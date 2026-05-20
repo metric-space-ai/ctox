@@ -6,8 +6,44 @@ import {
   parseDelimitedText,
 } from '../../shared/universal-importer.js';
 import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js';
+import { loadModuleMessages } from '../../shared/i18n.js';
 
 const BUILD = '20260519-outbound-actions6';
+let t = (key, fallback, ...args) => {
+  let val = fallback ?? key;
+  if (args.length) {
+    args.forEach((arg, i) => {
+      val = val.replace(`{${i}}`, arg);
+    });
+  }
+  return val;
+};
+
+function getTabLabel(key, fallback) {
+  return ({
+    'message_mail_subject': t('subject', 'Betreff'),
+    'message_mail_body': t('email', 'E-Mail'),
+    'message_followup_1': t('followup1', 'Follow-up 1'),
+    'message_followup_2': t('followup2', 'Follow-up 2'),
+    'note_general': t('general', 'Allgemein'),
+    'note_next_step': t('nextStep', 'Nächster Schritt'),
+  })[key] || fallback;
+}
+
+function getResearchFieldLabel(id, fallback) {
+  const key = id === 'email' ? 'email_field' : id;
+  return t(key, fallback);
+}
+
+function getContactFieldLabel(id, fallback) {
+  const cleanId = id.replace('.', '_');
+  return t(cleanId, fallback);
+}
+
+function getContactFieldDesc(id, fallback) {
+  const cleanId = id.replace('.', '_');
+  return t(`${cleanId}_desc`, fallback);
+}
 const DEFAULT_CAMPAIGN_ID = 'outbound_default_campaign';
 const DEFAULT_CAMPAIGN_NAME = 'Outbound Firmenqualifizierung';
 const OUTBOUND_LAYOUT_KEY = 'ctox.businessOs.outbound.columnLayout';
@@ -44,6 +80,16 @@ const AUTOMATION_STAGES = Object.freeze({
     cta: 'Lead-Qualifizierung starten',
   },
 });
+
+function getAutomationStageDefinition(stage) {
+  const base = AUTOMATION_STAGES[stage];
+  if (!base) return null;
+  return {
+    label: t(`automation_stage.${stage}.label`, base.label),
+    description: t(`automation_stage.${stage}.desc`, base.description),
+    cta: t(`automation_stage.${stage}.cta`, base.cta),
+  };
+}
 const RESEARCH_FIELD_DEFS = Object.freeze([
   ['legal_form', 'Rechtsform'],
   ['country', 'Land'],
@@ -73,6 +119,9 @@ const RESEARCH_FIELD_DEFS = Object.freeze([
   ['employee_count', 'Mitarbeiterzahl'],
 ]);
 const DEFAULT_RESEARCH_FIELD_IDS = Object.freeze(RESEARCH_FIELD_DEFS.map(([id]) => id));
+const DEFAULT_RESEARCH_FIELD_IDS_COMPACT = Object.freeze([
+  'legal_form', 'country', 'city', 'phone', 'email', 'domain', 'revenue_eur', 'employee_count'
+]);
 const CONTACT_FIELD_DEFS = Object.freeze([
   ['contact.people', 'Ansprechpartner', 'Gefundene relevante Personen, Rollen und kurze Einordnung.'],
   ['contact.role', 'Rolle', 'Funktion, Senioritaet und Verantwortungsbereich der wichtigsten Ansprechpartner.'],
@@ -85,6 +134,306 @@ const CONTACT_FIELD_DEFS = Object.freeze([
   ['lead.status', 'Lead', 'Status der Lead-Qualifizierung.'],
 ]);
 const DEFAULT_CONTACT_FIELD_IDS = Object.freeze(['contact.people', 'contact.status', 'lead.status']);
+const DEFAULT_CONTACT_FIELD_IDS_COMPACT = Object.freeze(['contact.people', 'contact.status']);
+
+
+const DEFAULT_API_URL = 'https://leadgenservice.ngrok.io';
+const DEFAULT_TOKEN_ID = '2QjI3u9txqyB9chbDt1rUJF5th4_31BsnCZFuiZTUoeVMeyui';
+
+const DEFAULT_ICP_CORE = `Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`;
+
+const DEFAULT_CHECKLIST = `B2B-Ansprache klar erkennbar (Leistungs-/Branchen-/Lösungsseiten).
+Objekt-/Auftragslogik sichtbar (z. B. Immobilien/Exposés, Aufträge, Tickets, Wartung, Projekte).
+Navigation/Content zu Vertrieb (Pipeline/Leads/Anfragen), Projekten/Leistungen und Service/Support.
+Hinweise auf bestehende Tool-Landschaft (CRM, Projekt-/Ticket-Tool, Tabellen/Excel) oder geplanten Wechsel.
+Kontakt- oder Termin-Widgets (Lead-Erfassung), ggf. Login-/Kundenbereich.
+Karriere-/Teamseite mit Rollen wie Sales/CRM, Projektleitung/PMO, Service/Dispatcher, Techniker.
+Mehrere Standorte/Regionen oder mobile Teams (z. B. Außendienst/Field Service).
+Referenzen im KMU-Umfeld (DACH), mehrsprachige Site optional.
+Preis-/Kostenargumente gegen Seat-Modelle (viele Nutzerrollen, interne/externe Mitnutzer).
+Bei Maklern: Hinweise auf Objektaufnahme, Exposé-/Terminkoordination, Nachbetreuung/Service.`;
+
+const DEFAULT_CTA = 'Soll ich Ihnen 12 potenzielle Kunden inklusive der fertigen Anschreiben zusenden?';
+
+const DEFAULT_SIGNATURE = `Beste Grüße
+Max Mustermann`;
+
+const ICP_PROMPT_TEMPLATE = `Du bist ein Sales Specialist und berätst Unternehmen, ideale Kundenprofile zu definieren, Ich gebe dir hierfür mehre <Muster ICPs> Beschreibungen, an den du dich orientieren kannst, sowie eine <Taxonomie> als Hilfe. Deine Aufgabe ist, es aus der <Homepage des Kunden> einen ICP für den Kunden zu entwickeln. Folge dazu der <Instruktion> Schritt für Schritt. Du gibst ein JSON Objekt zurück, ohne weitere Kommentare
+
+<Instruktion>:
+Lies die <Homepage des Kunden> und finde in der <Taxonomie> Nummern für mögliche Kunden des eigenen Angebots. Liste die passenden Taxonomie-Nummer mit Bezeichnung in der Sprache der <Homepage des Kunden> auf.
+
+Formuliere eine Produkt und Dienstleistungsberschreibung. Hol dir dazu Inspiration von den <Muster ICPs>: Es kommt darauf an, dass der Match anhand von öffentlichen Informationen durchgeführt werden kann.Gib ein Json aus mit Rechtsform, Ausrichtung (B2B/B2C). Mitarbeiter (min) Mitarbeiter (max). Umsatz (min), Umsatz (max), der Taxonomie mit dem Array der Nummer sowie der Beschreibung. sowie eine Checkliste für den Abgleich mit der Landingpage des potentiellen Kunden, sowie eine Produkt&Dienstleistungs beschreibung auf Basis der <Homepage des Kunden>
+
+<Muster ICPs>:
+{"legal_form": null,"orientation": "B2B","employees_num": { "min": 100, "max": 50000 },"fin_revenue": { "min": 10000000, "max": 10000000000 },"Taxonomie": [{ "id": "4.1", "name": "SaaS" },{ "id": "4.2", "name": "On-Prem-Software-Lizenz + Wartung" },{ "id": "4.4", "name": "PaaS/IaaS" },{ "id": "4.12", "name": "Data/Analytics-SaaS (BI, MLOps, Observability)" },{ "id": "4.13", "name": "Managed SaaS/Managed Service zu Software" },
+{ "id": "7.2", "name": "IT-Beratung/Systemhaus/Integration" },
+{ "id": "7.9", "name": "Managed Services/MSP/MSSP (inkl. Cybersecurity)" },
+{ "id": "11.9", "name": "Rechenzentren/Colocation" },
+{ "id": "1.8", "name": "EMS/Elektronikfertiger" },
+{ "id": "1.4", "name": "Komponenten-/Zulieferer (B2B)" },
+{ "id": "1.1", "name": "OEM/Hersteller (eigene Marke)" },
+{ "id": "11.1", "name": "Energieversorger (Tarifmodell)" },
+{ "id": "11.3", "name": "Netz-/Infrastruktur-Betreiber (Zugang/Fees)" },
+{ "id": "11.4", "name": "Telekommunikation/ISP (Tarife)" },
+{ "id": "11.10", "name": "Masten/Tower-Co/Passive Infra" },
+{ "id": "12.1", "name": "Finanzdienstleister – Bank/Fintech (Zins/Fees/Spread)" },
+{ "id": "12.4", "name": "Versicherung (Versicherer/MGA/Insurtech)" },
+{ "id": "8.2", "name": "Gesundheitsdienstleister (Praxis/Klinik/Therapie)" },
+{ "id": "8.4", "name": "Diagnostik/Labore/Bildgebung" },
+{ "id": "16.3", "name": "Öffentliche Einrichtung/Behörde – Gebühren/Steuern" },
+{ "id": "10.3", "name": "Logistik: Lager/Fulfillment" }
+],
+"Checkliste_Landingpage": ["B2B-/B2G-Ansprache eindeutig? (\\"Für Unternehmen\\", Branchen-/Lösungsseiten)","Branche klar benannt und in obiger Taxonomie vertreten?","Hinweise auf IT-/Service-/Support-Prozesse (Begriffe: Service Desk, Tickets, SLA, Störung, ITSM) vorhanden?","Technologie-/Tool-Erwähnungen sichtbar (z. B. Microsoft/Active Directory, SAP/ERP, ServiceNow/Jira/OTRS, Monitoring/Alerting)?","Zertifikate/Normen-Seite vorhanden (z. B. ISO 9001/27001, BSI/DSGVO, IPC, ASiG/BGM)?","Komplexität sichtbar (mehrere Standorte, 'bundesweit', international, 24/7, Rechenzentrum, Cloud/Hybrid)?","Mehrsprachige Website (z. B. DE/EN) vorhanden?","Karrierebereich mit IT-Rollen (z. B. IT-Admin, DevOps, System Engineer) sichtbar?","Partner-/Technologie- oder Referenzseite vorhanden?","Content zu Monitoring/Automatisierung/IT-Betrieb/Qualität (Blog, Magazin, Whitepaper, Webinare) vorhanden?","Kunden-/Branchenreferenzen oder Zertifizierungs-Logos (z. B. DEKRA/UL) sichtbar?","Eigenes Service-/Kundenportal oder Login/Support-Bereich verlinkt?"],
+"Produkt_und_Dienstleistungsbeschreibung": "MILTON ist eine KI-gestützte Plattform für IT-Automatisierung im Service-Desk und IT-Betrieb. Sie liest Tickets (auch aus E-Mail), korreliert diese mit Monitoringdaten, führt Standardaufgaben und Störungsbehebungen automatisch aus und dokumentiert revisionssicher im vorhandenen System. Einsatz in Cloud-, On-Prem- und Hybrid-Umgebungen; kompatibel mit gängigen Systemen/Applikationen; Prozesse und Datenhoheit bleiben erhalten; konform zu ISO 20000, ISO 27001, BSI IT-Grundschutz, ISAE 3402 und DSGVO. Nutzen: hohe Automatisierungsquote bei IT-Regelaufgaben, weniger Störungen, deutlich kürzere Ticket-Bearbeitungszeit."}
+
+{
+  "Rechtsform": ["Einzelunternehmen", "e.K.", "GmbH", "UG (haftungsbeschränkt)", "GmbH & Co. KG", "AG", "SE"],
+  "Ausrichtung": "B2B",
+  "Mitarbeiter": { "min": 1, "max": 500 },
+  "Umsatz": { "min": 50000, "max": 100000000 },
+  "Taxonomie": [
+    { "id": "6.6", "name": "Vermittler/Makler" },
+    { "id": "14.2", "name": "Immobilien – Bestandshalter/Vermietung" },
+    { "id": "14.4", "name": "Property-/Asset-/Facility-Management (Eigentümer-nah)" },
+    { "id": "7.3", "name": "Kreativ-/Marketing-Agentur" },
+    { "id": "7.1", "name": "Unternehmensberatung/Management Consulting" },
+    { "id": "7.2", "name": "IT-Beratung/Systemhaus/Integration" },
+    { "id": "7.7", "name": "Ingenieurwesen/Planung/Architektur" },
+    { "id": "7.9", "name": "Managed Services/MSP/MSSP (inkl. Cybersecurity)" },
+    { "id": "9.1", "name": "Handwerk/Installation" },
+    { "id": "9.6", "name": "Reparatur/Werkstatt/Wartung" },
+    { "id": "9.3", "name": "Facility-/Gebäudemanagement" },
+    { "id": "4.1", "name": "SaaS" },
+    { "id": "4.2", "name": "On-Prem-Software-Lizenz + Wartung" },
+    { "id": "4.13", "name": "Managed SaaS/Managed Service zu Software" }
+  ],
+  "Checkliste_Landingpage": [
+    "B2B-Ansprache klar erkennbar (Leistungs-/Branchen-/Lösungsseiten).",
+    "Objekt-/Auftragslogik sichtbar (z. B. Immobilien/Exposés, Aufträge, Tickets, Wartung, Projekte).",
+    "Navigation/Content zu Vertrieb (Pipeline/Leads/Anfragen), Projekten/Leistungen und Service/Support.",
+    "Hinweise auf bestehende Tool-Landschaft (CRM, Projekt-/Ticket-Tool, Tabellen/Excel) oder geplanten Wechsel.",
+    "Kontakt- oder Termin-Widgets (Lead-Erfassung), ggf. Login-/Kundenbereich.",
+    "Karriere-/Teamseite mit Rollen wie Sales/CRM, Projektleitung/PMO, Service/Dispatcher, Techniker.",
+    "Mehrere Standorte/Regionen oder mobile Teams (z. B. Außendienst/Field Service).",
+    "Referenzen im KMU-Umfeld (DACH), mehrsprachige Site optional.",
+    "Preis-/Kostenargumente gegen Seat-Modelle (viele Nutzerrollen, interne/externe Mitnutzer).",
+    "Bei Maklern: Hinweise auf Objektaufnahme, Exposé-/Terminkoordination, Nachbetreuung/Service."
+  ],
+  "Produkt_und_Dienstleistungsbeschreibung": "Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle."
+}
+
+
+<Taxonomie>:
+{
+"taxonomy": [
+{
+"id": "1",
+"name": "Produktion & Beschaffung",
+"subcategories": [
+{ "id": "1.1", "name": "OEM/Hersteller (eigene Marke)" },
+{ "id": "1.2", "name": "Auftragsfertiger/Contract Manufacturing" },
+{ "id": "1.3", "name": "White-Label/Private-Label" },
+{ "id": "1.4", "name": "Komponenten-/Zulieferer (B2B)" },
+{ "id": "1.5", "name": "3D-Druck/On-Demand-Manufacturing" },
+{ "id": "1.6", "name": "ODM/Design-&-Fertigung aus einer Hand" },
+{ "id": "1.7", "name": "Lizenz-/Technologietransfer (Lizenzfertigung)" },
+{ "id": "1.8", "name": "EMS/Elektronikfertiger" },
+{ "id": "1.9", "name": "Co-Packing/Co-Manufacturing (Abfüllung/Verpackung)" },
+{ "id": "1.10", "name": "Refurbishment/Remanufacturing/Recycling" },
+{ "id": "1.11", "name": "Fabless/Foundry (Halbleiter)" }
+]
+},
+{
+"id": "2",
+"name": "Handel & Retail",
+"subcategories": [
+{ "id": "2.1", "name": "Großhandel/Distributor" },
+{ "id": "2.2", "name": "Import/Export-Handel" },
+{ "id": "2.3", "name": "Stationärer Einzelhandel" },
+{ "id": "2.4", "name": "E-Commerce (eigener Online-Shop, D2C/B2C)" },
+{ "id": "2.5", "name": "B2B-E-Procurement/Kataloglieferant" },
+{ "id": "2.6", "name": "Dropshipping-Shop" },
+{ "id": "2.7", "name": "Abo-Box (physisch)" },
+{ "id": "2.8", "name": "Flash-Sale/Off-Price/Rabatt-Club" },
+{ "id": "2.9", "name": "Print-on-Demand/Mass Customization" },
+{ "id": "2.10", "name": "Recommerce/Second-Hand/Refurbished" },
+{ "id": "2.11", "name": "Social Commerce/Live-Shopping" },
+{ "id": "2.12", "name": "Automaten/Vending/Unattended Retail" },
+{ "id": "2.13", "name": "Omnichannel (Click & Collect/Ship-from-Store)" }
+]
+},
+{
+"id": "3",
+"name": "Franchise, Lizenz & IP",
+"subcategories": [
+{ "id": "3.1", "name": "Franchise-Geber" },
+{ "id": "3.2", "name": "Lizenzierung/IP-Vergabe" },
+{ "id": "3.3", "name": "Technologie-/Patentlizenz (ohne Marke)" },
+{ "id": "3.4", "name": "Content-/Formatlizenz (TV/Medien/Character)" },
+{ "id": "3.5", "name": "Markenlizenz/Co-Branding" }
+]
+},
+{
+"id": "4",
+"name": "Software & Digitale Dienste",
+"subcategories": [
+{ "id": "4.1", "name": "SaaS" },
+{ "id": "4.2", "name": "On-Prem-Software-Lizenz + Wartung" },
+{ "id": "4.3", "name": "API-/Usage-based-Service" },
+{ "id": "4.4", "name": "PaaS/IaaS" },
+{ "id": "4.5", "name": "Open-Source + Support/Enterprise Edition" },
+{ "id": "4.6", "name": "Mobile App – In-App-Kauf" },
+{ "id": "4.7", "name": "Freemium" }
+]
+}
+]
+}
+
+<Homepage des Kunden>:
+\${homepage}`;
+
+const MESSAGE_PROMPT_TEMPLATE = `Du bist ein Sales Specialist und berätst Unternehmen, bessere Kaltakquise-E-Mails zu formulieren.
+Ich gebe dir hierfür mehrere <Muster E-Mails Positiv> und <Muster E-Mails Negativ> als Referenz sowie eine <Negativ-Checkliste> als Hilfe.
+Deine Aufgabe ist es, aus der <Produkt und Dienstleistungsbeschreibung>, und falls vorhanden auch <zusätzliche Anweisung>: enthalten kann, z.B. für CTA und Absender, der <Checkliste für Infos von Kunden>, <Infos zum Kontakt> und der <Infos von Hompage des Kunden> ein relevantes Anschreiben zu entwickeln.
+Folge dazu der <Instruktion> Schritt für Schritt.
+
+<Instruktion>:
+Führe alle Schritte nacheinander aus.
+
+Schritt 1:
+Lies die <Infos von Hompage des Kunden>, die <Checkliste für Infos von Kunden> und die <Produkt und Dienstleistungsbeschreibung>. Erstelle eine strukturierte Übersicht mit vier Teilen:
+
+A) Produktbeschreibung (nur aus der Homepage, nicht erfinden):
+- Ein-Satz-Wertversprechen in Klartext (kein Jargon).
+- 3 wichtigste Nutzen für die anvisierte Zielrolle (nicht Features).
+- 1–2 belastbare Belege (Zahl, Referenz, Zertifikat), falls vorhanden.
+- Einsatzform (SaaS/On-Prem/Hybrid), Integrationen, Einführungsaufwand (nur wenn klar genannt).
+
+B) Kundenkontext (nur aus Touchpoints, nicht erfinden):
+- Rolle/Team, Prioritäten, KPI-Signale (z. B. offene Stellen, OKRs, Blogthemen, Finanzzahlen).
+- Aktuelle Tools/Prozesse/Constraints, die sich aus Touchpoints ableiten lassen (z. B. „On-Prem only“, „Salesforce im Einsatz“).
+- 2–3 belegbare Schmerzpunkte/Chancen (z. B. „doppelte Datenpflege“, „Ticketflut im Service“, „ungepflegte Fassade“).
+
+C) Anrede- & Tonalitätsbestimmung:
+- Analysiere Sprache, Stil und Kultur der Homepage und Touchpoints (z. B. „per Du“ im Karrierebereich, lockere Blogposts, konservative B2B-Sprache).
+- Entscheide: soll die Ansprache in den Mails mit „Sie“ (formell) oder „du“ (informell) erfolgen?
+- Leite außerdem die Tonalität ab: konservativ, locker, technisch, pragmatisch.
+- Berüchsichtige und priorisiere <zusätzliche Anweisung>, falls vorhanden.
+- Dokumentiere diese Entscheidung klar mit Begründung und mindestens 1 Belegstelle aus den Quellen (z. B. „Karriereseite spricht Bewerber durchgehend mit Du an → ‘du’ wählen“).
+
+D) Verbindungspunkte (Hypothesen aus A + B):
+- Formuliere pro Verbindungspunkt:
+  - *Touchpoint*: konkrete Quelle (z. B. Stellenausschreibung, Blog, Finanzbericht, Angaben im Social Media Profil).
+  - *Bezug zum Produkt*: welche Produktfunktion/Leistung adressiert das.
+  - *Pain oder Chance*: welches Problem oder Ziel steckt dahinter.
+  - *Formulierungsvorschlag*: 1 Satz, wie du das in einer Mail ansprechen würdest.
+  - *Produkt Pitch*: Überlege, inwwieweit ein direker Produkt/Dienstleistungs Pitch besser ist und erstmal nur eine rein problemlösungsorientierte Ansprache.
+- 3 solcher Verbindungspunkte, damit Variationen entstehen können.
+
+Schritt 2:
+Formuliere drei sehr unterschiedliche Kaltakquise-E-Mail-Entwürfe auf Basis der Verbindungspunkte aus Schritt 1.
+- Verwende die in Schritt 1C abgeleitete Anspracheform (Du oder Sie) und Tonalität.
+- Länge: 60–120 Wörter, 4–6 Sätze.
+- Struktur je Entwurf:
+  1) Betreff: spezifisch + nüchtern, Bezug auf Pain/Use Case.
+  2) Erster Satz: echter Touchpoint-Verweis (konkret, belegbar).
+  3) 1–2 Sätze: Problem → Nutzen (in Sprache der Zielrolle; kein Jargon).
+  4) Optional 1 Mini-Beleg (nur wenn aus Inputs ableitbar; keine Fantasiezahlen).
+  5) Leichter CTA (eine Frage, kein Termin-Push, nur 1 CTA).
+- Variiere Hook/CTA bewusst (z. B. „Insight anbieten“, „Beispiel schicken“, „kurz prüfen“).
+- Jede Mail muss explizit 1 Produktnutzen + 1 Kunden-Touchpoint benennen.
+- Weiche von der Struktur ab, falls das <zusätzliche Anweisung> verlangt.
+
+Schritt 3:
+Überprüfe die drei Entwürfe anhand der <Negativ-Checkliste>.
+- Schreibe pro Variante 2–3 Sätze Kritik (konkret, textstellenbasiert).
+- Leite daraus 3 präzise Verbesserungsanweisungen für das Finale ab (imperativ, z. B. „Touchpoint in Satz 1 konkretisieren: ‘Blogbeitrag vom 12.05.: …’“; „Zahl entfernen, da unbelegt“).
+
+Schritt 4:
+Schreibe EIN finales Anschreiben (Betreff + Text), das:
+- die bestbewerteten Elemente übernimmt,
+- alle Verbesserungsanweisungen aus Schritt 3 umsetzt,
+- ausschließlich belegbare Aussagen enthält,
+- max. 110 Wörter umfasst.
+- Anrede & Tonalität: exakt so, wie in Schritt 1C bestimmt.
+
+<Muster E-Mails Positiv>:
+Betreff: Eure KI-Studie als YouTube-Serie für mehr warme Leads
+Hallo Kathrin,
+eure KI-Traffic-Studie (Blog, 31.07.2025) zeigt starke Expertise. Als kurze YouTube-Serie würden die Kern-Insights noch mehr Vertrauen stiften und regelmäßig warme Anfragen in eure Erstberatung lenken. Das setzen wir für Agenturen um: Themenplan, einfache Skripte, Titel/Thumbnails und Kanal-Optimierung aus einer Hand. Beleg: Wir haben 600+ Business-YouTube-Kanäle begleitet.
+Offen für ein 20‑minütiges, kostenloses YouTube-Strategiegespräch, um Potenziale eurer bestehenden Inhalte zu heben?
+
+Betreff: YouTube Ads habt ihr – wie nutzt ihr organisch für warme Anfragen?
+Hi Maren,
+auf eurer Leistungsseite zu YouTube Werbung und als Google Premium Partner setzt ihr Paid stark ein. Ergänzend sorgt ein eigener, organischer YouTube‑Kanal für Vertrauen vor dem Erstgespräch – mit regelmäßiger Reichweite statt kurzer Peaks. Wir richten das schlank ein: Analyse, Setup und Equipment, einfache Skripte sowie passende Themen, Titel und Thumbnails. Beleg: 600+ betreute Business‑Kanäle in 5+ Jahren.
+Hast du Lust auf ein 15‑minütiges Beratungsgespräch, in dem ich dir 2–3 konkrete Formatideen für Hanseranking zeige?
+
+<Muster E-Mails Negativ>:
+[
+  { "Nr": 1, "Typ": "Selbstdarstellung überladen", "Betreff": "Kurze Vorstellung – Softwarefirma aus Köln", "Text": "Hallo Herr Meier, mein Name ist ... Wann hätten Sie Zeit?" },
+  { "Nr": 2, "Typ": "Pseudo-persönlich, austauschbar", "Betreff": "Kurze Frage zu Ihrer Website", "Text": "Hallo Frau Keller, mir ist aufgefallen, dass ..." }
+]
+
+<Negativ-Checkliste>:
+- Generische Aussagen („Wir helfen Unternehmen wie Ihrem…“)
+- Zu viel „Wir“, zu wenig „Sie“
+- Überlänge, Romane, mehrere CTAs
+- Aggressiver Druck / Dringlichkeit
+- Falsche Personalisierung
+- Jargon / Buzzwords
+- Unbelegte Superlative
+- Angst-Rhetorik
+- Emojis / flapsiger Humor
+
+<Produkt und Dienstleistungsbeschreibung>:
+{{Produkt_und_Dienstleistungsbeschreibung}}
+
+<zusätzliche Anweisung>:
+{{CTA}}
+
+<Checkliste für Infos von Kunden>:
+{{Checkliste_Landingpage}}
+
+<Infos von Hompage des Kunden>:
+{{Landing_Page_Inhalt}}
+
+<Infos zum Kontakt>:
+{{Kontakt_info}}`;
+
+const EXTRACT_EMAIL_PROMPT = `Du bist ein präziser Extraktions-Parser. Du erhältst unten die KOMPLETTE Ausgabe eines vorherigen LLM-Durchlaufs (Message_Prompt), die eine mehrstufige Analyse (Schritt 1–3) und am Ende EIN finales Anschreiben (Schritt 4) enthält.
+
+AUFGABE:
+- Finde ausschließlich das finale Anschreiben aus Schritt 4 (oft überschrieben mit "Schritt 4", "Final", "Finales Anschreiben" o.ä.).
+- Extrahiere daraus den Betreff und den eigentlichen E-Mail-Text.
+- Kürze, wo möglich; streiche Wiederholungen.
+- Inhalte NICHT verändern oder erweitern. Nichts Neues erfinden. Aber wärmer und empathischer und nicht so technisch formulieren.
+- Keine Anführungszeichen oder wörtlichen Zitate aus der Empfänger-Seite; paraphrasiere kurz und sinngemäß, damit es nicht hölzern oder aufgezählt wirkt
+- Verwende einfache, aktive Sätze. Vermeide Substantivketten.
+- Leite passende und kurze Texte für Folow Up Nachrichten ab. Der erste sollte nicht zu aufdringlich sein, aber als CTA klar und höflich, charmant darauf verweisen, ob und warum der Lead sich mit dem Vorschlag beschäftigen möchte bzw. sollte? Bei zweiten Followup dann charmant einfodern, dass eine Response helps, ob sich die Beschäftigung mit dem Theam überhaupt lohnt mit schon der Erwartung, dass sich der Lead hierzu äußert, bzw. warum er kein Interesse hat?
+- Gib als EINZIGE Ausgabe ein gültiges JSON-Objekt mit genau diesen vier Schlüsseln zurück:
+  {
+    "Betreff": "<Betreff ohne das Label 'Betreff:'>",
+    "Text": "<E-Mail-Text, Zeilenumbrüche beibehalten>",
+    "FollowUp1": "<FollowUp1-Text, Zeilenumbrüche beibehalten>",
+    "FollowUp2": "<FollowUp2-Text, Zeilenumbrüche beibehalten>"
+  }
+
+REGELN:
+1) Nutze nur den Abschnitt des finalen Anschreibens (Schritt 4). Erfinde keine Inhalte.
+2) Falls im finalen Abschnitt kein explizites "Betreff:"-Label steht:
+   - Nimm die erste Zeile als Betreff (bis zum ersten Zeilenumbruch).
+   - Der restliche Teil ist der E-Mail-Text.
+3) Entferne führende Labels wie "Betreff:" oder "Subject:" aus dem Betreff.
+4) Trimme führende/abschließende Leerzeichen. Erhalte Zeilenumbrüche im Text.
+5) Sprache, Tonalität und Schreibweise genau beibehalten (keine Umschreibungen).
+6) Output muss striktes JSON sein: keine zusätzlichen Kommentare, kein Markdown, keine Codefences, keine nachgestellten Hinweise, keine Backticks, keine BOM.
+7) Escape ggf. Anführungszeichen innerhalb der JSON-Strings korrekt. Keine trailing commas.
+
+EINGABE (Rohtext der Message_Prompt-Antwort):
+<<<BEGIN_MESSAGE_PROMPT_OUTPUT
+{{Message_Prompt_Response}}
+END_MESSAGE_PROMPT_OUTPUT>>>`;
 
 const state = {
   ctx: null,
@@ -113,10 +462,44 @@ const state = {
   lastOperationalRefreshMs: 0,
   cleanup: [],
   centerResizeCleanup: null,
+  researchSettingsActiveTab: 'columns',
+  tempResearchSettings: null,
+  generatingOutreach: new Map(),
+  isScrolling: false,
+  scrollTimeout: null,
+  pendingRenderAfterScroll: false,
+  statusFilter: '',
+  tagFilter: '',
+  lastTbodyHtml: '',
+  lastActiveColsKey: '',
 };
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
+  t = (key, fallback, ...args) => {
+    let val = messages[key] ?? fallback ?? key;
+    if (args.length) {
+      args.forEach((arg, i) => {
+        val = val.replace(`{${i}}`, arg);
+      });
+    }
+    return val;
+  };
+  if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
+  if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
+  if (!state.viewMode) state.viewMode = 'expanded';
+  state.statusFilter = '';
+  state.tagFilter = '';
+  state.lastTbodyHtml = '';
+  if (!state.viewMode) state.viewMode = 'expanded';
+
+  state.isScrolling = false;
+  state.scrollTimeout = null;
+  state.pendingRenderAfterScroll = false;
+
   await ensureStyles();
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left?.replaceChildren?.();
@@ -125,6 +508,28 @@ export async function mount(ctx) {
   await loadAll({ hydrateKnowledge: false });
   wireEvents(ctx.host);
   wireRealtime();
+
+  const scrollListener = (event) => {
+    const scrollContainer = event.target.closest('.outbound-table-scroll-unified');
+    if (scrollContainer) {
+      state.isScrolling = true;
+      if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
+      state.scrollTimeout = window.setTimeout(() => {
+        state.isScrolling = false;
+        state.scrollTimeout = null;
+        if (state.pendingRenderAfterScroll) {
+          state.pendingRenderAfterScroll = false;
+          render();
+        }
+      }, 500);
+    }
+  };
+  ctx.host.addEventListener('scroll', scrollListener, { capture: true, passive: true });
+  state.cleanup.push(() => {
+    ctx.host.removeEventListener('scroll', scrollListener, true);
+    if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
+  });
+
   const resizeCleanup = setupOutboundColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
   render();
@@ -141,6 +546,7 @@ export async function mount(ctx) {
     state.centerResizeCleanup = null;
     if (state.centerRenderTimer) window.clearTimeout(state.centerRenderTimer);
     state.centerRenderTimer = null;
+    closeHiddenCompaniesPanel();
     state.cleanup.forEach((fn) => fn?.());
     state.cleanup = [];
     ctx.host.replaceChildren();
@@ -191,7 +597,8 @@ async function knowledgeCommand(args) {
     throw new Error('RxDB command bus is not available');
   }
   const commandId = `cmd_knowledge_${crypto.randomUUID()}`;
-  return state.ctx.commandBus.dispatch({
+  const startedAtMs = Date.now();
+  const dispatched = await state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'knowledge',
     type: 'knowledge.command',
@@ -206,6 +613,15 @@ async function knowledgeCommand(args) {
       command_path: 'knowledge',
     },
   });
+  if (dispatched?.status && dispatched.status !== 'pending_sync') return dispatched;
+  const projection = await waitForBusinessCommandProjection(commandId, startedAtMs);
+  if (!projection) {
+    throw new Error(`Knowledge command ${commandId} was not acknowledged by the native RxDB peer`);
+  }
+  if (projection.status === 'failed') {
+    throw new Error(projection.error || projection.result?.error || `Knowledge command ${commandId} failed`);
+  }
+  return projection.result || projection;
 }
 
 async function ensureKnowledgeDataTable(refs, key, title, description) {
@@ -225,7 +641,7 @@ async function ensureKnowledgeDataTable(refs, key, title, description) {
 }
 
 async function ensureCampaignKnowledge(campaign) {
-  if (!campaign?.id || state.ctx?.sync?.config?.http_bridge_available === false) return null;
+  if (!campaign?.id || !nativeRxdbSyncReady()) return null;
   const refs = campaignKnowledgeRefs(campaign);
   await ensureKnowledgeDataTable(refs, refs.companiesKey, `${campaign.name} · Unternehmen`, 'Outbound Campaign Firmen, Importjobs, Qualifikation und Unternehmens-Research.');
   await ensureKnowledgeDataTable(refs, refs.contactsKey, `${campaign.name} · Ansprechpartner`, 'Outbound Campaign Ansprechpartner- und Lead-Qualifikation.');
@@ -303,7 +719,7 @@ function campaignRunbookChunk(campaign, refs) {
 }
 
 async function appendKnowledgeRows(campaign, tableKey, rows) {
-  if (!rows.length || state.ctx?.sync?.config?.http_bridge_available === false) return null;
+  if (!rows.length || !nativeRxdbSyncReady()) return null;
   const refs = await ensureCampaignKnowledge(campaign);
   if (!refs) return null;
   for (let index = 0; index < rows.length; index += OUTBOUND_KNOWLEDGE_APPEND_CHUNK) {
@@ -319,7 +735,7 @@ async function appendKnowledgeRows(campaign, tableKey, rows) {
 }
 
 async function readKnowledgeRows(refs, tableKey, limit = 5000) {
-  if (state.knowledgeProjectionDisabled || state.ctx?.sync?.config?.http_bridge_available === false) return [];
+  if (state.knowledgeProjectionDisabled || !nativeRxdbSyncReady()) return [];
   try {
     const result = await knowledgeCommand([
       'data', 'select',
@@ -336,6 +752,35 @@ async function readKnowledgeRows(refs, tableKey, limit = 5000) {
     console.warn('[outbound] knowledge projection unavailable; using local projections', error);
     return [];
   }
+}
+
+function nativeRxdbSyncReady() {
+  return state.ctx?.sync?.mode === 'webrtc'
+    || state.ctx?.sync?.config?.native_rxdb_peer_available === true;
+}
+
+async function waitForBusinessCommandProjection(commandId, startedAtMs) {
+  const collection = state.ctx?.db?.raw?.business_commands;
+  if (!collection) return null;
+  const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    try {
+      const doc = await collection.findOne(commandId).exec();
+      const match = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+      if (
+        match
+        && Number(match.updated_at_ms || 0) >= earliestUpdatedAt
+        && match.status
+        && match.status !== 'pending_sync'
+      ) {
+        return match;
+      }
+    } catch (_) {
+      // Retry below; replicated command results may arrive just after dispatch.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 500));
+  }
+  return null;
 }
 
 function openCampaignRunbook(campaignId) {
@@ -884,6 +1329,165 @@ function wireEvents(root) {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const view = event.target.closest('[data-view]')?.dataset.view;
     const filter = event.target.closest('[data-filter]')?.dataset.filter;
+
+    // Copy to clipboard helper
+    const copyBtn = event.target.closest('[data-copy-text]');
+    if (copyBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      const textToCopy = copyBtn.dataset.copyText;
+      if (textToCopy) {
+        navigator.clipboard.writeText(textToCopy).then(() => {
+          const originalText = copyBtn.innerText;
+          const originalBg = copyBtn.style.background;
+          const originalColor = copyBtn.style.color;
+          const originalBorder = copyBtn.style.borderColor;
+
+          copyBtn.innerText = t('copied', 'Kopiert!');
+          copyBtn.style.background = '#10b981';
+          copyBtn.style.color = '#ffffff';
+          copyBtn.style.borderColor = '#10b981';
+
+          setTimeout(() => {
+            copyBtn.innerText = originalText;
+            copyBtn.style.background = originalBg;
+            copyBtn.style.color = originalColor;
+            copyBtn.style.borderColor = originalBorder;
+          }, 2000);
+        }).catch(err => {
+          console.error('Failed to copy text: ', err);
+        });
+      }
+      return;
+    }
+
+    // Tab switching clicks
+    const msgTab = event.target.closest('.msg-tab');
+    if (msgTab) {
+      event.preventDefault();
+      event.stopPropagation();
+      const tr = msgTab.closest('tr');
+      if (tr) {
+        const contactKey = tr.dataset.contactKey;
+        const tabKey = msgTab.dataset.msg;
+        state.activeMsgByContact.set(contactKey, tabKey);
+        replaceRowDOMInline(tr);
+      }
+      return;
+    }
+
+    const noteTab = event.target.closest('.note-tab');
+    if (noteTab) {
+      event.preventDefault();
+      event.stopPropagation();
+      const tr = noteTab.closest('tr');
+      if (tr) {
+        const contactKey = tr.dataset.contactKey;
+        const tabKey = noteTab.dataset.note;
+        state.activeNoteByContact.set(contactKey, tabKey);
+        replaceRowDOMInline(tr);
+      }
+      return;
+    }
+
+    // Toggle compact view checkbox
+    if (event.target.id === 'toggle-compact') {
+      state.viewMode = event.target.checked ? 'compact' : 'expanded';
+      const container = root.querySelector('.outbound-unified-workbench');
+      if (container) container.setAttribute('data-view', state.viewMode);
+      renderCenter();
+      return;
+    }
+
+    // Delete note type action
+    if (action === 'delete-note-type') {
+      event.preventDefault();
+      event.stopPropagation();
+      const tr = event.target.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const noteKey = event.target.dataset.noteKey;
+      if (confirm('Diesen Notiz-Typ löschen?')) {
+        await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          if (c.notes) delete c.notes[noteKey];
+        });
+      }
+      return;
+    }
+
+    // Add note type action
+    if (action === 'add-note-type') {
+      event.preventDefault();
+      event.stopPropagation();
+      const tr = event.target.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const raw = prompt('Neuen Notiz-Typ anlegen (Name):', '');
+      if (!raw) return;
+      const safeKey = 'note_' + raw.trim().toLowerCase().replace(/\s+/g, '_');
+      await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+        if (!c.notes) c.notes = {};
+        c.notes[safeKey] = '';
+      });
+      return;
+    }
+
+    // Status multi-select overlay click trigger
+    if (action === 'edit-status' || event.target.closest('.col-status')) {
+      const tr = event.target.closest('tr');
+      if (tr && tr.dataset.contactIndex != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        const itemId = tr.dataset.id;
+        const contactIndex = Number(tr.dataset.contactIndex);
+        const item = state.pipeline.find(entry => entry.id === itemId);
+        const contact = item?.contacts?.[contactIndex];
+        if (contact) {
+          const cell = tr.querySelector('.col-status');
+          const curVals = chipsFromMultiSelect(contact.status_field || contact.status);
+          const allOptions = extractUniqueStatuses(state.pipeline);
+          showMultiSelectOverlay(cell, {
+            currentValues: curVals,
+            allOptions,
+            labelSingular: 'Status',
+            onSave: (finalVals) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+              c.status_field = { keys: finalVals };
+            })
+          });
+        }
+      }
+      return;
+    }
+
+    // Tag multi-select overlay click trigger
+    if (action === 'edit-tags' || event.target.closest('.col-tags')) {
+      const tr = event.target.closest('tr');
+      if (tr && tr.dataset.contactIndex != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        const itemId = tr.dataset.id;
+        const contactIndex = Number(tr.dataset.contactIndex);
+        const item = state.pipeline.find(entry => entry.id === itemId);
+        const contact = item?.contacts?.[contactIndex];
+        if (contact) {
+          const cell = tr.querySelector('.col-tags');
+          const curVals = chipsFromMultiSelect(contact.tags);
+          const allOptions = extractUniqueTags(state.pipeline);
+          showMultiSelectOverlay(cell, {
+            currentValues: curVals,
+            allOptions,
+            labelSingular: 'Tag',
+            onSave: (finalVals) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+              c.tags = { keys: finalVals };
+            })
+          });
+        }
+      }
+      return;
+    }
+
     if (!action && !view && !filter) return;
     const id = event.target.closest('[data-id]')?.dataset.id || '';
     if (action === 'select-campaign') {
@@ -915,6 +1519,30 @@ function wireEvents(root) {
     if (action === 'qualify-company') await setCompanyQualification(id || state.selectedCompanyId, 'qualified');
     if (action === 'reject-company') await setCompanyQualification(id || state.selectedCompanyId, 'rejected');
     if (action === 'send-pipeline') await sendCompanyToPipeline(id || state.selectedCompanyId);
+    if (action === 'select-company-contact') {
+      event.preventDefault();
+      event.stopPropagation();
+      const btn = event.target.closest('[data-action="select-company-contact"]');
+      const companyId = btn.dataset.companyId;
+      const index = Number(btn.dataset.index);
+      setSelectedContactIndexForCompany(companyId, index);
+      const tr = btn.closest('tr');
+      if (tr) {
+        replaceRowDOMInline(tr);
+      }
+      return;
+    }
+    if (action === 'delete-company-contact') {
+      event.preventDefault();
+      event.stopPropagation();
+      const btn = event.target.closest('[data-action="delete-company-contact"]');
+      const itemId = btn.dataset.itemId;
+      const index = Number(btn.dataset.index);
+      if (itemId && confirm('Diesen Ansprechpartner wirklich löschen?')) {
+        await deleteContactFromPipelineItem(itemId, index);
+      }
+      return;
+    }
     if (action === 'open-automation') openAutomationDrawer(event.target.closest('[data-stage]')?.dataset.stage, event.target.closest('[data-campaign-id]')?.dataset.campaignId || state.selectedCampaignId);
     if (action === 'close-automation') closeAutomationDrawer();
     if (action === 'start-automation') await startAutomationBatch();
@@ -924,6 +1552,17 @@ function wireEvents(root) {
     }
     if (action === 'research-contacts') await queueContactResearch(id || state.selectedPipelineId);
     if (action === 'open-research-settings') openResearchSettingsDrawer();
+    if (action === 'research-settings-tab') toggleResearchSettingsTab(event.target.dataset.tab);
+    if (action === 'generate-outreach') {
+      const tr = event.target.closest('tr');
+      if (tr && tr.dataset.contactIndex != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        const itemId = tr.dataset.id;
+        const contactIndex = Number(tr.dataset.contactIndex);
+        await generateOutreachForContact(itemId, contactIndex);
+      }
+    }
     if (action === 'export-table') exportQualificationTable();
     if (action === 'sort-table') {
       const column = event.target.closest('[data-column]')?.dataset.column;
@@ -945,6 +1584,198 @@ function wireEvents(root) {
     if (action === 'research-settings-add-contact-field') addResearchSettingsField('contact');
     if (action === 'research-settings-remove-field') removeResearchSettingsField(event.target.closest('[data-custom-field-id]')?.dataset.customFieldId);
     if (action === 'research-settings-remove-contact-field') removeResearchSettingsField(event.target.closest('[data-custom-field-id]')?.dataset.customFieldId, 'contact');
+
+    if (action === 'mailserver-save-domain') {
+      event.preventDefault();
+      event.stopPropagation();
+      const drawer = root.querySelector('.outbound-research-panel') || root.querySelector('.outbound-research-drawer');
+      const domainName = (drawer?.querySelector('#mailserver-new-domain-input')?.value || '').trim();
+      if (!domainName) {
+        showBusinessAlert(t('pleaseEnterDomain', 'Bitte gib einen Domain-Namen ein.'));
+        return;
+      }
+      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
+      state.mailserver.loading = true;
+      const rPanel = root.querySelector('.outbound-research-drawer');
+      if (rPanel) {
+        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+      }
+      try {
+        const commandId = `cmd_mailserver_save_domain_${crypto.randomUUID()}`;
+        const startedAtMs = Date.now();
+        const dispatched = await state.ctx.commandBus.dispatch({
+          id: commandId,
+          module: 'ctox',
+          type: 'ctox.mailserver.save_domain',
+          record_id: commandId,
+          inbound_channel: 'business_os.outbound',
+          payload: {
+            domain_name: domainName,
+            dkim_selector: 'default',
+            dkim_private_key: '',
+          },
+          client_context: { source_module: 'outbound' }
+        });
+        let result = dispatched;
+        if (!dispatched?.status || dispatched.status === 'pending_sync') {
+          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
+        }
+        if (!result || (result.status !== 'completed' && !result.result)) {
+          throw new Error('Fehler beim Speichern der Domain.');
+        }
+      } catch (err) {
+        showBusinessAlert(err.message || String(err));
+      } finally {
+        await loadMailserverConfig();
+      }
+      return;
+    }
+
+    if (action === 'mailserver-delete-domain') {
+      event.preventDefault();
+      event.stopPropagation();
+      const btn = event.target.closest('[data-action="mailserver-delete-domain"]');
+      const domainName = btn?.dataset.domain;
+      if (!domainName) return;
+      const confirmed = await showBusinessConfirm(
+        t('deleteDomainConfirm', 'Möchtest du die Domain "{0}" wirklich löschen? Alle E-Mail-Konten dieser Domain könnten beeinträchtigt werden.', domainName),
+        { danger: true }
+      );
+      if (!confirmed) return;
+      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
+      state.mailserver.loading = true;
+      const rPanel = root.querySelector('.outbound-research-drawer');
+      if (rPanel) {
+        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+      }
+      try {
+        const commandId = `cmd_mailserver_delete_domain_${crypto.randomUUID()}`;
+        const startedAtMs = Date.now();
+        const dispatched = await state.ctx.commandBus.dispatch({
+          id: commandId,
+          module: 'ctox',
+          type: 'ctox.mailserver.delete_domain',
+          record_id: commandId,
+          inbound_channel: 'business_os.outbound',
+          payload: { domain_name: domainName },
+          client_context: { source_module: 'outbound' }
+        });
+        let result = dispatched;
+        if (!dispatched?.status || dispatched.status === 'pending_sync') {
+          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
+        }
+        if (!result || (result.status !== 'completed' && !result.result)) {
+          throw new Error('Fehler beim Löschen der Domain.');
+        }
+      } catch (err) {
+        showBusinessAlert(err.message || String(err));
+      } finally {
+        await loadMailserverConfig();
+      }
+      return;
+    }
+
+    if (action === 'mailserver-save-user') {
+      event.preventDefault();
+      event.stopPropagation();
+      const drawer = root.querySelector('.outbound-research-panel') || root.querySelector('.outbound-research-drawer');
+      const username = (drawer?.querySelector('#mailserver-new-username-input')?.value || '').trim();
+      const password = (drawer?.querySelector('#mailserver-new-password-input')?.value || '').trim();
+      if (!username || !password) {
+        showBusinessAlert(t('pleaseEnterUserPass', 'Bitte gib eine E-Mail-Adresse und ein Passwort ein.'));
+        return;
+      }
+      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
+      state.mailserver.loading = true;
+      const rPanel = root.querySelector('.outbound-research-drawer');
+      if (rPanel) {
+        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+      }
+      try {
+        const commandId = `cmd_mailserver_save_user_${crypto.randomUUID()}`;
+        const startedAtMs = Date.now();
+        const dispatched = await state.ctx.commandBus.dispatch({
+          id: commandId,
+          module: 'ctox',
+          type: 'ctox.mailserver.save_user',
+          record_id: commandId,
+          inbound_channel: 'business_os.outbound',
+          payload: { username, password },
+          client_context: { source_module: 'outbound' }
+        });
+        let result = dispatched;
+        if (!dispatched?.status || dispatched.status === 'pending_sync') {
+          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
+        }
+        if (!result || (result.status !== 'completed' && !result.result)) {
+          throw new Error('Fehler beim Erstellen des E-Mail-Kontos.');
+        }
+      } catch (err) {
+        showBusinessAlert(err.message || String(err));
+      } finally {
+        await loadMailserverConfig();
+      }
+      return;
+    }
+
+    if (action === 'mailserver-delete-user') {
+      event.preventDefault();
+      event.stopPropagation();
+      const btn = event.target.closest('[data-action="mailserver-delete-user"]');
+      const username = btn?.dataset.username;
+      if (!username) return;
+      const confirmed = await showBusinessConfirm(
+        t('deleteUserConfirm', 'Möchtest du das E-Mail-Konto "{0}" wirklich löschen? Alle in diesem Postfach gespeicherten E-Mails gehen unwiderruflich verloren.', username),
+        { danger: true }
+      );
+      if (!confirmed) return;
+      state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
+      state.mailserver.loading = true;
+      const rPanel = root.querySelector('.outbound-research-drawer');
+      if (rPanel) {
+        rPanel.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+      }
+      try {
+        const commandId = `cmd_mailserver_delete_user_${crypto.randomUUID()}`;
+        const startedAtMs = Date.now();
+        const dispatched = await state.ctx.commandBus.dispatch({
+          id: commandId,
+          module: 'ctox',
+          type: 'ctox.mailserver.delete_user',
+          record_id: commandId,
+          inbound_channel: 'business_os.outbound',
+          payload: { username },
+          client_context: { source_module: 'outbound' }
+        });
+        let result = dispatched;
+        if (!dispatched?.status || dispatched.status === 'pending_sync') {
+          result = await waitForBusinessCommandProjection(commandId, startedAtMs);
+        }
+        if (!result || (result.status !== 'completed' && !result.result)) {
+          throw new Error('Fehler beim Löschen des E-Mail-Kontos.');
+        }
+      } catch (err) {
+        showBusinessAlert(err.message || String(err));
+      } finally {
+        await loadMailserverConfig();
+      }
+      return;
+    }
+
+    if (action === 'hide-company') {
+      event.preventDefault();
+      event.stopPropagation();
+      hideCompany(id);
+      render(true);
+      return;
+    }
+    if (action === 'toggle-hidden-companies' || event.target.closest('#toggle-hidden-companies')) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleHiddenCompaniesPanel();
+      return;
+    }
+
     if (view) {
       state.activeView = view;
       render();
@@ -957,6 +1788,226 @@ function wireEvents(root) {
       render();
     }
   });
+
+  // Double-click delegated inline editors
+  root.addEventListener('dblclick', async (event) => {
+    const tr = event.target.closest('tr');
+    if (!tr || tr.dataset.contactIndex == null) return;
+
+    const itemId = tr.dataset.id;
+    const contactIndex = Number(tr.dataset.contactIndex);
+    const item = state.pipeline.find(entry => entry.id === itemId);
+    const contact = item?.contacts?.[contactIndex];
+    if (!contact) return;
+
+    // Contact name editing
+    const nameBtn = event.target.closest('.person-name-btn');
+    if (nameBtn) {
+      event.stopPropagation();
+      startInlineEdit(nameBtn, {
+        initialText: contact.name || contact.firstname || contact.lastname || '',
+        multiline: false,
+        onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          c.name = newVal;
+        })
+      });
+      return;
+    }
+
+    // Role/Position editing
+    const roleTd = event.target.closest('.col-role');
+    if (roleTd) {
+      event.stopPropagation();
+      startInlineEdit(roleTd, {
+        initialText: contact.role || contact.title || contact.position || '',
+        multiline: false,
+        onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          c.role = newVal;
+        })
+      });
+      return;
+    }
+
+    // Department editing
+    const deptTd = event.target.closest('.col-dept');
+    if (deptTd) {
+      event.stopPropagation();
+      startInlineEdit(deptTd, {
+        initialText: contact.departments || contact.department || '',
+        multiline: false,
+        onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          c.departments = newVal;
+        })
+      });
+      return;
+    }
+
+    // Email / Phone / LinkedIn stack editing
+    const contactTd = event.target.closest('.col-contact');
+    if (contactTd) {
+      event.stopPropagation();
+      const emailLink = event.target.closest('a[href^="mailto:"]');
+      const linkedinLink = event.target.closest('a[href*="linkedin"]');
+
+      if (emailLink) {
+        startInlineEdit(emailLink, {
+          initialText: contact.email || contact.e_mail || '',
+          multiline: false,
+          onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+            c.email = newVal;
+          })
+        });
+      } else if (linkedinLink) {
+        startInlineEdit(linkedinLink, {
+          initialText: contact.linkedin_url || contact.linkedin || contact.profile_url || '',
+          multiline: false,
+          onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+            c.linkedin_url = newVal;
+          })
+        });
+      } else {
+        const phoneWrap = contactTd.querySelector('span') || contactTd;
+        startInlineEdit(phoneWrap, {
+          initialText: contact.phone || contact.telephone || '',
+          multiline: false,
+          onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+            c.phone = newVal;
+          })
+        });
+      }
+      return;
+    }
+
+    // Outreach draft editing
+    const msgContent = event.target.closest('.msg-content');
+    if (msgContent) {
+      event.stopPropagation();
+      const activeKey = msgContent.dataset.activeKey || 'message_mail_subject';
+      const messages = contact.messages || {};
+      startInlineEdit(msgContent, {
+        initialText: messages[activeKey] || '',
+        multiline: true,
+        onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          if (!c.messages) c.messages = {};
+          c.messages[activeKey] = newVal;
+        })
+      });
+      return;
+    }
+
+    // Contact notes editing
+    const noteContent = event.target.closest('.note-content');
+    if (noteContent) {
+      event.stopPropagation();
+      const activeNoteKey = noteContent.dataset.activeNoteKey || 'note_general';
+      const notes = contact.notes || {};
+      startInlineEdit(noteContent, {
+        initialText: notes[activeNoteKey] || '',
+        multiline: true,
+        onSave: (newVal) => updateContactInPipelineItem(itemId, contactIndex, (c) => {
+          if (!c.notes) c.notes = {};
+          c.notes[activeNoteKey] = newVal;
+        })
+      });
+      return;
+    }
+  });
+
+  // Hover-peeking mouseover/mouseout listeners
+  root.addEventListener('mouseover', (event) => {
+    const tab = event.target.closest('.msg-tab');
+    if (tab) {
+      const tr = tab.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const item = state.pipeline.find(entry => entry.id === itemId);
+      const contact = item?.contacts?.[contactIndex];
+      if (!contact) return;
+
+      const tabKey = tab.dataset.msg;
+      const messages = contact.messages || {};
+      const activeText = trim(messages[tabKey]);
+
+      const textPre = tr.querySelector('.col-message .msg-text');
+      if (textPre) {
+        textPre.textContent = activeText || '—';
+      }
+      tr.classList.add('is-peeking-msg');
+      return;
+    }
+
+    const noteTab = event.target.closest('.note-tab');
+    if (noteTab) {
+      const tr = noteTab.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const item = state.pipeline.find(entry => entry.id === itemId);
+      const contact = item?.contacts?.[contactIndex];
+      if (!contact) return;
+
+      const noteKey = noteTab.dataset.note;
+      const notes = contact.notes || {};
+      const activeText = trim(notes[noteKey]);
+
+      const textPre = tr.querySelector('.col-note .note-text');
+      if (textPre) {
+        textPre.textContent = activeText || '—';
+      }
+      tr.classList.add('is-peeking-note');
+      return;
+    }
+  });
+
+  root.addEventListener('mouseout', (event) => {
+    const tab = event.target.closest('.msg-tab');
+    if (tab) {
+      const tr = tab.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const item = state.pipeline.find(entry => entry.id === itemId);
+      const contact = item?.contacts?.[contactIndex];
+      if (!contact) return;
+
+      const contactKey = tr.dataset.contactKey;
+      const activeMsgKey = state.activeMsgByContact?.get(contactKey) || 'message_mail_subject';
+      const messages = contact.messages || {};
+      const activeText = trim(messages[activeMsgKey]);
+
+      const textPre = tr.querySelector('.col-message .msg-text');
+      if (textPre) {
+        textPre.textContent = activeText || '—';
+      }
+      tr.classList.remove('is-peeking-msg');
+      return;
+    }
+
+    const noteTab = event.target.closest('.note-tab');
+    if (noteTab) {
+      const tr = noteTab.closest('tr');
+      if (!tr) return;
+      const itemId = tr.dataset.id;
+      const contactIndex = Number(tr.dataset.contactIndex);
+      const item = state.pipeline.find(entry => entry.id === itemId);
+      const contact = item?.contacts?.[contactIndex];
+      if (!contact) return;
+
+      const contactKey = tr.dataset.contactKey;
+      const activeNoteKey = state.activeNoteByContact?.get(contactKey) || 'note_general';
+      const notes = contact.notes || {};
+      const activeText = trim(notes[activeNoteKey]);
+
+      const textPre = tr.querySelector('.col-note .note-text');
+      if (textPre) {
+        textPre.textContent = activeText || '—';
+      }
+      tr.classList.remove('is-peeking-note');
+      return;
+    }
+  });
+
   root.addEventListener('input', (event) => {
     if (event.target.matches('[data-search]')) {
       state.search = event.target.value;
@@ -972,11 +2023,28 @@ function wireEvents(root) {
       scheduleCenterRenderPreservingInput(event.target);
     }
   });
+
+  root.addEventListener('change', (event) => {
+    if (event.target.id === 'status-filter') {
+      state.statusFilter = event.target.value;
+      render(true);
+    } else if (event.target.id === 'tag-filter') {
+      state.tagFilter = event.target.value;
+      render(true);
+    }
+  });
 }
 
-function render() {
+function render(force = false) {
+  if (!force) {
+    const hasInlineEditor = !!state.ctx?.host?.querySelector('.inline-editor');
+    if (state.isScrolling || hasInlineEditor || activeOverlay) {
+      state.pendingRenderAfterScroll = true;
+      return;
+    }
+  }
   renderLeft();
-  renderCenter();
+  renderCenter(force);
   renderRight();
 }
 
@@ -985,14 +2053,14 @@ function renderLeft() {
   const campaigns = visibleCampaigns();
   root.innerHTML = `
     <header class="outbound-pane-header">
-      <div><span>Outbound</span><h2>Campaigns</h2></div>
+      <div><span>${escapeHtml(t('outbound', 'Outbound'))}</span><h2>${escapeHtml(t('campaigns', 'Campaigns'))}</h2></div>
       <div class="outbound-actions">
-        <button class="outbound-icon-button" type="button" data-action="new-campaign" title="Neue Campaign" aria-label="Neue Campaign">+</button>
+        <button class="outbound-icon-button" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">+</button>
       </div>
     </header>
     <div class="outbound-scroll">
-      <section class="outbound-section" aria-label="Campaigns">
-        ${campaigns.map(renderCampaignItem).join('') || '<div class="outbound-empty">Keine Campaigns vorhanden.</div>'}
+      <section class="outbound-section" aria-label="${escapeHtml(t('campaigns', 'Campaigns'))}">
+        ${campaigns.map(renderCampaignItem).join('') || `<div class="outbound-empty">${escapeHtml(t('noCampaigns', 'Keine Campaigns vorhanden.'))}</div>`}
       </section>
     </div>
   `;
@@ -1013,22 +2081,22 @@ function renderCampaignItem(campaign) {
           ${scope ? `<em>${escapeHtml(scope)}</em>` : ''}
         </button>
         <div class="outbound-shard-actions" aria-label="Campaign Aktionen">
-          <button type="button" data-icon="runbook" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="Campaign Runbook öffnen" aria-label="Campaign Runbook öffnen" ${knowledge.runbookId ? '' : 'disabled'}></button>
-          <button class="is-primary-action" type="button" data-icon="import" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="Importjob anlegen" aria-label="Importjob anlegen"><b>Import</b></button>
-          <button type="button" data-icon="edit" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="Campaign bearbeiten" aria-label="Campaign bearbeiten"></button>
-          <button type="button" data-icon="delete" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="Campaign löschen" aria-label="Campaign löschen"></button>
+          <button type="button" data-icon="runbook" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}></button>
+          <button class="is-primary-action" type="button" data-icon="import" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"><b>Import</b></button>
+          <button type="button" data-icon="edit" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}"></button>
+          <button type="button" data-icon="delete" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}"></button>
         </div>
       </div>
       <div class="outbound-funnel" aria-label="Campaign Funnel">
         ${renderInputFunnelStage(campaign, metrics)}
         ${renderConversion(metrics.input, metrics.companyResearchDone, campaign, 'company_research')}
-        ${renderFunnelStage(campaign, 'research', 'Research', 'offen', `${metrics.companyResearchDone} / ${metrics.companyResearchTotal}`, metrics.companyResearchOpen)}
+        ${renderFunnelStage(campaign, 'research', 'Research', t('offen', 'offen'), `${metrics.companyResearchDone} / ${metrics.companyResearchTotal}`, metrics.companyResearchOpen)}
         ${renderConversion(metrics.companyResearchDone, metrics.companyQualified, campaign, 'pipeline')}
-        ${renderFunnelStage(campaign, 'qualified', 'Firmen', 'qualifiziert', `${metrics.companyQualified} / ${metrics.companyQualifiedTotal}`, metrics.pipelineOpen, 'good')}
+        ${renderFunnelStage(campaign, 'qualified', t('company', 'Firmen'), t('qualifiziert', 'qualifiziert'), `${metrics.companyQualified} / ${metrics.companyQualifiedTotal}`, metrics.pipelineOpen, 'good')}
         ${renderConversion(metrics.companyQualified, metrics.contactQualified, campaign, 'contact_research')}
-        ${renderFunnelStage(campaign, 'contact_qualified', 'Kontakte', 'qualifiziert', `${metrics.contactQualified} / ${metrics.contactQualifiedTotal}`, metrics.contactOpen)}
+        ${renderFunnelStage(campaign, 'contact_qualified', t('contact_people', 'Kontakte'), t('qualifiziert', 'qualifiziert'), `${metrics.contactQualified} / ${metrics.contactQualifiedTotal}`, metrics.contactOpen)}
         ${renderConversion(metrics.contactQualified, metrics.leadQualified, campaign, 'lead_qualification')}
-        ${renderFunnelStage(campaign, 'lead_qualified', 'Leads', 'qualifiziert', `${metrics.leadQualified} / ${metrics.leadQualifiedTotal}`, metrics.leadOpen)}
+        ${renderFunnelStage(campaign, 'lead_qualified', t('lead_status', 'Leads'), t('qualifiziert', 'qualifiziert'), `${metrics.leadQualified} / ${metrics.leadQualifiedTotal}`, metrics.leadOpen)}
       </div>
     </article>
   `;
@@ -1046,9 +2114,9 @@ function renderInputFunnelStage(campaign, metrics) {
       data-filter="all"
       data-campaign-id="${escapeHtml(campaign.id)}"
       aria-pressed="${active}"
-      title="Input Unternehmen filtern"
+      title="${escapeHtml(t('filter_input_title', 'Input Unternehmen filtern'))}"
     >
-      <span><b>Input</b><small>Unternehmen</small></span>
+      <span><b>Input</b><small>${escapeHtml(t('company', 'Unternehmen'))}</small></span>
       <i>${formatCount(metrics.input)}</i>
       <em>${escapeHtml(status)}</em>
       <span class="outbound-funnel-progress" aria-hidden="true">
@@ -1059,10 +2127,10 @@ function renderInputFunnelStage(campaign, metrics) {
 }
 
 function inputImportStatusLabel(metrics) {
-  if (!metrics.sourceCount) return 'Noch kein Import';
-  const parts = [`${formatCount(metrics.parsedSourceCount)} / ${formatCount(metrics.sourceCount)} verarbeitet`];
-  if (metrics.runningSourceCount) parts.push(`${formatCount(metrics.runningSourceCount)} läuft`);
-  if (metrics.failedSourceCount) parts.push(`${formatCount(metrics.failedSourceCount)} Fehler`);
+  if (!metrics.sourceCount) return t('noImport', 'Noch kein Import');
+  const parts = [`${formatCount(metrics.parsedSourceCount)} / ${formatCount(metrics.sourceCount)} ${t('processed', 'verarbeitet')}`];
+  if (metrics.runningSourceCount) parts.push(`${formatCount(metrics.runningSourceCount)} ${t('running', 'läuft')}`);
+  if (metrics.failedSourceCount) parts.push(`${formatCount(metrics.failedSourceCount)} ${t('failed', 'Fehler')}`);
   return parts.join(' · ');
 }
 
@@ -1071,21 +2139,21 @@ function renderCampaignEditItem(campaign) {
     <article class="outbound-campaign-item outbound-campaign-edit" aria-current="${campaign.id === state.selectedCampaignId}" data-id="${escapeHtml(campaign.id)}">
       <div class="outbound-campaign-edit-grid">
         <label>
-          <span>Titel</span>
+          <span>${escapeHtml(t('title', 'Titel'))}</span>
           <input data-campaign-edit-field="name" value="${escapeHtml(campaign.name)}" />
         </label>
         <label>
-          <span>Untertitel</span>
+          <span>${escapeHtml(t('subtitle', 'Untertitel'))}</span>
           <input data-campaign-edit-field="subtitle" value="${escapeHtml(campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`)}" />
         </label>
         <label>
-          <span>Scope / ICP</span>
+          <span>${escapeHtml(t('scopeIcp', 'Scope / ICP'))}</span>
           <textarea data-campaign-edit-field="scope" rows="3" placeholder="z.B. DACH SaaS, 50-500 MA, hoher Energieverbrauch, kaufkräftige Operations-Teams">${escapeHtml(campaign.payload?.scope || campaign.objective || '')}</textarea>
         </label>
       </div>
       <div class="outbound-campaign-edit-actions">
-        <button class="outbound-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">Abbrechen</button>
-        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}">Speichern</button>
+        <button class="outbound-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
+        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('save', 'Speichern'))}</button>
       </div>
     </article>
   `;
@@ -1100,17 +2168,20 @@ function renderFunnelStage(campaign, filter, label, sublabel, value, openCount =
       data-filter="${escapeHtml(filter)}"
       data-campaign-id="${escapeHtml(campaign.id)}"
       aria-pressed="${active}"
-      title="${escapeHtml(label)} ${escapeHtml(sublabel || '')} filtern"
+      title="${escapeHtml(t('filter_stage_title', '{0} {1} filtern', label, sublabel || ''))}"
     >
       <span><b>${escapeHtml(label)}</b>${sublabel ? `<small>${escapeHtml(sublabel)}</small>` : ''}</span>
       <i>${typeof value === 'number' ? formatCount(value) : escapeHtml(value)}</i>
-      ${openCount ? `<em>${formatCount(openCount)} offen</em>` : ''}
+      ${openCount ? `<em>${formatCount(openCount)} ${escapeHtml(t('offen', 'offen'))}</em>` : ''}
     </button>
   `;
 }
 
 function renderConversion(from, to, campaign, stage) {
   const openCount = automationOpenRecords(campaign.id, stage).length;
+  const stageDef = getAutomationStageDefinition(stage);
+  const ctaText = stageDef?.cta || t('automationStart', 'Automatisierung starten');
+  const titleText = `${ctaText} · ${formatCount(openCount)} ${t('offen', 'offen')}`;
   return `
     <div class="outbound-conversion">
       <span>${conversionRate(from, to)}</span>
@@ -1119,8 +2190,8 @@ function renderConversion(from, to, campaign, stage) {
         data-action="open-automation"
         data-stage="${escapeHtml(stage)}"
         data-campaign-id="${escapeHtml(campaign.id)}"
-        title="${escapeHtml(`${AUTOMATION_STAGES[stage]?.cta || 'Automatisierung starten'} · ${formatCount(openCount)} offen`)}"
-        aria-label="${escapeHtml(`${AUTOMATION_STAGES[stage]?.cta || 'Automatisierung starten'} · ${formatCount(openCount)} offen`)}"
+        title="${escapeHtml(titleText)}"
+        aria-label="${escapeHtml(titleText)}"
         ${openCount ? '' : 'disabled'}
       >${openCount ? '<span aria-hidden="true">▶</span>' : ''}<b>${escapeHtml(automationShortLabel(stage, openCount))}</b></button>
     </div>
@@ -1129,23 +2200,23 @@ function renderConversion(from, to, campaign, stage) {
 
 function currentFilterLabel() {
   return ({
-    all: 'Input Unternehmen',
-    research: 'Research offen',
-    qualified: 'Unternehmen qualifiziert',
-    contact_qualified: 'Kontakt qualifiziert',
-    lead_qualified: 'Lead qualifiziert',
-    pipeline: 'Pipeline',
-    rejected: 'Nicht passend',
-  })[state.filter] || 'Alle';
+    all: t('filter_all', 'Input Unternehmen'),
+    research: t('filter_research', 'Research offen'),
+    qualified: t('filter_qualified', 'Unternehmen qualifiziert'),
+    contact_qualified: t('filter_contact_qualified', 'Kontakt qualifiziert'),
+    lead_qualified: t('filter_lead_qualified', 'Lead qualifiziert'),
+    pipeline: t('filter_pipeline', 'Pipeline'),
+    rejected: t('filter_rejected', 'Nicht passend'),
+  })[state.filter] || t('filter_default', 'Alle');
 }
 
 function automationShortLabel(stage, openCount) {
-  if (!openCount) return 'fertig';
+  if (!openCount) return t('done', 'fertig');
   return ({
-    company_research: 'Research',
-    pipeline: 'Pipeline',
-    contact_research: 'Kontakte',
-    lead_qualification: 'Leads',
+    company_research: t('filter_research', 'Research'),
+    pipeline: t('filter_pipeline', 'Pipeline'),
+    contact_research: t('contact_people', 'Kontakte'),
+    lead_qualification: t('lead_status', 'Leads'),
   })[stage] || 'Start';
 }
 
@@ -1159,113 +2230,693 @@ function renderSourceItem(source) {
   return `
     <div class="outbound-source-item">
       <strong>${escapeHtml(source.title)}</strong>
-      <span>${escapeHtml(source.source_type)} · ${escapeHtml(source.status)} · ${source.imported_count || 0}/${source.row_count || 0} Firmen</span>
+      <span>${escapeHtml(source.source_type)} · ${escapeHtml(source.status)} · ${source.imported_count || 0}/${source.row_count || 0} ${escapeHtml(t('companiesCount', 'Firmen'))}</span>
     </div>
   `;
 }
 
-function renderCenter() {
+function renderCenter(force = false) {
   const root = state.ctx.host.querySelector('.outbound-center');
   state.centerResizeCleanup?.();
   state.centerResizeCleanup = null;
   const campaign = selectedCampaign();
   if (!campaign) {
-    root.innerHTML = '<div class="outbound-empty">Keine Campaign ausgewählt.</div>';
+    root.innerHTML = `<div class="outbound-empty">${escapeHtml(t('noCampaignSelected', 'Keine Campaign ausgewählt.'))}</div>`;
     return;
   }
+
   const settings = getCampaignResearchSettings(campaign);
+  const activeCols = buildActiveTableColumns(settings, state.viewMode);
+  const activeColsKey = activeCols.map(c => c.id).join(',');
+  if (state.lastActiveColsKey !== activeColsKey) {
+    force = true;
+    state.lastActiveColsKey = activeColsKey;
+  }
+
+  const campaignStatuses = extractUniqueStatuses(currentPipeline());
+  const campaignTags = extractUniqueTags(currentPipeline());
+  const hiddenCount = loadHiddenCompanies().length;
+
+  const scrollUnified = root.querySelector('.outbound-table-scroll-unified');
+  const tbody = root.querySelector('.crm-table tbody');
+
+  // SMART INLINE UPDATE DETECT
+  if (!force && scrollUnified && tbody) {
+    // 1. Update counts in the header
+    const countsEl = root.querySelector('.outbound-header-counts');
+    if (countsEl) {
+      countsEl.textContent = `${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}`;
+    }
+
+    // 2. Update active research summary
+    const summaryContainer = root.querySelector('.outbound-active-research-container');
+    if (summaryContainer) {
+      summaryContainer.innerHTML = renderActiveResearchSummary(campaign);
+    }
+
+    // 3. Update research activity panel
+    const activityContainer = root.querySelector('.outbound-research-activity-container');
+    if (activityContainer) {
+      summaryContainer.innerHTML = renderResearchActivityPanel(campaign);
+    }
+
+    // 4. Update Status/Tag selects and "Versteckte Firmen" count
+    const statusSelect = root.querySelector('#status-filter');
+    if (statusSelect) {
+      const activeVal = state.statusFilter;
+      statusSelect.innerHTML = `<option value="">${escapeHtml(t('allStatus', 'Alle Status'))}</option>` + campaignStatuses.map(s => `<option value="${escapeHtml(s)}" ${activeVal === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('');
+    }
+
+    const tagSelect = root.querySelector('#tag-filter');
+    if (tagSelect) {
+      const activeVal = state.tagFilter;
+      tagSelect.innerHTML = `<option value="">${escapeHtml(t('allTags', 'Alle Tags'))}</option>` + campaignTags.map(t => `<option value="${escapeHtml(t)}" ${activeVal === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('');
+    }
+
+    const hiddenCountBadge = root.querySelector('#toggle-hidden-companies span:last-child');
+    if (hiddenCountBadge) {
+      hiddenCountBadge.textContent = hiddenCount;
+    }
+
+    // 5. Update tbody with table rows
+    const rows = filteredQualificationRows();
+    const visibleRows = rows.slice(0, OUTBOUND_TABLE_RENDER_LIMIT);
+    const emptyCompanyMessage = state.filter === 'all'
+      ? t('noCompaniesInCampaign', 'Noch keine Unternehmen in dieser Campaign.')
+      : `${t('emptyFilter', 'Keine Firmen für diesen Filter:')} ${currentFilterLabel()}.`;
+
+    const newHtml = visibleRows.length
+      ? visibleRows.map(row => renderCRMCompanyRows(row)).join('')
+      : `<tr><td colspan="${activeCols.length}" class="outbound-table-empty" style="text-align:center; padding: 40px; color: var(--outbound-muted);">${escapeHtml(emptyCompanyMessage)}</td></tr>`;
+
+    if (state.lastTbodyHtml !== newHtml) {
+      state.lastTbodyHtml = newHtml;
+      tbody.innerHTML = newHtml;
+    }
+
+    setupCenterSplitResizing(root);
+    return;
+  }
+
+  // FALLBACK FULL REDRAW (force === true or initial campaign select)
+  const scrollTop = scrollUnified ? scrollUnified.scrollTop : 0;
+  const scrollLeft = scrollUnified ? scrollUnified.scrollLeft : 0;
+  const focusState = saveFocusState(root);
+
   root.innerHTML = `
     <header class="outbound-pane-header">
       <div><span>${escapeHtml(campaign.market || 'DACH')}</span><h2>${escapeHtml(campaign.name)}</h2></div>
       <div class="outbound-header-actions">
-        ${renderActiveResearchSummary(campaign)}
+        <div class="outbound-active-research-container">
+          ${renderActiveResearchSummary(campaign)}
+        </div>
+
+        <label class="outbound-toggle-label" style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; user-select: none; margin-right: 6px; color: var(--outbound-muted);">
+          <input type="checkbox" id="toggle-compact" ${state.viewMode === 'compact' ? 'checked' : ''} style="cursor: pointer; accent-color: var(--outbound-accent);" />
+          <span>${escapeHtml(t('compactView', 'Kompakte Ansicht'))}</span>
+        </label>
+
+        <select id="status-filter" style="background: var(--outbound-surface-2); border: 1px solid var(--outbound-line); border-radius: var(--outbound-radius); padding: 4px 8px; font-size: 11px; font-weight: 600; color: var(--outbound-text); cursor: pointer; max-width: 120px; outline: none; margin-right: 6px;">
+          <option value="">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
+          ${campaignStatuses.map(s => `<option value="${escapeHtml(s)}" ${state.statusFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
+        </select>
+
+        <select id="tag-filter" style="background: var(--outbound-surface-2); border: 1px solid var(--outbound-line); border-radius: var(--outbound-radius); padding: 4px 8px; font-size: 11px; font-weight: 600; color: var(--outbound-text); cursor: pointer; max-width: 120px; outline: none; margin-right: 6px;">
+          <option value="">${escapeHtml(t('allTags', 'Alle Tags'))}</option>
+          ${campaignTags.map(t => `<option value="${escapeHtml(t)}" ${state.tagFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+        </select>
+
+        <button type="button" id="toggle-hidden-companies" class="outbound-button" style="font-size: 11px; font-weight: 600; padding: 0 8px; min-height: 30px; display: inline-flex; align-items: center; gap: 6px; border-color: var(--outbound-line); color: var(--outbound-text); background: var(--outbound-surface-2); margin-right: 6px; cursor: pointer;">
+          <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
+          <span style="background: var(--outbound-accent); color: #000; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 999px;">${hiddenCount}</span>
+        </button>
+
         <button
           class="outbound-icon-button outbound-icon-mask"
           type="button"
           data-icon="export"
           data-action="export-table"
-          title="Tabelle als Excel exportieren"
-          aria-label="Tabelle als Excel exportieren"
+          title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
+          aria-label="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
+          style="margin-right: 6px;"
         ></button>
         <button
           class="outbound-icon-button outbound-icon-mask"
           type="button"
           data-icon="settings"
           data-action="open-research-settings"
-          title="Research-Felder einstellen"
-          aria-label="Research-Felder einstellen"
+          title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
+          aria-label="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
+          style="margin-right: 12px;"
         ></button>
-        <div class="outbound-muted">${currentSources().length} Importjobs · ${currentCompanies().length} Firmen · ${settings.fields.length + settings.contactFields.length} Spalten</div>
+        <div class="outbound-muted outbound-header-counts">${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}</div>
       </div>
     </header>
-    ${renderResearchActivityPanel(campaign)}
-    ${renderQualificationSplit(campaign)}
+    <div class="outbound-center-content">
+      <div class="outbound-research-activity-container">
+        ${renderResearchActivityPanel(campaign)}
+      </div>
+      ${renderQualificationSplit(campaign)}
+    </div>
   `;
+
+  // Restore scroll & focus states
+  const newScrollUnified = root.querySelector('.outbound-table-scroll-unified');
+  if (newScrollUnified) {
+    newScrollUnified.scrollTop = scrollTop;
+    newScrollUnified.scrollLeft = scrollLeft;
+  }
+  restoreFocusState(root, focusState);
+
   setupCenterSplitResizing(root);
+}
+
+const OUTREACH_TABS = [
+  { key: 'message_mail_subject', label: 'Betreff' },
+  { key: 'message_mail_body', label: 'E-Mail' },
+  { key: 'message_followup_1', label: 'Follow-up 1' },
+  { key: 'message_followup_2', label: 'Follow-up 2' }
+];
+
+const STANDARD_NOTE_TABS = [
+  { key: 'note_general', label: 'Allgemein' },
+  { key: 'note_next_step', label: 'Nächster Schritt' }
+];
+
+function getNoteTabsForContact(contact) {
+  const tabs = [...STANDARD_NOTE_TABS];
+  if (contact?.notes) {
+    Object.keys(contact.notes).forEach(key => {
+      if (key.startsWith('note_') && !tabs.some(t => t.key === key)) {
+        const label = key.slice(5).split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        tabs.push({ key, label });
+      }
+    });
+  }
+  return tabs;
+}
+
+function renderHeaderCell(columnId, label, className = '', action = false) {
+  return renderTableHeaderCell({ id: columnId, label, action }, className);
+}
+
+function replaceRowDOMInline(tr) {
+  if (!tr) return;
+  const itemId = tr.dataset.id;
+  const row = filteredQualificationRows().find(r => (r.item?.id === itemId || r.company.id === itemId));
+  if (row) {
+    const newHtml = renderCRMCompanyRows(row);
+    const temp = document.createElement('tbody');
+    temp.innerHTML = newHtml;
+    const newTr = temp.firstElementChild;
+    if (newTr) {
+      const parent = tr.parentNode;
+      parent.replaceChild(newTr, tr);
+      state.lastTbodyHtml = parent.innerHTML;
+    }
+  }
+}
+
+const COLUMN_CLASS_MAPPING = {
+  // Company fields
+  'legal_form': 'col-dept',
+  'country': 'col-loc',
+  'city': 'col-loc',
+  'phone': 'col-contact',
+  'email': 'col-contact',
+  'domain': 'col-contact',
+  'employee_count': 'col-dept',
+  'revenue_eur': 'col-dept',
+  'profit_eur': 'col-dept',
+  'share_capital_eur': 'col-dept',
+  'balance_sheet_total_eur': 'col-dept',
+  'equity_eur': 'col-dept',
+  'representative_1': 'col-role',
+  'representative_2': 'col-role',
+  'representative_3': 'col-role',
+  'business_purpose': 'col-note',
+  'tickers': 'col-dept',
+  'financials_date': 'col-loc',
+  'industry_wz': 'col-role',
+  'vat_id': 'col-dept',
+  'street': 'col-contact',
+  'postal_code': 'col-loc',
+  'registry_court': 'col-role',
+  'registry_id': 'col-dept',
+  'status': 'col-status',
+  // Contact fields
+  'contact.people': 'col-name',
+  'contact.role': 'col-role',
+  'contact.email': 'col-contact',
+  'contact.linkedin': 'col-contact',
+  'contact.phone': 'col-contact',
+  'contact.fit': 'col-note',
+  'contact.status': 'col-status',
+  'contact.tags': 'col-tags',
+  'lead.reason': 'col-note',
+  'lead.status': 'col-status',
+};
+
+function buildActiveTableColumns(settings, viewMode) {
+  const isCompact = viewMode === 'compact';
+  const activeCompanyFieldIds = isCompact ? settings.fieldsCompact : settings.fields;
+  const activeContactFieldIds = isCompact ? settings.contactFieldsCompact : settings.contactFields;
+
+  const cols = [];
+
+  // 1. Always start with Company Name
+  cols.push({
+    id: 'company.name',
+    label: 'Unternehmen',
+    className: 'col-company',
+    type: 'company_name'
+  });
+
+  // 2. Active Company Fields
+  (activeCompanyFieldIds || []).forEach(fieldId => {
+    let label = settings.columnLabels?.[fieldId];
+    if (!label) {
+      const def = RESEARCH_FIELD_DEFS.find(([id]) => id === fieldId);
+      label = def ? def[1] : (settings.customFields?.find(f => f.id === fieldId)?.label || fieldId);
+    }
+    const mappedClass = COLUMN_CLASS_MAPPING[fieldId] || 'col-dept';
+    cols.push({
+      id: `field.${fieldId}`,
+      fieldId: fieldId,
+      label: label,
+      className: mappedClass,
+      type: 'company_field'
+    });
+  });
+
+  // 3. Active Contact Fields
+  (activeContactFieldIds || []).forEach(fieldId => {
+    let label = settings.columnLabels?.[fieldId];
+    if (!label) {
+      const def = CONTACT_FIELD_DEFS.find(([id]) => id === fieldId);
+      label = def ? def[1] : (settings.customContactFields?.find(f => f.id === fieldId)?.label || fieldId);
+    }
+
+    if (fieldId === 'contact.people') {
+      cols.push({
+        id: 'contact.people',
+        fieldId: 'contact.people',
+        label: label,
+        className: 'col-name',
+        type: 'contact_people'
+      });
+    } else {
+      const mappedClass = COLUMN_CLASS_MAPPING[fieldId] || 'col-role';
+      cols.push({
+        id: `contact_field.${fieldId}`,
+        fieldId: fieldId,
+        label: label,
+        className: mappedClass,
+        type: 'contact_field'
+      });
+    }
+  });
+
+  // 4. Outreach and Notes columns (only in Expanded view)
+  if (!isCompact) {
+    cols.push({
+      id: 'outreach.type',
+      label: 'Anschreiben',
+      className: 'col-msgtype',
+      type: 'outreach_type'
+    });
+    cols.push({
+      id: 'outreach.draft',
+      label: 'Entwurf',
+      className: 'col-message',
+      type: 'outreach_draft'
+    });
+    cols.push({
+      id: 'note.type',
+      label: 'Notiz-Typ',
+      className: 'col-notetype',
+      type: 'note_type'
+    });
+    cols.push({
+      id: 'note.content',
+      label: 'Notizen',
+      className: 'col-note',
+      type: 'note_content'
+    });
+  }
+
+  return cols;
+}
+
+function resolveContactFieldHTML(row, contact, fieldId, contactKey) {
+  if (fieldId === 'contact.role') {
+    return escapeHtml(contact.role || contact.title || contact.position || '—');
+  }
+  if (fieldId === 'contact.departments') {
+    return escapeHtml(contact.departments || contact.department || '—');
+  }
+  if (fieldId === 'contact.email') {
+    return contact.email ? `<a href="mailto:${escapeHtml(contact.email)}">${escapeHtml(contact.email)}</a>` : '<span style="color: var(--outbound-muted);">Keine E-Mail</span>';
+  }
+  if (fieldId === 'contact.linkedin') {
+    const url = contact.linkedin_url || contact.linkedin;
+    return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">LinkedIn</a>` : '<span style="color: var(--outbound-muted);">Kein LinkedIn</span>';
+  }
+  if (fieldId === 'contact.phone') {
+    return contact.phone ? `<span>${escapeHtml(contact.phone)}</span>` : '<span style="color: var(--outbound-muted);">Keine Tel.</span>';
+  }
+  if (fieldId === 'contact.fit') {
+    return escapeHtml(contact.qualification_status || contact.fit_reason || contact.relevance || '—');
+  }
+  if (fieldId === 'contact.status') {
+    const statusChips = chipsFromMultiSelect(contact.status_field || contact.status);
+    const statusHtml = statusChips.length
+      ? statusChips.map(c => `<span class="chip" data-kind="status">${escapeHtml(c)}</span>`).join('')
+      : '<span class="chip" style="opacity: 0.5;">+ Status</span>';
+    return `<div class="chip-row">${statusHtml}</div>`;
+  }
+  if (fieldId === 'contact.tags') {
+    const tagChips = chipsFromMultiSelect(contact.tags);
+    const tagHtml = tagChips.length
+      ? tagChips.map(c => `<span class="chip">${escapeHtml(c)}</span>`).join('')
+      : '<span class="chip" style="opacity: 0.5;">+ Tag</span>';
+    return `<div class="chip-row">${tagHtml}</div>`;
+  }
+  if (fieldId === 'lead.reason') {
+    return escapeHtml(row.item?.lead_reason || row.item?.qualification_reason || '—');
+  }
+  if (fieldId === 'lead.status') {
+    const status = row.item ? pipelineResearchStatus(row.item, 'lead_qualification') : '';
+    const val = isAutomationActive(status) || isFailedStatus(status) || isCancelledStatus(status)
+      ? automationStatusLabel(status)
+      : (isLeadQualified(row.item) ? 'qualifiziert' : 'offen');
+    return escapeHtml(val);
+  }
+
+  // Fallback for custom contact fields
+  const aliases = [fieldId, fieldId.replace(/^contact\./, ''), fieldId.replace(/^lead\./, '')];
+  const value = firstObjectValue(contact, aliases)
+    || (row.item?.payload ? firstObjectValue(row.item.payload, aliases) : '')
+    || (row.item?.payload?.knowledge_rows ? firstKnowledgeRowValue(row.item.payload.knowledge_rows, fieldId) : '');
+  if (Array.isArray(value)) return escapeHtml(value.filter(Boolean).join(', ') || '—');
+  return escapeHtml(String(value || '').trim() || '—');
+}
+
+function renderCRMCompanyRows(row) {
+  const contacts = Array.isArray(row.item?.contacts) ? row.item.contacts : [];
+
+  let html = '';
+  const contactStatus = row.item ? pipelineResearchStatus(row.item, 'contact_research') : '';
+  const leadStatus = row.item ? pipelineResearchStatus(row.item, 'lead_qualification') : '';
+  const rowClass = tableRowStatusClass(combinedAutomationStatus(contactStatus, leadStatus));
+
+  // Helper to match contact against active filters
+  const contactMatchesFilters = (c) => {
+    let statusMatch = true;
+    let tagMatch = true;
+    if (state.statusFilter) {
+      const chips = chipsFromMultiSelect(c.status_field || c.status).map(x => x.toLowerCase());
+      statusMatch = chips.includes(state.statusFilter.toLowerCase());
+    }
+    if (state.tagFilter) {
+      const chips = chipsFromMultiSelect(c.tags).map(x => x.toLowerCase());
+      tagMatch = chips.includes(state.tagFilter.toLowerCase());
+    }
+    return statusMatch && tagMatch;
+  };
+
+  const campaign = selectedCampaign();
+  const settings = getCampaignResearchSettings(campaign);
+  const activeCols = buildActiveTableColumns(settings, state.viewMode);
+
+  if (contacts.length === 0) {
+    const contactKey = row.item ? `${row.item.id}_0` : `${row.company.id}_0`;
+
+    html += `
+      <tr${rowClass} data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0">
+    `;
+
+    const contactCols = activeCols.filter(col => col.type === 'contact_people' || col.type === 'contact_field');
+    let contactCellRendered = false;
+
+    activeCols.forEach(col => {
+      if (col.type === 'company_name') {
+        html += `
+          <td class="col-company">
+            <div class="company-cell">
+              <a href="${escapeHtml(row.company.website || '#')}" target="_blank" rel="noopener" class="company-name-title">${escapeHtml(row.company.name)}</a>
+              ${row.company.domain ? `<a href="https://${escapeHtml(row.company.domain)}" target="_blank" rel="noopener" class="company-domain-link">${escapeHtml(row.company.domain)}</a>` : ''}
+              ${row.company.qualification_status === 'rejected' ? '<span class="company-exclude-badge">Ausgeschlossen</span>' : ''}
+              <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 4px; font-size: 10px; color: var(--outbound-muted);">
+                <span>Recht: ${escapeHtml(row.company.company_data?.legal_form || '—')}</span>
+                <span>Mitarbeiter: ${escapeHtml(row.company.company_data?.employee_count || '—')}</span>
+                <span>Umsatz: ${escapeHtml(row.company.company_data?.revenue_eur ? row.company.company_data.revenue_eur.toLocaleString('de-DE') + ' €' : '—')}</span>
+              </div>
+              <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                ${row.company.qualification_status === 'pending' ? `
+                  <button class="mini-btn" style="background: rgba(34, 197, 94, 0.2); color: #86efac; border-color: rgba(34, 197, 94, 0.4);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
+                  <button class="mini-btn" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
+                ` : `
+                  <span class="outbound-badge ${row.company.qualification_status === 'qualified' ? 'good' : 'warn'}">
+                    ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
+                  </span>
+                  ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
+                    <button class="mini-btn" type="button" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline</button>
+                  ` : ''}
+                `}
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
+              </div>
+            </div>
+          </td>
+        `;
+      } else if (col.type === 'company_field') {
+        html += `<td class="${col.className}">${escapeHtml(companyResearchValue(row.company, col.fieldId))}</td>`;
+      } else if (col.type === 'contact_people' || col.type === 'contact_field') {
+        if (!contactCellRendered) {
+          html += `
+            <td class="col-name" colspan="${contactCols.length}" style="vertical-align: middle;">
+              ${row.item
+                ? `<button class="outbound-button" type="button" style="width: 100%; border-color: var(--outbound-accent); color: var(--outbound-accent);" data-action="research-contacts" data-id="${escapeHtml(row.item.id)}">Ansprechpartner recherchieren</button>`
+                : `<button class="outbound-button" type="button" style="width: 100%; background: var(--outbound-accent); color:#000; font-weight:800;" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline übernehmen</button>`
+              }
+            </td>
+          `;
+          contactCellRendered = true;
+        }
+      } else {
+        html += `<td class="${col.className}" style="color: var(--outbound-muted); opacity: 0.5;">—</td>`;
+      }
+    });
+
+    html += `</tr>`;
+  } else {
+    let activeIndex = getSelectedContactIndexForCompany(row.company.id, contacts);
+
+    // Filter-Aware Picker adjustments
+    if (state.statusFilter || state.tagFilter) {
+      const activeContact = contacts[activeIndex];
+      if (!activeContact || !contactMatchesFilters(activeContact)) {
+        const firstMatchingIdx = contacts.findIndex(c => contactMatchesFilters(c));
+        if (firstMatchingIdx !== -1) {
+          activeIndex = firstMatchingIdx;
+          setSelectedContactIndexForCompany(row.company.id, activeIndex);
+        }
+      }
+    }
+
+    const contact = contacts[activeIndex] || contacts[0];
+    const contactKey = row.item ? `${row.item.id}_${activeIndex}` : `${row.company.id}_${activeIndex}`;
+
+    const activeMsgKey = state.activeMsgByContact.get(contactKey) || 'message_mail_subject';
+    const activeNoteKey = state.activeNoteByContact.get(contactKey) || 'note_general';
+
+    html += `
+      <tr${rowClass} data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}">
+    `;
+
+    activeCols.forEach(col => {
+      if (col.type === 'company_name') {
+        html += `
+          <td class="col-company">
+            <div class="company-cell">
+              <a href="${escapeHtml(row.company.website || '#')}" target="_blank" rel="noopener" class="company-name-title">${escapeHtml(row.company.name)}</a>
+              ${row.company.domain ? `<a href="https://${escapeHtml(row.company.domain)}" target="_blank" rel="noopener" class="company-domain-link">${escapeHtml(row.company.domain)}</a>` : ''}
+              ${row.company.qualification_status === 'rejected' ? '<span class="company-exclude-badge">Ausgeschlossen</span>' : ''}
+              <div style="margin-top: 4px; display: flex; flex-direction: column; gap: 4px; font-size: 10px; color: var(--outbound-muted);">
+                <span>Recht: ${escapeHtml(row.company.company_data?.legal_form || '—')}</span>
+                <span>Mitarbeiter: ${escapeHtml(row.company.company_data?.employee_count || '—')}</span>
+                <span>Umsatz: ${escapeHtml(row.company.company_data?.revenue_eur ? row.company.company_data.revenue_eur.toLocaleString('de-DE') + ' €' : '—')}</span>
+              </div>
+              <div style="margin-top: 8px; display: flex; gap: 4px; flex-wrap: wrap;">
+                ${row.company.qualification_status === 'pending' ? `
+                  <button class="mini-btn" style="background: rgba(34, 197, 94, 0.2); color: #86efac; border-color: rgba(34, 197, 94, 0.4);" type="button" data-action="qualify-company" data-id="${escapeHtml(row.company.id)}">Qualifizieren</button>
+                  <button class="mini-btn" style="background: rgba(239, 68, 68, 0.2); color: #fca5a5; border-color: rgba(239, 68, 68, 0.4);" type="button" data-action="reject-company" data-id="${escapeHtml(row.company.id)}">Ausschließen</button>
+                ` : `
+                  <span class="outbound-badge ${row.company.qualification_status === 'qualified' ? 'good' : 'warn'}">
+                    ${row.company.qualification_status === 'qualified' ? 'Qualifiziert' : 'Ausgeschlossen'}
+                  </span>
+                  ${row.company.qualification_status === 'qualified' && row.company.pipeline_status !== 'pipeline' ? `
+                    <button class="mini-btn" type="button" data-action="send-pipeline" data-id="${escapeHtml(row.company.id)}">In Pipeline</button>
+                  ` : ''}
+                `}
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="hide-company" data-id="${escapeHtml(row.company.id)}">Ausblenden</button>
+                <button class="mini-btn" style="background: rgba(255, 255, 255, 0.05); color: var(--outbound-muted); border-color: var(--outbound-line);" type="button" data-action="research-company" data-id="${escapeHtml(row.company.id)}" title="Unternehmensdaten nachrecherchieren">Nachrecherche</button>
+              </div>
+            </div>
+          </td>
+        `;
+      } else if (col.type === 'company_field') {
+        html += `<td class="${col.className}">${escapeHtml(companyResearchValue(row.company, col.fieldId))}</td>`;
+      } else if (col.type === 'contact_people') {
+        html += `
+          <td class="col-name">
+            <div class="name-picker" style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start; min-width: 120px;">
+              ${contacts.map((c, idx) => {
+                if (state.statusFilter || state.tagFilter) {
+                  if (!contactMatchesFilters(c)) return '';
+                }
+                const active = idx === activeIndex;
+                const isCurrentAttr = active ? 'aria-current="true"' : '';
+                const nameLabel = escapeHtml(c.name || c.firstname || c.lastname || '—');
+                return `
+                  <span class="person-picker-row" style="display: inline-flex; align-items: center; gap: 4px; width: 100%;">
+                    <button
+                      class="cell-select person-name-btn"
+                      type="button"
+                      data-action="select-company-contact"
+                      data-company-id="${escapeHtml(row.company.id)}"
+                      data-index="${idx}"
+                      ${isCurrentAttr}
+                      style="flex: 1; text-align: left; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; font-size: 11px;"
+                    >${nameLabel}</button>
+                    <button
+                      class="mini-btn delete-contact-btn"
+                      type="button"
+                      data-action="delete-company-contact"
+                      data-item-id="${escapeHtml(row.item?.id || '')}"
+                      data-index="${idx}"
+                      title="Kontakt löschen"
+                      style="padding: 2px 4px; font-size: 10px; opacity: 0.7;"
+                    >🗑</button>
+                  </span>
+                `;
+              }).join('')}
+              ${row.item ? `
+                <button class="mini-btn" type="button" data-action="research-contacts" data-id="${escapeHtml(row.item.id)}" style="margin-top: 6px; width: 100%; text-align: center;" title="Ansprechpartner nachrecherchieren">Nachrecherche</button>
+              ` : ''}
+            </div>
+          </td>
+        `;
+      } else if (col.type === 'contact_field') {
+        html += `<td class="${col.className}">${resolveContactFieldHTML(row, contact, col.fieldId, contactKey)}</td>`;
+      } else if (col.type === 'outreach_type') {
+        html += `
+          <td class="col-msgtype">
+            <div class="msg-tabs">
+              ${OUTREACH_TABS.map(tab => {
+                const active = tab.key === activeMsgKey ? 'aria-selected="true"' : '';
+                return `<button type="button" class="msg-tab" data-msg="${tab.key}" ${active}>${escapeHtml(getTabLabel(tab.key, tab.label))}</button>`;
+              }).join('')}
+            </div>
+            <div style="margin-top: 8px;">
+              <button class="outbound-button" type="button" data-action="generate-outreach" style="width: 100%; font-size: 11px; padding: 4px 8px; border-color: var(--outbound-accent); color: var(--outbound-accent);" ${state.generatingOutreach.has(contactKey) ? 'disabled' : ''}>✨ ${t('generate', 'Generieren')}</button>
+            </div>
+          </td>
+        `;
+      } else if (col.type === 'outreach_draft') {
+        html += `
+          <td class="col-message">
+            ${state.generatingOutreach.has(contactKey) ? `
+              <div class="outbound-message-loading">
+                <span class="outbound-spinner"></span>
+                <div>
+                  <strong>${escapeHtml(t('generatingOutreachEllipsis', 'Anschreiben wird generiert...'))}</strong>
+                  <div style="font-size: 11px; color: var(--outbound-muted); margin-top: 2px;">
+                    ${escapeHtml(state.generatingOutreach.get(contactKey)?.statusText || t('waitingForApi', 'Warte auf API...'))}
+                  </div>
+                </div>
+              </div>
+            ` : `
+              <div class="msg-content" data-active-key="${escapeHtml(activeMsgKey)}">
+                <pre class="msg-text">${escapeHtml(trim(contact.messages?.[activeMsgKey]) || '—')}</pre>
+              </div>
+            `}
+          </td>
+        `;
+      } else if (col.type === 'note_type') {
+        html += `
+          <td class="col-notetype">
+            <div class="note-tabs">
+              ${getNoteTabsForContact(contact).map(tab => {
+                const active = tab.key === activeNoteKey ? 'aria-selected="true"' : '';
+                const isCustom = !STANDARD_NOTE_TABS.some(t => t.key === tab.key);
+                const delBtn = isCustom ? `<button class="mini-btn" data-action="delete-note-type" data-note-key="${escapeHtml(tab.key)}" title="${escapeHtml(t('delete', 'Löschen'))}">🗑</button>` : '';
+                return `
+                  <div class="note-tab-wrap">
+                    <button type="button" class="note-tab" data-note="${tab.key}" ${active}>${escapeHtml(getTabLabel(tab.key, tab.label))}</button>
+                    ${delBtn}
+                  </div>
+                `;
+              }).join('')}
+              <button type="button" class="mini-btn mini-btn-add" data-action="add-note-type">+ ${t('noteType', 'Notiztyp')}</button>
+            </div>
+          </td>
+        `;
+      } else if (col.type === 'note_content') {
+        html += `
+          <td class="col-note">
+            <div class="note-content" data-active-note-key="${escapeHtml(activeNoteKey)}">
+              <pre class="note-text">${escapeHtml(trim(contact.notes?.[activeNoteKey]) || '—')}</pre>
+            </div>
+          </td>
+        `;
+      }
+    });
+
+    html += `</tr>`;
+  }
+
+  return html;
 }
 
 function renderQualificationSplit(campaign) {
   const rows = filteredQualificationRows();
   const visibleRows = rows.slice(0, OUTBOUND_TABLE_RENDER_LIMIT);
-  const pipelineItems = currentPipeline();
-  const settings = getCampaignResearchSettings(campaign);
-  const visibleFields = researchFieldsForPrompt(settings)
-    .filter((field) => field.id !== 'domain');
-  const companyColumns = companyTableColumns(visibleFields);
-  const contactColumns = contactTableColumns(settings);
   const emptyCompanyMessage = state.filter === 'all'
-    ? 'Noch keine Unternehmen in dieser Campaign.'
-    : `Keine Unternehmen für Filter: ${currentFilterLabel()}.`;
+    ? t('noCompaniesCampaign', 'Noch keine Unternehmen in dieser Campaign.')
+    : t('noCompaniesFilter', 'Keine Unternehmen für Filter: {0}.', currentFilterLabel());
+
+  const settings = getCampaignResearchSettings(campaign);
+  const activeCols = buildActiveTableColumns(settings, state.viewMode);
+
+  const rowsHtml = visibleRows.length ? visibleRows.map(row => renderCRMCompanyRows(row)).join('') : `
+    <tr><td colspan="${activeCols.length}" class="outbound-table-empty" style="text-align:center; padding: 40px; color: var(--outbound-muted);">${escapeHtml(emptyCompanyMessage)}</td></tr>
+  `;
+  state.lastTbodyHtml = rowsHtml;
+
+  const headersHtml = activeCols.map(col => {
+    const isAction = col.type === 'outreach_type' || col.type === 'outreach_draft' || col.type === 'note_type' || col.type === 'note_content';
+    if (isAction) {
+      return `<th class="${col.className}">${escapeHtml(col.label)}</th>`;
+    }
+    return renderHeaderCell(col.id, col.label, col.className);
+  }).join('');
+
   return `
-    <div class="outbound-split-workbench" data-outbound-center-split>
-      <section class="outbound-table-pane outbound-company-table-pane" aria-label="Unternehmens-Stammdaten">
-        <div class="outbound-table-head">
-          <div>
-            <span>Stammdaten</span>
-            <strong>Unternehmen</strong>
-          </div>
-          <div class="outbound-table-tools">
-            <input class="outbound-search" data-search placeholder="Firma suchen" value="${escapeHtml(state.search)}" />
-            ${hasTableControls() ? `<button class="outbound-button" type="button" data-action="clear-table-filters" title="Tabellenfilter und Sortierung zurücksetzen">Reset</button>` : ''}
-          </div>
-        </div>
-        <div class="outbound-table-scroll">
-          <table class="outbound-data-table">
-            <thead>
-              <tr>${companyColumns.map(renderTableHeaderCell).join('')}</tr>
-            </thead>
-            <tbody>
-              ${visibleRows.map((row) => renderCompanyDataRow(row, companyColumns)).join('') || `
-                <tr><td colspan="${companyColumns.length}" class="outbound-table-empty">${escapeHtml(emptyCompanyMessage)}</td></tr>
-              `}
-              ${renderTableLimitRow(rows.length, companyColumns.length)}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <div class="outbound-center-resizer" role="separator" aria-orientation="vertical" aria-label="Tabellenbreite anpassen" data-outbound-center-resizer></div>
-      <section class="outbound-table-pane outbound-contact-table-pane" aria-label="Ansprechpartner-Qualifizierung">
-        <div class="outbound-table-head">
-          <div>
-            <span>Pipeline</span>
-            <strong>Ansprechpartner Qualifizierung</strong>
-          </div>
-          <div class="outbound-muted">${pipelineItems.length} Pipeline</div>
-        </div>
-        <div class="outbound-table-scroll">
-          <table class="outbound-data-table">
-            <thead>
-              <tr>${contactColumns.map(renderTableHeaderCell).join('')}</tr>
-            </thead>
-            <tbody>
-              ${visibleRows.map((row) => renderContactQualificationRow(row, contactColumns)).join('') || `
-                <tr><td colspan="${contactColumns.length}" class="outbound-table-empty">Erst Unternehmen importieren und qualifizieren.</td></tr>
-              `}
-              ${renderTableLimitRow(rows.length, contactColumns.length)}
-            </tbody>
-          </table>
-        </div>
-      </section>
+    <div class="outbound-unified-workbench" data-view="${state.viewMode}">
+      <div class="outbound-table-scroll-unified">
+        <table class="crm-table">
+          <thead>
+            <tr>
+              ${headersHtml}
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -1273,10 +2924,10 @@ function renderQualificationSplit(campaign) {
 function renderActiveResearchSummary(campaign) {
   const counts = researchActivityCounts(campaign.id);
   const active = [
-    ['läuft', counts.running],
-    ['wartet', counts.waiting],
-    ['Fehler', counts.failed],
-    ['abgebrochen', counts.cancelled],
+    [t('running', 'läuft'), counts.running],
+    [t('waiting', 'wartet'), counts.waiting],
+    [t('failed', 'Fehler'), counts.failed],
+    [t('cancelled', 'abgebrochen'), counts.cancelled],
   ].filter(([, count]) => count > 0);
   if (!active.length) return '';
   const tone = counts.failed || counts.cancelled ? 'warn' : counts.running ? 'running' : 'waiting';
@@ -1294,8 +2945,15 @@ function renderResearchActivityPanel(campaign) {
   if (!counts.total) return '';
   const isProblem = counts.failed || counts.cancelled;
   const title = counts.running
-    ? `CTOX arbeitet: ${formatCount(counts.running)} läuft${counts.waiting ? ` · ${formatCount(counts.waiting)} wartet` : ''}${isProblem ? ` · ${formatCount(counts.failed + counts.cancelled)} Fehler` : ''}`
-    : `CTOX arbeitet gerade nicht: ${formatCount(counts.waiting)} wartet${isProblem ? ` · ${formatCount(counts.failed + counts.cancelled)} Fehler` : ''}`;
+    ? t('automationActiveResearch', 'CTOX arbeitet: {0} läuft{1}{2}',
+        formatCount(counts.running),
+        counts.waiting ? t('automationActiveResearchWaiting', ' · {0} wartet', formatCount(counts.waiting)) : '',
+        isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
+      )
+    : t('automationIdleResearch', 'CTOX arbeitet gerade nicht: {0} wartet{1}',
+        formatCount(counts.waiting),
+        isProblem ? t('automationActiveResearchFailed', ' · {0} Fehler', formatCount(counts.failed + counts.cancelled)) : ''
+      );
   const items = activity
     .filter((item) => item.kind !== 'done' && item.kind !== 'idle')
     .slice(0, 5);
@@ -1306,10 +2964,10 @@ function renderResearchActivityPanel(campaign) {
         <strong>${escapeHtml(title)}</strong>
       </div>
       <div class="outbound-research-activity-counts">
-        ${renderActivityCount('läuft', counts.running)}
-        ${renderActivityCount('wartet', counts.waiting)}
-        ${renderActivityCount('Fehler', counts.failed, counts.failed ? 'warn' : '')}
-        ${renderActivityCount('abgebrochen', counts.cancelled, counts.cancelled ? 'warn' : '')}
+        ${renderActivityCount(t('running', 'läuft'), counts.running)}
+        ${renderActivityCount(t('waiting', 'wartet'), counts.waiting)}
+        ${renderActivityCount(t('failed', 'Fehler'), counts.failed, counts.failed ? 'warn' : '')}
+        ${renderActivityCount(t('cancelled', 'abgebrochen'), counts.cancelled, counts.cancelled ? 'warn' : '')}
       </div>
       ${items.length ? `
         <ol>
@@ -1344,9 +3002,9 @@ function researchActivityRows(campaignId) {
   const companies = dedupeCompanies(state.companies.filter((item) => item.campaign_id === campaignId));
   const pipeline = dedupePipelineItems(state.pipeline.filter((item) => item.campaign_id === campaignId));
   const rows = [
-    ...companies.map((company) => activityRowFromStatus(company.name, 'Company', companyResearchStatus(company))),
-    ...pipeline.map((item) => activityRowFromStatus(item.company_name, 'Kontakt', pipelineResearchStatus(item, 'contact_research'))),
-    ...pipeline.map((item) => activityRowFromStatus(item.company_name, 'Lead', pipelineResearchStatus(item, 'lead_qualification'))),
+    ...companies.map((company) => activityRowFromStatus(company.name, t('company', 'Company'), companyResearchStatus(company))),
+    ...pipeline.map((item) => activityRowFromStatus(item.company_name, t('contact_status', 'Kontakt'), pipelineResearchStatus(item, 'contact_research'))),
+    ...pipeline.map((item) => activityRowFromStatus(item.company_name, t('lead_status', 'Lead'), pipelineResearchStatus(item, 'lead_qualification'))),
   ];
   const priority = { running: 0, failed: 1, blocked: 1, cancelled: 2, waiting: 3, idle: 4, done: 5 };
   return rows.sort((a, b) => (priority[a.kind] ?? 9) - (priority[b.kind] ?? 9));
@@ -1355,7 +3013,7 @@ function researchActivityRows(campaignId) {
 function activityRowFromStatus(name, stageLabel, status) {
   const kind = automationStatusKind(status);
   return {
-    label: `${stageLabel}: ${name || 'Datensatz'}`,
+    label: `${stageLabel}: ${name || t('dataset', 'Datensatz')}`,
     kind,
     statusLabel: automationStatusLabel(status),
   };
@@ -1366,7 +3024,7 @@ function renderTableLimitRow(total, columnCount) {
   return `
     <tr>
       <td colspan="${columnCount}" class="outbound-table-empty">
-        ${escapeHtml(`${OUTBOUND_TABLE_RENDER_LIMIT} von ${formatCount(total)} Zeilen sichtbar. Suche oder Filter eingrenzen.`)}
+        ${escapeHtml(t('rowsVisibleHint', '{0} von {1} Zeilen sichtbar. Suche oder Filter eingrenzen.', OUTBOUND_TABLE_RENDER_LIMIT, formatCount(total)))}
       </td>
     </tr>
   `;
@@ -1374,14 +3032,14 @@ function renderTableLimitRow(total, columnCount) {
 
 function companyTableColumns(fields) {
   return [
-    { id: 'company.name', label: 'Unternehmen', value: (row) => row.company.name, primary: true },
-    { id: 'company.domain', label: 'Domain', value: (row) => row.company.domain || domainFromUrl(row.company.website) || '' },
+    { id: 'company.name', label: t('company', 'Unternehmen'), value: (row) => row.company.name, primary: true },
+    { id: 'company.domain', label: t('domain', 'Domain'), value: (row) => row.company.domain || domainFromUrl(row.company.website) || '' },
     ...fields.map((field) => ({
       id: `field.${field.id}`,
       label: field.label,
       value: (row) => companyResearchValue(row.company, field.id),
     })),
-    { id: 'company.qualification', label: 'Qualifizierung', value: (row) => labelQualification(row.company.qualification_status), badge: true },
+    { id: 'company.qualification', label: t('qualification', 'Qualifizierung'), value: (row) => labelQualification(row.company.qualification_status), badge: true },
   ];
 }
 
@@ -1394,16 +3052,17 @@ function contactTableColumns(settings = getCampaignResearchSettings(selectedCamp
       value: (row) => contactColumnValue(row.item, field.id),
       primary: field.id === 'contact.people',
     })),
-    { id: 'contact.action', label: 'Aktion', value: () => '', action: true },
+    { id: 'contact.action', label: t('action', 'Aktion'), value: () => '', action: true },
   ];
 }
 
-function renderTableHeaderCell(column) {
+function renderTableHeaderCell(column, className = '') {
   const sorted = state.tableSort?.column === column.id ? state.tableSort.direction : '';
   const filterValue = state.tableFilters[column.id] || '';
-  const sortLabel = sorted === 'asc' ? 'Aufsteigend sortiert' : sorted === 'desc' ? 'Absteigend sortiert' : 'Sortieren';
+  const sortLabel = sorted === 'asc' ? t('sortedAsc', 'Aufsteigend sortiert') : sorted === 'desc' ? t('sortedDesc', 'Absteigend sortiert') : t('sort', 'Sortieren');
+  const classAttr = className ? ` class="${escapeHtml(className)}"` : '';
   return `
-    <th>
+    <th${classAttr}>
       <div class="outbound-table-column-head">
         <button
           type="button"
@@ -1420,8 +3079,8 @@ function renderTableHeaderCell(column) {
           <input
             data-table-filter="${escapeHtml(column.id)}"
             value="${escapeHtml(filterValue)}"
-            placeholder="Filtern"
-            aria-label="${escapeHtml(`${column.label} filtern`)}"
+            placeholder="${escapeHtml(t('filter', 'Filtern'))}"
+            aria-label="${escapeHtml(t('filterAria', '{0} filtern', column.label))}"
           />
         `}
       </div>
@@ -1561,7 +3220,7 @@ function automationOpenRecords(campaignId, stage) {
 
 function openAutomationDrawer(stage, campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId) || selectedCampaign();
-  const definition = AUTOMATION_STAGES[stage];
+  const definition = getAutomationStageDefinition(stage);
   const root = state.ctx.host.querySelector('[data-outbound-root]');
   if (!campaign || !definition || !root) return;
   state.selectedCampaignId = campaign.id;
@@ -1581,40 +3240,40 @@ function closeAutomationDrawer() {
 }
 
 function renderAutomationDrawer(campaign, stage, openCount, batchSize) {
-  const definition = AUTOMATION_STAGES[stage];
+  const definition = getAutomationStageDefinition(stage);
   const nextCount = Math.min(openCount, batchSize, OUTBOUND_BATCH_LIMIT);
   const selectedSize = [25, 50, 100].find((size) => size >= nextCount) || OUTBOUND_BATCH_LIMIT;
   const allOption = openCount > OUTBOUND_BATCH_LIMIT
-    ? `<option value="all">${formatCount(openCount)} offene in 100er-Runs starten</option>`
+    ? `<option value="all">${escapeHtml(t('automationAllOpenRuns', '{0} offene in {1}er-Runs starten', formatCount(openCount), 100))}</option>`
     : '';
   return `
     <div class="outbound-automation-backdrop" data-action="close-automation"></div>
     <section class="outbound-automation-panel" data-stage="${escapeHtml(stage)}" data-campaign-id="${escapeHtml(campaign.id)}">
       <header class="outbound-automation-header">
         <div>
-          <span>CTOX Automation</span>
+          <span>${escapeHtml(t('automationHeadline', 'CTOX Automation'))}</span>
           <h3>${escapeHtml(definition.label)}</h3>
           <p>${escapeHtml(definition.description)}</p>
         </div>
-        <button class="outbound-icon-button" type="button" data-action="close-automation" aria-label="Schließen">×</button>
+        <button class="outbound-icon-button" type="button" data-action="close-automation" aria-label="${escapeHtml(t('close', 'Schließen'))}">×</button>
       </header>
       <div class="outbound-automation-body">
         <dl>
-          <div><dt>Campaign</dt><dd>${escapeHtml(campaign.name)}</dd></div>
-          <div><dt>Offen</dt><dd>${formatCount(openCount)}</dd></div>
-          <div><dt>Nächster Run</dt><dd>${formatCount(nextCount)} Datensätze</dd></div>
-          <div><dt>Sicherheit</dt><dd>${OUTBOUND_BATCH_LIMIT} pro Run</dd></div>
+          <div><dt>${escapeHtml(t('campaign', 'Campaign'))}</dt><dd>${escapeHtml(campaign.name)}</dd></div>
+          <div><dt>${escapeHtml(t('open', 'Offen'))}</dt><dd>${formatCount(openCount)}</dd></div>
+          <div><dt>${escapeHtml(t('automationNextRun', 'Nächster Run'))}</dt><dd>${escapeHtml(t('automationBatchSize', '{0} Datensätze', formatCount(nextCount)))}</dd></div>
+          <div><dt>${escapeHtml(t('automationSafety', 'Sicherheit'))}</dt><dd>${escapeHtml(t('automationSafetyDesc', '{0} pro Run', OUTBOUND_BATCH_LIMIT))}</dd></div>
         </dl>
         <label>
-          <span>Umfang</span>
+          <span>${escapeHtml(t('automationScope', 'Umfang'))}</span>
           <select data-automation-batch-size ${openCount ? '' : 'disabled'}>
-            ${[25, 50, 100].map((size) => `<option value="${size}" ${size === selectedSize ? 'selected' : ''}>${size} Datensätze</option>`).join('')}
+            ${[25, 50, 100].map((size) => `<option value="${size}" ${size === selectedSize ? 'selected' : ''}>${escapeHtml(t('automationBatchSize', '{0} Datensätze', size))}</option>`).join('')}
             ${allOption}
           </select>
         </label>
       </div>
       <footer class="outbound-automation-footer">
-        <span class="outbound-muted">${openCount > OUTBOUND_BATCH_LIMIT ? `Alle offenen Researches laufen als kontrollierte CTOX Runs mit je maximal ${OUTBOUND_BATCH_LIMIT} Datensätzen.` : 'Kontrollierter CTOX Batch-Run.'}</span>
+        <span class="outbound-muted">${openCount > OUTBOUND_BATCH_LIMIT ? escapeHtml(t('automationBatchWarning', 'Alle offenen Researches laufen als kontrollierte CTOX Runs mit je maximal {0} Datensätzen.', OUTBOUND_BATCH_LIMIT)) : escapeHtml(t('automationBatchInfo', 'Kontrollierter CTOX Batch-Run.'))}</span>
         <button class="outbound-button primary" type="button" data-action="start-automation" ${openCount ? '' : 'disabled'}>${escapeHtml(definition.cta)}</button>
       </footer>
     </section>
@@ -1832,56 +3491,316 @@ function openResearchSettingsDrawer() {
   const root = state.ctx.host.querySelector('[data-outbound-root]');
   if (!campaign || !root) return;
   closeResearchSettingsDrawer();
+
+  state.researchSettingsActiveTab = 'columns';
+  state.tempResearchSettings = JSON.parse(JSON.stringify(getCampaignResearchSettings(campaign)));
+
   const drawer = document.createElement('aside');
   drawer.className = 'outbound-research-drawer';
   drawer.setAttribute('role', 'dialog');
   drawer.setAttribute('aria-modal', 'true');
-  drawer.setAttribute('aria-label', 'Research-Felder einstellen');
+  drawer.setAttribute('aria-label', t('settingsFields', 'Research-Felder einstellen'));
   drawer.innerHTML = renderResearchSettingsDrawer(campaign);
   root.append(drawer);
-  drawer.querySelector('[data-research-setting-custom]')?.focus();
+
+  const initialFocus = drawer.querySelector('[data-research-setting-custom]');
+  if (initialFocus) initialFocus.focus();
 }
 
 function closeResearchSettingsDrawer() {
+  state.tempResearchSettings = null;
+  state.researchSettingsActiveTab = 'columns';
   state.ctx?.host?.querySelector('.outbound-research-drawer')?.remove();
 }
 
 function renderResearchSettingsDrawer(campaign) {
-  const settings = getCampaignResearchSettings(campaign);
+  const settings = state.tempResearchSettings || getCampaignResearchSettings(campaign);
+
+  let tabBodyHtml = '';
+  if (state.researchSettingsActiveTab === 'columns') {
+    tabBodyHtml = `
+      <div class="outbound-research-toolbar">
+        <button class="outbound-button" type="button" data-action="research-settings-core">${escapeHtml(t('kernelFields', 'Kernfelder'))}</button>
+        <button class="outbound-button" type="button" data-action="research-settings-all">${escapeHtml(t('allFields', 'Alle Felder'))}</button>
+      </div>
+      <div class="outbound-column-settings-grid">
+        ${renderResearchColumnSection('company', t('columnSectionCompanyTitle', 'Unternehmenshälfte'), t('columnSectionCompanyDesc', 'Stammdaten und Firmenqualifizierung'), RESEARCH_FIELD_DEFS, settings.fields, settings.customFields, settings)}
+        ${renderResearchColumnSection('contact', t('columnSectionContactTitle', 'Personenhälfte'), t('columnSectionContactDesc', 'Ansprechpartner und Lead-Qualifizierung'), CONTACT_FIELD_DEFS, settings.contactFields, settings.customContactFields, settings)}
+      </div>
+      <label class="outbound-research-notes">
+        <span>${escapeHtml(t('additionalHints', 'Zusätzliche Hinweise'))}</span>
+        <textarea data-research-setting-custom rows="3" placeholder="${escapeHtml(t('additionalHintsPlaceholder', 'z.B. Belege immer mit URL ausgeben, nur öffentlich belegbare Unternehmensdaten, keine Personen recherchieren'))}">${escapeHtml(settings.customInstruction)}</textarea>
+      </label>
+    `;
+  } else if (state.researchSettingsActiveTab === 'prompts') {
+    tabBodyHtml = `
+      <div class="outbound-prompts-settings-form">
+        <div class="outbound-settings-section">
+          <h4>${escapeHtml(t('apiConnection', 'API Verbindung'))}</h4>
+          <div class="outbound-prompt-fields-row">
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('gatewayUrl', 'Gateway URL'))}</span>
+              <input data-prompt-setting="apiUrl" value="${escapeHtml(settings.apiUrl)}" placeholder="https://..." />
+            </label>
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('tokenId', 'Token ID'))}</span>
+              <input data-prompt-setting="apiToken" type="password" value="${escapeHtml(settings.apiToken)}" placeholder="Token..." />
+            </label>
+          </div>
+        </div>
+
+        <div class="outbound-settings-section">
+          <h4>${escapeHtml(t('outreachVariables', 'Outreach Variables'))}</h4>
+          <div class="outbound-prompt-variables-grid">
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('icpCoreLabel', 'ICP Core (Produkt- und Dienstleistungsbeschreibung)'))}</span>
+              <textarea data-prompt-setting="icpCore" rows="4" placeholder="${escapeHtml(t('icpCorePlaceholder', 'Beschreibe dein Produkt...'))}">${escapeHtml(settings.icpCore)}</textarea>
+            </label>
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('checklistLandingpage', 'Checkliste Landingpage'))}</span>
+              <textarea data-prompt-setting="checklist" rows="4" placeholder="${escapeHtml(t('checklistPlaceholder', 'Ein Kriterium pro Zeile...'))}">${escapeHtml(settings.checklist)}</textarea>
+            </label>
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('ctaLabel', 'CTA (Call to Action)'))}</span>
+              <input data-prompt-setting="cta" value="${escapeHtml(settings.cta)}" placeholder="${escapeHtml(t('ctaPlaceholder', 'z.B. Sollen wir Ihnen nähere Details zusenden?'))}" />
+            </label>
+            <label class="outbound-field-wrap">
+              <span>${escapeHtml(t('signatureLabel', 'Signatur'))}</span>
+              <textarea data-prompt-setting="signature" rows="2" placeholder="${escapeHtml(t('signaturePlaceholder', 'Mit freundlichen Grüßen...'))}">${escapeHtml(settings.signature)}</textarea>
+            </label>
+          </div>
+        </div>
+
+        <div class="outbound-settings-section">
+          <h4>${escapeHtml(t('extendedLlmPrompts', 'Erweiterte LLM-Prompts (Templates)'))}</h4>
+          <details class="outbound-prompt-details">
+            <summary>${escapeHtml(t('editSystemPrompts', 'System-Prompts für Pipeline-Generierung bearbeiten'))}</summary>
+            <div class="outbound-details-content">
+              <label class="outbound-field-wrap">
+                <span>ICP Prompt Template</span>
+                <textarea class="code-font" data-prompt-setting="icpPromptTemplate" rows="8">${escapeHtml(settings.icpPromptTemplate)}</textarea>
+              </label>
+              <label class="outbound-field-wrap">
+                <span>Message Prompt Template</span>
+                <textarea class="code-font" data-prompt-setting="messagePromptTemplate" rows="8">${escapeHtml(settings.messagePromptTemplate)}</textarea>
+              </label>
+              <label class="outbound-field-wrap">
+                <span>Extract Email Prompt</span>
+                <textarea class="code-font" data-prompt-setting="extractEmailPrompt" rows="8">${escapeHtml(settings.extractEmailPrompt)}</textarea>
+              </label>
+            </div>
+          </details>
+        </div>
+      </div>
+    `;
+  } else if (state.researchSettingsActiveTab === 'mailserver') {
+    const ms = state.mailserver || { domains: [], users: [], loading: false, error: null };
+    
+    let msContent = '';
+    if (ms.loading) {
+      msContent = `
+        <div class="outbound-mailserver-loading" style="padding: 40px; text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px;">
+          <div class="outbound-loading-spinner" style="width: 32px; height: 32px; border: 3px solid rgba(255,255,255,0.1); border-radius: 50%; border-top-color: var(--outbound-accent, #3b82f6); animation: spin 1s linear infinite;"></div>
+          <p style="color: var(--outbound-muted); font-size: 13px; margin: 0;">${escapeHtml(t('loadingMailserverConfig', 'Mailserver-Konfiguration wird geladen...'))}</p>
+        </div>
+      `;
+    } else {
+      if (ms.error) {
+        msContent += `
+          <div class="outbound-mailserver-error" style="background: rgba(220, 53, 69, 0.1); border: 1px solid #ef4444; padding: 12px; border-radius: 6px; color: #ef4444; margin-bottom: 16px; font-size: 13px;">
+            <strong>${escapeHtml(t('errorLabel', 'Fehler'))}:</strong> ${escapeHtml(ms.error)}
+          </div>
+        `;
+      }
+      
+      // Sektion 1: Custom Domains
+      let domainsListHtml = '';
+      if (!ms.domains || ms.domains.length === 0) {
+        domainsListHtml = `<p class="outbound-muted-placeholder" style="color: var(--outbound-muted); font-style: italic; padding: 8px 0; font-size: 13px;">${escapeHtml(t('noDomainsConfigured', 'Keine Domains konfiguriert.'))}</p>`;
+      } else {
+        domainsListHtml = ms.domains.map(dom => {
+          const publicDkimClean = (dom.dkim_public_key || '')
+            .replace('-----BEGIN PUBLIC KEY-----', '')
+            .replace('-----END PUBLIC KEY-----', '')
+            .replace(/\s+/g, '')
+            .trim();
+          
+          const dkimTxtRecord = `v=DKIM1; k=rsa; p=${publicDkimClean}`;
+          
+          return `
+            <div class="outbound-mailserver-domain-card" style="border: 1px solid var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 16px; margin-bottom: 16px; background: rgba(255,255,255,0.02);">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 8px;">
+                <h4 style="margin: 0; font-size: 14px; color: var(--outbound-text, #334155); font-weight: 600;">${escapeHtml(dom.domain_name)}</h4>
+                <button class="outbound-button danger-link" type="button" data-action="mailserver-delete-domain" data-domain="${escapeHtml(dom.domain_name)}" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 13px; font-weight: 500; padding: 0;">
+                  ${escapeHtml(t('delete', 'Löschen'))}
+                </button>
+              </div>
+              
+              <details class="outbound-dns-guide" style="cursor: pointer;">
+                <summary style="font-size: 13px; color: var(--outbound-accent, #3b82f6); font-weight: 500; outline: none; margin-bottom: 8px;">
+                  ${escapeHtml(t('dnsSetupGuide', 'DNS-Einrichtungsanleitung (DKIM, SPF, DMARC)'))}
+                </summary>
+                <div class="outbound-dns-records" style="padding-top: 10px; display: grid; gap: 12px;">
+                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
+                      <strong style="font-size: 11px; color: #94a3b8;">1. DKIM (TXT Record)</strong>
+                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: ${escapeHtml(dom.dkim_selector || 'default')}._domainkey</span>
+                    </div>
+                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981; max-height: 80px; overflow-y: auto;">${escapeHtml(dkimTxtRecord)}</code>
+                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dkimTxtRecord)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                      ${escapeHtml(t('copy', 'Kopieren'))}
+                    </button>
+                  </div>
+
+                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
+                      <strong style="font-size: 11px; color: #94a3b8;">2. SPF (TXT Record)</strong>
+                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: @</span>
+                    </div>
+                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:51.210.246.120 ~all')}</code>
+                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.spf_record || 'v=spf1 mx a ip4:51.210.246.120 ~all')}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                      ${escapeHtml(t('copy', 'Kopieren'))}
+                    </button>
+                  </div>
+
+                  <div style="background: rgba(0,0,0,0.15); padding: 10px; border-radius: 6px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 4px; align-items: center;">
+                      <strong style="font-size: 11px; color: #94a3b8;">3. DMARC (TXT Record)</strong>
+                      <span style="font-size: 10px; color: #64748b; font-family: monospace;">Host: _dmarc</span>
+                    </div>
+                    <code class="code-font" style="display: block; word-break: break-all; font-size: 11px; background: #000; padding: 6px; border-radius: 4px; color: #10b981;">${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}</code>
+                    <button class="outbound-button mini-copy" type="button" data-copy-text="${escapeHtml(dom.dmarc_record || `v=DMARC1; p=none; rua=mailto:dmarc@${dom.domain_name}`)}" style="margin-top: 6px; font-size: 11px; padding: 2px 8px; height: auto; line-height: 1.2;">
+                      ${escapeHtml(t('copy', 'Kopieren'))}
+                    </button>
+                  </div>
+                </div>
+              </details>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // Sektion 2: E-Mail-Konten
+      let usersListHtml = '';
+      if (!ms.users || ms.users.length === 0) {
+        usersListHtml = `<p class="outbound-muted-placeholder" style="color: var(--outbound-muted); font-style: italic; padding: 8px 0; font-size: 13px;">${escapeHtml(t('noUsersConfigured', 'Keine E-Mail-Konten konfiguriert.'))}</p>`;
+      } else {
+        usersListHtml = `
+          <table class="outbound-mailserver-users-table" style="width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 13px;">
+            <thead>
+              <tr style="border-bottom: 1px solid var(--outbound-border, #e2e8f0); color: var(--outbound-muted); text-align: left;">
+                <th style="padding: 8px 4px; font-weight: 500;">${escapeHtml(t('emailAddress', 'E-Mail-Adresse'))}</th>
+                <th style="padding: 8px 4px; font-weight: 500; text-align: right;">${escapeHtml(t('actions', 'Aktionen'))}</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${ms.users.map(u => `
+                <tr style="border-bottom: 1px solid rgba(255,255,255,0.03);">
+                  <td style="padding: 10px 4px; font-weight: 500; color: var(--outbound-text, #334155);">${escapeHtml(u.username)}</td>
+                  <td style="padding: 10px 4px; text-align: right;">
+                    <button class="outbound-button danger-link" type="button" data-action="mailserver-delete-user" data-username="${escapeHtml(u.username)}" style="background: none; border: none; color: #ef4444; cursor: pointer; font-size: 12px; padding: 0;">
+                      ${escapeHtml(t('delete', 'Löschen'))}
+                    </button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        `;
+      }
+
+      msContent = `
+        <div class="outbound-mailserver-settings" style="display: flex; flex-direction: column; gap: 24px;">
+          <div class="outbound-settings-section">
+            <h4 style="margin-top: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--outbound-muted);">${escapeHtml(t('customDomainsTitle', 'Custom Domains & DNS'))}</h4>
+            <p style="font-size: 12px; color: var(--outbound-muted); margin-bottom: 16px; line-height: 1.4;">
+              ${escapeHtml(t('customDomainsDesc', 'Füge deine Domains hinzu. CTOX generiert automatisch DKIM-Signaturen und liefert dir die SPF- und DMARC-Einträge für deinen Domain-Registrar.'))}
+            </p>
+            
+            <div class="outbound-mailserver-add-domain-form" style="background: rgba(255,255,255,0.01); border: 1px dashed var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 14px; margin-bottom: 20px;">
+              <div style="display: flex; gap: 8px;">
+                <input id="mailserver-new-domain-input" type="text" placeholder="z.B. meinefirma.de" style="flex: 1; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
+                <button class="outbound-button" type="button" data-action="mailserver-save-domain" style="white-space: nowrap; height: 32px; padding: 0 16px; font-size: 13px;">
+                  ${escapeHtml(t('addDomainButton', 'Domain hinzufügen'))}
+                </button>
+              </div>
+            </div>
+            
+            <div class="outbound-mailserver-domains-list">
+              ${domainsListHtml}
+            </div>
+          </div>
+
+          <div class="outbound-settings-section" style="border-top: 1px solid var(--outbound-border, #e2e8f0); padding-top: 24px;">
+            <h4 style="margin-top: 0; margin-bottom: 6px; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--outbound-muted);">${escapeHtml(t('emailAccountsTitle', 'E-Mail-Konten'))}</h4>
+            <p style="font-size: 12px; color: var(--outbound-muted); margin-bottom: 16px; line-height: 1.4;">
+              ${escapeHtml(t('emailAccountsDesc', 'Erstelle vollwertige Mail-Accounts für den Empfang und Versand über IMAP und SMTP.'))}
+            </p>
+            
+            <div class="outbound-mailserver-add-user-form" style="background: rgba(255,255,255,0.01); border: 1px dashed var(--outbound-border, #e2e8f0); border-radius: 8px; padding: 14px; margin-bottom: 20px; display: grid; gap: 10px;">
+              <div style="display: grid; grid-template-columns: 1.2fr 1fr; gap: 8px;">
+                <input id="mailserver-new-username-input" type="email" placeholder="name@meinefirma.de" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
+                <input id="mailserver-new-password-input" type="password" placeholder="Passwort" style="padding: 6px 12px; border-radius: 6px; border: 1px solid var(--outbound-border, #e2e8f0); font-size: 13px; background: rgba(0,0,0,0.2); color: #fff;" />
+              </div>
+              <div style="display: flex; justify-content: flex-end;">
+                <button class="outbound-button" type="button" data-action="mailserver-save-user" style="height: 32px; padding: 0 16px; font-size: 13px;">
+                  ${escapeHtml(t('addUserButton', 'Konto erstellen'))}
+                </button>
+              </div>
+            </div>
+            
+            <div class="outbound-mailserver-users-list">
+              ${usersListHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    tabBodyHtml = msContent;
+  }
+
+  let footerHtml = `
+    <footer class="outbound-research-footer">
+      <span class="outbound-muted">${escapeHtml(t('settingsFooterHint', 'Gilt für diese Campaign. Änderungen an Spalten und Prompts werden direkt übernommen.'))}</span>
+      <button class="outbound-button primary" type="button" data-action="save-research-settings">${escapeHtml(t('save', 'Speichern'))}</button>
+    </footer>
+  `;
+  if (state.researchSettingsActiveTab === 'mailserver') {
+    footerHtml = `
+      <footer class="outbound-research-footer">
+        <span class="outbound-muted">${escapeHtml(t('mailserverFooterHint', 'Mailserver-Einstellungen gelten global für das gesamte System.'))}</span>
+        <button class="outbound-button" type="button" data-action="close-research-settings">${escapeHtml(t('close', 'Schließen'))}</button>
+      </footer>
+    `;
+  }
+
   return `
     <div class="outbound-research-backdrop" data-action="close-research-settings"></div>
     <section class="outbound-research-panel">
       <header class="outbound-research-header">
         <div>
-          <span>Funnel Tabellen</span>
-          <h3>Spalten und Research-Felder</h3>
+          <span>${escapeHtml(t('funnelSettings', 'Funnel Einstellungen'))}</span>
+          <h3>${escapeHtml(t('configureCampaign', 'Campaign konfigurieren'))}</h3>
         </div>
-        <button class="outbound-icon-button" type="button" data-action="close-research-settings" aria-label="Schließen">×</button>
+        <button class="outbound-icon-button" type="button" data-action="close-research-settings" aria-label="${escapeHtml(t('close', 'Schließen'))}">×</button>
       </header>
-      <div class="outbound-research-body">
-        <div class="outbound-research-toolbar">
-          <button class="outbound-button" type="button" data-action="research-settings-core">Kernfelder</button>
-          <button class="outbound-button" type="button" data-action="research-settings-all">Alle Felder</button>
-        </div>
-        <div class="outbound-column-settings-grid">
-          ${renderResearchColumnSection('company', 'Unternehmenshälfte', 'Stammdaten und Firmenqualifizierung', RESEARCH_FIELD_DEFS, settings.fields, settings.customFields, settings)}
-          ${renderResearchColumnSection('contact', 'Personenhälfte', 'Ansprechpartner und Lead-Qualifizierung', CONTACT_FIELD_DEFS, settings.contactFields, settings.customContactFields, settings)}
-        </div>
-        <label class="outbound-research-notes">
-          <span>Zusätzliche Hinweise</span>
-          <textarea data-research-setting-custom rows="3" placeholder="z.B. Belege immer mit URL ausgeben, nur öffentlich belegbare Unternehmensdaten, keine Personen recherchieren">${escapeHtml(settings.customInstruction)}</textarea>
-        </label>
+      <div class="outbound-drawer-tabs">
+        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="columns" ${state.researchSettingsActiveTab === 'columns' ? 'aria-selected="true"' : ''}>${escapeHtml(t('columnsAndFieldsTab', 'Spalten & Felder'))}</button>
+        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="prompts" ${state.researchSettingsActiveTab === 'prompts' ? 'aria-selected="true"' : ''}>${escapeHtml(t('outreachAndApiTab', 'Outreach & API Prompts'))}</button>
+        <button class="outbound-drawer-tab" type="button" data-action="research-settings-tab" data-tab="mailserver" ${state.researchSettingsActiveTab === 'mailserver' ? 'aria-selected="true"' : ''}>${escapeHtml(t('mailserverTab', 'Mailserver & Domains'))}</button>
       </div>
-      <footer class="outbound-research-footer">
-        <span class="outbound-muted">Gilt für diese Campaign. Neue aktive Unternehmensspalten werden für bestehende Unternehmen mit CTOX nachrecherchiert; Personen-Spalten werden in der Pipeline verwendet.</span>
-        <button class="outbound-button primary" type="button" data-action="save-research-settings">Speichern</button>
-      </footer>
+      <div class="outbound-research-body">
+        ${tabBodyHtml}
+      </div>
+      ${footerHtml}
     </section>
   `;
 }
 
 function renderResearchColumnSection(side, title, subtitle, baseDefs, selectedIds, customFields, settings) {
-  const selected = new Set(selectedIds || []);
+  const selectedFull = new Set(selectedIds || []);
+  const selectedCompactIds = side === 'contact' ? settings.contactFieldsCompact : settings.fieldsCompact;
+  const selectedCompact = new Set(selectedCompactIds || []);
   const rows = [
     ...baseDefs.map(([id, fallbackLabel, fallbackPrompt]) => ({
       id,
@@ -1905,34 +3824,41 @@ function renderResearchColumnSection(side, title, subtitle, baseDefs, selectedId
           <strong>${escapeHtml(subtitle)}</strong>
         </div>
       </div>
-      <div class="outbound-column-settings-labels" aria-hidden="true">
-        <span></span>
-        <span>Spalte</span>
-        <span>CTOX Research-Anweisung</span>
+      <div class="outbound-column-settings-labels" aria-hidden="true" style="grid-template-columns: 56px minmax(126px, 0.72fr) minmax(160px, 1.28fr) 26px;">
+        <div style="display: flex; gap: 8px; justify-content: center; font-size: 8px; font-weight: 800; color: var(--outbound-muted); letter-spacing: 0.5px;">
+          <span>${escapeHtml(t('viewFull', 'VOLL'))}</span>
+          <span>${escapeHtml(t('viewCompact', 'KOMP'))}</span>
+        </div>
+        <span>${escapeHtml(t('columnLabelAria', 'Spaltenname'))}</span>
+        <span>${escapeHtml(t('columnPrompt', 'CTOX Research-Anweisung'))}</span>
         <span></span>
       </div>
       <div class="outbound-column-settings-list" data-custom-field-list="${escapeHtml(side)}">
-        ${rows.map((field) => renderResearchColumnRow(side, field, selected.has(field.id))).join('')}
+        ${rows.map((field) => renderResearchColumnRow(side, field, selectedFull.has(field.id), selectedCompact.has(field.id))).join('')}
       </div>
       <div class="outbound-custom-field-form">
-        <input data-custom-field-label="${escapeHtml(side)}" placeholder="${side === 'contact' ? 'z.B. Buying Committee, Entscheider-Relevanz' : 'z.B. Zertifizierungen, Zielkunden, Technologien'}" aria-label="Neue Spalte" />
-        <button class="outbound-button" type="button" data-action="${addAction}">Hinzufügen</button>
+        <input data-custom-field-label="${escapeHtml(side)}" placeholder="${side === 'contact' ? escapeHtml(t('customContactPlaceholder', 'z.B. Buying Committee, Entscheider-Relevanz')) : escapeHtml(t('customCompanyPlaceholder', 'z.B. Zertifizierungen, Zielkunden, Technologien'))}" aria-label="${escapeHtml(t('newColumnAria', 'Neue Spalte'))}" />
+        <button class="outbound-button" type="button" data-action="${addAction}">${escapeHtml(t('addColumn', 'Hinzufügen'))}</button>
       </div>
     </section>
   `;
 }
 
-function renderResearchColumnRow(side, field, checked = true) {
+function renderResearchColumnRow(side, field, checkedFull = true, checkedCompact = false) {
   const removeAction = side === 'contact' ? 'research-settings-remove-contact-field' : 'research-settings-remove-field';
   return `
-    <div class="outbound-column-setting-row" data-column-setting-id="${escapeHtml(field.id)}" data-column-setting-side="${escapeHtml(side)}" ${field.custom ? `data-custom-field-id="${escapeHtml(field.id)}"` : ''}>
-      <label class="outbound-column-setting-toggle">
-        <input type="checkbox" data-column-setting-field="${escapeHtml(field.id)}" data-column-setting-kind="${escapeHtml(side)}" ${checked ? 'checked' : ''} />
-        <span></span>
-      </label>
-      <input data-column-setting-label value="${escapeHtml(field.label)}" aria-label="Spaltenname" />
-      <input data-column-setting-prompt value="${escapeHtml(field.prompt || '')}" placeholder="Was soll CTOX dafür recherchieren?" aria-label="Research-Anweisung" />
-      ${field.custom ? `<button type="button" data-action="${removeAction}" aria-label="${escapeHtml(`${field.label} löschen`)}">×</button>` : '<i></i>'}
+    <div class="outbound-column-setting-row" data-column-setting-id="${escapeHtml(field.id)}" data-column-setting-side="${escapeHtml(side)}" ${field.custom ? `data-custom-field-id="${escapeHtml(field.id)}"` : ''} style="grid-template-columns: 56px minmax(126px, 0.72fr) minmax(160px, 1.28fr) 26px;">
+      <div style="display: flex; gap: 8px; align-items: center; justify-content: center;">
+        <label class="outbound-column-setting-toggle" title="${escapeHtml(t('viewFullTitle', 'Vollansicht'))}" style="margin: 0; display: inline-flex;">
+          <input type="checkbox" data-column-setting-full="${escapeHtml(field.id)}" data-column-setting-kind="${escapeHtml(side)}" ${checkedFull ? 'checked' : ''} style="cursor: pointer; accent-color: var(--outbound-accent);" />
+        </label>
+        <label class="outbound-column-setting-toggle" title="${escapeHtml(t('viewCompactTitle', 'Kompaktansicht'))}" style="margin: 0; display: inline-flex;">
+          <input type="checkbox" data-column-setting-compact="${escapeHtml(field.id)}" data-column-setting-kind="${escapeHtml(side)}" ${checkedCompact ? 'checked' : ''} style="cursor: pointer; accent-color: var(--outbound-accent);" />
+        </label>
+      </div>
+      <input data-column-setting-label value="${escapeHtml(field.label)}" aria-label="${escapeHtml(t('columnLabelAria', 'Spaltenname'))}" />
+      <input data-column-setting-prompt value="${escapeHtml(field.prompt || '')}" placeholder="${escapeHtml(t('columnPromptPlaceholder', 'Was soll CTOX dafür recherchieren?'))}" aria-label="${escapeHtml(t('columnPromptAria', 'Research-Anweisung'))}" />
+      ${field.custom ? `<button type="button" data-action="${removeAction}" aria-label="${escapeHtml(t('deleteColumnAria', '{0} löschen', field.label))}">×</button>` : '<i></i>'}
     </div>
   `;
 }
@@ -1941,65 +3867,35 @@ async function saveResearchSettings() {
   const campaign = selectedCampaign();
   const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
   if (!campaign || !drawer) return;
+
   const beforeSettings = getCampaignResearchSettings(campaign);
-  const fields = Array.from(drawer.querySelectorAll('[data-column-setting-kind="company"][data-column-setting-field]:checked'))
-    .map((input) => input.dataset.columnSettingField)
-    .filter(Boolean);
-  const contactFields = Array.from(drawer.querySelectorAll('[data-column-setting-kind="contact"][data-column-setting-field]:checked'))
-    .map((input) => input.dataset.columnSettingField)
-    .filter(Boolean);
-  const companyRows = Array.from(drawer.querySelectorAll('[data-column-setting-side="company"][data-column-setting-id]'));
-  const contactRows = Array.from(drawer.querySelectorAll('[data-column-setting-side="contact"][data-column-setting-id]'));
-  const customFields = companyRows
-    .filter((node) => node.dataset.customFieldId)
-    .map((node) => ({
-      id: node.dataset.columnSettingId,
-      label: node.querySelector('[data-column-setting-label]')?.value?.trim() || '',
-      prompt: node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '',
-    }))
-    .filter((field) => field.id && field.label);
-  const customContactFields = contactRows
-    .filter((node) => node.dataset.customFieldId)
-    .map((node) => ({
-      id: node.dataset.columnSettingId,
-      label: node.querySelector('[data-column-setting-label]')?.value?.trim() || '',
-      prompt: node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '',
-    }))
-    .filter((field) => field.id && field.label);
-  const columnLabels = {};
-  const fieldPrompts = {};
-  [...companyRows, ...contactRows].forEach((node) => {
-    const id = node.dataset.columnSettingId;
-    const label = node.querySelector('[data-column-setting-label]')?.value?.trim() || '';
-    const prompt = node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '';
-    if (id && label) columnLabels[id] = label;
-    if (id && prompt) fieldPrompts[id] = prompt;
-  });
-  const customInstruction = drawer.querySelector('[data-research-setting-custom]')?.value?.trim() || '';
-  const researchSettings = normalizeResearchSettings({
-    fields,
-    contactFields,
-    customFields,
-    customContactFields,
-    columnLabels,
-    fieldPrompts,
-    customInstruction,
-  });
+
+  saveResearchSettingsTemporaryState(drawer);
+
+  const researchSettings = normalizeResearchSettings(state.tempResearchSettings);
+
   const nextPayload = {
     ...(campaign.payload || {}),
     research_settings: researchSettings,
   };
+
   await patchDoc(state.ctx.db.raw.outbound_campaigns, campaign.id, {
     payload: nextPayload,
     updated_at_ms: Date.now(),
   });
+
   state.campaigns = state.campaigns.map((item) => (
     item.id === campaign.id
       ? { ...item, payload: nextPayload, updated_at_ms: Date.now() }
       : item
   ));
+
+  state.tempResearchSettings = null;
+  state.researchSettingsActiveTab = 'columns';
+
   closeResearchSettingsDrawer();
   render();
+
   window.setTimeout(() => {
     loadAll()
       .then(() => queueResearchForNewFields(campaign.id, beforeSettings, researchSettings))
@@ -2011,7 +3907,7 @@ async function saveResearchSettings() {
 
 function setResearchSettingsSelection(checked) {
   const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
-  drawer?.querySelectorAll('[data-column-setting-field]').forEach((input) => {
+  drawer?.querySelectorAll('input[type="checkbox"][data-column-setting-kind]').forEach((input) => {
     input.checked = checked;
   });
 }
@@ -2035,11 +3931,22 @@ function setResearchSettingsCoreSelection() {
     'employee_count',
   ]);
   const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
-  drawer?.querySelectorAll('[data-column-setting-field]').forEach((input) => {
-    if (input.dataset.columnSettingKind === 'contact') {
-      input.checked = DEFAULT_CONTACT_FIELD_IDS.includes(input.dataset.columnSettingField);
+  drawer?.querySelectorAll('input[type="checkbox"][data-column-setting-kind]').forEach((input) => {
+    const isFull = input.hasAttribute('data-column-setting-full');
+    const fieldId = isFull ? input.dataset.columnSettingFull : input.dataset.columnSettingCompact;
+    const kind = input.dataset.columnSettingKind;
+    if (isFull) {
+      if (kind === 'contact') {
+        input.checked = DEFAULT_CONTACT_FIELD_IDS.includes(fieldId);
+      } else {
+        input.checked = core.has(fieldId);
+      }
     } else {
-      input.checked = core.has(input.dataset.columnSettingField);
+      if (kind === 'contact') {
+        input.checked = DEFAULT_CONTACT_FIELD_IDS_COMPACT.includes(fieldId);
+      } else {
+        input.checked = DEFAULT_RESEARCH_FIELD_IDS_COMPACT.includes(fieldId);
+      }
     }
   });
 }
@@ -2081,18 +3988,39 @@ function normalizeResearchSettings(raw = {}) {
   const fields = Array.isArray(raw.fields)
     ? raw.fields.filter((id) => known.has(id))
     : [...DEFAULT_RESEARCH_FIELD_IDS, ...customFields.map((field) => field.id)];
+  
+  const fieldsCompact = Array.isArray(raw.fieldsCompact || raw.fields_compact)
+    ? (raw.fieldsCompact || raw.fields_compact).filter((id) => known.has(id))
+    : [...DEFAULT_RESEARCH_FIELD_IDS_COMPACT, ...customFields.map((field) => field.id)];
+
   const knownContact = new Set([...CONTACT_FIELD_DEFS.map(([id]) => id), ...customContactFields.map((field) => field.id)]);
   const contactFields = Array.isArray(raw.contactFields || raw.contact_fields)
     ? (raw.contactFields || raw.contact_fields).filter((id) => knownContact.has(id))
     : [...DEFAULT_CONTACT_FIELD_IDS, ...customContactFields.map((field) => field.id)];
+
+  const contactFieldsCompact = Array.isArray(raw.contactFieldsCompact || raw.contact_fields_compact)
+    ? (raw.contactFieldsCompact || raw.contact_fields_compact).filter((id) => knownContact.has(id))
+    : [...DEFAULT_CONTACT_FIELD_IDS_COMPACT, ...customContactFields.map((field) => field.id)];
+
   return {
     fields: fields.length ? fields : DEFAULT_RESEARCH_FIELD_IDS,
+    fieldsCompact: fieldsCompact.length ? fieldsCompact : DEFAULT_RESEARCH_FIELD_IDS_COMPACT,
     contactFields: contactFields.length ? contactFields : DEFAULT_CONTACT_FIELD_IDS,
+    contactFieldsCompact: contactFieldsCompact.length ? contactFieldsCompact : DEFAULT_CONTACT_FIELD_IDS_COMPACT,
     customFields,
     customContactFields,
     columnLabels,
     fieldPrompts,
     customInstruction: String(raw.customInstruction || raw.custom_instruction || '').trim(),
+    apiUrl: String(raw.apiUrl || raw.api_url || DEFAULT_API_URL).trim(),
+    apiToken: String(raw.apiToken || raw.api_token || DEFAULT_TOKEN_ID).trim(),
+    icpCore: String(raw.icpCore || raw.icp_core || DEFAULT_ICP_CORE).trim(),
+    checklist: String(raw.checklist || raw.checklist_landingpage || DEFAULT_CHECKLIST).trim(),
+    cta: String(raw.cta || DEFAULT_CTA).trim(),
+    signature: String(raw.signature || DEFAULT_SIGNATURE).trim(),
+    icpPromptTemplate: String(raw.icpPromptTemplate || raw.icp_prompt_template || ICP_PROMPT_TEMPLATE).trim(),
+    messagePromptTemplate: String(raw.messagePromptTemplate || raw.message_prompt_template || MESSAGE_PROMPT_TEMPLATE).trim(),
+    extractEmailPrompt: String(raw.extractEmailPrompt || raw.extract_email_prompt || EXTRACT_EMAIL_PROMPT).trim(),
   };
 }
 
@@ -2560,9 +4488,9 @@ function renderPipelineDetail() {
 }
 
 async function createCampaign() {
-  const name = await showBusinessPrompt('Name der Outbound Campaign', {
-    title: 'Campaign anlegen',
-    defaultValue: 'Neue Outbound Campaign',
+  const name = await showBusinessPrompt(t('campaignNamePrompt', 'Name der Outbound Campaign'), {
+    title: t('createCampaignTitle', 'Campaign anlegen'),
+    defaultValue: t('defaultCampaignName', 'Neue Outbound Campaign'),
   });
   if (!name) return;
   const now = Date.now();
@@ -2570,7 +4498,7 @@ async function createCampaign() {
   const campaign = {
     id,
     name,
-    objective: 'Outbound Firmenqualifizierung',
+    objective: t('campaignObjectiveDefault', 'Outbound Firmenqualifizierung'),
     market: 'DACH',
     status: 'active',
     owner_id: state.ctx?.session?.user?.id || '',
@@ -2621,9 +4549,9 @@ async function saveCampaignInlineEdit(campaignId) {
 async function deleteCampaign(campaignId) {
   const campaign = state.campaigns.find((item) => item.id === campaignId);
   if (!campaign) return;
-  const ok = await showBusinessConfirm(`Campaign "${campaign.name}" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Campaign werden entfernt.`, {
-    title: 'Campaign löschen',
-    confirmLabel: 'Löschen',
+  const ok = await showBusinessConfirm(t('deleteConfirm', 'Campaign "{0}" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Campaign werden entfernt.', campaign.name), {
+    title: t('deleteTitle', 'Campaign löschen'),
+    confirmLabel: t('delete', 'Löschen'),
   });
   if (!ok) return;
   await removeWhere(state.ctx.db.raw.outbound_sources, (item) => item.campaign_id === campaign.id);
@@ -2645,16 +4573,16 @@ async function openCompanyImporter() {
     moduleId: 'outbound',
     entityType: 'company_source',
     commandType: 'outbound.source.import',
-    title: 'Importjob anlegen',
+    title: t('importJob', 'Importjob anlegen'),
     kicker: 'Outbound Import',
     defaultTitle: `${campaign.name} Import`,
-    helperText: 'URL, PDF, Text oder Excel liefern Unternehmen fuer den Input-Funnel. Der Importer extrahiert daraus Unternehmen; Personen werden erst spaeter in der Pipeline recherchiert.',
-    filterPromptLabel: 'Importfilter',
-    filterPromptPlaceholder: 'z.B. nur Firmen mit Sitz in Deutschland',
-    defaultFilterPrompt: 'Nur Firmen mit Sitz in Deutschland importieren.',
-    submitLabel: 'Importjob starten',
-    submittingLabel: 'Importjob wird angelegt...',
-    doneLabel: 'Importjob angelegt.',
+    helperText: t('importerHelperText', 'URL, PDF, Text oder Excel liefern Unternehmen fuer den Input-Funnel. Der Importer extrahiert daraus Unternehmen; Personen werden erst spaeter in der Pipeline recherchiert.'),
+    filterPromptLabel: t('importFilter', 'Importfilter'),
+    filterPromptPlaceholder: t('filterPromptPlaceholder', 'z.B. nur Firmen mit Sitz in Deutschland'),
+    defaultFilterPrompt: t('defaultFilterPrompt', 'Nur Firmen mit Sitz in Deutschland importieren.'),
+    submitLabel: t('submitImport', 'Importjob starten'),
+    submittingLabel: t('importSubmitting', 'Importjob wird angelegt...'),
+    doneLabel: t('importDone', 'Importjob angelegt.'),
     closeOnSubmit: true,
     dispatch: false,
     definition: {
@@ -2662,8 +4590,8 @@ async function openCompanyImporter() {
       pipeline_boundary: 'company_first_contact_later',
       import_filter: {
         company_country_codes: ['DE'],
-        company_country_labels: ['Deutschland', 'Germany'],
-        rule: 'Nur Unternehmen mit Sitz in Deutschland importieren.',
+        company_country_labels: [t('germany', 'Deutschland'), t('germanyEn', 'Germany')],
+        rule: t('ruleCountryGermany', 'Nur Unternehmen mit Sitz in Deutschland importieren.'),
       },
     },
     clientContext: { campaign_id: campaign.id },
@@ -2704,8 +4632,8 @@ async function importCompaniesFromPayload(campaign, payload) {
     runOutboundImportInBackground(campaign, payload, sourceId);
     return {
       status: sourceStatus,
-      message: 'Importjob gestartet.',
-      detail: 'CTOX extrahiert Unternehmen im Hintergrund.',
+      message: t('importStarted', 'Importjob gestartet.'),
+      detail: t('importBackgroundDetail', 'CTOX extrahiert Unternehmen im Hintergrund.'),
       dispatch: false,
     };
   }
@@ -2745,7 +4673,7 @@ async function importCompaniesFromPayload(campaign, payload) {
   await updateCampaignCounts(campaign.id);
   return {
     status: sourceStatus,
-    message: `${filteredRows.length} Firmen importiert.`,
+    message: t('companiesImported', '{0} Firmen importiert.', filteredRows.length),
     detail: '',
     dispatch: false,
   };
@@ -2966,8 +4894,8 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
       ...payload,
       source_id: sourceId,
       instruction: [
-        'Lies den Importjob als Firmenliste, folge bei Listen/Verzeichnissen den noetigen Unternehmensdetailseiten und schreibe alle gefundenen Unternehmen als record-shaped Knowledge in den Campaign Companies DataFrame. Keine Personen recherchieren.',
-        payload.filter_prompt ? `Importfilter strikt anwenden: ${payload.filter_prompt}` : '',
+        t('importPromptLabel', 'Lies den Importjob als Firmenliste, folge bei Listen/Verzeichnissen den noetigen Unternehmensdetailseiten und schreibe alle gefundenen Unternehmen als record-shaped Knowledge in den Campaign Companies DataFrame. Keine Personen recherchieren.'),
+        payload.filter_prompt ? t('importFilterStrict', 'Importfilter strikt anwenden: {0}', payload.filter_prompt) : '',
       ].filter(Boolean).join('\n'),
       writeback_contract: {
         system: 'ctox knowledge data',
@@ -3048,10 +4976,10 @@ async function queueCompanyResearch(companyId, options = {}) {
     record_id: company.id,
     inbound_channel: 'business_os.outbound',
     payload: {
-      title: `Unternehmensdaten recherchieren: ${company.name}`,
+      title: t('researchCompanyDataTitle', 'Unternehmensdaten recherchieren: {0}', company.name),
       instruction: options.reason === 'custom_fields_added'
-        ? 'Recherchiere die neu hinzugefuegten Unternehmensdaten-Kategorien fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'
-        : 'Recherchiere nur Unternehmensdaten fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.',
+        ? t('researchCompanyDataNew', 'Recherchiere die neu hinzugefuegten Unternehmensdaten-Kategorien fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.')
+        : t('researchCompanyDataStandard', 'Recherchiere nur Unternehmensdaten fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'),
       research_request: {
         tool: 'ctox web research',
         mode: 'new_record',
@@ -3060,7 +4988,7 @@ async function queueCompanyResearch(companyId, options = {}) {
         fields: researchFields,
         custom_instruction: [
           researchSettings.customInstruction,
-          options.reason === 'custom_fields_added' ? 'Nur fehlende oder neue Kategorien nachrecherchieren und bestehende Unternehmensdaten nicht entfernen.' : '',
+          options.reason === 'custom_fields_added' ? t('researchMissingOrNew', 'Nur fehlende oder neue Kategorien nachrecherchieren und bestehende Unternehmensdaten nicht entfernen.') : '',
         ].filter(Boolean).join('\n'),
         include_private: [],
       },
@@ -3384,13 +5312,54 @@ function filteredCompanies() {
   return filteredQualificationRows().map((row) => row.company);
 }
 
+function loadHiddenCompanies() {
+  const campaignId = state.selectedCampaignId;
+  if (!campaignId) return [];
+  try {
+    const data = localStorage.getItem(`outbound_hidden_companies_${campaignId}`);
+    return data ? JSON.parse(data) : [];
+  } catch (e) {
+    console.error('Error loading hidden companies:', e);
+    return [];
+  }
+}
+
+function saveHiddenCompanies(list) {
+  const campaignId = state.selectedCampaignId;
+  if (!campaignId) return;
+  try {
+    localStorage.setItem(`outbound_hidden_companies_${campaignId}`, JSON.stringify(list));
+  } catch (e) {
+    console.error('Error saving hidden companies:', e);
+  }
+}
+
+function hideCompany(companyId) {
+  const list = loadHiddenCompanies();
+  if (!list.includes(companyId)) {
+    list.push(companyId);
+    saveHiddenCompanies(list);
+  }
+}
+
+function unhideCompany(companyId) {
+  const list = loadHiddenCompanies();
+  const index = list.indexOf(companyId);
+  if (index !== -1) {
+    list.splice(index, 1);
+    saveHiddenCompanies(list);
+  }
+}
+
 function filteredQualificationRows() {
+  const hiddenList = loadHiddenCompanies();
   const search = state.search.trim().toLowerCase();
   const rows = currentCompanies().map((company) => ({
     company,
     item: pipelineItemForCompany(company),
   })).filter((row) => {
     const { company, item } = row;
+    if (hiddenList.includes(company.id)) return false;
     if (search && !`${company.name} ${company.domain} ${company.city}`.toLowerCase().includes(search)) return false;
     if (state.filter === 'research' && !(company.research_status === 'pending' || company.research_status === 'queued')) return false;
     if (state.filter === 'qualified' && company.qualification_status !== 'qualified') return false;
@@ -3398,6 +5367,26 @@ function filteredQualificationRows() {
     if (state.filter === 'lead_qualified' && !isLeadQualified(item)) return false;
     if (state.filter === 'pipeline' && company.pipeline_status !== 'pipeline') return false;
     if (state.filter === 'rejected' && company.qualification_status !== 'rejected') return false;
+
+    // Status and tag filter matching on contacts
+    if (state.statusFilter || state.tagFilter) {
+      const contacts = Array.isArray(item?.contacts) ? item.contacts : [];
+      const hasMatchingContact = contacts.some(c => {
+        let statusMatch = true;
+        let tagMatch = true;
+        if (state.statusFilter) {
+          const chips = chipsFromMultiSelect(c.status_field || c.status).map(x => x.toLowerCase());
+          statusMatch = chips.includes(state.statusFilter.toLowerCase());
+        }
+        if (state.tagFilter) {
+          const chips = chipsFromMultiSelect(c.tags).map(x => x.toLowerCase());
+          tagMatch = chips.includes(state.tagFilter.toLowerCase());
+        }
+        return statusMatch && tagMatch;
+      });
+      if (!hasMatchingContact) return false;
+    }
+
     return rowMatchesTableFilters(row);
   });
   return sortQualificationRows(rows);
@@ -3941,4 +5930,782 @@ function escapeHtml(value) {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#039;');
+}
+
+async function updateContactInPipelineItem(pipelineItemId, contactIndex, mutator) {
+  const collection = state.ctx?.db?.raw?.outbound_pipeline_items;
+  if (!collection) return;
+  const existing = await collection.findOne(pipelineItemId).exec();
+  if (!existing) return;
+
+  const contacts = Array.isArray(existing.contacts) ? JSON.parse(JSON.stringify(existing.contacts)) : [];
+  if (contacts[contactIndex]) {
+    mutator(contacts[contactIndex]);
+    await existing.incrementalPatch({ contacts });
+    await loadAll({ hydrateKnowledge: false });
+    render();
+  }
+}
+
+function getSelectedContactIndexForCompany(companyId, contacts) {
+  if (!contacts || !contacts.length) return 0;
+  if (!state.selectedContactByCompany) {
+    state.selectedContactByCompany = new Map();
+  }
+  const saved = state.selectedContactByCompany.get(companyId);
+  if (typeof saved === 'number' && saved >= 0 && saved < contacts.length) {
+    return saved;
+  }
+  return 0;
+}
+
+function setSelectedContactIndexForCompany(companyId, index) {
+  if (!state.selectedContactByCompany) {
+    state.selectedContactByCompany = new Map();
+  }
+  state.selectedContactByCompany.set(companyId, index);
+}
+
+async function deleteContactFromPipelineItem(pipelineItemId, contactIndex) {
+  const collection = state.ctx?.db?.raw?.outbound_pipeline_items;
+  if (!collection) return;
+  const existing = await collection.findOne(pipelineItemId).exec();
+  if (!existing) return;
+
+  const contacts = Array.isArray(existing.contacts) ? JSON.parse(JSON.stringify(existing.contacts)) : [];
+  if (contactIndex >= 0 && contactIndex < contacts.length) {
+    contacts.splice(contactIndex, 1);
+    await existing.incrementalPatch({ contacts });
+
+    if (state.selectedContactByCompany) {
+      const saved = state.selectedContactByCompany.get(existing.company_id);
+      if (typeof saved === 'number') {
+        if (contacts.length === 0) {
+          state.selectedContactByCompany.delete(existing.company_id);
+        } else if (saved >= contacts.length) {
+          state.selectedContactByCompany.set(existing.company_id, contacts.length - 1);
+        }
+      }
+    }
+
+    await loadAll({ hydrateKnowledge: false });
+    render();
+  }
+}
+
+function saveFocusState(parentEl) {
+  const activeEl = document.activeElement;
+  if (!activeEl || !parentEl.contains(activeEl)) return null;
+
+  let selector = '';
+  if (activeEl.hasAttribute('data-table-filter')) {
+    selector = `[data-table-filter="${activeEl.getAttribute('data-table-filter')}"]`;
+  } else if (activeEl.hasAttribute('data-campaign-edit-field')) {
+    selector = `[data-campaign-edit-field="${activeEl.getAttribute('data-campaign-edit-field')}"]`;
+  } else if (activeEl.classList.contains('inline-editor')) {
+    const tr = activeEl.closest('tr');
+    if (tr && tr.hasAttribute('data-contact-key')) {
+      selector = `tr[data-contact-key="${tr.getAttribute('data-contact-key')}"] .inline-editor`;
+    }
+  }
+
+  if (!selector) return null;
+
+  return {
+    selector,
+    selectionStart: activeEl.selectionStart,
+    selectionEnd: activeEl.selectionEnd,
+  };
+}
+
+function restoreFocusState(parentEl, focusState) {
+  if (!focusState) return;
+  const newEl = parentEl.querySelector(focusState.selector);
+  if (newEl) {
+    newEl.focus();
+    if (typeof focusState.selectionStart === 'number') {
+      try {
+        newEl.selectionStart = focusState.selectionStart;
+        newEl.selectionEnd = focusState.selectionEnd;
+      } catch (e) {
+        // Safe-guard
+      }
+    }
+  }
+}
+
+function chipsFromMultiSelect(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  if (typeof val === 'object' && Array.isArray(val.keys)) return val.keys;
+  if (typeof val === 'string') return val.split(',').map(s => s.trim()).filter(Boolean);
+  return [];
+}
+
+function extractUniqueStatuses(pipeline) {
+  const set = new Set(['Offen', 'Recherchiert', 'Kontaktiert', 'Antwort erhalten', 'Nicht passend']);
+  for (const item of pipeline) {
+    if (Array.isArray(item.contacts)) {
+      for (const contact of item.contacts) {
+        const val = contact.status_field || contact.status;
+        if (val) {
+          chipsFromMultiSelect(val).forEach(k => set.add(k));
+        }
+      }
+    }
+  }
+  return Array.from(set);
+}
+
+function extractUniqueTags(pipeline) {
+  const set = new Set(['Entscheider', 'Influencer', 'Technisch', 'Marketing', 'Vertrieb']);
+  for (const item of pipeline) {
+    if (Array.isArray(item.contacts)) {
+      for (const contact of item.contacts) {
+        if (contact.tags) {
+          chipsFromMultiSelect(contact.tags).forEach(k => set.add(k));
+        }
+      }
+    }
+  }
+  return Array.from(set);
+}
+
+function startInlineEdit(hostEl, { initialText, multiline, onSave }) {
+  if (hostEl.querySelector('.inline-editor')) return;
+  const originalHtml = hostEl.innerHTML;
+
+  const editor = document.createElement(multiline ? 'textarea' : 'input');
+  editor.className = 'inline-editor';
+  if (multiline) {
+    editor.style.height = '100px';
+    editor.style.resize = 'vertical';
+  }
+  editor.value = initialText || '';
+
+  hostEl.innerHTML = '';
+  hostEl.appendChild(editor);
+  editor.focus();
+  if (!multiline && editor.select) {
+    editor.select();
+  }
+
+  let finished = false;
+  async function finish(save) {
+    if (finished) return;
+    finished = true;
+    const value = editor.value.trim();
+    if (save) {
+      hostEl.innerHTML = `<span style="opacity:0.5;">${escapeHtml(t('savingEllipsis', 'Speichern...'))}</span>`;
+      try {
+        await onSave(value);
+      } catch (e) {
+        console.error('Error saving inline edit:', e);
+        hostEl.innerHTML = originalHtml;
+      }
+    } else {
+      hostEl.innerHTML = originalHtml;
+    }
+  }
+
+  editor.addEventListener('blur', () => {
+    finish(true);
+  });
+
+  editor.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (!multiline || e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        finish(true);
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+}
+
+let activeOverlay = null;
+
+function closeMultiSelectOverlay() {
+  if (activeOverlay) {
+    activeOverlay.remove();
+    activeOverlay = null;
+  }
+}
+
+function showMultiSelectOverlay(hostCell, { currentValues, allOptions, labelSingular, onSave }) {
+  closeMultiSelectOverlay();
+
+  const rect = hostCell.getBoundingClientRect();
+  const overlay = document.createElement('div');
+  overlay.className = 'multi-editor-overlay';
+
+  overlay.style.top = `${window.scrollY + rect.bottom + 4}px`;
+  overlay.style.left = `${window.scrollX + rect.left}px`;
+
+  const selectedSet = new Set(currentValues);
+
+  function renderList() {
+    return allOptions.map(opt => {
+      const checked = selectedSet.has(opt) ? 'checked' : '';
+      return `
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" data-option="${escapeHtml(opt)}" ${checked} style="cursor:pointer;" />
+          <span>${escapeHtml(opt)}</span>
+        </label>
+      `;
+    }).join('');
+  }
+
+  overlay.innerHTML = `
+    <div class="multi-editor-title" style="margin-bottom:8px; font-weight:800; font-size:11px; text-transform:uppercase;">${escapeHtml(t('manageEntities', '{0}s verwalten', labelSingular))}</div>
+    <div class="multi-editor-list" style="display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto; border:1px solid var(--outbound-line); padding:6px; background:var(--outbound-surface); border-radius:4px; margin-bottom:8px;">
+      ${renderList()}
+    </div>
+    <div class="multi-editor-addrow" style="display:flex; gap:4px; align-items:center; margin-bottom:8px;">
+      <input type="text" class="multi-editor-input" placeholder="${escapeHtml(t('newOptionPlaceholder', 'Neu...'))}" style="flex:1; font-size:11px; padding:3px 6px; border:1px solid var(--outbound-line); background:var(--outbound-surface); color:var(--outbound-text); border-radius:4px;" />
+      <button type="button" class="mini-btn" data-action="add-option" style="padding:3px 8px;">+</button>
+    </div>
+    <div class="multi-editor-actions" style="display:flex; justify-content:flex-end; gap:6px;">
+      <button type="button" class="btn-small" data-action="cancel-overlay" style="padding:4px 8px; font-size:10px; cursor:pointer;">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
+      <button type="button" class="btn-small btn-save" style="padding:4px 10px; font-size:10px; background:var(--outbound-accent); border-color:var(--outbound-accent); color:#000; font-weight:800; cursor:pointer;" data-action="save-overlay">${escapeHtml(t('save', 'Speichern'))}</button>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+  activeOverlay = overlay;
+
+  const addInput = overlay.querySelector('.multi-editor-input');
+  const addBtn = overlay.querySelector('[data-action="add-option"]');
+  const listContainer = overlay.querySelector('.multi-editor-list');
+
+  function addOption() {
+    const val = addInput.value.trim();
+    if (val && !allOptions.includes(val)) {
+      allOptions.push(val);
+      selectedSet.add(val);
+      listContainer.innerHTML = renderList();
+      addInput.value = '';
+    }
+  }
+
+  addBtn.addEventListener('click', addOption);
+  addInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addOption();
+    }
+  });
+
+  listContainer.addEventListener('change', (e) => {
+    const checkbox = e.target.closest('input[type="checkbox"]');
+    if (checkbox) {
+      const opt = checkbox.dataset.option;
+      if (checkbox.checked) {
+        selectedSet.add(opt);
+      } else {
+        selectedSet.delete(opt);
+      }
+    }
+  });
+
+  overlay.querySelector('[data-action="cancel-overlay"]').addEventListener('click', closeMultiSelectOverlay);
+
+  overlay.querySelector('[data-action="save-overlay"]').addEventListener('click', async () => {
+    const finalVals = Array.from(selectedSet);
+    closeMultiSelectOverlay();
+    await onSave(finalVals);
+  });
+
+  const clickOutsideHandler = (e) => {
+    if (!overlay.contains(e.target) && !hostCell.contains(e.target)) {
+      closeMultiSelectOverlay();
+      document.removeEventListener('click', clickOutsideHandler);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('click', clickOutsideHandler);
+  }, 50);
+}
+
+function trim(str) {
+  return typeof str === 'string' ? str.trim() : '';
+}
+
+function toggleResearchSettingsTab(tabName) {
+  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (!drawer) return;
+  saveResearchSettingsTemporaryState(drawer);
+  state.researchSettingsActiveTab = tabName;
+  drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+  if (tabName === 'mailserver') {
+    loadMailserverConfig();
+  }
+}
+
+async function loadMailserverConfig() {
+  if (!state.ctx?.commandBus?.dispatch) return;
+  state.mailserver = state.mailserver || { domains: [], users: [], loading: false, error: null };
+  state.mailserver.loading = true;
+  state.mailserver.error = null;
+  
+  // Render loading state
+  const drawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+  if (drawer && state.researchSettingsActiveTab === 'mailserver') {
+    drawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+  }
+
+  try {
+    const commandId = `cmd_mailserver_get_config_${crypto.randomUUID()}`;
+    const startedAtMs = Date.now();
+    
+    const dispatched = await state.ctx.commandBus.dispatch({
+      id: commandId,
+      module: 'ctox',
+      type: 'ctox.mailserver.get_config',
+      record_id: commandId,
+      inbound_channel: 'business_os.outbound',
+      payload: {},
+      client_context: {
+        source_module: 'outbound',
+      },
+    });
+
+    let result = dispatched;
+    if (!dispatched?.status || dispatched.status === 'pending_sync') {
+      result = await waitForBusinessCommandProjection(commandId, startedAtMs);
+    }
+
+    if (result && (result.status === 'completed' || result.result)) {
+      const outcome = result.result || result.payload?.outcome || result;
+      state.mailserver.domains = outcome.domains || [];
+      state.mailserver.users = outcome.users || [];
+    } else {
+      throw new Error('Fehler beim Laden der Mailserver-Konfiguration.');
+    }
+  } catch (err) {
+    console.error('[outbound] Failed to load mailserver config', err);
+    state.mailserver.error = err.message || String(err);
+  } finally {
+    state.mailserver.loading = false;
+    // Re-render if tab is still active
+    const currentDrawer = state.ctx?.host?.querySelector('.outbound-research-drawer');
+    if (currentDrawer && state.researchSettingsActiveTab === 'mailserver') {
+      currentDrawer.innerHTML = renderResearchSettingsDrawer(selectedCampaign());
+    }
+  }
+}
+
+function saveResearchSettingsTemporaryState(drawer) {
+  if (!drawer || !state.tempResearchSettings) return;
+
+  const customInstructionTextarea = drawer.querySelector('[data-research-setting-custom]');
+  if (customInstructionTextarea) {
+    state.tempResearchSettings.customInstruction = customInstructionTextarea.value.trim();
+  }
+
+  const fieldsChecked = Array.from(drawer.querySelectorAll('[data-column-setting-kind="company"][data-column-setting-full]:checked'))
+    .map((input) => input.dataset.columnSettingFull)
+    .filter(Boolean);
+  if (fieldsChecked.length || drawer.querySelector('[data-column-setting-kind="company"]')) {
+    state.tempResearchSettings.fields = fieldsChecked;
+  }
+
+  const fieldsCompactChecked = Array.from(drawer.querySelectorAll('[data-column-setting-kind="company"][data-column-setting-compact]:checked'))
+    .map((input) => input.dataset.columnSettingCompact)
+    .filter(Boolean);
+  if (fieldsCompactChecked.length || drawer.querySelector('[data-column-setting-kind="company"]')) {
+    state.tempResearchSettings.fieldsCompact = fieldsCompactChecked;
+  }
+
+  const contactFieldsChecked = Array.from(drawer.querySelectorAll('[data-column-setting-kind="contact"][data-column-setting-full]:checked'))
+    .map((input) => input.dataset.columnSettingFull)
+    .filter(Boolean);
+  if (contactFieldsChecked.length || drawer.querySelector('[data-column-setting-kind="contact"]')) {
+    state.tempResearchSettings.contactFields = contactFieldsChecked;
+  }
+
+  const contactFieldsCompactChecked = Array.from(drawer.querySelectorAll('[data-column-setting-kind="contact"][data-column-setting-compact]:checked'))
+    .map((input) => input.dataset.columnSettingCompact)
+    .filter(Boolean);
+  if (contactFieldsCompactChecked.length || drawer.querySelector('[data-column-setting-kind="contact"]')) {
+    state.tempResearchSettings.contactFieldsCompact = contactFieldsCompactChecked;
+  }
+
+  const companyRows = Array.from(drawer.querySelectorAll('[data-column-setting-side="company"][data-column-setting-id]'));
+  if (companyRows.length) {
+    state.tempResearchSettings.customFields = companyRows
+      .filter((node) => node.dataset.customFieldId)
+      .map((node) => ({
+        id: node.dataset.columnSettingId,
+        label: node.querySelector('[data-column-setting-label]')?.value?.trim() || '',
+        prompt: node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '',
+      }))
+      .filter((field) => field.id && field.label);
+  }
+
+  const contactRows = Array.from(drawer.querySelectorAll('[data-column-setting-side="contact"][data-column-setting-id]'));
+  if (contactRows.length) {
+    state.tempResearchSettings.customContactFields = contactRows
+      .filter((node) => node.dataset.customFieldId)
+      .map((node) => ({
+        id: node.dataset.columnSettingId,
+        label: node.querySelector('[data-column-setting-label]')?.value?.trim() || '',
+        prompt: node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '',
+      }))
+      .filter((field) => field.id && field.label);
+  }
+
+  if (companyRows.length || contactRows.length) {
+    if (!state.tempResearchSettings.columnLabels) state.tempResearchSettings.columnLabels = {};
+    if (!state.tempResearchSettings.fieldPrompts) state.tempResearchSettings.fieldPrompts = {};
+    [...companyRows, ...contactRows].forEach((node) => {
+      const id = node.dataset.columnSettingId;
+      const label = node.querySelector('[data-column-setting-label]')?.value?.trim() || '';
+      const prompt = node.querySelector('[data-column-setting-prompt]')?.value?.trim() || '';
+      if (id && label) state.tempResearchSettings.columnLabels[id] = label;
+      if (id && prompt) state.tempResearchSettings.fieldPrompts[id] = prompt;
+    });
+  }
+
+  const apiUrlInput = drawer.querySelector('[data-prompt-setting="apiUrl"]');
+  if (apiUrlInput) state.tempResearchSettings.apiUrl = apiUrlInput.value.trim();
+
+  const apiTokenInput = drawer.querySelector('[data-prompt-setting="apiToken"]');
+  if (apiTokenInput) state.tempResearchSettings.apiToken = apiTokenInput.value.trim();
+
+  const icpCoreTextarea = drawer.querySelector('[data-prompt-setting="icpCore"]');
+  if (icpCoreTextarea) state.tempResearchSettings.icpCore = icpCoreTextarea.value.trim();
+
+  const checklistTextarea = drawer.querySelector('[data-prompt-setting="checklist"]');
+  if (checklistTextarea) state.tempResearchSettings.checklist = checklistTextarea.value.trim();
+
+  const ctaInput = drawer.querySelector('[data-prompt-setting="cta"]');
+  if (ctaInput) state.tempResearchSettings.cta = ctaInput.value.trim();
+
+  const signatureTextarea = drawer.querySelector('[data-prompt-setting="signature"]');
+  if (signatureTextarea) state.tempResearchSettings.signature = signatureTextarea.value.trim();
+
+  const icpPromptTemplateTextarea = drawer.querySelector('[data-prompt-setting="icpPromptTemplate"]');
+  if (icpPromptTemplateTextarea) state.tempResearchSettings.icpPromptTemplate = icpPromptTemplateTextarea.value.trim();
+
+  const messagePromptTemplateTextarea = drawer.querySelector('[data-prompt-setting="messagePromptTemplate"]');
+  if (messagePromptTemplateTextarea) state.tempResearchSettings.messagePromptTemplate = messagePromptTemplateTextarea.value.trim();
+
+  const extractEmailPromptTextarea = drawer.querySelector('[data-prompt-setting="extractEmailPrompt"]');
+  if (extractEmailPromptTextarea) state.tempResearchSettings.extractEmailPrompt = extractEmailPromptTextarea.value.trim();
+}
+
+function normalizeDraftResult(messageObj) {
+  if (!messageObj) return {};
+  const result = {};
+  const findVal = (keys) => {
+    for (const key of keys) {
+      const found = Object.keys(messageObj).find(k => k.toLowerCase() === key.toLowerCase());
+      if (found) return messageObj[found];
+    }
+    return '';
+  };
+
+  result.message_mail_subject = findVal(['Betreff', 'subject']);
+  result.message_mail_body = findVal(['Text', 'body', 'mail_body', 'email_body', 'email']);
+  result.message_followup_1 = findVal(['FollowUp1', 'followup_1', 'follow_up_1', 'followup1']);
+  result.message_followup_2 = findVal(['FollowUp2', 'followup_2', 'follow_up_2', 'followup2']);
+
+  return result;
+}
+
+async function generateOutreachForContact(itemId, contactIndex) {
+  const contactKey = `${itemId}_${contactIndex}`;
+  if (state.generatingOutreach.has(contactKey)) return;
+
+  const item = state.pipeline.find(entry => entry.id === itemId);
+  if (!item) return;
+  const company = state.companies.find(c => c.id === item.company_id);
+  if (!company) return;
+  const contact = item.contacts?.[contactIndex];
+  if (!contact) return;
+
+  const campaign = selectedCampaign();
+  const settings = getCampaignResearchSettings(campaign);
+  const gatewayUrl = settings.apiUrl || DEFAULT_API_URL;
+  const gatewayToken = settings.apiToken || DEFAULT_TOKEN_ID;
+
+  state.generatingOutreach.set(contactKey, { statusText: 'Verbindung wird aufgebaut... (0%)' });
+  renderCenter();
+
+  const researchResults = company.company_data || company.payload?.research_results || {};
+  const summaryParts = [];
+  summaryParts.push(`Unternehmen: ${company.name}`);
+  if (company.website) summaryParts.push(`Website: ${company.website}`);
+  if (company.domain) summaryParts.push(`Domain: ${company.domain}`);
+
+  Object.entries(researchResults).forEach(([key, val]) => {
+    if (val && typeof val !== 'object') {
+      summaryParts.push(`${key}: ${val}`);
+    }
+  });
+  const homepage_summary = summaryParts.join('\n');
+
+  let first_name = contact.firstname || '';
+  let last_name = contact.lastname || '';
+  if (!first_name && !last_name && contact.name) {
+    const parts = contact.name.trim().split(/\s+/);
+    if (parts.length > 1) {
+      first_name = parts[0];
+      last_name = parts.slice(1).join(' ');
+    } else {
+      first_name = parts[0] || '';
+    }
+  }
+
+  const person = {
+    first_name,
+    last_name,
+    title: contact.role || contact.title || contact.position || '',
+    email: contact.email || '',
+    phone: contact.phone || '',
+    linkedin_url: contact.linkedin_url || contact.linkedin || ''
+  };
+
+  const itemPayload = {
+    company: {
+      website_url: company.website || (company.domain ? `https://${company.domain}` : ''),
+      homepage_summary
+    },
+    person
+  };
+
+  const payload = {
+    Produkt_und_Dienstleistungsbeschreibung: settings.icpCore,
+    CTA: settings.cta,
+    Signatur: settings.signature,
+    Checkliste_Landingpage: settings.checklist,
+    message_prompt_template: settings.messagePromptTemplate,
+    extract_prompt_template: settings.extractEmailPrompt,
+    items: [itemPayload]
+  };
+
+  const headers = {
+    'Content-Type': 'application/json',
+    'X-Token-Id': gatewayToken,
+    'X-Auth-Token': gatewayToken
+  };
+
+  try {
+    const url = `${gatewayUrl}/email/generate?async=1`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP-Fehler ${response.status}: ${response.statusText}`);
+    }
+
+    const resData = await response.json();
+
+    if (response.status === 200 && resData.results && resData.results[0]) {
+      const messageObj = resData.results[0].message;
+      const normalized = normalizeDraftResult(messageObj);
+      await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+        if (!c.messages) c.messages = {};
+        c.messages.message_mail_subject = normalized.message_mail_subject || '';
+        c.messages.message_mail_body = normalized.message_mail_body || '';
+        c.messages.message_followup_1 = normalized.message_followup_1 || '';
+        c.messages.message_followup_2 = normalized.message_followup_2 || '';
+      });
+      state.generatingOutreach.delete(contactKey);
+      renderCenter();
+      return;
+    }
+
+    const jobId = resData.job_id;
+    if (!jobId) {
+      throw new Error('Keine Job-ID vom Server zurückgegeben.');
+    }
+
+    const pollInterval = 2000;
+    const poll = async () => {
+      if (!state.generatingOutreach.has(contactKey)) return;
+
+      try {
+        const pollResponse = await fetch(`${gatewayUrl}/email/generate/status/${jobId}`, {
+          method: 'GET',
+          headers
+        });
+
+        if (!pollResponse.ok) {
+          throw new Error(`Polling HTTP-Fehler ${pollResponse.status}`);
+        }
+
+        const pollData = await pollResponse.json();
+
+        if (!pollData.ok) {
+          throw new Error(pollData.error || 'Fehler beim Polling.');
+        }
+
+        const status = pollData.status;
+        const progress = pollData.progress || 0;
+        const note = pollData.note || 'Warte auf Verarbeitung...';
+
+        if (status === 'queued' || status === 'running') {
+          state.generatingOutreach.set(contactKey, {
+            statusText: `${note} (${progress}%)`
+          });
+          renderCenter();
+          setTimeout(poll, pollInterval);
+        } else if (status === 'done') {
+          const result = pollData.result || {};
+          if (result.results && result.results[0]) {
+            const messageObj = result.results[0].message;
+            const normalized = normalizeDraftResult(messageObj);
+
+            await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+              if (!c.messages) c.messages = {};
+              c.messages.message_mail_subject = normalized.message_mail_subject || '';
+              c.messages.message_mail_body = normalized.message_mail_body || '';
+              c.messages.message_followup_1 = normalized.message_followup_1 || '';
+              c.messages.message_followup_2 = normalized.message_followup_2 || '';
+            });
+
+            state.generatingOutreach.delete(contactKey);
+            renderCenter();
+          } else {
+            throw new Error('Keine Ergebnisse in der Serverantwort vorhanden.');
+          }
+        } else {
+          throw new Error(pollData.error || 'Serverfehler bei der Generierung.');
+        }
+      } catch (err) {
+        console.error('[outbound] error during outreach generation polling:', err);
+        state.generatingOutreach.delete(contactKey);
+        renderCenter();
+        showBusinessAlert(`Fehler bei der Outreach-Generierung: ${err.message}`);
+      }
+    };
+
+    setTimeout(poll, pollInterval);
+
+  } catch (err) {
+    console.error('[outbound] error starting outreach generation:', err);
+    state.generatingOutreach.delete(contactKey);
+    renderCenter();
+    showBusinessAlert(`Verbindungsfehler: ${err.message}`);
+  }
+}
+
+let hiddenCompaniesPanelOpen = false;
+
+export function toggleHiddenCompaniesPanel() {
+  if (hiddenCompaniesPanelOpen) {
+    closeHiddenCompaniesPanel();
+  } else {
+    buildHiddenCompaniesPanel();
+  }
+}
+
+export function closeHiddenCompaniesPanel() {
+  const panel = document.querySelector('.hidden-company-panel');
+  if (panel) {
+    panel.remove();
+  }
+  hiddenCompaniesPanelOpen = false;
+}
+
+export function buildHiddenCompaniesPanel() {
+  closeHiddenCompaniesPanel();
+
+  const panel = document.createElement('div');
+  panel.className = 'hidden-company-panel';
+
+  const header = document.createElement('div');
+  header.className = 'hidden-company-header';
+
+  const title = document.createElement('div');
+  title.style.fontWeight = '800';
+  title.textContent = t('hiddenCompanies', 'Versteckte Firmen');
+
+  const btnClose = document.createElement('button');
+  btnClose.type = 'button';
+  btnClose.className = 'mini-btn';
+  btnClose.style.padding = '4px 8px';
+  btnClose.textContent = t('close', 'Schließen');
+  btnClose.addEventListener('click', closeHiddenCompaniesPanel);
+
+  header.appendChild(title);
+  header.appendChild(btnClose);
+  panel.appendChild(header);
+
+  const listWrap = document.createElement('div');
+  listWrap.className = 'hidden-company-list';
+  listWrap.style.marginTop = '8px';
+  panel.appendChild(listWrap);
+
+  const hiddenIds = loadHiddenCompanies();
+
+  if (hiddenIds.length === 0) {
+    const emptyRow = document.createElement('div');
+    emptyRow.textContent = t('noCompaniesHidden', 'Keine Firma ausgeblendet.');
+    emptyRow.style.fontStyle = 'italic';
+    emptyRow.style.color = 'var(--outbound-muted)';
+    listWrap.appendChild(emptyRow);
+  } else {
+    hiddenIds.forEach(companyId => {
+      const company = state.companies.find(c => c.id === companyId);
+      const companyName = company ? company.name : companyId;
+
+      const row = document.createElement('div');
+      row.className = 'hidden-company-row';
+      row.style.display = 'flex';
+      row.style.justifyContent = 'space-between';
+      row.style.alignItems = 'center';
+      row.style.gap = '8px';
+      row.style.marginBottom = '6px';
+
+      const nameDiv = document.createElement('div');
+      nameDiv.className = 'hidden-company-name';
+      nameDiv.style.fontSize = '11px';
+      nameDiv.textContent = companyName;
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.type = 'button';
+      restoreBtn.className = 'mini-btn';
+      restoreBtn.style.padding = '2px 6px';
+      restoreBtn.textContent = t('restoreCompany', 'Wieder anzeigen');
+      restoreBtn.addEventListener('click', () => {
+        unhideCompany(companyId);
+        render(true);
+        buildHiddenCompaniesPanel(); // re-render panel list
+      });
+
+      row.appendChild(nameDiv);
+      row.appendChild(restoreBtn);
+      listWrap.appendChild(row);
+    });
+
+    const bulkRow = document.createElement('div');
+    bulkRow.style.marginTop = '12px';
+    bulkRow.style.display = 'flex';
+    bulkRow.style.justifyContent = 'flex-end';
+
+    const bulkBtn = document.createElement('button');
+    bulkBtn.type = 'button';
+    bulkBtn.className = 'outbound-button';
+    bulkBtn.style.fontSize = '10px';
+    bulkBtn.style.padding = '4px 8px';
+    bulkBtn.textContent = t('restoreAllCompanies', 'Alle wieder anzeigen');
+    bulkBtn.addEventListener('click', () => {
+      saveHiddenCompanies([]);
+      render(true);
+      closeHiddenCompaniesPanel();
+    });
+    bulkRow.appendChild(bulkBtn);
+    panel.appendChild(bulkRow);
+  }
+
+  document.body.appendChild(panel);
+  hiddenCompaniesPanelOpen = true;
 }

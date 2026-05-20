@@ -4,6 +4,7 @@
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
+use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
@@ -11,22 +12,42 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
-use std::collections::HashMap;
+use sha2::Sha256;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs;
+use std::io;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tiny_http::{Header, Request, Response, Server};
+use url::Url;
 use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
+const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
+const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
+const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
+const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
+const CHATGPT_AUTH_SCOPE: &str =
+    "openid profile email offline_access api.connectors.read api.connectors.invoke";
+const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
+const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
+
+#[derive(Debug, Clone, Default)]
+struct ChatgptSubscriptionAuthStatus {
+    configured: bool,
+    account_email: Option<String>,
+    plan: Option<String>,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessOsStatus {
@@ -129,11 +150,86 @@ pub struct CtoxTaskDeleteMutation {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSourceLoadMutation {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSourceSaveMutation {
+    pub module_id: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DesktopFileMaterializeRequest {
+    pub file_id: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct ModuleFounderAssignment {
     pub module_id: String,
     pub user_id: String,
     #[serde(default = "default_true")]
     pub active: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleInstallTemplateRequest {
+    pub template_id: String,
+    #[serde(default)]
+    pub module_id: String,
+    #[serde(default)]
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleUpsertRequest {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub entry: String,
+    #[serde(default)]
+    pub collections: Vec<String>,
+    #[serde(default)]
+    pub layout: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleDeleteRequest {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RuntimeSettingsRequest {
+    #[serde(default)]
+    pub provider: String,
+    #[serde(default)]
+    pub auth_mode: String,
+    #[serde(default)]
+    pub chat_model: String,
+    #[serde(default)]
+    pub context: String,
+    #[serde(default)]
+    pub max_run_secs: Option<u64>,
+    #[serde(default)]
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChannelCommandRequest {
+    #[serde(default)]
+    pub channel: String,
+    #[serde(default)]
+    pub account_key: String,
+    #[serde(default)]
+    pub config: Value,
+    #[serde(default)]
+    pub display_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -174,6 +270,44 @@ pub struct CommandAccepted {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_status: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ModuleManifest {
+    id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    entry: String,
+    #[serde(default)]
+    collections: Vec<String>,
+    #[serde(default)]
+    layout: Value,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    core: bool,
+    #[serde(default)]
+    editable: bool,
+    #[serde(default)]
+    deletable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TemplateManifest {
+    id: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    category: String,
+    #[serde(default)]
+    source_module: String,
+    #[serde(default)]
+    default_title: String,
+    #[serde(default)]
+    tags: Vec<String>,
 }
 
 pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
@@ -244,6 +378,7 @@ fn process_is_running(_pid: u32) -> bool {
 pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
     let instance_id = stable_instance_id(root)?;
     let peer_id = format!("ctox-core-{}", short_hash(&instance_id));
+    let native_rxdb_peer_available = super::rxdb_peer::is_native_peer_running();
     Ok(BusinessOsSyncConfig {
         ok: true,
         app_hosting: "ctox_instance_webserver",
@@ -254,10 +389,14 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         peer_role: "ctox_instance",
         signaling_urls: signaling_urls(),
         transport: "webrtc",
-        http_bridge_available: true,
+        http_bridge_available: false,
         ctox_instance_required: true,
-        native_rxdb_peer_available: false,
-        native_rxdb_peer_reason: "src/core/rxdb is not a complete CTOX WebRTC replication peer yet",
+        native_rxdb_peer_available,
+        native_rxdb_peer_reason: if native_rxdb_peer_available {
+            ""
+        } else {
+            "CTOX native WebRTC peer is starting or unavailable"
+        },
     })
 }
 
@@ -561,6 +700,202 @@ pub fn list_users(root: &Path, session: &BusinessOsSession) -> anyhow::Result<Va
     }))
 }
 
+pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let users = query_users(&conn)?;
+    let documents = users
+        .into_iter()
+        .map(|user| {
+            serde_json::json!({
+                "id": user.id,
+                "user_id": user.id,
+                "display_name": user.display_name,
+                "role": user.role,
+                "active": user.active,
+                "created_at_ms": user.created_at_ms,
+                "updated_at_ms": user.updated_at_ms,
+                "_deleted": false,
+            })
+        })
+        .collect::<Vec<_>>();
+    let count = documents.len();
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": "business_users",
+        "documents": documents,
+        "count": count,
+        "since_ms": 0,
+    }))
+}
+
+pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
+        .ok()
+        .flatten();
+    let provider = runtime_state
+        .as_ref()
+        .map(crate::inference::runtime_state::api_provider_for_runtime_state)
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map)
+        });
+    let source = runtime_state
+        .as_ref()
+        .map(|state| state.source.as_env_value().to_owned())
+        .unwrap_or_else(|| {
+            env_map
+                .get("CTOX_CHAT_SOURCE")
+                .cloned()
+                .unwrap_or_else(|| "local".to_owned())
+        });
+    let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
+    let key_configured = crate::secrets::get_credential(root, key_name).is_some();
+    let configured_auth_mode = env_map
+        .get("CTOX_OPENAI_AUTH_MODE")
+        .or_else(|| env_map.get("OPENAI_AUTH_MODE"))
+        .cloned()
+        .unwrap_or_else(|| "api_key".to_owned());
+    let auth_mode = if provider.eq_ignore_ascii_case("local") {
+        "local".to_owned()
+    } else {
+        configured_auth_mode
+    };
+    let service = cheap_ctox_service_status(root);
+    let service_running = service
+        .get("running")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let service_last_error = service
+        .get("last_error")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .unwrap_or_default();
+    let subscription_selected = provider.eq_ignore_ascii_case("openai")
+        && matches!(
+            auth_mode.trim().to_ascii_lowercase().as_str(),
+            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+        );
+    let subscription_auth = if subscription_selected {
+        chatgpt_subscription_auth_status(root)
+    } else {
+        ChatgptSubscriptionAuthStatus::default()
+    };
+    let auth_configured = provider.eq_ignore_ascii_case("local")
+        || key_configured
+        || (subscription_selected && subscription_auth.configured);
+    let service_needs_attention = !service_running || !service_last_error.trim().is_empty();
+    let auth_needs_attention = !auth_configured;
+    let needs_attention = service_needs_attention || auth_needs_attention;
+    let auth_message = runtime_auth_message(
+        provider.as_str(),
+        key_name,
+        key_configured,
+        subscription_selected,
+        &subscription_auth,
+    );
+    let service_message = if service_needs_attention {
+        if !service_running {
+            "CTOX Service läuft nicht.".to_owned()
+        } else {
+            format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
+        }
+    } else {
+        "CTOX Service läuft.".to_owned()
+    };
+    let diagnostics_message = if needs_attention {
+        if !service_running {
+            "CTOX Service läuft nicht.".to_owned()
+        } else if !service_last_error.trim().is_empty() {
+            format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
+        } else {
+            auth_message.clone()
+        }
+    } else {
+        auth_message.clone()
+    };
+    let updated_at_ms = now_ms() as u64;
+    Ok(serde_json::json!({
+        "id": "runtime-settings",
+        "ok": true,
+        "can_manage": true,
+        "updated_at_ms": updated_at_ms,
+        "runtime": {
+            "source": source,
+            "provider": provider,
+            "chat_model": env_map.get("CTOX_CHAT_MODEL")
+                .or_else(|| env_map.get("CTOX_CHAT_MODEL_BASE"))
+                .cloned()
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
+                .unwrap_or_default(),
+            "context": env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT")
+                .cloned()
+                .or_else(|| runtime_state.as_ref().and_then(|state| state.configured_context_tokens.map(|value| value.to_string())))
+                .unwrap_or_else(|| "256k".to_owned()),
+            "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(1800),
+            "upstream_base_url": runtime_state.as_ref()
+                .filter(|state| !state.source.is_local())
+                .map(|state| state.upstream_base_url.clone())
+                .unwrap_or_default()
+        },
+        "auth": {
+            "mode": auth_mode,
+            "api_key_name": key_name,
+            "api_key_configured": key_configured,
+            "subscription_selected": subscription_selected,
+            "subscription_session_configured": subscription_auth.configured,
+            "subscription_account_email": subscription_auth.account_email,
+            "subscription_plan": subscription_auth.plan,
+            "configured": auth_configured
+        },
+        "service": service,
+        "diagnostics": {
+            "needs_attention": needs_attention,
+            "service_needs_attention": service_needs_attention,
+            "auth_needs_attention": auth_needs_attention,
+            "service_message": service_message,
+            "auth_message": auth_message,
+            "last_error": service_last_error,
+            "message": diagnostics_message
+        }
+    }))
+}
+
+pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let modules = load_module_manifests(&app_root)?;
+    let templates = load_template_manifests(&app_root)?;
+    let governance = module_governance_map(
+        root,
+        &BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(BusinessOsSessionUser {
+                id: "ctox-system".to_owned(),
+                display_name: "CTOX System".to_owned(),
+                role: "admin".to_owned(),
+                is_admin: true,
+            }),
+            login_url: None,
+            reason: None,
+        },
+    )?;
+    Ok(serde_json::json!({
+        "id": "module-catalog",
+        "ok": true,
+        "modules": modules,
+        "templates": templates,
+        "governance": governance,
+        "updated_at_ms": now_ms(),
+        "_deleted": false,
+    }))
+}
+
 pub fn upsert_user(
     root: &Path,
     session: &BusinessOsSession,
@@ -646,7 +981,595 @@ pub fn assign_module_founder(
             "updated_at_ms": now
         }),
     )?;
-    module_governance_map(root, session)
+    let mut governance = module_governance_map(root, session)?;
+    if let Some(map) = governance.as_object_mut() {
+        map.insert(
+            "business_module_acl_ids".to_string(),
+            Value::Array(vec![Value::String(record_id)]),
+        );
+    }
+    Ok(governance)
+}
+
+pub fn upsert_module_manifest_command(
+    root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleUpsertRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.id);
+    anyhow::ensure!(!module_id.is_empty(), "module id is required");
+    anyhow::ensure!(
+        session_can_modify_module(root, session, &module_id)?,
+        "module modification rights required"
+    );
+    let manifest = upsert_module_manifest(app_root, request)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": manifest.id,
+        "module": manifest
+    }))
+}
+
+pub fn install_template_module_command(
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleInstallTemplateRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    let manifest = install_template_module(app_root, request)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": manifest.id,
+        "module": manifest
+    }))
+}
+
+pub fn delete_installed_module_command(
+    root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleDeleteRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module id is required");
+    anyhow::ensure!(
+        session_can_modify_module(root, session, &module_id)?,
+        "module modification rights required"
+    );
+    delete_installed_module(app_root, root, ModuleDeleteRequest { module_id: module_id.clone() })?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "deleted": true
+    }))
+}
+
+pub fn save_runtime_settings_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: RuntimeSettingsRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    save_runtime_settings(root, request)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "saved"
+    }))
+}
+
+pub fn start_subscription_auth_command(
+    root: &Path,
+    session: &BusinessOsSession,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    subscription_auth_start_payload(root)
+}
+
+pub fn run_channel_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    command_type: &str,
+    request: ChannelCommandRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    match command_type {
+        "ctox.channel.test" => {
+            let account_key = request.account_key.trim();
+            let account_key = if account_key.is_empty() {
+                None
+            } else {
+                Some(account_key)
+            };
+            channels::test_channel_for_business_os(root, request.channel.trim(), account_key)
+        }
+        "ctox.channel.sync" => {
+            channels::sync_channel_for_business_os(root, request.channel.trim())
+        }
+        "ctox.channel.settings.save" => channels::save_channel_settings_for_business_os(
+            root,
+            request.channel.trim(),
+            &request.config,
+        ),
+        "ctox.channel.disconnect" => channels::disconnect_communication_account_for_business_os(
+            root,
+            request.account_key.trim(),
+        ),
+        "ctox.channel.pair.start" => {
+            channels::start_pairing_for_business_os(root, request.channel.trim())
+        }
+        "ctox.channel.jami.export" => Ok(channels::export_jami_archive_for_business_os(root)),
+        "ctox.channel.jami.create" => {
+            let display_name = request
+                .display_name
+                .trim()
+                .to_string();
+            let display_name = if display_name.is_empty() {
+                "CTOX".to_string()
+            } else {
+                display_name
+            };
+            let config = serde_json::json!({ "profile_name": display_name });
+            channels::save_channel_settings_for_business_os(root, "jami", &config)?;
+            channels::start_pairing_for_business_os(root, "jami")
+        }
+        _ => anyhow::bail!("unsupported channel command type: {command_type}"),
+    }
+}
+
+fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow::Result<()> {
+    let provider = crate::inference::runtime_state::normalize_api_provider(&request.provider);
+    let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
+        .unwrap_or_else(|_| BTreeMap::new());
+    let chat_model = request.chat_model.trim();
+    let context = request.context.trim();
+    if provider.eq_ignore_ascii_case("local") {
+        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
+        env_map.remove("CTOX_API_PROVIDER");
+        env_map.remove("CTOX_UPSTREAM_BASE_URL");
+        env_map.remove("OPENAI_AUTH_MODE");
+        env_map.remove("CTOX_OPENAI_AUTH_MODE");
+    } else {
+        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned());
+        env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
+        env_map.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_owned(),
+            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
+                .to_owned(),
+        );
+    }
+    if !chat_model.is_empty() {
+        env_map.insert("CTOX_CHAT_MODEL".to_owned(), chat_model.to_owned());
+        env_map.insert("CTOX_CHAT_MODEL_BASE".to_owned(), chat_model.to_owned());
+    }
+    if !context.is_empty() {
+        env_map.insert("CTOX_CHAT_MODEL_MAX_CONTEXT".to_owned(), context.to_owned());
+    }
+    if let Some(max_run_secs) = request.max_run_secs.filter(|value| *value > 0) {
+        env_map.insert(
+            "CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(),
+            max_run_secs.to_string(),
+        );
+    }
+    let auth_mode = request.auth_mode.trim().to_ascii_lowercase();
+    if provider.eq_ignore_ascii_case("openai")
+        && matches!(
+            auth_mode.as_str(),
+            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
+        )
+    {
+        env_map.insert(
+            "OPENAI_AUTH_MODE".to_owned(),
+            "chatgpt_subscription".to_owned(),
+        );
+        env_map.insert(
+            "CTOX_OPENAI_AUTH_MODE".to_owned(),
+            "chatgpt_subscription".to_owned(),
+        );
+    } else {
+        env_map.insert("OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
+        env_map.insert("CTOX_OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
+    }
+    let api_key = request.api_key.trim();
+    if !api_key.is_empty() {
+        let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(provider);
+        env_map.insert(key_name.to_owned(), api_key.to_owned());
+    }
+    crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
+}
+
+fn chatgpt_subscription_auth_status(root: &Path) -> ChatgptSubscriptionAuthStatus {
+    let Ok(codex_home) = ctox_core::config::find_codex_home() else {
+        return ChatgptSubscriptionAuthStatus::default();
+    };
+    let _ = restore_chatgpt_subscription_auth_from_instance(root, &codex_home);
+    let auth_manager = ctox_core::AuthManager::new(
+        codex_home.clone(),
+        false,
+        ctox_core::auth::AuthCredentialsStoreMode::default(),
+    );
+    let Some(auth) = auth_manager.auth_cached() else {
+        return ChatgptSubscriptionAuthStatus::default();
+    };
+    if !auth.is_chatgpt_auth() {
+        return ChatgptSubscriptionAuthStatus::default();
+    }
+    ChatgptSubscriptionAuthStatus {
+        configured: true,
+        account_email: auth.get_account_email(),
+        plan: auth.account_plan_type().map(|plan| format!("{plan:?}")),
+    }
+}
+
+fn runtime_auth_message(
+    provider: &str,
+    key_name: &str,
+    key_configured: bool,
+    subscription_selected: bool,
+    subscription_auth: &ChatgptSubscriptionAuthStatus,
+) -> String {
+    if provider.eq_ignore_ascii_case("local") {
+        return "Lokale CTOX Runtime ausgewählt; keine API-Autorisierung nötig.".to_owned();
+    }
+    if subscription_selected {
+        return if subscription_auth.configured {
+            match (
+                subscription_auth.account_email.as_deref(),
+                subscription_auth.plan.as_deref(),
+            ) {
+                (Some(email), Some(plan)) => {
+                    format!("ChatGPT Subscription autorisiert: {email} ({plan}).")
+                }
+                (Some(email), None) => format!("ChatGPT Subscription autorisiert: {email}."),
+                _ => "ChatGPT Subscription autorisiert.".to_owned(),
+            }
+        } else {
+            "ChatGPT Subscription ausgewählt, aber keine ChatGPT-Session im Codex/CTOX Auth-Store gefunden.".to_owned()
+        };
+    }
+    if key_configured {
+        format!("{key_name} ist im CTOX Secret Store vorhanden.")
+    } else {
+        format!("{key_name} fehlt im CTOX Secret Store.")
+    }
+}
+
+fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
+    let login = start_chatgpt_subscription_login(root)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "auth_url",
+        "login_id": login.login_id,
+        "auth_url": login.auth_url,
+        "message": "ChatGPT Subscription Autorisierung gestartet."
+    }))
+}
+
+struct StartedChatgptSubscriptionLogin {
+    login_id: String,
+    auth_url: String,
+}
+
+#[derive(Clone)]
+struct ChatgptLoginPkce {
+    verifier: String,
+    challenge: String,
+}
+
+fn start_chatgpt_subscription_login(
+    root: &Path,
+) -> anyhow::Result<StartedChatgptSubscriptionLogin> {
+    let codex_home = ctox_core::config::find_codex_home()
+        .context("Codex/CTOX Auth-Store konnte nicht aufgelöst werden")?;
+    let pkce = chatgpt_login_pkce();
+    let state = chatgpt_login_state();
+    let (server, port) = bind_chatgpt_login_server()
+        .context("Lokaler ChatGPT-Login-Callback konnte nicht gestartet werden")?;
+    let redirect_uri = format!("http://localhost:{port}/auth/callback");
+    let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
+    let login_id = Uuid::new_v4().to_string();
+    let worker_login_id = login_id.clone();
+    let root = root.to_path_buf();
+    thread::spawn(move || {
+        if let Err(err) =
+            run_chatgpt_login_callback_server(server, root, codex_home, redirect_uri, pkce, state)
+        {
+            eprintln!("CTOX ChatGPT subscription login {worker_login_id} failed: {err}");
+        }
+    });
+    Ok(StartedChatgptSubscriptionLogin { login_id, auth_url })
+}
+
+fn chatgpt_login_pkce() -> ChatgptLoginPkce {
+    let verifier = format!(
+        "{}{}{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    );
+    let digest = Sha256::digest(verifier.as_bytes());
+    let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest);
+    ChatgptLoginPkce {
+        verifier,
+        challenge,
+    }
+}
+
+fn chatgpt_login_state() -> String {
+    let seed = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+    let digest = Sha256::digest(seed.as_bytes());
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
+}
+
+fn bind_chatgpt_login_server() -> anyhow::Result<(Server, u16)> {
+    for port in [
+        CHATGPT_AUTH_CALLBACK_PORT,
+        CHATGPT_AUTH_CALLBACK_FALLBACK_PORT,
+    ] {
+        match Server::http(format!("127.0.0.1:{port}")) {
+            Ok(server) => return Ok((server, port)),
+            Err(_) => continue,
+        }
+    }
+    anyhow::bail!(
+        "Ports {CHATGPT_AUTH_CALLBACK_PORT} und {CHATGPT_AUTH_CALLBACK_FALLBACK_PORT} sind belegt"
+    )
+}
+
+fn build_chatgpt_authorize_url(redirect_uri: &str, code_challenge: &str, state: &str) -> String {
+    let query = [
+        ("response_type", "code"),
+        ("client_id", ctox_core::auth::CLIENT_ID),
+        ("redirect_uri", redirect_uri),
+        ("scope", CHATGPT_AUTH_SCOPE),
+        ("code_challenge", code_challenge),
+        ("code_challenge_method", "S256"),
+        ("id_token_add_organizations", "true"),
+        ("codex_cli_simplified_flow", "true"),
+        ("state", state),
+        ("originator", "ctox_business_os"),
+    ];
+    let qs = query
+        .into_iter()
+        .map(|(key, value)| format!("{key}={}", urlencoding_encode(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{CHATGPT_AUTH_ISSUER}/oauth/authorize?{qs}")
+}
+
+fn run_chatgpt_login_callback_server(
+    server: Server,
+    root: PathBuf,
+    codex_home: PathBuf,
+    redirect_uri: String,
+    pkce: ChatgptLoginPkce,
+    state: String,
+) -> anyhow::Result<()> {
+    for request in server.incoming_requests() {
+        let url_raw = request.url().to_owned();
+        let handled = handle_chatgpt_login_callback_request(
+            request,
+            &url_raw,
+            &root,
+            &codex_home,
+            &redirect_uri,
+            &pkce,
+            &state,
+        )?;
+        if handled {
+            break;
+        }
+    }
+    server.unblock();
+    Ok(())
+}
+
+fn handle_chatgpt_login_callback_request(
+    request: Request,
+    url_raw: &str,
+    root: &Path,
+    codex_home: &Path,
+    redirect_uri: &str,
+    pkce: &ChatgptLoginPkce,
+    expected_state: &str,
+) -> anyhow::Result<bool> {
+    let parsed = Url::parse(&format!("http://localhost{url_raw}"))?;
+    if parsed.path() != "/auth/callback" {
+        respond_html(request, 404, "Not Found")?;
+        return Ok(false);
+    }
+    let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    if params.get("state").map(String::as_str) != Some(expected_state) {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: state mismatch.",
+        )?;
+        return Ok(true);
+    }
+    if let Some(error) = params.get("error") {
+        let description = params
+            .get("error_description")
+            .map(String::as_str)
+            .unwrap_or(error);
+        respond_html(
+            request,
+            400,
+            &format!("CTOX Login wurde von ChatGPT abgelehnt: {description}"),
+        )?;
+        return Ok(true);
+    }
+    let Some(code) = params.get("code").filter(|value| !value.trim().is_empty()) else {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: code fehlt.",
+        )?;
+        return Ok(true);
+    };
+    match exchange_chatgpt_authorization_code(code, redirect_uri, &pkce.verifier)
+        .and_then(|tokens| persist_chatgpt_subscription_auth(root, codex_home, tokens))
+    {
+        Ok(()) => {
+            respond_html(
+                request,
+                200,
+                "CTOX ChatGPT Subscription ist autorisiert. Dieses Fenster kann geschlossen werden.",
+            )?;
+            Ok(true)
+        }
+        Err(err) => {
+            respond_html(
+                request,
+                500,
+                &format!("CTOX konnte die ChatGPT Subscription nicht speichern: {err}"),
+            )?;
+            Ok(true)
+        }
+    }
+}
+
+fn respond_html(request: Request, status: u16, body: &str) -> anyhow::Result<()> {
+    let response = Response::from_string(format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>CTOX Login</title><body style=\"font:16px system-ui;padding:32px;background:#10181b;color:#eef5f3\"><h1>CTOX Login</h1><p>{}</p></body>",
+        html_escape(body)
+    ))
+    .with_status_code(status)
+    .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
+    request.respond(response).map_err(io::Error::other)?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatgptTokenExchangeResponse {
+    id_token: String,
+    access_token: String,
+    refresh_token: String,
+}
+
+fn exchange_chatgpt_authorization_code(
+    code: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> anyhow::Result<ChatgptTokenExchangeResponse> {
+    let body = format!(
+        "grant_type=authorization_code&code={}&redirect_uri={}&client_id={}&code_verifier={}",
+        urlencoding_encode(code),
+        urlencoding_encode(redirect_uri),
+        urlencoding_encode(ctox_core::auth::CLIENT_ID),
+        urlencoding_encode(code_verifier)
+    );
+    let response = ureq::post(&format!("{CHATGPT_AUTH_ISSUER}/oauth/token"))
+        .set("Content-Type", "application/x-www-form-urlencoded")
+        .send_string(&body);
+    match response {
+        Ok(response) => response.into_json().map_err(anyhow::Error::from),
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow::bail!("OAuth Token-Exchange fehlgeschlagen ({status}): {body}")
+        }
+        Err(err) => Err(anyhow::Error::from(err)),
+    }
+}
+
+fn persist_chatgpt_subscription_auth(
+    root: &Path,
+    codex_home: &Path,
+    tokens: ChatgptTokenExchangeResponse,
+) -> anyhow::Result<()> {
+    let token_data = ctox_core::token_data::TokenData {
+        id_token: ctox_core::token_data::parse_chatgpt_jwt_claims(&tokens.id_token)
+            .map_err(anyhow::Error::msg)?,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        account_id: chatgpt_account_id_from_jwt(&tokens.id_token),
+    };
+    let auth = ctox_core::auth::AuthDotJson {
+        auth_mode: Some(ApiAuthMode::Chatgpt),
+        openai_api_key: None,
+        tokens: Some(token_data),
+        last_refresh: Some(chrono::Utc::now()),
+    };
+    ctox_core::auth::save_auth(
+        codex_home,
+        &auth,
+        ctox_core::auth::AuthCredentialsStoreMode::File,
+    )?;
+    crate::secrets::write_secret_record(
+        root,
+        CHATGPT_AUTH_SECRET_SCOPE,
+        CHATGPT_AUTH_SECRET_NAME,
+        &serde_json::to_string(&auth)?,
+        Some("ChatGPT Subscription OAuth state for this CTOX instance".to_owned()),
+        serde_json::json!({"source": "business_os_subscription_login", "auth_mode": "chatgpt_subscription"}),
+    )?;
+    Ok(())
+}
+
+fn restore_chatgpt_subscription_auth_from_instance(
+    root: &Path,
+    codex_home: &Path,
+) -> anyhow::Result<bool> {
+    let auth_manager = ctox_core::AuthManager::new(
+        codex_home.to_path_buf(),
+        false,
+        ctox_core::auth::AuthCredentialsStoreMode::default(),
+    );
+    if auth_manager
+        .auth_cached()
+        .as_ref()
+        .is_some_and(|auth| auth.is_chatgpt_auth())
+    {
+        return Ok(false);
+    }
+    let serialized = crate::secrets::read_secret_value(
+        root,
+        CHATGPT_AUTH_SECRET_SCOPE,
+        CHATGPT_AUTH_SECRET_NAME,
+    )
+    .context("no instance ChatGPT auth backup")?;
+    let auth: ctox_core::auth::AuthDotJson =
+        serde_json::from_str(&serialized).context("instance ChatGPT auth backup is invalid")?;
+    if auth.tokens.is_none() {
+        anyhow::bail!("instance ChatGPT auth backup has no tokens");
+    }
+    ctox_core::auth::save_auth(
+        codex_home,
+        &auth,
+        ctox_core::auth::AuthCredentialsStoreMode::File,
+    )?;
+    Ok(true)
+}
+
+fn chatgpt_account_id_from_jwt(jwt: &str) -> Option<String> {
+    let mut parts = jwt.split('.');
+    let (_header, payload, _signature) = (parts.next()?, parts.next()?, parts.next()?);
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .ok()?;
+    let value = serde_json::from_slice::<Value>(&bytes).ok()?;
+    value
+        .get("https://api.openai.com/auth")
+        .and_then(Value::as_object)
+        .and_then(|claims| claims.get("chatgpt_account_id"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn urlencoding_encode(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
 }
 
 pub fn record_module_release(
@@ -699,24 +1622,17 @@ pub fn record_module_release(
             request.notes.trim()
         ],
     )?;
-    upsert_business_record(
-        &conn,
-        "business_module_releases",
-        &version_id,
-        now,
-        serde_json::json!({
-            "id": version_id,
-            "version_id": version_id,
-            "module_id": module_id,
-            "version": next_version,
-            "status": "released",
-            "created_by": created_by,
-            "created_at_ms": now,
-            "notes": request.notes,
-            "updated_at_ms": now
-        }),
-    )?;
-    module_governance_map(root, session)
+    let release_ids = sync_module_release_records(&conn, module_id, now)?;
+    let mut governance = module_governance_map(root, session)?;
+    if let Some(object) = governance.as_object_mut() {
+        object.insert("module_id".to_string(), Value::String(module_id.to_string()));
+        object.insert("version_id".to_string(), Value::String(version_id));
+        object.insert(
+            "business_module_release_ids".to_string(),
+            Value::Array(release_ids.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(governance)
 }
 
 pub fn rollback_module_release(
@@ -750,21 +1666,91 @@ pub fn rollback_module_release(
         "UPDATE business_module_releases SET status = CASE WHEN version_id = ?2 THEN 'released' ELSE 'rolled_back' END WHERE module_id = ?1",
         params![module_id, version_id],
     )?;
-    upsert_business_record(
-        &conn,
-        "business_module_releases",
-        version_id,
-        now,
-        serde_json::json!({
-            "id": version_id,
-            "version_id": version_id,
-            "module_id": module_id,
-            "status": "released",
-            "rolled_back_at_ms": now,
-            "updated_at_ms": now
-        }),
+    let release_ids = sync_module_release_records(&conn, module_id, now)?;
+    let mut governance = module_governance_map(root, session)?;
+    if let Some(object) = governance.as_object_mut() {
+        object.insert("module_id".to_string(), Value::String(module_id.to_string()));
+        object.insert("version_id".to_string(), Value::String(version_id.to_string()));
+        object.insert("rolled_back_at_ms".to_string(), Value::from(now));
+        object.insert(
+            "business_module_release_ids".to_string(),
+            Value::Array(release_ids.into_iter().map(Value::String).collect()),
+        );
+    }
+    Ok(governance)
+}
+
+fn sync_module_release_records(
+    conn: &Connection,
+    module_id: &str,
+    updated_at_ms: i64,
+) -> anyhow::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT version_id, module_id, version, status, created_by, created_at_ms, notes
+         FROM business_module_releases
+         WHERE module_id = ?1
+         ORDER BY version DESC",
     )?;
-    module_governance_map(root, session)
+    let rows = stmt.query_map(params![module_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, String>(6)?,
+        ))
+    })?;
+    let release_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    let mut release_ids = Vec::new();
+    for (version_id, module_id, version, status, created_by, created_at_ms, notes) in release_rows {
+        let record_updated_at = next_business_record_updated_at(
+            conn,
+            "business_module_releases",
+            &version_id,
+            updated_at_ms,
+        )?;
+        upsert_business_record(
+            conn,
+            "business_module_releases",
+            &version_id,
+            record_updated_at,
+            serde_json::json!({
+                "id": version_id.clone(),
+                "version_id": version_id.clone(),
+                "module_id": module_id,
+                "version": version,
+                "status": status,
+                "created_by": created_by,
+                "created_at_ms": created_at_ms,
+                "notes": notes,
+                "updated_at_ms": record_updated_at
+            }),
+        )?;
+        release_ids.push(version_id);
+    }
+    Ok(release_ids)
+}
+
+fn next_business_record_updated_at(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    candidate: i64,
+) -> anyhow::Result<i64> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT updated_at_ms FROM business_records WHERE collection = ?1 AND record_id = ?2",
+            params![collection, record_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(match existing {
+        Some(existing) if existing >= candidate => existing + 1,
+        _ => candidate,
+    })
 }
 
 pub fn record_report(
@@ -772,6 +1758,30 @@ pub fn record_report(
     session: &BusinessOsSession,
     mutation: BusinessOsReportMutation,
 ) -> anyhow::Result<Value> {
+    let accepted = record_report_command(root, session, mutation, None, None)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "report_id": accepted.report_id,
+        "command_id": accepted.command_id,
+        "task_id": accepted.task_id.unwrap_or_default(),
+        "status": "open"
+    }))
+}
+
+struct ReportAccepted {
+    report_id: String,
+    command_id: String,
+    task_id: Option<String>,
+    task_status: Option<String>,
+}
+
+fn record_report_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    mutation: BusinessOsReportMutation,
+    command_id: Option<String>,
+    report_id: Option<String>,
+) -> anyhow::Result<ReportAccepted> {
     anyhow::ensure!(session.authenticated, "login required");
     let module_id = mutation.module_id.trim();
     let title = mutation.title.trim();
@@ -779,11 +1789,17 @@ pub fn record_report(
     anyhow::ensure!(!title.is_empty(), "title is required");
     let kind = normalize_report_kind(&mutation.kind);
     let severity = normalize_report_severity(&mutation.severity);
-    let report_id = format!("report_{}", Uuid::new_v4());
+    let report_id = report_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| format!("report_{}", Uuid::new_v4()));
     let reporter_id = session_user_id(session).unwrap_or("");
     let now = now_ms() as i64;
+    let summary = mutation.summary.clone();
+    let expected = mutation.expected.clone();
+    let client_context = mutation.client_context.clone();
     let command = BusinessCommand {
-        id: None,
+        id: command_id,
         module: "ctox".to_owned(),
         command_type: format!("ctox.report.{kind}"),
         record_id: Some(report_id.clone()),
@@ -792,14 +1808,17 @@ pub fn record_report(
             "module_id": module_id,
             "kind": kind,
             "severity": severity,
-            "summary": mutation.summary,
-            "expected": mutation.expected,
+            "summary": summary,
+            "expected": expected,
             "reporter_id": reporter_id,
             "instruction": format!("Bearbeite diesen Business-OS {} Report für Modul `{}`. Prüfe Reproduktion, Auswirkung, gewünschtes Ergebnis und setze daraus CTOX Arbeit auf. Wenn du die Aufgabe annimmst oder abschliesst, dokumentiere im Ergebnis konkret, was du geaendert hast, welche Dateien/Module betroffen sind, welche Verifikation gelaufen ist und welche gespeicherte Modulversion als Rollback-Ziel genutzt werden kann.", kind, module_id)
         }),
-        client_context: mutation.client_context.clone(),
+        client_context: client_context.clone(),
     };
     let accepted = record_command(root, command)?;
+    let accepted_command_id = accepted.command_id.clone();
+    let task_id = accepted.task_id.clone();
+    let task_status = accepted.task_status.clone();
     let conn = open_store(root)?;
     conn.execute(
         "INSERT INTO business_module_reports
@@ -811,11 +1830,11 @@ pub fn record_report(
             kind,
             severity,
             title,
-            mutation.summary,
-            mutation.expected,
+            summary,
+            expected,
             reporter_id,
-            accepted.command_id,
-            serde_json::to_string(&mutation.client_context)?,
+            accepted_command_id,
+            serde_json::to_string(&client_context)?,
             now
         ],
     )?;
@@ -831,14 +1850,14 @@ pub fn record_report(
             "kind": kind,
             "severity": severity,
             "title": title,
-            "summary": mutation.summary,
-            "expected": mutation.expected,
+            "summary": summary,
+            "expected": expected,
             "status": "open",
             "reporter_id": reporter_id,
-            "ctox_command_id": accepted.command_id,
-            "task_id": accepted.task_id,
+            "ctox_command_id": accepted_command_id,
+            "task_id": task_id,
             "inbound_channel": module_id,
-            "client_context": mutation.client_context,
+            "client_context": client_context,
             "created_at_ms": now,
             "updated_at_ms": now
         }),
@@ -856,24 +1875,881 @@ pub fn record_report(
             "inbound_channel": module_id,
             "severity": severity,
             "surface": "business-os",
-            "description": mutation.summary,
-            "evidence": mutation.client_context,
+            "description": summary,
+            "evidence": client_context,
             "payload": {
                 "kind": kind,
-                "expected": mutation.expected,
-                "ctox_command_id": accepted.command_id,
-                "task_id": accepted.task_id
+                "expected": expected,
+                "ctox_command_id": accepted_command_id,
+                "task_id": task_id
             },
             "updated_at_ms": now
         }),
     )?;
+    Ok(ReportAccepted {
+        report_id,
+        command_id: accepted.command_id,
+        task_id,
+        task_status,
+    })
+}
+
+pub fn load_module_source_records(
+    root: &Path,
+    mutation: &ModuleSourceLoadMutation,
+) -> anyhow::Result<Value> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let module_id = source_sanitize_slug(&mutation.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let module_root = resolve_module_source_root(&app_root, &module_id)?;
+    let mut files = Vec::new();
+    collect_module_source_files(&module_id, &module_root, &module_root, &mut files)?;
+    files.sort_by(|left, right| {
+        let left_path = left.get("path").and_then(Value::as_str).unwrap_or_default();
+        let right_path = right
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        left_path.cmp(right_path)
+    });
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    let mut file_ids = Vec::with_capacity(files.len());
+    for file in &files {
+        let Some(id) = file.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        upsert_business_record(&conn, "business_module_source_files", id, now, file.clone())?;
+        file_ids.push(id.to_string());
+    }
     Ok(serde_json::json!({
         "ok": true,
-        "report_id": report_id,
-        "command_id": accepted.command_id,
-        "task_id": accepted.task_id,
-        "status": "open"
+        "module_id": module_id,
+        "source_file_ids": file_ids,
+        "count": file_ids.len()
     }))
+}
+
+pub fn save_module_source_record(
+    root: &Path,
+    mutation: ModuleSourceSaveMutation,
+) -> anyhow::Result<Value> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let module_id = source_sanitize_slug(&mutation.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let module_root = resolve_module_source_root(&app_root, &module_id)?;
+    let rel = normalize_source_relative_path(&mutation.path)?;
+    anyhow::ensure!(
+        is_allowed_source_path(&rel),
+        "source file type is not editable: {}",
+        rel.display()
+    );
+    let target = module_root.join(&rel);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create source directory {}", parent.display()))?;
+    }
+    let previous_content = fs::read_to_string(&target).ok();
+    let previous_sha256 = previous_content
+        .as_deref()
+        .map(|content| hex_sha256(content.as_bytes()));
+    let next_sha256 = hex_sha256(mutation.content.as_bytes());
+    let changed = previous_sha256.as_deref() != Some(next_sha256.as_str());
+    let snapshot_id = if changed {
+        previous_content
+            .as_deref()
+            .map(|content| {
+                write_module_source_snapshot(
+                    root,
+                    &module_id,
+                    &rel,
+                    content,
+                    previous_sha256.as_deref(),
+                )
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    fs::write(&target, mutation.content.as_bytes())
+        .with_context(|| format!("failed to write module source {}", target.display()))?;
+    let metadata = fs::metadata(&target)?;
+    let rel_display = rel.to_string_lossy().replace('\\', "/");
+    let file = module_source_file_doc(
+        &module_id,
+        &rel,
+        &rel_display,
+        &mutation.content,
+        metadata.len(),
+        modified_at_ms(&metadata),
+        &next_sha256,
+        previous_sha256.as_deref().unwrap_or(""),
+        snapshot_id.as_deref().unwrap_or(""),
+    );
+    let file_id = file
+        .get("id")
+        .and_then(Value::as_str)
+        .context("source file doc id missing")?
+        .to_string();
+    let conn = open_store(root)?;
+    upsert_business_record(
+        &conn,
+        "business_module_source_files",
+        &file_id,
+        now_ms() as i64,
+        file,
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "path": rel_display,
+        "source_file_id": file_id,
+        "source_file_ids": [file_id],
+        "size_bytes": metadata.len(),
+        "modified_at_ms": modified_at_ms(&metadata),
+        "sha256": next_sha256,
+        "previous_sha256": previous_sha256,
+        "snapshot_id": snapshot_id,
+        "changed": changed
+    }))
+}
+
+pub fn materialize_desktop_file_command(
+    root: &Path,
+    _session: &BusinessOsSession,
+    request: DesktopFileMaterializeRequest,
+) -> anyhow::Result<Value> {
+    let file_id = request.file_id.trim();
+    anyhow::ensure!(!file_id.is_empty(), "file_id is required");
+    let file_doc = rxdb_desktop_file_document(root, file_id)?;
+    let stored_path = file_doc
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("desktop file path is missing")?;
+    if !request.path.trim().is_empty() {
+        anyhow::ensure!(
+            request.path.trim() == stored_path,
+            "desktop file path does not match indexed metadata"
+        );
+    }
+    anyhow::ensure!(
+        file_doc
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("file")
+            == "file",
+        "only regular files can be materialized"
+    );
+    let source = file_doc
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        source.starts_with("ctox"),
+        "only CTOX-managed desktop files can be materialized"
+    );
+    let path = PathBuf::from(stored_path)
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize desktop file {stored_path}"))?;
+    super::rxdb_peer::sync_desktop_file_from_path(root, &path)?;
+    let metadata = fs::metadata(&path)
+        .with_context(|| format!("failed to read materialized file {}", path.display()))?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "file_id": file_id,
+        "path": path.to_string_lossy(),
+        "size_bytes": metadata.len(),
+        "content_state": "available",
+        "content_synced_at_ms": now_ms(),
+        "modified_at_ms": modified_at_ms(&metadata)
+    }))
+}
+
+fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Value> {
+    let database_path = root.join("runtime/ctox.sqlite3");
+    let conn = Connection::open(&database_path)
+        .with_context(|| format!("failed to open {}", database_path.display()))?;
+    let data: String = conn
+        .query_row(
+            "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+            params![file_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .with_context(|| format!("desktop file `{file_id}` is not indexed"))?;
+    serde_json::from_str(&data).context("invalid desktop file RxDB document")
+}
+
+fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
+    [
+        root.join("src").join("apps").join("business-os"),
+        root.join("apps").join("business-os"),
+        root.join("business-os"),
+        root.to_path_buf(),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.join("index.html").is_file())
+    .context("Business OS app root not found")
+}
+
+fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+    let modules_root = app_root.join("modules");
+    let mut manifests = Vec::new();
+    if modules_root.is_dir() {
+        for entry in fs::read_dir(&modules_root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let path = entry.path().join("module.json");
+            if !path.is_file() {
+                continue;
+            }
+            let text = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+            let mut manifest: ModuleManifest = serde_json::from_str(&text)
+                .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+            if manifest.entry.is_empty() {
+                manifest.entry = format!("modules/{}/index.html", manifest.id);
+            }
+            let core = is_core_module(&manifest.id);
+            manifest.source = if core { "core" } else { "local" }.to_owned();
+            manifest.core = core;
+            manifest.editable = true;
+            manifest.deletable = !core;
+            manifests.push(manifest);
+        }
+    }
+    for manifest in load_installed_module_manifests(app_root)? {
+        if manifests.iter().any(|existing| existing.id == manifest.id) {
+            continue;
+        }
+        manifests.push(manifest);
+    }
+    manifests.sort_by(|a, b| match (a.id.as_str(), b.id.as_str()) {
+        ("ctox", "ctox") => std::cmp::Ordering::Equal,
+        ("ctox", _) => std::cmp::Ordering::Less,
+        (_, "ctox") => std::cmp::Ordering::Greater,
+        _ => a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)),
+    });
+    Ok(manifests)
+}
+
+fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+    let modules_root = app_root.join("installed-modules");
+    let mut manifests = Vec::new();
+    if !modules_root.is_dir() {
+        return Ok(manifests);
+    }
+    for entry in fs::read_dir(&modules_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("module.json");
+        if !path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+        let mut manifest: ModuleManifest = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        if is_core_module(&manifest.id) {
+            continue;
+        }
+        if manifest.entry.is_empty() {
+            manifest.entry = format!("installed-modules/{}/index.html", manifest.id);
+        }
+        manifest.source = "installed".to_owned();
+        manifest.core = false;
+        manifest.editable = true;
+        manifest.deletable = true;
+        manifests.push(manifest);
+    }
+    Ok(manifests)
+}
+
+fn load_template_manifests(app_root: &Path) -> anyhow::Result<Vec<TemplateManifest>> {
+    let templates_root = app_root.join("template-store");
+    let mut templates = Vec::new();
+    if !templates_root.is_dir() {
+        return Ok(templates);
+    }
+    for entry in fs::read_dir(&templates_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("template.json");
+        if !path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read template manifest {}", path.display()))?;
+        let template: TemplateManifest = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse template manifest {}", path.display()))?;
+        templates.push(template);
+    }
+    templates.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.cmp(&b.id)));
+    Ok(templates)
+}
+
+fn install_template_module(
+    app_root: &Path,
+    request: ModuleInstallTemplateRequest,
+) -> anyhow::Result<ModuleManifest> {
+    let template_id = source_sanitize_slug(&request.template_id);
+    anyhow::ensure!(!template_id.is_empty(), "template_id is required");
+    let template_path = app_root
+        .join("template-store")
+        .join(&template_id)
+        .join("template.json");
+    let text = fs::read_to_string(&template_path).with_context(|| {
+        format!(
+            "failed to read template manifest {}",
+            template_path.display()
+        )
+    })?;
+    let template: TemplateManifest = serde_json::from_str(&text).with_context(|| {
+        format!(
+            "failed to parse template manifest {}",
+            template_path.display()
+        )
+    })?;
+    let source_module = source_sanitize_slug(if template.source_module.is_empty() {
+        &template.id
+    } else {
+        &template.source_module
+    });
+    let source = app_root.join("modules").join(&source_module);
+    if !source.join("module.json").is_file() {
+        anyhow::bail!("template source module `{source_module}` is missing");
+    }
+    let requested_id = source_sanitize_slug(if request.module_id.trim().is_empty() {
+        if request.title.trim().is_empty() {
+            &template.id
+        } else {
+            &request.title
+        }
+    } else {
+        &request.module_id
+    });
+    let module_id = unique_module_id(app_root, &requested_id);
+    let module_title = if request.title.trim().is_empty() {
+        if template.default_title.trim().is_empty() {
+            template.title.clone()
+        } else {
+            template.default_title.clone()
+        }
+    } else {
+        request.title.trim().to_owned()
+    };
+    let target = app_root.join("installed-modules").join(&module_id);
+    copy_dir_recursive(&source, &target)?;
+
+    let manifest_path = target.join("module.json");
+    let mut manifest_value: Value = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?,
+    )?;
+    manifest_value["id"] = Value::String(module_id.clone());
+    manifest_value["title"] = Value::String(module_title);
+    manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest_value["template_id"] = Value::String(template.id);
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
+        .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+
+    let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
+    manifest.source = "installed".to_owned();
+    manifest.core = false;
+    manifest.editable = true;
+    manifest.deletable = true;
+    Ok(manifest)
+}
+
+fn upsert_module_manifest(
+    app_root: &Path,
+    request: ModuleUpsertRequest,
+) -> anyhow::Result<ModuleManifest> {
+    let module_id = source_sanitize_slug(&request.id);
+    anyhow::ensure!(!module_id.is_empty(), "module id is required");
+    let title = request.title.trim();
+    anyhow::ensure!(!title.is_empty(), "module title is required");
+    let is_core = is_core_module(&module_id);
+    let target = if is_core {
+        app_root.join("modules").join(&module_id)
+    } else {
+        app_root.join("installed-modules").join(&module_id)
+    };
+    let manifest_path = target.join("module.json");
+    if !manifest_path.is_file() {
+        create_blank_installed_module(app_root, &module_id, title, &request.description)?;
+    }
+    let mut manifest_value: Value = serde_json::from_str(
+        &fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?,
+    )?;
+    manifest_value["id"] = Value::String(module_id.clone());
+    manifest_value["title"] = Value::String(title.to_owned());
+    manifest_value["description"] = Value::String(request.description.trim().to_owned());
+    let entry = if is_core {
+        format!("modules/{module_id}/index.html")
+    } else if request.entry.trim().is_empty() {
+        format!("installed-modules/{module_id}/index.html")
+    } else {
+        request.entry.trim().to_owned()
+    };
+    manifest_value["entry"] = Value::String(entry);
+    manifest_value["collections"] = Value::Array(
+        request
+            .collections
+            .into_iter()
+            .map(|item| item.trim().to_owned())
+            .filter(|item| !item.is_empty())
+            .map(Value::String)
+            .collect(),
+    );
+    if !request.layout.is_null() {
+        manifest_value["layout"] = request.layout;
+    }
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
+        .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+
+    let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
+    manifest.source = if is_core { "core" } else { "installed" }.to_owned();
+    manifest.core = is_core;
+    manifest.editable = true;
+    manifest.deletable = !is_core;
+    Ok(manifest)
+}
+
+fn create_blank_installed_module(
+    app_root: &Path,
+    module_id: &str,
+    title: &str,
+    description: &str,
+) -> anyhow::Result<()> {
+    if is_core_module(module_id) {
+        anyhow::bail!("core module does not exist: {module_id}");
+    }
+    let target = app_root.join("installed-modules").join(module_id);
+    if target.exists() {
+        anyhow::bail!("target module already exists: {}", target.display());
+    }
+    fs::create_dir_all(&target)
+        .with_context(|| format!("failed to create module dir {}", target.display()))?;
+    let manifest = serde_json::json!({
+        "id": module_id,
+        "title": title,
+        "description": description,
+        "entry": format!("installed-modules/{module_id}/index.html"),
+        "collections": ["business_commands"],
+        "layout": {
+            "shell": "pane",
+            "center": "module workspace"
+        }
+    });
+    fs::write(
+        target.join("module.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )?;
+    fs::write(
+        target.join("index.html"),
+        format!(
+            "<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\"><title>{}</title></head><body><div data-module-root></div></body></html>\n",
+            html_escape(title)
+        ),
+    )?;
+    fs::write(
+        target.join("index.js"),
+        format!(
+            "export async function mount({{ host, module }}) {{\n  host.innerHTML = `<section class=\"blank-module\"><h1>${{module.title || '{}'}}</h1><p>${{module.description || 'Neues Business-OS Modul.'}}</p></section>`;\n  return () => {{}};\n}}\n",
+            js_escape(title)
+        ),
+    )?;
+    fs::write(target.join("schema.js"), "export const collections = [];\n")?;
+    Ok(())
+}
+
+fn delete_installed_module(
+    app_root: &Path,
+    root: &Path,
+    request: ModuleDeleteRequest,
+) -> anyhow::Result<()> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module id is required");
+    if is_core_module(&module_id) {
+        anyhow::bail!("core modules cannot be deleted");
+    }
+    let target = app_root.join("installed-modules").join(&module_id);
+    if !target.is_dir() {
+        anyhow::bail!("installed module not found: {module_id}");
+    }
+    fs::remove_dir_all(&target)
+        .with_context(|| format!("failed to delete module dir {}", target.display()))?;
+    let mut layout = load_module_layout(root)?;
+    remove_module_from_layout_value(&mut layout, &module_id);
+    save_module_layout(root, &layout)?;
+    Ok(())
+}
+
+fn module_layout_path(root: &Path) -> PathBuf {
+    root.join("runtime").join("business-os-module-layout.json")
+}
+
+fn load_module_layout(root: &Path) -> anyhow::Result<Value> {
+    let path = module_layout_path(root);
+    if !path.is_file() {
+        return Ok(serde_json::json!({
+            "ok": true,
+            "version": 1,
+            "labels": {},
+            "ungrouped": [],
+            "groups": []
+        }));
+    }
+    let mut value: Value = serde_json::from_str(
+        &fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module layout {}", path.display()))?,
+    )
+    .with_context(|| format!("failed to parse module layout {}", path.display()))?;
+    if let Value::Object(map) = &mut value {
+        map.insert("ok".to_owned(), Value::Bool(true));
+    }
+    Ok(value)
+}
+
+fn save_module_layout(root: &Path, layout: &Value) -> anyhow::Result<()> {
+    let path = module_layout_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let mut clean = layout.clone();
+    if let Value::Object(map) = &mut clean {
+        map.remove("ok");
+    }
+    fs::write(&path, serde_json::to_vec_pretty(&clean)?)
+        .with_context(|| format!("failed to write module layout {}", path.display()))?;
+    Ok(())
+}
+
+fn remove_module_from_layout_value(layout: &mut Value, module_id: &str) {
+    let Some(map) = layout.as_object_mut() else {
+        return;
+    };
+    if let Some(Value::Array(items)) = map.get_mut("ungrouped") {
+        items.retain(|item| item.as_str() != Some(module_id));
+    }
+    if let Some(Value::Array(groups)) = map.get_mut("groups") {
+        for group in groups {
+            if let Some(Value::Array(items)) = group.get_mut("items") {
+                items.retain(|item| item.as_str() != Some(module_id));
+            }
+        }
+    }
+    if let Some(Value::Object(labels)) = map.get_mut("labels") {
+        labels.remove(module_id);
+    }
+}
+
+fn html_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+fn js_escape(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
+}
+
+fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
+    let base = if requested_id.is_empty() {
+        "module".to_owned()
+    } else if is_core_module(requested_id) {
+        format!("{requested_id}-copy")
+    } else {
+        requested_id.to_owned()
+    };
+    let installed_root = app_root.join("installed-modules");
+    if !installed_root.join(&base).exists() {
+        return base;
+    }
+    for index in 2..1000 {
+        let candidate = format!("{base}-{index}");
+        if !installed_root.join(&candidate).exists() {
+            return candidate;
+        }
+    }
+    format!("{base}-{}", Uuid::new_v4())
+}
+
+fn is_core_module(id: &str) -> bool {
+    CORE_MODULE_IDS.iter().any(|core| id == *core)
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
+    if target.exists() {
+        anyhow::bail!("target module already exists: {}", target.display());
+    }
+    fs::create_dir_all(target)
+        .with_context(|| format!("failed to create module dir {}", target.display()))?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = target.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_file() {
+            fs::copy(&from, &to).with_context(|| {
+                format!("failed to copy {} to {}", from.display(), to.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_module_source_files(
+    module_id: &str,
+    module_root: &Path,
+    current: &Path,
+    files: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    for entry in fs::read_dir(current)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.')
+            || matches!(name.as_ref(), "node_modules" | "dist" | "build" | "target")
+        {
+            continue;
+        }
+        if entry.file_type()?.is_dir() {
+            collect_module_source_files(module_id, module_root, &path, files)?;
+            continue;
+        }
+        let rel = path.strip_prefix(module_root).unwrap_or(&path);
+        if !is_allowed_source_path(rel) {
+            continue;
+        }
+        let metadata = fs::metadata(&path)?;
+        if metadata.len() > 1024 * 1024 {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module source {}", path.display()))?;
+        let rel_display = rel.to_string_lossy().replace('\\', "/");
+        let sha256 = hex_sha256(content.as_bytes());
+        files.push(module_source_file_doc(
+            module_id,
+            rel,
+            &rel_display,
+            &content,
+            metadata.len(),
+            modified_at_ms(&metadata),
+            &sha256,
+            "",
+            "",
+        ));
+    }
+    Ok(())
+}
+
+fn module_source_file_doc(
+    module_id: &str,
+    rel: &Path,
+    rel_display: &str,
+    content: &str,
+    size_bytes: u64,
+    modified_at_ms: u64,
+    sha256: &str,
+    previous_sha256: &str,
+    snapshot_id: &str,
+) -> Value {
+    serde_json::json!({
+        "id": module_source_file_id(module_id, rel_display),
+        "module_id": module_id,
+        "path": rel_display,
+        "language": source_language_for_path(rel),
+        "sha256": sha256,
+        "previous_sha256": previous_sha256,
+        "snapshot_id": snapshot_id,
+        "size_bytes": size_bytes,
+        "content": content,
+        "source_kind": "module-source",
+        "synced_at_ms": now_ms(),
+        "updated_at_ms": modified_at_ms
+    })
+}
+
+fn resolve_module_source_root(app_root: &Path, module_id: &str) -> anyhow::Result<PathBuf> {
+    let core = app_root.join("modules").join(module_id);
+    if core.join("module.json").is_file() {
+        return Ok(core);
+    }
+    let installed = app_root.join("installed-modules").join(module_id);
+    if installed.join("module.json").is_file() {
+        return Ok(installed);
+    }
+    anyhow::bail!("module `{module_id}` was not found")
+}
+
+fn normalize_source_relative_path(path: &str) -> anyhow::Result<PathBuf> {
+    let rel = Path::new(path);
+    if rel.is_absolute() {
+        anyhow::bail!("absolute source paths are not allowed");
+    }
+    let mut out = PathBuf::new();
+    for part in rel.components() {
+        match part {
+            std::path::Component::Normal(segment) => {
+                let segment = segment.to_string_lossy();
+                if segment.starts_with('.') {
+                    anyhow::bail!("hidden source paths are not allowed");
+                }
+                out.push(segment.as_ref());
+            }
+            std::path::Component::CurDir => {}
+            _ => anyhow::bail!("unsafe source path"),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        anyhow::bail!("source path is required");
+    }
+    Ok(out)
+}
+
+fn is_allowed_source_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn source_language_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "css" => "css",
+        "html" => "html",
+        "json" => "json",
+        "md" => "markdown",
+        "mjs" | "js" => "javascript",
+        "ts" => "typescript",
+        _ => "text",
+    }
+}
+
+fn modified_at_ms(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn write_module_source_snapshot(
+    root: &Path,
+    module_id: &str,
+    rel: &Path,
+    content: &str,
+    previous_sha256: Option<&str>,
+) -> anyhow::Result<String> {
+    let created_at_ms = now_ms();
+    let rel_display = rel.to_string_lossy().replace('\\', "/");
+    let safe_path = rel_display
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    let snapshot_id = format!("{created_at_ms}_{safe_path}");
+    let snapshot_root = root
+        .join("runtime")
+        .join("business-os-source-snapshots")
+        .join(module_id);
+    fs::create_dir_all(&snapshot_root).with_context(|| {
+        format!(
+            "failed to create source snapshot directory {}",
+            snapshot_root.display()
+        )
+    })?;
+    let source_path = snapshot_root.join(format!("{snapshot_id}.source"));
+    fs::write(&source_path, content.as_bytes())
+        .with_context(|| format!("failed to write source snapshot {}", source_path.display()))?;
+    let metadata_path = snapshot_root.join(format!("{snapshot_id}.json"));
+    let metadata = serde_json::json!({
+        "snapshot_id": snapshot_id,
+        "module_id": module_id,
+        "path": rel_display,
+        "previous_sha256": previous_sha256,
+        "created_at_ms": created_at_ms,
+        "source_path": source_path.display().to_string()
+    });
+    fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?).with_context(|| {
+        format!(
+            "failed to write source snapshot metadata {}",
+            metadata_path.display()
+        )
+    })?;
+    Ok(snapshot_id)
+}
+
+fn module_source_file_id(module_id: &str, path: &str) -> String {
+    format!(
+        "{}:{}",
+        module_id,
+        String::from(path)
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | ':' | '-') {
+                    ch
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+    )
+    .chars()
+    .take(512)
+    .collect()
+}
+
+fn source_sanitize_slug(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    out.trim_matches('-').to_owned()
 }
 
 fn module_manifest_path(app_root: &Path, module_id: &str) -> anyhow::Result<std::path::PathBuf> {
@@ -1408,6 +3284,23 @@ pub fn pull_collection_records(
     since_ms: Option<i64>,
     limit: Option<usize>,
 ) -> anyhow::Result<Value> {
+    // Conversations module reads communication_* collections. These live in
+    // CTOX's channels SQLite (runtime/ctox.sqlite3), not in business-os.sqlite3 —
+    // so we delegate to channels.rs helpers that read from the canonical tables
+    // directly. No projection table needed; messages/threads/accounts stay
+    // single-source-of-truth in channels.
+    match collection {
+        "communication_accounts" => {
+            return channels::pull_communication_accounts_for_business_os(root, since_ms, limit);
+        }
+        "communication_threads" => {
+            return channels::pull_communication_threads_for_business_os(root, since_ms, limit);
+        }
+        "communication_messages" => {
+            return channels::pull_communication_messages_for_business_os(root, since_ms, limit);
+        }
+        _ => {}
+    }
     let conn = open_store(root)?;
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let since_ms = since_ms.unwrap_or(0);
@@ -1446,6 +3339,207 @@ pub fn pull_collection_records(
     }))
 }
 
+fn sanitize_filename(title: &str) -> String {
+    let mut sanitized = String::new();
+    for c in title.chars() {
+        if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+            sanitized.push(c);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    let s = sanitized.trim().to_string();
+    if s.is_empty() {
+        "Untitled".to_string()
+    } else {
+        s
+    }
+}
+
+fn write_note_markdown_file(root: &Path, record_id: &str, document: &Value) -> anyhow::Result<()> {
+    let title = document.get("title").and_then(Value::as_str).unwrap_or("Untitled").trim();
+    let content = document.get("content").and_then(Value::as_str).unwrap_or("").trim();
+    let sanitized_title = sanitize_filename(title);
+    let notes_dir = root.join("runtime/business-os/notes");
+    std::fs::create_dir_all(&notes_dir)?;
+
+    if let Ok(entries) = std::fs::read_dir(&notes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                    if filename.ends_with(&format!("_{}.md", record_id)) {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
+    }
+
+    let file_path = notes_dir.join(format!("{}_{}.md", sanitized_title, record_id));
+    std::fs::write(&file_path, content)?;
+    Ok(())
+}
+
+fn delete_note_markdown_file(root: &Path, record_id: &str) -> anyhow::Result<()> {
+    let notes_dir = root.join("runtime/business-os/notes");
+    if notes_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&notes_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                        if filename.ends_with(&format!("_{}.md", record_id)) {
+                            let _ = std::fs::remove_file(path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
+    let notes_dir = root.join("runtime/business-os/notes");
+    if !notes_dir.is_dir() {
+        std::fs::create_dir_all(&notes_dir)?;
+    }
+
+    let conn = open_store(root)?;
+
+    let mut files_on_disk = HashMap::new();
+    if let Ok(entries) = std::fs::read_dir(&notes_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                    if filename.ends_with(".md") {
+                        files_on_disk.insert(filename.to_string(), path.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    let mut active_db_ids = std::collections::HashSet::new();
+
+    for (filename, path) in &files_on_disk {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+        let mut title = "";
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                title = trimmed.trim_start_matches('#').trim();
+                break;
+            }
+        }
+        if title.is_empty() {
+            title = "Untitled";
+        }
+
+        let mut uuid_suffix = None;
+        if stem.len() >= 37 {
+            let potential_uuid = &stem[stem.len() - 36..];
+            if Uuid::parse_str(potential_uuid).is_ok() && stem.as_bytes()[stem.len() - 37] == b'_' {
+                uuid_suffix = Some(potential_uuid.to_string());
+            }
+        }
+
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .unwrap_or_else(|_| std::time::SystemTime::now())
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+
+        if let Some(id) = uuid_suffix {
+            active_db_ids.insert(id.clone());
+
+            let db_record: Option<(i64, String)> = conn
+                .query_row(
+                    "SELECT updated_at_ms, payload_json FROM business_records WHERE collection = 'notes' AND record_id = ?1 AND deleted = 0",
+                    params![id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+
+            match db_record {
+                Some((db_mtime, db_payload_json)) => {
+                    if mtime > db_mtime + 2000 {
+                        let mut payload: Value = serde_json::from_str(&db_payload_json).unwrap_or_default();
+                        if let Some(obj) = payload.as_object_mut() {
+                            obj.insert("title".to_string(), Value::String(title.to_string()));
+                            obj.insert("content".to_string(), Value::String(content));
+                            obj.insert("updated_at_ms".to_string(), Value::from(mtime));
+                        }
+                        upsert_business_record(&conn, "notes", &id, mtime, payload)?;
+                    }
+                }
+                None => {
+                    let is_deleted: Option<i64> = conn
+                        .query_row(
+                            "SELECT deleted FROM business_records WHERE collection = 'notes' AND record_id = ?1",
+                            params![id],
+                            |row| row.get(0),
+                        )
+                        .optional()?;
+
+                    if is_deleted == Some(1) {
+                        let _ = std::fs::remove_file(path);
+                    } else {
+                        let payload = serde_json::json!({
+                            "id": id,
+                            "title": title,
+                            "content": content,
+                            "folder": "Notes",
+                            "updated_at_ms": mtime,
+                        });
+                        upsert_business_record(&conn, "notes", &id, mtime, payload)?;
+                    }
+                }
+            }
+        } else {
+            let new_id = Uuid::new_v4().to_string();
+            let sanitized_title = sanitize_filename(title);
+            let new_filename = format!("{}_{}.md", sanitized_title, new_id);
+            let new_path = notes_dir.join(&new_filename);
+
+            if std::fs::rename(path, &new_path).is_ok() {
+                active_db_ids.insert(new_id.clone());
+                let payload = serde_json::json!({
+                    "id": new_id,
+                    "title": title,
+                    "content": content,
+                    "folder": "Notes",
+                    "updated_at_ms": mtime,
+                });
+                upsert_business_record(&conn, "notes", &new_id, mtime, payload)?;
+            }
+        }
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT record_id, payload_json FROM business_records WHERE collection = 'notes' AND deleted = 0"
+    )?;
+    let db_notes = stmt.query_map(params![], |row| {
+        let record_id: String = row.get(0)?;
+        let payload_json: String = row.get(1)?;
+        Ok((record_id, payload_json))
+    })?;
+
+    for row in db_notes {
+        let (record_id, _payload_json) = row?;
+        if !active_db_ids.contains(&record_id) {
+            mark_business_record_deleted(&conn, "notes", &record_id, now_ms() as i64)?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value> {
     let collection = body
         .get("collection")
@@ -1475,6 +3569,11 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
         {
             let conn = open_store(root)?;
             mark_business_record_deleted(&conn, collection, &record_id, now_ms() as i64)?;
+            if collection == "notes" {
+                if let Err(e) = delete_note_markdown_file(root, &record_id) {
+                    eprintln!("[business-os] failed to delete note file for {}: {}", record_id, e);
+                }
+            }
             accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
             continue;
         }
@@ -1499,6 +3598,11 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
                 updated_at_ms,
                 document.clone(),
             )?;
+            if collection == "notes" {
+                if let Err(e) = write_note_markdown_file(root, &record_id, document) {
+                    eprintln!("[business-os] failed to write note file for {}: {}", record_id, e);
+                }
+            }
             accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
         }
     }
@@ -1511,7 +3615,7 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
     }))
 }
 
-fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
+pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -1558,8 +3662,666 @@ fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<
             .cloned()
             .unwrap_or(Value::Null),
     };
+    match command.command_type.as_str() {
+        "ctox.task.update" => {
+            let mutation: CtoxTaskUpdateMutation = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.task.update payload")?;
+            let session = rxdb_command_session(&command)?;
+            let outcome = update_ctox_task(root, &session, mutation)?;
+            let task_id = outcome
+                .get("task")
+                .and_then(|task| task.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                task_id.as_deref(),
+                Some("updated"),
+                outcome,
+            );
+        }
+        "ctox.task.delete" => {
+            let mutation: CtoxTaskDeleteMutation = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.task.delete payload")?;
+            let session = rxdb_command_session(&command)?;
+            let outcome = delete_ctox_task(root, &session, mutation)?;
+            let task_id = outcome
+                .get("task_id")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                task_id.as_deref(),
+                Some("cancelled"),
+                outcome,
+            );
+        }
+        "knowledge.command" => {
+            let args = command
+                .payload
+                .get("args")
+                .and_then(Value::as_array)
+                .context("knowledge.command payload.args array is required")?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_string)
+                        .context("knowledge.command args must be strings")
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let outcome = crate::knowledge::dispatch_capturing(root, &args)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_os.user.upsert" => {
+            let mutation: BusinessOsUserMutation =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.business_os.user.upsert payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = upsert_user(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.runtime_settings.save" => {
+            let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.runtime_settings.save payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = save_runtime_settings_command(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.subscription_auth.start" => {
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = start_subscription_auth_command(root, &session)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        command_type if command_type.starts_with("ctox.channel.") => {
+            let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.channel payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = run_channel_command(root, &session, command_type, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        command_type if command_type.starts_with("ctox.report.") => {
+            let mut mutation: BusinessOsReportMutation =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.report payload")?;
+            if mutation.kind.trim().is_empty() {
+                mutation.kind = command_type
+                    .strip_prefix("ctox.report.")
+                    .unwrap_or("bug")
+                    .to_string();
+            }
+            mutation.client_context = command.client_context.clone();
+            let session = rxdb_authenticated_session(&command)?;
+            let accepted = record_report_command(
+                root,
+                &session,
+                mutation,
+                Some(command_id),
+                command.record_id.clone(),
+            )?;
+            return Ok(serde_json::json!({
+                "ok": true,
+                "id": accepted.command_id,
+                "command_id": accepted.command_id,
+                "status": "accepted",
+                "task_id": accepted.task_id.unwrap_or_default(),
+                "task_status": accepted.task_status.unwrap_or_else(|| "accepted".to_string()),
+                "report_id": accepted.report_id,
+                "report_status": "open"
+            }));
+        }
+        "ctox.source.load" => {
+            let mutation: ModuleSourceLoadMutation =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.source.load payload")?;
+            let outcome = load_module_source_records(root, &mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.source.save" => {
+            let mutation: ModuleSourceSaveMutation =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.source.save payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let module_id = source_sanitize_slug(&mutation.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            anyhow::ensure!(
+                session_can_modify_module(root, &session, &module_id)?,
+                "module modification rights required"
+            );
+            let outcome = save_module_source_record(root, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.file.materialize" => {
+            let mutation: DesktopFileMaterializeRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.file.materialize payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = materialize_desktop_file_command(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.release" => {
+            let mutation: ModuleReleaseRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.release payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = record_module_release(root, &app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.assign_founder" => {
+            let mutation: ModuleFounderAssignment = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.assign_founder payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = assign_module_founder(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.save" => {
+            let mutation: ModuleUpsertRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.save payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = upsert_module_manifest_command(root, &app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.delete" => {
+            let mutation: ModuleDeleteRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.delete payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = delete_installed_module_command(root, &app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.install_template" => {
+            let mutation: ModuleInstallTemplateRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.install_template payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = install_template_module_command(&app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.rollback" => {
+            let mutation: ModuleRollbackRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.rollback payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = rollback_module_release(root, &app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.mailserver.get_config" => {
+            let conn = open_store(root)?;
+            
+            // Get domains
+            let mut stmt = conn.prepare("SELECT domain_name, dkim_selector, dkim_private_key, COALESCE(spf_record, ''), COALESCE(dmarc_record, '') FROM stalwart_domains")?;
+            let domain_rows = stmt.query_map(params![], |row| {
+                let dkim_private_key = row.get::<_, String>(2)?;
+                let dkim_public_key = get_public_key(&dkim_private_key);
+                Ok(serde_json::json!({
+                    "domain_name": row.get::<_, String>(0)?,
+                    "dkim_selector": row.get::<_, String>(1)?,
+                    "dkim_private_key": dkim_private_key,
+                    "dkim_public_key": dkim_public_key,
+                    "spf_record": row.get::<_, String>(3)?,
+                    "dmarc_record": row.get::<_, String>(4)?,
+                }))
+            })?;
+            let mut domains = Vec::new();
+            for r in domain_rows {
+                domains.push(r?);
+            }
+
+            // Get users
+            let mut stmt = conn.prepare("SELECT username, created_at FROM stalwart_users")?;
+            let user_rows = stmt.query_map(params![], |row| {
+                Ok(serde_json::json!({
+                    "username": row.get::<_, String>(0)?,
+                    "created_at": row.get::<_, i64>(1)?,
+                }))
+            })?;
+            let mut users = Vec::new();
+            for r in user_rows {
+                users.push(r?);
+            }
+
+            let outcome = serde_json::json!({
+                "domains": domains,
+                "users": users
+            });
+
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.mailserver.save_domain" => {
+            let domain_name = command.payload.get("domain_name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let mut dkim_selector = command.payload.get("dkim_selector").and_then(Value::as_str).unwrap_or("default").trim().to_string();
+            if dkim_selector.is_empty() {
+                dkim_selector = "default".to_string();
+            }
+            let dkim_private_key_opt = command.payload.get("dkim_private_key").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+
+            anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+
+            // Generate private key if not provided
+            let dkim_private_key = if dkim_private_key_opt.is_empty() {
+                // Try executing openssl command
+                if let Ok(output) = std::process::Command::new("openssl")
+                    .args(&["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-outform", "PEM"])
+                    .output() {
+                    if output.status.success() {
+                        String::from_utf8_lossy(&output.stdout).to_string()
+                    } else {
+                        get_fallback_private_key()
+                    }
+                } else {
+                    get_fallback_private_key()
+                }
+            } else {
+                dkim_private_key_opt
+            };
+
+            let spf_record = format!("v=spf1 mx a ip4:51.210.246.120 ~all");
+            let dmarc_record = format!("v=DMARC1; p=none; rua=mailto:dmarc@{}", domain_name);
+
+            let conn = open_store(root)?;
+            conn.execute(
+                "INSERT OR REPLACE INTO stalwart_domains (domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![domain_name, dkim_selector, dkim_private_key, spf_record, dmarc_record],
+            )?;
+
+            let dkim_public_key = get_public_key(&dkim_private_key);
+
+            let outcome = serde_json::json!({
+                "domain_name": domain_name,
+                "dkim_selector": dkim_selector,
+                "spf_record": spf_record,
+                "dmarc_record": dmarc_record,
+                "dkim_private_key": dkim_private_key,
+                "dkim_public_key": dkim_public_key
+            });
+
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.mailserver.delete_domain" => {
+            let domain_name = command.payload.get("domain_name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
+
+            let conn = open_store(root)?;
+            conn.execute("DELETE FROM stalwart_domains WHERE domain_name = ?1", params![domain_name])?;
+
+            let outcome = serde_json::json!({
+                "domain_name": domain_name,
+                "deleted": true
+            });
+
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.mailserver.save_user" => {
+            let username = command.payload.get("username").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let password = command.payload.get("password").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+
+            anyhow::ensure!(!username.is_empty(), "username is required");
+            anyhow::ensure!(!password.is_empty(), "password is required");
+
+            let db_path = root.join("runtime/ctox.sqlite3").to_string_lossy().into_owned();
+            let store = ctox_mailserver::store::sqlite::SqliteStore::new(&db_path);
+            store.add_user(&username, &password)?;
+
+            let outcome = serde_json::json!({
+                "username": username,
+                "saved": true
+            });
+
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.mailserver.delete_user" => {
+            let username = command.payload.get("username").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            anyhow::ensure!(!username.is_empty(), "username is required");
+
+            let conn = open_store(root)?;
+            conn.execute("DELETE FROM stalwart_users WHERE username = ?1", params![username])?;
+            conn.execute("DELETE FROM stalwart_mailboxes WHERE owner = ?1", params![username])?;
+
+            let outcome = serde_json::json!({
+                "username": username,
+                "deleted": true
+            });
+
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        _ => {}
+    }
     let accepted = record_command(root, command)?;
     Ok(serde_json::to_value(accepted)?)
+}
+
+fn get_public_key(private_key_pem: &str) -> String {
+    use std::io::Write;
+    use std::io::Read;
+    if private_key_pem == get_fallback_private_key() {
+        return get_fallback_public_key();
+    }
+    if let Ok(mut child) = std::process::Command::new("openssl")
+        .args(&["pkey", "-pubout", "-outform", "PEM"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn() {
+        
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(private_key_pem.as_bytes());
+        }
+        
+        let mut output = String::new();
+        if let Some(mut stdout) = child.stdout.take() {
+            let _ = stdout.read_to_string(&mut output);
+        }
+        
+        if let Ok(status) = child.wait() {
+            if status.success() && !output.is_empty() {
+                return output;
+            }
+        }
+    }
+    get_fallback_public_key()
+}
+
+fn get_fallback_public_key() -> String {
+    r#"-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8r+J1QCogIBQmEua3fE0
+eV/lbphvaNu6sa4KnkcmDDnCzBvj4qqBUe8JNTpKR2UiFmSD/XoAmNyrSwBysmL5
+r3U4FtlRkDCqeoyjsWIBqm67GfynXGws3GBVB+LP7RFcF/I8dJ7QnlBSC4JWT+62
+HlptCroMUOBq8eIsGz16HnK9CZQLJrYPVEI1fut1JnyuzW7DXcqYWfi8ebE2/pWO
+tM5WS1qii4KAMs6o6E5LiFbRiRmmv4PWd7SphZ5o48yUhZEkCi7Q4bAR9ZXJThjK
+4rV89P459E27G4BChV8r1RQ4H8rub2mtkQaFbEKi0JZFj/boy07fiS2yXFyLrR2B
+hwIDAQAB
+-----END PUBLIC KEY-----"#.to_string()
+}
+
+fn get_fallback_private_key() -> String {
+    r#"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDyv4nVAKiAgFCY
+S5rd8TR5X+VumG9o27qxrgqeRyYMOcLMG+PiqoFR7wk1OkpHZSIWZIP9egCY3KtL
+AHKyYvmvdTgW2VGQMKp6jKOxYgGqbrsZ/KdcbCzcYFUH4s/tEVwX8jx0ntCeUFIL
+glZP7rYeWm0KugxQ4Grx4iwbPXoecr0JlAsmtg9UQjV+63UmfK7NbsNdyphZ+Lx5
+sTb+lY60zlZLWqKLgoAyzqjoTkuIVtGJGaa/g9Z3tKmFnmjjzJSFkSQKLtDhsBH1
+lclOGMritXz0/jn0TbsbgEKFXyvVFDgfyu5vaa2RBoVsQqLQlkWP9ujLTt+JLbJc
+XIutHYGHAgMBAAECggEAOC6cd+/vD86i2Jym+zcYLf9D2pTtNBem3fip/Hf7FllH
+/HV4CL3tsEjimK8lAeEmQoiBA+l4uehYvMMdyKufnjxC/wbNGdIporNqL2O/fvKh
+2yHemkVvHJIvG+Qiu3uJFQG7fEJFhl6QnplL4LQe8md7VUA6GX3XQqRWEPfpi6IP
+OUdVxuWPu6s2rgDrNiFA49vNYcShj0ilEKKjTl64dpTzTmlBKpiusRiGr99cPTBH
+LOitgdXT7rQ/HexkadBOQwj1oCgKTkIX0EL05ZUoJ2DVvqbmy5q47Ch4hIJDIuCh
+eUhXUefNkNvm0+zN7FU12jIMix+UhTE0A+SjUmNGAQKBgQD7C7898CcAQ2coTdfF
+NLlaJYCEBV3WwG+kkif71s7/wEfuqW2Rpnrdf+5DpVm6FWYuh4x/+y58TdoVtBkf
+A7f0d2FBRQobi82EqiF0cuijg8J0mxFpM72nyAEWdNT3moqPcFgB7QfjsES0HQqx
+swZtIhtUGAUxV2j2staoIee68wKBgQD3id9ZZRWysM5R5Ztc7Cbblz5t1Wuesr9M
+Z/I2Ae99UBzr5X6gONjC8FMIOav+EG7xXaNjnnihYM3sFerI9d/UqEJfYC/foDUV
+FhMHeuImWWWUPeWz0L1dvd6wKo1QxDIXgWBH4XOey4i1f36pZmufddNdqNJT63X+
+0RK6phpcHQKBgA162P77aSyzcdORMnfNV/KGNvtfymUgmh4NFwaHxz+mVHZ1NIPw
+m4JPPzz0oPfD9GOlNZ8dnqZgC8jEjeDDc1o2GsvFaECIZjWsaPV2whUdmxBlzy6F
+77YVoDFTfqf47V28W41m69iG+3lsYcme4kZz4WHHlGfM2L7+ZVZL08SPAoGAUXEB
+FO5XFzVojDVYyle/6Rt3pLdE8y+oFMFWRUKZwsbq3QnigWByoKBlER24YpyRg8Pl
+D8+BrMamuXf0iS2r+NFrFOoWliKllExw8lMRuMBM1VsQCfsxcngXnipB2ELUoDsm
+rD+WxLX+Qoix6ZYS7qHbasMyf/3GEpJC8TnZDlkCgYEAuvW1ffY9HHKQZMWC5aM3
+/Hw9V/yuPVN0h/KbahXBGkOuWlNbpzPpBRIlUOCEIQTEFEH+PTLLEHD3ZUuTJbpn
+8ZfRN7S3tepNQQrn7UO4dek0kdnyawMKq1vgrO4IUZP7YTRMu/YNsS9YahmS5jQ1
+W1zGjMP9KaO/lbRSW/NHasM=
+-----END PRIVATE KEY-----"#.to_string()
+}
+
+fn rxdb_command_session(command: &BusinessCommand) -> anyhow::Result<BusinessOsSession> {
+    rxdb_session_from_command(command, true)
+}
+
+fn rxdb_authenticated_session(command: &BusinessCommand) -> anyhow::Result<BusinessOsSession> {
+    rxdb_session_from_command(command, false)
+}
+
+fn rxdb_session_from_command(
+    command: &BusinessCommand,
+    require_manage_all: bool,
+) -> anyhow::Result<BusinessOsSession> {
+    let actor = command
+        .client_context
+        .get("actor")
+        .or_else(|| command.client_context.get("user"));
+    let role = actor
+        .and_then(|value| value.get("role"))
+        .or_else(|| command.client_context.get("role"))
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .to_string();
+    let id = actor
+        .and_then(|value| value.get("id"))
+        .or_else(|| command.client_context.get("user_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("rxdb-command")
+        .to_string();
+    let display_name = actor
+        .and_then(|value| value.get("display_name"))
+        .or_else(|| actor.and_then(|value| value.get("name")))
+        .or_else(|| command.client_context.get("display_name"))
+        .and_then(Value::as_str)
+        .unwrap_or(id.as_str())
+        .to_string();
+    let is_admin = actor
+        .and_then(|value| value.get("is_admin"))
+        .or_else(|| command.client_context.get("is_admin"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| normalize_business_role(&role) == "admin");
+    let session = BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(BusinessOsSessionUser {
+            id,
+            display_name,
+            role,
+            is_admin,
+        }),
+        login_url: None,
+        reason: None,
+    };
+    if require_manage_all {
+        anyhow::ensure!(
+            session_can_manage_all(&session),
+            "chef or admin role required"
+        );
+    }
+    Ok(session)
+}
+
+fn write_rxdb_control_command_outcome(
+    root: &Path,
+    command: &BusinessCommand,
+    status: &str,
+    task_id: Option<&str>,
+    task_status: Option<&str>,
+    result: Value,
+) -> anyhow::Result<Value> {
+    let command_id = command.id.as_deref().context("command id is required")?;
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            command_id,
+            command.module,
+            command.command_type,
+            command.record_id.clone().unwrap_or_default(),
+            status,
+            serde_json::to_string(&command.payload)?,
+            serde_json::to_string(&command.client_context)?,
+            now
+        ],
+    )?;
+    upsert_business_record(
+        &conn,
+        "business_commands",
+        command_id,
+        now,
+        serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": command.module.clone(),
+            "command_type": command.command_type.clone(),
+            "record_id": command.record_id.clone().unwrap_or_default(),
+            "status": status,
+            "inbound_channel": command_inbound_channel(command),
+            "task_id": task_id.unwrap_or_default(),
+            "task_status": task_status.unwrap_or(status),
+            "payload": command.payload.clone(),
+            "client_context": command.client_context.clone(),
+            "result": result.clone(),
+            "updated_at_ms": now
+        }),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "id": command_id,
+        "command_id": command_id,
+        "status": status,
+        "task_id": task_id.unwrap_or_default(),
+        "task_status": task_status.unwrap_or(status),
+        "result": result
+    }))
 }
 
 fn process_documents_report_command(
