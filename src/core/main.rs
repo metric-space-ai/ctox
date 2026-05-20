@@ -160,6 +160,7 @@ GOVERNANCE / MISSION
   ctox service --foreground      run the daemon loop in the foreground
   ctox governance <subcmd>       governance decisions and audits
   ctox channel <subcmd>          communication channels (email, jami, webrtc)
+  ctox mailserver <subcmd>       manage mailserver domains, users, and send test emails
   ctox queue <subcmd>            inspect, repair, and manage the service queue
   ctox report <subcmd>           deep research report runs (feasibility / market / decision brief / …)
   ctox plan <subcmd>             mission plans
@@ -258,6 +259,15 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // runtime DB is wedged.
             "upgrade" | "update" | "version" | "status" | "doctor" => return true,
             "business-os" | "business" if args.get(1).map(String::as_str) == Some("serve") => {
+                return true
+            }
+            "business-os" | "business"
+                if args.get(1).map(String::as_str) == Some("files")
+                    && matches!(
+                        args.get(2).map(String::as_str),
+                        Some("sync" | "sync-workspace")
+                    ) =>
+            {
                 return true
             }
             _ => {}
@@ -515,6 +525,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("browser") => browser::handle_browser_command(&root, &args[1..]),
         Some("channel") => channels::handle_channel_command(&root, &args[1..]),
+        Some("mailserver") => handle_mailserver_command(&root, &args[1..]),
         Some("doc") => doc::handle_doc_command(&root, &args[1..]),
         Some("follow-up") => follow_up::handle_follow_up_command(&args[1..]),
         Some("governance") => governance::handle_governance_command(&root, &args[1..]),
@@ -1945,6 +1956,200 @@ fn resolve_systemd_user_ctox_root(home_dir: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    let subcmd = args.first().map(String::as_str).unwrap_or("");
+    let db_path = paths::core_db(root).to_string_lossy().to_string();
+    let store = ctox_mailserver::store::SqliteStore::new(&db_path);
+
+    // Ensure database stalwart tables exist (in case it is the first time running)
+    store.init().context("Failed to initialize mailserver SQLite store")?;
+
+    match subcmd {
+        "add-domain" => {
+            let domain = args.get(1).context("usage: ctox mailserver add-domain <domain> [--selector <selector>] [--private-key <key>]")?;
+            let selector = find_flag_value(&args[2..], "--selector").unwrap_or("default");
+            let private_key_arg = find_flag_value(&args[2..], "--private-key");
+
+            let private_key_pem = if let Some(key_val) = private_key_arg {
+                if key_val.starts_with("-----BEGIN") {
+                    key_val.to_string()
+                } else {
+                    // Try to read it as a file path
+                    std::fs::read_to_string(key_val)
+                        .with_context(|| format!("Failed to read private key from file path: {}", key_val))?
+                }
+            } else {
+                println!("Generiere neuen 2048-bit RSA-Schlüssel für Domain '{}'...", domain);
+                let output = std::process::Command::new("openssl")
+                    .args(&["genrsa", "2048"])
+                    .output()
+                    .context("Failed to run 'openssl genrsa 2048'. Bitte stellen Sie sicher, dass openssl auf dem System installiert ist.")?;
+                if !output.status.success() {
+                    anyhow::bail!("openssl genrsa failed: {}", String::from_utf8_lossy(&output.stderr));
+                }
+                String::from_utf8_lossy(&output.stdout).into_owned()
+            };
+
+            // Derive public key in DER format to generate base64 for Vercel/DNS
+            let mut child = std::process::Command::new("openssl")
+                .args(&["rsa", "-pubout", "-outform", "DER"])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .context("Failed to spawn openssl to extract public key")?;
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                stdin.write_all(private_key_pem.as_bytes())?;
+            }
+
+            let output = child.wait_with_output()?;
+            if !output.status.success() {
+                anyhow::bail!("openssl rsa public key derivation failed: {}", String::from_utf8_lossy(&output.stderr));
+            }
+
+            use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+            use base64::Engine;
+            let b64_pubkey = BASE64_STANDARD.encode(&output.stdout);
+
+            store.add_domain(domain, selector, &private_key_pem)?;
+
+            println!("\n\x1b[32;1m✓ Domain '{}' erfolgreich hinzugefügt.\x1b[0m", domain);
+            println!("\n================================================================================\n");
+            println!("\x1b[1m=== DNS / Vercel-Konfiguration für {} ===\x1b[0m\n", domain);
+            println!("Für die DKIM-Signierung fügen Sie bitte folgenden TXT-Eintrag bei Ihrem DNS-Provider hinzu:\n");
+            println!("  \x1b[33;1mName/Host:\x1b[0m   {}._domainkey.{}", selector, domain);
+            println!("  \x1b[33;1mTyp:\x1b[0m         TXT");
+            println!("  \x1b[33;1mWert:\x1b[0m        v=DKIM1; k=rsa; p={}", b64_pubkey);
+            println!("\nZusätzlich empfohlene Einträge für den E-Mail-Verkehr:\n");
+            println!("  \x1b[36mMX Record:\x1b[0m");
+            println!("    Name/Host:  @");
+            println!("    Typ:        MX");
+            println!("    Wert:       10 mail.{}", domain);
+            println!("\n  \x1b[36mA Record:\x1b[0m");
+            println!("    Name/Host:  mail.{}", domain);
+            println!("    Typ:        A");
+            println!("    Wert:       51.210.246.120");
+            println!("\n  \x1b[36mTXT SPF Record:\x1b[0m");
+            println!("    Name/Host:  @");
+            println!("    Typ:        TXT");
+            println!("    Wert:       v=spf1 mx a ip4:51.210.246.120 ~all");
+            println!("\n  \x1b[36mTXT DMARC Record:\x1b[0m");
+            println!("    Name/Host:  _dmarc.{}", domain);
+            println!("    Typ:        TXT");
+            println!("    Wert:       v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc@{}", domain);
+            println!("\n================================================================================\n");
+            Ok(())
+        }
+        "list-domains" => {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            let mut stmt = conn.prepare("SELECT domain_name, dkim_selector FROM stalwart_domains")?;
+            let rows = stmt.query_map([], |row| {
+                let name: String = row.get(0)?;
+                let selector: String = row.get(1)?;
+                Ok((name, selector))
+            })?;
+            println!("\n\x1b[1mRegistrierte Domains:\x1b[0m");
+            println!("{:<30} {:<15}", "Domain", "Selector");
+            println!("{:-<45}", "");
+            let mut count = 0;
+            for row in rows {
+                let (name, selector) = row?;
+                println!("{:<30} {:<15}", name, selector);
+                count += 1;
+            }
+            if count == 0 {
+                println!("(Keine Domains registriert)");
+            }
+            println!();
+            Ok(())
+        }
+        "add-user" => {
+            let email = args.get(1).context("usage: ctox mailserver add-user <email> <password>")?;
+            let password = args.get(2).context("usage: ctox mailserver add-user <email> <password>")?;
+
+            store.add_user(email, password)?;
+            println!("\n\x1b[32;1m✓ Benutzer '{}' erfolgreich erstellt.\x1b[0m", email);
+            println!("Standard-Mailboxen (INBOX, Sent, Trash) wurden automatisch angelegt.\n");
+            Ok(())
+        }
+        "list-users" => {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            let mut stmt = conn.prepare("SELECT username, created_at FROM stalwart_users")?;
+            let rows = stmt.query_map([], |row| {
+                let username: String = row.get(0)?;
+                let created_at: i64 = row.get(1)?;
+                Ok((username, created_at))
+            })?;
+            println!("\n\x1b[1mRegistrierte Benutzer:\x1b[0m");
+            println!("{:<40} {:<25}", "E-Mail / Benutzername", "Erstellt am");
+            println!("{:-<65}", "");
+            let mut count = 0;
+            for row in rows {
+                let (username, created_at) = row?;
+                let dt = chrono::DateTime::from_timestamp(created_at, 0)
+                    .map(|d| d.to_rfc3339())
+                    .unwrap_or_else(|| created_at.to_string());
+                println!("{:<40} {:<25}", username, dt);
+                count += 1;
+            }
+            if count == 0 {
+                println!("(Keine Benutzer registriert)");
+            }
+            println!();
+            Ok(())
+        }
+        "send-email" => {
+            let from = find_flag_value(&args[1..], "--from").context("usage: ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body>\nFehlendes Argument: --from")?;
+            let to = find_flag_value(&args[1..], "--to").context("usage: ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body>\nFehlendes Argument: --to")?;
+            let subject = find_flag_value(&args[1..], "--subject").context("usage: ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body>\nFehlendes Argument: --subject")?;
+            let body = find_flag_value(&args[1..], "--body").context("usage: ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body>\nFehlendes Argument: --body")?;
+
+            let msg_id = format!("<{}@ctox.local>", uuid::Uuid::new_v4());
+            let date = chrono::Utc::now().to_rfc2822();
+
+            let rfc822_body = format!(
+                "From: {from}\r\n\
+                 To: {to}\r\n\
+                 Subject: {subject}\r\n\
+                 Message-ID: {msg_id}\r\n\
+                 Date: {date}\r\n\
+                 MIME-Version: 1.0\r\n\
+                 Content-Type: text/plain; charset=utf-8\r\n\
+                 Content-Transfer-Encoding: 7bit\r\n\
+                 \r\n\
+                 {body}\r\n",
+                from = from,
+                to = to,
+                subject = subject,
+                msg_id = msg_id,
+                date = date,
+                body = body
+            );
+
+            let queue_id = store.queue_email(from, to, &rfc822_body)?;
+            println!("\n\x1b[32;1m✓ E-Mail erfolgreich in die Warteschlange eingereiht.\x1b[0m");
+            println!("  Warteschlangen-ID: {}", queue_id);
+            println!("  Absender:          {}", from);
+            println!("  Empfänger:         {}", to);
+            println!("  Betreff:           {}", subject);
+            println!("\nDer ctox-Hintergrunddienst wird diese E-Mail in Kürze automatisch versenden.\n");
+            Ok(())
+        }
+        _ => {
+            anyhow::bail!(
+                "Unbekannter mailserver Unterbefehl. Verfügbare Befehle:\n\n\
+                 ctox mailserver add-domain <domain> [--selector <selector>] [--private-key <key>]\n\
+                 ctox mailserver list-domains\n\
+                 ctox mailserver add-user <email> <password>\n\
+                 ctox mailserver list-users\n\
+                 ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body>"
+            )
+        }
+    }
 }
 
 #[cfg(test)]
