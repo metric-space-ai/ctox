@@ -24,11 +24,13 @@ pub fn start_services_thread(db_path: String) {
             .expect("Failed to build tokio runtime for mailserver");
 
         rt.block_on(async {
+            println!("[ctox-mailserver] Starting mailserver thread with DB: {}", db_path);
             let store = store::SqliteStore::new(&db_path);
             if let Err(e) = store.init() {
-                eprintln!("Failed to initialize mailserver SQLite store: {:?}", e);
+                eprintln!("[ctox-mailserver] ERROR: Failed to initialize mailserver SQLite store: {:?}", e);
                 return;
             }
+            println!("[ctox-mailserver] SQLite store initialized successfully");
 
             let mut config = StalwartConfig::default();
             config.server.db_path = db_path;
@@ -77,6 +79,11 @@ pub fn start_services_thread(db_path: String) {
             } else {
                 config.carddav.bind_address = "127.0.0.1:8081".parse().unwrap();
             }
+
+            println!(
+                "[ctox-mailserver] Starting services: SMTP on {}, IMAP on {}, CalDAV on {}, CardDAV on {}",
+                config.smtp.bind_address, config.imap.bind_address, config.caldav.bind_address, config.carddav.bind_address
+            );
 
             // Start Inbound SMTP Server
             let smtp_server = Arc::new(smtp::server::SmtpInboundServer::new(
