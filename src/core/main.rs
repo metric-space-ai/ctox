@@ -257,8 +257,14 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
         match first {
             // Recovery / inspection commands — must work even when the
             // runtime DB is wedged.
-            "upgrade" | "update" | "version" | "status" | "doctor" => return true,
+            "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" => return true,
             "business-os" | "business" if args.get(1).map(String::as_str) == Some("serve") => {
+                return true
+            }
+            "business-os" | "business"
+                if args.get(1).map(String::as_str) == Some("peer")
+                    && matches!(args.get(2).map(String::as_str), None | Some("status" | "ensure")) =>
+            {
                 return true
             }
             "business-os" | "business"
