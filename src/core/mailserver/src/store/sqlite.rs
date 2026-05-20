@@ -20,6 +20,7 @@ impl SqliteStore {
     fn connect(&self) -> StalwartResult<Connection> {
         let conn = Connection::open(&self.db_path)?;
         conn.busy_timeout(std::time::Duration::from_secs(10))?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
         Ok(conn)
     }
 
