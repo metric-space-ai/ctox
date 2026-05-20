@@ -24,12 +24,15 @@ pub fn start_services_thread(db_path: String) {
             .expect("Failed to build tokio runtime for mailserver");
 
         rt.block_on(async {
+            tracing::info!("[ctox-mailserver] Starting mailserver thread with DB: {}", db_path);
             println!("[ctox-mailserver] Starting mailserver thread with DB: {}", db_path);
             let store = store::SqliteStore::new(&db_path);
             if let Err(e) = store.init() {
+                tracing::error!("[ctox-mailserver] ERROR: Failed to initialize mailserver SQLite store: {:?}", e);
                 eprintln!("[ctox-mailserver] ERROR: Failed to initialize mailserver SQLite store: {:?}", e);
                 return;
             }
+            tracing::info!("[ctox-mailserver] SQLite store initialized successfully");
             println!("[ctox-mailserver] SQLite store initialized successfully");
 
             let mut config = StalwartConfig::default();
@@ -80,6 +83,10 @@ pub fn start_services_thread(db_path: String) {
                 config.carddav.bind_address = "127.0.0.1:8081".parse().unwrap();
             }
 
+            tracing::info!(
+                "[ctox-mailserver] Starting services: SMTP on {}, IMAP on {}, CalDAV on {}, CardDAV on {}",
+                config.smtp.bind_address, config.imap.bind_address, config.caldav.bind_address, config.carddav.bind_address
+            );
             println!(
                 "[ctox-mailserver] Starting services: SMTP on {}, IMAP on {}, CalDAV on {}, CardDAV on {}",
                 config.smtp.bind_address, config.imap.bind_address, config.caldav.bind_address, config.carddav.bind_address
@@ -91,7 +98,9 @@ pub fn start_services_thread(db_path: String) {
                 config.smtp.clone(),
             ));
             tokio::spawn(async move {
+                tracing::info!("[ctox-mailserver] SMTP Inbound Server thread running");
                 if let Err(e) = smtp_server.start().await {
+                    tracing::error!("[ctox-mailserver] SMTP Inbound Server failed to start: {:?}", e);
                     eprintln!("SMTP Inbound Server failed to start: {:?}", e);
                 }
             });
@@ -102,7 +111,9 @@ pub fn start_services_thread(db_path: String) {
                 config.imap.clone(),
             ));
             tokio::spawn(async move {
+                tracing::info!("[ctox-mailserver] IMAP Server thread running");
                 if let Err(e) = imap_server.start().await {
+                    tracing::error!("[ctox-mailserver] IMAP Server failed to start: {:?}", e);
                     eprintln!("IMAP Server failed to start: {:?}", e);
                 }
             });
@@ -113,7 +124,9 @@ pub fn start_services_thread(db_path: String) {
                 config.caldav.clone(),
             ));
             tokio::spawn(async move {
+                tracing::info!("[ctox-mailserver] CalDAV Server thread running");
                 if let Err(e) = caldav_server.start().await {
+                    tracing::error!("[ctox-mailserver] CalDAV Server failed to start: {:?}", e);
                     eprintln!("CalDAV Server failed to start: {:?}", e);
                 }
             });
@@ -124,7 +137,9 @@ pub fn start_services_thread(db_path: String) {
                 config.carddav.clone(),
             ));
             tokio::spawn(async move {
+                tracing::info!("[ctox-mailserver] CardDAV Server thread running");
                 if let Err(e) = carddav_server.start().await {
+                    tracing::error!("[ctox-mailserver] CardDAV Server failed to start: {:?}", e);
                     eprintln!("CardDAV Server failed to start: {:?}", e);
                 }
             });
@@ -135,6 +150,7 @@ pub fn start_services_thread(db_path: String) {
                 config.smtp.clone(),
             ));
             tokio::spawn(async move {
+                tracing::info!("[ctox-mailserver] SMTP Outbound Queue Runner thread running");
                 queue_runner.start().await;
             });
 
