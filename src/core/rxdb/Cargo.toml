@@ -1,0 +1,64 @@
+[package]
+name = "ctox-rxdb"
+version = "0.1.0"
+edition = "2021"
+description = "Byte-correct Rust port of RxDB 16.20.0 for CTOX (WebRTC P2P sync with business-os)"
+publish = false
+
+[lib]
+name = "rxdb"
+path = "src/lib.rs"
+
+[dependencies]
+# Async runtime (pinned to match CTOX root)
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "io-util"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Storage
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+
+# JSON / serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# Regex (utils-regex), randomness (utils-number, utils-string)
+regex = "1"
+rand = "0.8"
+
+# Base64 — for attachment size accounting via base64 decode-length
+base64 = "0.22"
+
+# Errors (anyhow is forbidden inside this crate per PORT_STYLE.md §2)
+thiserror = "1"
+
+# Sync primitives
+parking_lot = "0.12"
+dashmap = "6"
+arc-swap = "1"
+
+# Hashing / bytes
+sha2 = "0.10"
+bytes = "1"
+
+# Time (prefer std, but keep chrono available for upstream date code)
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+# Logging
+tracing = "0.1"
+
+# IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Phase-4: WebSocket transport for signaling
+tokio-tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
+url = "2"
+rustls = { version = "0.23", features = ["ring"] }
+
+# Phase-4 WebRTC transport for rxdb-rs <-> browser simple-peer interop.
+webrtc = "0.20.0-alpha.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
+tempfile = "3"

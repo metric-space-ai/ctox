@@ -1,0 +1,19 @@
+upstream: kofrasa/mingo
+tag: 6.5.6
+commit: 5a1bda9494174fe6f72c94cbaabcc832c7e8803e
+vendored_at: 2026-05-19
+license: MIT (Copyright (c) 2013-2024 Francis Asante)
+subset: rx-query-mingo.ts dependencies only
+files:
+  - src/core.ts
+  - src/query.ts
+  - src/util.ts
+  - src/types.ts
+  - src/lazy.ts
+  - src/operators/_predicates.ts
+  - src/operators/query/comparison/{eq,ne,gt,gte,lt,lte,in,nin}.ts
+  - src/operators/query/logical/{and,or,nor,not}.ts
+  - src/operators/query/array/{elemMatch,size}.ts
+  - src/operators/query/element/{exists,type}.ts
+  - src/operators/query/evaluation/{regex,mod}.ts
+  - src/operators/pipeline/{sort,project}.ts

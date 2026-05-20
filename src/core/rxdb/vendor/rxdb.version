@@ -1,0 +1,14 @@
+upstream: pubkey/rxdb
+tag: 16.20.0
+commit: c69c94bb107a4d36dbf989de0e5f17081dcf7718
+vendored_at: 2026-05-19
+license: Apache-2.0
+source_tree: vendor/rxdb-16.20.0/
+source_url: https://github.com/pubkey/rxdb/tree/16.20.0
+notes: |
+  Frozen upstream source for the byte-correct Rust port.
+  DO NOT modify any file under vendor/rxdb-16.20.0/.
+  To update: clone the new tag fresh into a temp dir, replace the entire
+  vendor/rxdb-16.20.0/ tree, and bump the commit + vendored_at fields.
+  Every Rust file ported from this tree carries a `// ref: rxdb/<path>:<line-range>`
+  anchor pointing into this frozen tree.
