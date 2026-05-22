@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use rusqlite::Connection;
@@ -10,6 +11,7 @@ use crate::rx_error::{new_rx_error, RxResult};
 
 /// Matches upstream's `:memory:` SQLite database marker.
 pub const SQLITE_IN_MEMORY_DB_NAME: &str = ":memory:";
+const SQLITE_BUSY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 pub struct RxStorageSqliteSettings {
@@ -57,9 +59,13 @@ impl RxStorageSqlite {
         }
         let connection = Connection::open(path).map_err(sqlite_error)?;
         connection
+            .busy_timeout(SQLITE_BUSY_TIMEOUT)
+            .map_err(sqlite_error)?;
+        connection
             .execute_batch(
                 r#"
                 PRAGMA journal_mode = WAL;
+                PRAGMA busy_timeout = 10000;
                 PRAGMA synchronous = NORMAL;
                 PRAGMA foreign_keys = ON;
                 "#,
@@ -67,9 +73,11 @@ impl RxStorageSqlite {
             .map_err(sqlite_error)?;
 
         // Register the update hook for immediate same-process reactivity
-        connection.update_hook(Some(|_action: rusqlite::hooks::Action, _db: &str, tbl: &str, _row_id: i64| {
-            crate::storage::sqlite::instance::notify_table_change(tbl);
-        }));
+        connection.update_hook(Some(
+            |_action: rusqlite::hooks::Action, _db: &str, tbl: &str, _row_id: i64| {
+                crate::storage::sqlite::instance::notify_table_change(tbl);
+            },
+        ));
 
         let shared = Arc::new(Mutex::new(connection));
         *self.connection.lock() = Some(Arc::clone(&shared));

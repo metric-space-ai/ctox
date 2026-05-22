@@ -696,6 +696,9 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     if runtime_env::config_flag(root, "CTOX_SERVICE_PREWARM_BACKENDS") {
         supervisor::start_backend_supervisor(root.to_path_buf());
     }
+    if let Err(err) = crate::business_os::ensure_native_peer(root) {
+        eprintln!("ctox service: Business OS native RxDB peer failed to start: {err:#}");
+    }
     #[cfg(unix)]
     let socket_path = service_socket_path(root);
     let mut announced_ready = false;

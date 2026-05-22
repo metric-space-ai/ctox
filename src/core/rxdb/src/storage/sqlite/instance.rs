@@ -2,15 +2,16 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
-use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
 
 use crate::plugins::utils::utils_string::random_token;
@@ -136,6 +137,39 @@ impl RxStorageInstanceSqlite {
         }
         Ok(docs_in_db)
     }
+
+    fn checkpoint_status_snapshot(&self) -> Value {
+        let conn = self.connection.lock();
+        let checkpoint = latest_checkpoint(&conn, &self.table_name)
+            .unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
+        let latest_id = checkpoint
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let latest_lwt = checkpoint
+            .get("lwt")
+            .and_then(Value::as_f64)
+            .unwrap_or_default();
+        let schema_hash = schema_checkpoint_hash(&self.schema);
+        let latest_id_hash = if latest_id.is_empty() {
+            String::new()
+        } else {
+            sha256_hex(latest_id.as_bytes())
+        };
+        let epoch_input = format!(
+            "{}\n{}\n{}\n{}\n{}",
+            self.database_name, self.collection_name, schema_hash, latest_lwt, latest_id
+        );
+        json!({
+            "source": "rxdb-rs-sqlite",
+            "state": "advertised",
+            "collection": self.collection_name,
+            "schemaHash": schema_hash,
+            "latestLwt": latest_lwt,
+            "latestIdHash": latest_id_hash,
+            "epoch": sha256_hex(epoch_input.as_bytes()),
+        })
+    }
 }
 
 fn start_external_write_poll(
@@ -166,7 +200,18 @@ fn start_external_write_poll(
             let result = {
                 let checkpoint = checkpoint.lock().clone();
                 let conn = connection.lock();
-                changed_documents_since(&conn, &table_name, &primary_path, 50, Some(&checkpoint))
+                let poll_limit = if table_name.contains("desktop_file_chunks") {
+                    1
+                } else {
+                    50
+                };
+                changed_documents_since(
+                    &conn,
+                    &table_name,
+                    &primary_path,
+                    poll_limit,
+                    Some(&checkpoint),
+                )
             };
             let Ok(result) = result else {
                 continue;
@@ -222,6 +267,18 @@ fn latest_checkpoint(conn: &rusqlite::Connection, table_name: &str) -> Option<Va
     .optional()
     .ok()
     .flatten()
+}
+
+fn schema_checkpoint_hash(schema: &RxJsonSchema) -> String {
+    let value = serde_json::to_value(schema).unwrap_or(Value::Null);
+    let encoded = serde_json::to_string(&value).unwrap_or_default();
+    sha256_hex(encoded.as_bytes())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn changed_documents_since(
@@ -305,7 +362,9 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let mut checkpoint: Option<Value> = None;
         {
             let mut conn = self.connection.lock();
-            let tx = conn.transaction().map_err(sqlite_error)?;
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(sqlite_error)?;
             let docs_in_db = self.load_docs_in_db(&tx)?;
             let categorized = crate::rx_storage_helper::categorize_bulk_write_rows(
                 self.schema.attachments.is_some(),
@@ -453,6 +512,10 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         self.closed.store(true, Ordering::SeqCst);
         unregister_table_notifier(&self.table_name);
         Ok(())
+    }
+
+    async fn replication_checkpoint_status(&self) -> Value {
+        self.checkpoint_status_snapshot()
     }
 
     async fn get_attachment_data(

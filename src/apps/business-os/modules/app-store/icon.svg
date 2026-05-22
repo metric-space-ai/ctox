@@ -1,0 +1,12 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-app-store">
+  <defs>
+    <linearGradient id="grad-app-store" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#ec4899" />
+    </linearGradient>
+  </defs>
+  <path d="M21 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z" fill="url(#grad-app-store)" fill-opacity="0.12" stroke="url(#grad-app-store)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+  <path d="M16 8A4 4 0 0 0 8 8" stroke="url(#grad-app-store)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+  <rect x="5" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
+  <rect x="14" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
+</svg>

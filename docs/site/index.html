@@ -499,6 +499,112 @@
         line-height: 1.45;
       }
 
+      .connectivity {
+        background: #101820;
+        color: #f7fbff;
+        border-bottom: 1px solid #203245;
+      }
+
+      .connectivity .section-kicker {
+        color: #74e4cb;
+      }
+
+      .connectivity h2 {
+        max-width: 820px;
+      }
+
+      .connectivity-intro {
+        max-width: 760px;
+        margin: 22px 0 0;
+        color: #cdd9e6;
+        font-size: 20px;
+        line-height: 1.5;
+      }
+
+      .connectivity-map {
+        display: grid;
+        grid-template-columns: minmax(180px, 0.85fr) minmax(250px, 1.3fr) minmax(180px, 0.85fr);
+        gap: 1px;
+        margin-top: 42px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .connectivity-node,
+      .connectivity-path {
+        display: grid;
+        min-height: 174px;
+        align-content: center;
+        gap: 10px;
+        padding: 26px;
+        background: #151f2a;
+      }
+
+      .connectivity-node b,
+      .connectivity-path b {
+        font-size: 23px;
+        line-height: 1.1;
+      }
+
+      .connectivity-node span,
+      .connectivity-path span {
+        color: #a9b8c9;
+        line-height: 1.45;
+      }
+
+      .connectivity-path {
+        justify-items: center;
+        text-align: center;
+        background:
+          linear-gradient(90deg, transparent 0 calc(50% - 1px), rgba(116, 228, 203, 0.58) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
+          #0b1117;
+      }
+
+      .connectivity-path small {
+        color: #74e4cb;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .connectivity-modes {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 1px;
+        margin-top: 1px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-top: 0;
+        background: rgba(255, 255, 255, 0.16);
+      }
+
+      .connectivity-mode {
+        min-height: 230px;
+        padding: 24px;
+        background: #f7f9fd;
+        color: var(--ink);
+      }
+
+      .connectivity-mode small {
+        color: var(--green);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .connectivity-mode h3 {
+        margin: 12px 0 0;
+        font-size: 22px;
+        line-height: 1.12;
+      }
+
+      .connectivity-mode p {
+        margin: 14px 0 0;
+        color: #424955;
+        line-height: 1.48;
+      }
+
       .compare-list {
         display: grid;
         gap: 1px;
@@ -785,6 +891,8 @@
         .automation-claim,
         .os-proof-strip,
         .business-os-gallery,
+        .connectivity-map,
+        .connectivity-modes,
         .compare-row,
         .install .download-strip,
         .install .section-inner {
@@ -883,6 +991,7 @@
         </a>
         <div class="top-actions">
           <a href="docs.html">Docs</a>
+          <a href="#connectivity">Connectivity</a>
           <a href="https://github.com/metric-space-ai/ctox">GitHub</a>
           <a class="nav-cta" href="#install" data-scroll-to="install">Install</a>
         </div>
@@ -1070,6 +1179,53 @@ records
                 <span>Skillbooks, runbooks, documents, and reusable procedures are visible, editable, and available for CTOX to learn from.</span>
               </figcaption>
             </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="connectivity" id="connectivity" aria-labelledby="connectivity-title">
+        <div class="section-inner">
+          <p class="section-kicker">Business OS connectivity</p>
+          <h2 id="connectivity-title">The browser does not need a direct IP route to CTOX.</h2>
+          <p class="connectivity-intro">
+            CTOX can be public, routed through ctox.dev, or private behind NAT.
+            The browser only needs the static Business OS shell and a pairing
+            config. Data moves through RxDB WebRTC replication between browser
+            IndexedDB and the Rust daemon's SQLite store.
+          </p>
+
+          <div class="connectivity-map" aria-label="Business OS WebRTC data path">
+            <div class="connectivity-node">
+              <b>Browser</b>
+              <span><code>rxdb-bundle.mjs</code>, Dexie, IndexedDB, module shell.</span>
+            </div>
+            <div class="connectivity-path">
+              <small>same room password</small>
+              <b>RxDB WebRTC collections</b>
+              <span>module catalog, runtime state, commands, files, channel data.</span>
+            </div>
+            <div class="connectivity-node">
+              <b>CTOX</b>
+              <span><code>rxdb-rs</code>, <code>RxStorageSqlite</code>, <code>runtime/ctox.sqlite3</code>.</span>
+            </div>
+          </div>
+
+          <div class="connectivity-modes">
+            <article class="connectivity-mode">
+              <small>public host</small>
+              <h3>CTOX has its own domain</h3>
+              <p>CTOX serves the shell and injects session plus pairing config. The data plane still stays RxDB/WebRTC.</p>
+            </article>
+            <article class="connectivity-mode">
+              <small>managed edge</small>
+              <h3>ctox.dev subdomain</h3>
+              <p>ctox.dev routes or serves the shell. Pairing data opens the WebRTC room, not an HTTP data bridge.</p>
+            </article>
+            <article class="connectivity-mode">
+              <small>private instance</small>
+              <h3>No inbound IP route</h3>
+              <p>The desktop app or ctox.dev can deliver the shell while CTOX connects outbound to signaling.</p>
+            </article>
           </div>
         </div>
       </section>

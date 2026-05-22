@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use serde_json::json;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -289,6 +290,17 @@ pub trait RxStorageInstance: Send + Sync {
     async fn remove(&self) -> Result<(), RxError>;
 
     async fn close(&self) -> Result<(), RxError>;
+
+    async fn replication_checkpoint_status(&self) -> Value {
+        if let Some(inner) = self.underlying_persistent_storage() {
+            return inner.replication_checkpoint_status().await;
+        }
+        json!({
+            "source": "rxdb-rs-storage",
+            "state": "unsupported",
+            "collection": self.collection_name(),
+        })
+    }
 
     /// Upstream `getAttachmentData(docId, attachmentId, digest)`. For CTOX
     /// attachments are out-of-band Parquet files; backends that do not support

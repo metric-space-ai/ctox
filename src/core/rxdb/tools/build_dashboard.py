@@ -44,6 +44,14 @@ def parse_porting(text):
             cur_headers = []
             in_table = False
             continue
+        if line.startswith("## CTOX Integration Layer"):
+            if cur_section and cur_rows:
+                sections[cur_section] = cur_rows
+            cur_section = "integration"
+            cur_rows = []
+            cur_headers = []
+            in_table = False
+            continue
         if line.startswith("## "):
             if cur_section and cur_rows:
                 sections[cur_section] = cur_rows
@@ -108,6 +116,16 @@ def render(sections):
         addition_rows.append(r)
 
     skip_rows = sections.get("skip", [])
+    integration_rows = []
+    for r in sections.get("integration", []):
+        r = clean_row(r)
+        r["_phase"] = "integration"
+        r["Upstream"] = r.get("Area", "")
+        r["Rust target"] = r.get("Files", "")
+        r["Tier"] = "—"
+        r["Owner"] = "main"
+        integration_rows.append(r)
+
     by_status = {"pending": 0, "claimed": 0, "wip": 0, "done": 0, "skipped": 0}
     by_tier = {"T1": {"pending": 0, "claimed": 0, "wip": 0, "done": 0},
                "T2": {"pending": 0, "claimed": 0, "wip": 0, "done": 0},
@@ -148,6 +166,18 @@ def render(sections):
         r["_latest_wave"] = max(waves)
         r["_wave_count"] = len(waves)
         latest_wave = max(latest_wave or 0, r["_latest_wave"])
+        activity_rows.append(r)
+    for r in integration_rows:
+        try:
+            wave = int(r.get("Wave", "0"))
+        except ValueError:
+            continue
+        if wave <= 0:
+            continue
+        r = dict(r)
+        r["_latest_wave"] = wave
+        r["_wave_count"] = 1
+        latest_wave = max(latest_wave or 0, wave)
         activity_rows.append(r)
     activity_rows.sort(
         key=lambda r: (
@@ -287,6 +317,7 @@ footer{margin-top:30px;padding-top:14px;border-top:1px solid #ddd;color:#888;fon
     parts.append(f'<div class="stat"><div class="lbl">file-row completion</div><div class="num">{pct:.1f}%</div></div>')
     parts.append(f'<div class="stat"><div class="lbl">upstream files</div><div class="num">{upstream_done}/{upstream_total}</div></div>')
     parts.append(f'<div class="stat"><div class="lbl">new code items</div><div class="num">{additions_done}/{additions_total}</div></div>')
+    parts.append(f'<div class="stat"><div class="lbl">CTOX integration waves</div><div class="num">{len(integration_rows)}</div></div>')
     parts.append(f'<div class="stat"><div class="lbl">latest wave</div><div class="num">{latest_wave or "—"}</div></div>')
     parts.append(f'<div class="stat"><div class="lbl">rows with wave notes</div><div class="num">{len(activity_rows)}</div></div>')
     for st, cnt in [("pending", by_status["pending"]), ("claimed", by_status["claimed"]),
@@ -372,6 +403,22 @@ footer{margin-top:30px;padding-top:14px;border-top:1px solid #ddd;color:#888;fon
                 f'<td>{html.escape(r.get("Item",""))}</td>'
                 f'<td class="path">{html.escape(r.get("Where",""))}</td>'
                 f'<td>{owner_cell(r.get("Owner"))}</td>'
+                f'<td class="notes">{html.escape(r.get("Notes",""))}</td></tr>'
+            )
+        parts.append("</tbody></table>")
+        parts.append("</section>")
+
+    # CTOX integration waves
+    if integration_rows:
+        parts.append("<section>")
+        parts.append("<h2>CTOX integration waves</h2>")
+        parts.append('<table><thead><tr><th class="num">Wave</th><th>Status</th><th>Area</th><th>Files</th><th>Notes</th></tr></thead><tbody>')
+        for r in sorted(integration_rows, key=lambda row: int(row.get("Wave", "0") or "0"), reverse=True):
+            parts.append(
+                f'<tr><td class="num mono">{html.escape(r.get("Wave",""))}</td>'
+                f'<td>{status_chip(r.get("Status","pending"))}</td>'
+                f'<td class="path">{html.escape(r.get("Area",""))}</td>'
+                f'<td class="path">{html.escape(r.get("Files",""))}</td>'
                 f'<td class="notes">{html.escape(r.get("Notes",""))}</td></tr>'
             )
         parts.append("</tbody></table>")

@@ -7,6 +7,7 @@ use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use rusqlite::params;
 use rusqlite::Connection;
+use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
@@ -32,8 +33,10 @@ use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
+const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
+const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
-const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge"];
+const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge", "app-store", "desktop", "reports"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -41,6 +44,8 @@ const CHATGPT_AUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
+const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
+const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -55,6 +60,9 @@ pub struct BusinessOsStatus {
     pub runtime: &'static str,
     pub store_path: String,
     pub now_ms: u128,
+    pub sync: Value,
+    pub module_catalog: Value,
+    pub data_plane: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ctox_service: Option<Value>,
 }
@@ -68,12 +76,16 @@ pub struct BusinessOsSyncConfig {
     pub peer_id: String,
     pub peer_role: &'static str,
     pub sync_room: String,
+    pub signaling_room_password: String,
     pub signaling_urls: Vec<String>,
+    pub signaling_urls_source: &'static str,
+    pub ice_servers: Vec<Value>,
     pub transport: &'static str,
     pub http_bridge_available: bool,
     pub ctox_instance_required: bool,
     pub native_rxdb_peer_available: bool,
     pub native_rxdb_peer_reason: &'static str,
+    pub native_rxdb_peer_status: Value,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -159,6 +171,30 @@ pub struct ModuleSourceSaveMutation {
     pub module_id: String,
     pub path: String,
     pub content: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSourceListSnapshotsRequest {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleSourceRollbackSnapshotRequest {
+    pub module_id: String,
+    pub snapshot_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppStoreInstallRequest {
+    pub module_id: String,
+    pub download_url: String,
+    #[serde(default)]
+    pub source_path: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AppStoreUninstallRequest {
+    pub module_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -279,6 +315,18 @@ struct ModuleManifest {
     #[serde(default)]
     description: String,
     #[serde(default)]
+    category: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    developer: String,
+    #[serde(default)]
+    license: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    store: Value,
+    #[serde(default)]
     entry: String,
     #[serde(default)]
     collections: Vec<String>,
@@ -326,12 +374,212 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
 pub fn status(root: &Path) -> anyhow::Result<BusinessOsStatus> {
     let path = root.join("runtime").join(STORE_FILE);
     let ctox_service = Some(cheap_ctox_service_status(root));
+    let sync_config = sync_config(root)?;
     Ok(BusinessOsStatus {
         ok: true,
         runtime: "native-rust",
         store_path: path.display().to_string(),
         now_ms: now_ms(),
+        sync: serde_json::json!({
+            "transport": sync_config.transport,
+            "sync_mode": sync_config.sync_mode,
+            "sync_room": sync_config.sync_room,
+            "signaling_urls": sync_config.signaling_urls,
+            "signaling_urls_source": sync_config.signaling_urls_source,
+            "native_rxdb_peer_available": sync_config.native_rxdb_peer_available,
+            "native_rxdb_peer_reason": sync_config.native_rxdb_peer_reason,
+            "native_rxdb_peer_status": sync_config.native_rxdb_peer_status,
+            "http_bridge_available": sync_config.http_bridge_available,
+        }),
+        module_catalog: rxdb_module_catalog_status(root),
+        data_plane: rxdb_data_plane_status(root),
         ctox_service,
+    })
+}
+
+fn rxdb_data_plane_status(root: &Path) -> Value {
+    const CRITICAL_COLLECTIONS: &[(&str, bool)] = &[
+        ("business_module_catalog", true),
+        ("ctox_runtime_settings", true),
+        ("desktop_files", false),
+        ("desktop_file_chunks", false),
+        ("business_commands", false),
+        ("ctox_queue_tasks", false),
+    ];
+
+    let path = root.join("runtime/ctox.sqlite3");
+    if !path.is_file() {
+        return serde_json::json!({
+            "ok": false,
+            "path": path.display().to_string(),
+            "reason": "native RxDB SQLite store is missing",
+            "collections": {},
+        });
+    }
+    let conn = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return serde_json::json!({
+                "ok": false,
+                "path": path.display().to_string(),
+                "reason": format!("open native RxDB SQLite store: {err}"),
+                "collections": {},
+            });
+        }
+    };
+    let _ = conn.busy_timeout(Duration::from_millis(100));
+
+    let mut collections = BTreeMap::new();
+    let mut required_ok = true;
+    for (collection, required_for_shell) in CRITICAL_COLLECTIONS {
+        let table = format!("ctox_business_os__{collection}__v0");
+        let table_exists = rxdb_table_exists(&conn, &table).unwrap_or(false);
+        let row_count = if table_exists {
+            rxdb_table_row_count(&conn, &table).ok()
+        } else {
+            None
+        };
+        let latest_updated_at_ms = if table_exists {
+            rxdb_table_latest_updated_at_ms(&conn, &table)
+                .ok()
+                .flatten()
+        } else {
+            None
+        };
+        let collection_ok =
+            table_exists && (!required_for_shell || row_count.unwrap_or_default() > 0);
+        if *required_for_shell && !collection_ok {
+            required_ok = false;
+        }
+        collections.insert(
+            (*collection).to_string(),
+            serde_json::json!({
+                "ok": collection_ok,
+                "required_for_shell": required_for_shell,
+                "table": table,
+                "table_exists": table_exists,
+                "row_count": row_count,
+                "latest_updated_at_ms": latest_updated_at_ms,
+            }),
+        );
+    }
+
+    serde_json::json!({
+        "ok": required_ok,
+        "path": path.display().to_string(),
+        "required_collections_ready": required_ok,
+        "collections": collections,
+    })
+}
+
+fn rxdb_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            [table],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn rxdb_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
+    conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .with_context(|| format!("count rows in {table}"))
+}
+
+fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Result<Option<i64>> {
+    conn.query_row(
+        &format!("SELECT MAX(CAST(json_extract(data, '$.updated_at_ms') AS INTEGER)) FROM {table}"),
+        [],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .with_context(|| format!("read latest updated_at_ms in {table}"))
+}
+
+fn rxdb_module_catalog_status(root: &Path) -> Value {
+    let path = root.join("runtime/ctox.sqlite3");
+    if !path.is_file() {
+        return serde_json::json!({
+            "ok": false,
+            "path": path.display().to_string(),
+            "reason": "native RxDB SQLite store is missing",
+        });
+    }
+    let conn = match Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(err) => {
+            return serde_json::json!({
+                "ok": false,
+                "path": path.display().to_string(),
+                "reason": format!("open native RxDB SQLite store: {err}"),
+            });
+        }
+    };
+    let _ = conn.busy_timeout(Duration::from_millis(100));
+    let table_exists = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ctox_business_os__business_module_catalog__v0'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .ok()
+        .flatten()
+        .is_some();
+    if !table_exists {
+        return serde_json::json!({
+            "ok": false,
+            "path": path.display().to_string(),
+            "reason": "business_module_catalog RxDB collection table is missing",
+        });
+    }
+    let data = match conn
+        .query_row(
+            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+    {
+        Ok(Some(data)) => data,
+        Ok(None) => {
+            return serde_json::json!({
+                "ok": false,
+                "path": path.display().to_string(),
+                "table": "ctox_business_os__business_module_catalog__v0",
+                "reason": "module-catalog document is missing",
+            });
+        }
+        Err(err) => {
+            return serde_json::json!({
+                "ok": false,
+                "path": path.display().to_string(),
+                "table": "ctox_business_os__business_module_catalog__v0",
+                "reason": format!("read module-catalog document: {err}"),
+            });
+        }
+    };
+    let parsed = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+    let module_count = parsed
+        .get("modules")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or(0);
+    serde_json::json!({
+        "ok": module_count > 0,
+        "path": path.display().to_string(),
+        "table": "ctox_business_os__business_module_catalog__v0",
+        "document_id": "module-catalog",
+        "module_count": module_count,
+        "template_count": parsed
+            .get("templates")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or(0),
+        "updated_at_ms": parsed.get("updated_at_ms").cloned().unwrap_or(Value::Null),
     })
 }
 
@@ -377,17 +625,26 @@ fn process_is_running(_pid: u32) -> bool {
 
 pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
     let instance_id = stable_instance_id(root)?;
+    let signaling_room_password = business_os_room_password(root)?;
     let peer_id = format!("ctox-core-{}", short_hash(&instance_id));
-    let native_rxdb_peer_available = super::rxdb_peer::is_native_peer_running();
+    let native_rxdb_peer_available = super::rxdb_peer::is_native_peer_running_for_root(root);
+    let native_rxdb_peer_status = super::rxdb_peer::native_peer_status(root);
+    let signaling = signaling_urls_config(root);
     Ok(BusinessOsSyncConfig {
         ok: true,
         app_hosting: "ctox_instance_webserver",
         sync_mode: "p2p-first",
-        sync_room: format!("ctox-business-os:{instance_id}"),
+        sync_room: format!(
+            "ctox-business-os:{instance_id}:{}",
+            room_secret_id(&signaling_room_password)
+        ),
+        signaling_room_password,
         instance_id,
         peer_id,
         peer_role: "ctox_instance",
-        signaling_urls: signaling_urls(),
+        signaling_urls: signaling.urls,
+        signaling_urls_source: signaling.source,
+        ice_servers: ice_servers_config(),
         transport: "webrtc",
         http_bridge_available: false,
         ctox_instance_required: true,
@@ -397,7 +654,135 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         } else {
             "CTOX native WebRTC peer is starting or unavailable"
         },
+        native_rxdb_peer_status,
     })
+}
+
+pub fn rotate_sync_room_password(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
+    if env::var("CTOX_BUSINESS_OS_ROOM_PASSWORD")
+        .ok()
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        anyhow::bail!(
+            "CTOX_BUSINESS_OS_ROOM_PASSWORD is set; unset the environment override before rotating the persisted Business OS room password"
+        );
+    }
+
+    let generated = format!("ctox-room-{}", Uuid::new_v4().simple());
+    crate::secrets::write_secret_record(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        &generated,
+        Some("Business OS WebRTC signaling room password".to_owned()),
+        serde_json::json!({"source": "business_os_sync_config_rotation"}),
+    )?;
+    sync_config(root)
+}
+
+fn ice_servers_config() -> Vec<Value> {
+    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_ICE_SERVERS") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            if let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed) {
+                let servers = items
+                    .into_iter()
+                    .filter_map(normalize_ice_server)
+                    .collect::<Vec<_>>();
+                if !servers.is_empty() {
+                    return servers;
+                }
+            }
+            let servers = trimmed
+                .split(',')
+                .map(str::trim)
+                .filter(|url| !url.is_empty())
+                .map(|url| serde_json::json!({ "urls": url }))
+                .collect::<Vec<_>>();
+            if !servers.is_empty() {
+                return servers;
+            }
+        }
+    }
+    vec![serde_json::json!({ "urls": DEFAULT_STUN_URL })]
+}
+
+fn normalize_ice_server(value: Value) -> Option<Value> {
+    let object = value.as_object()?;
+    let urls = object.get("urls")?;
+    let normalized_urls = if let Some(url) = urls.as_str() {
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        Value::String(trimmed.to_owned())
+    } else if let Some(items) = urls.as_array() {
+        let urls = items
+            .iter()
+            .filter_map(|item| item.as_str())
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+            .map(|url| Value::String(url.to_owned()))
+            .collect::<Vec<_>>();
+        if urls.is_empty() {
+            return None;
+        }
+        Value::Array(urls)
+    } else {
+        return None;
+    };
+
+    let mut server = serde_json::Map::new();
+    server.insert("urls".to_owned(), normalized_urls);
+    if let Some(username) = object
+        .get("username")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        server.insert("username".to_owned(), Value::String(username.to_owned()));
+    }
+    if let Some(credential) = object
+        .get("credential")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+    {
+        server.insert(
+            "credential".to_owned(),
+            Value::String(credential.to_owned()),
+        );
+    }
+    Some(Value::Object(server))
+}
+
+fn business_os_room_password(root: &Path) -> anyhow::Result<String> {
+    if let Ok(value) = env::var("CTOX_BUSINESS_OS_ROOM_PASSWORD") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_owned());
+        }
+    }
+    if let Ok(value) = crate::secrets::read_secret_value(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+    ) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_owned());
+        }
+    }
+    let generated = format!("ctox-room-{}", Uuid::new_v4().simple());
+    crate::secrets::write_secret_record(
+        root,
+        BUSINESS_OS_SECRET_SCOPE,
+        BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME,
+        &generated,
+        Some("Business OS WebRTC signaling room password".to_owned()),
+        serde_json::json!({"source": "business_os_sync_config"}),
+    )?;
+    Ok(generated)
 }
 
 pub fn session(auth_header: Option<&str>, session_header: Option<&str>) -> BusinessOsSession {
@@ -1040,7 +1425,13 @@ pub fn delete_installed_module_command(
         session_can_modify_module(root, session, &module_id)?,
         "module modification rights required"
     );
-    delete_installed_module(app_root, root, ModuleDeleteRequest { module_id: module_id.clone() })?;
+    delete_installed_module(
+        app_root,
+        root,
+        ModuleDeleteRequest {
+            module_id: module_id.clone(),
+        },
+    )?;
     Ok(serde_json::json!({
         "ok": true,
         "module_id": module_id,
@@ -1095,9 +1486,7 @@ pub fn run_channel_command(
             };
             channels::test_channel_for_business_os(root, request.channel.trim(), account_key)
         }
-        "ctox.channel.sync" => {
-            channels::sync_channel_for_business_os(root, request.channel.trim())
-        }
+        "ctox.channel.sync" => channels::sync_channel_for_business_os(root, request.channel.trim()),
         "ctox.channel.settings.save" => channels::save_channel_settings_for_business_os(
             root,
             request.channel.trim(),
@@ -1112,10 +1501,7 @@ pub fn run_channel_command(
         }
         "ctox.channel.jami.export" => Ok(channels::export_jami_archive_for_business_os(root)),
         "ctox.channel.jami.create" => {
-            let display_name = request
-                .display_name
-                .trim()
-                .to_string();
+            let display_name = request.display_name.trim().to_string();
             let display_name = if display_name.is_empty() {
                 "CTOX".to_string()
             } else {
@@ -1625,7 +2011,10 @@ pub fn record_module_release(
     let release_ids = sync_module_release_records(&conn, module_id, now)?;
     let mut governance = module_governance_map(root, session)?;
     if let Some(object) = governance.as_object_mut() {
-        object.insert("module_id".to_string(), Value::String(module_id.to_string()));
+        object.insert(
+            "module_id".to_string(),
+            Value::String(module_id.to_string()),
+        );
         object.insert("version_id".to_string(), Value::String(version_id));
         object.insert(
             "business_module_release_ids".to_string(),
@@ -1669,8 +2058,14 @@ pub fn rollback_module_release(
     let release_ids = sync_module_release_records(&conn, module_id, now)?;
     let mut governance = module_governance_map(root, session)?;
     if let Some(object) = governance.as_object_mut() {
-        object.insert("module_id".to_string(), Value::String(module_id.to_string()));
-        object.insert("version_id".to_string(), Value::String(version_id.to_string()));
+        object.insert(
+            "module_id".to_string(),
+            Value::String(module_id.to_string()),
+        );
+        object.insert(
+            "version_id".to_string(),
+            Value::String(version_id.to_string()),
+        );
         object.insert("rolled_back_at_ms".to_string(), Value::from(now));
         object.insert(
             "business_module_release_ids".to_string(),
@@ -2053,7 +2448,7 @@ pub fn materialize_desktop_file_command(
     let path = PathBuf::from(stored_path)
         .canonicalize()
         .with_context(|| format!("failed to canonicalize desktop file {stored_path}"))?;
-    super::rxdb_peer::sync_desktop_file_from_path(root, &path)?;
+    super::rxdb_peer::materialize_desktop_file_from_path(root, &path)?;
     let metadata = fs::metadata(&path)
         .with_context(|| format!("failed to read materialized file {}", path.display()))?;
     Ok(serde_json::json!({
@@ -2071,6 +2466,8 @@ fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Valu
     let database_path = root.join("runtime/ctox.sqlite3");
     let conn = Connection::open(&database_path)
         .with_context(|| format!("failed to open {}", database_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
     let data: String = conn
         .query_row(
             "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -2631,7 +3028,7 @@ fn is_allowed_source_path(path: &Path) -> bool {
         .map(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts"
+                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts" | "svg"
             )
         })
         .unwrap_or(false)
@@ -2651,6 +3048,7 @@ fn source_language_for_path(path: &Path) -> &'static str {
         "md" => "markdown",
         "mjs" | "js" => "javascript",
         "ts" => "typescript",
+        "svg" => "xml",
         _ => "text",
     }
 }
@@ -2715,6 +3113,301 @@ fn write_module_source_snapshot(
         )
     })?;
     Ok(snapshot_id)
+}
+
+pub fn list_module_source_snapshots(
+    root: &Path,
+    request: ModuleSourceListSnapshotsRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let snapshot_root = root
+        .join("runtime")
+        .join("business-os-source-snapshots")
+        .join(&module_id);
+    if !snapshot_root.is_dir() {
+        return Ok(Value::Array(Vec::new()));
+    }
+    let mut snapshots = Vec::new();
+    for entry in fs::read_dir(&snapshot_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(value) = serde_json::from_str::<Value>(&content) {
+                    snapshots.push(value);
+                }
+            }
+        }
+    }
+    snapshots.sort_by(|a, b| {
+        let a_ms = a.get("created_at_ms").and_then(Value::as_u64).unwrap_or(0);
+        let b_ms = b.get("created_at_ms").and_then(Value::as_u64).unwrap_or(0);
+        b_ms.cmp(&a_ms)
+    });
+    Ok(Value::Array(snapshots))
+}
+
+pub fn rollback_module_source_snapshot(
+    root: &Path,
+    request: ModuleSourceRollbackSnapshotRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let snapshot_id = request.snapshot_id.trim();
+    anyhow::ensure!(!snapshot_id.is_empty(), "snapshot_id is required");
+
+    let snapshot_root = root
+        .join("runtime")
+        .join("business-os-source-snapshots")
+        .join(&module_id);
+
+    let metadata_path = snapshot_root.join(format!("{}.json", snapshot_id));
+    anyhow::ensure!(metadata_path.is_file(), "snapshot metadata not found");
+
+    let source_path = snapshot_root.join(format!("{}.source", snapshot_id));
+    anyhow::ensure!(source_path.is_file(), "snapshot source file not found");
+
+    let metadata_content = fs::read_to_string(&metadata_path)?;
+    let metadata: Value = serde_json::from_str(&metadata_content)?;
+    let rel_path = metadata
+        .get("path")
+        .and_then(Value::as_str)
+        .context("invalid snapshot metadata: path missing")?;
+
+    let source_content = fs::read_to_string(&source_path)?;
+
+    let mutation = ModuleSourceSaveMutation {
+        module_id: module_id.clone(),
+        path: rel_path.to_string(),
+        content: source_content,
+    };
+
+    let outcome = save_module_source_record(root, mutation)?;
+    Ok(outcome)
+}
+
+fn find_module_json_dir_for_install(
+    dir: &Path,
+    module_id: &str,
+    source_path: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    let source_path = source_path.trim().trim_matches('/');
+    if !source_path.is_empty() {
+        if let Some(found) = find_module_json_dir_by_source_path(dir, source_path)? {
+            return Ok(Some(found));
+        }
+    }
+    find_module_json_dir_by_id(dir, module_id)
+}
+
+fn find_module_json_dir_by_source_path(
+    dir: &Path,
+    source_path: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    if dir.join("module.json").is_file()
+        && dir
+            .to_string_lossy()
+            .replace('\\', "/")
+            .ends_with(source_path)
+    {
+        return Ok(Some(dir.to_path_buf()));
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_module_json_dir_by_source_path(&path, source_path)? {
+                return Ok(Some(found));
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn find_module_json_dir_by_id(dir: &Path, module_id: &str) -> anyhow::Result<Option<PathBuf>> {
+    let manifest_path = dir.join("module.json");
+    if manifest_path.is_file() {
+        let text = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+        let manifest: Value = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+        let manifest_id = manifest
+            .get("id")
+            .and_then(Value::as_str)
+            .map(source_sanitize_slug)
+            .unwrap_or_default();
+        if manifest_id == module_id {
+            return Ok(Some(dir.to_path_buf()));
+        }
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_module_json_dir_by_id(&path, module_id)? {
+                return Ok(Some(found));
+            }
+        }
+    }
+    Ok(None)
+}
+
+pub fn install_app_module(
+    _root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: AppStoreInstallRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required to install modules"
+    );
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+
+    // Download the ZIP archive
+    let response = ureq::get(&request.download_url)
+        .set("User-Agent", "Mozilla/5.0 CTOX Business OS App Installer")
+        .timeout(Duration::from_secs(60))
+        .call()
+        .with_context(|| {
+            format!(
+                "Failed to download module zip from {}",
+                request.download_url
+            )
+        })?;
+
+    let mut zip_bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut zip_bytes)
+        .with_context(|| "Failed to read zip download stream")?;
+
+    // Extract ZIP to a temporary directory
+    let temp_dir = std::env::temp_dir().join(format!("ctox-app-install-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir)
+        .with_context(|| format!("Failed to create temp extract dir {}", temp_dir.display()))?;
+
+    let cursor = std::io::Cursor::new(zip_bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).context("Failed to open downloaded archive as a zip file")?;
+
+    for i in 0..archive.len() {
+        let mut file = archive
+            .by_index(i)
+            .context("Failed to read file from zip archive")?;
+        let filepath = match file.enclosed_name() {
+            Some(path) => path.to_owned(),
+            None => continue,
+        };
+        let outpath = temp_dir.join(filepath);
+        if file.is_dir() {
+            fs::create_dir_all(&outpath)?;
+        } else {
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    fs::create_dir_all(&p)?;
+                }
+            }
+            let mut outfile = fs::File::create(&outpath)?;
+            std::io::copy(&mut file, &mut outfile)?;
+        }
+    }
+
+    // Search recursively for the directory containing module.json
+    let found_dir = find_module_json_dir_for_install(&temp_dir, &module_id, &request.source_path)?
+        .with_context(|| {
+            format!(
+                "No module.json for module '{}' found in the downloaded repository archive",
+                module_id
+            )
+        })?;
+
+    // Read and parse module.json to ensure it's a valid manifest
+    let manifest_path = found_dir.join("module.json");
+    let manifest_content = fs::read_to_string(&manifest_path)
+        .context("Failed to read module.json in downloaded archive")?;
+    let manifest: Value = serde_json::from_str(&manifest_content)
+        .context("Downloaded module.json is not a valid JSON")?;
+
+    // Ensure the ID matches (or just use the ID in the manifest to create destination)
+    let manifest_id = manifest
+        .get("id")
+        .and_then(Value::as_str)
+        .context("Downloaded module.json is missing 'id' field")?;
+    let sanitized_manifest_id = source_sanitize_slug(manifest_id);
+    anyhow::ensure!(
+        sanitized_manifest_id == module_id,
+        "Module ID in module.json ('{}') does not match request module ID ('{}')",
+        sanitized_manifest_id,
+        module_id
+    );
+
+    // Copy target directory to installed-modules/<module_id>
+    let dest_dir = app_root.join("installed-modules").join(&module_id);
+    if dest_dir.exists() {
+        fs::remove_dir_all(&dest_dir).with_context(|| {
+            format!(
+                "Failed to clear existing installation directory {}",
+                dest_dir.display()
+            )
+        })?;
+    } else {
+        if let Some(parent) = dest_dir.parent() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
+    copy_dir_recursive(&found_dir, &dest_dir)
+        .context("Failed to copy extracted module files to installed-modules")?;
+
+    // Clean up temporary directory
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "installed": true,
+        "manifest": manifest
+    }))
+}
+
+pub fn uninstall_app_module(
+    root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: AppStoreUninstallRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required to uninstall modules"
+    );
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+
+    if is_core_module(&module_id) {
+        anyhow::bail!("Core modules cannot be uninstalled");
+    }
+
+    let dest_dir = app_root.join("installed-modules").join(&module_id);
+    if !dest_dir.is_dir() {
+        anyhow::bail!("Module '{}' is not installed", module_id);
+    }
+
+    fs::remove_dir_all(&dest_dir)
+        .with_context(|| format!("Failed to delete module directory {}", dest_dir.display()))?;
+
+    // Update layout if module_id exists in it
+    let mut layout = load_module_layout(root)?;
+    remove_module_from_layout_value(&mut layout, &module_id);
+    save_module_layout(root, &layout)?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "uninstalled": true
+    }))
 }
 
 fn module_source_file_id(module_id: &str, path: &str) -> String {
@@ -3357,8 +4050,16 @@ fn sanitize_filename(title: &str) -> String {
 }
 
 fn write_note_markdown_file(root: &Path, record_id: &str, document: &Value) -> anyhow::Result<()> {
-    let title = document.get("title").and_then(Value::as_str).unwrap_or("Untitled").trim();
-    let content = document.get("content").and_then(Value::as_str).unwrap_or("").trim();
+    let title = document
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("Untitled")
+        .trim();
+    let content = document
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     let sanitized_title = sanitize_filename(title);
     let notes_dir = root.join("runtime/business-os/notes");
     std::fs::create_dir_all(&notes_dir)?;
@@ -3469,7 +4170,8 @@ pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
             match db_record {
                 Some((db_mtime, db_payload_json)) => {
                     if mtime > db_mtime + 2000 {
-                        let mut payload: Value = serde_json::from_str(&db_payload_json).unwrap_or_default();
+                        let mut payload: Value =
+                            serde_json::from_str(&db_payload_json).unwrap_or_default();
                         if let Some(obj) = payload.as_object_mut() {
                             obj.insert("title".to_string(), Value::String(title.to_string()));
                             obj.insert("content".to_string(), Value::String(content));
@@ -3571,7 +4273,10 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
             mark_business_record_deleted(&conn, collection, &record_id, now_ms() as i64)?;
             if collection == "notes" {
                 if let Err(e) = delete_note_markdown_file(root, &record_id) {
-                    eprintln!("[business-os] failed to delete note file for {}: {}", record_id, e);
+                    eprintln!(
+                        "[business-os] failed to delete note file for {}: {}",
+                        record_id, e
+                    );
                 }
             }
             accepted.push(serde_json::json!({ "id": record_id, "status": "deleted" }));
@@ -3600,7 +4305,10 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
             )?;
             if collection == "notes" {
                 if let Err(e) = write_note_markdown_file(root, &record_id, document) {
-                    eprintln!("[business-os] failed to write note file for {}: {}", record_id, e);
+                    eprintln!(
+                        "[business-os] failed to write note file for {}: {}",
+                        record_id, e
+                    );
                 }
             }
             accepted.push(serde_json::json!({ "id": record_id, "status": "stored" }));
@@ -3628,11 +4336,14 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
     let exists: Option<String> = conn
         .query_row(
             "SELECT command_id FROM business_commands WHERE command_id = ?1",
-            params![command_id],
+            params![command_id.as_str()],
             |row| row.get(0),
         )
         .optional()?;
     if exists.is_some() {
+        if let Some(outcome) = stored_rxdb_business_command_outcome(&conn, &command_id)? {
+            return Ok(outcome);
+        }
         return Ok(serde_json::json!({
             "id": command_id,
             "command_id": command_id,
@@ -3725,9 +4436,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.business_os.user.upsert" => {
-            let mutation: BusinessOsUserMutation =
-                serde_json::from_value(command.payload.clone())
-                    .context("invalid ctox.business_os.user.upsert payload")?;
+            let mutation: BusinessOsUserMutation = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.business_os.user.upsert payload")?;
             let session = rxdb_authenticated_session(&command)?;
             let outcome = upsert_user(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -3844,6 +4554,41 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 outcome,
             );
         }
+        "ctox.source.list_snapshots" => {
+            let request: ModuleSourceListSnapshotsRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.source.list_snapshots payload")?;
+            let outcome = list_module_source_snapshots(root, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.source.rollback_snapshot" => {
+            let request: ModuleSourceRollbackSnapshotRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.source.rollback_snapshot payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let module_id = source_sanitize_slug(&request.module_id);
+            anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+            anyhow::ensure!(
+                session_can_modify_module(root, &session, &module_id)?,
+                "module modification rights required"
+            );
+            let outcome = rollback_module_source_snapshot(root, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
         "ctox.file.materialize" => {
             let mutation: DesktopFileMaterializeRequest =
                 serde_json::from_value(command.payload.clone())
@@ -3935,8 +4680,9 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.module.rollback" => {
-            let mutation: ModuleRollbackRequest = serde_json::from_value(command.payload.clone())
-                .context("invalid ctox.module.rollback payload")?;
+            let mutation: ModuleRollbackRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.rollback payload")?;
             let session = rxdb_authenticated_session(&command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = rollback_module_release(root, &app_root, &session, mutation)?;
@@ -3949,9 +4695,40 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 outcome,
             );
         }
+        "ctox.app_store.install" => {
+            let request: AppStoreInstallRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.app_store.install payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = install_app_module(root, &app_root, &session, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.app_store.uninstall" => {
+            let request: AppStoreUninstallRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.app_store.uninstall payload")?;
+            let session = rxdb_authenticated_session(&command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = uninstall_app_module(root, &app_root, &session, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
         "ctox.mailserver.get_config" => {
             let conn = open_store(root)?;
-            
+
             // Get domains
             let mut stmt = conn.prepare("SELECT domain_name, dkim_selector, dkim_private_key, COALESCE(spf_record, ''), COALESCE(dmarc_record, '') FROM stalwart_domains")?;
             let domain_rows = stmt.query_map(params![], |row| {
@@ -3999,12 +4776,30 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.mailserver.save_domain" => {
-            let domain_name = command.payload.get("domain_name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
-            let mut dkim_selector = command.payload.get("dkim_selector").and_then(Value::as_str).unwrap_or("default").trim().to_string();
+            let domain_name = command
+                .payload
+                .get("domain_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let mut dkim_selector = command
+                .payload
+                .get("dkim_selector")
+                .and_then(Value::as_str)
+                .unwrap_or("default")
+                .trim()
+                .to_string();
             if dkim_selector.is_empty() {
                 dkim_selector = "default".to_string();
             }
-            let dkim_private_key_opt = command.payload.get("dkim_private_key").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let dkim_private_key_opt = command
+                .payload
+                .get("dkim_private_key")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
 
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
 
@@ -4012,8 +4807,17 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let dkim_private_key = if dkim_private_key_opt.is_empty() {
                 // Try executing openssl command
                 if let Ok(output) = std::process::Command::new("openssl")
-                    .args(&["genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048", "-outform", "PEM"])
-                    .output() {
+                    .args(&[
+                        "genpkey",
+                        "-algorithm",
+                        "RSA",
+                        "-pkeyopt",
+                        "rsa_keygen_bits:2048",
+                        "-outform",
+                        "PEM",
+                    ])
+                    .output()
+                {
                     if output.status.success() {
                         String::from_utf8_lossy(&output.stdout).to_string()
                     } else {
@@ -4057,11 +4861,20 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.mailserver.delete_domain" => {
-            let domain_name = command.payload.get("domain_name").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let domain_name = command
+                .payload
+                .get("domain_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             anyhow::ensure!(!domain_name.is_empty(), "domain_name is required");
 
             let conn = open_store(root)?;
-            conn.execute("DELETE FROM stalwart_domains WHERE domain_name = ?1", params![domain_name])?;
+            conn.execute(
+                "DELETE FROM stalwart_domains WHERE domain_name = ?1",
+                params![domain_name],
+            )?;
 
             let outcome = serde_json::json!({
                 "domain_name": domain_name,
@@ -4078,13 +4891,28 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.mailserver.save_user" => {
-            let username = command.payload.get("username").and_then(Value::as_str).unwrap_or_default().trim().to_string();
-            let password = command.payload.get("password").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let username = command
+                .payload
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            let password = command
+                .payload
+                .get("password")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
 
             anyhow::ensure!(!username.is_empty(), "username is required");
             anyhow::ensure!(!password.is_empty(), "password is required");
 
-            let db_path = root.join("runtime/ctox.sqlite3").to_string_lossy().into_owned();
+            let db_path = root
+                .join("runtime/ctox.sqlite3")
+                .to_string_lossy()
+                .into_owned();
             let store = ctox_mailserver::store::sqlite::SqliteStore::new(&db_path);
             store.add_user(&username, &password)?;
 
@@ -4103,12 +4931,24 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.mailserver.delete_user" => {
-            let username = command.payload.get("username").and_then(Value::as_str).unwrap_or_default().trim().to_string();
+            let username = command
+                .payload
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
             anyhow::ensure!(!username.is_empty(), "username is required");
 
             let conn = open_store(root)?;
-            conn.execute("DELETE FROM stalwart_users WHERE username = ?1", params![username])?;
-            conn.execute("DELETE FROM stalwart_mailboxes WHERE owner = ?1", params![username])?;
+            conn.execute(
+                "DELETE FROM stalwart_users WHERE username = ?1",
+                params![username],
+            )?;
+            conn.execute(
+                "DELETE FROM stalwart_mailboxes WHERE owner = ?1",
+                params![username],
+            )?;
 
             let outcome = serde_json::json!({
                 "username": username,
@@ -4131,8 +4971,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
 }
 
 fn get_public_key(private_key_pem: &str) -> String {
-    use std::io::Write;
     use std::io::Read;
+    use std::io::Write;
     if private_key_pem == get_fallback_private_key() {
         return get_fallback_public_key();
     }
@@ -4141,17 +4981,17 @@ fn get_public_key(private_key_pem: &str) -> String {
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .spawn() {
-        
+        .spawn()
+    {
         if let Some(mut stdin) = child.stdin.take() {
             let _ = stdin.write_all(private_key_pem.as_bytes());
         }
-        
+
         let mut output = String::new();
         if let Some(mut stdout) = child.stdout.take() {
             let _ = stdout.read_to_string(&mut output);
         }
-        
+
         if let Ok(status) = child.wait() {
             if status.success() && !output.is_empty() {
                 return output;
@@ -4170,7 +5010,8 @@ HlptCroMUOBq8eIsGz16HnK9CZQLJrYPVEI1fut1JnyuzW7DXcqYWfi8ebE2/pWO
 tM5WS1qii4KAMs6o6E5LiFbRiRmmv4PWd7SphZ5o48yUhZEkCi7Q4bAR9ZXJThjK
 4rV89P459E27G4BChV8r1RQ4H8rub2mtkQaFbEKi0JZFj/boy07fiS2yXFyLrR2B
 hwIDAQAB
------END PUBLIC KEY-----"#.to_string()
+-----END PUBLIC KEY-----"#
+        .to_string()
 }
 
 fn get_fallback_private_key() -> String {
@@ -4201,7 +5042,41 @@ rD+WxLX+Qoix6ZYS7qHbasMyf/3GEpJC8TnZDlkCgYEAuvW1ffY9HHKQZMWC5aM3
 /Hw9V/yuPVN0h/KbahXBGkOuWlNbpzPpBRIlUOCEIQTEFEH+PTLLEHD3ZUuTJbpn
 8ZfRN7S3tepNQQrn7UO4dek0kdnyawMKq1vgrO4IUZP7YTRMu/YNsS9YahmS5jQ1
 W1zGjMP9KaO/lbRSW/NHasM=
------END PRIVATE KEY-----"#.to_string()
+-----END PRIVATE KEY-----"#
+        .to_string()
+}
+
+fn stored_rxdb_business_command_outcome(
+    conn: &Connection,
+    command_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let payload_json: Option<String> = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'business_commands'
+               AND record_id = ?1
+               AND deleted = 0",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let Some(payload_json) = payload_json else {
+        return Ok(None);
+    };
+    let mut payload: Value = serde_json::from_str(&payload_json)
+        .with_context(|| format!("invalid stored business command projection for {command_id}"))?;
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("ok".to_string(), Value::Bool(true));
+        obj.insert("id".to_string(), Value::String(command_id.to_string()));
+        obj.insert(
+            "command_id".to_string(),
+            Value::String(command_id.to_string()),
+        );
+        obj.insert("already_accepted".to_string(), Value::Bool(true));
+    }
+    Ok(Some(payload))
 }
 
 fn rxdb_command_session(command: &BusinessCommand) -> anyhow::Result<BusinessOsSession> {
@@ -4216,32 +5091,34 @@ fn rxdb_session_from_command(
     command: &BusinessCommand,
     require_manage_all: bool,
 ) -> anyhow::Result<BusinessOsSession> {
-    let actor = command
-        .client_context
-        .get("actor")
-        .or_else(|| command.client_context.get("user"));
+    let client_ctx = if let Value::String(ref s) = command.client_context {
+        serde_json::from_str(s).unwrap_or_else(|_| command.client_context.clone())
+    } else {
+        command.client_context.clone()
+    };
+    let actor = client_ctx.get("actor").or_else(|| client_ctx.get("user"));
     let role = actor
         .and_then(|value| value.get("role"))
-        .or_else(|| command.client_context.get("role"))
+        .or_else(|| client_ctx.get("role"))
         .and_then(Value::as_str)
         .unwrap_or("user")
         .to_string();
     let id = actor
         .and_then(|value| value.get("id"))
-        .or_else(|| command.client_context.get("user_id"))
+        .or_else(|| client_ctx.get("user_id"))
         .and_then(Value::as_str)
         .unwrap_or("rxdb-command")
         .to_string();
     let display_name = actor
         .and_then(|value| value.get("display_name"))
         .or_else(|| actor.and_then(|value| value.get("name")))
-        .or_else(|| command.client_context.get("display_name"))
+        .or_else(|| client_ctx.get("display_name"))
         .and_then(Value::as_str)
         .unwrap_or(id.as_str())
         .to_string();
     let is_admin = actor
         .and_then(|value| value.get("is_admin"))
-        .or_else(|| command.client_context.get("is_admin"))
+        .or_else(|| client_ctx.get("is_admin"))
         .and_then(Value::as_bool)
         .unwrap_or_else(|| normalize_business_role(&role) == "admin");
     let session = BusinessOsSession {
@@ -6070,22 +6947,283 @@ fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
     Ok(id)
 }
 
-fn signaling_urls() -> Vec<String> {
-    std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS")
-        .ok()
-        .map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec![DEFAULT_SIGNALING_URL.to_string()])
+#[derive(Debug, Clone)]
+struct SignalingUrlsConfig {
+    urls: Vec<String>,
+    source: &'static str,
+}
+
+fn signaling_urls_config(root: &Path) -> SignalingUrlsConfig {
+    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS") {
+        let urls = parse_signaling_urls(&raw);
+        if !urls.is_empty() {
+            persist_signaling_urls(root, &urls);
+            return SignalingUrlsConfig {
+                urls,
+                source: "environment",
+            };
+        }
+    }
+    if let Some(urls) = read_persisted_signaling_urls(root) {
+        return SignalingUrlsConfig {
+            urls,
+            source: "runtime",
+        };
+    }
+    SignalingUrlsConfig {
+        urls: vec![DEFAULT_SIGNALING_URL.to_string()],
+        source: "default",
+    }
+}
+
+fn parse_signaling_urls(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>()
+}
+
+fn persisted_signaling_urls_path(root: &Path) -> PathBuf {
+    root.join("runtime").join(BUSINESS_OS_SIGNALING_URLS_FILE)
+}
+
+fn persist_signaling_urls(root: &Path, urls: &[String]) {
+    let path = persisted_signaling_urls_path(root);
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return;
+    }
+    let Ok(content) = serde_json::to_vec_pretty(urls) else {
+        return;
+    };
+    let _ = fs::write(path, content);
+}
+
+fn read_persisted_signaling_urls(root: &Path) -> Option<Vec<String>> {
+    let path = persisted_signaling_urls_path(root);
+    let raw = fs::read_to_string(path).ok()?;
+    if let Ok(urls) = serde_json::from_str::<Vec<String>>(&raw) {
+        let urls = urls
+            .into_iter()
+            .map(|item| item.trim().to_string())
+            .filter(|item| !item.is_empty())
+            .collect::<Vec<_>>();
+        if !urls.is_empty() {
+            return Some(urls);
+        }
+    }
+    let urls = parse_signaling_urls(&raw);
+    (!urls.is_empty()).then_some(urls)
 }
 
 fn short_hash(value: &str) -> String {
     let digest = sha2::Sha256::digest(value.as_bytes());
     base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest)[..10]
         .to_string()
+}
+
+fn room_secret_id(value: &str) -> String {
+    let digest = sha2::Sha256::digest(value.as_bytes());
+    base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &digest)[..22]
+        .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn rotate_sync_room_password_changes_persisted_room_secret() -> anyhow::Result<()> {
+        if env::var("CTOX_BUSINESS_OS_ROOM_PASSWORD")
+            .ok()
+            .map(|value| !value.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        let first = sync_config(root)?;
+        let rotated = rotate_sync_room_password(root)?;
+        let reloaded = sync_config(root)?;
+
+        assert_ne!(
+            first.signaling_room_password,
+            rotated.signaling_room_password
+        );
+        assert_ne!(first.sync_room, rotated.sync_room);
+        assert_eq!(
+            rotated.signaling_room_password,
+            reloaded.signaling_room_password
+        );
+        assert_eq!(rotated.sync_room, reloaded.sync_room);
+        assert!(rotated.sync_room.starts_with("ctox-business-os:"));
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_data_plane_status_reports_critical_collection_counts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let sqlite_path = root.join("runtime/ctox.sqlite3");
+        let conn = Connection::open(sqlite_path)?;
+        for collection in [
+            "business_module_catalog",
+            "ctox_runtime_settings",
+            "desktop_files",
+            "desktop_file_chunks",
+        ] {
+            conn.execute(
+                &format!(
+                    "CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL)"
+                ),
+                [],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_module_catalog__v0 (id, data) VALUES ('module-catalog', ?1)",
+            [serde_json::json!({"updated_at_ms": 1000, "modules": [{"id": "ctox"}]}).to_string()],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__ctox_runtime_settings__v0 (id, data) VALUES ('runtime-settings', ?1)",
+            [serde_json::json!({"updated_at_ms": 1100}).to_string()],
+        )?;
+
+        let status = rxdb_data_plane_status(root);
+        assert_eq!(status.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            status
+                .pointer("/collections/business_module_catalog/row_count")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            status
+                .pointer("/collections/ctox_runtime_settings/latest_updated_at_ms")
+                .and_then(Value::as_i64),
+            Some(1100)
+        );
+        assert_eq!(
+            status
+                .pointer("/collections/desktop_files/ok")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_module_snapshots_and_rollback() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        // 1. Set up the expected directory structure for Business OS app root and module
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), "<html></html>")?;
+
+        let module_root = app_root.join("modules").join("test-module");
+        fs::create_dir_all(&module_root)?;
+        fs::write(module_root.join("module.json"), "{}")?;
+
+        // 2. Save initial version
+        let mutation1 = ModuleSourceSaveMutation {
+            module_id: "test-module".to_string(),
+            path: "app.js".to_string(),
+            content: "console.log('version 1');".to_string(),
+        };
+        let outcome1 = save_module_source_record(root, mutation1)?;
+        assert_eq!(outcome1.get("path").and_then(Value::as_str), Some("app.js"));
+
+        // Verify the file was written
+        let target_file = module_root.join("app.js");
+        assert!(target_file.is_file());
+        assert_eq!(
+            fs::read_to_string(&target_file)?,
+            "console.log('version 1');"
+        );
+
+        // 3. Save a second version (triggers snapshot of version 1)
+        let mutation2 = ModuleSourceSaveMutation {
+            module_id: "test-module".to_string(),
+            path: "app.js".to_string(),
+            content: "console.log('version 2');".to_string(),
+        };
+        let outcome2 = save_module_source_record(root, mutation2)?;
+        assert_eq!(outcome2.get("path").and_then(Value::as_str), Some("app.js"));
+        assert_eq!(
+            fs::read_to_string(&target_file)?,
+            "console.log('version 2');"
+        );
+
+        // 4. List snapshots
+        let list_req = ModuleSourceListSnapshotsRequest {
+            module_id: "test-module".to_string(),
+        };
+        let snapshots = list_module_source_snapshots(root, list_req)?;
+        let snapshots_arr = snapshots.as_array().expect("expected snapshots array");
+        assert_eq!(snapshots_arr.len(), 1, "should have exactly one snapshot");
+
+        let first_snapshot = &snapshots_arr[0];
+        let snapshot_id = first_snapshot
+            .get("snapshot_id")
+            .and_then(Value::as_str)
+            .expect("missing snapshot_id")
+            .to_string();
+        assert_eq!(
+            first_snapshot.get("path").and_then(Value::as_str),
+            Some("app.js")
+        );
+
+        // 5. Rollback to version 1 (which will snapshot version 2!)
+        let rollback_req = ModuleSourceRollbackSnapshotRequest {
+            module_id: "test-module".to_string(),
+            snapshot_id: snapshot_id.clone(),
+        };
+        let rollback_outcome = rollback_module_source_snapshot(root, rollback_req)?;
+        assert_eq!(
+            rollback_outcome.get("path").and_then(Value::as_str),
+            Some("app.js")
+        );
+
+        // Verify content is rolled back to version 1
+        assert_eq!(
+            fs::read_to_string(&target_file)?,
+            "console.log('version 1');"
+        );
+
+        // 6. List snapshots again - should now show 2 snapshots (since the rollback snapshotted the pre-rollback state "version 2"!)
+        let list_req_2 = ModuleSourceListSnapshotsRequest {
+            module_id: "test-module".to_string(),
+        };
+        let snapshots_2 = list_module_source_snapshots(root, list_req_2)?;
+        let snapshots_arr_2 = snapshots_2.as_array().expect("expected snapshots array");
+        assert_eq!(
+            snapshots_arr_2.len(),
+            2,
+            "should now have two snapshots after rollback"
+        );
+
+        // Verify the latest snapshot is version 2 (the pre-rollback state)
+        let latest_snapshot = &snapshots_arr_2[0];
+        let latest_source_path = Path::new(
+            latest_snapshot
+                .get("source_path")
+                .and_then(Value::as_str)
+                .expect("missing source_path"),
+        );
+        assert_eq!(
+            fs::read_to_string(latest_source_path)?,
+            "console.log('version 2');"
+        );
+
+        Ok(())
+    }
 }

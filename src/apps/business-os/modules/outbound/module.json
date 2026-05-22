@@ -19,5 +19,23 @@
     "shell": "full-workspace",
     "left": "campaign selection and source import",
     "center": "company qualification and pipeline workbench"
+  },
+  "category": "Sales",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "sales",
+    "outbound",
+    "research",
+    "pipeline"
+  ],
+  "store": {
+    "summary": "Campaign sourcing, company qualification, research handoff, and pipeline preparation.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/outbound",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

@@ -1255,14 +1255,16 @@ async function renderTable() {
     return;
   }
   try {
+    const localRows = localDataFrameRows(item);
     const schema = localDataFrameSchema(item);
-    const allRows = localDataFrameRows(item);
-    const rows = {
-      returned: allRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
-      rows: allRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
-    };
+    const rows = localRows.length
+      ? {
+          returned: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
+          rows: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
+        }
+      : { returned: 0, rows: [] };
     els.tableTitle.textContent = schema.title || item.title || 'DataFrame';
-    const totalRows = Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : allRows.length;
+    const totalRows = Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : localRows.length;
     const total = `${totalRows.toLocaleString('de-DE')} Zeilen`;
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · ${total}`;
     renderDataFrameTable(schema.columns || [], rows.rows || []);

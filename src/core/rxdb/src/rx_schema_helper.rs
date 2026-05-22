@@ -283,19 +283,27 @@ pub fn fill_with_default_settings(mut schema_obj: RxJsonSchema) -> RxJsonSchema 
 }
 
 // ref: rxdb/src/rx-schema-helper.ts:288
-pub const META_LWT_UNIX_TIME_MAX: f64 = 1_000_000_000_000_000.0;
+pub const META_LWT_UNIX_TIME_MAX: i64 = 1_000_000_000_000_000;
 
 // ref: rxdb/src/rx-schema-helper.ts:289-314
 /// Schema for the `_meta` property RxDB attaches to every document.
 pub fn rx_meta_schema() -> JsonSchema {
     let mut properties = std::collections::HashMap::new();
+    let mut lwt_extra = std::collections::HashMap::new();
+    lwt_extra.insert(
+        "minimum".to_string(),
+        serde_json::json!(RX_META_LWT_MINIMUM),
+    );
+    lwt_extra.insert(
+        "maximum".to_string(),
+        serde_json::json!(META_LWT_UNIX_TIME_MAX),
+    );
+    lwt_extra.insert("multipleOf".to_string(), serde_json::json!(0.01));
     properties.insert(
         "lwt".to_string(),
         JsonSchema {
             schema_type: Some("number".to_string()),
-            minimum: Some(RX_META_LWT_MINIMUM as f64),
-            maximum: Some(META_LWT_UNIX_TIME_MAX),
-            multiple_of: Some(0.01),
+            extra: lwt_extra,
             ..Default::default()
         },
     );

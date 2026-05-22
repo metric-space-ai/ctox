@@ -9,7 +9,8 @@
     "ctox_queue_tasks",
     "research_tasks",
     "research_runs",
-    "research_notes"
+    "research_notes",
+    "knowledge_tables"
   ],
   "layout": {
     "shell": "full-workspace",
@@ -20,5 +21,23 @@
       "right": "task setup, scoring model, and selected source detail",
       "bottom": "Knowledge table diagnostics and raw row evidence"
     }
+  },
+  "category": "Research",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "research",
+    "sources",
+    "scoring",
+    "knowledge"
+  ],
+  "store": {
+    "summary": "Knowledge-backed web research dashboards with source scoring and CTOX systematic-research handoff.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/research",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

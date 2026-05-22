@@ -59,6 +59,18 @@ struct ModuleManifest {
     #[serde(default)]
     description: String,
     #[serde(default)]
+    category: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    developer: String,
+    #[serde(default)]
+    license: String,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    store: Value,
+    #[serde(default)]
     entry: String,
     #[serde(default)]
     collections: Vec<String>,
@@ -155,14 +167,8 @@ pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow
         );
     }
     let _conn = store::open_store(root)?;
-    match store::sync_config(root) {
-        Ok(config) => {
-            super::rxdb_peer::spawn_native_peer(
-                root,
-                config.sync_room.clone(),
-                config.signaling_urls.clone(),
-            );
-        }
+    match super::rxdb_peer::ensure_native_peer(root) {
+        Ok(()) => {}
         Err(err) => eprintln!("[business-os] native rxdb peer config failed: {err:#}"),
     }
     let server = Server::http(&options.addr)
@@ -266,6 +272,12 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 request,
                 &store::session(auth_header.as_deref(), session_header.as_deref()),
             )?;
+        }
+        (Method::Post, "/login") => {
+            handle_login_request(request)?;
+        }
+        (Method::Get, "/logout") => {
+            respond_redirect_with_cookie(request, "/", "", 0)?;
         }
         (Method::Get, "/api/business-os/users") => {
             let session = request_session(&request);
@@ -379,12 +391,29 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 }),
             )?;
         }
-        _ if path.starts_with("/api/business-os/knowledge") => {
-            respond_status(
+        (Method::Get, "/api/business-os/knowledge") => {
+            respond_json_value(request, knowledge_index_payload(root)?)?;
+        }
+        (Method::Get, "/api/business-os/knowledge/document") => {
+            let id = query_param(&url, "id").unwrap_or_default();
+            respond_json_value(request, knowledge_document_payload(root, &id)?)?;
+        }
+        (Method::Get, "/api/business-os/knowledge/dataframe/schema") => {
+            let id = query_param(&url, "id").unwrap_or_default();
+            respond_json_value(request, knowledge_dataframe_schema_payload(root, &id)?)?;
+        }
+        (Method::Get, "/api/business-os/knowledge/dataframe/rows") => {
+            let query = parse_query(&url);
+            let id = query.get("id").cloned().unwrap_or_default();
+            let offset = parse_usize_query(&query, "offset", 0);
+            let limit = parse_usize_query(&query, "limit", 120).clamp(1, 500);
+            respond_json_value(
                 request,
-                410,
-                "Business OS knowledge data must sync through RxDB",
+                knowledge_dataframe_rows_payload(root, &id, offset, limit)?,
             )?;
+        }
+        _ if path.starts_with("/api/business-os/knowledge") => {
+            respond_status(request, 404, "unknown Business OS knowledge endpoint")?;
         }
         (Method::Post, "/api/business-os/modules/install-template") => {
             let session = request_session(&request);
@@ -476,6 +505,13 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         }
         (Method::Get, "/api/business-os/sync/config") => {
             respond_json(request, &store::sync_config(root)?)?;
+        }
+        (Method::Post, "/api/business-os/sync/native-peer/restart") => {
+            if std::env::var_os("CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS").is_none() {
+                respond_status(request, 403, "native peer restart is not enabled")?;
+            } else {
+                respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
+            }
         }
         (Method::Get, "/api/business-os/rxdb/pull") => {
             let query = parse_query(&url);
@@ -670,7 +706,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {
-    let auth_header = header_value(request, "Authorization");
+    let auth_header =
+        header_value(request, "Authorization").or_else(|| login_cookie_auth_header(request));
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
     store::session(auth_header.as_deref(), session_header.as_deref())
 }
@@ -1285,6 +1322,64 @@ fn header_value(request: &Request, name: &str) -> Option<String> {
         .map(|header| header.value.as_str().to_owned())
 }
 
+fn handle_login_request(mut request: Request) -> anyhow::Result<()> {
+    let mut body = String::new();
+    request.as_reader().read_to_string(&mut body)?;
+    let form = Url::parse(&format!("http://localhost/login?{body}"))
+        .ok()
+        .map(|url| url.query_pairs().into_owned().collect::<HashMap<_, _>>())
+        .unwrap_or_default();
+    let user = form.get("user").map(String::as_str).unwrap_or("").trim();
+    let password = form.get("password").map(String::as_str).unwrap_or("");
+    let credentials = format!("{user}:{password}");
+    let auth_header = format!(
+        "Basic {}",
+        base64::engine::general_purpose::STANDARD.encode(credentials.as_bytes())
+    );
+    let session = store::session(Some(&auth_header), None);
+    if session.authenticated {
+        let cookie =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credentials.as_bytes());
+        respond_redirect_with_cookie(request, "/", &cookie, 60 * 60 * 24 * 30)
+    } else {
+        respond_redirect_with_cookie(request, "/login?loginFailed=1", "", 0)
+    }
+}
+
+fn login_cookie_auth_header(request: &Request) -> Option<String> {
+    let cookie_header = header_value(request, "Cookie")?;
+    let cookie_value = cookie_header.split(';').find_map(|part| {
+        let (name, value) = part.trim().split_once('=')?;
+        (name == "ctox_business_os_auth").then_some(value.trim())
+    })?;
+    let credentials = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(cookie_value)
+        .ok()?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(credentials);
+    Some(format!("Basic {encoded}"))
+}
+
+fn respond_redirect_with_cookie(
+    request: Request,
+    location: &str,
+    cookie_value: &str,
+    max_age_secs: u64,
+) -> anyhow::Result<()> {
+    let mut response = Response::empty(303);
+    response.add_header(Header::from_bytes("Location", location.as_bytes()).unwrap());
+    let cookie = if cookie_value.is_empty() {
+        "ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_owned()
+    } else {
+        format!(
+            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}"
+        )
+    };
+    response.add_header(Header::from_bytes("Set-Cookie", cookie.as_bytes()).unwrap());
+    add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
+}
+
 fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
     let modules_root = app_root.join("modules");
     let mut manifests = Vec::new();
@@ -1585,7 +1680,7 @@ fn is_allowed_source_path(path: &Path) -> bool {
         .map(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts"
+                "css" | "html" | "js" | "json" | "md" | "mjs" | "ts" | "svg"
             )
         })
         .unwrap_or(false)
@@ -1605,6 +1700,7 @@ fn source_language_for_path(path: &Path) -> &'static str {
         "md" => "markdown",
         "mjs" | "js" => "javascript",
         "ts" => "typescript",
+        "svg" => "xml",
         _ => "text",
     }
 }
@@ -2008,9 +2104,7 @@ fn knowledge_index_payload(root: &Path) -> anyhow::Result<Value> {
     let sqlite_path = ctox_sqlite_path(root);
 
     if sqlite_path.is_file() {
-        let conn = Connection::open(&sqlite_path).with_context(|| {
-            format!("failed to open CTOX knowledge DB {}", sqlite_path.display())
-        })?;
+        let conn = open_ctox_sqlite(root)?;
 
         if sqlite_table_exists(&conn, "ctox_skill_bundles")? {
             let skill_sql = if sqlite_table_exists(&conn, "ctox_skill_files")? {
@@ -2567,7 +2661,11 @@ fn scan_parquet(path: &Path) -> PolarsResult<LazyFrame> {
 
 fn open_ctox_sqlite(root: &Path) -> anyhow::Result<Connection> {
     let path = ctox_sqlite_path(root);
-    Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))
+    let conn =
+        Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
+    Ok(conn)
 }
 
 fn sqlite_table_exists(conn: &Connection, table_name: &str) -> anyhow::Result<bool> {

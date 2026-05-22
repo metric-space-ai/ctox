@@ -1330,3 +1330,317 @@ body.is-research-col-resizing * {
     grid-template-rows: minmax(280px, 0.9fr) minmax(220px, 0.8fr);
   }
 }
+
+/* Research Shards & View Toggle styles */
+
+.research-center-body.has-hidden-map {
+  grid-template-rows: 1fr;
+}
+
+.research-center-body.has-hidden-map .research-map-panel {
+  display: none;
+}
+
+.research-tabs-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--research-line);
+  padding-right: 8px;
+  background: var(--research-surface);
+}
+
+.research-tabs-container .research-tabs {
+  border-bottom: none;
+}
+
+.research-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--research-line);
+  border-radius: 6px;
+  background: var(--research-surface-2);
+  overflow: hidden;
+  padding: 2px;
+}
+
+.research-view-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--research-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 120ms ease;
+}
+
+.research-view-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.research-view-btn:hover {
+  color: var(--research-text);
+  background: color-mix(in srgb, var(--research-accent) 6%, transparent);
+}
+
+.research-view-btn.is-active {
+  background: var(--research-surface);
+  color: var(--research-accent);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+/* Shards View Layout & Toolbar */
+
+.research-sources-shards-wrapper {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.research-sources-shards-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid var(--research-line);
+  background: color-mix(in srgb, var(--research-surface-2) 30%, var(--research-surface));
+}
+
+.research-sources-shards-search {
+  flex: 1;
+  min-width: 220px;
+  height: 32px;
+  border: 1px solid var(--research-line);
+  border-radius: 8px;
+  background: var(--research-surface);
+  color: var(--research-text);
+  font: inherit;
+  font-size: 13px;
+  padding: 0 12px;
+  outline: none;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+.research-sources-shards-search:focus {
+  border-color: var(--research-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--research-accent) 15%, transparent);
+}
+
+.research-sources-shards-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.research-tag-pill {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--research-line);
+  border-radius: 999px;
+  background: var(--research-surface);
+  color: var(--research-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.research-tag-pill:hover {
+  border-color: color-mix(in srgb, var(--research-accent) 50%, var(--research-line));
+  color: var(--research-text);
+  transform: translateY(-0.5px);
+}
+
+.research-tag-pill.is-active {
+  background: color-mix(in srgb, var(--research-accent) 12%, var(--research-surface));
+  border-color: var(--research-accent);
+  color: var(--research-accent);
+  font-weight: 800;
+}
+
+.research-sources-shards-scroll {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  overscroll-behavior: contain;
+}
+
+.research-sources-shards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 14px;
+}
+
+/* Premium Shard Cards */
+
+.research-source-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--research-surface) 95%, var(--research-text)), color-mix(in srgb, var(--research-surface) 90%, var(--research-text)));
+  border: 1px solid var(--research-line);
+  border-radius: 14px;
+  padding: 14px;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--research-text) 4%, transparent);
+  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.research-source-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.research-source-card:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--research-accent) 55%, var(--research-line));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--research-accent) 8%, transparent);
+}
+
+.research-source-card.is-selected {
+  border-color: var(--research-accent);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)), color-mix(in srgb, var(--research-accent) 3%, var(--research-surface)));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--research-accent) 12%, transparent);
+}
+
+.research-source-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.research-source-card-top > div {
+  min-width: 0;
+}
+
+.research-source-card-title {
+  font-size: 13.5px;
+  font-weight: 850;
+  line-height: 1.25;
+  color: var(--research-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-source-card-subtitle {
+  font-size: 11.5px;
+  color: var(--research-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-source-card-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 850;
+  border: 1px solid currentColor;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.research-source-card-badge.a { background: color-mix(in srgb, var(--research-good) 12%, transparent); color: var(--research-good); }
+.research-source-card-badge.b { background: color-mix(in srgb, var(--research-accent) 12%, transparent); color: var(--research-accent); }
+.research-source-card-badge.c { background: color-mix(in srgb, var(--research-warn) 12%, transparent); color: var(--research-warn); }
+.research-source-card-badge.d { background: color-mix(in srgb, var(--research-risk) 12%, transparent); color: var(--research-risk); }
+
+.research-source-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.research-source-card-chip {
+  background: color-mix(in srgb, var(--research-surface-2) 80%, var(--research-text));
+  color: var(--research-muted);
+  border: 1px solid color-mix(in srgb, var(--research-line) 60%, transparent);
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 10.5px;
+  font-weight: 750;
+  line-height: 1;
+}
+
+.research-source-card-kv {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 5px 8px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--research-text);
+  border-top: 1px dashed color-mix(in srgb, var(--research-line) 60%, transparent);
+  padding-top: 8px;
+}
+
+.research-source-card-kv .k {
+  color: var(--research-muted);
+  font-weight: 750;
+}
+
+.research-source-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 4px;
+}
+
+.research-source-card-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--research-line);
+  background: var(--research-surface-2);
+  color: var(--research-muted);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 800;
+  text-decoration: none;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.research-source-card-btn:hover {
+  border-color: color-mix(in srgb, var(--research-accent) 45%, var(--research-line));
+  color: var(--research-text);
+}
+
+.research-source-card-btn.primary {
+  background: color-mix(in srgb, var(--research-accent) 14%, var(--research-surface));
+  border-color: var(--research-accent);
+  color: var(--research-accent);
+}

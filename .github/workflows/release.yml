@@ -270,6 +270,14 @@ jobs:
           mkdir -p bundle/target/release
           cp target/${{ matrix.target }}/release/ctox bundle/target/release/
           cp -r src/skills bundle/skills
+          mkdir -p bundle/rxdb-js
+          cp src/apps/business-os/vendor/rxdb-bundle.provenance.json bundle/rxdb-js/
+          cp src/core/rxdb/js-fork/bundle-contract.json bundle/rxdb-js/
+          cp src/core/rxdb/js-fork/dependency-audit-baseline.json bundle/rxdb-js/
+          cp src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json bundle/rxdb-js/
+          mkdir -p bundle/rxdb-js/source
+          cp src/core/rxdb/js-fork/source/package.json bundle/rxdb-js/source/
+          cp src/core/rxdb/js-fork/source/package-lock.json bundle/rxdb-js/source/
           cp install.sh bundle/
           cp LICENSE bundle/
           cp docs/legal/NOTICE bundle/NOTICE
@@ -283,6 +291,14 @@ jobs:
           New-Item -ItemType Directory -Force bundle\target\release | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\target\release\"
           Copy-Item -Path "src\skills" -Destination "bundle\skills" -Recurse
+          New-Item -ItemType Directory -Force bundle\rxdb-js | Out-Null
+          Copy-Item -Path "src\apps\business-os\vendor\rxdb-bundle.provenance.json" -Destination "bundle\rxdb-js\"
+          Copy-Item -Path "src\core\rxdb\js-fork\bundle-contract.json" -Destination "bundle\rxdb-js\"
+          Copy-Item -Path "src\core\rxdb\js-fork\dependency-audit-baseline.json" -Destination "bundle\rxdb-js\"
+          Copy-Item -Path "src\core\rxdb\js-fork\ctox-rxdb-js.manifest.json" -Destination "bundle\rxdb-js\"
+          New-Item -ItemType Directory -Force bundle\rxdb-js\source | Out-Null
+          Copy-Item -Path "src\core\rxdb\js-fork\source\package.json" -Destination "bundle\rxdb-js\source\"
+          Copy-Item -Path "src\core\rxdb\js-fork\source\package-lock.json" -Destination "bundle\rxdb-js\source\"
           Copy-Item -Path "install.sh", "LICENSE" -Destination "bundle\"
           Copy-Item -Path "docs\legal\NOTICE" -Destination "bundle\NOTICE"
           Compress-Archive -Path "bundle\*" -DestinationPath "${{ matrix.artifact }}.zip" -Force

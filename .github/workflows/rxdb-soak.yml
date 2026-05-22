@@ -1,0 +1,87 @@
+name: RxDB WebRTC Soak
+
+on:
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: "Number of soak cycles"
+        required: true
+        default: "3"
+      modes:
+        description: "Comma-separated smoke modes"
+        required: true
+        default: "browser-to-rust,command-browser-to-rust,command-burst-browser-to-rust,workspace-rust-to-browser,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,checkpoint-error-browser-status,schema-error-browser-status"
+      fail_on_retry:
+        description: "Fail when a smoke mode needed a retry"
+        required: true
+        default: "true"
+      require_release_coverage:
+        description: "Fail unless all release smoke modes are included"
+        required: true
+        default: "true"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+  PLAYWRIGHT_MODULE_PATH: /tmp/ctox-pw-smoke/node_modules/playwright
+
+jobs:
+  rxdb-webrtc-soak:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: rxdb-soak
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
+
+      - name: Install Playwright runtime
+        run: |
+          mkdir -p /tmp/ctox-pw-smoke
+          npm --prefix /tmp/ctox-pw-smoke init -y
+          npm --prefix /tmp/ctox-pw-smoke install playwright@1.57.0
+          npm --prefix /tmp/ctox-pw-smoke exec playwright install --with-deps chromium
+
+      - name: Build CTOX smoke binary
+        run: cargo build --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
+
+      - name: Run RxDB WebRTC soak
+        env:
+          SOAK_CYCLES: ${{ inputs.cycles }}
+          SOAK_MIN_CYCLES: ${{ inputs.require_release_coverage == 'true' && '3' || '' }}
+          SOAK_MODES: ${{ inputs.modes }}
+          SOAK_REQUIRED_MODES: ${{ inputs.require_release_coverage == 'true' && 'browser-to-rust,command-browser-to-rust,command-burst-browser-to-rust,workspace-rust-to-browser,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,checkpoint-error-browser-status,schema-error-browser-status' || '' }}
+          SOAK_FAIL_ON_RETRY: ${{ inputs.require_release_coverage == 'true' && '1' || (inputs.fail_on_retry == 'true' && '1' || '0') }}
+          SOAK_RESULT_PATH: rxdb-soak-summary.json
+          SMOKE_PAGE_PATH: /index.html
+          BUSINESS_PORT: "9000"
+          SIGNALING_PORT: "19000"
+        run: node src/core/rxdb/tools/browser_rust_soak.js
+
+      - name: Print soak evidence summary
+        if: always()
+        run: node src/core/rxdb/tools/print_soak_summary.js rxdb-soak-summary.json
+
+      - name: Upload soak summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rxdb-soak-summary
+          path: rxdb-soak-summary.json
+          if-no-files-found: ignore

@@ -1,0 +1,49 @@
+{
+  "name": "ctox-rxdb-js-dependency-audit-baseline",
+  "date": "2026-05-22",
+  "source_package": "js-fork/source/package.json",
+  "source_lockfile": "js-fork/source/package-lock.json",
+  "source_lock_sha256": "84d084ff4c1681647dbfdef6fa8c0c9a495f76d667ee69791376c2e972fd061a",
+  "package_manager": "npm-ci",
+  "generated_from": "npm --prefix src/core/rxdb/js-fork/source audit --json",
+  "policy": {
+    "allowed_status": "zero-vulnerability-baseline",
+    "fail_on_lockfile_drift": true,
+    "fail_on_new_direct_vulnerable_package": true,
+    "fail_on_severity_budget_growth": true,
+    "notes": "This baseline records the reduced CTOX hard-fork dependency state. Do not reintroduce upstream build/test/service tooling unless the Business OS bundle pipeline requires it."
+  },
+  "severity_budget": {
+    "low": 0,
+    "moderate": 0,
+    "high": 0,
+    "critical": 0,
+    "total": 0
+  },
+  "dependency_budget": {
+    "prod": 80,
+    "dev": 27,
+    "optional": 27,
+    "peer": 0,
+    "peerOptional": 0,
+    "total": 107
+  },
+  "known_direct_vulnerable_packages": [],
+  "triage_queue": [
+    {
+      "area": "remaining-deprecation-noise",
+      "packages": ["lodash.get", "lodash.isequal"],
+      "target": "Remove inherited validator transitive deprecation noise when replacing the remaining z-schema path."
+    },
+    {
+      "area": "runtime-import-narrowing",
+      "packages": ["z-schema", "as-typed", "util"],
+      "target": "Keep narrowing legacy validation/type utility paths after Business OS schema validation is fully standardized on the CTOX contract."
+    },
+    {
+      "area": "audit-regression",
+      "packages": [],
+      "target": "Keep npm audit at zero for the private fork source package."
+    }
+  ]
+}

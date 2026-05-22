@@ -1293,8 +1293,7 @@ pub fn read_pairing_state_for_business_os(root: &Path, channel: &str) -> Value {
             "error": "channel parameter is required",
         });
     }
-    let artifacts =
-        crate::communication::runtime::artifacts_dir_for_business_os(root, channel);
+    let artifacts = crate::communication::runtime::artifacts_dir_for_business_os(root, channel);
     let status_path = artifacts.join("pairing-status.json");
     let svg_path = artifacts.join("pairing-qr.svg");
     let artifact_json: Option<Value> = std::fs::read_to_string(&status_path)
@@ -1305,9 +1304,8 @@ pub fn read_pairing_state_for_business_os(root: &Path, channel: &str) -> Value {
     // Latest account for this channel — drives both account_key and the
     // fallback status when no artifact JSON has been written.
     let db_path = resolve_db_path(root, None);
-    let account_row: Option<(String, Option<String>, Option<String>)> = open_channel_db(&db_path)
-        .ok()
-        .and_then(|conn| {
+    let account_row: Option<(String, Option<String>, Option<String>)> =
+        open_channel_db(&db_path).ok().and_then(|conn| {
             conn.query_row(
                 "SELECT account_key, last_inbound_ok_at, last_outbound_ok_at \
                  FROM communication_accounts \

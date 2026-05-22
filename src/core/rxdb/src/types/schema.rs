@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 // ref: rxdb/src/types/rx-schema.d.ts CompositePrimaryKey<RxDocType>
@@ -58,14 +58,23 @@ pub struct JsonSchema {
     #[serde(rename = "minLength", default, skip_serializing_if = "Option::is_none")]
     pub min_length: Option<u64>,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_json_number"
+    )]
     pub minimum: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_json_number"
+    )]
     pub maximum: Option<f64>,
     #[serde(
         rename = "multipleOf",
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_optional_json_number"
     )]
     pub multiple_of: Option<f64>,
 
@@ -123,7 +132,11 @@ pub struct RxJsonSchema {
     #[serde(default)]
     pub encrypted: Vec<String>,
 
-    #[serde(rename = "internalIndexes", default)]
+    #[serde(
+        rename = "internalIndexes",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub internal_indexes: Vec<Vec<String>>,
 
     #[serde(rename = "keyCompression", default)]
@@ -142,4 +155,17 @@ pub struct RxJsonSchema {
 
 fn default_object_type() -> String {
     "object".to_string()
+}
+
+fn serialize_optional_json_number<S>(value: &Option<f64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match value {
+        Some(number) if number.is_finite() && number.fract() == 0.0 => {
+            serializer.serialize_i64(*number as i64)
+        }
+        Some(number) => serializer.serialize_f64(*number),
+        None => serializer.serialize_none(),
+    }
 }

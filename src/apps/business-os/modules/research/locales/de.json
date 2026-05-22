@@ -106,5 +106,14 @@
   "xAxisLabel": "X-Achse",
   "yAxisLabel": "Y-Achse",
   "horizontalLabel": "Horizontal",
-  "verticalLabel": "Vertikal"
+  "verticalLabel": "Vertikal",
+  "shardsView": "Karten",
+  "tableView": "Tabelle",
+  "searchSourcesPlaceholder": "Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...",
+  "subthemeAll": "Alle",
+  "subthemeRotorload": "Rotorlast",
+  "subthemeBench": "Prüfstand",
+  "subthemeFlightlog": "Fluglog",
+  "subthemeVibration": "Vibration",
+  "subthemeSimulation": "Simulation"
 }

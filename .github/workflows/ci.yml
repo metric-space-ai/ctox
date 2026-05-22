@@ -37,6 +37,12 @@ jobs:
         working-directory: src/apps/desktop
         run: cargo check --locked
 
+      - name: Business OS WebRTC pairing tests
+        working-directory: src/apps/desktop
+        run: |
+          cargo test --locked desktop_web_deploy_url
+          cargo test --locked business_os_peer_status
+
   check-ctox:
     strategy:
       fail-fast: false
@@ -65,6 +71,13 @@ jobs:
           components: rustfmt
           targets: ${{ matrix.target }}
 
+      - uses: actions/setup-node@v4
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/core/rxdb/js-fork/source/package-lock.json
+
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
@@ -79,6 +92,66 @@ jobs:
       - name: Format check
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo fmt --check
+
+      - name: Business OS RxDB-only contract
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          node --check src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node --check src/core/rxdb/tools/browser_rust_smoke.js
+          node --check src/core/rxdb/tools/browser_rust_smoke_matrix.js
+          node --check src/core/rxdb/tools/browser_rust_soak.js
+          node --check src/core/rxdb/tools/print_soak_summary.js
+          node --check src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js
+          node --check src/core/rxdb/tools/business_os_connection_modes_smoke.js
+          node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
+          node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
+          node src/core/rxdb/tools/assert_js_fork_release_evidence.js
+
+      - name: ctox-rxdb-js bundle provenance
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          npm --prefix src/core/rxdb/js-fork/source ci
+          node --check src/core/rxdb/tools/assert_js_fork_dependency_audit.js
+          node src/core/rxdb/tools/assert_js_fork_dependency_audit.js
+          node src/scripts/vendor-builds/build-ctox-rxdb-js.mjs --artifact-dir runtime/build/ctox-rxdb-js --write-provenance
+
+      - name: Upload ctox-rxdb-js bundle evidence
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctox-rxdb-js-bundle-evidence
+          path: |
+            runtime/build/ctox-rxdb-js/rxdb-bundle.mjs
+            runtime/build/ctox-rxdb-js/rxdb-bundle.provenance.json
+            src/core/rxdb/js-fork/bundle-contract.json
+            src/core/rxdb/js-fork/dependency-audit-baseline.json
+            src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json
+            src/core/rxdb/js-fork/source/package.json
+            src/core/rxdb/js-fork/source/package-lock.json
+          if-no-files-found: error
+
+      - name: Business OS command idempotency
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
+
+      - name: Business OS file sync policy
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_indexes_large_file_lazily_until_materialized
+
+      - name: Business OS file chunk generations
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_records_new_chunk_generation_after_update
+
+      - name: Business OS file chunk retention
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_file_from_path_prunes_stale_chunk_generations
+
+      - name: Business OS file tombstones
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox sync_desktop_files_from_workspace_root_tombstones_renamed_files
 
       - name: Check
         run: cargo check --locked --target ${{ matrix.target }}

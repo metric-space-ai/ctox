@@ -43,6 +43,47 @@ state:
 That is the practical difference: CTOX uses agents, but CTOX itself is the
 daemon that keeps technical work organized over time.
 
+## Business OS Connectivity
+
+Business OS is the browser surface for CTOX. The browser shell can be delivered
+by CTOX itself, by ctox.dev, or by the desktop app. Business data still uses one
+path: RxDB WebRTC replication between browser IndexedDB and the CTOX SQLite
+store. HTTP may deliver static assets or launch context, but it is not the data
+bridge between Business OS and CTOX.
+
+```mermaid
+flowchart LR
+  Browser["Browser Business OS<br/>rxdb-bundle.mjs<br/>IndexedDB"] -- "RxDB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
+  CTOX -. "join room" .-> Signaling
+```
+
+| Setup | How the app reaches the browser | Data path |
+| --- | --- | --- |
+| CTOX with public IP or domain | CTOX serves Business OS and injects session plus pairing config. | Browser and CTOX replicate collections through WebRTC. |
+| CTOX behind a managed `*.ctox.dev` subdomain | ctox.dev routes to the instance or serves the static shell with `ctox_config`. | Browser and CTOX use the same signaling room and RxDB contract. |
+| Local or private CTOX without inbound reachability | The desktop app or ctox.dev serves the shell. CTOX connects outbound to signaling. | Pairing room password brings both peers together, then SQLite-backed RxDB sync carries modules, files, commands, and status. |
+
+The supported modes are intentionally delivery choices, not data-channel
+choices. A reachable host, managed ctox.dev entrypoint, or desktop launcher may
+serve the same Business OS shell, but browser business data still goes through
+the RxDB/WebRTC contract.
+
+For private desktop setups, keep the remote-control/TUI room separate from the
+Business OS sync room. The Business OS values come from:
+
+```sh
+ctox business-os peer status
+```
+
+Use the `ctox-business-os:...` room and its room password for Business OS.
+The older remote TUI room is only for terminal/control sessions.
+
+`ctox_config` and explicit room-password URL parameters are bootstrap-only.
+Business OS normalizes them into the local pairing config and removes the
+sensitive query parameters from the address bar before continuing with
+RxDB/WebRTC sync.
+
 ## Install
 
 ```sh

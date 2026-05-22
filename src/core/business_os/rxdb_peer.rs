@@ -11,7 +11,7 @@ use rxdb::plugins::replication_webrtc::{
 };
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
-use rxdb::types::{HashOutput, JsonSchema, MangoQuery, PrimaryKey, RxJsonSchema};
+use rxdb::types::{HashOutput, MangoQuery, RxJsonSchema};
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
@@ -24,10 +24,12 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
+use uuid::Uuid;
 
 static NATIVE_PEER_STARTED: AtomicBool = AtomicBool::new(false);
 static NATIVE_PEER_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -35,6 +37,15 @@ static NATIVE_PEER: Mutex<Option<Arc<NativePeer>>> = Mutex::new(None);
 static TEMPORARY_RXDB_DATABASE_LOCK: Mutex<()> = Mutex::new(());
 static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
+const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
+const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
+    "ctox-control-plane-v1",
+    "ctox-rxdb-native-v1",
+    "ctox-file-chunks-v1",
+    "ctox-schema-hash-v1",
+    "ctox-peer-session-v1",
+    "ctox-checkpoint-epoch-v1",
+];
 const DESKTOP_FILE_CHUNK_SIZE: usize = 16 * 1024;
 const DESKTOP_FILE_EAGER_LIMIT_BYTES: u64 = 1024 * 1024;
 const DESKTOP_FILE_SCAN_INTERVAL_SECS: u64 = 15;
@@ -42,6 +53,8 @@ const DESKTOP_FILE_SCAN_MAX_DEPTH: usize = 6;
 const DESKTOP_FILE_SCAN_MAX_FILES: usize = 200;
 const DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS: usize = 2;
 const DESKTOP_FILE_CHUNK_CLEANUP_SCAN_LIMIT: u64 = 100_000;
+const DESKTOP_FILE_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
+const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
@@ -54,6 +67,8 @@ type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
 struct NativePeer {
     database: Arc<RxDatabase>,
+    peer_session_id: String,
+    shutdown_tx: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
     _process_lock: File,
     _pools: Vec<WebRtcPool>,
     _command_consumer: tokio::task::JoinHandle<()>,
@@ -63,6 +78,22 @@ struct NativePeer {
     _business_users_sync: tokio::task::JoinHandle<()>,
     _runtime_settings_sync: tokio::task::JoinHandle<()>,
     _module_catalog_sync: tokio::task::JoinHandle<()>,
+}
+
+impl NativePeer {
+    async fn shutdown(&self) {
+        for pool in &self._pools {
+            pool.cancel().await;
+        }
+        self._command_consumer.abort();
+        self._notes_sync.abort();
+        self._file_index_sync.abort();
+        self._channel_state_sync.abort();
+        self._business_users_sync.abort();
+        self._runtime_settings_sync.abort();
+        self._module_catalog_sync.abort();
+        let _ = self.database.close().await;
+    }
 }
 
 struct Sha256HashFunction;
@@ -94,6 +125,9 @@ pub fn native_peer_status(root: &Path) -> Value {
         "in_process_started": in_process_started,
         "in_process_running": in_process_running,
         "process_lock_held": process_lock_held,
+        "peer_session_id": current_peer()
+            .map(|peer| peer.peer_session_id.clone())
+            .unwrap_or_default(),
         "lock_path": native_peer_lock_path(root).display().to_string(),
         "database_path": root.join("runtime/ctox.sqlite3").display().to_string(),
     })
@@ -108,6 +142,29 @@ pub fn ensure_native_peer(root: &Path) -> anyhow::Result<()> {
         config.signaling_room_password.clone(),
     );
     Ok(())
+}
+
+pub fn restart_native_peer(root: &Path) -> anyhow::Result<Value> {
+    if let Some(peer) = current_peer() {
+        if let Ok(mut sender) = peer.shutdown_tx.lock() {
+            if let Some(sender) = sender.take() {
+                let _ = sender.send(());
+            }
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while NATIVE_PEER_STARTED.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        if NATIVE_PEER_STARTED.load(Ordering::SeqCst) {
+            anyhow::bail!("native RxDB peer did not stop before restart deadline");
+        }
+    }
+    ensure_native_peer(root)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while current_peer().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    Ok(native_peer_status(root))
 }
 
 pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
@@ -161,6 +218,8 @@ pub fn spawn_native_peer(
                 NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
                 eprintln!("[business-os] native rxdb peer failed: {err:#}");
             }
+            NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
+            NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
         })
     {
         NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
@@ -462,6 +521,7 @@ async fn run_native_peer(
     let signaling_url =
         signaling_url_with_native_metadata(&signaling_url, &sync_room, &signaling_room_password);
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
+    let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     let database = open_database(root.join("runtime/ctox.sqlite3")).await?;
     let collections = database
         .add_collections(collection_creators())
@@ -472,6 +532,7 @@ async fn run_native_peer(
     for (collection_name, collection) in collections {
         let topic = format!("{sync_room}:{collection_name}");
         let mut options = SyncOptionsWebRTCRs::new(collection, signaling_url.clone(), topic);
+        options.peer_session_id = peer_session_id.clone();
         options.ice_servers = ice_servers.clone();
         if collection_name == "desktop_file_chunks" {
             options.pull_batch_size = 1;
@@ -515,9 +576,12 @@ async fn run_native_peer(
         root.clone(),
         Arc::clone(&database),
     ));
+    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let peer = Arc::new(NativePeer {
         database,
+        peer_session_id,
+        shutdown_tx: Mutex::new(Some(shutdown_tx)),
         _process_lock: process_lock,
         _pools: pools,
         _command_consumer: command_consumer,
@@ -532,8 +596,19 @@ async fn run_native_peer(
         *current = Some(Arc::clone(&peer));
     }
     NATIVE_PEER_RUNNING.store(true, Ordering::SeqCst);
-    std::future::pending::<()>().await;
-    #[allow(unreachable_code)]
+    let _ = shutdown_rx.await;
+    peer.shutdown().await;
+    if let Ok(mut current) = NATIVE_PEER.lock() {
+        if current
+            .as_ref()
+            .map(|candidate| Arc::ptr_eq(candidate, &peer))
+            .unwrap_or(false)
+        {
+            *current = None;
+        }
+    }
+    NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
+    NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
     Ok(())
 }
 
@@ -595,7 +670,14 @@ fn signaling_url_with_native_metadata(
         .filter(|(key, _)| {
             !matches!(
                 key.as_ref(),
-                "client" | "role" | "instance_id" | "cap" | "token" | "token_iat" | "token_exp"
+                "client"
+                    | "role"
+                    | "instance_id"
+                    | "protocol"
+                    | "cap"
+                    | "token"
+                    | "token_iat"
+                    | "token_exp"
             )
         })
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -611,6 +693,7 @@ fn signaling_url_with_native_metadata(
         if let Some(instance_id) = instance_id_from_sync_room(sync_room) {
             query.append_pair("instance_id", instance_id);
         }
+        query.append_pair("protocol", CTOX_RXDB_PROTOCOL);
         if let Some(token) = signaling_token_from_room_password(signaling_room_password) {
             let issued_at = current_unix_seconds();
             query.append_pair("token", &token);
@@ -620,7 +703,9 @@ fn signaling_url_with_native_metadata(
                 &(issued_at + SIGNALING_TOKEN_TTL_SECONDS).to_string(),
             );
         }
-        query.append_pair("cap", "ctox-control-plane-v1");
+        for capability in CTOX_NATIVE_CAPABILITIES {
+            query.append_pair("cap", capability);
+        }
     }
     url.to_string()
 }
@@ -738,10 +823,9 @@ struct DesktopFileIndexCandidate {
 async fn sync_notes_background_loop(root: PathBuf) {
     loop {
         let root_clone = root.clone();
-        let res = tokio::task::spawn_blocking(move || {
-            store::sync_local_markdown_notes(&root_clone)
-        })
-        .await;
+        let res =
+            tokio::task::spawn_blocking(move || store::sync_local_markdown_notes(&root_clone))
+                .await;
         if let Err(err) = res {
             eprintln!("[business-os] native rxdb notes sync join failed: {err:#}");
         } else if let Ok(Err(err)) = res {
@@ -1522,16 +1606,20 @@ async fn upsert_desktop_file_with_parent(
                     .collect()
             };
             for (idx, data) in chunk_payloads.into_iter().enumerate() {
+                let chunk_hash = hex_sha256(data.as_bytes());
                 chunks
                     .incremental_upsert(json!({
                         "id": format!("{file_id}_{generation_id}_{idx}"),
                         "file_id": file_id,
                         "generation_id": generation_id.clone(),
                         "content_hash": content_hash.clone(),
+                        "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
                         "idx": idx as u64,
                         "total": total as u64,
                         "encoding": "base64",
                         "data": data,
+                        "chunk_hash": chunk_hash,
+                        "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
                         "size_bytes": data.len() as u64,
                         "created_at_ms": now,
                     }))
@@ -1583,6 +1671,7 @@ async fn upsert_desktop_file_with_parent(
             "content_ref": file_id,
             "content_state": content_state,
             "content_hash": content_hash,
+            "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
             "content_generation_id": content_generation_id,
             "mtime_ms": modified_at_ms,
             "content_synced_at_ms": content_synced_at_ms,
@@ -1782,7 +1871,7 @@ async fn sync_desktop_file_scan_roots_with_database(
 
     let candidate_count = candidates.len();
     let mut seen_file_ids = HashSet::with_capacity(candidates.len());
-    
+
     // Acquire write lock specifically for the DB write iteration
     let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     for candidate in candidates {
@@ -1959,7 +2048,15 @@ fn should_skip_scan_dir(path: &Path) -> bool {
 fn should_skip_scan_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.starts_with('.') || name.ends_with('~') || name.ends_with(".tmp"))
+        .map(|name| {
+            name.starts_with('.')
+                || name.ends_with('~')
+                || name.ends_with(".tmp")
+                || name.ends_with(".sqlite3")
+                || name.ends_with(".db")
+                || name.contains(".sqlite3-")
+                || name.contains(".db-")
+        })
         .unwrap_or(true)
 }
 
@@ -2205,9 +2302,9 @@ fn collection_creators() -> HashMap<String, RxCollectionCreator> {
         .iter()
         .map(|(name, primary_key)| {
             (
-                (*name).to_string(),
+                name.clone(),
                 RxCollectionCreator {
-                    schema: generic_business_os_schema(primary_key),
+                    schema: business_os_schema(name, primary_key),
                     conflict_handler: None,
                     options: HashMap::new(),
                 },
@@ -2216,89 +2313,58 @@ fn collection_creators() -> HashMap<String, RxCollectionCreator> {
         .collect()
 }
 
-fn generic_business_os_schema(primary_key: &str) -> RxJsonSchema {
-    let mut properties = HashMap::new();
-    properties.insert(
-        primary_key.to_string(),
-        JsonSchema {
-            schema_type: Some("string".to_string()),
-            max_length: Some(1024),
-            ..JsonSchema::default()
-        },
+fn business_os_schema(name: &str, primary_key: &str) -> RxJsonSchema {
+    let schema = business_os_schema_contract()
+        .get(name)
+        .unwrap_or_else(|| panic!("Business OS RxDB schema contract is missing {name}"));
+    let actual_primary_key = schema
+        .get("primaryKey")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert_eq!(
+        actual_primary_key, primary_key,
+        "Business OS RxDB primary key mismatch for {name}"
     );
-    properties.insert(
-        "updated_at_ms".to_string(),
-        JsonSchema {
-            schema_type: Some("number".to_string()),
-            ..JsonSchema::default()
-        },
-    );
+    schema_from_json(schema.clone())
+}
 
-    RxJsonSchema {
-        version: 0,
-        primary_key: PrimaryKey::Simple(primary_key.to_string()),
-        schema_type: "object".to_string(),
-        properties,
-        required: vec![primary_key.to_string()],
-        indexes: vec![vec!["updated_at_ms".to_string()]],
-        encrypted: Vec::new(),
-        internal_indexes: Vec::new(),
-        key_compression: false,
-        attachments: None,
-        additional_properties: true,
-        extra: HashMap::<String, Value>::new(),
+fn schema_from_json(mut value: Value) -> RxJsonSchema {
+    normalize_schema_indexes(&mut value);
+    serde_json::from_value(value).expect("Business OS RxDB schema must match rxdb-rs schema type")
+}
+
+fn normalize_schema_indexes(value: &mut Value) {
+    let Some(indexes) = value.get_mut("indexes").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for index in indexes.iter_mut() {
+        if let Some(field) = index.as_str() {
+            *index = Value::Array(vec![Value::String(field.to_string())]);
+        }
     }
 }
 
-fn business_os_collections() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("business_chats", "id"),
-        ("business_commands", "id"),
-        ("business_module_acl", "id"),
-        ("business_module_catalog", "id"),
-        ("business_module_releases", "id"),
-        ("business_module_reports", "id"),
-        ("business_module_source_files", "id"),
-        ("business_users", "id"),
-        ("channel_pairing_state", "channel"),
-        ("communication_accounts", "account_key"),
-        ("communication_messages", "message_key"),
-        ("communication_threads", "thread_key"),
-        ("ctox_bug_reports", "id"),
-        ("ctox_queue_tasks", "id"),
-        ("ctox_runtime_settings", "id"),
-        ("ctox_runs", "id"),
-        ("desktop_file_chunks", "id"),
-        ("desktop_files", "id"),
-        ("desktop_icons", "id"),
-        ("desktop_layout", "id"),
-        ("desktop_notifications", "id"),
-        ("desktop_windows", "id"),
-        ("document_blob_chunks", "id"),
-        ("document_runbooks", "id"),
-        ("document_versions", "id"),
-        ("documents", "id"),
-        ("knowledge_items", "id"),
-        ("knowledge_runbooks", "id"),
-        ("knowledge_tables", "id"),
-        ("matching_objects", "id"),
-        ("matching_requirements", "id"),
-        ("matching_results", "id"),
-        ("notes", "id"),
-        ("outbound_campaigns", "id"),
-        ("outbound_companies", "id"),
-        ("outbound_pipeline_items", "id"),
-        ("outbound_research_runs", "id"),
-        ("outbound_sources", "id"),
-        ("planning_absences", "id"),
-        ("planning_employees", "id"),
-        ("planning_projects", "id"),
-        ("planning_shifts", "id"),
-        ("planning_time_records", "id"),
-        ("research_notes", "id"),
-        ("research_runs", "id"),
-        ("research_tasks", "id"),
-    ]
+fn business_os_schema_contract() -> &'static HashMap<String, Value> {
+    static CONTRACT: OnceLock<HashMap<String, Value>> = OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        serde_json::from_str(include_str!("business_os_schema_contract.json"))
+            .expect("Business OS RxDB schema contract JSON must be valid")
+    })
+}
+
+fn business_os_collections() -> Vec<(String, String)> {
+    let mut collections = business_os_schema_contract()
+        .iter()
+        .map(|(name, schema)| {
+            let primary_key = schema
+                .get("primaryKey")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("Business OS RxDB schema {name} has no primaryKey"));
+            (name.clone(), primary_key.to_string())
+        })
+        .collect::<Vec<_>>();
+    collections.sort_by(|left, right| left.0.cmp(&right.0));
+    collections
 }
 
 #[cfg(test)]
@@ -2371,9 +2437,45 @@ mod tests {
             .expect("token_exp number");
         assert_eq!(expires_at - issued_at, SIGNALING_TOKEN_TTL_SECONDS);
         assert_eq!(
-            query_pairs.get("cap").map(String::as_str),
-            Some("ctox-control-plane-v1")
+            query_pairs.get("protocol").map(String::as_str),
+            Some(CTOX_RXDB_PROTOCOL)
         );
+        let capabilities = parsed
+            .query_pairs()
+            .filter_map(|(key, value)| (key == "cap").then(|| value.into_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(capabilities, CTOX_NATIVE_CAPABILITIES);
+    }
+
+    #[tokio::test]
+    async fn native_core_schema_hashes_match_browser_contract() {
+        let cases = [
+            (
+                "business_module_catalog",
+                "id",
+                "332763869d93c2bb55fa6b217c36521d1c1f17be4701d8538d686cda89f5cea0",
+            ),
+            (
+                "ctox_runtime_settings",
+                "id",
+                "3958bb6580e9705f3688fcf453a80ec33c486b43ac6988f015ffc16cb5ac918d",
+            ),
+        ];
+        for (collection, primary_key, expected_hash) in cases {
+            let schema = rxdb::rx_schema::create_rx_schema(
+                business_os_schema(collection, primary_key),
+                Arc::new(Sha256HashFunction),
+                true,
+            )
+            .expect("schema creates");
+            let actual_hash = schema.hash().await;
+            if actual_hash != expected_hash {
+                let normalized =
+                    serde_json::to_string(&schema.json_schema).expect("schema serializes");
+                eprintln!("{collection} native schema: {normalized}");
+            }
+            assert_eq!(actual_hash, expected_hash, "schema hash for {collection}");
+        }
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {
@@ -2444,6 +2546,10 @@ mod tests {
             Some("base64")
         );
         assert_eq!(chunk.get("idx").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            chunk.get("chunk_hash_scheme").and_then(Value::as_str),
+            Some(DESKTOP_FILE_CHUNK_HASH_SCHEME)
+        );
     }
 
     #[test]
@@ -2466,6 +2572,105 @@ mod tests {
         assert_eq!(chunk.get("data").and_then(Value::as_str), Some(""));
         assert_eq!(chunk.get("total").and_then(Value::as_u64), Some(1));
         assert_eq!(chunk.get("size_bytes").and_then(Value::as_u64), Some(0));
+        assert_eq!(
+            chunk.get("content_hash_scheme").and_then(Value::as_str),
+            Some(DESKTOP_FILE_CONTENT_HASH_SCHEME)
+        );
+        assert_eq!(
+            chunk.get("chunk_hash_scheme").and_then(Value::as_str),
+            Some(DESKTOP_FILE_CHUNK_HASH_SCHEME)
+        );
+        assert_eq!(
+            chunk.get("content_hash").and_then(Value::as_str),
+            Some(hex_sha256(b"").as_str())
+        );
+        assert_eq!(
+            chunk.get("chunk_hash").and_then(Value::as_str),
+            Some(hex_sha256(b"").as_str())
+        );
+    }
+
+    #[test]
+    fn sync_desktop_file_from_path_reconstructs_and_rejects_invalid_chunk_integrity() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("integrity.txt");
+        let payload = vec![b'z'; DESKTOP_FILE_CHUNK_SIZE + 23];
+        fs::write(&file_path, &payload).expect("write integrity artifact");
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
+
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let file = read_desktop_file_row(&conn, &file_id);
+        let generation_id = file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .expect("active generation id");
+        let content_hash = file
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .expect("content hash");
+        assert_eq!(
+            file.get("content_hash_scheme").and_then(Value::as_str),
+            Some(DESKTOP_FILE_CONTENT_HASH_SCHEME)
+        );
+
+        let chunks = read_desktop_file_chunks(&conn, &file_id, false);
+        let decoded =
+            reconstruct_desktop_file_chunks(&chunks, &file_id, generation_id, content_hash)
+                .expect("valid chunks reconstruct");
+        assert_eq!(decoded, payload);
+
+        let mut missing_chunk = chunks.clone();
+        missing_chunk.pop();
+        assert_chunk_integrity_error(
+            reconstruct_desktop_file_chunks(&missing_chunk, &file_id, generation_id, content_hash),
+            "chunk set is incomplete",
+        );
+
+        let mut stale_generation = chunks.clone();
+        stale_generation[0]["generation_id"] = Value::String("gen_stale".to_string());
+        assert_chunk_integrity_error(
+            reconstruct_desktop_file_chunks(
+                &stale_generation,
+                &file_id,
+                generation_id,
+                content_hash,
+            ),
+            "unexpected chunk generation",
+        );
+
+        let mut wrong_content_hash = chunks.clone();
+        wrong_content_hash[0]["content_hash"] = Value::String("bad-content-hash".to_string());
+        assert_chunk_integrity_error(
+            reconstruct_desktop_file_chunks(
+                &wrong_content_hash,
+                &file_id,
+                generation_id,
+                content_hash,
+            ),
+            "unexpected chunk content hash",
+        );
+
+        let mut wrong_chunk_hash = chunks.clone();
+        wrong_chunk_hash[0]["chunk_hash"] = Value::String("bad-chunk-hash".to_string());
+        assert_chunk_integrity_error(
+            reconstruct_desktop_file_chunks(
+                &wrong_chunk_hash,
+                &file_id,
+                generation_id,
+                content_hash,
+            ),
+            "unexpected chunk hash",
+        );
+
+        let mut wrong_total = chunks.clone();
+        wrong_total[1]["total"] = Value::from(99_u64);
+        assert_chunk_integrity_error(
+            reconstruct_desktop_file_chunks(&wrong_total, &file_id, generation_id, content_hash),
+            "chunk total mismatch",
+        );
     }
 
     #[test]
@@ -3204,6 +3409,124 @@ mod tests {
             )
             .expect("chunks count");
         assert_eq!(chunks, 1);
+    }
+
+    fn read_desktop_file_row(conn: &Connection, file_id: &str) -> Value {
+        let file_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
+                [file_id],
+                |row| row.get(0),
+            )
+            .expect("desktop file row");
+        serde_json::from_str(&file_json).expect("desktop file json")
+    }
+
+    fn read_desktop_file_chunks(
+        conn: &Connection,
+        file_id: &str,
+        include_deleted: bool,
+    ) -> Vec<Value> {
+        let deleted_clause = if include_deleted {
+            ""
+        } else {
+            "AND deleted = 0"
+        };
+        let sql = format!(
+            "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 \
+             WHERE id LIKE ?1 {deleted_clause}"
+        );
+        let mut rows = conn.prepare(&sql).expect("chunk query");
+        rows.query_map(params![format!("{file_id}_%")], |row| {
+            row.get::<_, String>(0)
+        })
+        .expect("chunk rows")
+        .map(|row| serde_json::from_str(&row.expect("chunk row")).expect("chunk json"))
+        .collect()
+    }
+
+    fn reconstruct_desktop_file_chunks(
+        chunks: &[Value],
+        file_id: &str,
+        generation_id: &str,
+        content_hash: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(!chunks.is_empty(), "chunk set is empty");
+        let total = chunks[0]
+            .get("total")
+            .and_then(Value::as_u64)
+            .context("chunk total is missing")? as usize;
+        anyhow::ensure!(chunks.len() == total, "chunk set is incomplete");
+
+        let mut ordered = chunks.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|chunk| chunk.get("idx").and_then(Value::as_u64).unwrap_or(u64::MAX));
+        for (expected_idx, chunk) in ordered.iter().enumerate() {
+            anyhow::ensure!(
+                chunk.get("file_id").and_then(Value::as_str) == Some(file_id),
+                "unexpected chunk file id"
+            );
+            anyhow::ensure!(
+                chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id),
+                "unexpected chunk generation"
+            );
+            anyhow::ensure!(
+                chunk.get("content_hash").and_then(Value::as_str) == Some(content_hash),
+                "unexpected chunk content hash"
+            );
+            anyhow::ensure!(
+                chunk.get("content_hash_scheme").and_then(Value::as_str)
+                    == Some(DESKTOP_FILE_CONTENT_HASH_SCHEME),
+                "unexpected chunk content hash scheme"
+            );
+            anyhow::ensure!(
+                chunk.get("chunk_hash_scheme").and_then(Value::as_str)
+                    == Some(DESKTOP_FILE_CHUNK_HASH_SCHEME),
+                "unexpected chunk hash scheme"
+            );
+            anyhow::ensure!(
+                chunk.get("idx").and_then(Value::as_u64) == Some(expected_idx as u64),
+                "chunk index is not contiguous"
+            );
+            anyhow::ensure!(
+                chunk.get("total").and_then(Value::as_u64) == Some(total as u64),
+                "chunk total mismatch"
+            );
+            let data = chunk
+                .get("data")
+                .and_then(Value::as_str)
+                .context("chunk data is missing")?;
+            anyhow::ensure!(
+                chunk.get("size_bytes").and_then(Value::as_u64) == Some(data.len() as u64),
+                "chunk size does not match encoded data"
+            );
+            anyhow::ensure!(
+                chunk.get("chunk_hash").and_then(Value::as_str)
+                    == Some(hex_sha256(data.as_bytes()).as_str()),
+                "unexpected chunk hash"
+            );
+        }
+
+        let encoded = ordered
+            .iter()
+            .filter_map(|chunk| chunk.get("data").and_then(Value::as_str))
+            .collect::<String>();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .context("decode desktop file chunks")?;
+        anyhow::ensure!(
+            hex_sha256(&decoded) == content_hash,
+            "decoded content hash mismatch"
+        );
+        Ok(decoded)
+    }
+
+    fn assert_chunk_integrity_error(result: anyhow::Result<Vec<u8>>, expected: &str) {
+        let err = result.expect_err("chunk integrity must reject invalid fixture");
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(expected),
+            "expected error containing {expected:?}, got {message:?}"
+        );
     }
 
     #[test]

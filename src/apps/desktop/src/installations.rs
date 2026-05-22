@@ -34,6 +34,12 @@ pub struct RemoteAccessSettings {
     #[serde(default)]
     pub business_password: String,
     #[serde(default)]
+    pub business_os_sync_room: String,
+    #[serde(default)]
+    pub business_os_room_password: String,
+    #[serde(default)]
+    pub business_os_signaling_urls: Vec<String>,
+    #[serde(default)]
     pub host_target: RemoteHostTarget,
     #[serde(default)]
     pub instance_source: RemoteInstanceSource,
@@ -64,6 +70,9 @@ impl Default for RemoteAccessSettings {
             client_name: String::new(),
             business_user: String::new(),
             business_password: String::new(),
+            business_os_sync_room: String::new(),
+            business_os_room_password: String::new(),
+            business_os_signaling_urls: Vec::new(),
             host_target: RemoteHostTarget::Unspecified,
             instance_source: RemoteInstanceSource::Unspecified,
             ssh_host: String::new(),

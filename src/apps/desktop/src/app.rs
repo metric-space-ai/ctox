@@ -6,10 +6,11 @@ use std::{
     process::{Child, Command, Stdio},
     sync::mpsc::{self, Receiver},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context as AnyhowContext, Result};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use eframe::{
     egui::{
         self, Align, Button, Color32, Context, FontFamily, FontId, Frame, Id, Key, Layout,
@@ -18,7 +19,9 @@ use eframe::{
     CreationContext,
 };
 use rfd::FileDialog;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use url::Url;
 use uuid::Uuid;
 
 use crate::{
@@ -61,6 +64,7 @@ const UI_BLUE: Color32 = Color32::from_rgb(30, 136, 229);
 const UI_GREEN: Color32 = Color32::from_rgb(33, 163, 102);
 const UI_AMBER: Color32 = Color32::from_rgb(200, 134, 0);
 const UI_RED: Color32 = Color32::from_rgb(189, 59, 53);
+const BUSINESS_OS_SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
 
 pub struct CtoxDesktopApp {
     registry: InstallationRegistry,
@@ -169,6 +173,9 @@ struct ConnectInstanceDraft {
     endpoint: String,
     room: String,
     room_password: String,
+    business_os_signaling_url: String,
+    business_os_sync_room: String,
+    business_os_room_password: String,
     user: String,
     user_password: String,
     remember_login: bool,
@@ -647,6 +654,9 @@ impl CtoxDesktopApp {
         let endpoint = self.connect_draft.endpoint.trim();
         let room = self.connect_draft.room.trim();
         let room_password = self.connect_draft.room_password.trim();
+        let business_os_signaling_url = self.connect_draft.business_os_signaling_url.trim();
+        let business_os_sync_room = self.connect_draft.business_os_sync_room.trim();
+        let business_os_room_password = self.connect_draft.business_os_room_password.trim();
         let user = self.connect_draft.user.trim();
         let user_password = self.connect_draft.user_password.trim();
         let ssh_host = self.connect_draft.ssh_host.trim();
@@ -689,6 +699,25 @@ impl CtoxDesktopApp {
                         Some("Peer2Peer Verbindung braucht User und User-Passwort.".to_owned());
                     return;
                 }
+                if !business_os_sync_room.is_empty()
+                    && !is_business_os_sync_room(business_os_sync_room)
+                {
+                    self.notice = Some(
+                        "Business OS Sync Room muss mit `ctox-business-os:` beginnen. Nutze `ctox business-os peer status` auf der CTOX-Instanz.".to_owned(),
+                    );
+                    return;
+                }
+                let business_os_pairing_started = !business_os_signaling_url.is_empty()
+                    || !business_os_sync_room.is_empty()
+                    || !business_os_room_password.is_empty();
+                if business_os_pairing_started
+                    && (business_os_sync_room.is_empty() || business_os_room_password.is_empty())
+                {
+                    self.notice = Some(
+                        "Business OS Pairing braucht Sync-Room und Room-Passwort aus `ctox business-os peer status`.".to_owned(),
+                    );
+                    return;
+                }
             }
             ConnectMode::Ssh => {
                 if ssh_host.is_empty() || ssh_user.is_empty() || ssh_password.is_empty() {
@@ -711,6 +740,21 @@ impl CtoxDesktopApp {
                     self.notice = Some(format!("SSH Verbindung fehlgeschlagen: {error}"));
                     return;
                 }
+            }
+        } else {
+            None
+        };
+
+        let ssh_business_os_pairing = if let Some((detected_root, _)) = ssh_probe.as_ref() {
+            match fetch_business_os_peer_status_over_ssh(
+                ssh_host,
+                ssh_user,
+                ssh_password,
+                22,
+                detected_root,
+            ) {
+                Ok(pairing) => Some(Ok(pairing)),
+                Err(error) => Some(Err(error.to_string())),
             }
         } else {
             None
@@ -741,6 +785,9 @@ impl CtoxDesktopApp {
             match self.registry.add_installation_path(path) {
                 Ok(installation) => {
                     let installation_id = installation.id.clone();
+                    let mut local_business_os_pairing: Option<
+                        Result<DesktopBusinessOsPeerStatus, String>,
+                    > = None;
                     if let Some(entry) = self
                         .registry
                         .installations
@@ -756,6 +803,14 @@ impl CtoxDesktopApp {
                             entry.preferred_binary = running_local
                                 .as_ref()
                                 .and_then(|discovery| discovery.binary.clone());
+                        }
+                        local_business_os_pairing =
+                            Some(match fetch_business_os_peer_status_local(entry) {
+                                Ok(pairing) => Ok(pairing),
+                                Err(error) => Err(error.to_string()),
+                            });
+                        if let Some(Ok(pairing)) = local_business_os_pairing.as_ref() {
+                            apply_business_os_pairing(&mut entry.remote, pairing);
                         }
                     }
                     let desktop_state = self
@@ -779,8 +834,12 @@ impl CtoxDesktopApp {
                     self.connect_draft = ConnectInstanceDraft::default();
                     if let Err(error) = self.registry.save() {
                         self.notice = Some(error.to_string());
+                    } else if let Some(Err(error)) = local_business_os_pairing {
+                        self.notice = Some(format!(
+                            "Verbunden. Business OS Pairing konnte noch nicht gelesen werden: {error}"
+                        ));
                     } else {
-                        self.notice = Some("Verbunden.".to_owned());
+                        self.notice = Some("Verbunden. Business OS Pairing geladen.".to_owned());
                     }
                     self.spawn_version_probes_for_all();
                 }
@@ -819,6 +878,12 @@ impl CtoxDesktopApp {
                     entry.remote.signaling_urls = vec![endpoint.to_owned()];
                     entry.remote.room_id = room.to_owned();
                     entry.remote.password = room_password.to_owned();
+                    entry.remote.business_os_signaling_urls =
+                        non_empty_opt(business_os_signaling_url)
+                            .map(|value| vec![value.to_owned()])
+                            .unwrap_or_default();
+                    entry.remote.business_os_sync_room = business_os_sync_room.to_owned();
+                    entry.remote.business_os_room_password = business_os_room_password.to_owned();
                     entry.env.remove("CTOX_BUSINESS_OS_URL");
                 }
                 ConnectMode::Ssh => {
@@ -833,6 +898,9 @@ impl CtoxDesktopApp {
                     entry.remote.password = ssh_password.to_owned();
                     if !version.trim().is_empty() {
                         entry.cached_version = Some(version);
+                    }
+                    if let Some(Ok(pairing)) = ssh_business_os_pairing.as_ref() {
+                        apply_business_os_pairing(&mut entry.remote, pairing);
                     }
                     entry.env.remove("CTOX_BUSINESS_OS_URL");
                 }
@@ -856,7 +924,8 @@ impl CtoxDesktopApp {
         self.active_tab_id = None;
         self.show_add_menu = false;
         self.add_flow = AddInstanceFlow::Choice;
-        if self.connect_draft.mode == ConnectMode::Ssh {
+        let was_ssh_connect = self.connect_draft.mode == ConnectMode::Ssh;
+        if was_ssh_connect {
             self.admin_unlocked_installations
                 .insert(installation_id.clone());
             if let Some(desktop_state) = self.registry.desktop.get_mut(&installation_id) {
@@ -867,6 +936,12 @@ impl CtoxDesktopApp {
         self.connect_draft = ConnectInstanceDraft::default();
         if let Err(error) = self.registry.save() {
             self.notice = Some(error.to_string());
+        } else if let Some(Err(error)) = ssh_business_os_pairing {
+            self.notice = Some(format!(
+                "Verbunden. Business OS Pairing konnte noch nicht gelesen werden: {error}"
+            ));
+        } else if was_ssh_connect {
+            self.notice = Some("Verbunden. Business OS Pairing geladen.".to_owned());
         } else {
             self.notice = Some("Verbunden.".to_owned());
         }
@@ -1255,6 +1330,15 @@ impl CtoxDesktopApp {
             verify_direct_business_os_endpoint(&url)?;
             open_external_url(&url)?;
             self.notice = Some("Business OS".to_owned());
+            return Ok(());
+        }
+
+        if installation.mode == InstallationMode::RemoteWebRtc
+            && installation.remote.host_target == RemoteHostTarget::Unspecified
+        {
+            let url = desktop_web_deploy_business_os_url(&installation)?;
+            open_external_url(&url)?;
+            self.notice = Some("Business OS WebRTC".to_owned());
             return Ok(());
         }
 
@@ -2105,12 +2189,53 @@ impl CtoxDesktopApp {
                                     &mut self.connect_draft.endpoint,
                                     false,
                                 );
-                                add_form_input(ui, "Room", "", &mut self.connect_draft.room, false);
                                 add_form_input(
                                     ui,
-                                    "Room Password",
+                                    "Remote TUI Room",
+                                    "",
+                                    &mut self.connect_draft.room,
+                                    false,
+                                );
+                                add_form_input(
+                                    ui,
+                                    "Remote TUI Password",
                                     "",
                                     &mut self.connect_draft.room_password,
+                                    true,
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("Business OS WebRTC")
+                                        .size(14.0)
+                                        .strong()
+                                        .color(UI_TEXT),
+                                );
+                                ui.label(
+                                    RichText::new(
+                                        "Optional direkt eintragen: Werte aus `ctox business-os peer status`.",
+                                    )
+                                    .size(12.0)
+                                    .color(UI_MUTED),
+                                );
+                                add_form_input(
+                                    ui,
+                                    "Business OS Signaling URL",
+                                    "leer = Peer2Peer Server URL nutzen",
+                                    &mut self.connect_draft.business_os_signaling_url,
+                                    false,
+                                );
+                                add_form_input(
+                                    ui,
+                                    "Business OS Sync Room",
+                                    "ctox-business-os:...",
+                                    &mut self.connect_draft.business_os_sync_room,
+                                    false,
+                                );
+                                add_form_input(
+                                    ui,
+                                    "Business OS Room Password",
+                                    "",
+                                    &mut self.connect_draft.business_os_room_password,
                                     true,
                                 );
                                 add_form_input(ui, "User", "", &mut self.connect_draft.user, false);
@@ -3861,6 +3986,14 @@ impl CtoxDesktopApp {
             .unwrap_or_default();
         let mut room_id = installation.remote.room_id.clone();
         let mut room_password = installation.remote.password.clone();
+        let mut business_os_endpoint = installation
+            .remote
+            .business_os_signaling_urls
+            .first()
+            .cloned()
+            .unwrap_or_default();
+        let mut business_os_sync_room = installation.remote.business_os_sync_room.clone();
+        let mut business_os_room_password = installation.remote.business_os_room_password.clone();
         let mut role_value = desktop_state.role.clone();
         let mut desktop_changed = false;
         let mut installation_changed = false;
@@ -4115,7 +4248,7 @@ impl CtoxDesktopApp {
                                                 installation_changed = true;
                                             }
                                         });
-                                        settings_row(ui, "Room", |ui| {
+                                        settings_row(ui, "Remote TUI Room", |ui| {
                                             if ui
                                                 .add_enabled(
                                                     admin_unlocked,
@@ -4126,11 +4259,61 @@ impl CtoxDesktopApp {
                                                 installation_changed = true;
                                             }
                                         });
-                                        settings_row(ui, "Room Password", |ui| {
+                                        settings_row(ui, "Remote TUI Password", |ui| {
                                             if ui
                                                 .add_enabled(
                                                     admin_unlocked,
                                                     TextEdit::singleline(&mut room_password)
+                                                        .password(true),
+                                                )
+                                                .changed()
+                                            {
+                                                installation_changed = true;
+                                            }
+                                        });
+                                        ui.add_space(10.0);
+                                        ui.label(
+                                            RichText::new("Business OS WebRTC")
+                                                .size(15.0)
+                                                .strong()
+                                                .color(UI_TEXT),
+                                        );
+                                        ui.label(
+                                            RichText::new(
+                                                "Diese Werte kommen aus `ctox business-os peer status` der CTOX-Instanz.",
+                                            )
+                                            .size(13.0)
+                                            .color(UI_MUTED),
+                                        );
+                                        settings_row(ui, "Business OS Signaling", |ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    admin_unlocked,
+                                                    TextEdit::singleline(&mut business_os_endpoint)
+                                                        .hint_text("leer = Peer2Peer Server nutzen"),
+                                                )
+                                                .changed()
+                                            {
+                                                installation_changed = true;
+                                            }
+                                        });
+                                        settings_row(ui, "Business OS Sync Room", |ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    admin_unlocked,
+                                                    TextEdit::singleline(&mut business_os_sync_room)
+                                                        .hint_text("ctox-business-os:..."),
+                                                )
+                                                .changed()
+                                            {
+                                                installation_changed = true;
+                                            }
+                                        });
+                                        settings_row(ui, "Business OS Room Password", |ui| {
+                                            if ui
+                                                .add_enabled(
+                                                    admin_unlocked,
+                                                    TextEdit::singleline(&mut business_os_room_password)
                                                         .password(true),
                                                 )
                                                 .changed()
@@ -4383,6 +4566,14 @@ impl CtoxDesktopApp {
                                 .unwrap_or_default();
                             entry.remote.room_id = room_id.trim().to_owned();
                             entry.remote.password = room_password.trim().to_owned();
+                            entry.remote.business_os_signaling_urls =
+                                non_empty_opt(business_os_endpoint.trim())
+                                    .map(|value| vec![value.to_owned()])
+                                    .unwrap_or_default();
+                            entry.remote.business_os_sync_room =
+                                business_os_sync_room.trim().to_owned();
+                            entry.remote.business_os_room_password =
+                                business_os_room_password.trim().to_owned();
                         }
                     }
                 }
@@ -4604,8 +4795,16 @@ impl CtoxDesktopApp {
                     non_empty_or(self.connect_draft.endpoint.trim(), "Server URL fehlt").to_owned(),
                 ),
                 (
-                    "Room".to_owned(),
+                    "Remote TUI Room".to_owned(),
                     non_empty_or(self.connect_draft.room.trim(), "Room fehlt").to_owned(),
+                ),
+                (
+                    "Business OS".to_owned(),
+                    non_empty_or(
+                        self.connect_draft.business_os_sync_room.trim(),
+                        "Sync-Room spaeter in den Einstellungen setzen",
+                    )
+                    .to_owned(),
                 ),
             ],
         }
@@ -6036,6 +6235,224 @@ fn business_os_url_for_installation(installation: &Installation) -> Option<Strin
         .map(ToOwned::to_owned)
 }
 
+#[derive(Serialize)]
+struct DesktopBusinessOsLaunchConfig {
+    ok: bool,
+    app_hosting: &'static str,
+    sync_mode: &'static str,
+    instance_id: String,
+    peer_id: String,
+    peer_role: &'static str,
+    sync_room: String,
+    signaling_room_password: String,
+    signaling_urls: Vec<String>,
+    ice_servers: Vec<serde_json::Value>,
+    #[serde(rename = "iceServers")]
+    ice_servers_camel: Vec<serde_json::Value>,
+    transport: &'static str,
+    http_bridge_available: bool,
+    ctox_instance_required: bool,
+    native_rxdb_peer_available: bool,
+    native_rxdb_peer_reason: &'static str,
+    session: DesktopBusinessOsSession,
+}
+
+#[derive(Serialize)]
+struct DesktopBusinessOsSession {
+    ok: bool,
+    authenticated: bool,
+    auth_required: bool,
+    source: &'static str,
+    user: DesktopBusinessOsUser,
+}
+
+#[derive(Serialize)]
+struct DesktopBusinessOsUser {
+    id: String,
+    display_name: String,
+    role: String,
+    is_admin: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct DesktopBusinessOsPeerStatus {
+    #[serde(default)]
+    sync_room: String,
+    #[serde(default)]
+    signaling_room_password: String,
+    #[serde(default)]
+    signaling_urls: Vec<String>,
+}
+
+fn desktop_web_deploy_business_os_url(installation: &Installation) -> Result<String> {
+    let remote = &installation.remote;
+    let sync_room = non_empty_or(remote.business_os_sync_room.trim(), remote.room_id.trim());
+    let room_password = non_empty_or(
+        remote.business_os_room_password.trim(),
+        remote.password.trim(),
+    );
+    let base_signaling_urls = if remote.business_os_signaling_urls.is_empty() {
+        &remote.signaling_urls
+    } else {
+        &remote.business_os_signaling_urls
+    };
+    let signaling_urls = base_signaling_urls
+        .iter()
+        .map(|url| url.trim())
+        .filter(|url| !url.is_empty())
+        .map(|url| {
+            with_business_os_signaling_metadata(
+                url,
+                sync_room,
+                room_password,
+                "business-os-desktop",
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let ice_servers = business_os_ice_servers_for_installation(installation)?;
+    anyhow::ensure!(
+        !sync_room.is_empty() && !room_password.is_empty() && !signaling_urls.is_empty(),
+        "Private Business OS braucht Business-OS-Sync-Room, Business-OS-Room-Passwort und Signaling-URL."
+    );
+    anyhow::ensure!(
+        is_business_os_sync_room(sync_room),
+        "Private Business OS braucht den Business-OS Sync-Room aus `ctox business-os peer status`, nicht den TUI-Room."
+    );
+
+    let instance_id =
+        instance_id_from_business_os_room(sync_room).unwrap_or_else(|| installation.id.clone());
+    let user_id = non_empty_or(remote.business_user.trim(), "ctox-desktop").to_owned();
+    let fallback_display_name = installation.display_name();
+    let display_name = non_empty_or(remote.client_name.trim(), &fallback_display_name).to_owned();
+    let role = "admin".to_owned();
+    let config = DesktopBusinessOsLaunchConfig {
+        ok: true,
+        app_hosting: "desktop_web_deploy",
+        sync_mode: "p2p-first",
+        peer_id: format!("ctox-desktop-{}", short_sha256(&installation.id, 10)),
+        peer_role: "browser",
+        sync_room: sync_room.to_owned(),
+        signaling_room_password: room_password.to_owned(),
+        signaling_urls,
+        ice_servers: ice_servers.clone(),
+        ice_servers_camel: ice_servers,
+        instance_id,
+        transport: "webrtc",
+        http_bridge_available: false,
+        ctox_instance_required: true,
+        native_rxdb_peer_available: true,
+        native_rxdb_peer_reason: "",
+        session: DesktopBusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            source: "desktop_web_deploy",
+            user: DesktopBusinessOsUser {
+                id: user_id,
+                display_name,
+                role,
+                is_admin: true,
+            },
+        },
+    };
+    let packed = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&config)?);
+    let mut url = Url::parse(&desktop_business_os_shell_url())?;
+    url.query_pairs_mut().append_pair("ctox_config", &packed);
+    Ok(url.to_string())
+}
+
+fn business_os_ice_servers_for_installation(
+    installation: &Installation,
+) -> Result<Vec<serde_json::Value>> {
+    let raw = installation
+        .env
+        .get("CTOX_BUSINESS_OS_ICE_SERVERS")
+        .or_else(|| installation.env.get("CTOX_WEBRTC_ICE_SERVERS"))
+        .cloned()
+        .or_else(|| std::env::var("CTOX_BUSINESS_OS_ICE_SERVERS").ok())
+        .or_else(|| std::env::var("CTOX_WEBRTC_ICE_SERVERS").ok())
+        .unwrap_or_default();
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let value: serde_json::Value = serde_json::from_str(trimmed)
+        .context("Business OS ICE server config must be a JSON array")?;
+    let servers = value
+        .as_array()
+        .cloned()
+        .context("Business OS ICE server config must be a JSON array")?;
+    Ok(servers)
+}
+
+fn desktop_business_os_shell_url() -> String {
+    std::env::var("CTOX_BUSINESS_OS_SHELL_URL")
+        .ok()
+        .or_else(|| std::env::var("CTOX_DESKTOP_BUSINESS_OS_SHELL_URL").ok())
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| "https://ctox.dev/business-os/".to_owned())
+}
+
+fn apply_business_os_pairing(
+    remote: &mut RemoteAccessSettings,
+    pairing: &DesktopBusinessOsPeerStatus,
+) {
+    remote.business_os_sync_room = pairing.sync_room.clone();
+    remote.business_os_room_password = pairing.signaling_room_password.clone();
+    remote.business_os_signaling_urls = pairing.signaling_urls.clone();
+}
+
+fn with_business_os_signaling_metadata(
+    raw_url: &str,
+    sync_room: &str,
+    room_password: &str,
+    client: &str,
+) -> Result<String> {
+    let mut url = Url::parse(raw_url)?;
+    let now = unix_seconds();
+    let exp = now.saturating_add(BUSINESS_OS_SIGNALING_TOKEN_TTL_SECONDS);
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("role", "browser");
+        pairs.append_pair("client", client);
+        if let Some(instance_id) = instance_id_from_business_os_room(sync_room) {
+            pairs.append_pair("instance_id", &instance_id);
+        }
+        pairs.append_pair("token", &short_sha256(room_password, 32));
+        pairs.append_pair("token_iat", &now.to_string());
+        pairs.append_pair("token_exp", &exp.to_string());
+        pairs.append_pair("cap", "ctox-control-plane-v1");
+    }
+    Ok(url.to_string())
+}
+
+fn instance_id_from_business_os_room(sync_room: &str) -> Option<String> {
+    let mut parts = sync_room.split(':');
+    match (parts.next(), parts.next()) {
+        (Some("ctox-business-os"), Some(instance_id)) if !instance_id.trim().is_empty() => {
+            Some(instance_id.to_owned())
+        }
+        _ => None,
+    }
+}
+
+fn is_business_os_sync_room(sync_room: &str) -> bool {
+    instance_id_from_business_os_room(sync_room).is_some()
+}
+
+fn short_sha256(value: &str, len: usize) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let encoded = URL_SAFE_NO_PAD.encode(digest);
+    encoded.chars().take(len).collect()
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
 const BUSINESS_OS_CANDIDATE_PORTS: &[u16] = &[8765, 9876, 3000];
 
 fn first_reachable_business_os_url(urls: impl IntoIterator<Item = String>) -> Option<String> {
@@ -6609,6 +7026,97 @@ fn verify_ssh_ctox_connection(
     Ok((root, version))
 }
 
+fn fetch_business_os_peer_status_local(
+    installation: &Installation,
+) -> Result<DesktopBusinessOsPeerStatus> {
+    let launch = installation.command_launch_target(&["business-os", "peer", "status"])?;
+    let output = Command::new(&launch.program)
+        .args(&launch.args)
+        .current_dir(&launch.cwd)
+        .envs(&launch.env)
+        .stdin(Stdio::null())
+        .output()
+        .context("Business OS peer status local")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        anyhow::bail!(
+            "ctox business-os peer status failed{}",
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        );
+    }
+    parse_business_os_peer_status(&output.stdout)
+}
+
+fn fetch_business_os_peer_status_over_ssh(
+    host: &str,
+    user: &str,
+    password: &str,
+    port: u16,
+    install_root: &str,
+) -> Result<DesktopBusinessOsPeerStatus> {
+    let target = format!("{}@{}", user.trim(), host.trim());
+    let remote_root = remote_path_expr(install_root);
+    let remote_cmd = format!(
+        "cd {remote_root} && PATH=\"$PWD/bin:$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:$PATH\" ctox business-os peer status"
+    );
+    let output = Command::new("sshpass")
+        .arg("-p")
+        .arg(password.trim())
+        .arg("ssh")
+        .arg("-o")
+        .arg("StrictHostKeyChecking=no")
+        .arg("-o")
+        .arg("ConnectTimeout=8")
+        .arg("-p")
+        .arg(port.to_string())
+        .arg(target)
+        .arg(remote_cmd)
+        .stdin(Stdio::null())
+        .output()
+        .context("Business OS peer status over SSH")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        anyhow::bail!(
+            "ctox business-os peer status failed{}",
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!(": {detail}")
+            }
+        );
+    }
+    parse_business_os_peer_status(&output.stdout)
+}
+
+fn parse_business_os_peer_status(stdout: &[u8]) -> Result<DesktopBusinessOsPeerStatus> {
+    let pairing: DesktopBusinessOsPeerStatus = serde_json::from_slice(stdout)
+        .context("ctox business-os peer status returned invalid JSON")?;
+    anyhow::ensure!(
+        is_business_os_sync_room(&pairing.sync_room),
+        "ctox business-os peer status returned no Business OS sync room"
+    );
+    anyhow::ensure!(
+        !pairing.signaling_room_password.trim().is_empty(),
+        "ctox business-os peer status returned no Business OS room password"
+    );
+    anyhow::ensure!(
+        pairing
+            .signaling_urls
+            .iter()
+            .any(|url| !url.trim().is_empty()),
+        "ctox business-os peer status returned no signaling URL"
+    );
+    Ok(pairing)
+}
+
 fn delete_installation_payload(installation: &Installation) -> Result<String> {
     match installation.mode {
         InstallationMode::Local => {
@@ -6826,5 +7334,146 @@ fn run_upgrade(kind: VersionProbeKind, tx: std::sync::mpsc::Sender<UpgradeEvent>
         Err(err) => {
             let _ = tx.send(UpgradeEvent::Finished(Err(err.to_string())));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    fn remote_webrtc_installation() -> Installation {
+        let mut remote = RemoteAccessSettings::default();
+        remote.host_target = RemoteHostTarget::Unspecified;
+        remote.signaling_urls = vec!["wss://signaling.ctox.dev".to_owned()];
+        remote.room_id = "remote-tui-room".to_owned();
+        remote.password = "remote-tui-password".to_owned();
+        remote.business_os_signaling_urls = vec!["wss://signaling.ctox.dev".to_owned()];
+        remote.business_os_sync_room = "ctox-business-os:inst_test:roomhash".to_owned();
+        remote.business_os_room_password = "business-os-room-password".to_owned();
+        remote.business_user = "admin".to_owned();
+        remote.client_name = "Admin".to_owned();
+        Installation {
+            id: "installation-test".to_owned(),
+            name: "Private CTOX".to_owned(),
+            mode: InstallationMode::RemoteWebRtc,
+            root_path: None,
+            preferred_binary: None,
+            env: BTreeMap::new(),
+            remote,
+            cached_version: None,
+            cached_version_at: None,
+        }
+    }
+
+    #[test]
+    fn desktop_web_deploy_url_packs_business_os_pairing_config() {
+        let installation = remote_webrtc_installation();
+        let launch_url = desktop_web_deploy_business_os_url(&installation).expect("launch url");
+        let parsed = Url::parse(&launch_url).expect("parse launch url");
+        assert_eq!(
+            parsed.as_str().split('?').next(),
+            Some("https://ctox.dev/business-os/")
+        );
+        let packed = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "ctox_config").then(|| value.into_owned()))
+            .expect("ctox_config");
+        let decoded = URL_SAFE_NO_PAD.decode(packed).expect("decode config");
+        let config: Value = serde_json::from_slice(&decoded).expect("json config");
+        assert_eq!(config["sync_room"], "ctox-business-os:inst_test:roomhash");
+        assert_eq!(config["http_bridge_available"], false);
+        assert_eq!(config["transport"], "webrtc");
+        assert_eq!(
+            config["ice_servers"].as_array().expect("ice_servers").len(),
+            0
+        );
+        assert_eq!(
+            config["iceServers"].as_array().expect("iceServers").len(),
+            0
+        );
+        let signaling_url = config["signaling_urls"][0].as_str().expect("signaling url");
+        assert!(signaling_url.contains("role=browser"));
+        assert!(signaling_url.contains("instance_id=inst_test"));
+        assert!(!signaling_url.contains("business-os-room-password"));
+    }
+
+    #[test]
+    fn desktop_web_deploy_url_packs_business_os_ice_servers() {
+        let mut installation = remote_webrtc_installation();
+        installation.env.insert(
+            "CTOX_BUSINESS_OS_ICE_SERVERS".to_owned(),
+            r#"[{"urls":"turn:turn.ctox.dev:3478","username":"user","credential":"secret"}]"#
+                .to_owned(),
+        );
+        let launch_url = desktop_web_deploy_business_os_url(&installation).expect("launch url");
+        let parsed = Url::parse(&launch_url).expect("parse launch url");
+        let packed = parsed
+            .query_pairs()
+            .find_map(|(key, value)| (key == "ctox_config").then(|| value.into_owned()))
+            .expect("ctox_config");
+        let decoded = URL_SAFE_NO_PAD.decode(packed).expect("decode config");
+        let config: Value = serde_json::from_slice(&decoded).expect("json config");
+        assert_eq!(config["ice_servers"][0]["urls"], "turn:turn.ctox.dev:3478");
+        assert_eq!(config["iceServers"][0]["urls"], "turn:turn.ctox.dev:3478");
+        assert_eq!(config["transport"], "webrtc");
+        assert_eq!(config["http_bridge_available"], false);
+    }
+
+    #[test]
+    fn desktop_web_deploy_url_rejects_invalid_business_os_ice_servers() {
+        let mut installation = remote_webrtc_installation();
+        installation.env.insert(
+            "CTOX_BUSINESS_OS_ICE_SERVERS".to_owned(),
+            r#"{"urls":"turn:turn.ctox.dev:3478"}"#.to_owned(),
+        );
+        let error = desktop_web_deploy_business_os_url(&installation)
+            .expect_err("ICE config must be an array");
+        assert!(error.to_string().contains("ICE server config"), "{error}");
+    }
+
+    #[test]
+    fn desktop_web_deploy_url_rejects_remote_tui_room_as_business_os_room() {
+        let mut installation = remote_webrtc_installation();
+        installation.remote.business_os_sync_room.clear();
+        let error = desktop_web_deploy_business_os_url(&installation)
+            .expect_err("remote TUI room must not be accepted");
+        assert!(
+            error.to_string().contains("Business-OS Sync-Room"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn business_os_peer_status_accepts_ctox_sync_room() {
+        let pairing = parse_business_os_peer_status(
+            br#"{
+                "sync_room":"ctox-business-os:inst_test:roomhash",
+                "signaling_room_password":"business-os-room-password",
+                "signaling_urls":["wss://signaling.ctox.dev"]
+            }"#,
+        )
+        .expect("valid peer status");
+
+        assert_eq!(pairing.sync_room, "ctox-business-os:inst_test:roomhash");
+        assert_eq!(pairing.signaling_room_password, "business-os-room-password");
+        assert_eq!(pairing.signaling_urls, vec!["wss://signaling.ctox.dev"]);
+    }
+
+    #[test]
+    fn business_os_peer_status_rejects_remote_tui_room() {
+        let error = parse_business_os_peer_status(
+            br#"{
+                "sync_room":"remote-tui-room",
+                "signaling_room_password":"business-os-room-password",
+                "signaling_urls":["wss://signaling.ctox.dev"]
+            }"#,
+        )
+        .expect_err("remote TUI room must not be accepted");
+
+        assert!(
+            error.to_string().contains("Business OS sync room"),
+            "{error}"
+        );
     }
 }

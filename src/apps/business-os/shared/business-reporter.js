@@ -66,6 +66,12 @@ function startEasterEgg() {
   eggState.lastTime = performance.now();
 
   fabButton.classList.add('bug-crawled-away');
+  const innerSvg = fabButton.querySelector('svg');
+  if (innerSvg) {
+    innerSvg.style.opacity = '0';
+    innerSvg.style.visibility = 'hidden';
+    innerSvg.style.display = 'none';
+  }
 
   bugActor.style.display = 'inline-flex';
   bugActor.style.left = `${eggState.x}px`;
@@ -100,6 +106,12 @@ function stopEasterEggInstantly() {
 
   if (fabButton) {
     fabButton.classList.remove('bug-crawled-away');
+    const innerSvg = fabButton.querySelector('svg');
+    if (innerSvg) {
+      innerSvg.style.opacity = '';
+      innerSvg.style.visibility = '';
+      innerSvg.style.display = '';
+    }
   }
 
   if (bugActor) {
@@ -223,6 +235,12 @@ function animLoop(timestamp) {
 
       if (fabButton) {
         fabButton.classList.remove('bug-crawled-away');
+        const innerSvg = fabButton.querySelector('svg');
+        if (innerSvg) {
+          innerSvg.style.opacity = '';
+          innerSvg.style.visibility = '';
+          innerSvg.style.display = '';
+        }
       }
 
       if (bugActor) {
@@ -1054,9 +1072,9 @@ function installReporterStyles() {
     }
     .ctox-report-fab svg { color: #ef4444; flex: 0 0 auto; }
     .ctox-report-fab.bug-crawled-away svg {
-      opacity: 0;
-      visibility: hidden;
-      transition: opacity 0.3s;
+      opacity: 0 !important;
+      visibility: hidden !important;
+      display: none !important;
     }
     .ctox-bug-actor {
       position: fixed;

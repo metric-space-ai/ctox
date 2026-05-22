@@ -14,5 +14,23 @@
     "shell": "full-workspace",
     "left": "Bug and feature filters and history",
     "center": "Selected report evidence, CTOX change log, and rollback"
+  },
+  "category": "Governance",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "bugs",
+    "features",
+    "reports",
+    "rollback"
+  ],
+  "store": {
+    "summary": "Bug and feature report tracker with CTOX acceptance, evidence, release, and rollback state.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/reports",
+    "installable": false,
+    "editable_after_install": false,
+    "distribution": "system-module"
   }
 }

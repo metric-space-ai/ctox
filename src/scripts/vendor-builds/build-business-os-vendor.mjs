@@ -22,6 +22,7 @@ const esbuild = await loadEsbuild();
 
 await buildDocumentFormat();
 await buildSuperdoc();
+await buildHyperFormula();
 
 async function buildDocumentFormat() {
   const entry = path.join(businessOsRoot, 'modules', 'documents', 'document-format', 'src', 'index.ts');
@@ -66,6 +67,23 @@ async function buildSuperdoc() {
     logLevel: 'info',
     mainFields: ['browser', 'module', 'main'],
     conditions: ['browser', 'import', 'default'],
+  });
+  await report(outfile);
+}
+
+async function buildHyperFormula() {
+  const entry = path.join(vendorRoot, 'hyperformula', 'HyperFormula.js');
+  const outfile = path.join(vendorRoot, 'hyperformula.mjs');
+  await esbuild.build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: false,
+    minify: false,
+    logLevel: 'info',
   });
   await report(outfile);
 }

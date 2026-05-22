@@ -224,6 +224,68 @@ const iconMap = {
       <path d="M10 18l3-3 4 4" stroke="url(#grad-file-viewer)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
     </svg>
   `,
+  shiftflow: (size, stroke) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-shiftflow">
+      <defs>
+        <linearGradient id="grad-shiftflow" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#8b5cf6" />
+          <stop offset="100%" stop-color="#7c3aed" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="4" width="18" height="16" rx="3" fill="url(#grad-shiftflow)" fill-opacity="0.12" stroke="url(#grad-shiftflow)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></rect>
+      <line x1="3" y1="9" x2="21" y2="9" stroke="url(#grad-shiftflow)" stroke-width="${stroke}" stroke-linecap="round"></line>
+      <line x1="9" y1="9" x2="9" y2="20" stroke="url(#grad-shiftflow)" stroke-width="1" stroke-dasharray="2 2" stroke-linecap="round"></line>
+      <line x1="15" y1="9" x2="15" y2="20" stroke="url(#grad-shiftflow)" stroke-width="1" stroke-dasharray="2 2" stroke-linecap="round"></line>
+      <rect x="5" y="12" width="8" height="4" rx="1.5" fill="url(#grad-shiftflow)" fill-opacity="0.3" stroke="url(#grad-shiftflow)" stroke-width="1"></rect>
+      <circle cx="17" cy="15" r="2.5" stroke="url(#grad-shiftflow)" stroke-width="1.2"></circle>
+      <polyline points="17 13.5 17 15 18 15" stroke="url(#grad-shiftflow)" stroke-width="1" stroke-linecap="round"></polyline>
+    </svg>
+  `,
+  spreadsheets: (size, stroke) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-spreadsheets">
+      <defs>
+        <linearGradient id="grad-spreadsheets" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#10b981" />
+          <stop offset="100%" stop-color="#059669" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="3" width="18" height="18" rx="2" fill="url(#grad-spreadsheets)" fill-opacity="0.12" stroke="url(#grad-spreadsheets)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></rect>
+      <line x1="9" y1="3" x2="9" y2="21" stroke="url(#grad-spreadsheets)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
+      <line x1="3" y1="9" x2="21" y2="9" stroke="url(#grad-spreadsheets)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
+      <line x1="3" y1="15" x2="21" y2="15" stroke="url(#grad-spreadsheets)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
+      <path d="M5 17l3-3 4 2 4-4" stroke="url(#grad-spreadsheets)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
+      <circle cx="16" cy="12" r="1.5" fill="#ffffff" stroke="url(#grad-spreadsheets)" stroke-width="1"></circle>
+    </svg>
+  `,
+  creator: (size, stroke) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-creator">
+      <defs>
+        <linearGradient id="grad-creator" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#06b6d4" />
+          <stop offset="100%" stop-color="#0891b2" />
+        </linearGradient>
+      </defs>
+      <polyline points="7 8 3 12 7 16" stroke="url(#grad-creator)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <polyline points="17 8 21 12 17 16" stroke="url(#grad-creator)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <line x1="14" y1="6" x2="10" y2="18" stroke="url(#grad-creator)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
+      <path d="M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z" fill="url(#grad-creator)"></path>
+      <path d="M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z" fill="url(#grad-creator)"></path>
+    </svg>
+  `,
+  'app-store': (size, stroke) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-app-store">
+      <defs>
+        <linearGradient id="grad-app-store" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#f59e0b" />
+          <stop offset="100%" stop-color="#ec4899" />
+        </linearGradient>
+      </defs>
+      <path d="M21 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z" fill="url(#grad-app-store)" fill-opacity="0.12" stroke="url(#grad-app-store)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M16 8A4 4 0 0 0 8 8" stroke="url(#grad-app-store)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></path>
+      <rect x="5" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
+      <rect x="14" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
+    </svg>
+  `,
   fallback: (size, stroke) => `
     <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-fallback">
       <defs>
@@ -238,6 +300,20 @@ const iconMap = {
   `
 };
 
+const registeredIcons = new Map();
+
+export function registerSvgIcon(moduleId, svgString) {
+  if (!moduleId || !svgString) return;
+  let key = String(moduleId).trim().toLowerCase();
+  if (key.startsWith('module:')) {
+    key = key.slice('module:'.length);
+  }
+  if (key.startsWith('desktop-app:')) {
+    key = key.slice('desktop-app:'.length);
+  }
+  registeredIcons.set(key, svgString);
+}
+
 export function getSvgIcon(moduleId, size = 24, strokeWidth = 2) {
   // Normalize module key
   let key = String(moduleId || '').trim().toLowerCase();
@@ -246,6 +322,23 @@ export function getSvgIcon(moduleId, size = 24, strokeWidth = 2) {
   }
   if (key.startsWith('desktop-app:')) {
     key = key.slice('desktop-app:'.length);
+  }
+
+  // Check registered custom icons first
+  if (registeredIcons.has(key)) {
+    const rawSvg = registeredIcons.get(key);
+    if (typeof rawSvg === 'function') {
+      return rawSvg(size, strokeWidth).trim();
+    }
+    let svg = String(rawSvg).trim();
+    if (svg.includes('<svg')) {
+      // replace or inject width/height attributes
+      svg = svg.replace(/width="[^"]*"/, `width="${size}"`);
+      svg = svg.replace(/height="[^"]*"/, `height="${size}"`);
+      // replace stroke-width attributes
+      svg = svg.replace(/stroke-width="[^"]*"/g, `stroke-width="${strokeWidth}"`);
+    }
+    return svg;
   }
 
   const generator = iconMap[key] || iconMap.fallback;

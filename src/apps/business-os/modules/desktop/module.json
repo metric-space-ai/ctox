@@ -16,5 +16,23 @@
     "left": "desktop scopes",
     "center": "desktop surface",
     "right": "agent context"
+  },
+  "category": "Workspace",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "desktop",
+    "files",
+    "launcher",
+    "notifications"
+  ],
+  "store": {
+    "summary": "Business OS workspace shell with file access, app launching, desktop icons, and taskbar state.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/desktop",
+    "installable": false,
+    "editable_after_install": false,
+    "distribution": "system-module"
   }
 }

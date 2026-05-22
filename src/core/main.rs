@@ -124,6 +124,7 @@ INSTALL / UPGRADE
   ctox update rollback           revert to the previous release slot
   ctox update status             dump install layout + manifest + update state
   ctox business-os status        show bundled and native Business OS state
+  ctox business-os peer rotate   rotate the persisted Business OS WebRTC room
   ctox business-os serve [--addr 127.0.0.1:8765]
                                  serve the native no-build Business OS app
   ctox business-os install --target <empty-dir> [--init-git]
@@ -258,12 +259,17 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // Recovery / inspection commands — must work even when the
             // runtime DB is wedged.
             "upgrade" | "update" | "version" | "status" | "doctor" | "mailserver" => return true,
-            "business-os" | "business" if args.get(1).map(String::as_str) == Some("serve") => {
+            "business-os" | "business"
+                if matches!(args.get(1).map(String::as_str), Some("serve" | "status")) =>
+            {
                 return true
             }
             "business-os" | "business"
                 if args.get(1).map(String::as_str) == Some("peer")
-                    && matches!(args.get(2).map(String::as_str), None | Some("status" | "ensure")) =>
+                    && matches!(
+                        args.get(2).map(String::as_str),
+                        None | Some("status" | "ensure")
+                    ) =>
             {
                 return true
             }
@@ -1970,7 +1976,9 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
     let store = ctox_mailserver::store::SqliteStore::new(&db_path);
 
     // Ensure database stalwart tables exist (in case it is the first time running)
-    store.init().context("Failed to initialize mailserver SQLite store")?;
+    store
+        .init()
+        .context("Failed to initialize mailserver SQLite store")?;
 
     match subcmd {
         "add-domain" => {
@@ -1983,17 +1991,24 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
                     key_val.to_string()
                 } else {
                     // Try to read it as a file path
-                    std::fs::read_to_string(key_val)
-                        .with_context(|| format!("Failed to read private key from file path: {}", key_val))?
+                    std::fs::read_to_string(key_val).with_context(|| {
+                        format!("Failed to read private key from file path: {}", key_val)
+                    })?
                 }
             } else {
-                println!("Generiere neuen 2048-bit RSA-Schlüssel für Domain '{}'...", domain);
+                println!(
+                    "Generiere neuen 2048-bit RSA-Schlüssel für Domain '{}'...",
+                    domain
+                );
                 let output = std::process::Command::new("openssl")
                     .args(&["genrsa", "2048"])
                     .output()
                     .context("Failed to run 'openssl genrsa 2048'. Bitte stellen Sie sicher, dass openssl auf dem System installiert ist.")?;
                 if !output.status.success() {
-                    anyhow::bail!("openssl genrsa failed: {}", String::from_utf8_lossy(&output.stderr));
+                    anyhow::bail!(
+                        "openssl genrsa failed: {}",
+                        String::from_utf8_lossy(&output.stderr)
+                    );
                 }
                 String::from_utf8_lossy(&output.stdout).into_owned()
             };
@@ -2014,7 +2029,10 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 
             let output = child.wait_with_output()?;
             if !output.status.success() {
-                anyhow::bail!("openssl rsa public key derivation failed: {}", String::from_utf8_lossy(&output.stderr));
+                anyhow::bail!(
+                    "openssl rsa public key derivation failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
 
             use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -2023,13 +2041,25 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 
             store.add_domain(domain, selector, &private_key_pem)?;
 
-            println!("\n\x1b[32;1m✓ Domain '{}' erfolgreich hinzugefügt.\x1b[0m", domain);
+            println!(
+                "\n\x1b[32;1m✓ Domain '{}' erfolgreich hinzugefügt.\x1b[0m",
+                domain
+            );
             println!("\n================================================================================\n");
-            println!("\x1b[1m=== DNS / Vercel-Konfiguration für {} ===\x1b[0m\n", domain);
+            println!(
+                "\x1b[1m=== DNS / Vercel-Konfiguration für {} ===\x1b[0m\n",
+                domain
+            );
             println!("Für die DKIM-Signierung fügen Sie bitte folgenden TXT-Eintrag bei Ihrem DNS-Provider hinzu:\n");
-            println!("  \x1b[33;1mName/Host:\x1b[0m   {}._domainkey.{}", selector, domain);
+            println!(
+                "  \x1b[33;1mName/Host:\x1b[0m   {}._domainkey.{}",
+                selector, domain
+            );
             println!("  \x1b[33;1mTyp:\x1b[0m         TXT");
-            println!("  \x1b[33;1mWert:\x1b[0m        v=DKIM1; k=rsa; p={}", b64_pubkey);
+            println!(
+                "  \x1b[33;1mWert:\x1b[0m        v=DKIM1; k=rsa; p={}",
+                b64_pubkey
+            );
             println!("\nZusätzlich empfohlene Einträge für den E-Mail-Verkehr:\n");
             println!("  \x1b[36mMX Record:\x1b[0m");
             println!("    Name/Host:  @");
@@ -2046,13 +2076,17 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
             println!("\n  \x1b[36mTXT DMARC Record:\x1b[0m");
             println!("    Name/Host:  _dmarc.{}", domain);
             println!("    Typ:        TXT");
-            println!("    Wert:       v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc@{}", domain);
+            println!(
+                "    Wert:       v=DMARC1; p=quarantine; pct=100; rua=mailto:dmarc@{}",
+                domain
+            );
             println!("\n================================================================================\n");
             Ok(())
         }
         "list-domains" => {
             let conn = rusqlite::Connection::open(&db_path)?;
-            let mut stmt = conn.prepare("SELECT domain_name, dkim_selector FROM stalwart_domains")?;
+            let mut stmt =
+                conn.prepare("SELECT domain_name, dkim_selector FROM stalwart_domains")?;
             let rows = stmt.query_map([], |row| {
                 let name: String = row.get(0)?;
                 let selector: String = row.get(1)?;
@@ -2074,11 +2108,18 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
             Ok(())
         }
         "add-user" => {
-            let email = args.get(1).context("usage: ctox mailserver add-user <email> <password>")?;
-            let password = args.get(2).context("usage: ctox mailserver add-user <email> <password>")?;
+            let email = args
+                .get(1)
+                .context("usage: ctox mailserver add-user <email> <password>")?;
+            let password = args
+                .get(2)
+                .context("usage: ctox mailserver add-user <email> <password>")?;
 
             store.add_user(email, password)?;
-            println!("\n\x1b[32;1m✓ Benutzer '{}' erfolgreich erstellt.\x1b[0m", email);
+            println!(
+                "\n\x1b[32;1m✓ Benutzer '{}' erfolgreich erstellt.\x1b[0m",
+                email
+            );
             println!("Standard-Mailboxen (INBOX, Sent, Trash) wurden automatisch angelegt.\n");
             Ok(())
         }
@@ -2142,7 +2183,9 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
             println!("  Absender:          {}", from);
             println!("  Empfänger:         {}", to);
             println!("  Betreff:           {}", subject);
-            println!("\nDer ctox-Hintergrunddienst wird diese E-Mail in Kürze automatisch versenden.\n");
+            println!(
+                "\nDer ctox-Hintergrunddienst wird diese E-Mail in Kürze automatisch versenden.\n"
+            );
             Ok(())
         }
         _ => {

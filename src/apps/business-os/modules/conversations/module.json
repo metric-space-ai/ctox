@@ -14,5 +14,23 @@
     "left": "Conversation list filtered by channel and search",
     "center": "Selected conversation timeline with channel-aware messages",
     "right": "Contact card, related business records, and CTOX agent attribution"
+  },
+  "category": "Collaboration",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "communication",
+    "audit",
+    "threads",
+    "channels"
+  ],
+  "store": {
+    "summary": "Read-only communication timeline across connected channels with business record cross-links.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/conversations",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

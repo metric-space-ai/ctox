@@ -19,5 +19,23 @@
       "right": "runbook details and generated commands",
       "bottom": "diagnostics, export evidence, and selected document context"
     }
+  },
+  "category": "Knowledge",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "documents",
+    "docx",
+    "markdown",
+    "runbooks"
+  ],
+  "store": {
+    "summary": "DOCX and Markdown document workspace with document versions, blob chunks, and automation runbooks.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/documents",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

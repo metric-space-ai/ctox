@@ -1,3 +1,5 @@
+import { readStoredFileFromChunks } from './file-integrity.js?v=20260522-file-chunk-integrity4';
+
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 
 export async function openUniversalImporter(ctx, config = {}) {
@@ -238,14 +240,13 @@ export async function openUniversalImporter(ctx, config = {}) {
       if (!chunksColl) throw new Error('desktop_file_chunks collection not found');
 
       const docs = await chunksColl.find().exec();
-      const allChunks = docs
-        .map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-        .filter(chunk => chunk.file_id === fileId);
-
-      if (!allChunks.length) throw new Error('Dateiinhalt fehlt');
-
-      allChunks.sort((a, b) => Number(a.idx) - Number(b.idx));
-      const base64 = allChunks.map(c => c.data).join('');
+      const allChunks = docs.map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+      const blob = await readStoredFileFromChunks(allChunks, fileId, fileDoc.mime_type || guessMimeType(fileDoc.name), {
+        contentGenerationId: fileDoc.content_generation_id || '',
+        contentHash: fileDoc.content_hash || '',
+        contentHashScheme: fileDoc.content_hash_scheme || '',
+      });
+      const base64 = await blobToBase64(blob);
 
       stagedFiles.push({
         name: fileDoc.name,
@@ -259,6 +260,13 @@ export async function openUniversalImporter(ctx, config = {}) {
 
       renderStagedFiles();
     } catch (err) {
+      ctx?.reportFileIntegrityError?.(err, {
+        fileId,
+        mimeType: fileDoc.mime_type || guessMimeType(fileDoc.name),
+        contentState: fileDoc.content_state || '',
+        contentGenerationId: fileDoc.content_generation_id || '',
+        contentHashScheme: fileDoc.content_hash_scheme || '',
+      });
       console.error('Failed to load virtual file chunks:', err);
       alert(`Fehler beim Laden der Datei: ${err.message}`);
     } finally {
@@ -864,6 +872,10 @@ function guessMimeType(name) {
   if (/\.tsv$/i.test(name)) return 'text/tab-separated-values';
   if (/\.txt$/i.test(name)) return 'text/plain';
   return 'application/octet-stream';
+}
+
+async function blobToBase64(blob) {
+  return fileToBase64(blob);
 }
 
 function fileToBase64(file) {

@@ -167,12 +167,17 @@ pub fn create_rx_schema(
     hash_function: SharedHashFunction,
     run_pre_create_hooks: bool,
 ) -> RxResult<RxSchema> {
-    let mut as_value = serde_json::to_value(&json_schema).unwrap_or(Value::Null);
+    let original_value = serde_json::to_value(&json_schema).unwrap_or(Value::Null);
+    let mut as_value = original_value.clone();
     if run_pre_create_hooks {
         run_plugin_hooks("preCreateRxSchema", &mut as_value);
     }
     // hooks might have mutated the schema in-place; deserialize back.
-    let mutated: RxJsonSchema = serde_json::from_value(as_value).unwrap_or(json_schema);
+    let mutated: RxJsonSchema = if as_value == original_value {
+        json_schema
+    } else {
+        serde_json::from_value(as_value).unwrap_or(json_schema)
+    };
     let filled = fill_with_default_settings(mutated);
     let normalized = normalize_rx_json_schema(&filled);
     let _ = (OVERWRITABLE.load().deep_freeze_when_dev_mode)(clone_deep(

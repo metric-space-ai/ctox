@@ -21,6 +21,7 @@ pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{
     ClientToServer, PeerId, RoomId, ServerToClient, PEER_ID_LENGTH, SIMPLE_PEER_PING_INTERVAL_MS,
 };
+pub use webrtc::peer_connection::RTCIceServer;
 pub use webrtc_helper::{is_master_in_webrtc_replication, send_message_and_await_answer};
 pub use webrtc_types::{
     PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,

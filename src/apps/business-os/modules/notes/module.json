@@ -12,5 +12,23 @@
     "left": "Folders and note list",
     "center": "Markdown editor and rich text live preview",
     "right": "Command dashboard and formatting shortcuts"
+  },
+  "category": "Productivity",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "notes",
+    "markdown",
+    "local-first",
+    "writing"
+  ],
+  "store": {
+    "summary": "Local-first markdown notes workspace with folder navigation and live preview.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/notes",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

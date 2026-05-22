@@ -19,5 +19,23 @@
       "right": "Runbook configuration, modification, and execution",
       "bottom": "Selected rows, dataframe diagnostics, and CTOX task evidence"
     }
+  },
+  "category": "Knowledge",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "knowledge-base",
+    "runbooks",
+    "dataframes",
+    "skills"
+  ],
+  "store": {
+    "summary": "Knowledge workspace for operational runbooks, markdown assets, skills, and structured data tables.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/knowledge",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

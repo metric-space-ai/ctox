@@ -1,0 +1,34 @@
+{
+  "id": "creator",
+  "title": "App Creator",
+  "description": "Native standalone code-generator & harness workbench to visualize and test custom Business-OS modules.",
+  "entry": "modules/creator/index.html",
+  "collections": [
+    "business_commands"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#0891b2\" /></linearGradient></defs><polyline points=\"7 8 3 12 7 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"17 8 21 12 17 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><line x1=\"14\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z\" fill=\"url(#grad-creator)\"></path><path d=\"M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z\" fill=\"url(#grad-creator)\"></path></svg>",
+    "left": "Harness configuration and parameter inputs",
+    "center": "Architectural simulation flow, visual graphs, and code projections"
+  },
+  "category": "Development",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "creator",
+    "developer-tools",
+    "codegen",
+    "local-first",
+    "architecture"
+  ],
+  "store": {
+    "summary": "Local-first visual workbench to configure and preview new Business-OS modules natively.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/creator",
+    "installable": true,
+    "editable_after_install": false,
+    "distribution": "ctox-repo-module"
+  }
+}

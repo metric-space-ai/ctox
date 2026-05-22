@@ -129,6 +129,25 @@ const researchNoteSchema = {
   additionalProperties: true,
 };
 
+const knowledgeRecordSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    kind: { type: 'string' },
+    title: { type: 'string' },
+    subtitle: { type: 'string' },
+    summary: { type: 'string' },
+    source_path: { type: 'string' },
+    updated_at: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
 export const collections = {
   business_commands: commandSchema,
   business_chats: businessChatSchema,
@@ -136,6 +155,7 @@ export const collections = {
   research_tasks: researchTaskSchema,
   research_runs: researchRunSchema,
   research_notes: researchNoteSchema,
+  knowledge_tables: knowledgeRecordSchema,
 };
 
 export const migrationStrategies = {

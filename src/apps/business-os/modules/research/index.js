@@ -39,6 +39,202 @@ const COMPETITIVE_AI_AXES = Object.freeze([
   { id: 'portfolio_priority', label: 'Portfolio priority' },
 ]);
 
+const RESEARCH_TABLE_CONTRACT = Object.freeze({
+  source_catalog: {
+    title: 'Source Catalog',
+    columns: [
+      'source_id',
+      'title',
+      'source_url',
+      'source_type',
+      'publisher',
+      'discovery_query',
+      'discovered_at',
+      'read_status',
+      'contribution_note',
+      'evidence_relevance',
+      'review_status',
+    ],
+  },
+  evidence_points: {
+    title: 'Evidence Points',
+    columns: [
+      'evidence_id',
+      'source_id',
+      'criterion_id',
+      'fact_label',
+      'fact_value',
+      'fact_unit',
+      'quote',
+      'source_url',
+      'extracted_at',
+      'confidence',
+    ],
+  },
+  evaluation_matrix: {
+    title: 'Evaluation Matrix',
+    columns: [
+      'option_id',
+      'source_id',
+      'title',
+      'criterion_scores_json',
+      'weighted_total',
+      'confidence',
+      'rationale',
+      'updated_at',
+    ],
+  },
+});
+
+const DRONE_SOURCES_METADATA = Object.freeze({
+  'nasa-mtb2': {
+    group: 'nasa',
+    kind: 'Windkanal / Rotorlasten',
+    tags: ['rotorload', 'windtunnel', 'nasa'],
+    fields: 'Kräfte/Momente je Rotor, Betriebspunkt, Testmatrix, Rotorpositionen',
+    use: 'Beste öffentliche Basis für Mehrkomponenten-Rotorlasten; danach Geometrie und Vorzeichen sauber klären.',
+    missing: 'Keine motorinterne Lagerreaktion, keine reale Feldalterung, Lagerabstand muss separat kommen.',
+    links: [
+      ['NASA Artikel', 'https://www.nasa.gov/directorates/armd/aavp/armd-aavp-rvlt/multirotor-test-bed/'],
+      ['Rotorcraft Programmseite', 'https://rotorcraft.arc.nasa.gov/Research/Programs/MTB2.html'],
+      ['Data Report PDF', 'https://rotorcraft.arc.nasa.gov/Publications/files/MTB2_Data_Report_05222025.pdf'],
+      ['ReadMe XLSX', 'https://rotorcraft.arc.nasa.gov/Research/Programs/MTB2ReadMe.xlsx'],
+      ['MTB2 Data XLSX', 'https://rotorcraft.arc.nasa.gov/Research/Programs/mtbii_data_tables_v2.xlsx'],
+      ['Rotor Positions XLSX', 'https://rotorcraft.arc.nasa.gov/Research/Programs/MTB2_Rotor_Positions_public_v1.xlsx']
+    ]
+  },
+  'uiuc': {
+    group: 'bench',
+    kind: 'Windkanal / Propellerkennfeld',
+    tags: ['bench', 'propeller', 'windtunnel'],
+    fields: 'CT, CP, Schub-/Drehmomentkoeffizienten, Advance Ratio, statische Sweeps',
+    use: 'Propellerkennfelder für Schub/Drehmoment bei RPM und Luftgeschwindigkeit.',
+    missing: 'Keine Lagerreaktionen, kaum Querkräfte/Momente am Motor.',
+    links: [
+      ['UIUC Propeller Database', 'https://m-selig.ae.illinois.edu/props/propDB.html'],
+      ['Download Archiv', 'https://m-selig.ae.illinois.edu/props/UIUC-propDB.zip']
+    ]
+  },
+  'apc': {
+    group: 'bench',
+    kind: 'Hersteller / Propellerdaten',
+    tags: ['bench', 'propeller', 'geometry'],
+    fields: 'Performance-Files und Geometriedaten für APC-Propeller',
+    use: 'Schnelle Kennfeldquelle, besonders wenn APC-Propeller im Design vorkommen.',
+    missing: 'Herstellerfokus; keine Mehrrotor-Interaktion und keine Lagerdaten.',
+    links: [
+      ['APC Performance Data', 'https://www.apcprop.com/technical-information/performance-data/'],
+      ['APC Engineering / Geometry', 'https://www.apcprop.com/technical-information/engineering/']
+    ]
+  },
+  'tyto-db': {
+    group: 'bench',
+    kind: 'Prüfstand / Motor-Prop-ESC',
+    tags: ['bench', 'motor', 'esc', 'propeller'],
+    fields: 'Schub, Drehmoment, RPM, Spannung, Strom, elektrische/mechanische Leistung, Effizienz',
+    use: 'Gute Quelle für reale Motor-Propeller-ESC-Kombinationen und Plausibilisierung von Herstellerwerten.',
+    missing: 'Meist stationär; Querlasten und Rotorinteraktion fehlen.',
+    links: [
+      ['Tyto Database', 'https://database.tytorobotics.com/'],
+      ['How-to Artikel', 'https://www.tytorobotics.com/blogs/articles/how-to-use-the-database-for-drone-motors-propellers-and-escs']
+    ]
+  },
+  'mendeley30': {
+    group: 'bench',
+    kind: 'Prüfstand / Zeitreihen',
+    tags: ['bench', 'propeller', 'timeseries'],
+    fields: '100-Hz-Daten, 60 s je Fall, Flight Stand 50, Hover-Bedingung',
+    use: 'Nützlich für größere Multicopter-Propeller und Streuung über kurze Zeitfenster.',
+    missing: 'Hover/Prüfstand, keine reale Flugumgebung.',
+    links: [
+      ['Mendeley Dataset', 'https://data.mendeley.com/datasets/69hhwc3fd3']
+    ]
+  },
+  'kde': {
+    group: 'bench',
+    kind: 'Herstellerdaten',
+    tags: ['bench', 'manufacturer', 'motor'],
+    fields: 'Motor/ESC/Propeller-Performance-Charts je Produktfamilie',
+    use: 'Guter Plausibilitätscheck bei konkreten KDE-Komponenten.',
+    missing: 'Herstellerabhängig, oft tabellarisch ohne Rohdaten und Querlasten.',
+    links: [
+      ['KDE Dynamometer Development', 'https://www.kdedirect.com/pages/dynamometer-development']
+    ]
+  },
+  'px4-review': {
+    group: 'flight',
+    kind: 'Fluglogs',
+    tags: ['flightlog', 'duty', 'px4'],
+    fields: 'ULog, Aktuatorausgänge, Sensorik, Batteriesystem, Flugzustände; je nach Log auch weitere Topics',
+    use: 'Reale Missionsprofile und Zeitanteile; gut zum Aufbau eines Duty Cycles.',
+    missing: 'Lasten müssen über Kennfelder oder Modelle abgeleitet werden.',
+    links: [
+      ['PX4 Flight Review', 'https://review.px4.io/'],
+      ['PX4 Flight Reporting', 'https://docs.px4.io/main/en/getting_started/flight_reporting'],
+      ['PX4 Statistical Log Analysis', 'https://docs.px4.io/main/uk/dev_log/flight_log_analysis_statistical']
+    ]
+  },
+  'ardupilot': {
+    group: 'flight',
+    kind: 'Fluglogs / Vibration',
+    tags: ['flightlog', 'vibration', 'ardupilot'],
+    fields: 'DataFlash Logs, ACC/GYR, hochfrequente IMU-Samples, FFT-Analyse',
+    use: 'Sehr nützlich für Unwucht, Propellerschäden und Resonanzanalyse.',
+    missing: 'Keine direkten Rotorlasten; Motordaten hängen stark von Setup und Parametern ab.',
+    links: [
+      ['DataFlash Logs', 'https://ardupilot.org/copter/docs/common-downloading-and-analyzing-data-logs-in-mission-planner.html'],
+      ['IMU Batch Sampler', 'https://ardupilot.org/copter/docs/common-imu-batchsampling.html'],
+      ['Raw IMU Logging', 'https://ardupilot.org/dev/docs/common-raw-imu-logging.html']
+    ]
+  },
+  'vid': {
+    group: 'flight',
+    kind: 'Realflug / Dynamikdaten',
+    tags: ['flightlog', 'rotorload', 'dynamics'],
+    fields: 'Rotor speed, motor current, control inputs, Ground-Truth 6-axis force, Visual-Inertial-Daten',
+    use: 'Gute Brücke zwischen Fluglog und Dynamikdaten; interessant für externe Kraftschätzung.',
+    missing: 'Spezifische Plattform; Übertragbarkeit auf eigene Motor-/Lagergeometrie prüfen.',
+    links: [
+      ['arXiv Paper', 'https://arxiv.org/abs/2103.11152'],
+      ['VID Dataset GitHub', 'https://github.com/ZJU-FAST-Lab/VID-Dataset'],
+      ['VID Platform GitHub', 'https://github.com/ZJU-FAST-Lab/VID-Flight-Platform']
+    ]
+  },
+  'fault-vib': {
+    group: 'flight',
+    kind: 'Vibration / Fehlerdaten',
+    tags: ['vibration', 'fault', 'bench'],
+    fields: 'Vibrationsdaten aus Ground Tests mit Propellerfehlern und unterschiedlichen Drehzahlen',
+    use: 'Gut für Risikofälle: Unwucht, beschädigte Propeller, Zustandsüberwachung.',
+    missing: 'Nicht als Nennlastquelle verwenden; Ground-Test statt Flug.',
+    links: [
+      ['Mendeley Fault Dataset', 'https://data.mendeley.com/datasets/xkvfjmm8zg']
+    ]
+  },
+  'px4-sih': {
+    group: 'simulation',
+    kind: 'Simulation',
+    tags: ['simulation', 'px4', 'propeller'],
+    fields: 'CT(J), CP(J), Advance Ratio, physikalische Parameter, Aktuatorausgänge',
+    use: 'Lastfälle systematisch erzeugen und mit UIUC/NASA/Prüfstandsdaten kalibrieren.',
+    missing: 'Kein Ersatz für gemessene Rotorlasten; Modellparameter bestimmen Ergebnis.',
+    links: [
+      ['PX4 SIH Simulation', 'https://docs.px4.io/main/en/sim_sih/']
+    ]
+  },
+  'rotors': {
+    group: 'simulation',
+    kind: 'Simulation / MAV',
+    tags: ['simulation', 'gazebo', 'mav'],
+    fields: 'Multirotor-Modelle, IMU/Odometrie/Sensoren, Controller- und World-Dateien',
+    use: 'Nützlich für Architektur- und Reglerlastfälle; Messdaten zur Kalibrierung nötig.',
+    missing: 'Aerodynamische Details und Lagerkräfte nur modellabhängig.',
+    links: [
+      ['RotorS GitHub', 'https://github.com/ethz-asl/rotors_simulator']
+    ]
+  }
+});
+
 const state = {
   ctx: null,
   lang: 'de',
@@ -52,6 +248,10 @@ const state = {
   selectedTaskId: '',
   selectedSourceId: '',
   activeTab: 'sources',
+  sourcesViewMode: 'shards',
+  showDiagram: true,
+  sourceSearchTerm: '',
+  sourceActiveTag: 'all',
   mapMode: 'portfolio',
   sourceRows: [],
   curatedRows: [],
@@ -72,7 +272,7 @@ const state = {
 export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  
+
   // Load dynamic translations
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
   state.t = (key, fallback, ...args) => {
@@ -90,6 +290,7 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   bindEvents(ctx.host);
+  await startResearchCollections();
   const resizeCleanup = setupResearchColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
   wireRealtime();
@@ -104,6 +305,18 @@ export async function mount(ctx) {
     state.contextMenu = null;
     ctx.host.replaceChildren();
   };
+}
+
+async function startResearchCollections() {
+  const collections = [
+    'business_commands',
+    'ctox_queue_tasks',
+    'research_tasks',
+    'research_runs',
+    'research_notes',
+    'knowledge_tables',
+  ];
+  await Promise.allSettled(collections.map((collection) => state.ctx.sync?.startCollection?.(collection)));
 }
 
 async function ensureStyles() {
@@ -157,6 +370,23 @@ function bindEvents(root) {
       openSourceDrawer(target.dataset.sourceId || '');
     } else if (action === 'focus-ctox-run') {
       focusCtoxRun(target.dataset.taskQueueId || '', target.dataset.commandId || '');
+    } else if (action === 'sources-view') {
+      state.sourcesViewMode = target.dataset.viewMode || 'shards';
+      renderCenter();
+    } else if (action === 'toggle-diagram') {
+      state.showDiagram = !state.showDiagram;
+      const centerBody = root.querySelector('.research-center-body');
+      if (centerBody) {
+        if (state.showDiagram) {
+          centerBody.classList.remove('has-hidden-map');
+        } else {
+          centerBody.classList.add('has-hidden-map');
+        }
+      }
+      renderCenter();
+    } else if (action === 'source-tag-filter') {
+      state.sourceActiveTag = target.dataset.tagId || 'all';
+      renderCenter();
     }
   });
   root.addEventListener('change', (event) => {
@@ -165,6 +395,22 @@ function bindEvents(root) {
     updateTaskAxis(axis.dataset.axisSelect, axis.value).catch((error) => {
       console.error('[research] axis update failed', error);
     });
+  });
+  root.addEventListener('input', (event) => {
+    const searchInput = event.target.closest('[data-action="source-search"]');
+    if (searchInput) {
+      const selectionStart = searchInput.selectionStart;
+      const selectionEnd = searchInput.selectionEnd;
+      state.sourceSearchTerm = searchInput.value;
+      renderCenter();
+      const restoredInput = document.getElementById('research-source-search-input');
+      if (restoredInput) {
+        restoredInput.focus();
+        if (selectionStart !== null && selectionEnd !== null) {
+          restoredInput.setSelectionRange(selectionStart, selectionEnd);
+        }
+      }
+    }
   });
   root.addEventListener('wheel', handleMapWheel, { passive: false });
   root.addEventListener('pointerdown', handleMapPointerDown);
@@ -215,10 +461,12 @@ function wireRealtime() {
     raw.ctox_queue_tasks,
     raw.knowledge_tables,
   ].filter(Boolean);
-  for (const collection of collections) {
+  for (const collection of collections.filter((collection) => collection !== raw.knowledge_tables)) {
     const subscription = collection.$?.subscribe?.(() => scheduleLocalRefresh(80));
     if (subscription?.unsubscribe) state.cleanup.push(() => subscription.unsubscribe());
   }
+  const knowledgeSubscription = raw.knowledge_tables?.$?.subscribe?.(() => scheduleKnowledgeRefresh(120));
+  if (knowledgeSubscription?.unsubscribe) state.cleanup.push(() => knowledgeSubscription.unsubscribe());
 }
 
 function scheduleLocalRefresh(delay = 80) {
@@ -226,6 +474,21 @@ function scheduleLocalRefresh(delay = 80) {
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
     await loadLocalState();
+    render();
+  }, delay);
+}
+
+function scheduleKnowledgeRefresh(delay = 120) {
+  if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
+  state.refreshTimer = window.setTimeout(async () => {
+    state.refreshTimer = null;
+    state.knowledgeBases = await loadKnowledgeBases();
+    await loadLocalState();
+    await ensureTasksFromKnowledgeBases();
+    if (!state.selectedTaskId || !state.tasks.some((task) => task.id === state.selectedTaskId)) {
+      state.selectedTaskId = state.tasks[0]?.id || '';
+    }
+    await loadDashboardData();
     render();
   }, delay);
 }
@@ -249,14 +512,16 @@ async function ensureTasksFromKnowledgeBases() {
       criteria: state.t('evidenceNoteText', 'Nutze die vorhandene Knowledge Base als Ausgangspunkt. Score nur belegte Quellen und trenne Rohkandidaten von kuratierten Dashboard-Ergebnissen.'),
       status: 'ready',
       knowledge_domain: base.domain,
-      source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']),
-      curated_table_key: tableKey(base, ['load_data_library', 'curated_sources', 'source_library']),
-      measurements_table_key: tableKey(base, ['measured_load_points', 'measurements', 'evidence_points']),
+      source_catalog_key: tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
+      curated_table_key: tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
+      measurements_table_key: tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
       x_axis: defaultAxisPairForTask(base).x,
       y_axis: defaultAxisPairForTask(base).y,
       payload: {
         seeded_from_knowledge: true,
         scoring_dimensions: inferScoringDimensions({ knowledge_domain: base.domain, title: base.title, prompt: defaultPromptForKnowledgeBase(base), criteria: '' }),
+        scoring_weights: scoringWeights(inferScoringDimensions({ knowledge_domain: base.domain, title: base.title, prompt: defaultPromptForKnowledgeBase(base), criteria: '' })),
+        table_contract: RESEARCH_TABLE_CONTRACT,
         source_table_ids: base.tables.map((table) => table.id),
       },
       created_at_ms: now,
@@ -270,7 +535,7 @@ async function ensureTasksFromKnowledgeBases() {
 }
 
 async function loadKnowledgeBases() {
-  const tables = await findAll(state.ctx?.db?.raw?.knowledge_tables);
+  const tables = await loadKnowledgeTables();
   const byDomain = new Map();
   for (const rawTable of tables) {
     const table = rawTable?.payload && typeof rawTable.payload === 'object' ? rawTable.payload : rawTable;
@@ -291,6 +556,10 @@ async function loadKnowledgeBases() {
   return [...byDomain.values()]
     .map((base) => ({ ...base, tables: base.tables.sort((a, b) => String(a.table_key).localeCompare(String(b.table_key))) }))
     .sort((a, b) => scoreResearchBase(b) - scoreResearchBase(a) || a.title.localeCompare(b.title));
+}
+
+async function loadKnowledgeTables() {
+  return findAll(state.ctx?.db?.raw?.knowledge_tables);
 }
 
 function isResearchKnowledgeBase(base) {
@@ -350,7 +619,10 @@ async function fetchTableRows(tableId) {
     table?.dataframe?.rows,
     table?.payload?.dataframe?.rows,
   );
-  return rows.slice(0, ROW_LIMIT).map((row) => row && typeof row === 'object' ? row : { value: row });
+  if (rows.length) {
+    return rows.slice(0, ROW_LIMIT).map((row) => row && typeof row === 'object' ? row : { value: row });
+  }
+  return [];
 }
 
 function buildSourceModels(task, sourceRows, curatedRows, measurementRows) {
@@ -474,6 +746,10 @@ function scoreDimensions(row, curated, measurements, task, axisDefs = BASE_AXES)
     const direct = numberValue(row[axis.id] ?? curated?.[axis.id]);
     if (direct) scores[axis.id] = normalizeScoreScale(direct);
   }
+  const weightedCriteria = axisDefs
+    .filter((axis) => axis.id !== 'portfolio_priority')
+    .map((axis) => [scores[axis.id] ?? topicFitScore(task, text, row), Number(axis.weight || 1)]);
+  if (weightedCriteria.length) scores.portfolio_priority = clampScore(weightedAverage(weightedCriteria));
   return scores;
 }
 
@@ -556,9 +832,18 @@ function renderCenter() {
   root.innerHTML = `
     <header class="research-pane-header research-center-header">
       <div><span>${escapeHtml(task.knowledge_domain)}</span><h2>${escapeHtml(task.title)}</h2></div>
-      <span class="research-map-hint">Scroll zoom · drag pan</span>
+      <div style="display: flex; align-items: center; gap: 10px;">
+        ${state.showDiagram ? `<span class="research-map-hint" style="margin-right: 6px;">Scroll zoom · drag pan</span>` : ''}
+        <button type="button"
+                class="research-icon-button"
+                data-action="toggle-diagram"
+                title="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
+                aria-pressed="${!state.showDiagram}">
+          ${iconSvg(state.showDiagram ? 'eyeOff' : 'eye')}
+        </button>
+      </div>
     </header>
-    <div class="research-center-body">
+    <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
       <section class="research-map-panel">
         <div class="research-map-head">
           <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
@@ -575,10 +860,30 @@ function renderCenter() {
         </div>
       </section>
       <section class="research-workbench">
-        <div class="research-tabs" role="tablist" aria-label="Research views">
-          ${tabButton('sources', state.t('sources', 'Sources'))}
-          ${tabButton('measurements', state.t('measurements', 'Measurements'))}
-          ${tabButton('knowledge', state.t('knowledge', 'Knowledge'))}
+        <div class="research-tabs-container">
+          <div class="research-tabs" role="tablist" aria-label="Research views">
+            ${tabButton('sources', state.t('sources', 'Sources'))}
+            ${tabButton('measurements', state.t('measurements', 'Measurements'))}
+            ${tabButton('knowledge', state.t('knowledge', 'Knowledge'))}
+          </div>
+          ${state.activeTab === 'sources' ? `
+            <div class="research-view-toggle">
+              <button type="button"
+                      class="research-view-btn${state.sourcesViewMode === 'table' ? ' is-active' : ''}"
+                      data-action="sources-view"
+                      data-view-mode="table"
+                      title="${escapeHtml(state.t('tableView', 'Tabelle'))}">
+                ${iconSvg('table')}
+              </button>
+              <button type="button"
+                      class="research-view-btn${state.sourcesViewMode === 'shards' ? ' is-active' : ''}"
+                      data-action="sources-view"
+                      data-view-mode="shards"
+                      title="${escapeHtml(state.t('shardsView', 'Karten'))}">
+                ${iconSvg('grid')}
+              </button>
+            </div>
+          ` : ''}
         </div>
         <div class="research-table-host">
           ${renderActiveTable(task)}
@@ -784,10 +1089,10 @@ function updateMapTransform() {
 function renderActiveTable(task) {
   if (state.activeTab === 'measurements') return renderMeasurementsTable();
   if (state.activeTab === 'knowledge') return renderKnowledgeTables(task);
-  return renderSourcesTable();
+  return renderSourcesWorkbench();
 }
 
-function renderSourcesTable() {
+function renderSourcesTable(filteredList = state.sourceModels) {
   const task = selectedTask();
   const axisPair = normalizedAxisPair(task);
   const xAxis = axisPair.x;
@@ -796,7 +1101,7 @@ function renderSourcesTable() {
     <table class="research-data-table">
       <thead><tr><th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th><th>${escapeHtml(state.t('classLabel', 'Class'))}</th><th>${escapeHtml(state.t('scoreLabel', 'Score'))}</th><th>${escapeHtml(axisLabel(yAxis, task))}</th><th>${escapeHtml(axisLabel(xAxis, task))}</th><th></th></tr></thead>
       <tbody>
-        ${state.sourceModels.map((source) => `
+        ${filteredList.map((source) => `
           <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}">
             <td><button type="button" data-action="select-source" data-source-id="${escapeHtml(source.id)}"><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.id)}</span></button></td>
             <td>${escapeHtml(source.sourceClass)}</td>
@@ -809,6 +1114,155 @@ function renderSourcesTable() {
       </tbody>
     </table>
   `;
+}
+
+function renderSourcesWorkbench() {
+  const activeTag = state.sourceActiveTag || 'all';
+  const subthemes = [
+    { id: 'all', label: state.t('subthemeAll', 'Alle') },
+    { id: 'rotorload', label: state.t('subthemeRotorload', 'Rotorlast') },
+    { id: 'bench', label: state.t('subthemeBench', 'Prüfstand') },
+    { id: 'flightlog', label: state.t('subthemeFlightlog', 'Fluglog') },
+    { id: 'vibration', label: state.t('subthemeVibration', 'Vibration') },
+    { id: 'simulation', label: state.t('subthemeSimulation', 'Simulation') }
+  ];
+
+  const filtered = filteredSources();
+
+  return `
+    <div class="research-sources-shards-wrapper">
+      <div class="research-sources-shards-toolbar">
+        <input type="text"
+               class="research-sources-shards-search"
+               id="research-source-search-input"
+               data-action="source-search"
+               placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}"
+               value="${escapeHtml(state.sourceSearchTerm || '')}"
+               autocomplete="off" />
+        <div class="research-sources-shards-filters">
+          ${subthemes.map((theme) => `
+            <button type="button"
+                    class="research-tag-pill${activeTag === theme.id ? ' is-active' : ''}"
+                    data-action="source-tag-filter"
+                    data-tag-id="${theme.id}">
+              ${escapeHtml(theme.label)}
+            </button>
+          `).join('')}
+        </div>
+      </div>
+      <div class="research-sources-shards-scroll">
+        ${state.sourcesViewMode === 'shards' ? `
+          <div class="research-sources-shards-grid">
+            ${filtered.map(renderSourceCard).join('') || `
+              <div class="research-empty" style="grid-column: 1 / -1; padding: 40px; text-align: center; color: var(--research-muted);">
+                ${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}
+              </div>
+            `}
+          </div>
+        ` : renderSourcesTable(filtered)}
+      </div>
+    </div>
+  `;
+}
+
+function filteredSources() {
+  const activeTag = state.sourceActiveTag || 'all';
+  const searchTerm = (state.sourceSearchTerm || '').trim().toLowerCase();
+
+  return state.sourceModels.filter((source) => {
+    if (activeTag !== 'all') {
+      const meta = DRONE_SOURCES_METADATA[source.id];
+      const tags = meta?.tags || [];
+      if (!tags.includes(activeTag)) return false;
+    }
+    if (searchTerm) {
+      const titleMatch = (source.title || '').toLowerCase().includes(searchTerm);
+      const idMatch = (source.id || '').toLowerCase().includes(searchTerm);
+      const classMatch = (source.sourceClass || '').toLowerCase().includes(searchTerm);
+
+      const meta = DRONE_SOURCES_METADATA[source.id];
+      const kindMatch = meta?.kind ? meta.kind.toLowerCase().includes(searchTerm) : false;
+      const fieldsMatch = meta?.fields ? meta.fields.toLowerCase().includes(searchTerm) : false;
+      const useMatch = meta?.use ? meta.use.toLowerCase().includes(searchTerm) : false;
+      const missingMatch = meta?.missing ? meta.missing.toLowerCase().includes(searchTerm) : false;
+      const tagMatch = meta?.tags ? meta.tags.some(t => t.toLowerCase().includes(searchTerm)) : false;
+
+      if (!titleMatch && !idMatch && !classMatch && !kindMatch && !fieldsMatch && !useMatch && !missingMatch && !tagMatch) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+function renderSourceCard(source) {
+  const isSelected = source.id === state.selectedSourceId;
+  const meta = DRONE_SOURCES_METADATA[source.id];
+
+  const kind = meta?.kind || source.sourceClass || 'Quelle';
+  const tags = meta?.tags || [source.sourceClass.toLowerCase()];
+  const fields = meta?.fields || source.summary || state.t('noSummaryAvailable', 'Keine Zusammenfassung.');
+  const use = meta?.use || 'Verfügbare quantitative Datenpunkte für das Dashboard.';
+  const missing = meta?.missing || 'Nicht separat aufbereitete Lückenanalyse.';
+
+  return `
+    <div class="research-source-card${isSelected ? ' is-selected' : ''}"
+         data-action="select-source"
+         data-source-id="${escapeHtml(source.id)}">
+      <div class="research-source-card-top">
+        <div>
+          <h3 class="research-source-card-title">${escapeHtml(source.title)}</h3>
+          <div class="research-source-card-subtitle">${escapeHtml(kind)}</div>
+        </div>
+        <span class="research-source-card-badge ${source.grade.toLowerCase()}">
+          ${escapeHtml(gradeFullText(source.grade))}
+        </span>
+      </div>
+      <div class="research-source-card-chips">
+        ${tags.map(tag => `<span class="research-source-card-chip">${escapeHtml(tag)}</span>`).join('')}
+      </div>
+      <div class="research-source-card-kv">
+        <span class="k">Daten</span>
+        <span class="v">${escapeHtml(fields)}</span>
+        <span class="k">Nutzen</span>
+        <span class="v">${escapeHtml(use)}</span>
+        <span class="k">Lücke</span>
+        <span class="v">${escapeHtml(missing)}</span>
+      </div>
+      ${meta?.links && meta.links.length > 0 ? `
+        <div class="research-source-card-actions">
+          ${meta.links.map((link, idx) => `
+            <a href="${escapeHtml(link[1])}"
+               class="research-source-card-btn${idx === 0 ? ' primary' : ''}"
+               target="_blank"
+               rel="noreferrer"
+               onclick="event.stopPropagation();">
+              ${escapeHtml(link[0])}
+            </a>
+          `).join('')}
+        </div>
+      ` : source.url ? `
+        <div class="research-source-card-actions">
+          <a href="${escapeHtml(source.url)}"
+             class="research-source-card-btn primary"
+             target="_blank"
+             rel="noreferrer"
+             onclick="event.stopPropagation();">
+            ${escapeHtml(state.t('openLabel', 'Öffnen'))}
+          </a>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function gradeFullText(grade) {
+  const g = String(grade || '').toUpperCase();
+  if (g === 'A') return 'A · Ausgezeichnet';
+  if (g === 'B') return 'B · Gut';
+  if (g === 'C') return 'C · Ergänzend';
+  if (g === 'D') return 'D · Risiko';
+  return g;
 }
 
 function renderMeasurementsTable() {
@@ -986,7 +1440,7 @@ function openTaskDialog(editTask = null) {
       <form data-research-task-form>
         <input type="hidden" name="task_id" value="${escapeHtml(editTask?.id || '')}">
         <label><span>${escapeHtml(state.t('titel', 'Titel'))}</span><input name="title" placeholder="${escapeHtml(state.t('neueResearch', 'Neue Research'))}" value="${escapeHtml(editTask?.title || '')}" required></label>
-        <label><span>Knowledge Base</span><select name="domain" ${isEdit ? 'disabled' : ''}>${state.knowledgeBases.map((base) => `<option value="${escapeHtml(base.domain)}" ${base.domain === selectedDomain ? 'selected' : ''}>${escapeHtml(base.title)} · ${escapeHtml(base.domain)}</option>`).join('')}</select></label>
+        <label><span>Knowledge Domain</span><input name="domain" list="research-knowledge-domains" placeholder="research/vendor-ai-agents" value="${escapeHtml(selectedDomain)}" ${isEdit ? 'readonly' : ''} required><datalist id="research-knowledge-domains">${state.knowledgeBases.map((base) => `<option value="${escapeHtml(base.domain)}">${escapeHtml(base.title)}</option>`).join('')}</datalist></label>
         <label><span>${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}">${escapeHtml(editTask?.prompt || '')}</textarea></label>
         <label><span>${escapeHtml(state.t('kriterien', 'Kriterien'))}</span><textarea name="criteria" placeholder="${escapeHtml(state.t('criteriaPlaceholder', 'Scope, Ausschlüsse, Scoring-Hinweise'))}">${escapeHtml(editTask?.criteria || '')}</textarea></label>
         <label><span>${escapeHtml(state.t('scoringDimensions', 'Scoring Dimensionen'))}</span><textarea name="scoring_dimensions" placeholder="${escapeHtml(state.t('scoringPlaceholder', 'overlap: Overlap\nbuyer_clarity: Buyer clarity'))}">${escapeHtml(dimensionsText)}</textarea></label>
@@ -1020,10 +1474,12 @@ function closeTaskDialog() {
 async function createTaskFromForm(form) {
   const taskId = String(form.get('task_id') || '').trim();
   const current = taskId ? state.tasks.find((item) => item.id === taskId) : null;
-  const domain = String(form.get('domain') || current?.knowledge_domain || '').trim();
+  const rawDomain = String(form.get('domain') || current?.knowledge_domain || '').trim();
+  const rawTitle = String(form.get('title') || '').trim();
+  const domain = normalizeResearchDomain(rawDomain || rawTitle || current?.title || 'research');
   const base = state.knowledgeBases.find((item) => item.domain === domain);
   const now = Date.now();
-  const title = String(form.get('title') || base?.title || domain || 'Research').trim();
+  const title = String(rawTitle || base?.title || titleFromDomain(domain) || 'Research').trim();
   const prompt = String(form.get('prompt') || defaultPromptForKnowledgeBase(base)).trim();
   const criteria = String(form.get('criteria') || '').trim();
   const scoringDimensions = parseDimensionLines(String(form.get('scoring_dimensions') || ''))
@@ -1037,15 +1493,17 @@ async function createTaskFromForm(form) {
     criteria,
     status: current?.status || 'ready',
     knowledge_domain: domain,
-    source_catalog_key: current?.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']),
-    curated_table_key: current?.curated_table_key || tableKey(base, ['load_data_library', 'curated_sources', 'source_library']),
-    measurements_table_key: current?.measurements_table_key || tableKey(base, ['measured_load_points', 'measurements', 'evidence_points']),
+    source_catalog_key: current?.source_catalog_key || tableKey(base, ['source_catalog', 'sources', 'curated_sources']) || 'source_catalog',
+    curated_table_key: current?.curated_table_key || tableKey(base, ['evaluation_matrix', 'load_data_library', 'curated_sources', 'source_library']) || 'evaluation_matrix',
+    measurements_table_key: current?.measurements_table_key || tableKey(base, ['evidence_points', 'measured_load_points', 'measurements']) || 'evidence_points',
     x_axis: safeAxis(current?.x_axis || axisPair.x, { payload: { scoring_dimensions: scoringDimensions } }, axisPair.x),
     y_axis: safeAxis(current?.y_axis || axisPair.y, { payload: { scoring_dimensions: scoringDimensions } }, axisPair.y),
     payload: {
       ...(current?.payload || {}),
       user_created: current?.payload?.user_created ?? true,
       scoring_dimensions: scoringDimensions,
+      scoring_weights: scoringWeights(scoringDimensions),
+      table_contract: RESEARCH_TABLE_CONTRACT,
     },
     created_at_ms: current?.created_at_ms || now,
     updated_at_ms: now,
@@ -1062,23 +1520,28 @@ async function runSelectedResearch() {
   if (!task) return;
   const base = knowledgeBaseForTask(task);
   const now = Date.now();
+  const scoringDimensions = scoringDimensionsForTask(task).filter((axis) => axis.id !== 'portfolio_priority');
+  const tableContract = task.payload?.table_contract || RESEARCH_TABLE_CONTRACT;
+  const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
+  const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
   const instruction = [
     `Fuehre systematic-research fuer das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
-    task.curated_table_key ? `Curated table: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key}` : null,
-    task.measurements_table_key ? `Measurements table: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.measurements_table_key}` : null,
+    `Evaluation matrix: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.curated_table_key || 'evaluation_matrix'}`,
+    `Evidence points: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.measurements_table_key || 'evidence_points'}`,
+    missingTables.length ? `Missing tables to create first: ${missingTables.join(', ')}` : 'Required Knowledge tables already exist in the catalog.',
     '',
     'Auftrag:',
     task.prompt || defaultPromptForKnowledgeBase(base),
     '',
     task.criteria ? `Kriterien:\n${task.criteria}` : null,
     '',
-    `Scoring-Modell:\n${scoringDimensionsForTask(task).map((axis) => `- ${axis.id}: ${axis.label}`).join('\n')}`,
+    `Scoring-Modell:\n${scoringDimensions.map((axis) => `- ${axis.id}: ${axis.label}; weight=${axis.weight || scoringWeights(scoringDimensions)[axis.id] || 1}`).join('\n')}`,
     `Portfolio axes: x=${normalizedAxisPair(task).x}, y=${normalizedAxisPair(task).y}`,
     '',
-    'Erweitere die Knowledge Base, schreibe Rohfunde zuerst in source_catalog, score nur gelesene/kurierte Quellen, und aktualisiere die Dashboard-Projektion erst nach Agent Review.',
+    'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen.',
   ].filter(Boolean).join('\n');
   const result = await state.ctx.commandBus.dispatch({
     module: 'research',
@@ -1089,11 +1552,41 @@ async function runSelectedResearch() {
       instruction,
       prompt: instruction,
       priority: 'high',
+      required_skills: ['systematic-research'],
+      research_mode: 'library+living_dashboard',
       thread_key: `business-os/research/${task.id}`,
       knowledge_domain: task.knowledge_domain,
       source_catalog_key: task.source_catalog_key,
       curated_table_key: task.curated_table_key,
       measurements_table_key: task.measurements_table_key,
+      web_stack_plan: {
+        first_command: `ctox web deep-research --query ${JSON.stringify(task.prompt || task.title)} --depth standard --max-sources 24`,
+        followups: [
+          'ctox web scholarly search --query <refined topic> --with-oa-pdf --only-doi',
+          'ctox web read --url <candidate-url> --query <research focus>',
+          'ctox web search only as fallback for non-technical/vendor lookup gaps',
+        ],
+      },
+      knowledge_contract: {
+        domain: task.knowledge_domain,
+        tables: tableContract,
+        create_missing_tables: missingTables,
+        provenance_required: true,
+      },
+      scoring_contract: {
+        dimensions: scoringDimensions,
+        weights: scoringWeights(scoringDimensions),
+        total_field: 'weighted_total',
+        rule: 'Only score facts supported by a read source or durable Knowledge row; raw discovery candidates stay unscored.',
+      },
+      writeback_contract: {
+        collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
+        dashboard_tables: {
+          source_catalog: task.source_catalog_key || 'source_catalog',
+          evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
+          evidence_points: task.measurements_table_key || 'evidence_points',
+        },
+      },
     },
     client_context: {
       module: 'research',
@@ -1745,7 +2238,12 @@ function dedupeDimensions(dimensions) {
     const id = normalizeAxisId(dimension?.id || dimension?.key || dimension?.name);
     if (!id || seen.has(id)) continue;
     seen.add(id);
-    result.push({ id, label: String(dimension?.label || dimension?.title || groupLabel(id)).trim() || groupLabel(id) });
+    const weight = Number(dimension?.weight);
+    result.push({
+      id,
+      label: String(dimension?.label || dimension?.title || groupLabel(id)).trim() || groupLabel(id),
+      ...(Number.isFinite(weight) && weight > 0 ? { weight } : {}),
+    });
   }
   return result.length ? result : [...BASE_AXES];
 }
@@ -1757,8 +2255,8 @@ function parseDimensionLines(raw) {
     .filter(Boolean)
     .map((line) => {
       const match = line.match(/^([^:=-]+)[:=-]\s*(.+)$/);
-      if (match) return { id: normalizeAxisId(match[1]), label: match[2].trim() };
-      return { id: normalizeAxisId(line), label: groupLabel(line) };
+      if (match) return parseDimensionDefinition(match[1], match[2]);
+      return parseDimensionDefinition(line, groupLabel(line));
     })
     .filter((dimension) => dimension.id);
   return dimensions.length ? dedupeDimensions(dimensions) : null;
@@ -1767,8 +2265,30 @@ function parseDimensionLines(raw) {
 function formatDimensionLines(dimensions) {
   return dedupeDimensions(dimensions)
     .filter((dimension) => dimension.id !== 'portfolio_priority')
-    .map((dimension) => `${dimension.id}: ${dimension.label}`)
+    .map((dimension) => `${dimension.id}: ${dimension.label}${dimension.weight ? ` | ${dimension.weight}` : ''}`)
     .join('\n');
+}
+
+function parseDimensionDefinition(rawId, rawLabel) {
+  const labelText = String(rawLabel || '').trim();
+  const weightMatch = labelText.match(/^(.*?)\s*(?:\|\s*weight\s*=?|\|\s*|\((?:weight\s*=?\s*)?)(0?\.\d+|[1-9]\d*(?:\.\d+)?)\)?\s*$/i);
+  const label = (weightMatch?.[1] || labelText).trim();
+  const weight = weightMatch ? Number(weightMatch[2]) : NaN;
+  return {
+    id: normalizeAxisId(rawId),
+    label: label || groupLabel(rawId),
+    ...(Number.isFinite(weight) && weight > 0 ? { weight } : {}),
+  };
+}
+
+function scoringWeights(dimensions) {
+  const axes = dedupeDimensions(dimensions).filter((axis) => axis.id !== 'portfolio_priority');
+  const explicit = axes.some((axis) => Number(axis.weight) > 0);
+  if (explicit) {
+    return Object.fromEntries(axes.map((axis) => [axis.id, Number(axis.weight || 1)]));
+  }
+  const weight = axes.length ? Number((1 / axes.length).toFixed(3)) : 1;
+  return Object.fromEntries(axes.map((axis) => [axis.id, weight]));
 }
 
 function normalizeAxisId(value) {
@@ -1831,6 +2351,10 @@ function iconSvg(name) {
   const paths = {
     refresh: '<path d="M21 12a9 9 0 0 1-15 6.7L3 16m0 0v5h5M3 12a9 9 0 0 1 15-6.7L21 8m0 0V3h-5"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    table: '<rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="10" y1="3" x2="10" y2="21"/>',
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    eyeOff: '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
   };
   return `<svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">${paths[name] || ''}</svg>`;
 }
@@ -1938,6 +2462,13 @@ function titleFromDomain(domain) {
   return String(domain || 'Knowledge')
     .replace(/[_/-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function normalizeResearchDomain(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'research/general';
+  if (raw.includes('/')) return raw.replace(/^\/+|\/+$/g, '').replace(/\s+/g, '-').toLowerCase();
+  return `research/${slugId(raw).replace(/_/g, '-')}`;
 }
 
 function slugId(value) {

@@ -9,15 +9,60 @@ This is the only supported Business OS data path.
 - Local database: IndexedDB
 - Transport: RxDB WebRTC replication with `simple-peer`
 - Topic per collection: `{sync_room}:{collection}`
+- Room derivation: `ctox-business-os:{instance_id}:{sha256(room_password).base64url[0..22]}`
+- Protocol marker: `ctox-rxdb-protocol-v1`
+- Browser signaling metadata: `client=ctox-business-os-browser`, `role=browser`,
+  `instance_id`, `protocol=ctox-rxdb-protocol-v1`, and repeated `cap` values
+  including `ctox-rxdb-browser-v1` and `ctox-file-chunks-v1`.
+- Native signaling metadata: `client=ctox-business-os-native`,
+  `role=ctox_instance`, `instance_id`, `protocol=ctox-rxdb-protocol-v1`, a
+  short-lived room-password-derived token, and repeated `cap` values including
+  `ctox-rxdb-native-v1` and `ctox-file-chunks-v1`.
+- Control-plane-capable browser and native peers both include the same
+  room-password-derived token plus bounded `token_iat`/`token_exp` values. The
+  Signaling server rejects missing or mismatched `ctox-rxdb-protocol-v1`
+  metadata before peers can join Business OS rooms.
+- ICE configuration: optional `ice_servers` / `iceServers` from the launch
+  config, passed to simple-peer as `config.iceServers`
 
 The browser writes user actions and module commands into local RxDB collections.
 It does not call HTTP command, pull, push, status, session, module metadata, or
-knowledge data bridges. The served app shell receives its launch-only session
-and sync configuration through `window.CTOX_BUSINESS_OS_SESSION` and
-`window.CTOX_BUSINESS_OS_CONFIG` injected into `index.html`; after that,
-collection sync either starts WebRTC replication or stays explicitly
-`local-only` until the native peer is ready. There is no browser-side
-`/rxdb/pull` or `/rxdb/push` transport fallback.
+knowledge data bridges. In local CTOX-hosted development the app shell can still
+receive its launch-only session and sync configuration through
+`window.CTOX_BUSINESS_OS_SESSION` and `window.CTOX_BUSINESS_OS_CONFIG` injected
+into `index.html`. In web-deploy mode, the same WebRTC contract is read from a
+paired browser config instead: URL parameter `ctox_config` (base64url JSON),
+explicit `sync_room` + `signaling_url` URL parameters, `instance_id` +
+`room_password` + `signaling_url`, or the persisted
+`ctox.businessOs.pairingConfig` localStorage entry. Collection sync starts
+WebRTC replication whenever the contract has `transport: "webrtc"`, a
+resolved `sync_room`, and at least one signaling URL. The one-time
+`native_rxdb_peer_available` status bit is diagnostic only and does not disable
+WebRTC startup in the browser. There is no browser-side `/rxdb/pull` or
+`/rxdb/push` transport fallback.
+
+When a pairing config arrives through URL parameters, Business OS persists the
+normalized config and immediately removes `ctox_config`, room password, and
+signaling parameters from the address bar with `history.replaceState`. This
+keeps the launch URL shareable only for the initial handoff and avoids leaving
+the room password in browser history after the WebRTC/RxDB contract is loaded.
+
+The supported deployment shapes share this same data plane:
+
+- CTOX on a VPS with its own public IP/domain can host the static shell and
+  inject the launch context directly.
+- CTOX behind a managed `*.ctox.dev` subdomain uses that subdomain for hosting
+  and launch context, but the collections still replicate through WebRTC.
+- CTOX behind NAT or on a local machine does not need an inbound IP path. The
+  browser receives a pairing config with signaling URL, instance id, and the
+  room password; both peers derive the same non-guessable room and connect
+  outbound to signaling.
+
+If CTOX itself cannot host the browser shell, `ctox.dev` or the desktop app may
+serve the same static Business OS assets and pass `ctox_config` into the URL.
+That bootstrap is only app delivery and pairing context. Module catalog,
+runtime status, commands, files, and channel data still come through
+RxDB/WebRTC collections.
 
 ## CTOX Peer
 
@@ -25,10 +70,20 @@ collection sync either starts WebRTC replication or stays explicitly
 - Local database: `runtime/ctox.sqlite3`
 - Transport: RxDB WebRTC replication with `webrtc-rs`
 - Signaling: same signaling URLs as browser peers
+- ICE configuration: `CTOX_BUSINESS_OS_ICE_SERVERS` as JSON or comma-separated
+  URLs, falling back to `stun:stun.l.google.com:19302`
 
 The Rust port is complete. The CTOX daemon starts the native peer with
-`RxStorageSqlite` and registers the Business OS collections before the browser
-can replicate over WebRTC.
+`RxStorageSqlite` and registers the Business OS collections independently of
+the local Business OS webserver. `ctox business-os peer start` can run the same
+peer as a foreground process for web-deploy setups where CTOX is not reachable
+over IP and only connects outbound to signaling.
+
+CTOX persists the Business OS WebRTC room password in the encrypted secret
+store under `business-os/webrtc_room_password` unless
+`CTOX_BUSINESS_OS_ROOM_PASSWORD` is explicitly supplied. The actual signaling
+room includes only a hash-derived room id, so the raw password is a pairing
+secret, not a room name.
 
 While the peer is still starting, `/api/business-os/sync/config` reports:
 
@@ -121,6 +176,15 @@ native RxDB SQLite store, not sent through a separate HTTP file API.
 
 - File index entries replicate through `desktop_files`.
 - File payloads replicate through `desktop_file_chunks`.
+- Each eager payload generation has a stable `generation_id`; the active
+  generation is stored as `desktop_files.content_generation_id`. Browser
+  viewers must read only that generation when present, so stale chunks from a
+  previous write cannot mix with the current file contents. A generation is
+  valid only when every chunk index from `0` through `total - 1` is present.
+  CTOX keeps the active generation plus a bounded recent history. Older chunk
+  generations are redacted and tombstoned through RxDB after the file row points
+  at the new active generation, so delete events can replicate before later
+  storage cleanup removes tombstones.
 - CTOX-managed file rows keep the physical path in `local_path`/`path` for
   Rust-side materialization and expose the Business OS display path in
   `virtual_path`.
@@ -146,20 +210,36 @@ native RxDB SQLite store, not sent through a separate HTTP file API.
 The browser then sees CTOX-managed files through normal RxDB replication and
 renders them as Business OS files.
 
+## Regression Guard
+
+`src/apps/business-os/scripts/assert-rxdb-only.mjs` is the automated guard for
+this contract. It scans JavaScript, HTML, and JSON files in the app shell,
+shared runtime, modules, desktop apps, Electron wrapper code, and template-store
+app code for forbidden Browser-to-CTOX data paths, including `/api/business-os...`,
+split-string variants such as `'/api/' + 'business-os'`,
+`/api/business-os/status`, `/rxdb/pull`, direct command POST fallbacks, and
+the removed native HTTP bridge helpers.
+
+The main CI workflow runs the guard in the Linux CTOX check lane with Node 22.
+Server endpoint definitions remain allowed as compatibility/admin surfaces; the
+guard is scoped to browser-facing app code and the explicit native bridge
+markers that must not return.
+
 ## No Fallback Data
 
 Business OS must not synthesize queue state, runtime state, module data, token
 metrics, or flow progress when the real replicated records are missing.
 
-Allowed local-only behavior:
+Allowed non-data behavior:
 
 - empty views while no replicated records exist
-- explicit "native RxDB peer not available" status while the Rust peer is not
-  complete
-- static app shell and module manifests served by CTOX after login
+- static app shell assets served by CTOX
+- login/session bootstrap needed to inject `window.CTOX_BUSINESS_OS_SESSION`
 
 Disallowed behavior:
 
+- local replacement databases for Business OS data
+- sync modes that keep Business OS data local instead of using WebRTC
 - HTTP collection pulls as a replacement for RxDB replication
 - HTTP command posts as a replacement for replicated command documents
 - HTTP runtime flow or status snapshots presented as live CTOX state

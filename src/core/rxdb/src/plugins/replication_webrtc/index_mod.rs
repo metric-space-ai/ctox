@@ -52,6 +52,15 @@ use crate::rxjs_compat::RxSubject;
 use crate::types::{DocumentsWithCheckpoint, RxReplicationHandler, RxReplicationMasterChange};
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
+const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
+const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
+    "ctox-rxdb-native-v1",
+    "ctox-file-chunks-v1",
+    "ctox-replication-handshake-v1",
+    "ctox-schema-hash-v1",
+    "ctox-peer-session-v1",
+    "ctox-checkpoint-epoch-v1",
+];
 
 pub type RxWebRTCReplicationState<H> = RxWebRTCReplicationPool<H>;
 
@@ -84,8 +93,12 @@ pub struct SyncOptionsWebRTCRs {
     pub collection: Arc<RxCollection>,
     pub signaling_url: String,
     pub topic: String,
+    pub peer_session_id: String,
     pub ice_servers: Vec<RTCIceServer>,
     pub is_peer_valid: Option<Arc<dyn Fn(&WebRTCRsPeer) -> bool + Send + Sync>>,
+    pub pull_batch_size: u64,
+    pub push_batch_size: u64,
+    pub retry_time: u64,
 }
 
 impl SyncOptionsWebRTCRs {
@@ -98,8 +111,12 @@ impl SyncOptionsWebRTCRs {
             collection,
             signaling_url: signaling_url.into(),
             topic: topic.into(),
+            peer_session_id: format!("rxdb-rs-{}", random_token(Some(16))),
             ice_servers: Vec::new(),
             is_peer_valid: None,
+            pull_batch_size: 20,
+            push_batch_size: 20,
+            retry_time: 5_000,
         }
     }
 }
@@ -107,6 +124,7 @@ impl SyncOptionsWebRTCRs {
 #[derive(Clone)]
 struct WebRTCReplicationTuning {
     topic: Option<String>,
+    peer_session_id: Option<Arc<str>>,
     pull_batch_size: u64,
     push_batch_size: u64,
     retry_time: u64,
@@ -116,6 +134,7 @@ impl Default for WebRTCReplicationTuning {
     fn default() -> Self {
         Self {
             topic: None,
+            peer_session_id: None,
             pull_batch_size: 20,
             push_batch_size: 20,
             retry_time: 5_000,
@@ -249,6 +268,7 @@ where
         options.is_peer_valid,
         WebRTCReplicationTuning {
             topic: options.topic,
+            peer_session_id: None,
             pull_batch_size: options.pull_batch_size,
             push_batch_size: options.push_batch_size,
             retry_time: options.retry_time,
@@ -267,15 +287,18 @@ pub async fn replicate_web_rtc_rs(
         config.ice_servers = options.ice_servers;
     }
     let handler = WebRTCRsConnectionHandler::new_with_signaling(config).await?;
-    replicate_web_rtc_with_options(SyncOptionsWebRTC {
-        collection: options.collection,
-        connection_handler: handler,
-        topic: Some(options.topic),
-        is_peer_valid: options.is_peer_valid,
-        pull_batch_size: 20,
-        push_batch_size: 20,
-        retry_time: 5_000,
-    })
+    replicate_web_rtc_inner(
+        options.collection,
+        handler,
+        options.is_peer_valid,
+        WebRTCReplicationTuning {
+            topic: Some(options.topic),
+            peer_session_id: Some(Arc::<str>::from(options.peer_session_id)),
+            pull_batch_size: options.pull_batch_size,
+            push_batch_size: options.push_batch_size,
+            retry_time: options.retry_time,
+        },
+    )
     .await
 }
 
@@ -299,6 +322,7 @@ where
     let storage_token = collection.database.storage_token.clone();
     let request_flag = random_token(Some(10));
     let request_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let peer_session_id = tuning.peer_session_id.clone();
     let pool =
         RxWebRTCReplicationPool::<H>::new(Arc::clone(&collection), Arc::clone(&connection_handler));
 
@@ -325,11 +349,13 @@ where
     }
 
     // ref: rxdb/src/plugins/replication-webrtc/index.ts:86-95
-    // Answer "token" requests from remote peers.
+    // Answer control handshake requests from remote peers.
     {
         let pool_clone = Arc::clone(&pool);
         let handler = Arc::clone(&connection_handler);
+        let collection = Arc::clone(&collection);
         let storage_token = storage_token.clone();
+        let peer_session_id = peer_session_id.clone();
         let mut msg_stream = connection_handler.message_stream();
         let t = tokio::spawn(async move {
             while let Some(item) = msg_stream.next().await {
@@ -339,16 +365,24 @@ where
                 {
                     break;
                 }
-                if item.message.method == "token" {
-                    let resp = WebRTCResponse {
-                        id: item.message.id,
-                        result: Value::String(storage_token.clone()),
-                        error: None,
-                    };
-                    let _ = handler
-                        .send(&item.peer, WebRTCWireFrame::Response(resp))
-                        .await;
-                }
+                let result = match item.message.method.as_str() {
+                    "token" => Some(Value::String(storage_token.clone())),
+                    "ctoxProtocol" => {
+                        Some(ctox_protocol_response(&collection, peer_session_id.as_deref()).await)
+                    }
+                    _ => None,
+                };
+                let Some(result) = result else {
+                    continue;
+                };
+                let resp = WebRTCResponse {
+                    id: item.message.id,
+                    result,
+                    error: None,
+                };
+                let _ = handler
+                    .send(&item.peer, WebRTCWireFrame::Response(resp))
+                    .await;
             }
         });
         pool.tasks.lock().push(t);
@@ -376,7 +410,10 @@ where
                         continue;
                     }
                 }
-                // 1. Token handshake.
+                // 1. Token handshake. The browser hard fork actively gates the
+                // DataChannel with `ctoxProtocol`; Rust answers that request in
+                // the control-handler above. Keeping Rust passive here avoids a
+                // symmetric probe race while preserving the protocol gate.
                 let req_id = {
                     let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     format!("{}|{}|{}", collection.database.token, request_flag, n)
@@ -443,7 +480,9 @@ where
                             if item.peer != peer_for_msgs {
                                 continue;
                             }
-                            if item.message.method == "token" {
+                            if item.message.method == "token"
+                                || item.message.method == "ctoxProtocol"
+                            {
                                 continue;
                             }
                             let result = call_master_method(
@@ -496,6 +535,61 @@ where
     }
 
     Ok(pool)
+}
+
+async fn ctox_protocol_response(
+    collection: &Arc<RxCollection>,
+    peer_session_id: Option<&str>,
+) -> Value {
+    let checkpoint = collection
+        .storage_instance
+        .replication_checkpoint_status()
+        .await;
+    let collection_payload = match &collection.schema {
+        Some(schema) => serde_json::json!({
+            "name": collection.name,
+            "schemaVersion": schema.version(),
+            "schemaHash": schema.hash().await,
+            "checkpoint": checkpoint,
+        }),
+        None => Value::Null,
+    };
+    ctox_protocol_response_payload(collection_payload, peer_session_id)
+}
+
+fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
+    let peer_session_id = peer_session_id
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("rxdb-rs-{}", random_token(Some(16))));
+    serde_json::json!({
+        "protocol": CTOX_RXDB_PROTOCOL,
+        "capabilities": CTOX_RXDB_NATIVE_CAPABILITIES,
+        "collection": collection,
+        "peerSession": {
+            "role": "ctox_instance",
+            "sessionId": peer_session_id,
+        },
+    })
+}
+
+#[cfg(test)]
+fn validate_ctox_protocol_response(value: &Value) -> Result<(), RxError> {
+    let protocol = value
+        .get("protocol")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if protocol != CTOX_RXDB_PROTOCOL {
+        return Err(new_rx_error(
+            "RC_WEBRTC_PROTOCOL",
+            Some(serde_json::json!({
+                "message": "incompatible CTOX RxDB WebRTC protocol",
+                "expected": CTOX_RXDB_PROTOCOL,
+                "actual": protocol,
+            })),
+        ));
+    }
+    Ok(())
 }
 
 // ref: rxdb/src/plugins/replication-webrtc/index.ts:172-218
@@ -705,5 +799,97 @@ mod tests {
             .await
             .expect("periodic resync should emit before timeout");
         assert_eq!(item, Some(RxReplicationMasterChange::Resync));
+    }
+
+    #[test]
+    fn ctox_protocol_response_advertises_native_capabilities() {
+        let payload = ctox_protocol_response_payload(
+            serde_json::json!({
+                "name": "desktop_files",
+                "schemaVersion": 0,
+                "schemaHash": "schema-hash-1",
+                "checkpoint": {
+                    "source": "rxdb-rs-sqlite",
+                    "state": "advertised",
+                    "collection": "desktop_files",
+                    "schemaHash": "schema-hash-1",
+                    "latestLwt": 0,
+                    "latestIdHash": "",
+                    "epoch": "checkpoint-epoch-1"
+                }
+            }),
+            Some("rxdb-rs-test-session"),
+        );
+        assert_eq!(
+            payload.get("protocol").and_then(Value::as_str),
+            Some(CTOX_RXDB_PROTOCOL)
+        );
+        let capabilities = payload
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .expect("capabilities array");
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-replication-handshake-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-schema-hash-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-peer-session-v1")));
+        assert!(capabilities
+            .iter()
+            .any(|value| value.as_str() == Some("ctox-checkpoint-epoch-v1")));
+        assert_eq!(
+            payload
+                .pointer("/collection/schemaHash")
+                .and_then(Value::as_str),
+            Some("schema-hash-1")
+        );
+        assert_eq!(
+            payload
+                .pointer("/collection/checkpoint/epoch")
+                .and_then(Value::as_str),
+            Some("checkpoint-epoch-1")
+        );
+        assert_eq!(
+            payload.pointer("/peerSession/role").and_then(Value::as_str),
+            Some("ctox_instance")
+        );
+        assert_eq!(
+            payload
+                .pointer("/peerSession/sessionId")
+                .and_then(Value::as_str),
+            Some("rxdb-rs-test-session")
+        );
+        assert!(validate_ctox_protocol_response(&payload).is_ok());
+    }
+
+    #[test]
+    fn ctox_protocol_response_uses_supplied_peer_session_per_payload() {
+        let first = ctox_protocol_response_payload(Value::Null, Some("rxdb-rs-session-a"));
+        let second = ctox_protocol_response_payload(Value::Null, Some("rxdb-rs-session-b"));
+        assert_eq!(
+            first
+                .pointer("/peerSession/sessionId")
+                .and_then(Value::as_str),
+            Some("rxdb-rs-session-a")
+        );
+        assert_eq!(
+            second
+                .pointer("/peerSession/sessionId")
+                .and_then(Value::as_str),
+            Some("rxdb-rs-session-b")
+        );
+    }
+
+    #[test]
+    fn ctox_protocol_response_rejects_mismatch() {
+        let result = validate_ctox_protocol_response(&serde_json::json!({
+            "protocol": "rxdb-upstream",
+            "capabilities": []
+        }));
+        let error = result.expect_err("protocol mismatch must fail");
+        assert_eq!(error.code(), "RC_WEBRTC_PROTOCOL");
     }
 }

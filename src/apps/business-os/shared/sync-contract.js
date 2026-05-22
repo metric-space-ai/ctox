@@ -10,11 +10,15 @@ export function collectionTopic(syncRoom, collection) {
 }
 
 export function batchSizeFor(collection) {
+  if (collection === 'desktop_file_chunks') return 1;
   return collection.includes('attachment') || collection.includes('chunk') ? 1 : 10;
 }
 
 export function nativeRxdbPeerReady(config, db) {
   return config?.transport === SYNC_TRANSPORT
-    && config?.native_rxdb_peer_available === true
+    && typeof config?.sync_room === 'string'
+    && config.sync_room.length > 0
+    && Array.isArray(config?.signaling_urls)
+    && config.signaling_urls.some((url) => typeof url === 'string' && url.trim().length > 0)
     && db?.mode === 'rxdb';
 }

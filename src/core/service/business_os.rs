@@ -284,8 +284,10 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
             Ok(())
         }
         Some("serve") => serve_native_business_os(root, &args[1..]),
+        Some("peer") => handle_business_os_peer(root, &args[1..]),
         Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
+        Some("files") => handle_business_os_files(root, &args[1..]),
         Some("modules") => handle_business_os_modules(root, &args[1..]),
         Some("skills") => handle_business_os_skills(root, &args[1..]),
         Some("help") | Some("--help") | Some("-h") => {
@@ -320,9 +322,9 @@ pub fn business_os_status_text(root: &Path) -> String {
          Preview first:\n\
            ctox business-os install --target <empty-dir> --dry-run\n\n\
          Runtime contract:\n\
-           - Native Business OS is served by CTOX core from business-os/.\n\
-           - Native backend owns SQLite state, commands, module manifests, and sync.\n\
-           - Legacy template remains available during migration and will be removed later.\n",
+           - Web deploy can host the Business OS app shell.\n\
+           - CTOX core runs as the outbound RxDB/WebRTC peer.\n\
+           - SQLite state, commands, module manifests, and files sync over RxDB.\n",
         skill_status = exists_label(skill.is_file()),
         installer_status = exists_label(installer.is_file()),
         template_status = exists_label(template.is_dir()),
@@ -347,6 +349,30 @@ fn serve_native_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> 
     )
 }
 
+fn handle_business_os_peer(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        None | Some("status") => print_json(&serde_json::to_value(
+            crate::business_os::store::sync_config(root)?,
+        )?),
+        Some("rotate") | Some("rotate-room") => print_json(&serde_json::to_value(
+            crate::business_os::store::rotate_sync_room_password(root)?,
+        )?),
+        Some("start") => crate::business_os::run_native_peer_foreground(root),
+        Some("ensure") => {
+            crate::business_os::ensure_native_peer(root)?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "running": crate::business_os::store::sync_config(root)?.native_rxdb_peer_available,
+            }))
+        }
+        Some("--help") | Some("-h") => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os peer command `{other}`"),
+    }
+}
+
 fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("process") | Some("process-source-parse") => {
@@ -362,6 +388,38 @@ fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<(
             Ok(())
         }
         Some(other) => anyhow::bail!("unknown business-os commands command `{other}`"),
+    }
+}
+
+fn handle_business_os_files(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("sync") => {
+            let path = args
+                .get(1)
+                .context("usage: ctox business-os files sync <path>")?;
+            crate::business_os::sync_desktop_file_from_path(root, Path::new(path))?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "path": path,
+            }))
+        }
+        Some("sync-workspace") => {
+            let path = args
+                .get(1)
+                .context("usage: ctox business-os files sync-workspace <path>")?;
+            let indexed =
+                crate::business_os::sync_desktop_files_from_workspace_root(root, Path::new(path))?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "path": path,
+                "indexed": indexed,
+            }))
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os files command `{other}`"),
     }
 }
 
@@ -570,7 +628,7 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {

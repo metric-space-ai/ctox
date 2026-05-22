@@ -36,7 +36,7 @@
         display: none !important;
       }
     </style>
-    <link rel="stylesheet" href="app.css?v=20260520-triad-dragdrop2" />
+    <link rel="stylesheet" href="app.css?v=20260520-login-fix-v3" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
     <div class="app-shell" data-shell>
@@ -129,9 +129,52 @@
         </aside>
 
         <section class="workspace-pane workspace-pane-center" data-module-host>
-          <div class="empty-state">
-            <strong>Loading workspace</strong>
-            <span>The native Business OS shell is waiting for module manifests.</span>
+          <div class="workspace-startup-loader" id="startup-loader">
+            <div class="startup-logo-container">
+              <div class="startup-logo-glow"></div>
+              <svg class="startup-logo-svg" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="logoGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                    <stop offset="0%" stop-color="#10b981" />
+                    <stop offset="100%" stop-color="#06b6d4" />
+                  </linearGradient>
+                </defs>
+                <path d="M50 15 L85 35 L85 75 L50 95 L15 75 L15 35 Z" stroke="url(#logoGrad)" stroke-width="4" stroke-linejoin="round" />
+                <path d="M50 30 L73 43 L73 70 L50 83 L27 70 L27 43 Z" fill="url(#logoGrad)" fill-opacity="0.15" stroke="url(#logoGrad)" stroke-width="2" />
+                <path d="M50 15 L50 95" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
+                <path d="M15 35 L85 75" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
+                <path d="M85 35 L15 75" stroke="url(#logoGrad)" stroke-width="1.5" stroke-dasharray="4 4" />
+                <circle cx="50" cy="50" r="10" fill="url(#logoGrad)" />
+              </svg>
+            </div>
+            <h2 class="startup-title">CTOX Business OS</h2>
+            <div class="startup-progress-container">
+              <div class="startup-progress-bar" id="startup-progress-bar"></div>
+            </div>
+            <div class="startup-status-text" id="startup-status-text">System wird gestartet...</div>
+
+            <div class="startup-error-card" id="startup-error-card" hidden>
+              <div class="error-header">
+                <svg class="error-warning-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="12" y1="9" x2="12" y2="13" stroke-linecap="round" stroke-linejoin="round"/>
+                  <line x1="12" y1="17" x2="12.01" y2="17" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <h3>System-Start fehlgeschlagen</h3>
+              </div>
+              <div class="error-body">
+                <p>Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Der lokale RxDB-Catalog-Sync meldet:</p>
+                <code class="error-msg-block" id="startup-error-msg"></code>
+              </div>
+              <div class="error-footer">
+                <button class="error-retry-btn" id="startup-retry-btn" type="button">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 11-.57-8.38l5.67-5.67" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  Erneut versuchen
+                </button>
+              </div>
+            </div>
           </div>
         </section>
 
@@ -154,6 +197,6 @@
     </div>
     <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen"></aside>
 
-    <script type="module" src="app.js?v=20260520-web-research1"></script>
+    <script type="module" src="app.js?v=20260522-replication-io1"></script>
   </body>
 </html>

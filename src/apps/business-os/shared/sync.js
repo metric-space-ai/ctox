@@ -1,56 +1,343 @@
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
 
-export function createSyncRuntime({ db, config }) {
+const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
+const CTOX_BROWSER_CAPABILITIES = [
+  'ctox-control-plane-v1',
+  'ctox-rxdb-browser-v1',
+  'ctox-file-chunks-v1',
+  'ctox-schema-hash-v1',
+  'ctox-peer-session-v1',
+  'ctox-checkpoint-epoch-v1',
+];
+
+const signalingErrorHandlers = new Set();
+let signalingErrorObserverInstalled = false;
+
+export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
+  const activeCollections = new Set();
+  let globalRestartTimer = null;
+  let collectionStartQueue = Promise.resolve();
+  let stopped = false;
   const useWebrtc = nativeRxdbPeerReady(config, db);
-  return {
+  if (!useWebrtc) {
+    throw new Error('Business OS requires RxDB WebRTC sync; unsupported sync contract.');
+  }
+  const diagnostics = createDiagnostics(config);
+  const emitDiagnostic = (updates = {}) => {
+    if (updates.lastError !== undefined) diagnostics.lastError = updates.lastError;
+    if (updates.lastLifecycleEvent !== undefined) diagnostics.lastLifecycleEvent = updates.lastLifecycleEvent;
+    if (updates.phase) diagnostics.phase = updates.phase;
+    if (updates.moduleId) diagnostics.moduleId = updates.moduleId;
+    diagnostics.updatedAt = new Date().toISOString();
+    onDiagnostic?.(snapshotDiagnostics(diagnostics));
+  };
+  const recordCollection = (collection, update) => {
+    const current = diagnostics.collections[collection] || {};
+    const updatedAt = new Date().toISOString();
+    const next = {
+      ...current,
+      collection,
+      updatedAt,
+      ...update,
+    };
+    const nextPeerSession = typeof update.remotePeerSession === 'string' && update.remotePeerSession
+      ? update.remotePeerSession
+      : '';
+    if (nextPeerSession) {
+      const previousPeerSession = typeof current.remotePeerSession === 'string' && current.remotePeerSession
+        ? current.remotePeerSession
+        : '';
+      const changed = Boolean(previousPeerSession && previousPeerSession !== nextPeerSession);
+      const currentGeneration = Number.isFinite(Number(current.peerGeneration))
+        ? Number(current.peerGeneration)
+        : 0;
+      next.peerGeneration = changed ? currentGeneration + 1 : Math.max(1, currentGeneration || 1);
+      next.previousPeerSession = changed ? previousPeerSession : current.previousPeerSession || null;
+      next.peerGenerationChangedAt = changed || !current.peerGeneration
+        ? updatedAt
+        : current.peerGenerationChangedAt || updatedAt;
+    }
+    diagnostics.collections[collection] = {
+      ...next,
+    };
+    emitDiagnostic({ phase: 'collection-sync' });
+  };
+  const stopAllBridges = async () => {
+    const bridgePromises = [...bridges.values()];
+    bridges.clear();
+    const states = await Promise.allSettled(bridgePromises);
+    for (const state of states) {
+      if (state.status === 'fulfilled') {
+        try { await withTimeout(state.value?.stop?.(), 3000); } catch {}
+      }
+    }
+  };
+  const scheduleGlobalRestart = (triggerCollection, error) => {
+    if (stopped) return;
+    if (globalRestartTimer) return;
+    const serialized = serializeError(error);
+    const lifecycleEvent = isLifecycleEvent(error) ? serialized : null;
+    const reconnectingSince = new Date().toISOString();
+    for (const collection of activeCollections) {
+      recordCollection(collection, {
+        status: 'reconnecting',
+        connectionStatus: 'reconnecting',
+        lastError: collection === triggerCollection && !lifecycleEvent ? serialized : diagnostics.collections[collection]?.lastError || null,
+        lastLifecycleEvent: collection === triggerCollection && lifecycleEvent ? lifecycleEvent : diagnostics.collections[collection]?.lastLifecycleEvent || null,
+        reconnectingSince,
+      });
+    }
+    emitDiagnostic({
+      phase: 'reconnecting',
+      lastError: lifecycleEvent ? null : serialized,
+      lastLifecycleEvent: lifecycleEvent,
+    });
+    stopAllBridges().catch(() => {});
+    globalRestartTimer = setTimeout(async () => {
+      if (stopped) return;
+      globalRestartTimer = null;
+      const collections = [...activeCollections];
+      try {
+        for (const collection of collections) {
+          await syncRuntime.startCollection(collection);
+          await delay(250);
+        }
+      } catch (restartError) {
+        const restartSerialized = serializeError(restartError);
+        recordCollection(triggerCollection, { status: 'failed', connectionStatus: 'error', lastError: restartSerialized });
+        emitDiagnostic({ phase: 'failed', lastError: restartSerialized });
+      }
+    }, 5000);
+  };
+  emitDiagnostic({ phase: 'ready' });
+  const syncRuntime = {
     db,
     config,
-    mode: useWebrtc ? 'webrtc' : 'local-only',
+    mode: 'webrtc',
+    diagnostics,
     async startModule(moduleManifest) {
-      if (!useWebrtc) {
-        return {
-          mode: 'local-only',
-          reason: config?.native_rxdb_peer_reason || 'sync-transport-unavailable',
-        };
-      }
       const collections = moduleManifest?.collections || [];
-      const started = collections.map((collection) => this.startCollection(collection));
-      return Promise.allSettled(started);
+      const results = [];
+      emitDiagnostic({ phase: 'module-sync', moduleId: moduleManifest?.id || null });
+      for (const collection of collections) {
+        try {
+          results.push({ status: 'fulfilled', value: await this.startCollection(collection) });
+        } catch (reason) {
+          results.push({ status: 'rejected', reason });
+        }
+        await delay(100);
+      }
+      return results;
     },
     async startCollection(collection) {
-      if (bridges.has(collection)) return bridges.get(collection);
-      const bridgePromise = useWebrtc
-        ? startWebRtcReplication({ db, config, collection })
-        : Promise.resolve({
-            mode: 'local-only',
-            collection,
-            reason: config?.native_rxdb_peer_reason || 'sync-transport-unavailable',
-          });
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      activeCollections.add(collection);
+      if (bridges.has(collection)) {
+        recordCollection(collection, { status: 'reused' });
+        return bridges.get(collection);
+      }
+      recordCollection(collection, { status: 'starting' });
+      const bridgePromise = collectionStartQueue.then(() => {
+        if (stopped) throw new Error('Business OS sync runtime has been stopped');
+        return startWebRtcReplication({
+          db,
+          config,
+          collection,
+          recordCollection,
+          onFatalPeerError: (error) => scheduleGlobalRestart(collection, error),
+        });
+      });
+      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(500));
       bridges.set(collection, bridgePromise);
       try {
-        return await bridgePromise;
+        const bridge = await bridgePromise;
+        recordCollection(collection, {
+          status: bridge.mode === 'pending' ? 'pending' : 'running',
+          connectionStatus: bridge.mode === 'pending' ? 'pending' : 'connecting',
+          topic: bridge.topic || null,
+          reason: bridge.reason || null,
+          lastError: null,
+          reconnectingSince: null,
+          connectedAt: null,
+        });
+        return bridge;
       } catch (error) {
         bridges.delete(collection);
+        const serialized = serializeError(error);
+        recordCollection(collection, { status: 'failed', lastError: serialized });
+        emitDiagnostic({ phase: 'failed', lastError: serialized });
         throw error;
       }
     },
+    async stopCollection(collection) {
+      const bridgePromise = bridges.get(collection);
+      bridges.delete(collection);
+      if (!bridgePromise) return false;
+      recordCollection(collection, {
+        status: 'restarting',
+        connectionStatus: 'reconnecting',
+        lastError: null,
+        reconnectingSince: new Date().toISOString(),
+      });
+      try {
+        const bridge = await bridgePromise;
+        await withTimeout(bridge?.stop?.(), 3000);
+      } catch {
+        // The old bridge is already unusable. Dropping it from the cache is enough.
+      }
+      return true;
+    },
+    async restartCollection(collection) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      activeCollections.add(collection);
+      await this.stopCollection(collection);
+      return this.startCollection(collection);
+    },
+    async restartCollections(collections) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      if (globalRestartTimer) clearTimeout(globalRestartTimer);
+      globalRestartTimer = null;
+      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      for (const collection of requested) activeCollections.add(collection);
+      await stopAllBridges();
+      collectionStartQueue = Promise.resolve();
+      const restarted = [];
+      for (const collection of requested) {
+        restarted.push(await this.startCollection(collection));
+        await delay(250);
+      }
+      return restarted;
+    },
+    async stop() {
+      stopped = true;
+      if (globalRestartTimer) clearTimeout(globalRestartTimer);
+      globalRestartTimer = null;
+      await stopAllBridges();
+      emitDiagnostic({ phase: 'stopped' });
+    },
+  };
+  return syncRuntime;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(value, ms) {
+  return Promise.race([
+    Promise.resolve(value),
+    delay(ms),
+  ]);
+}
+
+function registerSignalingErrorHandler(signalingServerUrl, onError) {
+  installSignalingErrorObserver();
+  const matchKey = signalingUrlMatchKey(signalingServerUrl);
+  const handler = { matchKey, onError };
+  signalingErrorHandlers.add(handler);
+  return () => signalingErrorHandlers.delete(handler);
+}
+
+function installSignalingErrorObserver() {
+  if (signalingErrorObserverInstalled || typeof globalThis.WebSocket !== 'function') return;
+  const NativeWebSocket = globalThis.WebSocket;
+  class ObservedWebSocket extends NativeWebSocket {
+    constructor(url, protocols) {
+      if (protocols === undefined) {
+        super(url);
+      } else {
+        super(url, protocols);
+      }
+      const requestedUrl = String(url || '');
+      this.addEventListener('message', (event) => {
+        const error = parseSignalingControlPlaneError(event?.data, this.url || requestedUrl);
+        if (!error) return;
+        for (const handler of signalingErrorHandlers) {
+          if (!handler?.matchKey || handler.matchKey !== signalingUrlMatchKey(error.url)) continue;
+          try { handler.onError(error); } catch {}
+        }
+      });
+    }
+  }
+  for (const key of ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED']) {
+    try { ObservedWebSocket[key] = NativeWebSocket[key]; } catch {}
+  }
+  globalThis.WebSocket = ObservedWebSocket;
+  signalingErrorObserverInstalled = true;
+}
+
+function parseSignalingControlPlaneError(raw, url) {
+  if (typeof raw !== 'string' || !raw.includes('ctoxError')) return null;
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!payload || payload.type !== 'ctoxError' || payload.scope !== 'control-plane') return null;
+  const code = typeof payload.code === 'string' ? payload.code.trim() : 'control_plane_rejected';
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : code;
+  return {
+    name: 'CtoxSignalingControlPlaneError',
+    message: reason || code,
+    code,
+    url: redactUrlSecrets(url),
   };
 }
 
-async function startWebRtcReplication({ db, config, collection }) {
+function signalingUrlMatchKey(value) {
+  try {
+    const url = new URL(value, window.location.href);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return String(value || '').split('?')[0];
+  }
+}
+
+async function startWebRtcReplication({ db, config, collection, recordCollection, onFatalPeerError }) {
   const rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
-  if (!rxCollection) return { mode: 'pending', collection, reason: 'collection-not-registered' };
-  const rxdb = db?.rxdb || await import('../vendor/rxdb-bundle.mjs');
+  if (!rxCollection) {
+    recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
+    return { mode: 'pending', collection, reason: 'collection-not-registered' };
+  }
+  const rxdb = db?.rxdb || await import('../vendor/rxdb-bundle.mjs?v=20260522-replication-io1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
 
   ensureBrowserProcessNextTick();
-  const signalingServerUrl = firstSignalingUrl(config);
+  const signalingServerUrl = await signalingUrlWithBrowserMetadata(firstSignalingUrl(config), config);
+  const iceServers = iceServersFromConfig(config);
   const topic = collectionTopic(config.sync_room, collection);
   const batchSize = batchSizeFor(collection);
-  const connectionHandlerCreator = rxdb.getConnectionHandlerSimplePeer({ signalingServerUrl });
+  const initialReplicationStartedAt = new Date().toISOString();
+  recordCollection?.(collection, {
+    status: 'connecting',
+    topic,
+    signalingUrl: redactUrlSecrets(signalingServerUrl),
+    iceServersConfigured: iceServers.length,
+    batchSize,
+    initialReplicationState: 'pending',
+    initialReplicationStartedAt,
+    initialReplicationAt: null,
+  });
+  let stopped = false;
+  const connectionHandlerCreator = rxdb.getConnectionHandlerSimplePeer({
+    signalingServerUrl,
+    config: iceServers.length ? { iceServers } : undefined,
+  });
+  const subscriptions = [];
+  const unregisterSignalingErrorHandler = registerSignalingErrorHandler(signalingServerUrl, (error) => {
+    if (stopped) return;
+    recordCollection?.(collection, {
+      status: 'error',
+      connectionStatus: 'error',
+      lastError: error,
+    });
+    onFatalPeerError?.(error);
+  });
+  subscriptions.push({ unsubscribe: unregisterSignalingErrorHandler });
   const replicationState = await rxdb.replicateWebRTC({
     collection: rxCollection,
     topic,
@@ -58,9 +345,111 @@ async function startWebRtcReplication({ db, config, collection }) {
     pull: { batchSize },
     push: isReadOnlyProjectionCollection(collection) ? undefined : { batchSize },
     retryTime: 5000,
+    ctox: {
+      onPeerProtocol(info) {
+        const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
+        const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
+        const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
+        recordCollection?.(collection, {
+          remoteProtocol: info?.protocol || null,
+          remoteCapabilities,
+          remotePeerSession: info?.peerSession || null,
+          remoteCheckpoint,
+          peerSessionSeenAt: new Date().toISOString(),
+          ...(checkpointError
+            ? {
+                status: 'error',
+                connectionStatus: 'error',
+                lastError: checkpointError,
+              }
+            : {
+                lastError: null,
+              }),
+        });
+        if (checkpointError) onFatalPeerError?.(checkpointError);
+      },
+    },
   });
+  let lastErrorLogAt = 0;
   const errorSubscription = replicationState.error$?.subscribe?.((error) => {
-    console.error(`[business-os] WebRTC replication failed for ${collection}`, error);
+    if (stopped) return;
+    const now = Date.now();
+    const schemaProtocolError = classifySchemaProtocolError(collection, error);
+    if (schemaProtocolError) {
+      recordCollection?.(collection, {
+        status: 'error',
+        connectionStatus: 'error',
+        lastError: schemaProtocolError,
+      });
+      onFatalPeerError?.(schemaProtocolError);
+      return;
+    }
+    const replicationIoError = classifyReplicationIoError(collection, error);
+    if (replicationIoError) {
+      recordCollection?.(collection, {
+        status: 'error',
+        connectionStatus: 'error',
+        lastError: replicationIoError,
+      });
+      return;
+    }
+    const lifecycleEvent = classifyPeerLifecycleEvent(error);
+    if (lifecycleEvent) {
+      recordCollection?.(collection, {
+        status: 'reconnecting',
+        connectionStatus: 'reconnecting',
+        lastError: null,
+        lastLifecycleEvent: lifecycleEvent,
+        reconnectingSince: new Date().toISOString(),
+      });
+      onFatalPeerError?.(lifecycleEvent);
+      return;
+    }
+    if (now - lastErrorLogAt > 5000) {
+      lastErrorLogAt = now;
+      console.error(`[business-os] WebRTC replication failed for ${collection}`, error);
+    }
+    recordCollection?.(collection, {
+      status: 'error',
+      connectionStatus: 'error',
+      lastError: serializeError(error),
+    });
+    if (isFatalPeerStormError(error)) onFatalPeerError?.(error);
+  });
+  if (errorSubscription) subscriptions.push(errorSubscription);
+  let observedActive = false;
+  subscribeReplicationMetric(replicationState.active$, subscriptions, (active) => {
+    if (stopped) return;
+    const isActive = Boolean(active);
+    const now = new Date().toISOString();
+    if (isActive) {
+      observedActive = true;
+      recordCollection?.(collection, {
+        active: true,
+        status: 'connected',
+        connectionStatus: 'connected',
+        connectedAt: now,
+        reconnectingSince: null,
+      });
+      return;
+    }
+    recordCollection?.(collection, {
+      active: false,
+      status: observedActive ? 'reconnecting' : 'connecting',
+      connectionStatus: observedActive ? 'reconnecting' : 'connecting',
+      reconnectingSince: observedActive ? now : null,
+    });
+  });
+  subscribeReplicationMetric(replicationState.canceled$, subscriptions, (canceled) => {
+    if (stopped) return;
+    if (canceled) recordCollection?.(collection, { status: 'stopped', connectionStatus: 'stopped' });
+  });
+  watchInitialReplication({
+    replicationState,
+    collection,
+    recordCollection,
+    isStopped: () => stopped,
+    startedAt: initialReplicationStartedAt,
   });
 
   return {
@@ -70,11 +459,406 @@ async function startWebRtcReplication({ db, config, collection }) {
     state: replicationState,
     pullNow: async () => {},
     flush: async () => {},
-    stop() {
-      try { errorSubscription?.unsubscribe?.(); } catch {}
-      try { replicationState.cancel?.(); } catch {}
+    async stop() {
+      stopped = true;
+      for (const subscription of subscriptions) {
+        try { subscription?.unsubscribe?.(); } catch {}
+      }
+      try { await withTimeout(replicationState.cancel?.(), 3000); } catch {}
     },
   };
+}
+
+function watchInitialReplication({ replicationState, collection, recordCollection, isStopped, startedAt }) {
+  const awaitInitialReplication = initialReplicationAwaiter(replicationState);
+  if (!awaitInitialReplication) {
+    recordCollection?.(collection, {
+      initialReplicationState: 'unsupported',
+      initialReplicationStartedAt: startedAt || new Date().toISOString(),
+    });
+    return;
+  }
+  recordCollection?.(collection, {
+    initialReplicationState: 'pending',
+    initialReplicationSource: awaitInitialReplication.source,
+    initialReplicationStartedAt: startedAt || new Date().toISOString(),
+  });
+  Promise.resolve()
+    .then(() => awaitInitialReplication.fn.call(awaitInitialReplication.receiver || replicationState))
+    .then(() => {
+      if (isStopped?.()) return;
+      recordCollection?.(collection, {
+        status: 'connected',
+        connectionStatus: 'connected',
+        initialReplicationState: 'complete',
+        initialReplicationSource: awaitInitialReplication.source,
+        initialReplicationAt: new Date().toISOString(),
+        reconnectingSince: null,
+        lastError: null,
+      });
+    })
+    .catch((error) => {
+      if (isStopped?.()) return;
+      recordCollection?.(collection, {
+        status: 'error',
+        connectionStatus: 'error',
+        initialReplicationState: 'failed',
+        initialReplicationSource: awaitInitialReplication.source,
+        lastError: serializeError(error),
+      });
+    });
+}
+
+function initialReplicationAwaiter(replicationState) {
+  if (typeof replicationState?.awaitInitialReplication === 'function') {
+    return { fn: replicationState.awaitInitialReplication, receiver: replicationState, source: 'awaitInitialReplication' };
+  }
+  if (typeof replicationState?.awaitInSync === 'function') {
+    return { fn: replicationState.awaitInSync, receiver: replicationState, source: 'awaitInSync' };
+  }
+  if (replicationState?.peerStates$ && typeof replicationState.peerStates$.subscribe === 'function') {
+    return { fn: () => awaitWebRtcPoolInitialReplication(replicationState), receiver: null, source: 'webrtcPeerReplicationState' };
+  }
+  return null;
+}
+
+async function awaitWebRtcPoolInitialReplication(pool) {
+  const peerStates = await waitForWebRtcPeerStates(pool, 30000);
+  const nestedStates = [...peerStates.values()]
+    .map((peerState) => peerState?.replicationState)
+    .filter(Boolean);
+  if (!nestedStates.length) return true;
+  await Promise.all(nestedStates.map((state) => {
+    if (typeof state.awaitInitialReplication === 'function') {
+      return state.awaitInitialReplication();
+    }
+    if (typeof state.awaitInSync === 'function') {
+      return state.awaitInSync();
+    }
+    return true;
+  }));
+  return true;
+}
+
+function waitForWebRtcPeerStates(pool, timeoutMs) {
+  const existing = pool.peerStates$?.getValue?.();
+  if (existing?.size) return Promise.resolve(existing);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let subscription = null;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { subscription?.unsubscribe?.(); } catch {}
+      reject(new Error('Timed out waiting for WebRTC peer state'));
+    }, timeoutMs);
+    subscription = pool.peerStates$.subscribe((peerStates) => {
+      if (settled || !peerStates?.size) return;
+      settled = true;
+      clearTimeout(timer);
+      try { subscription?.unsubscribe?.(); } catch {}
+      resolve(peerStates);
+    });
+  });
+}
+
+function isFatalPeerStormError(error) {
+  const haystack = [
+    error?.code,
+    error?.parameters?.error?.code,
+    error?.message,
+    (() => {
+      try { return JSON.stringify(error?.parameters || null); } catch { return ''; }
+    })(),
+  ].filter(Boolean).join('\n');
+  return haystack.includes('ERR_SET_LOCAL_DESCRIPTION')
+    || haystack.includes('ERR_PC_CONSTRUCTOR')
+    || haystack.includes('ERR_CONNECTION_FAILURE')
+    || haystack.includes('Cannot create so many PeerConnections')
+    || haystack.includes('Still in CONNECTING state');
+}
+
+function createDiagnostics(config) {
+  return {
+    mode: 'webrtc',
+    phase: 'initializing',
+    startedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    syncRoom: typeof config?.sync_room === 'string' ? config.sync_room : null,
+    signalingUrls: sanitizedSignalingUrls(config),
+    iceServersConfigured: iceServersFromConfig(config).length,
+    protocol: CTOX_RXDB_PROTOCOL,
+    capabilities: CTOX_BROWSER_CAPABILITIES,
+    collections: {},
+    lastError: null,
+    lastLifecycleEvent: null,
+  };
+}
+
+function snapshotDiagnostics(diagnostics) {
+  return {
+    ...diagnostics,
+    collections: { ...diagnostics.collections },
+  };
+}
+
+function sanitizedSignalingUrls(config) {
+  const urls = Array.isArray(config?.signaling_urls) ? config.signaling_urls : [];
+  return urls
+    .filter((url) => typeof url === 'string' && url.trim())
+    .map((url) => redactUrlSecrets(url));
+}
+
+function redactUrlSecrets(value) {
+  try {
+    const url = new URL(value, window.location.href);
+    for (const key of [...url.searchParams.keys()]) {
+      if (isSecretParam(key)) url.searchParams.set(key, '[redacted]');
+    }
+    return url.toString();
+  } catch {
+    return String(value || '').replace(/([?&](?:token|password|secret|room_password|signaling_room_password)=)[^&]+/gi, '$1[redacted]');
+  }
+}
+
+function isSecretParam(key) {
+  return /(?:token|password|secret|credential|room_password|signaling_room_password)/i.test(key);
+}
+
+function serializeError(error) {
+  if (!error) return null;
+  return {
+    name: typeof error.name === 'string' ? error.name : 'Error',
+    message: String(error.message || error),
+    code: error.code || null,
+    phase: error.phase || null,
+    severity: error.severity || null,
+    retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
+  };
+}
+
+function sanitizeRemoteCheckpoint(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    source: typeof value.source === 'string' ? value.source.slice(0, 80) : null,
+    state: typeof value.state === 'string' ? value.state.slice(0, 40) : null,
+    collection: typeof value.collection === 'string' ? value.collection.slice(0, 120) : null,
+    schemaHash: typeof value.schemaHash === 'string' ? value.schemaHash.slice(0, 96) : null,
+    latestLwt: Number.isFinite(Number(value.latestLwt)) ? Number(value.latestLwt) : null,
+    latestIdHash: typeof value.latestIdHash === 'string' ? value.latestIdHash.slice(0, 96) : null,
+    epoch: typeof value.epoch === 'string' ? value.epoch.slice(0, 96) : null,
+  };
+}
+
+function classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint) {
+  const capabilities = Array.isArray(remoteCapabilities) ? remoteCapabilities : [];
+  if (!capabilities.includes('ctox-checkpoint-epoch-v1')) {
+    return createCheckpointProtocolError(
+      'ctox_checkpoint_capability_missing',
+      collection,
+      'Remote RxDB peer did not advertise checkpoint epoch capability.',
+    );
+  }
+  if (!remoteCheckpoint || remoteCheckpoint.state !== 'advertised' || !remoteCheckpoint.epoch) {
+    return createCheckpointProtocolError(
+      'ctox_checkpoint_epoch_missing',
+      collection,
+      'Remote RxDB peer did not provide advertised checkpoint epoch evidence.',
+    );
+  }
+  return null;
+}
+
+function createCheckpointProtocolError(code, collection, message) {
+  return {
+    name: 'CtoxCheckpointProtocolError',
+    code,
+    phase: 'checkpoint-handshake',
+    severity: 'error',
+    retryable: false,
+    collection,
+    message,
+  };
+}
+
+function classifySchemaProtocolError(collection, error) {
+  const serialized = serializeError(error);
+  const details = extractProtocolErrorDetails(error);
+  const haystack = [
+    serialized?.code,
+    serialized?.message,
+    details.expected,
+    details.actual,
+    details.collection,
+    details.message,
+  ].filter(Boolean).join('\n');
+  if (!haystack.includes('RC_WEBRTC_PROTOCOL') && !haystack.includes('schemaHash') && !haystack.includes('collection schema hash')) {
+    return null;
+  }
+  let code = 'ctox_schema_protocol_mismatch';
+  if (haystack.includes('collection schema hash') || haystack.includes('schemaHash')) {
+    code = details.actual ? 'ctox_schema_hash_mismatch' : 'ctox_schema_hash_missing';
+  } else if (details.expected === CTOX_RXDB_PROTOCOL || haystack.includes(CTOX_RXDB_PROTOCOL)) {
+    code = 'ctox_schema_protocol_mismatch';
+  } else if (details.expected === collection || details.collection === collection) {
+    code = 'ctox_schema_collection_mismatch';
+  }
+  return {
+    name: 'CtoxSchemaProtocolError',
+    code,
+    phase: 'schema-handshake',
+    severity: 'error',
+    retryable: false,
+    collection,
+    expected: sanitizeProtocolDetail(details.expected),
+    actual: sanitizeProtocolDetail(details.actual),
+    message: schemaProtocolMessageFor(code),
+  };
+}
+
+function extractProtocolErrorDetails(error) {
+  const candidates = [
+    error,
+    error?.parameters,
+    error?.parameters?.error,
+    error?.parameters?.error?.parameters,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const expected = typeof candidate.expected === 'string' ? candidate.expected : '';
+    const actual = typeof candidate.actual === 'string' ? candidate.actual : '';
+    const collection = typeof candidate.collection === 'string' ? candidate.collection : '';
+    const message = typeof candidate.message === 'string' ? candidate.message : '';
+    if (expected || actual || collection || message) {
+      return { expected, actual, collection, message };
+    }
+  }
+  const raw = String(error?.message || error || '');
+  return { expected: '', actual: '', collection: '', message: raw };
+}
+
+function sanitizeProtocolDetail(value) {
+  return typeof value === 'string' && value.trim() ? value.trim().slice(0, 120) : null;
+}
+
+function schemaProtocolMessageFor(code) {
+  if (code === 'ctox_schema_hash_mismatch') return 'Remote RxDB peer collection schema hash does not match the Browser schema.';
+  if (code === 'ctox_schema_hash_missing') return 'Remote RxDB peer did not provide a collection schema hash.';
+  if (code === 'ctox_schema_collection_mismatch') return 'Remote RxDB peer answered with a different collection name.';
+  return 'Remote RxDB peer is not compatible with the CTOX RxDB protocol.';
+}
+
+function classifyReplicationIoError(collection, error) {
+  const serialized = serializeError(error);
+  const details = extractReplicationErrorDetails(error);
+  const rawCode = String(serialized?.code || details.code || '').trim();
+  const direction = details.direction === 'push' || rawCode === 'RC_PUSH' || rawCode === 'RC_PUSH_NO_AR'
+    ? 'push'
+    : details.direction === 'pull' || rawCode === 'RC_PULL'
+      ? 'pull'
+      : '';
+  if (!['RC_PULL', 'RC_PUSH', 'RC_PUSH_NO_AR'].includes(rawCode) && !direction) return null;
+  let code = 'ctox_replication_io_failed';
+  if (rawCode === 'RC_PUSH_NO_AR') {
+    code = 'ctox_replication_push_contract_invalid';
+  } else if (direction === 'pull') {
+    code = 'ctox_replication_pull_failed';
+  } else if (direction === 'push') {
+    code = 'ctox_replication_push_failed';
+  }
+  return {
+    name: 'CtoxReplicationIoError',
+    code,
+    phase: direction === 'pull' ? 'replication-pull' : direction === 'push' ? 'replication-push' : 'replication-io',
+    severity: 'error',
+    retryable: rawCode !== 'RC_PUSH_NO_AR',
+    collection,
+    direction: direction || null,
+    upstreamCode: rawCode || null,
+    batchSize: Number.isFinite(Number(details.batchSize)) ? Number(details.batchSize) : null,
+    rowCount: Number.isFinite(Number(details.rowCount)) ? Number(details.rowCount) : null,
+    message: replicationIoMessageFor(code),
+  };
+}
+
+function extractReplicationErrorDetails(error) {
+  const candidates = [
+    error,
+    error?.parameters,
+    error?.parameters?.error,
+    error?.parameters?.error?.parameters,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const direction = typeof candidate.direction === 'string' ? candidate.direction : '';
+    const code = typeof candidate.code === 'string' ? candidate.code : '';
+    const batchSize = candidate.batchSize ?? candidate.batch_size ?? null;
+    const pushRows = Array.isArray(candidate.pushRows) ? candidate.pushRows : null;
+    const pullRows = Array.isArray(candidate.pullRows) ? candidate.pullRows : null;
+    if (direction || code || batchSize !== null || pushRows || pullRows) {
+      return {
+        direction,
+        code,
+        batchSize,
+        rowCount: pushRows ? pushRows.length : pullRows ? pullRows.length : null,
+      };
+    }
+  }
+  return { direction: '', code: '', batchSize: null, rowCount: null };
+}
+
+function replicationIoMessageFor(code) {
+  if (code === 'ctox_replication_pull_failed') return 'RxDB WebRTC pull from the remote peer failed.';
+  if (code === 'ctox_replication_push_failed') return 'RxDB WebRTC push to the remote peer failed.';
+  if (code === 'ctox_replication_push_contract_invalid') return 'Remote RxDB peer returned an invalid push response contract.';
+  return 'RxDB WebRTC replication I/O failed.';
+}
+
+function classifyPeerLifecycleEvent(error) {
+  const code = String(error?.code || error?.parameters?.error?.code || '');
+  const message = [
+    error?.message,
+    (() => {
+      try { return JSON.stringify(error?.parameters || null); } catch { return ''; }
+    })(),
+  ].filter(Boolean).join('\n');
+  const haystack = [code, message].filter(Boolean).join('\n');
+  let lifecycleCode = '';
+  let lifecycleMessage = '';
+  if (haystack.includes('ERR_CONNECTION_FAILURE')) {
+    lifecycleCode = 'peer_connection_lost';
+    lifecycleMessage = 'WebRTC peer connection was lost; reconnect repair is scheduled.';
+  } else if (haystack.includes('ERR_SET_LOCAL_DESCRIPTION')) {
+    lifecycleCode = 'peer_negotiation_failed';
+    lifecycleMessage = 'WebRTC peer negotiation failed; reconnect repair is scheduled.';
+  } else if (haystack.includes('ERR_PC_CONSTRUCTOR') || haystack.includes('Cannot create so many PeerConnections')) {
+    lifecycleCode = 'peer_connection_limit';
+    lifecycleMessage = 'Browser peer connection limit was reached; reconnect repair is scheduled.';
+  } else if (haystack.includes('Still in CONNECTING state')) {
+    lifecycleCode = 'peer_connect_timeout';
+    lifecycleMessage = 'WebRTC peer stayed in connecting state; reconnect repair is scheduled.';
+  }
+  if (!lifecycleCode) return null;
+  return {
+    name: 'CtoxWebRtcPeerLifecycleEvent',
+    code: lifecycleCode,
+    phase: 'peer-reconnect',
+    severity: 'recoverable',
+    retryable: true,
+    lifecycle: true,
+    message: lifecycleMessage,
+  };
+}
+
+function isLifecycleEvent(value) {
+  return Boolean(value && value.lifecycle === true && value.name === 'CtoxWebRtcPeerLifecycleEvent');
+}
+
+function subscribeReplicationMetric(observable, subscriptions, onValue) {
+  const subscription = observable?.subscribe?.((value) => {
+    try { onValue(value); } catch {}
+  });
+  if (subscription) subscriptions.push(subscription);
 }
 
 function firstSignalingUrl(config) {
@@ -82,6 +866,67 @@ function firstSignalingUrl(config) {
   const url = urls.find((candidate) => typeof candidate === 'string' && candidate.trim());
   if (!url) throw new Error('Business OS WebRTC sync requires a signaling URL');
   return url;
+}
+
+async function signalingUrlWithBrowserMetadata(rawUrl, config) {
+  try {
+    const url = new URL(rawUrl, window.location.href);
+    const preserved = [...url.searchParams.entries()]
+      .filter(([key]) => !['client', 'role', 'instance_id', 'protocol', 'cap', 'token', 'token_iat', 'token_exp'].includes(key));
+    url.search = '';
+    for (const [key, value] of preserved) url.searchParams.append(key, value);
+    url.searchParams.set('client', 'ctox-business-os-browser');
+    url.searchParams.set('role', 'browser');
+    const instanceId = String(config?.instance_id || config?.instanceId || '').trim()
+      || String(config?.sync_room || '').replace(/^ctox-business-os:/, '').split(':')[0];
+    if (instanceId) url.searchParams.set('instance_id', instanceId);
+    url.searchParams.set('protocol', CTOX_RXDB_PROTOCOL);
+    const token = await signalingTokenFromRoomPassword(config?.signaling_room_password || config?.room_password || '');
+    if (token) {
+      const issuedAt = Math.floor(Date.now() / 1000);
+      url.searchParams.set('token', token);
+      url.searchParams.set('token_iat', String(issuedAt));
+      url.searchParams.set('token_exp', String(issuedAt + 24 * 60 * 60));
+    }
+    for (const capability of CTOX_BROWSER_CAPABILITIES) {
+      url.searchParams.append('cap', capability);
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
+async function signalingTokenFromRoomPassword(roomPassword) {
+  const password = String(roomPassword || '').trim();
+  if (!password) return '';
+  const cryptoApi = globalThis.crypto;
+  const subtle = cryptoApi?.subtle;
+  if (!subtle || typeof TextEncoder !== 'function') return '';
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(password));
+  const bytes = Array.from(new Uint8Array(digest));
+  const base64 = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return base64.slice(0, 32);
+}
+
+function iceServersFromConfig(config) {
+  const value = Array.isArray(config?.ice_servers) ? config.ice_servers : config?.iceServers;
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      const urls = typeof entry.urls === 'string'
+        ? entry.urls.trim()
+        : Array.isArray(entry.urls)
+          ? entry.urls.map((url) => (typeof url === 'string' ? url.trim() : '')).filter(Boolean)
+          : null;
+      if (!urls || (Array.isArray(urls) && !urls.length)) return null;
+      const server = { urls };
+      if (typeof entry.username === 'string' && entry.username.trim()) server.username = entry.username.trim();
+      if (typeof entry.credential === 'string' && entry.credential.trim()) server.credential = entry.credential;
+      return server;
+    })
+    .filter(Boolean);
 }
 
 function ensureBrowserProcessNextTick() {

@@ -1,0 +1,27 @@
+{
+  "name": "ctox-rxdb-js-browser-bundle",
+  "source_package": "src/core/rxdb/js-fork/source/package.json",
+  "source_lockfile": "src/core/rxdb/js-fork/source/package-lock.json",
+  "source_lock_sha256": "84d084ff4c1681647dbfdef6fa8c0c9a495f76d667ee69791376c2e972fd061a",
+  "source_name": "ctox-rxdb-js",
+  "source_version": "16.20.0",
+  "package_manager": "npm-ci",
+  "publish_policy": "private-package-only",
+  "version_discipline": "upstream-version-pinned-with-ctox-provenance",
+  "upstream_repository": "pubkey/rxdb",
+  "upstream_tag": "16.20.0",
+  "upstream_commit": "c69c94bb107a4d36dbf989de0e5f17081dcf7718",
+  "bundle_path": "src/apps/business-os/vendor/rxdb-bundle.mjs",
+  "bundle_sha256": "31d85742875f0205358af24d4373aa8b5c769839751d4ea568d934e118ae9824",
+  "protocol": "ctox-rxdb-protocol-v1",
+  "expected_exports": [
+    "createRxDatabase",
+    "getRxStorageDexie",
+    "replicateWebRTC",
+    "getConnectionHandlerSimplePeer",
+    "RxDBMigrationSchemaPlugin",
+    "removeRxDatabase",
+    "addRxPlugin"
+  ],
+  "status": "built-from-ctox-rxdb-js-source"
+}

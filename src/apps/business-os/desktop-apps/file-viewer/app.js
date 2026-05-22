@@ -1,3 +1,5 @@
+import { readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity4';
+
 export const manifest = {
   id: 'file-viewer',
   title: 'File Viewer',
@@ -39,6 +41,9 @@ export async function mount(container, ctx) {
       name,
       mimeType,
       contentState: args.contentState || '',
+      contentHash: args.contentHash || args.content_hash || '',
+      contentHashScheme: args.contentHashScheme || args.content_hash_scheme || '',
+      contentGenerationId: args.contentGenerationId || args.content_generation_id || '',
     });
     objectUrl = URL.createObjectURL(blob);
     renderBlob(content, objectUrl, blob, name, mimeType);
@@ -50,6 +55,7 @@ export async function mount(container, ctx) {
     });
     ctx.setTitle?.(name);
   } catch (error) {
+    ctx.reportFileIntegrityError?.(error, fileIntegrityDetails(args, fileId, mimeType));
     content.innerHTML = `<p class="is-error">Datei konnte nicht geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
   }
 
@@ -61,20 +67,34 @@ export async function mount(container, ctx) {
 
 async function readStoredOrMaterializeFile(ctx, file) {
   if (file.contentState === 'lazy' || file.contentState === 'missing') {
-    await materializeStoredFile(ctx, file);
-    return waitForStoredFile(ctx.db, file.fileId, file.mimeType);
+    const commandId = await materializeStoredFile(ctx, file);
+    return waitForStoredFile(ctx.db, file.fileId, file.mimeType, commandId);
   }
   try {
-    return await readStoredFile(ctx.db, file.fileId, file.mimeType);
+    return await readStoredFile(ctx.db, file.fileId, file.mimeType, {
+      contentGenerationId: file.contentGenerationId,
+      contentHash: file.contentHash,
+      contentHashScheme: file.contentHashScheme,
+    });
   } catch (error) {
     if (!isMissingContentError(error) || !file.path) throw error;
   }
-  await materializeStoredFile(ctx, file);
-  return waitForStoredFile(ctx.db, file.fileId, file.mimeType);
+  const commandId = await materializeStoredFile(ctx, file);
+  return waitForStoredFile(ctx.db, file.fileId, file.mimeType, commandId);
 }
 
 function isMissingContentError(error) {
   return String(error?.message || error || '').includes('Dateiinhalt fehlt');
+}
+
+function fileIntegrityDetails(args, fileId, mimeType) {
+  return {
+    fileId,
+    mimeType,
+    contentState: args.contentState || '',
+    contentGenerationId: args.contentGenerationId || args.content_generation_id || '',
+    contentHashScheme: args.contentHashScheme || args.content_hash_scheme || '',
+  };
 }
 
 async function materializeStoredFile(ctx, file) {
@@ -103,32 +123,35 @@ async function materializeStoredFile(ctx, file) {
       actor: actorContext(ctx.session),
     },
   });
-  const projection = await waitForCommandProjection(ctx.db, commandId);
-  if (projection.status === 'failed') {
-    const message = projection?.result?.error || projection?.error || 'Datei konnte nicht materialisiert werden.';
-    throw new Error(message);
-  }
+  return commandId;
 }
 
-async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
+async function readCommandProjection(db, commandId) {
   const collection = db?.collection?.('business_commands');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const doc = await collection?.findOne(commandId).exec();
-    const data = doc?.toJSON?.();
-    if (data && data.status && data.status !== 'pending_sync') return data;
-    await delay(300);
-  }
-  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+  const doc = await collection?.findOne(commandId).exec();
+  return doc?.toJSON?.() || null;
 }
 
-async function waitForStoredFile(db, fileId, mimeType, timeoutMs = 45000) {
+async function waitForStoredFile(db, fileId, mimeType, commandId = '', timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      return await readStoredFile(db, fileId, mimeType);
+      const file = await db?.collection?.('desktop_files')?.findOne(fileId).exec();
+      const fileData = file?.toJSON?.();
+      return await readStoredFile(db, fileId, mimeType, {
+        contentGenerationId: fileData?.content_generation_id || '',
+        contentHash: fileData?.content_hash || '',
+        contentHashScheme: fileData?.content_hash_scheme || '',
+      });
     } catch (error) {
       if (!isMissingContentError(error)) throw error;
+      if (commandId) {
+        const command = await readCommandProjection(db, commandId);
+        if (command?.status === 'failed') {
+          const message = command?.result?.error || command?.error || 'Datei konnte nicht materialisiert werden.';
+          throw new Error(message);
+        }
+      }
       await delay(300);
     }
   }
@@ -166,26 +189,12 @@ async function renderBlob(container, objectUrl, blob, name, mimeType) {
   `;
 }
 
-async function readStoredFile(db, fileId, mimeType = 'application/octet-stream') {
+async function readStoredFile(db, fileId, mimeType = 'application/octet-stream', options = {}) {
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();
-  const allChunks = docs
-    .map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-    .filter((chunk) => chunk.file_id === fileId);
-  const latestCreatedAt = Math.max(0, ...allChunks.map((chunk) => Number(chunk.created_at_ms || 0)));
-  const generation = allChunks.filter((chunk) => Number(chunk.created_at_ms || 0) === latestCreatedAt);
-  const total = Number(generation[0]?.total || generation.length || 0);
-  if (!generation.length || total <= 0) throw new Error('Dateiinhalt fehlt.');
-  const data = generation
-    .filter((chunk) => Number(chunk.idx) < total)
-    .sort((a, b) => a.idx - b.idx)
-    .map((chunk) => chunk.data)
-    .join('');
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let idx = 0; idx < binary.length; idx += 1) bytes[idx] = binary.charCodeAt(idx);
-  return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+  const allChunks = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+  return readStoredFileFromChunks(allChunks, fileId, mimeType, options);
 }
 
 function ensureStyles() {

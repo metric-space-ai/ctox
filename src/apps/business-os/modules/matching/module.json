@@ -18,5 +18,23 @@
       "right": "Object pool configuration and selected record detail",
       "bottom": "Matching prompt, schema, task status, and evidence"
     }
+  },
+  "category": "Operations",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "matching",
+    "scoring",
+    "imports",
+    "workflow"
+  ],
+  "store": {
+    "summary": "Configurable matching workspace for requirements, object pools, scoring runs, and result review.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/matching",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
   }
 }

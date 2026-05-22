@@ -1,6 +1,6 @@
-import { createBusinessDb } from './shared/db.js?v=20260520-chat-ux-theme1';
-import { createSyncRuntime } from './shared/sync.js?v=20260519-source-upsert1';
-import { createCommandBus } from './shared/command-bus.js?v=20260519-native-commandbus1';
+import { createBusinessDb, resetBusinessDb } from './shared/db.js?v=20260522-rxdb-fork1';
+import { createSyncRuntime } from './shared/sync.js?v=20260522-replication-io1';
+import { createCommandBus } from './shared/command-bus.js?v=20260521-rxdb-db32';
 import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth-oauth3';
 import { dispatchBusinessReport, initBusinessReporter } from './shared/business-reporter.js?v=20260520-rxdb-reports1';
 import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-ux-theme1';
@@ -11,7 +11,7 @@ import { createWindowManager } from './shared/window-manager.js?v=20260519-shell
 import { createTaskbar } from './shared/taskbar.js?v=20260519-shell-os1';
 import { createWindowSwitcher } from './shared/window-switcher.js?v=20260519-shell-os1';
 import { installBusinessDialogFallbacks } from './shared/dialogs.js?v=20260519-dialogs1';
-import { getSvgIcon } from './shared/icons.js?v=20260520-svg-icons2';
+import { getSvgIcon, registerSvgIcon } from './shared/icons.js?v=20260520-svg-icons2';
 import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
 import { collections as desktopCollections, migrationStrategies as desktopMigrationStrategies } from './modules/desktop/schema.js';
 
@@ -19,15 +19,23 @@ const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
 const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
+const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
+const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
+const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260520-web-research1';
+const APP_BUILD = '20260522-replication-io1';
+const BUSINESS_DB_NAME = 'ctox_business_os_v10';
+const RXDB_BOOTSTRAP_VERSION = '20260521-rxdb-db13';
 const CTOX_HEALTH_POLL_MS = 10000;
-const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'explorer', 'knowledge', 'research'];
+const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
+const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research'];
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
+let syncRecoveryRepairTimer = null;
+let syncRecoveryRepairRunning = false;
 
 const SHELL_COL_MIN = {
   left: 210,
@@ -40,12 +48,17 @@ const SHELL_COL_SIDE_MAX = 620;
 const state = {
   modules: [],
   activeModule: null,
+  moduleRevisions: {},
   navHistory: [],
   navIndex: -1,
   navTransitioning: false,
   activeUnmount: null,
   db: null,
+  dataPlaneGeneration: 0,
   sync: null,
+  syncConfig: null,
+  syncDiagnostics: null,
+  advancedStatusEverHealthy: false,
   commandBus: null,
   session: null,
   governance: null,
@@ -53,9 +66,12 @@ const state = {
   taskbarPins: [],
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
+  schemaImportRetries: new Map(),
+  schemaRetryTimers: new Map(),
   syncStartedModules: new Set(),
   backgroundModuleWorkScheduled: false,
   ctoxHealth: null,
+  fileIntegrityDiagnostics: [],
   ctoxHealthTimer: null,
   eventBus: null,
   contextMenu: null,
@@ -67,8 +83,37 @@ const state = {
   windowGeometrySaveTimers: new Map(),
 };
 
+function installAdvancedStatusInterface() {
+  const api = {
+    version: 'business-os-advanced-status-v1',
+    async snapshot(options = {}) {
+      return buildAdvancedStatusSnapshot(options);
+    },
+    async waitForHealthy(options = {}) {
+      const timeoutMs = Number(options.timeoutMs || 30000);
+      const intervalMs = Number(options.intervalMs || 500);
+      const deadline = Date.now() + timeoutMs;
+      let lastSnapshot = null;
+      while (Date.now() < deadline) {
+        lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
+        if (lastSnapshot.ok) return lastSnapshot;
+        await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
+      }
+      const error = new Error(`Business OS advanced status did not become healthy: ${JSON.stringify(lastSnapshot)}`);
+      error.status = lastSnapshot;
+      throw error;
+    },
+  };
+  window.CTOX_BUSINESS_OS_STATUS = api;
+  window.CTOX_BUSINESS_OS_APP = state;
+}
+
+installAdvancedStatusInterface();
+
 if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
-  globalThis.ctoxBusinessOsSmoke = { state };
+  const smokeRoot = typeof globalThis === 'undefined' ? window : globalThis;
+  smokeRoot.ctoxBusinessOsSmoke = { state };
+  window.ctoxBusinessOsSmoke = { state };
 }
 
 const moduleAliases = {};
@@ -94,6 +139,7 @@ const shellMessages = {
     desktop: 'Desktop',
     showDesktop: 'Desktop anzeigen',
     closeModule: 'Schließen',
+    selectVersion: 'Version...',
     windowDefaultTitle: 'Fenster',
     windowMaximize: 'Maximieren',
     windowRestore: 'Wiederherstellen',
@@ -115,6 +161,7 @@ const shellMessages = {
       desktop: 'Desktop',
       ctox: 'CTOX',
       documents: 'Dokumente',
+      spreadsheets: 'Tabellen',
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
@@ -142,6 +189,7 @@ const shellMessages = {
     desktop: 'Desktop',
     showDesktop: 'Show desktop',
     closeModule: 'Close',
+    selectVersion: 'Version...',
     windowDefaultTitle: 'Window',
     windowMaximize: 'Maximize',
     windowRestore: 'Restore',
@@ -163,6 +211,7 @@ const shellMessages = {
       desktop: 'Desktop',
       ctox: 'CTOX',
       documents: 'Documents',
+      spreadsheets: 'Spreadsheets',
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
@@ -197,9 +246,13 @@ const els = {
   forwardButton: document.querySelector('[data-shell-forward]'),
 };
 
-bootstrap().catch((error) => {
+let currentProgress = 0;
+let progressTimer = null;
+
+bootstrap().catch(async (error) => {
   console.error(error);
-  setStatus(`Startup failed: ${error.message || error}`);
+  if (await recoverFromLocalRxDbSchemaDrift(error)) return;
+  showStartupError(error);
 });
 
 async function bootstrap() {
@@ -210,38 +263,41 @@ async function bootstrap() {
   applyShellStyle(prefs.shellStyle || 'windows', { persist: false });
   syncHeaderControls();
   wireShellActions();
-  setStatus(shellText('startupChecking'));
+
+  setStartupProgress(10, 'Initialisiere Systemeinstellungen...');
+
+  setStartupProgress(30, 'Sitzungsdaten werden überprüft...');
   const session = await loadSession();
   state.session = session;
   renderAccountButton(session);
   if (!session.authenticated) {
-    renderLoginGate(session);
+    const loginFailed = session.reason === 'invalid_credentials'
+      || new URLSearchParams(location.search).has('loginFailed');
+    clearStoredBrowserAuth();
+    renderLoginGate(session, { loginFailed });
     setStatus(shellText('loginRequired'));
     return;
   }
-  setStatus(shellText('syncConnecting'));
+
+  setStartupProgress(50, 'Lokale Datenbank wird geladen...');
   const syncConfig = await loadSyncConfig();
-  setStatus('Lokale Datenbank initialisieren');
+  await resetBusinessDataPlaneForBuildIfNeeded();
+  await openBusinessDataPlane(syncConfig);
+
+  setStartupProgress(70, 'Verbindung zu Sync-Peers wird hergestellt...');
+  let modules;
   try {
-    state.db = await createBusinessDb({ name: 'ctox_business_os_v4' });
-    await registerCoreCollections();
-    await hydrateTaskbarPinsFromDesktopLayout();
-  } catch (dbError) {
-    console.error("Database initialization failed, falling back to local-storage database:", dbError);
-    setStatus(`DB-Warnung: ${dbError.message || dbError}`);
+    setStartupProgress(85, 'Lade verfügbare Module & Anwendungsmanifeste...');
+    modules = await loadModules();
+  } catch (error) {
+    if (!isModuleCatalogSyncError(error)) throw error;
+    console.warn('[business-os] module catalog sync stalled; resetting local RxDB cache and retrying WebRTC sync', error);
+    setStartupProgress(80, 'Lokale RxDB wird neu synchronisiert...');
+    await repairBusinessDataPlane(syncConfig);
+    modules = await loadModules(20000);
   }
-  renderTabs();
-  state.sync = createSyncRuntime({
-    db: state.db,
-    config: syncConfig,
-  });
-  state.commandBus = createCommandBus({
-    db: state.db,
-    config: syncConfig,
-  });
-  startShellCtoxHealthMonitor();
-  const modules = await loadModules();
   state.modules = modules.modules || [];
+  registerCustomModuleIcons();
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
   state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
@@ -296,15 +352,17 @@ async function bootstrap() {
   initBusinessReporter({
     session: state.session,
     getActiveModule: () => state.activeModule,
-    commandBus: state.commandBus,
-    db: state.db,
+    commandBus: createLiveCommandBusFacade(),
+    db: createLiveDbFacade(),
   });
   initBusinessChat({
     session: state.session,
-    commandBus: state.commandBus,
-    db: state.db,
+    commandBus: createLiveCommandBusFacade(),
+    db: createLiveDbFacade(),
     getActiveModule: () => state.activeModule,
   });
+
+  setStartupProgress(95, 'Workspace ist bereit. Öffne Standardmodul...');
   try {
     await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
     setStatus(shellText('localWorkspace'));
@@ -316,9 +374,91 @@ async function bootstrap() {
   refreshRemoteShellStateInBackground();
 }
 
+async function resetBusinessDataPlaneForBuildIfNeeded() {
+  if (localStorage.getItem(RXDB_BOOTSTRAP_VERSION_KEY) === RXDB_BOOTSTRAP_VERSION) return;
+  setStatus('Lokale RxDB wird neu synchronisiert');
+  await resetBusinessDb({ name: BUSINESS_DB_NAME });
+  localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, RXDB_BOOTSTRAP_VERSION);
+}
+
+async function openBusinessDataPlane(syncConfig) {
+  setStartupProgress(51, 'Lokale Datenbank-Konfiguration wird vorbereitet...');
+  state.syncConfig = syncConfig;
+
+  setStartupProgress(54, 'Verbindung zur lokalen IndexedDB-Instanz wird geöffnet...');
+  state.db = await createBusinessDb({ name: BUSINESS_DB_NAME });
+
+  setStartupProgress(58, 'Systemtabellen und reaktive Schemata werden registriert...');
+  await registerCoreCollections();
+
+  setStartupProgress(62, 'Desktop-Layout und Fensterkonfiguration werden geladen...');
+  await hydrateTaskbarPinsFromDesktopLayout();
+  renderTabs();
+
+  setStartupProgress(66, 'Reaktive Daten-Synchronisation (WebRTC) wird initialisiert...');
+  state.sync = createSyncRuntime({
+    db: state.db,
+    config: syncConfig,
+    onDiagnostic: updateSyncDiagnostics,
+  });
+
+  setStartupProgress(69, 'Offline-First Befehls-Bus wird gestartet...');
+  state.commandBus = createCommandBus({
+    db: () => state.db,
+    config: syncConfig,
+  });
+  startShellCtoxHealthMonitor();
+}
+
+async function repairBusinessDataPlane(syncConfig) {
+  state.dataPlaneGeneration += 1;
+  clearSyncRecoveryRepairTimer();
+  if (state.ctoxHealthTimer) {
+    window.clearInterval(state.ctoxHealthTimer);
+    state.ctoxHealthTimer = null;
+  }
+  try { await state.sync?.stop?.(); } catch (error) { console.warn('[business-os] sync stop before cache reset failed', error); }
+  try { await state.db?.close?.(); } catch (error) { console.warn('[business-os] db close before cache reset failed', error); }
+  state.db = null;
+  state.sync = null;
+  updateSyncDiagnostics(null);
+  state.commandBus = null;
+  state.syncStartedModules.clear();
+  state.schemaRegistrations.clear();
+  for (const timer of state.schemaRetryTimers.values()) {
+    window.clearTimeout(timer);
+  }
+  state.schemaRetryTimers.clear();
+  state.schemaRegistrationQueue = Promise.resolve();
+  await resetBusinessDb({ name: BUSINESS_DB_NAME });
+  await openBusinessDataPlane(syncConfig);
+}
+
+function isModuleCatalogSyncError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Modulkatalog wurde noch nicht synchronisiert')
+    || message.includes('business_module_catalog collection is required')
+    || message.includes('module catalog');
+}
+
 async function registerCoreCollections() {
-  await state.db.addCollections(withMigrationStrategies(ctoxCollections, ctoxMigrationStrategies));
-  await state.db.addCollections(withMigrationStrategies(desktopCollections, desktopMigrationStrategies));
+  const t0 = performance.now();
+  setStartupProgress(58, 'Systemtabellen werden vorbereitet...');
+
+  const ctoxSchemes = withMigrationStrategies(ctoxCollections, ctoxMigrationStrategies);
+  const desktopSchemes = withMigrationStrategies(desktopCollections, desktopMigrationStrategies);
+
+  const consolidated = {
+    ...ctoxSchemes,
+    ...desktopSchemes,
+  };
+
+  setStartupProgress(59, 'Registriere Systemdaten-Struktur in IndexedDB...');
+  await state.db.addCollections(consolidated);
+
+  setStartupProgress(61, 'Systemtabellen erfolgreich initialisiert.');
+  const t1 = performance.now();
+  console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   await primeWindowGeometryCache();
 }
 
@@ -595,6 +735,10 @@ function wireShellActions() {
       handleModuleCommand(event);
     }
   });
+  window.addEventListener('ctox-business-os-modules-changed', async (event) => {
+    console.log('[business-os] modules changed event received:', event.detail);
+    await refreshModules();
+  });
   window.addEventListener('hashchange', () => {
     if (state.navTransitioning) return;
     const id = currentHashModuleId();
@@ -640,6 +784,57 @@ function wireShellActions() {
       event.preventDefault();
       const moduleId = sourceButton.dataset.moduleSource || state.activeModule?.id;
       if (moduleId) openModuleSourceEditor(moduleId);
+    }
+  });
+  els.host?.addEventListener('change', async (event) => {
+    const select = event.target.closest('[data-module-version-select]');
+    if (select) {
+      const moduleId = select.dataset.moduleVersionSelect;
+      const snapshotId = select.value;
+      if (!snapshotId) return;
+
+      const moduleName = moduleDisplayTitleFor(moduleId);
+      const confirmMsg = shellLang() === 'de'
+        ? `Möchtest du das Modul "${moduleName}" wirklich auf diese Version zurücksetzen?`
+        : `Do you really want to rollback module "${moduleName}" to this version?`;
+
+      if (!confirm(confirmMsg)) {
+        select.value = ''; // Reset select to placeholder
+        return;
+      }
+
+      try {
+        setStatus(shellLang() === 'de' ? 'Setze Version zurück...' : 'Rolling back version...');
+        select.disabled = true;
+
+        await dispatchShellModuleCommand({
+          commandType: 'ctox.source.rollback_snapshot',
+          moduleId,
+          recordId: `${moduleId}:snapshots`,
+          payload: { module_id: moduleId, snapshot_id: snapshotId },
+          source: 'business-os-shell',
+        });
+
+        // Update module revision to bust cache
+        if (!state.moduleRevisions) {
+          state.moduleRevisions = {};
+        }
+        state.moduleRevisions[moduleId] = Date.now();
+
+        // Remove from schemaRegistrations to force schema re-import
+        state.schemaRegistrations.delete(moduleId);
+
+        setStatus(shellLang() === 'de' ? 'Erfolgreich zurückgesetzt!' : 'Successfully rolled back!');
+
+        // Force reload the module
+        await openModule(moduleId, { force: true });
+      } catch (error) {
+        console.error('[business-os] rollback failed:', error);
+        setStatus((shellLang() === 'de' ? 'Fehler beim Zurücksetzen: ' : 'Rollback failed: ') + (error?.message || error), true);
+      } finally {
+        select.disabled = false;
+        select.value = ''; // Reset select to placeholder
+      }
     }
   });
   els.ctoxWarning?.addEventListener('click', (event) => {
@@ -716,9 +911,9 @@ function openSettingsDrawer(options = {}) {
     session: state.session,
     governance: state.governance,
     syncConfig: state.sync?.config,
-    sync: state.sync,
-    commandBus: state.commandBus,
-    db: state.db,
+    sync: createLiveSyncFacade(),
+    commandBus: createLiveCommandBusFacade(),
+    db: createLiveDbFacade(),
     initialTab: options.initialTab || 'runtime',
     onAccount: openAccountDrawer,
     onClose: closeDrawers,
@@ -1034,10 +1229,422 @@ function shellText(key) {
   return shellMessages[shellLang()]?.[key] || shellMessages.en[key] || key;
 }
 
+function updateSyncDiagnostics(snapshot) {
+  state.syncDiagnostics = snapshot;
+  window.ctoxBusinessOsSyncDiagnostics = snapshot;
+  scheduleSyncRecoveryRepairIfNeeded(snapshot);
+  refreshOpenSyncDiagnosticsDrawer();
+  window.dispatchEvent(new CustomEvent('ctox-business-os-sync-diagnostics', {
+    detail: snapshot,
+  }));
+}
+
+function scheduleSyncRecoveryRepairIfNeeded(snapshot) {
+  if (!hasRecoverableWebRtcFailure(snapshot)) {
+    clearSyncRecoveryRepairTimer();
+    return;
+  }
+  if (syncRecoveryRepairTimer || syncRecoveryRepairRunning) return;
+  syncRecoveryRepairTimer = window.setTimeout(() => {
+    syncRecoveryRepairTimer = null;
+    repairRecoveringDataPlane().catch((error) => {
+      console.error('[business-os] automatic RxDB/WebRTC data-plane repair failed', error);
+    });
+  }, SYNC_RECOVERY_REPAIR_DELAY_MS);
+}
+
+function clearSyncRecoveryRepairTimer() {
+  if (!syncRecoveryRepairTimer) return;
+  window.clearTimeout(syncRecoveryRepairTimer);
+  syncRecoveryRepairTimer = null;
+}
+
+function hasRecoverableWebRtcFailure(snapshot) {
+  if (!snapshot || snapshot.mode !== 'webrtc') return false;
+  const collections = Object.values(snapshot.collections || {});
+  const hadEstablishedConnection = collections.some((collection) => collection?.connectedAt || collection?.initialReplicationAt);
+  if (!hadEstablishedConnection && !state.advancedStatusEverHealthy) return false;
+  if (snapshot.phase === 'reconnecting') return true;
+  return collections.some((collection) => collection?.connectionStatus === 'reconnecting');
+}
+
+async function repairRecoveringDataPlane() {
+  if (syncRecoveryRepairRunning || !state.syncConfig || !state.db) return;
+  syncRecoveryRepairRunning = true;
+  try {
+    console.warn('[business-os] repairing RxDB/WebRTC data plane after stalled reconnect');
+    setStatus('RxDB/WebRTC wird neu verbunden');
+    await repairBusinessDataPlane(state.syncConfig);
+    await startCriticalSyncCollections();
+    if (state.activeModule) startModuleSync(state.activeModule);
+    window.setTimeout(() => startAllModuleSync(), 5000);
+  } finally {
+    syncRecoveryRepairRunning = false;
+  }
+}
+
+async function startCriticalSyncCollections() {
+  const collections = [
+    'business_module_catalog',
+    'ctox_runtime_settings',
+    'business_commands',
+    'ctox_queue_tasks',
+    'desktop_files',
+    'desktop_file_chunks',
+  ];
+  for (const collection of collections) {
+    try {
+      await state.sync?.startCollection?.(collection);
+    } catch (error) {
+      console.warn(`[business-os] critical sync collection ${collection} did not start during repair`, error);
+    }
+  }
+}
+
+async function buildAdvancedStatusSnapshot(options = {}) {
+  const diagnostics = state.syncDiagnostics || null;
+  const collections = diagnostics?.collections || {};
+  const collectionValues = Object.values(collections);
+  const requiredCollections = Array.isArray(options.requiredCollections) && options.requiredCollections.length
+    ? options.requiredCollections.filter((collection) => typeof collection === 'string' && collection.trim())
+    : [
+        'business_module_catalog',
+        'ctox_runtime_settings',
+        'business_commands',
+        'ctox_queue_tasks',
+        'desktop_files',
+        'desktop_file_chunks',
+      ];
+  const failedCollections = collectionValues
+    .filter((item) => ['failed', 'error', 'stopped'].includes(item?.connectionStatus || item?.status))
+    .map((item) => item.collection)
+    .filter(Boolean);
+  const collectionErrors = collectionValues
+    .filter((item) => item?.lastError)
+    .map((item) => serializeAdvancedStatusCollectionError(item))
+    .filter(Boolean);
+  const checkpointErrors = collectionErrors
+    .filter((error) => error?.name === 'CtoxCheckpointProtocolError');
+  const schemaErrors = collectionErrors
+    .filter((error) => error?.name === 'CtoxSchemaProtocolError');
+  const replicationErrors = collectionErrors
+    .filter((error) => error?.name === 'CtoxReplicationIoError');
+  const lifecycleEvents = collectionValues
+    .filter((item) => item?.lastLifecycleEvent)
+    .map((item) => serializeAdvancedStatusLifecycleEvent(item))
+    .filter(Boolean);
+  const fileIntegrityErrors = state.fileIntegrityDiagnostics
+    .map((item) => serializeAdvancedStatusFileIntegrityError(item))
+    .filter(Boolean);
+  const reconnectingCollections = collectionValues
+    .filter((item) => item?.connectionStatus === 'reconnecting' || item?.status === 'reconnecting')
+    .map((item) => item.collection)
+    .filter(Boolean);
+  const peerSessions = collectionValues
+    .filter((item) => item?.remotePeerSession)
+    .map((item) => ({
+      collection: item.collection || null,
+      protocol: item.remoteProtocol || null,
+      capabilities: Array.isArray(item.remoteCapabilities) ? item.remoteCapabilities : [],
+      peerSession: item.remotePeerSession,
+      generation: Number(item.peerGeneration || 0),
+      previousPeerSession: item.previousPeerSession || null,
+      checkpoint: sanitizeAdvancedStatusRemoteCheckpoint(item.remoteCheckpoint || null),
+      generationChangedAt: item.peerGenerationChangedAt || null,
+      seenAt: item.peerSessionSeenAt || null,
+    }));
+  const bodyDataset = { ...document.body?.dataset };
+  const counts = options.includeCounts === false ? null : await collectAdvancedStatusCounts();
+  const requiredCollectionEvidence = await collectAdvancedStatusRequiredEvidence(requiredCollections);
+  const initialSync = buildAdvancedStatusInitialSync(requiredCollections, collections);
+  const missingRequiredCollections = requiredCollections.filter((collection) => !isRequiredCollectionReady({
+    collection,
+    diagnostics: collections[collection] || null,
+    evidence: requiredCollectionEvidence[collection] || null,
+  }));
+  const checks = {
+    authenticated: Boolean(state.session?.authenticated),
+    shellLoaded: state.modules.length > 0,
+    activeModuleLoaded: Boolean(state.activeModule?.id),
+    workspaceNotLoading: !bodyDataset.moduleLoading,
+    dataPlaneWebrtc: state.sync?.mode === 'webrtc' && diagnostics?.mode === 'webrtc',
+    moduleCatalogAvailable: state.modules.length > 0 && (counts === null || Number(counts.business_module_catalog || 0) > 0),
+    requiredCollectionsConnected: missingRequiredCollections.length === 0,
+    requiredCollectionsInitialSyncComplete: initialSync.missingInitialReplication.length === 0,
+    noCheckpointProtocolErrors: checkpointErrors.length === 0,
+    noSchemaProtocolErrors: schemaErrors.length === 0,
+    noReplicationIoErrors: replicationErrors.length === 0,
+    noFailedCollections: failedCollections.length === 0,
+    noStalledReconnect: reconnectingCollections.length === 0,
+    noAutomaticRepairRunning: !syncRecoveryRepairRunning,
+  };
+  const ok = Object.values(checks).every(Boolean);
+  if (ok) state.advancedStatusEverHealthy = true;
+  return {
+    version: 'business-os-advanced-status-v1',
+    build: APP_BUILD,
+    ok,
+    checkedAt: new Date().toISOString(),
+    checks,
+    failures: Object.entries(checks).filter(([, passed]) => !passed).map(([name]) => name),
+    shell: {
+      readyState: document.readyState,
+      bodyDataset,
+      activeModule: state.activeModule?.id || null,
+      moduleCount: state.modules.length,
+      moduleIds: state.modules.map((mod) => mod.id).filter(Boolean),
+      statusText: document.querySelector('[data-status]')?.textContent || '',
+      visibleTextSample: (document.body?.innerText || '').slice(0, 500),
+    },
+    sync: {
+      mode: state.sync?.mode || null,
+      phase: diagnostics?.phase || null,
+      syncRoom: diagnostics?.syncRoom || null,
+      signalingUrls: diagnostics?.signalingUrls || [],
+      iceServersConfigured: diagnostics?.iceServersConfigured || 0,
+      protocol: diagnostics?.protocol || null,
+      capabilities: Array.isArray(diagnostics?.capabilities) ? diagnostics.capabilities : [],
+      peerSessions,
+      collectionTotal: collectionValues.length,
+      failedCollections,
+      collectionErrors,
+      checkpointErrors,
+      schemaErrors,
+      replicationErrors,
+      reconnectingCollections,
+      lifecycleEvents,
+      requiredCollections,
+      requiredCollectionEvidence,
+      missingRequiredCollections,
+      initialSync,
+      lastError: diagnostics?.lastError || null,
+      lastLifecycleEvent: diagnostics?.lastLifecycleEvent || null,
+    },
+    fileIntegrity: {
+      errorTotal: fileIntegrityErrors.length,
+      errors: fileIntegrityErrors,
+      lastError: fileIntegrityErrors[0] || null,
+    },
+    data: { counts },
+  };
+}
+
+function serializeAdvancedStatusCollectionError(item) {
+  const error = item?.lastError;
+  if (!error) return null;
+  const rawCode = typeof error.code === 'string' ? error.code.trim() : '';
+  const rawName = typeof error.name === 'string' ? error.name.trim() : '';
+  const rawMessage = typeof error.message === 'string' ? error.message.trim() : '';
+  const rawPhase = typeof error.phase === 'string' ? error.phase.trim() : '';
+  const rawSeverity = typeof error.severity === 'string' ? error.severity.trim() : '';
+  return {
+    collection: item.collection || null,
+    status: item.connectionStatus || item.status || null,
+    name: rawName || 'Error',
+    code: rawCode || null,
+    phase: rawPhase || null,
+    severity: rawSeverity || null,
+    retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
+    expected: typeof error.expected === 'string' ? error.expected.slice(0, 120) : null,
+    actual: typeof error.actual === 'string' ? error.actual.slice(0, 120) : null,
+    direction: typeof error.direction === 'string' ? error.direction.slice(0, 20) : null,
+    upstreamCode: typeof error.upstreamCode === 'string' ? error.upstreamCode.slice(0, 40) : null,
+    batchSize: Number.isFinite(Number(error.batchSize)) ? Number(error.batchSize) : null,
+    rowCount: Number.isFinite(Number(error.rowCount)) ? Number(error.rowCount) : null,
+    message: rawMessage.slice(0, 240),
+  };
+}
+
+function serializeAdvancedStatusLifecycleEvent(item) {
+  const event = item?.lastLifecycleEvent;
+  if (!event) return null;
+  return {
+    collection: item.collection || null,
+    status: item.connectionStatus || item.status || null,
+    name: typeof event.name === 'string' && event.name.trim() ? event.name.trim() : 'CtoxWebRtcPeerLifecycleEvent',
+    code: typeof event.code === 'string' ? event.code : null,
+    phase: typeof event.phase === 'string' ? event.phase : null,
+    severity: typeof event.severity === 'string' ? event.severity : null,
+    retryable: event.retryable === true,
+    message: String(event.message || '').slice(0, 240),
+    reconnectingSince: item.reconnectingSince || null,
+  };
+}
+
+function reportFileIntegrityError(source, error, details = {}) {
+  const code = typeof error?.code === 'string' ? error.code : '';
+  const phase = typeof error?.phase === 'string' ? error.phase : '';
+  const name = typeof error?.name === 'string' ? error.name : 'Error';
+  if (!code && name !== 'CtoxFileChunkIntegrityError') return;
+  state.fileIntegrityDiagnostics.unshift({
+    source: String(source || 'business-os').slice(0, 80),
+    name,
+    code: code || null,
+    phase: phase || null,
+    message: String(error?.message || error || '').slice(0, 240),
+    details: sanitizeFileIntegrityDetails(details),
+    observedAt: new Date().toISOString(),
+  });
+  state.fileIntegrityDiagnostics = state.fileIntegrityDiagnostics.slice(0, 10);
+}
+
+function serializeAdvancedStatusFileIntegrityError(item) {
+  if (!item) return null;
+  return {
+    source: item.source || null,
+    name: item.name || 'CtoxFileChunkIntegrityError',
+    code: item.code || null,
+    phase: item.phase || null,
+    message: String(item.message || '').slice(0, 240),
+    details: sanitizeFileIntegrityDetails(item.details || {}),
+    observedAt: item.observedAt || null,
+  };
+}
+
+function sanitizeFileIntegrityDetails(details = {}) {
+  const clean = {};
+  for (const [key, value] of Object.entries(details || {})) {
+    if (!['appId', 'fileId', 'mimeType', 'contentState', 'contentGenerationId', 'contentHashScheme'].includes(key)) continue;
+    clean[key] = String(value || '').slice(0, 160);
+  }
+  return clean;
+}
+
+function sanitizeAdvancedStatusRemoteCheckpoint(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    source: typeof value.source === 'string' ? value.source.slice(0, 80) : null,
+    state: typeof value.state === 'string' ? value.state.slice(0, 40) : null,
+    collection: typeof value.collection === 'string' ? value.collection.slice(0, 120) : null,
+    schemaHash: typeof value.schemaHash === 'string' ? value.schemaHash.slice(0, 96) : null,
+    latestLwt: Number.isFinite(Number(value.latestLwt)) ? Number(value.latestLwt) : null,
+    latestIdHash: typeof value.latestIdHash === 'string' ? value.latestIdHash.slice(0, 96) : null,
+    epoch: typeof value.epoch === 'string' ? value.epoch.slice(0, 96) : null,
+  };
+}
+
+function buildAdvancedStatusInitialSync(requiredCollections, collections) {
+  const now = Date.now();
+  const stallAfterMs = 45000;
+  const entries = requiredCollections.map((collection) => {
+    const diagnostics = collections?.[collection] || null;
+    const initialReplicationAt = diagnostics?.initialReplicationAt || null;
+    const startedAt = diagnostics?.initialReplicationStartedAt || null;
+    const startedMs = startedAt ? Date.parse(startedAt) : NaN;
+    const state = initialReplicationAt
+      ? 'complete'
+      : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
+    const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
+      ? Math.max(0, now - startedMs)
+      : 0;
+    return {
+      collection,
+      state,
+      status: diagnostics?.status || null,
+      connectionStatus: diagnostics?.connectionStatus || null,
+      source: diagnostics?.initialReplicationSource || null,
+      initialReplicationStartedAt: startedAt,
+      initialReplicationAt,
+      stalled: !initialReplicationAt && stalledForMs >= stallAfterMs,
+      stalledForMs,
+    };
+  });
+  return {
+    requiredTotal: entries.length,
+    completedTotal: entries.filter((entry) => entry.state === 'complete').length,
+    missingInitialReplication: entries
+      .filter((entry) => entry.state !== 'complete')
+      .map((entry) => entry.collection),
+    pendingCollections: entries
+      .filter((entry) => !['complete', 'failed'].includes(entry.state))
+      .map((entry) => entry.collection),
+    stalledCollections: entries
+      .filter((entry) => entry.stalled)
+      .map((entry) => entry.collection),
+    entries,
+  };
+}
+
+function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
+  const status = diagnostics?.connectionStatus || diagnostics?.status || '';
+  if (evidence?.hasCollection !== true || !diagnostics) return false;
+  const initialReplicationComplete = Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
+  if (!initialReplicationComplete) return false;
+  if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
+  if (['connected', 'running', 'reused'].includes(status)) return true;
+  if (evidence?.hasData === true) return true;
+  if (![
+    'business_commands',
+    'ctox_queue_tasks',
+    'desktop_files',
+    'desktop_file_chunks',
+  ].includes(collection)) return false;
+  return true;
+}
+
+async function collectAdvancedStatusCounts() {
+  const names = [
+    'business_module_catalog',
+    'ctox_runtime_settings',
+    'desktop_files',
+    'desktop_file_chunks',
+    'business_commands',
+    'ctox_queue_tasks',
+  ];
+  const counts = {};
+  await Promise.all(names.map(async (name) => {
+    counts[name] = await countCollectionDocs(name);
+  }));
+  return counts;
+}
+
+async function collectAdvancedStatusRequiredEvidence(names) {
+  const evidence = {};
+  await Promise.all(names.map(async (name) => {
+    const collection = state.db?.raw?.[name];
+    if (!collection?.find) {
+      evidence[name] = { hasCollection: false, hasData: false };
+      return;
+    }
+    try {
+      const docs = await collection.find({ limit: 1 }).exec();
+      const hasData = docs
+        .map((doc) => doc?.toJSON?.() || doc)
+        .some((doc) => !doc?._deleted && !doc?.is_deleted);
+      evidence[name] = { hasCollection: true, hasData };
+    } catch (error) {
+      evidence[name] = { hasCollection: true, hasData: false, error: String(error?.message || error) };
+    }
+  }));
+  return evidence;
+}
+
+async function countCollectionDocs(name) {
+  const collection = state.db?.raw?.[name];
+  if (!collection?.find) return null;
+  try {
+    const docs = await collection.find({ limit: 20 }).exec();
+    return docs
+      .map((doc) => doc?.toJSON?.() || doc)
+      .filter((doc) => !doc?._deleted && !doc?.is_deleted)
+      .length;
+  } catch (error) {
+    console.warn(`[business-os] advanced status count failed for ${name}`, error);
+    return null;
+  }
+}
+
+function refreshOpenSyncDiagnosticsDrawer() {
+  if (!els.rightDrawer || els.rightDrawer.hidden) return;
+  if (els.rightDrawer.firstElementChild?.dataset?.drawerKind !== 'sync-diagnostics') return;
+  els.rightDrawer.replaceChildren(renderSyncDiagnosticsDrawer());
+}
+
 const MODULE_GLYPHS = {
   desktop: '🖥',
   ctox: '◆',
   documents: '📄',
+  spreadsheets: '📊',
   knowledge: '📚',
   matching: '🔗',
   outbound: '📣',
@@ -1045,6 +1652,7 @@ const MODULE_GLYPHS = {
   research: '🔬',
   conversations: '💬',
   notes: '📝',
+  'app-store': '🛍',
 };
 
 function glyphForModule(moduleId) {
@@ -1058,7 +1666,7 @@ const DESKTOP_APPS = [
     glyph: '📁',
     defaultWidth: 720,
     defaultHeight: 460,
-    loader: () => import('./desktop-apps/explorer/app.js?v=20260519-shell-os1'),
+    loader: () => import('./desktop-apps/explorer/app.js?v=20260522-file-chunk-integrity4'),
   },
   {
     id: 'code-editor',
@@ -1074,7 +1682,15 @@ const DESKTOP_APPS = [
     glyph: '◫',
     defaultWidth: 760,
     defaultHeight: 560,
-    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260519-file-viewer1'),
+    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260522-file-chunk-integrity4'),
+  },
+  {
+    id: 'creator',
+    title: 'App Creator',
+    glyph: '⚙️',
+    defaultWidth: 1200,
+    defaultHeight: 800,
+    loader: () => import('./desktop-apps/creator/app.js?v=20260521-app-creator1'),
   },
 ];
 
@@ -1106,17 +1722,20 @@ async function openDesktopApp(appId, options = {}) {
   try {
     const mod = await entry.loader();
     teardown = await mod.mount(win.container, {
-      db: state.db,
-      sync: state.sync,
-      commandBus: state.commandBus,
+      db: createLiveDbFacade(),
+      sync: createLiveSyncFacade(),
+      commandBus: createLiveCommandBusFacade(),
       session: state.session,
       contextMenu: state.contextMenu,
       notifications: state.notifications,
       locale: shellLang(),
       args: options.args || {},
-      authHeaders: businessOsAuthHeaders,
       openDesktopApp,
       openBusinessChat,
+      reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`desktop-app:${entry.id}`, error, {
+        appId: entry.id,
+        ...details,
+      }),
       isTaskbarPinned,
       pinToTaskbar: pinTaskbarTarget,
       unpinFromTaskbar: unpinTaskbarTarget,
@@ -1668,6 +2287,7 @@ async function openModule(moduleId, options = {}) {
   els.host.replaceChildren(renderModuleFrame(mod));
   els.leftContent.replaceChildren(renderLeftContext(mod));
   els.rightContent.replaceChildren(renderRightContext(mod));
+  loadModuleVersionsDropdown(mod.id);
   try {
     await registerModuleSchemas(mod);
   } catch (error) {
@@ -1675,7 +2295,7 @@ async function openModule(moduleId, options = {}) {
     setStatus(`Schema warning: ${error.message || error}`);
   }
   try {
-    const moduleScript = await import(`./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}`);
+    const moduleScript = await import(`./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`);
     if (typeof moduleScript.mount === 'function') {
       state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
     }
@@ -1734,8 +2354,13 @@ async function registerModuleSchemas(mod) {
   if (state.schemaRegistrations.has(mod.id)) {
     return state.schemaRegistrations.get(mod.id);
   }
+  const generation = state.dataPlaneGeneration;
+  const db = state.db;
   const registration = (async () => {
-    const schemaModule = await import(`./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}`);
+    const retry = Number(state.schemaImportRetries.get(mod.id) || 0);
+    const retryQuery = retry > 0 ? `_schemaRetry${retry}` : '';
+    const schemaModule = await import(`./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}${retryQuery}`);
+    if (isStaleDataPlaneGeneration(generation)) return;
     if (schemaModule.collections) {
       const collections = withMigrationStrategies(
         schemaModule.collections,
@@ -1743,7 +2368,10 @@ async function registerModuleSchemas(mod) {
       );
       const nextRegistration = state.schemaRegistrationQueue
         .catch(() => {})
-        .then(() => state.db.addCollections(collections));
+        .then(() => {
+          if (isStaleDataPlaneGeneration(generation)) return null;
+          return db.addCollections(collections);
+        });
       state.schemaRegistrationQueue = nextRegistration.catch(() => {});
       await nextRegistration;
     }
@@ -1782,20 +2410,67 @@ function startAllModuleSync() {
 
 function startModuleSync(mod) {
   if (!mod?.id || !state.sync || state.syncStartedModules.has(mod.id)) return;
+  if (state.schemaRetryTimers.has(mod.id)) return;
   state.syncStartedModules.add(mod.id);
   registerModuleSchemas(mod)
-    .then(() => state.sync.startModule(mod))
-    .catch((error) => {
+    .then(() => {
+      state.schemaImportRetries.delete(mod.id);
+      return state.sync.startModule(mod);
+    })
+    .catch(async (error) => {
       state.syncStartedModules.delete(mod.id);
+      if (isRecoverableDataPlaneAbort(error)) return;
+      if (await recoverFromLocalRxDbSchemaDrift(error)) return;
+      if (isTransientModuleLoadError(error)) {
+        scheduleTransientModuleSyncRetry(mod, error);
+        return;
+      }
       console.error(`[business-os] Sync startup failed for ${mod.id}`, error);
       setStatus(`Sync failed: ${error.message || error}`);
     });
 }
 
+function scheduleTransientModuleSyncRetry(mod, error) {
+  const retry = Number(state.schemaImportRetries.get(mod.id) || 0) + 1;
+  state.schemaImportRetries.set(mod.id, retry);
+  const delayMs = Math.min(15000, 1000 * Math.max(1, Math.min(retry, 8)));
+  if (retry === 1 || retry % 5 === 0) {
+    console.warn(`[business-os] transient schema import failed for ${mod.id}; retrying`, error);
+  }
+  const timer = window.setTimeout(() => {
+    state.schemaRetryTimers.delete(mod.id);
+    startModuleSync(mod);
+  }, delayMs);
+  state.schemaRetryTimers.set(mod.id, timer);
+}
+
+async function recoverFromLocalRxDbSchemaDrift(error) {
+  if (!isRxDbSchemaDriftError(error)) return false;
+  const repairToken = `${BUSINESS_DB_NAME}:${RXDB_BOOTSTRAP_VERSION}`;
+  try {
+    if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
+    sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
+  } catch {}
+  console.warn('[business-os] local RxDB schema drift detected; rebuilding browser cache', error);
+  setStatus('Lokale RxDB wird neu aufgebaut');
+  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
+  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
+  try { await resetBusinessDb({ name: BUSINESS_DB_NAME }); } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
+  window.setTimeout(() => window.location.reload(), 250);
+  return true;
+}
+
+function isRxDbSchemaDriftError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB Error-Code: DB6')
+    || message.includes('previousSchemaHash')
+    || message.includes('schemaHash');
+}
+
 function preloadModuleScripts() {
   const modules = state.modules.filter((mod) => mod.id !== state.activeModule?.id);
   for (const [index, mod] of modules.entries()) {
-    const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}`;
+    const href = `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`;
     if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) continue;
     window.setTimeout(() => {
       if (document.head.querySelector(`link[rel="modulepreload"][href="${href}"]`)) return;
@@ -1838,10 +2513,10 @@ function createModuleContext(mod) {
     host: els.host.querySelector('[data-module-content]') || els.host.querySelector('[data-module-root]'),
     left: els.leftContent,
     right: els.rightContent,
-    db: state.db,
-    sync: state.sync,
-    commandBus: state.commandBus,
-    syncConfig: state.sync.config,
+    db: createLiveDbFacade(),
+    sync: createLiveSyncFacade(),
+    commandBus: createLiveCommandBusFacade(),
+    syncConfig: state.sync?.config,
     session: state.session,
     governance: state.governance,
     eventBus: state.eventBus,
@@ -1851,17 +2526,51 @@ function createModuleContext(mod) {
     desktopApps: listDesktopApps(),
     openDesktopApp,
     openBusinessChat,
+    reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`module:${mod.id}`, error, {
+      appId: mod.id,
+      ...details,
+    }),
     isTaskbarPinned,
     pinToTaskbar: pinTaskbarTarget,
     unpinFromTaskbar: unpinTaskbarTarget,
     toggleTaskbarPin,
-    authHeaders: businessOsAuthHeaders,
     canModifyModule: () => canModifyModule(mod),
     reportIssue: (details = {}) => reportCurrentModule({ module: mod, ...details }),
     openLeftDrawer: (content) => openDrawer('left', content),
     openRightDrawer: (content) => openDrawer('right', content),
     openBottomDrawer: (content) => openDrawer('bottom', content),
     closeDrawers,
+  };
+}
+
+function createLiveDbFacade() {
+  return {
+    get mode() { return state.db?.mode; },
+    get rxdb() { return state.db?.rxdb; },
+    get raw() { return state.db?.raw; },
+    get collections() { return state.db?.collections || {}; },
+    addCollections: (...args) => state.db?.addCollections?.(...args),
+    collection: (...args) => state.db?.collection?.(...args),
+    close: (...args) => state.db?.close?.(...args),
+  };
+}
+
+function createLiveSyncFacade() {
+  return {
+    get mode() { return state.sync?.mode; },
+    get config() { return state.sync?.config; },
+    get diagnostics() { return state.sync?.diagnostics; },
+    startCollection: (...args) => state.sync?.startCollection?.(...args),
+    stopCollection: (...args) => state.sync?.stopCollection?.(...args),
+    restartCollection: (...args) => state.sync?.restartCollection?.(...args),
+    restartCollections: (...args) => state.sync?.restartCollections?.(...args),
+    stop: (...args) => state.sync?.stop?.(...args),
+  };
+}
+
+function createLiveCommandBusFacade() {
+  return {
+    dispatch: (...args) => state.commandBus?.dispatch?.(...args),
   };
 }
 
@@ -1878,6 +2587,54 @@ function renderModuleFrame(mod) {
   return root;
 }
 
+function moduleRevisionQuery(moduleId) {
+  const rev = state.moduleRevisions?.[moduleId];
+  return rev ? `_${rev}` : '';
+}
+
+async function loadModuleVersionsDropdown(moduleId) {
+  const select = els.host.querySelector(`[data-module-version-select="${moduleId}"]`);
+  if (!select) return;
+  const generation = state.dataPlaneGeneration;
+  try {
+    const response = await dispatchShellModuleCommand({
+      commandType: 'ctox.source.list_snapshots',
+      moduleId,
+      recordId: `${moduleId}:snapshots`,
+      payload: { module_id: moduleId },
+      source: 'business-os-shell',
+    });
+    const snapshots = response?.result || [];
+    if (snapshots.length > 0) {
+      // Clear all but first option
+      while (select.options.length > 1) {
+        select.remove(1);
+      }
+      // Populate select
+      snapshots.forEach((snap) => {
+        const date = new Date(snap.created_at_ms);
+        const dateStr = date.toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+        });
+        const option = document.createElement('option');
+        option.value = snap.snapshot_id;
+        option.textContent = `${snap.path} (${dateStr})`;
+        select.appendChild(option);
+      });
+      select.style.display = 'inline-block';
+    } else {
+      select.style.display = 'none';
+    }
+  } catch (error) {
+    if (isRecoverableDataPlaneAbort(error) || isStaleDataPlaneGeneration(generation)) return;
+    console.error('[business-os] failed to load module versions:', error);
+  }
+}
+
 function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
@@ -1889,6 +2646,9 @@ function renderModuleAppBar(mod) {
         <span>${title}</span>
       </div>
       <div class="module-appbar-actions">
+        <select class="header-select module-appbar-select" style="display: none; width: auto; max-width: 140px; margin-right: 4px;" data-module-version-select="${escapeHtml(mod.id)}" aria-label="${escapeHtml(shellText('selectVersion') || 'Version auswählen')}">
+          <option value="" disabled selected>${escapeHtml(shellText('selectVersion') || 'Version...')}</option>
+        </select>
         <button class="module-appbar-button" type="button" data-module-source="${escapeHtml(mod.id)}" aria-label="Source von ${title} öffnen" title="Source öffnen">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 8l-4 4 4 4"></path><path d="M16 8l4 4-4 4"></path><path d="M14 5l-4 14"></path></svg>
         </button>
@@ -1909,6 +2669,7 @@ function taskbarMarkForModule(mod) {
     ctox: '◆',
     desktop: '⌂',
     documents: 'D',
+    spreadsheets: 'S',
     knowledge: 'K',
     matching: 'M',
     outbound: 'O',
@@ -2296,14 +3057,149 @@ function sanitizeClientId(value) {
     .replace(/^-+|-+$/g, '') || `group-${crypto.randomUUID()}`;
 }
 
-function renderLoginGate(session) {
+function renderLoginGate(session, options = {}) {
   document.body.dataset.authState = 'locked';
   delete document.body.dataset.moduleShell;
+  delete document.body.dataset.moduleLoading;
   state.modules = [];
   els.tabs.replaceChildren();
   els.leftContent.replaceChildren();
   els.rightContent.replaceChildren();
-  els.host.replaceChildren();
+
+  const container = document.createElement('div');
+  container.className = 'auth-gate';
+
+  const savedUser = readAccountPrefs().loginUser || 'admin';
+  const loginUrl = session.login_url || '';
+  const pairingMissing = session.reason === 'pairing_config_missing'
+    || session.reason === 'session_launch_context_missing';
+
+  container.innerHTML = `
+    <div class="auth-gate-panel${options.loginFailed ? ' has-error' : ''}">
+      <header class="auth-gate-header">
+        <div class="auth-gate-logo">
+          <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12,2 2,7 12,12 22,7" fill="var(--accent)" fill-opacity="0.25" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" />
+            <polygon points="2,7 2,17 12,22 12,12" fill="var(--accent)" fill-opacity="0.15" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" />
+            <polygon points="12,12 12,22 22,17 22,7" fill="var(--accent)" fill-opacity="0.15" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" />
+            <circle cx="12" cy="12" r="3" fill="var(--accent)" />
+          </svg>
+        </div>
+        <div class="auth-gate-title">
+          <h1>CTOX Business OS</h1>
+          <p>Melden Sie sich an, um eine Verbindung zur ctox-Instanz herzustellen.</p>
+        </div>
+      </header>
+
+      ${pairingMissing ? `
+        <div class="auth-gate-actions">
+          <div class="auth-gate-error" data-gate-error>
+            Business OS benötigt eine Pairing-Konfiguration mit sync_room und Signaling-URL.
+          </div>
+        </div>
+      ` : `
+      <form class="auth-gate-form" data-login-gate-form method="post" action="/login">
+        <div class="auth-gate-field">
+          <label for="gate-user">Benutzer</label>
+          <div class="auth-gate-input-wrapper">
+            <input
+              id="gate-user"
+              name="user"
+              autocomplete="username"
+              value="${escapeHtml(savedUser)}"
+              placeholder="admin"
+              class="auth-gate-input"
+              required
+            />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+          </div>
+        </div>
+
+        <div class="auth-gate-field">
+          <label for="gate-password">Passwort</label>
+          <div class="auth-gate-input-wrapper">
+            <input
+              id="gate-password"
+              type="password"
+              name="password"
+              autocomplete="current-password"
+              placeholder="Passwort"
+              class="auth-gate-input"
+              required
+            />
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </div>
+        </div>
+
+        <div class="auth-gate-actions">
+          <div class="auth-gate-error" data-gate-error hidden></div>
+          <button class="auth-gate-button" type="submit" data-gate-submit>Einloggen &amp; Verbinden</button>
+          ${loginUrl ? `<a class="auth-gate-external" href="${escapeHtml(loginUrl)}">Mit SSO einloggen</a>` : ''}
+        </div>
+      </form>
+      `}
+
+      <footer class="auth-gate-footer">
+        <small>CTOX Business OS · Sichere Ende-zu-Ende verschlüsselte Verbindung.</small>
+      </footer>
+    </div>
+  `;
+
+  const form = container.querySelector('[data-login-gate-form]');
+  if (!form) {
+    els.host.replaceChildren(container);
+    return;
+  }
+  const userInput = form.querySelector('input[name="user"]');
+  const passwordInput = form.querySelector('input[name="password"]');
+  const errorEl = form.querySelector('[data-gate-error]');
+  const submitBtn = form.querySelector('[data-gate-submit]');
+
+  const showGateError = (msg) => {
+    errorEl.textContent = msg;
+    errorEl.hidden = false;
+  };
+
+  if (options.loginFailed) {
+    clearStoredBrowserAuth();
+    showGateError("Ungültiger Benutzername oder Passwort.");
+  }
+
+  form.addEventListener('submit', (event) => {
+    errorEl.hidden = true;
+
+    const user = userInput.value.trim();
+    const password = passwordInput.value;
+
+    if (!user || !password) {
+      event.preventDefault();
+      showGateError("Bitte Benutzername und Passwort eingeben.");
+      return;
+    }
+
+    clearStoredBrowserAuth();
+    localStorage.removeItem(LOGGED_OUT_KEY);
+    writeAccountPrefs({ loginUser: user });
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Verbindung wird hergestellt...";
+  });
+
+  els.host.replaceChildren(container);
+
+  // Autofocus handling: if username is prefilled, focus password, otherwise username
+  setTimeout(() => {
+    if (userInput.value && userInput.value !== 'admin') {
+      passwordInput.focus();
+    } else {
+      userInput.focus();
+    }
+  }, 50);
 }
 
 function renderAccountButton(session = state.session) {
@@ -2347,7 +3243,7 @@ function renderLoginDrawer(session) {
       </div>
       <button class="icon-button" type="button" data-close-account aria-label="Schließen">×</button>
     </header>
-    <form class="account-form" data-login-form>
+    <form class="account-form" data-login-form method="post" action="/login">
       <label>
         <span>Benutzer</span>
         <input name="user" autocomplete="username" value="${escapeHtml(savedUser)}" placeholder="admin" />
@@ -2358,24 +3254,20 @@ function renderLoginDrawer(session) {
       </label>
       <button class="text-button account-primary" type="submit">Einloggen</button>
       ${loginUrl ? `<a class="text-button" href="${escapeHtml(loginUrl)}">Extern einloggen</a>` : ''}
-      <small>Business OS zeigt die aktive Rolle danach im Account-Menü.</small>
     </form>
   `;
   body.querySelector('[data-close-account]')?.addEventListener('click', closeDrawers);
   body.querySelector('[data-login-form]')?.addEventListener('submit', (event) => {
-    event.preventDefault();
     const form = new FormData(event.currentTarget);
     const user = form.get('user')?.toString().trim() || '';
     const password = form.get('password')?.toString() || '';
-    if (user && password) {
-      localStorage.setItem(AUTH_HEADER_KEY, `Basic ${encodeBasicAuth(user, password)}`);
-      localStorage.removeItem(SESSION_TOKEN_KEY);
-      localStorage.removeItem(LOGGED_OUT_KEY);
-      writeAccountPrefs({ loginUser: user });
-    } else {
+    if (!user || !password) {
+      event.preventDefault();
       return;
     }
-    location.reload();
+    clearStoredBrowserAuth();
+    localStorage.removeItem(LOGGED_OUT_KEY);
+    writeAccountPrefs({ loginUser: user });
   });
   return body;
 }
@@ -2441,10 +3333,9 @@ function renderProfileDrawer() {
     closeDrawers();
   });
   body.querySelector('[data-logout]')?.addEventListener('click', () => {
-    localStorage.removeItem(SESSION_TOKEN_KEY);
-    localStorage.removeItem(AUTH_HEADER_KEY);
-    localStorage.setItem(LOGGED_OUT_KEY, '1');
-    location.reload();
+    clearStoredBrowserAuth();
+    localStorage.removeItem(LOGGED_OUT_KEY);
+    location.href = '/logout';
   });
   return body;
 }
@@ -2463,8 +3354,9 @@ function writeAccountPrefs(nextPrefs) {
   return prefs;
 }
 
-function encodeBasicAuth(user, password) {
-  return btoa(unescape(encodeURIComponent(`${user}:${password}`)));
+function clearStoredBrowserAuth() {
+  localStorage.removeItem(SESSION_TOKEN_KEY);
+  localStorage.removeItem(AUTH_HEADER_KEY);
 }
 
 function roleDisplayName(role) {
@@ -2506,7 +3398,7 @@ function canModifyModule(mod) {
 async function reportCurrentModule(details = {}) {
   const mod = details.module || state.activeModule;
   const result = await dispatchBusinessReport({
-    commandBus: state.commandBus,
+    commandBus: createLiveCommandBusFacade(),
     session: state.session,
     module: mod,
     kind: details.kind || 'bug',
@@ -2551,14 +3443,86 @@ function renderRightContext(mod) {
     button.type = 'button';
     button.textContent = topic;
     button.addEventListener('click', () => {
-      const text = topic === 'WebRTC sync'
-        ? `room=${state.sync.config?.sync_room || 'unknown'} · role=${state.sync.config?.peer_role || 'unknown'}`
-        : `${mod.title || mod.id} topic context`;
-      openDrawer('right', drawerContent(topic, text));
+      if (topic === 'WebRTC sync') {
+        openDrawer('right', renderSyncDiagnosticsDrawer());
+        return;
+      }
+      openDrawer('right', drawerContent(topic, `${mod.title || mod.id} topic context`));
     });
     wrap.append(button);
   }
   return wrap;
+}
+
+function renderSyncDiagnosticsDrawer() {
+  const diagnostics = state.syncDiagnostics || {};
+  const config = state.sync?.config || {};
+  const collections = Object.values(diagnostics.collections || {})
+    .sort((a, b) => String(a.collection || '').localeCompare(String(b.collection || '')));
+  const lastError = diagnostics.lastError || null;
+  const body = document.createElement('div');
+  body.className = 'drawer-body sync-diagnostics-drawer';
+  body.dataset.drawerKind = 'sync-diagnostics';
+  body.innerHTML = `
+    <header class="drawer-header-row">
+      <div>
+        <h2>WebRTC Sync</h2>
+        <p>${escapeHtml(syncDiagnosticSummary(diagnostics))}</p>
+      </div>
+      <button class="icon-button" type="button" data-close-sync-diagnostics aria-label="Schließen">×</button>
+    </header>
+    <section class="sync-diagnostics-grid">
+      <div><span>Phase</span><strong>${escapeHtml(diagnostics.phase || 'unknown')}</strong></div>
+      <div><span>Modus</span><strong>${escapeHtml(diagnostics.mode || 'webrtc')}</strong></div>
+      <div><span>Role</span><strong>${escapeHtml(config.peer_role || 'browser')}</strong></div>
+      <div><span>ICE</span><strong>${Number(diagnostics.iceServersConfigured || 0)}</strong></div>
+    </section>
+    <section class="sync-diagnostics-section">
+      <span>Sync Room</span>
+      <code>${escapeHtml(diagnostics.syncRoom || config.sync_room || 'unknown')}</code>
+    </section>
+    <section class="sync-diagnostics-section">
+      <span>Signaling</span>
+      <div class="sync-diagnostics-list">
+        ${(diagnostics.signalingUrls || []).map((url) => `<code>${escapeHtml(url)}</code>`).join('') || '<small>Keine Signaling-URL konfiguriert.</small>'}
+      </div>
+    </section>
+    ${lastError ? `
+      <section class="sync-diagnostics-error">
+        <span>Letzter Fehler</span>
+        <strong>${escapeHtml(lastError.name || 'Error')}</strong>
+        <p>${escapeHtml(lastError.message || String(lastError))}</p>
+      </section>
+    ` : ''}
+    <section class="sync-diagnostics-section">
+      <span>Collections</span>
+      <div class="sync-diagnostics-collections">
+        ${collections.map((item) => `
+          <div class="sync-diagnostics-collection">
+            <strong>${escapeHtml(item.collection || 'collection')}</strong>
+            <span>${escapeHtml(item.status || 'unknown')}${item.active !== undefined ? ` · active=${Boolean(item.active)}` : ''}</span>
+            ${item.reason ? `<small>${escapeHtml(item.reason)}</small>` : ''}
+            ${item.lastError?.message ? `<small class="is-error">${escapeHtml(item.lastError.message)}</small>` : ''}
+          </div>
+        `).join('') || '<small>Noch keine Collection-Synchronisation gestartet.</small>'}
+      </div>
+    </section>
+  `;
+  body.querySelector('[data-close-sync-diagnostics]')?.addEventListener('click', closeDrawers);
+  return body;
+}
+
+function syncDiagnosticSummary(diagnostics) {
+  if (!diagnostics) return 'Noch keine Sync-Diagnostik verfügbar.';
+  const collectionValues = Object.values(diagnostics.collections || {});
+  const failed = collectionValues.filter((item) => ['failed', 'error'].includes(item.status)).length;
+  const running = collectionValues.filter((item) => item.status === 'running' || item.status === 'connected').length;
+  const reconnecting = collectionValues.filter((item) => item.status === 'reconnecting').length;
+  const pending = collectionValues.filter((item) => item.status === 'pending' || item.status === 'starting' || item.status === 'connecting').length;
+  if (failed) return `${failed} Collection${failed === 1 ? '' : 's'} mit Fehlern.`;
+  if (reconnecting) return `${running} Collection${running === 1 ? '' : 's'} aktiv, ${reconnecting} im Reconnect.`;
+  if (running) return `${running} Collection${running === 1 ? '' : 's'} aktiv, ${pending} im Aufbau.`;
+  return `Phase ${diagnostics.phase || 'unknown'}, ${pending} Collection${pending === 1 ? '' : 's'} im Aufbau.`;
 }
 
 async function openTemplateStoreDrawer() {
@@ -2640,9 +3604,19 @@ function renderTemplateStoreItem(template) {
   return card;
 }
 
+function registerCustomModuleIcons() {
+  if (!Array.isArray(state.modules)) return;
+  for (const mod of state.modules) {
+    if (mod.layout?.icon_svg) {
+      registerSvgIcon(mod.id, mod.layout.icon_svg);
+    }
+  }
+}
+
 async function refreshModules() {
   const modules = await loadModules();
   state.modules = modules.modules || [];
+  registerCustomModuleIcons();
   state.governance = modules.governance || state.governance;
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
   persistModuleLayout();
@@ -2685,7 +3659,13 @@ function openDrawer(side, content) {
   if (side === 'right' && !target.classList.contains('account-popover')) {
     target.classList.remove('account-popover');
   }
-  target.replaceChildren(content);
+  if (typeof content === 'string') {
+    const temp = document.createElement('div');
+    temp.innerHTML = content;
+    target.replaceChildren(...temp.childNodes);
+  } else {
+    target.replaceChildren(content);
+  }
   target.hidden = false;
   showBackdrop();
 }
@@ -2717,10 +3697,18 @@ async function refreshShellCtoxHealth() {
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
   } catch (error) {
-    const status = { ok: false, error: error?.message || String(error) };
+    const status = isPendingCtoxHealthError(error)
+      ? { ok: true, pending: true, error: error?.message || String(error) }
+      : { ok: false, error: error?.message || String(error) };
     state.ctoxHealth = status;
     renderShellCtoxWarning(status);
   }
+}
+
+function isPendingCtoxHealthError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Runtime-Status wurde noch nicht synchronisiert')
+    || message.includes('ctox_runtime_settings collection is required');
 }
 
 async function loadShellCtoxHealth() {
@@ -2755,6 +3743,7 @@ function renderShellCtoxWarning(status) {
 }
 
 function shellCtoxHealthProblem(status) {
+  if (status?.pending) return '';
   if (!status || status.ok === false) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
   }
@@ -2776,13 +3765,37 @@ async function loadSession() {
       reason: 'logged_out',
     };
   }
+
   const injected = readInjectedDesktopSession();
   if (injected) return injected;
+
+  const pairedConfig = readBusinessOsLaunchConfig();
+  if (pairedConfig) {
+    const user = pairedConfig.session?.user || pairedConfig.user || {};
+    const role = normalizeRole(user.role || 'user');
+    return {
+      ok: true,
+      authenticated: true,
+      auth_required: false,
+      source: 'webrtc_pairing',
+      user: {
+        id: user.id || 'paired-user',
+        display_name: user.display_name || user.name || user.id || 'Paired User',
+        role,
+        is_admin: roleCanAdmin(role),
+        ...user,
+      },
+      reason: null,
+    };
+  }
+
+  clearStoredBrowserAuth();
+
   return {
     ok: false,
     authenticated: false,
     auth_required: true,
-    reason: 'session_launch_context_missing',
+    reason: 'pairing_config_missing',
   };
 }
 
@@ -2814,19 +3827,6 @@ function readInjectedDesktopSession() {
   };
 }
 
-function businessOsAuthHeaders() {
-  const headers = {};
-  const storedHeader = localStorage.getItem(AUTH_HEADER_KEY);
-  const storedToken = localStorage.getItem(SESSION_TOKEN_KEY);
-  const sessionToken = state.session?.token || state.session?.access_token || '';
-  if (storedHeader) {
-    headers.Authorization = storedHeader;
-  } else if (storedToken || sessionToken) {
-    headers.Authorization = `Bearer ${storedToken || sessionToken}`;
-  }
-  return headers;
-}
-
 function isLocalBusinessOsSurface() {
   return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
@@ -2852,7 +3852,7 @@ async function loadTemplates() {
   };
 }
 
-async function loadModuleCatalog(timeoutMs = 10000) {
+async function loadModuleCatalog(timeoutMs = 60000) {
   const coll = state.db?.collection?.('business_module_catalog');
   if (!coll) throw new Error('business_module_catalog collection is required for shell module metadata');
   await state.sync?.startCollection?.('business_module_catalog');
@@ -2895,7 +3895,12 @@ async function dispatchShellModuleCommand({
   if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
     throw new Error('business_commands collection is required for module commands');
   }
+  const generation = state.dataPlaneGeneration;
+  const db = state.db;
   await state.sync?.startCollection?.('business_commands');
+  if (isStaleDataPlaneGeneration(generation)) {
+    throw createRecoverableDataPlaneAbort('Business OS data plane was rebuilt before command dispatch.');
+  }
   const commandId = `cmd_${newId()}`;
   await state.commandBus.dispatch({
     id: commandId,
@@ -2910,14 +3915,25 @@ async function dispatchShellModuleCommand({
       actor: actorContext(state.session),
     },
   });
-  return waitForCommandProjection(state.db, commandId);
+  return waitForCommandProjection(db, commandId, 45000, generation);
 }
 
-async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
+async function waitForCommandProjection(db, commandId, timeoutMs = 45000, generation = state.dataPlaneGeneration) {
   const collection = db?.collection?.('business_commands');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const doc = await collection?.findOne(commandId).exec();
+    if (isStaleDataPlaneGeneration(generation)) {
+      throw createRecoverableDataPlaneAbort(`Command ${commandId} was superseded by an RxDB/WebRTC repair.`);
+    }
+    let doc = null;
+    try {
+      doc = await collection?.findOne(commandId).exec();
+    } catch (error) {
+      if (isClosedRxDbCollectionError(error)) {
+        throw createRecoverableDataPlaneAbort(`Command ${commandId} collection was closed by an RxDB/WebRTC repair.`);
+      }
+      throw error;
+    }
     const data = doc?.toJSON?.();
     if (data && data.status && data.status !== 'pending_sync') {
       if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
@@ -2926,6 +3942,35 @@ async function waitForCommandProjection(db, commandId, timeoutMs = 45000) {
     await delay(300);
   }
   throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+}
+
+function isStaleDataPlaneGeneration(generation) {
+  return Number.isFinite(generation) && generation !== state.dataPlaneGeneration;
+}
+
+function createRecoverableDataPlaneAbort(message) {
+  const error = new Error(message);
+  error.code = 'CTOX_DATA_PLANE_REBUILT';
+  return error;
+}
+
+function isRecoverableDataPlaneAbort(error) {
+  return error?.code === 'CTOX_DATA_PLANE_REBUILT' || isClosedRxDbCollectionError(error);
+}
+
+function isClosedRxDbCollectionError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB Error-Code: COL21')
+    || message.includes('collection is closed')
+    || message.includes('closed collection');
+}
+
+function isTransientModuleLoadError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Failed to fetch dynamically imported module')
+    || message.includes('Importing a module script failed')
+    || message.includes('net::ERR_CONNECTION_REFUSED')
+    || message.includes('net::ERR_CONNECTION_RESET');
 }
 
 function actorContext(session) {
@@ -2947,9 +3992,188 @@ function delay(ms) {
 }
 
 async function loadSyncConfig() {
-  const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch;
-  if (injected && typeof injected === 'object') return injected;
-  throw new Error('Business OS sync config was not injected by CTOX.');
+  const config = await readBusinessOsLaunchConfig();
+  if (config) return config;
+
+  throw new Error('Business OS WebRTC sync config is missing. Pair this browser with a CTOX instance first.');
+}
+
+async function readBusinessOsLaunchConfig() {
+  const root = globalRoot();
+  const launch = firstObject(
+    readUrlPairingConfig(),
+    root.CTOX_BUSINESS_OS_CONFIG,
+    root.ctoxBusinessOsLaunch?.config,
+    root.ctoxBusinessOsLaunch,
+    window.CTOX_BUSINESS_OS_CONFIG,
+    window.ctoxBusinessOsLaunch?.config,
+    window.ctoxBusinessOsLaunch,
+    readStoredPairingConfig(),
+  );
+  const config = await normalizeBusinessOsLaunchConfig(launch);
+  if (config && config.source === 'url') {
+    writeStoredPairingConfig(config);
+    scrubPairingConfigFromUrl();
+  }
+  return config;
+}
+
+function readUrlPairingConfig() {
+  const params = new URLSearchParams(location.search);
+  const packed = params.get('ctox_config') || params.get('ctoxConfig');
+  if (packed) {
+    const parsed = parsePackedConfig(packed);
+    if (parsed) return { ...parsed, source: 'url' };
+  }
+  const syncRoom = params.get('sync_room') || params.get('syncRoom');
+  const signaling = params.get('signaling_url') || params.get('signalingUrl');
+  const instanceId = params.get('instance_id') || params.get('instanceId');
+  const roomPassword = params.get('room_password')
+    || params.get('roomPassword')
+    || params.get('signaling_room_password')
+    || params.get('signalingRoomPassword');
+  if ((!syncRoom && (!instanceId || !roomPassword)) || !signaling) return null;
+  return {
+    ok: true,
+    source: 'url',
+    app_hosting: 'web_deploy',
+    sync_mode: 'p2p-first',
+    instance_id: instanceId || syncRoom.replace(/^ctox-business-os:/, '').split(':')[0],
+    peer_id: params.get('peer_id') || params.get('peerId') || '',
+    peer_role: 'browser',
+    sync_room: syncRoom,
+    signaling_room_password: roomPassword || '',
+    signaling_urls: signaling.split(',').map((item) => item.trim()).filter(Boolean),
+    transport: 'webrtc',
+    http_bridge_available: false,
+    ctox_instance_required: true,
+    native_rxdb_peer_available: true,
+    native_rxdb_peer_reason: '',
+  };
+}
+
+function readStoredPairingConfig() {
+  try {
+    const raw = localStorage.getItem(PAIRING_CONFIG_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredPairingConfig(config) {
+  try {
+    localStorage.setItem(PAIRING_CONFIG_KEY, JSON.stringify({ ...config, source: 'stored' }));
+  } catch {}
+}
+
+function scrubPairingConfigFromUrl() {
+  try {
+    const url = new URL(location.href);
+    const sensitiveKeys = [
+      'ctox_config',
+      'ctoxConfig',
+      'sync_room',
+      'syncRoom',
+      'signaling_url',
+      'signalingUrl',
+      'instance_id',
+      'instanceId',
+      'room_password',
+      'roomPassword',
+      'signaling_room_password',
+      'signalingRoomPassword',
+      'peer_id',
+      'peerId',
+    ];
+    let changed = false;
+    for (const key of sensitiveKeys) {
+      if (!url.searchParams.has(key)) continue;
+      url.searchParams.delete(key);
+      changed = true;
+    }
+    if (!changed) return;
+    const next = `${url.pathname}${url.search}${url.hash}`;
+    history.replaceState(history.state, document.title, next);
+  } catch {}
+}
+
+function parsePackedConfig(value) {
+  try {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+}
+
+async function normalizeBusinessOsLaunchConfig(config) {
+  if (!config || typeof config !== 'object') return null;
+  const signalingUrls = Array.isArray(config.signaling_urls)
+    ? config.signaling_urls
+    : (Array.isArray(config.signalingUrls) ? config.signalingUrls : []);
+  const instanceId = String(config.instance_id || config.instanceId || '').trim();
+  const roomPassword = String(
+    config.signaling_room_password
+      || config.signalingRoomPassword
+      || config.room_password
+      || config.roomPassword
+      || ''
+  ).trim();
+  const explicitSyncRoom = String(config.sync_room || config.syncRoom || '').trim();
+  const syncRoom = explicitSyncRoom || await deriveSyncRoomFromPassword(instanceId, roomPassword);
+  const urls = signalingUrls.map((url) => String(url || '').trim()).filter(Boolean);
+  if (!syncRoom || !urls.length) return null;
+  return {
+    ok: config.ok !== false,
+    app_hosting: config.app_hosting || config.appHosting || 'web_deploy',
+    sync_mode: config.sync_mode || config.syncMode || 'p2p-first',
+    instance_id: instanceId || syncRoom.replace(/^ctox-business-os:/, '').split(':')[0],
+    peer_id: config.peer_id || config.peerId || '',
+    peer_role: config.peer_role || config.peerRole || 'browser',
+    sync_room: syncRoom,
+    signaling_room_password: roomPassword,
+    signaling_urls: urls,
+    transport: 'webrtc',
+    http_bridge_available: false,
+    ctox_instance_required: config.ctox_instance_required !== false,
+    native_rxdb_peer_available: config.native_rxdb_peer_available !== false,
+    native_rxdb_peer_reason: config.native_rxdb_peer_reason || '',
+    session: config.session || null,
+    user: config.user || null,
+    source: config.source || 'injected',
+  };
+}
+
+async function deriveSyncRoomFromPassword(instanceId, roomPassword) {
+  if (!instanceId || !roomPassword) return '';
+  if (!globalThis.crypto?.subtle || typeof TextEncoder === 'undefined') {
+    throw new Error('Business OS pairing requires WebCrypto to derive the WebRTC room from the room password.');
+  }
+  const bytes = new TextEncoder().encode(roomPassword);
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  const secretId = base64UrlEncode(new Uint8Array(digest)).slice(0, 22);
+  return `ctox-business-os:${instanceId}:${secretId}`;
+}
+
+function base64UrlEncode(bytes) {
+  let binary = '';
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function firstObject(...items) {
+  return items.find((item) => item && typeof item === 'object') || null;
+}
+
+function globalRoot() {
+  return typeof globalThis === 'undefined' ? window : globalThis;
 }
 
 function refreshRemoteShellStateInBackground() {
@@ -2962,6 +4186,7 @@ function refreshRemoteShellStateInBackground() {
         const nextIds = modules.modules.map((mod) => mod.id).join('\n');
         if (currentIds === nextIds) return;
         state.modules = modules.modules;
+        registerCustomModuleIcons();
         state.governance = modules.governance || state.governance;
         state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
         persistModuleLayout();
@@ -2974,6 +4199,154 @@ function refreshRemoteShellStateInBackground() {
 function setStatus(text) {
   if (els.status) els.status.textContent = text;
 }
+
+function setStartupProgress(percent, statusText) {
+  setStatus(statusText);
+
+  const statusLabel = document.getElementById('startup-status-text');
+  if (statusLabel) {
+    statusLabel.textContent = statusText;
+  }
+
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+
+  const progressBar = document.getElementById('startup-progress-bar');
+  if (!progressBar) return;
+
+  const startVal = currentProgress;
+  const endVal = percent;
+
+  // Choose duration proportional to step size to feel natural
+  const stepDiff = Math.abs(endVal - startVal);
+  const duration = Math.min(800, Math.max(250, stepDiff * 25));
+  const intervalTime = 16; // ~60fps
+  const totalSteps = Math.max(1, duration / intervalTime);
+  let step = 0;
+
+  progressTimer = setInterval(() => {
+    step++;
+    if (step <= totalSteps) {
+      const t = step / totalSteps;
+      const easeT = t * (2 - t); // Quadratic ease-out transition
+      currentProgress = startVal + (endVal - startVal) * easeT;
+      progressBar.style.width = `${currentProgress.toFixed(2)}%`;
+    } else {
+      // Creeping phase: asymptotic advance beyond target step to keep progress indicator active and alive
+      if (endVal < 95) {
+        const remainingCap = (endVal + 12) - currentProgress;
+        if (remainingCap > 0) {
+          currentProgress += remainingCap * 0.003;
+          progressBar.style.width = `${currentProgress.toFixed(2)}%`;
+        }
+      } else {
+        currentProgress = endVal;
+        progressBar.style.width = `${currentProgress}%`;
+        clearInterval(progressTimer);
+        progressTimer = null;
+      }
+    }
+  }, intervalTime);
+}
+window.setStartupProgress = setStartupProgress;
+
+function getFriendlyErrorMessage(error) {
+  const msg = error ? String(error.message || error) : '';
+
+  let title = 'Unerwartetes Systemproblem';
+  let description = 'Das Business OS konnte nicht vollständig geladen werden.';
+  let advice = 'Bitte versuchen Sie die Seite neu zu laden. Falls das Problem weiterhin besteht, vergewissern Sie sich, dass der CTOX-Dienst im Hintergrund läuft.';
+
+  if (msg.includes('pairing') || msg.includes('sync config is missing') || msg.includes('Pair this browser')) {
+    title = 'Keine Kopplung vorhanden';
+    description = 'Dieser Browser ist noch nicht mit einer aktiven CTOX-Instanz verbunden.';
+    advice = 'Bitte öffnen Sie Business OS über den bereitgestellten Link aus Ihrer CTOX-Schnittstelle oder koppeln Sie die Instanz erneut.';
+  } else if (msg.includes('IndexedDB lock') || msg.includes('timed out after 25000ms') || msg.includes('database creation timed out')) {
+    title = 'Datenbank-Zugriff blockiert';
+    description = 'Die lokale Datenbankverbindung konnte nicht rechtzeitig hergestellt werden (IndexedDB Timeout).';
+    advice = 'Möglicherweise ist die Anwendung in einem anderen Tab geöffnet. Schließen Sie bitte alle anderen Tabs von Business OS und versuchen Sie es erneut.';
+  } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
+    title = 'Datenbank-Drift erkannt';
+    description = 'Die Tabellenstruktur der lokalen Datenbank ist inkompatibel mit dieser Version.';
+    advice = 'Wir versuchen, den Cache automatisch neu aufzubauen. Klicken Sie auf "Erneut versuchen", um den Vorgang abzuschließen.';
+  } else if (msg.includes('modulkatalog') || msg.includes('business_module_catalog') || msg.includes('module catalog')) {
+    title = 'Module konnten nicht geladen werden';
+    description = 'Die Synchronisation des Modulkatalogs über das WebRTC-Netzwerk ist fehlgeschlagen oder wartet auf Verbindung.';
+    advice = 'Bitte überprüfen Sie, ob die CTOX-Instanz im Terminal aktiv ist. Eine stabile WebRTC-Verbindung ist für den Start zwingend erforderlich.';
+  } else if (msg.includes('Cannot access') && msg.includes('before initialization')) {
+    title = 'Fehler in Skript-Reihenfolge';
+    description = 'Eine Systemvariable wurde vor ihrer Initialisierung aufgerufen (Temporal Dead Zone).';
+    advice = 'Dieses Ladeproblem wurde behoben. Bitte leeren Sie den Browser-Cache und klicken Sie auf "Erneut versuchen".';
+  } else if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('signaling')) {
+    title = 'Verbindung zum Netzwerk fehlgeschlagen';
+    description = 'Der Signalisierungs-Server oder die Peer-Verbindungen konnten nicht erreicht werden.';
+    advice = 'Bitte überprüfen Sie Ihre Internetverbindung und stellen Sie sicher, dass keine Firewall oder restriktive Antiviren-Software WebRTC-Verbindungen blockiert.';
+  }
+
+  return { title, description, advice };
+}
+
+function showStartupError(error) {
+  console.error('[business-os] bootstrap error caught:', error);
+  const errMsg = error ? (error.message || String(error)) : 'Unbekannter Fehler';
+
+  if (progressTimer) {
+    clearInterval(progressTimer);
+    progressTimer = null;
+  }
+  currentProgress = 100;
+
+  const statusLabel = document.getElementById('startup-status-text');
+  if (statusLabel) {
+    statusLabel.textContent = 'System-Start fehlgeschlagen.';
+    statusLabel.classList.add('is-error');
+  }
+
+  const progressBar = document.getElementById('startup-progress-bar');
+  if (progressBar) {
+    progressBar.style.width = '100%';
+    progressBar.classList.add('is-error');
+  }
+
+  const errorBody = document.querySelector('.error-body');
+  if (errorBody) {
+    const friendly = getFriendlyErrorMessage(error);
+    errorBody.innerHTML = `
+      <div class="friendly-error-info">
+        <h4 class="friendly-error-title">${escapeHtml(friendly.title)}</h4>
+        <p class="friendly-error-description">${escapeHtml(friendly.description)}</p>
+        <div class="friendly-error-advice">
+          <strong>Empfohlene Aktion:</strong>
+          ${escapeHtml(friendly.advice)}
+        </div>
+      </div>
+      <details class="technical-details-toggle">
+        <summary>Technische Details (für Entwickler)</summary>
+        <code class="error-msg-block" id="startup-error-msg"></code>
+      </details>
+    `;
+  }
+
+  const errorMsgBlock = document.getElementById('startup-error-msg');
+  if (errorMsgBlock) {
+    errorMsgBlock.textContent = error && error.stack ? error.stack : errMsg;
+  }
+
+  const errorCard = document.getElementById('startup-error-card');
+  if (errorCard) {
+    errorCard.removeAttribute('hidden');
+  }
+
+  const retryBtn = document.getElementById('startup-retry-btn');
+  if (retryBtn) {
+    retryBtn.onclick = () => {
+      window.location.reload();
+    };
+  }
+}
+window.showStartupError = showStartupError;
 
 function escapeHtml(value) {
   return String(value ?? '')

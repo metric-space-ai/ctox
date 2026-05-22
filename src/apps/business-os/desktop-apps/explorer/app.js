@@ -1,3 +1,11 @@
+import {
+  FILE_CHUNK_HASH_SCHEME,
+  FILE_CONTENT_HASH_SCHEME,
+  base64ToBytes,
+  readStoredFileFromChunks,
+  sha256Hex,
+} from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity4';
+
 export const manifest = {
   id: 'explorer',
   title: 'Files',
@@ -7,11 +15,12 @@ export const manifest = {
 };
 
 const ROOT_ID = 'fs_root';
-const CHUNK_SIZE = 256 * 1024;
+const CHUNK_SIZE = 16 * 1024;
 const FILE_SOURCE = { id: 'desktop_files', label: 'Files', section: 'On this Desktop', mark: 'FS', moduleId: null, kind: 'File System', filesystem: true };
 const SOURCES = [
   FILE_SOURCE,
   { id: 'documents', label: 'Documents', section: 'Business OS', mark: 'DOC', moduleId: 'documents', kind: 'Document' },
+  { id: 'spreadsheets', label: 'Spreadsheets', section: 'Business OS', mark: 'XLS', moduleId: 'spreadsheets', kind: 'Spreadsheet' },
   { id: 'knowledge_items', label: 'Knowledge', section: 'Business OS', mark: 'KNO', moduleId: 'knowledge', kind: 'Knowledge' },
   { id: 'matching_objects', label: 'Matching Objects', section: 'Business OS', mark: 'MAT', moduleId: 'matching', kind: 'Object' },
   { id: 'outbound_companies', label: 'Outbound', section: 'Business OS', mark: 'OUT', moduleId: 'outbound', kind: 'Company' },
@@ -331,7 +340,7 @@ export async function mount(container, ctx) {
       return;
     }
     try {
-      const blob = await readStoredFile(ctx.db, row.id, row.mimeType);
+      const blob = await readStoredFile(ctx.db, row.id, row.mimeType, row);
       if (state.selectedId !== row.id) return;
       state.previewUrl = URL.createObjectURL(blob);
       if (row.mimeType.startsWith('image/')) {
@@ -343,6 +352,13 @@ export async function mount(container, ctx) {
         if (pre) pre.textContent = text.slice(0, 12000);
       }
     } catch (error) {
+      ctx.reportFileIntegrityError?.(error, {
+        fileId: row.id,
+        mimeType: row.mimeType,
+        contentState: row.contentState,
+        contentGenerationId: row.contentGenerationId,
+        contentHashScheme: row.contentHashScheme,
+      });
       body.innerHTML = `<p class="app-explorer-message is-error">Vorschau konnte nicht geladen werden: ${escapeHtml(error?.message || error)}</p>`;
     }
   }
@@ -366,11 +382,26 @@ export async function mount(container, ctx) {
             path: row.localPath || row.path,
             source: row.source,
             contentState: row.contentState,
+            contentHash: row.contentHash,
+            contentHashScheme: row.contentHashScheme,
+            contentGenerationId: row.contentGenerationId,
           },
         });
         return;
       }
-      const blob = await readStoredFile(ctx.db, row.id, row.mimeType);
+      let blob;
+      try {
+        blob = await readStoredFile(ctx.db, row.id, row.mimeType, row);
+      } catch (error) {
+        ctx.reportFileIntegrityError?.(error, {
+          fileId: row.id,
+          mimeType: row.mimeType,
+          contentState: row.contentState,
+          contentGenerationId: row.contentGenerationId,
+          contentHashScheme: row.contentHashScheme,
+        });
+        throw error;
+      }
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -482,6 +513,7 @@ async function ensureFileSystem(db) {
     { id: ROOT_ID, parent_id: '', path: '/', name: 'Files', kind: 'folder', sort_index: 0 },
     { id: 'fs_desktop', parent_id: ROOT_ID, path: '/Desktop', name: 'Desktop', kind: 'folder', sort_index: 10 },
     { id: 'fs_documents', parent_id: ROOT_ID, path: '/Documents', name: 'Documents', kind: 'folder', sort_index: 20 },
+    { id: 'fs_spreadsheets', parent_id: ROOT_ID, path: '/Spreadsheets', name: 'Spreadsheets', kind: 'folder', sort_index: 25 },
     { id: 'fs_downloads', parent_id: ROOT_ID, path: '/Downloads', name: 'Downloads', kind: 'folder', sort_index: 30 },
   ];
   for (const seed of seeds) {
@@ -510,15 +542,22 @@ async function storeFile(db, parentId, parentPath, name, file) {
   const dataUrl = await readFileAsDataUrl(file);
   const base64 = String(dataUrl).split(',')[1] || '';
   const total = Math.max(1, Math.ceil(base64.length / CHUNK_SIZE));
+  const contentHash = await sha256Hex(base64ToBytes(base64));
+  const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
   for (let idx = 0; idx < total; idx += 1) {
     const data = base64.slice(idx * CHUNK_SIZE, (idx + 1) * CHUNK_SIZE);
     await chunks.upsert({
-      id: `${id}_${idx}`,
+      id: `${id}_${generationId}_${idx}`,
       file_id: id,
+      generation_id: generationId,
+      content_hash: contentHash,
+      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
       idx,
       total,
       encoding: 'base64',
       data,
+      chunk_hash: await sha256Hex(data),
+      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
       size_bytes: data.length,
       created_at_ms: now,
     });
@@ -534,6 +573,11 @@ async function storeFile(db, parentId, parentPath, name, file) {
     size_bytes: file.size || 0,
     source: 'upload',
     content_ref: id,
+    content_state: 'available',
+    content_hash: contentHash,
+    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+    content_generation_id: generationId,
+    content_synced_at_ms: now,
     sort_index: now,
     is_deleted: false,
     created_at_ms: now,
@@ -541,26 +585,12 @@ async function storeFile(db, parentId, parentPath, name, file) {
   });
 }
 
-async function readStoredFile(db, fileId, mimeType = 'application/octet-stream') {
+async function readStoredFile(db, fileId, mimeType = 'application/octet-stream', options = {}) {
   const chunks = db?.collection?.('desktop_file_chunks');
   if (!chunks) throw new Error('Datei-Chunks sind nicht verfügbar.');
   const docs = await chunks.find().exec();
-  const allChunks = docs
-    .map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
-    .filter((chunk) => chunk.file_id === fileId);
-  const latestCreatedAt = Math.max(0, ...allChunks.map((chunk) => Number(chunk.created_at_ms || 0)));
-  const generation = allChunks.filter((chunk) => Number(chunk.created_at_ms || 0) === latestCreatedAt);
-  const total = Number(generation[0]?.total || generation.length || 0);
-  if (!generation.length || total <= 0) throw new Error('Dateiinhalt fehlt.');
-  const data = generation
-    .filter((chunk) => Number(chunk.idx) < total)
-    .sort((a, b) => a.idx - b.idx)
-    .map((chunk) => chunk.data)
-    .join('');
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let idx = 0; idx < binary.length; idx += 1) bytes[idx] = binary.charCodeAt(idx);
-  return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+  const allChunks = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+  return readStoredFileFromChunks(allChunks, fileId, mimeType, options);
 }
 
 function normalizeFileRow(data) {
@@ -585,6 +615,9 @@ function normalizeFileRow(data) {
     sizeLabel: isFolder ? '-' : formatBytes(data.size_bytes || 0),
     source: data.source || '',
     contentState: data.content_state || '',
+    contentHash: data.content_hash || '',
+    contentHashScheme: data.content_hash_scheme || '',
+    contentGenerationId: data.content_generation_id || '',
   };
 }
 

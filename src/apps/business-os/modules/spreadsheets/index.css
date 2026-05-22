@@ -1,0 +1,792 @@
+/* Spreadsheets Module Styling for CTOX Business OS */
+
+.spreadsheets-module {
+  height: 100%;
+  min-height: 0;
+  display: block;
+  background: var(--bg, #f6f8fb);
+  color: var(--text, #18222d);
+  overflow: hidden;
+}
+
+.spreadsheets-workbench {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.spreadsheets-editor-shell {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.spreadsheets-empty,
+.spreadsheets-loading,
+.spreadsheets-error {
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  min-height: 360px;
+  color: var(--muted, #687684);
+  text-align: center;
+}
+
+.spreadsheets-empty strong,
+.spreadsheets-loading strong,
+.spreadsheets-error strong {
+  color: var(--text, #18222d);
+  font-size: 14px;
+}
+
+.spreadsheets-loading-shell {
+  min-height: 100%;
+  grid-template-columns: minmax(0, 1fr);
+  display: grid;
+  place-content: center;
+}
+
+.spreadsheets-explorer,
+.spreadsheets-runbooks {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.spreadsheets-column-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--line, #d7e0e8);
+  flex-shrink: 0;
+}
+
+.spreadsheets-column-title {
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--muted, #687684);
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.spreadsheets-column-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.spreadsheets-column-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface-2, #eef3f7);
+  color: var(--muted, #687684);
+  padding: 0;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.spreadsheets-column-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+}
+
+.spreadsheets-column-icon:hover {
+  color: var(--accent, #2b6f73);
+  border-color: var(--accent, #2b6f73);
+  background: var(--surface, #fff);
+}
+
+.spreadsheets-column-icon:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.spreadsheets-upload input {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.spreadsheets-column-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line, #d7e0e8);
+  flex-shrink: 0;
+}
+
+.spreadsheets-column-tools input,
+.spreadsheets-column-tools select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #18222d);
+  font: inherit;
+  height: 32px;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.spreadsheets-column-tools input:focus,
+.spreadsheets-column-tools select:focus {
+  border-color: var(--accent, #2b6f73);
+  outline: none;
+}
+
+.spreadsheets-column-sort {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.spreadsheets-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+
+.spreadsheets-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 4px;
+  align-items: start;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  transition: all 0.15s ease;
+}
+
+.spreadsheets-card[aria-current="true"] {
+  background: var(--surface-2, #eef5f7);
+  border-color: var(--line, #bed1d8);
+}
+
+.spreadsheets-card-main {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  padding: 8px 4px 8px 8px;
+  text-align: left;
+}
+
+.spreadsheets-card-manage {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin: 6px 6px 0 0;
+  place-items: center;
+  border: 1px solid var(--line, #d4e0e5);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted, #687684);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.spreadsheets-card-manage:hover,
+.spreadsheets-card-manage:focus-visible {
+  color: var(--accent, #2b6f73);
+  border-color: var(--accent, #2b6f73);
+  background: var(--surface, #fff);
+  outline: none;
+}
+
+.spreadsheets-card-manage svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+.spreadsheets-card-main strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #18222d);
+}
+
+.spreadsheets-card-main .spreadsheets-card-filename {
+  display: block;
+  color: var(--muted, #687684);
+  font-size: 11.5px;
+  margin-top: 2px;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.spreadsheets-card-main .spreadsheets-card-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  color: color-mix(in srgb, var(--text, #18222d) 70%, var(--muted, #687684));
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.spreadsheets-card-main small {
+  display: block;
+  margin-top: 4px;
+  color: var(--accent, #2b6f73);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Center Editor Header & Surface */
+
+.spreadsheets-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--surface, #fff);
+  border-bottom: 1px solid var(--line, #d7e0e8);
+  flex-shrink: 0;
+}
+
+.spreadsheets-editor-title-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.spreadsheets-editor-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text, #18222d);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spreadsheets-dirty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-2, #eef3f7);
+  color: var(--muted, #687684);
+}
+
+.spreadsheets-dirty-badge.is-dirty {
+  background: color-mix(in srgb, var(--danger, #e06b60) 15%, var(--surface, #fff));
+  color: var(--danger, #e06b60);
+}
+
+.spreadsheets-dirty-badge.is-saving {
+  background: color-mix(in srgb, var(--accent, #2b6f73) 15%, var(--surface, #fff));
+  color: var(--accent, #2b6f73);
+}
+
+.spreadsheets-dirty-badge .indicator-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #4caf50;
+}
+
+.spreadsheets-dirty-badge.is-dirty .indicator-dot {
+  background: var(--danger, #e06b60);
+}
+
+.spreadsheets-dirty-badge.is-saving .indicator-dot {
+  background: var(--accent, #2b6f73);
+  animation: pulse-saving 1s infinite alternate;
+}
+
+@keyframes pulse-saving {
+  0% { opacity: 0.3; }
+  100% { opacity: 1; }
+}
+
+.spreadsheets-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.spreadsheets-editor-actions select {
+  height: 28px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #18222d);
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.spreadsheets-editor-actions button {
+  height: 28px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface-2, #eef3f7);
+  color: var(--text, #18222d);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 0 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.spreadsheets-editor-actions button:hover {
+  border-color: var(--accent, #2b6f73);
+  color: var(--accent, #2b6f73);
+  background: var(--surface, #fff);
+}
+
+.spreadsheets-editor-actions button svg {
+  width: 12px;
+  height: 12px;
+  fill: currentColor;
+}
+
+/* JSpreadsheet Premium Overrides */
+
+.spreadsheets-editor-canvas {
+  flex-grow: 1;
+  overflow: auto;
+  position: relative;
+  background: var(--surface-2, #eef3f7);
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+/* Scrollbars */
+.spreadsheets-editor-canvas::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.spreadsheets-editor-canvas::-webkit-scrollbar-track {
+  background: transparent;
+}
+.spreadsheets-editor-canvas::-webkit-scrollbar-thumb {
+  background: var(--line, #cbd8e2);
+  border-radius: 5px;
+}
+.spreadsheets-editor-canvas::-webkit-scrollbar-thumb:hover {
+  background: var(--muted, #94a6b5);
+}
+
+/* Theme Integration for jspreadsheet classes */
+.spreadsheets-editor-canvas .jexcel_container {
+  font-family: inherit !important;
+  border-color: var(--line, #d7e0e8) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background: var(--surface, #fff) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+}
+
+.spreadsheets-editor-canvas .jexcel > thead > tr > td {
+  background: var(--surface-2, #f3f6f9) !important;
+  color: var(--muted, #687684) !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line, #d7e0e8) !important;
+  border-right: 1px solid var(--line, #d7e0e8) !important;
+  height: 28px !important;
+  padding: 4px 8px !important;
+  text-align: center !important;
+  box-sizing: border-box;
+}
+
+.spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child {
+  background: var(--surface-2, #f3f6f9) !important;
+  color: var(--muted, #687684) !important;
+  font-weight: 700 !important;
+  border-right: 1px solid var(--line, #d7e0e8) !important;
+  border-bottom: 1px solid var(--line, #d7e0e8) !important;
+  text-align: center !important;
+  min-width: 32px !important;
+  font-size: 11px !important;
+}
+
+.spreadsheets-editor-canvas .jexcel > tbody > tr > td {
+  border-right: 1px solid var(--line, #e2ebf0) !important;
+  border-bottom: 1px solid var(--line, #e2ebf0) !important;
+  color: var(--text, #18222d) !important;
+  font-size: 12.5px !important;
+  padding: 4px 6px !important;
+  height: 22px !important;
+  box-sizing: border-box;
+  background: var(--surface, #fff) !important;
+}
+
+/* Selected cells */
+.spreadsheets-editor-canvas .jexcel .highlight {
+  background-color: color-mix(in srgb, var(--accent, #2b6f73) 10%, transparent) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel .highlight-left {
+  border-left: 1.5px solid var(--accent, #2b6f73) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel .highlight-right {
+  border-right: 1.5px solid var(--accent, #2b6f73) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel .highlight-top {
+  border-top: 1.5px solid var(--accent, #2b6f73) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel .highlight-bottom {
+  border-bottom: 1.5px solid var(--accent, #2b6f73) !important;
+}
+
+.spreadsheets-editor-canvas .jexcel_corner {
+  background-color: var(--accent, #2b6f73) !important;
+  border-color: var(--surface, #fff) !important;
+}
+
+/* Dark Mode Overrides (in case CTOX runs in dark mode theme) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e141a;
+    --text: #e1e7ec;
+    --muted: #8c9ba5;
+    --line: #222d37;
+    --surface: #141c24;
+    --surface-2: #1b2630;
+    --accent: #3ea0a6;
+    --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  }
+}
+
+/* Explicit class-based dark mode rules (in case shell applies dark theme via parent classes) */
+.theme-dark .spreadsheets-module,
+[data-theme="dark"] .spreadsheets-module {
+  background: var(--bg, #0e141a);
+  color: var(--text, #e1e7ec);
+}
+
+.theme-dark .spreadsheets-column-icon,
+[data-theme="dark"] .spreadsheets-column-icon {
+  background: var(--surface-2, #1b2630);
+  border-color: var(--line, #222d37);
+  color: var(--muted, #8c9ba5);
+}
+
+.theme-dark .spreadsheets-column-icon:hover,
+[data-theme="dark"] .spreadsheets-column-icon:hover {
+  color: var(--accent, #3ea0a6);
+  border-color: var(--accent, #3ea0a6);
+  background: var(--surface, #141c24);
+}
+
+.theme-dark .spreadsheets-column-head,
+.theme-dark .spreadsheets-column-tools,
+.theme-dark .spreadsheets-editor-header,
+[data-theme="dark"] .spreadsheets-column-head,
+[data-theme="dark"] .spreadsheets-column-tools,
+[data-theme="dark"] .spreadsheets-editor-header {
+  border-color: var(--line, #222d37);
+}
+
+.theme-dark .spreadsheets-editor-header,
+[data-theme="dark"] .spreadsheets-editor-header {
+  background: var(--surface, #141c24);
+}
+
+.theme-dark .spreadsheets-card[aria-current="true"],
+[data-theme="dark"] .spreadsheets-card[aria-current="true"] {
+  background: var(--surface-2, #1b2630);
+  border-color: var(--line, #2a3b4c);
+}
+
+.theme-dark .spreadsheets-card-manage,
+[data-theme="dark"] .spreadsheets-card-manage {
+  border-color: var(--line, #222d37);
+}
+
+.theme-dark .spreadsheets-card-manage:hover,
+[data-theme="dark"] .spreadsheets-card-manage:hover {
+  color: var(--accent, #3ea0a6);
+  border-color: var(--accent, #3ea0a6);
+  background: var(--surface, #141c24);
+}
+
+.theme-dark .spreadsheets-column-tools input,
+.theme-dark .spreadsheets-column-tools select,
+.theme-dark .spreadsheets-editor-actions select,
+.theme-dark .spreadsheets-editor-actions button,
+[data-theme="dark"] .spreadsheets-column-tools input,
+[data-theme="dark"] .spreadsheets-column-tools select,
+[data-theme="dark"] .spreadsheets-editor-actions select,
+[data-theme="dark"] .spreadsheets-editor-actions button {
+  background: var(--surface, #141c24);
+  color: var(--text, #e1e7ec);
+  border-color: var(--line, #222d37);
+}
+
+.theme-dark .spreadsheets-editor-actions button:hover,
+[data-theme="dark"] .spreadsheets-editor-actions button:hover {
+  border-color: var(--accent, #3ea0a6);
+  color: var(--accent, #3ea0a6);
+}
+
+/* JSpreadsheet dark mode overrides */
+.theme-dark .spreadsheets-editor-canvas .jexcel_container,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_container {
+  background: var(--surface, #141c24) !important;
+  border-color: var(--line, #222d37) !important;
+}
+
+.theme-dark .spreadsheets-editor-canvas .jexcel > thead > tr > td,
+.theme-dark .spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > thead > tr > td,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child {
+  background: var(--surface-2, #1b2630) !important;
+  color: var(--muted, #8c9ba5) !important;
+  border-color: var(--line, #222d37) !important;
+}
+
+.theme-dark .spreadsheets-editor-canvas .jexcel > tbody > tr > td,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td {
+  background: var(--surface, #141c24) !important;
+  color: var(--text, #e1e7ec) !important;
+  border-color: var(--line, #222d37) !important;
+}
+
+.theme-dark .spreadsheets-editor-canvas .jexcel_corner,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_corner {
+  border-color: var(--surface, #141c24) !important;
+}
+
+/* Right pane (Runbooks) */
+.spreadsheets-runbook-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+
+.spreadsheets-runbook-card {
+  border: 1px solid var(--line, #d7e0e8);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  padding: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.spreadsheets-runbook-card:hover {
+  border-color: var(--accent, #2b6f73);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.spreadsheets-runbook-card.is-active {
+  border-color: var(--accent, #2b6f73);
+  background: color-mix(in srgb, var(--accent, #2b6f73) 6%, var(--surface, #fff));
+}
+
+.spreadsheets-runbook-card strong {
+  display: block;
+  font-size: 13px;
+  color: var(--text, #18222d);
+  font-weight: 600;
+}
+
+.spreadsheets-runbook-card span {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted, #687684);
+  margin-top: 4px;
+}
+
+.spreadsheets-runbook-workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-top: 1px solid var(--line, #d7e0e8);
+  background: var(--surface-2, #eef3f7);
+  flex-shrink: 0;
+}
+
+.spreadsheets-runbook-workbench textarea {
+  width: 100%;
+  min-height: 80px;
+  padding: 8px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #18222d);
+  font: inherit;
+  font-size: 12.5px;
+  resize: vertical;
+}
+
+.spreadsheets-runbook-workbench textarea:focus {
+  border-color: var(--accent, #2b6f73);
+  outline: none;
+}
+
+.spreadsheets-runbook-workbench button {
+  height: 34px;
+  border: 1px solid var(--accent, #2b6f73);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent, #2b6f73) 10%, var(--surface, #fff));
+  color: var(--accent, #2b6f73);
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all 0.15s ease;
+}
+
+.spreadsheets-runbook-workbench button:hover:not(:disabled) {
+  background: var(--accent, #2b6f73);
+  color: #fff;
+}
+
+.spreadsheets-runbook-workbench button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: var(--line, #cdd8e2);
+  color: var(--muted, #687684);
+  background: var(--surface-2, #eef3f7);
+}
+
+/* Drawer Dialog Styles */
+.spreadsheets-drawer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.spreadsheets-drawer-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.spreadsheets-drawer-form label > span {
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted, #687684);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.spreadsheets-drawer-form input,
+.spreadsheets-drawer-form select,
+.spreadsheets-drawer-form textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #18222d);
+  font: inherit;
+  font-size: 13px;
+}
+
+.spreadsheets-drawer-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+.spreadsheets-drawer-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.spreadsheets-drawer-actions button {
+  height: 36px;
+  border: 1px solid var(--line, #cdd8e2);
+  border-radius: 6px;
+  background: var(--surface, #fff);
+  color: var(--text, #18222d);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.spreadsheets-drawer-actions button[type="submit"] {
+  border-color: var(--accent, #2b6f73);
+  color: var(--accent, #2b6f73);
+}
+
+.spreadsheets-drawer-actions button[type="submit"]:hover {
+  background: color-mix(in srgb, var(--accent, #2b6f73) 8%, var(--surface, #fff));
+}
+
+.spreadsheets-drawer-actions button.danger-button {
+  border-color: var(--danger, #e06b60);
+  color: var(--danger, #e06b60);
+}
+
+.spreadsheets-drawer-actions button.danger-button:hover {
+  background: color-mix(in srgb, var(--danger, #e06b60) 8%, var(--surface, #fff));
+}
+
+/* Formula Errors */
+.spreadsheets-editor-canvas .jexcel td.formula-error {
+  color: var(--danger, #e06b60) !important;
+  background-color: color-mix(in srgb, var(--danger, #e06b60) 8%, transparent) !important;
+  font-weight: 600;
+  position: relative;
+}
+
+.spreadsheets-editor-canvas .jexcel td.formula-error::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 0 6px 6px 0;
+  border-color: transparent var(--danger, #e06b60) transparent transparent;
+  pointer-events: none;
+}

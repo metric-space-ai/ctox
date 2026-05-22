@@ -19,5 +19,23 @@
     "left": "runtime scopes",
     "center": "active workbench",
     "right": "agent context"
+  },
+  "category": "System",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "Apache-2.0",
+  "tags": [
+    "control-plane",
+    "queue",
+    "runs",
+    "governance"
+  ],
+  "store": {
+    "summary": "Native CTOX control surface for queue tasks, runs, module reports, releases, and source evidence.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/ctox",
+    "installable": false,
+    "editable_after_install": false,
+    "distribution": "system-module"
   }
 }

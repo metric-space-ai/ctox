@@ -778,6 +778,7 @@ function renderMain(state) {
   const live = isLiveMetricSubject(metricSubject, state);
   const metrics = metricSubject ? aggregateFlowMetrics(state.flow) : emptyMetrics();
   const elapsedSeconds = live ? liveElapsedSeconds(state) : metrics.seconds;
+  const flowSource = flowSourceView(state);
   const main = state.ctx.host.querySelector('[data-ctox-main]');
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
@@ -788,8 +789,8 @@ function renderMain(state) {
         <h1>${escapeHtml(t.doingNow)}</h1>
       </div>
       <div class="ctox-flow-source">
-        <strong>${escapeHtml(displayFlowMode(state.flow.mode || 'ctox_core'))}</strong>
-        <span>${escapeHtml(state.flow.ok ? t.connected : t.notLive)}</span>
+        <strong>${escapeHtml(flowSource.mode)}</strong>
+        <span>${escapeHtml(flowSource.status)}</span>
         ${live ? liveStatusMarkup(state) : ''}
       </div>
     </header>
@@ -2166,11 +2167,11 @@ function routeStatusNodeId(status) {
 }
 
 async function loadLocalCommands(ctx) {
-  return loadLocalCollection(ctx, 'business_commands');
+  return (await loadLocalCollection(ctx, 'business_commands')).filter((doc) => !isInternalSmokeDoc(doc));
 }
 
 async function loadLocalQueueTasks(ctx) {
-  return loadLocalCollection(ctx, 'ctox_queue_tasks');
+  return (await loadLocalCollection(ctx, 'ctox_queue_tasks')).filter((doc) => !isInternalSmokeDoc(doc));
 }
 
 async function loadLocalBugReports(ctx) {
@@ -2185,6 +2186,14 @@ async function loadLocalCollection(ctx, collectionName) {
     .map((doc) => doc.toJSON())
     .sort((left, right) => (right.updated_at_ms || 0) - (left.updated_at_ms || 0))
     .slice(0, 20);
+}
+
+function isInternalSmokeDoc(doc) {
+  return doc?.command_type === 'business_os.smoke'
+    || doc?.client_context?.source === 'rxdb-smoke'
+    || doc?.payload?.client_context?.source === 'rxdb-smoke'
+    || doc?.payload?.title === 'WebRTC command smoke'
+    || doc?.title === 'WebRTC command smoke';
 }
 
 function emptyHarnessFlow(error = '') {
@@ -2577,6 +2586,20 @@ function isLiveMetricSubject(task, state) {
   return task.id === state.model.activeTask.id
     && taskMatchesHarnessFlow(task, state)
     && normalizeCommandStatus(task.status) === 'running';
+}
+
+function flowSourceView(state) {
+  const t = labels[state.lang];
+  if (state.flow?.ok === false && state.ctx?.sync?.mode === 'webrtc') {
+    return {
+      mode: state.runtimeStatus || displayFlowMode('rxdb-webrtc'),
+      status: t.connected,
+    };
+  }
+  return {
+    mode: displayFlowMode(state.flow?.mode || 'ctox_core'),
+    status: state.flow?.ok ? t.connected : t.notLive,
+  };
 }
 
 function isHarnessLive(state) {

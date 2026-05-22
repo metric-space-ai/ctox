@@ -1,0 +1,127 @@
+<div class="module-root" data-module-root="creator">
+  <div class="creator-single-pane">
+    <div class="creator-card">
+      <header class="creator-card-header">
+        <span class="os-kicker">KI App Generator</span>
+        <h2 class="os-title">Neue App beschreiben & installieren</h2>
+        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert die Datenmodelle, Benutzeroberflächen und das SQLite-Schema vollautomatisch.</p>
+      </header>
+
+      <div class="creator-card-body">
+        <!-- 1. Quickstart presets dropdown -->
+        <div class="form-group">
+          <label class="form-label" for="select-preset-prompt">Schnellstart-Vorlage laden (Exemplarische Prompts)</label>
+          <select id="select-preset-prompt" class="os-select">
+            <option value="" selected disabled>-- Wähle eine Beispiel-App-Vorlage --</option>
+            <option value="standard-mgmt">📦 Lagerverwaltung (Tabelle & Artikeldetails)</option>
+            <option value="notes-style">📝 Notizbuch (Markdown-Editor & Aufzeichnungen)</option>
+            <option value="kanban-style">📋 Taskboard (Kanban-Spalten & Tickets)</option>
+            <option value="support-style">🎫 Support Desk (Helpdesk & Kundentickets)</option>
+            <option value="time-style">⏱️ Zeiterfassung (Arbeitszeit-Log & Projektstunden)</option>
+            <option value="plant-style">🌱 Pflanzen-Tracker (Bürobotanik & Gieß-Logs)</option>
+          </select>
+        </div>
+
+        <!-- 2. AI Prompt Textarea -->
+        <div class="form-group">
+          <label class="form-label" for="ai-prompt-input">Wunsch-App per KI generieren (Prompt)</label>
+          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer und verantwortlicher Person...'"></textarea>
+
+          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            Spezifikation optimieren & anwenden
+          </button>
+        </div>
+
+        <!-- 3. Advanced Settings Accordion (Collapsible & Zero-config by default) -->
+        <div class="expert-accordion">
+          <button type="button" class="accordion-trigger" id="expert-accordion-btn">
+            <span>⚙️ Erweiterte Einstellungen (Optional)</span>
+            <svg class="accordion-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          <div class="accordion-content is-collapsed" id="expert-accordion-content">
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label" for="input-app-id">Modul ID (Slug)</label>
+                <input type="text" id="input-app-id" class="os-input" placeholder="z.B. lagerverwaltung" value="lagerverwaltung" required pattern="[a-z0-9\-]+">
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="input-app-title">Titel der App</label>
+                <input type="text" id="input-app-title" class="os-input" placeholder="z.B. Lagerverwaltung" value="Lagerverwaltung" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="input-app-desc">Beschreibung</label>
+              <input type="text" id="input-app-desc" class="os-input" placeholder="Kurze Beschreibung..." value="Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen." required>
+            </div>
+
+            <div class="form-grid">
+              <div class="form-group">
+                <label class="form-label" for="select-app-category">Kategorie</label>
+                <select id="select-app-category" class="os-select">
+                  <option value="Productivity">Productivity</option>
+                  <option value="Management" selected>Management</option>
+                  <option value="Finance">Finance</option>
+                  <option value="Utilities">Utilities</option>
+                  <option value="Development">Development</option>
+                </select>
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="select-app-layout">Workspace Layout</label>
+                <select id="select-app-layout" class="os-select">
+                  <option value="pane">Standard-Spalten (links/center/rechts)</option>
+                  <option value="full-workspace" selected>Volle Breite (Custom Columns)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">RxDB Datenbank Collections</label>
+              <div class="collections-editor">
+                <div id="collections-list">
+                  <!-- Dynamically populated collection rows -->
+                </div>
+                <div class="collection-row" style="margin-top: 8px;">
+                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Collection Name..." style="flex: 1; padding: 6px 10px; font-size: 12px;">
+                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Collection hinzufügen">+</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. Deployment Action -->
+        <div class="deploy-action-section">
+          <button type="button" id="btn-deploy-app" class="os-btn is-primary">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            App jetzt generieren & installieren
+          </button>
+
+          <div class="sync-status">
+            <div class="sync-dot" id="deploy-sync-dot"></div>
+            <span id="deploy-sync-text">System bereit</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. Integrated High-Tech Build Terminal -->
+      <footer class="creator-card-footer">
+        <div class="terminal-header">
+          <div class="terminal-dots">
+            <span class="t-dot"></span>
+            <span class="t-dot"></span>
+            <span class="t-dot"></span>
+          </div>
+          <span class="terminal-title">Build & Deployment Logs</span>
+        </div>
+        <div id="console-logs-container" class="console-logs os-scrollbar">
+          <div class="console-log-entry info">[SYSTEM] App Creator initialisiert. Bereit zur Prompt-Eingabe...</div>
+        </div>
+      </footer>
+    </div>
+  </div>
+</div>
