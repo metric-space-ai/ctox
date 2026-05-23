@@ -1314,12 +1314,32 @@ build_ctox() {
   # 1. Build main CTOX binary
   run_build_module "ctox CLI" "$source_root" "$cargo" build --release --bin ctox
   mkdir -p "$source_root/bin"
-  cp "$source_root/target/release/ctox" "$source_root/bin/" 2>/dev/null || true
+  local ctox_built_binary=""
+  for candidate in \
+    "$source_root/runtime/build/cargo-target/release/ctox" \
+    "$source_root/target/release/ctox"
+  do
+    if [[ -x "$candidate" ]]; then
+      ctox_built_binary="$candidate"
+      break
+    fi
+  done
+  [[ -n "$ctox_built_binary" ]] && cp "$ctox_built_binary" "$source_root/bin/" 2>/dev/null || true
 
   if [[ -f "$source_root/src/apps/desktop/Cargo.toml" ]]; then
     prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
     run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
-    cp "$source_root/src/apps/desktop/target/release/ctox-desktop-host" "$source_root/bin/" 2>/dev/null || true
+    local desktop_built_binary=""
+    for candidate in \
+      "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
+      "$source_root/src/apps/desktop/target/release/ctox-desktop-host"
+    do
+      if [[ -x "$candidate" ]]; then
+        desktop_built_binary="$candidate"
+        break
+      fi
+    done
+    [[ -n "$desktop_built_binary" ]] && cp "$desktop_built_binary" "$source_root/bin/" 2>/dev/null || true
   fi
 
   # Qwen3.6 uses a dedicated Rust Unix-socket adapter over the local
@@ -1421,6 +1441,8 @@ resolve_ctox_binary_path() {
   local source_root="$1"
   local candidate
   for candidate in \
+    "$source_root/runtime/build/cargo-target/release/ctox" \
+    "$source_root/runtime/build/cargo-target/debug/ctox" \
     "$source_root/target/release/ctox" \
     "$source_root/target/debug/ctox" \
     "$source_root/bin/ctox"
@@ -1434,6 +1456,8 @@ resolve_ctox_desktop_host_binary_path() {
   local source_root="$1"
   local candidate
   for candidate in \
+    "$source_root/runtime/build/cargo-target/release/ctox-desktop-host" \
+    "$source_root/runtime/build/cargo-target/debug/ctox-desktop-host" \
     "$source_root/src/apps/desktop/target/release/ctox-desktop-host" \
     "$source_root/src/apps/desktop/target/debug/ctox-desktop-host" \
     "$source_root/bin/ctox-desktop-host"
