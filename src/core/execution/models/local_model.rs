@@ -206,9 +206,15 @@ fn qwen35_27b_q4km_dflash_backend(
 }
 
 fn qwen36_35b_a3b_ggml_backend(root: &Path, transport_endpoint: Option<&str>) -> LocalModelBackend {
-    let binary = root
-        .join("src/core/inference/models/qwen36_35b_a3b_ggml/target/release")
+    let target_binary = root
+        .join("runtime/build/cargo-target/release")
         .join("qwen36-35b-a3b-ggml-server");
+    let binary = if target_binary.is_file() {
+        target_binary
+    } else {
+        root.join("src/core/inference/models/qwen36_35b_a3b_ggml/target/release")
+            .join("qwen36-35b-a3b-ggml-server")
+    };
 
     let model = config_path_or(root, "CTOX_QWEN36_GGUF", default_qwen36_gguf(root));
     let llama_cli = config_path_or(

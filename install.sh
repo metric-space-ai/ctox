@@ -1349,6 +1349,23 @@ build_ctox() {
   if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
     prepare_cargo_target_cache "$qwen36_backend_dir/target" "qwen36-35b-a3b-ggml"
     run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server
+    local qwen36_built_binary=""
+    local qwen36_expected_binary="$qwen36_backend_dir/target/release/qwen36-35b-a3b-ggml-server"
+    for candidate in \
+      "$source_root/runtime/build/cargo-target/release/qwen36-35b-a3b-ggml-server" \
+      "$qwen36_expected_binary"
+    do
+      if [[ -x "$candidate" ]]; then
+        qwen36_built_binary="$candidate"
+        break
+      fi
+    done
+    if [[ -n "$qwen36_built_binary" && "$qwen36_built_binary" != "$qwen36_expected_binary" ]]; then
+      mkdir -p "$(dirname "$qwen36_expected_binary")"
+      rm -f "$qwen36_expected_binary"
+      cp "$qwen36_built_binary" "$qwen36_expected_binary"
+      chmod 775 "$qwen36_expected_binary" 2>/dev/null || true
+    fi
   fi
 
   # 2. If CUDA features requested, prepare build environment
