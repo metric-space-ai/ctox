@@ -1,0 +1,6 @@
+interface:
+  display_name: Minecraft Mod Development
+  short_description: Build, inspect, merge, install, and troubleshoot Minecraft mods and shader/controller setups.
+  default_prompt:
+    - Run $minecraft-mod-development for this Minecraft task. Identify the target launcher instance and loader, inspect mod metadata, use the helper script for build/install/merge operations, preserve manifest backups, check Java/GPU/controller prerequisites, and verify the resulting jar or installed mods directory before reporting completion.
+

@@ -253,6 +253,29 @@
       }
     },
     {
+      "id": "minecraft-mods",
+      "title": "Minecraft Mods",
+      "description": "Local-first workspace for Minecraft mod projects, build artifacts, install targets, merge plans, and CTOX mod commands.",
+      "entry": "modules/minecraft-mods/index.html",
+      "collections": [
+        "business_commands",
+        "minecraft_mod_projects",
+        "minecraft_mod_artifacts",
+        "minecraft_mod_installations",
+        "minecraft_mod_merge_sets"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "left": "mod projects, loader filters, and install targets",
+        "center": "artifact table, merge planner, and build/install status",
+        "right": "selected mod editor, operations, and CTOX command evidence"
+      }
+    },
+    {
       "id": "spreadsheets",
       "title": "Spreadsheets",
       "description": "Native XLSX spreadsheet workspace with spreadsheet explorer, spreadsheet editor surface based on JSpreadsheet, and CTOX runbooks.",
