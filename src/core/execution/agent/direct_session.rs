@@ -100,11 +100,7 @@ pub(crate) fn exact_prompt_token_count(
     let binding = kernel.primary_generation.as_ref().context(
         "exact token preflight unavailable: local runtime has no primary generation binding",
     )?;
-    let base_url = if binding.base_url.trim().is_empty() {
-        format!("http://127.0.0.1:{}", binding.port)
-    } else {
-        binding.base_url.trim().trim_end_matches('/').to_string()
-    };
+    let base_url = tokenizer_base_url(binding)?;
     let tokens = count_llama_tokenize_endpoint(&base_url, text).with_context(|| {
         format!(
             "exact token preflight failed via {} for {}",
@@ -116,6 +112,21 @@ pub(crate) fn exact_prompt_token_count(
         context_limit: kernel.turn_context_tokens(),
         source: format!("{} /tokenize", binding.request_model),
     }))
+}
+
+fn tokenizer_base_url(binding: &runtime_kernel::ResolvedRuntimeBinding) -> Result<String> {
+    let base_url = binding.base_url.trim().trim_end_matches('/');
+    if !base_url.is_empty() {
+        return Ok(base_url.to_string());
+    }
+    if let Some(base_url) = binding.transport.http_base_url() {
+        return Ok(base_url.trim_end_matches('/').to_string());
+    }
+    anyhow::bail!(
+        "exact token preflight unavailable: {} exposes {} without HTTP tokenizer metadata",
+        binding.request_model,
+        binding.transport.display_label()
+    )
 }
 
 fn count_llama_tokenize_endpoint(base_url: &str, text: &str) -> Result<i64> {
@@ -1321,6 +1332,29 @@ mod tests {
         assert_eq!(parse_tokenize_count(r#"{"n_tokens":42}"#).unwrap(), 42);
         assert_eq!(parse_tokenize_count(r#"{"token_count":17}"#).unwrap(), 17);
         assert_eq!(parse_tokenize_count(r#"{"count":9}"#).unwrap(), 9);
+    }
+
+    #[test]
+    fn tokenizer_base_url_does_not_fallback_to_stale_port_for_ipc_runtime() {
+        let binding = runtime_kernel::ResolvedRuntimeBinding {
+            workload: runtime_kernel::InferenceWorkloadRole::PrimaryGeneration,
+            display_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
+            request_model: "Qwen/Qwen3.6-35B-A3B".to_string(),
+            port: 1234,
+            base_url: String::new(),
+            transport_endpoint: Some("/tmp/primary_generation.sock".to_string()),
+            transport: crate::inference::local_transport::LocalTransport::UnixSocket {
+                path: PathBuf::from("/tmp/primary_generation.sock"),
+            },
+            health_path: "/health",
+            launcher_kind: runtime_kernel::RuntimeLauncherKind::Engine,
+            compute_target: None,
+            visible_devices: None,
+        };
+
+        let err = tokenizer_base_url(&binding).unwrap_err().to_string();
+        assert!(err.contains("without HTTP tokenizer metadata"));
+        assert!(!err.contains("127.0.0.1:1234"));
     }
 
     #[test]

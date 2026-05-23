@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Deserialize;
 use sha2::Digest;
 use sha2::Sha256;
 #[cfg(unix)]
@@ -141,6 +142,45 @@ pub fn managed_runtime_transport(root: &Path, workload: InferenceWorkloadRole) -
         managed_runtime_ipc_path(root, workload),
         managed_runtime_pipe_name(root, workload),
     )
+}
+
+pub fn runtime_http_endpoint_metadata_path(ipc_path: &Path) -> PathBuf {
+    let file_name = ipc_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("runtime.sock");
+    ipc_path.with_file_name(format!("{file_name}.http.json"))
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeHttpEndpointMetadata {
+    base_url: Option<String>,
+}
+
+fn runtime_http_base_url_for_transport(transport: &LocalTransport) -> Option<String> {
+    transport
+        .http_base_url()
+        .or_else(|| runtime_http_base_url_from_metadata(transport))
+}
+
+fn runtime_http_base_url_from_metadata(transport: &LocalTransport) -> Option<String> {
+    let ipc_path = transport.unix_socket_path()?;
+    let metadata_path = runtime_http_endpoint_metadata_path(ipc_path);
+    let payload = std::fs::read(metadata_path).ok()?;
+    let metadata: RuntimeHttpEndpointMetadata = serde_json::from_slice(&payload).ok()?;
+    let base_url = metadata.base_url?.trim().trim_end_matches('/').to_string();
+    if is_loopback_http_base_url(&base_url) {
+        Some(base_url)
+    } else {
+        None
+    }
+}
+
+fn is_loopback_http_base_url(base_url: &str) -> bool {
+    let normalized = base_url.to_ascii_lowercase();
+    normalized.starts_with("http://127.0.0.1:")
+        || normalized.starts_with("http://localhost:")
+        || normalized.starts_with("http://[::1]:")
 }
 
 pub fn preferred_auxiliary_selection_for_host(
@@ -350,7 +390,7 @@ fn resolve_primary_generation(
     };
     let transport = managed_runtime_transport(root, InferenceWorkloadRole::PrimaryGeneration);
     let transport_endpoint = Some(transport.endpoint_string());
-    let base_url = transport.http_base_url().unwrap_or_default();
+    let base_url = runtime_http_base_url_for_transport(&transport).unwrap_or_default();
     Some(ResolvedRuntimeBinding {
         workload: InferenceWorkloadRole::PrimaryGeneration,
         display_model: request_model.clone(),
@@ -399,7 +439,7 @@ fn resolve_auxiliary(
     let base_url = auxiliary_state
         .base_url
         .clone()
-        .or_else(|| transport.http_base_url())
+        .or_else(|| runtime_http_base_url_for_transport(&transport))
         .unwrap_or_default();
     Some(ResolvedRuntimeBinding {
         workload,
@@ -490,6 +530,54 @@ mod tests {
             Some("")
         );
         assert_eq!(resolved.internal_responses_base_url(), "/v1");
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolves_primary_generation_http_base_url_from_socket_metadata() {
+        let root = make_temp_root();
+        runtime_state::persist_runtime_state(
+            &root,
+            &runtime_state::InferenceRuntimeState {
+                version: 4,
+                source: runtime_state::InferenceSource::Local,
+                local_runtime: runtime_state::LocalRuntimeKind::Candle,
+                base_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                requested_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                active_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                engine_model: Some("Qwen/Qwen3.6-35B-A3B".to_string()),
+                engine_port: Some(1234),
+                configured_context_tokens: Some(131_072),
+                realized_context_tokens: Some(131_072),
+                upstream_base_url: runtime_state::local_upstream_base_url(1234),
+                local_preset: Some("Quality".to_string()),
+                boost: runtime_state::BoostRuntimeState::default(),
+                adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
+                embedding: runtime_state::AuxiliaryRuntimeState::default(),
+                transcription: runtime_state::AuxiliaryRuntimeState::default(),
+                speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
+            },
+        )
+        .unwrap();
+        let ipc_path = managed_runtime_ipc_path(&root, InferenceWorkloadRole::PrimaryGeneration);
+        std::fs::create_dir_all(ipc_path.parent().unwrap()).unwrap();
+        std::fs::write(
+            runtime_http_endpoint_metadata_path(&ipc_path),
+            r#"{"version":1,"base_url":"http://127.0.0.1:33503","model":"Qwen/Qwen3.6-35B-A3B"}"#,
+        )
+        .unwrap();
+
+        invalidate_runtime_kernel_cache();
+        let resolved = InferenceRuntimeKernel::resolve(&root).unwrap();
+        assert_eq!(
+            resolved
+                .primary_generation
+                .as_ref()
+                .map(|binding| binding.base_url.as_str()),
+            Some("http://127.0.0.1:33503")
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

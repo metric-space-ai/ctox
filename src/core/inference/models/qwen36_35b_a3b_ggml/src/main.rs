@@ -102,6 +102,14 @@ struct Engine {
     llama_server: Mutex<Option<Child>>,
 }
 
+#[derive(Debug, Serialize)]
+struct RuntimeHttpEndpointMetadata<'a> {
+    version: u32,
+    base_url: String,
+    model: &'a str,
+    pid: u32,
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -129,7 +137,9 @@ async fn main() -> Result<()> {
         return Err(err.context("llama-server did not become ready"));
     }
     info!(port, "llama-server is ready");
+    write_runtime_http_endpoint_metadata(&args.socket, &server_url, &args.model_id)?;
 
+    let socket_path = args.socket.clone();
     let engine = Arc::new(Engine {
         args,
         server_url,
@@ -140,6 +150,7 @@ async fn main() -> Result<()> {
     if let Some(child) = engine.llama_server.lock().unwrap().take() {
         let _ = kill_child(child);
     }
+    let _ = std::fs::remove_file(runtime_http_endpoint_metadata_path(&socket_path));
     result
 }
 
@@ -231,6 +242,42 @@ fn kill_child(mut child: Child) -> Result<()> {
     }
     let _ = child.kill();
     let _ = child.wait();
+    Ok(())
+}
+
+fn runtime_http_endpoint_metadata_path(ipc_path: &Path) -> PathBuf {
+    let file_name = ipc_path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("runtime.sock");
+    ipc_path.with_file_name(format!("{file_name}.http.json"))
+}
+
+fn write_runtime_http_endpoint_metadata(
+    socket_path: &Path,
+    server_url: &str,
+    model_id: &str,
+) -> Result<()> {
+    let metadata_path = runtime_http_endpoint_metadata_path(socket_path);
+    if let Some(parent) = metadata_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
+    }
+    let metadata = RuntimeHttpEndpointMetadata {
+        version: 1,
+        base_url: format!("http://{server_url}"),
+        model: model_id,
+        pid: std::process::id(),
+    };
+    std::fs::write(&metadata_path, serde_json::to_vec_pretty(&metadata)?)
+        .with_context(|| format!("write {}", metadata_path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&metadata_path)?.permissions();
+        perms.set_mode(0o600);
+        std::fs::set_permissions(&metadata_path, perms)?;
+    }
     Ok(())
 }
 
@@ -327,6 +374,7 @@ async fn serve(engine: Arc<Engine>) -> Result<()> {
 
     drop(listener);
     let _ = std::fs::remove_file(sock);
+    let _ = std::fs::remove_file(runtime_http_endpoint_metadata_path(sock));
     info!("shutdown complete");
     Ok(())
 }
