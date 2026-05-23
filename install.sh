@@ -1345,7 +1345,7 @@ build_ctox() {
   # Qwen3.6 uses a dedicated Rust Unix-socket adapter over the local
   # llama.cpp/ggml CUDA binary. It is not part of the top-level workspace, so
   # build it explicitly when the source crate is present.
-  local qwen36_backend_dir="$source_root/src/inference/models/qwen36_35b_a3b_ggml"
+  local qwen36_backend_dir="$source_root/src/core/inference/models/qwen36_35b_a3b_ggml"
   if [[ -f "$qwen36_backend_dir/Cargo.toml" ]]; then
     prepare_cargo_target_cache "$qwen36_backend_dir/target" "qwen36-35b-a3b-ggml"
     run_build_module "Qwen3.6 ggml backend" "$qwen36_backend_dir" "$cargo" build --release --bin qwen36-35b-a3b-ggml-server

@@ -1599,8 +1599,7 @@ fn resolve_managed_engine_binary(
         anyhow::bail!(
             "local inference backend `{}` is registered for model `{}` \
              but the server binary is missing at {}. Build it with: \
-             `(cd {} && cargo build --release --features=cuda --bin \
-             qwen35-27b-q4km-dflash-server)`",
+             `(cd {} && cargo build --release --bin {})`",
             backend.model_id,
             launch_spec.request_model,
             backend.binary.display(),
@@ -1610,6 +1609,11 @@ fn resolve_managed_engine_binary(
                 .and_then(|p| p.parent())
                 .map(|p| p.display().to_string())
                 .unwrap_or_else(|| "src/core/inference/models/<model>".to_string()),
+            backend
+                .binary
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("server"),
         );
     }
     let ctox_engine = engine::discover_source_layout_paths(root).model_runtime_binary;
