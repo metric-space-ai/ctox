@@ -29,9 +29,10 @@ core repository and must not be overwritten by `ctox install` or `ctox upgrade`.
 CTOX core owns the daemon, runtime state, skills, queues, ticket state,
 verification, and orchestration.
 
-The generated business repository owns the Next.js app, Postgres schema,
-module code, public website content, deployment configuration, and all customer
-customization.
+The generated business repository owns customer configuration and customer
+customization. CTOX Business OS apps are RxDB-backed app-store modules; only
+system apps are installed by default, and non-system apps must come through the
+Business OS app store.
 
 ## Vanilla Template
 
@@ -41,18 +42,11 @@ The source template lives in:
 templates/business-basic/
 ```
 
-It contains:
-
-- `apps/web`: Next.js app shell with public entry, login, and internal module
-  routes.
-- `packages/db`: Postgres/Drizzle schema baseline.
-- `packages/ctox-bridge`: event bridge contract between business data and CTOX.
-- `packages/ui`: shared navigation model, design tokens, theme CSS, shell, and
-  layout components.
-- `modules/sales`: CRM module contract.
-- `modules/marketing`: website, campaigns, assets, research, commerce contract.
-- `modules/operations`: projects, work items, boards, wiki, meetings contract.
-- `modules/business`: products, invoices, bookkeeping, reporting contract.
+It contains customer-owned configuration, documentation, and the system
+Business OS app allowlist. Legacy Next.js app files and the former public
+website bridge must not be copied into new installations. App code lives in
+RxDB Business OS modules, and non-system modules are installed from the app
+store after installation.
 
 ## Mission/Vision Bootstrap Contract
 
@@ -83,17 +77,8 @@ Use a thin central bootstrap orchestrator with module-owned demo generators:
 This keeps the business stack maintainable: module behavior changes next to the
 module, while installation still has one obvious "bootstrap demo tenant" action.
 
-Recommended generated entrypoints:
-
-```text
-apps/web/lib/bootstrap-demo.ts
-apps/web/lib/marketing-seed.ts
-apps/web/lib/sales-seed.ts
-apps/web/lib/operations-seed.ts
-apps/web/lib/business-seed.ts
-apps/web/lib/ctox-seed.ts
-apps/web/app/api/settings/bootstrap-demo/route.ts
-```
+Recommended generated entrypoints now live in the RxDB Business OS module
+runtime. Do not add new Next.js app entrypoints for Business OS.
 
 The bootstrap endpoint should accept:
 

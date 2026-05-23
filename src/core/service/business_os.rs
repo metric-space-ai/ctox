@@ -322,9 +322,11 @@ pub fn business_os_status_text(root: &Path) -> String {
          Preview first:\n\
            ctox business-os install --target <empty-dir> --dry-run\n\n\
          Runtime contract:\n\
-           - Web deploy can host the Business OS app shell.\n\
+           - Web deploy can host the RxDB Business OS app shell.\n\
            - CTOX core runs as the outbound RxDB/WebRTC peer.\n\
-           - SQLite state, commands, module manifests, and files sync over RxDB.\n",
+           - SQLite state, commands, module manifests, and files sync over RxDB.\n\
+           - Only system Business OS apps are installed by default.\n\
+           - Non-system apps are installed through the app store only.\n",
         skill_status = exists_label(skill.is_file()),
         installer_status = exists_label(installer.is_file()),
         template_status = exists_label(template.is_dir()),

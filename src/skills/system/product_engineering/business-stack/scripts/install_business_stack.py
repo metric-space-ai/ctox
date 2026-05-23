@@ -33,6 +33,19 @@ EXCLUDED_PATTERNS = {
     "*.log",
 }
 
+SYSTEM_BUSINESS_OS_APP_IDS = {
+    "app-store",
+    "ctox",
+    "desktop",
+    "knowledge",
+    "reports",
+}
+BUSINESS_OS_APP_ROOTS = {"modules", "installed-modules"}
+LEGACY_NEXT_BUSINESS_PATH_ROOTS = {
+    ("apps", "web"),
+    ("public-website-repo",),
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -92,6 +105,12 @@ def resolve_ctox_repo(explicit_repo: Path | None) -> Path:
 
 
 def is_excluded(relative_path: Path) -> bool:
+    if is_legacy_next_business_path(relative_path):
+        return True
+
+    if is_non_system_business_os_app(relative_path):
+        return True
+
     if any(part in EXCLUDED_DIRECTORIES for part in relative_path.parts):
         return True
 
@@ -103,6 +122,26 @@ def is_excluded(relative_path: Path) -> bool:
         return False
 
     return any(fnmatch.fnmatch(name, pattern) for pattern in EXCLUDED_PATTERNS)
+
+
+def is_non_system_business_os_app(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if len(parts) >= 2 and parts[0] in BUSINESS_OS_APP_ROOTS:
+        return parts[1] not in SYSTEM_BUSINESS_OS_APP_IDS
+    if (
+        len(parts) >= 5
+        and parts[0] == "src"
+        and parts[1] == "apps"
+        and parts[2] == "business-os"
+        and parts[3] in BUSINESS_OS_APP_ROOTS
+    ):
+        return parts[4] not in SYSTEM_BUSINESS_OS_APP_IDS
+    return False
+
+
+def is_legacy_next_business_path(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    return any(parts[: len(root)] == root for root in LEGACY_NEXT_BUSINESS_PATH_ROOTS)
 
 
 def validate_target(repo_root: Path, template_root: Path, target: Path) -> Path:
@@ -160,6 +199,12 @@ def write_manifest(repo_root: Path, template_root: Path, target: Path) -> None:
             "Customize this generated repository. CTOX core upgrades must only propose "
             "normal Git diffs here and never replace files in place."
         ),
+        "appInstallPolicy": {
+            "systemAppsInstalled": sorted(SYSTEM_BUSINESS_OS_APP_IDS),
+            "nonSystemApps": "app-store-only",
+            "runtime": "rxdb-business-os",
+            "legacyNextBusinessApp": "excluded",
+        },
     }
     (target / ".ctox-business-install.json").write_text(
         json.dumps(manifest, indent=2) + "\n"

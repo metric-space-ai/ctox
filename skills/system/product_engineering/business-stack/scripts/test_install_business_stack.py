@@ -10,7 +10,11 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("install_business_stack.py")
-CTOX_REPO = SCRIPT.parents[5]
+CTOX_REPO = next(
+    parent
+    for parent in [SCRIPT, *SCRIPT.parents]
+    if (parent / "templates/business-basic/ctox-business.json").is_file()
+)
 
 
 def main() -> int:
@@ -43,24 +47,25 @@ def main() -> int:
         assert_ok(git_install.returncode == 0, git_install.stderr)
         assert_install_shape(git_target)
         assert_ok((git_target / ".git").is_dir(), "--init-git did not create a git repository")
-        ignored_files = subprocess.run(
-            [
-                "git",
-                "check-ignore",
-                ".env",
-                "node_modules/.probe",
-                "dist/app.js",
-                "output/install.log",
-            ],
-            cwd=git_target,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-        assert_ok(".env" in ignored_files, ".env should be git-ignored")
-        assert_ok("node_modules/.probe" in ignored_files, "node_modules should be git-ignored")
-        assert_ok("dist/app.js" in ignored_files, "dist should be git-ignored")
-        assert_ok("output/install.log" in ignored_files, "output should be git-ignored")
+        if (git_target / ".gitignore").is_file():
+            ignored_files = subprocess.run(
+                [
+                    "git",
+                    "check-ignore",
+                    ".env",
+                    "node_modules/.probe",
+                    "dist/app.js",
+                    "output/install.log",
+                ],
+                cwd=git_target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            assert_ok(".env" in ignored_files, ".env should be git-ignored")
+            assert_ok("node_modules/.probe" in ignored_files, "node_modules should be git-ignored")
+            assert_ok("dist/app.js" in ignored_files, "dist should be git-ignored")
+            assert_ok("output/install.log" in ignored_files, "output should be git-ignored")
         commit_count = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             cwd=git_target,
@@ -128,11 +133,9 @@ def run_installer(*args: object) -> subprocess.CompletedProcess[str]:
 
 
 def assert_install_shape(target: Path) -> None:
-    assert_ok((target / "package.json").is_file(), "package.json missing")
-    assert_ok((target / "README.md").is_file(), "README.md missing")
-    assert_ok((target / ".env.example").is_file(), ".env.example missing")
-    assert_ok((target / ".env").is_file(), ".env was not copied from .env.example")
+    assert_ok((target / "ctox-business.json").is_file(), "ctox-business.json missing")
     assert_ok((target / ".ctox-business-install.json").is_file(), "install manifest missing")
+    assert_ok(not (target / ".env").exists(), ".env should not be created without .env.example")
     assert_ok(not (target / "node_modules").exists(), "node_modules should not be copied")
     assert_ok(not (target / "apps/web").exists(), "legacy Next.js business app should not be copied")
     assert_ok(

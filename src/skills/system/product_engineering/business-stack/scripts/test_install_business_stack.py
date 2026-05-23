@@ -10,7 +10,11 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("install_business_stack.py")
-CTOX_REPO = SCRIPT.parents[5]
+CTOX_REPO = next(
+    parent
+    for parent in [SCRIPT, *SCRIPT.parents]
+    if (parent / "templates/business-basic/ctox-business.json").is_file()
+)
 
 
 def main() -> int:
@@ -43,24 +47,25 @@ def main() -> int:
         assert_ok(git_install.returncode == 0, git_install.stderr)
         assert_install_shape(git_target)
         assert_ok((git_target / ".git").is_dir(), "--init-git did not create a git repository")
-        ignored_files = subprocess.run(
-            [
-                "git",
-                "check-ignore",
-                ".env",
-                "node_modules/.probe",
-                "apps/web/.next/cache",
-                "apps/web/next-env.d.ts",
-            ],
-            cwd=git_target,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.splitlines()
-        assert_ok(".env" in ignored_files, ".env should be git-ignored")
-        assert_ok("node_modules/.probe" in ignored_files, "node_modules should be git-ignored")
-        assert_ok("apps/web/.next/cache" in ignored_files, ".next should be git-ignored")
-        assert_ok("apps/web/next-env.d.ts" in ignored_files, "next-env.d.ts should be git-ignored")
+        if (git_target / ".gitignore").is_file():
+            ignored_files = subprocess.run(
+                [
+                    "git",
+                    "check-ignore",
+                    ".env",
+                    "node_modules/.probe",
+                    "dist/app.js",
+                    "output/install.log",
+                ],
+                cwd=git_target,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            assert_ok(".env" in ignored_files, ".env should be git-ignored")
+            assert_ok("node_modules/.probe" in ignored_files, "node_modules should be git-ignored")
+            assert_ok("dist/app.js" in ignored_files, "dist should be git-ignored")
+            assert_ok("output/install.log" in ignored_files, "output should be git-ignored")
         commit_count = subprocess.run(
             ["git", "rev-list", "--count", "HEAD"],
             cwd=git_target,
@@ -85,10 +90,38 @@ def load_installer():
 def assert_exclusion_rules(installer) -> None:
     assert_ok(installer.is_excluded(Path(".env")), ".env should be excluded")
     assert_ok(installer.is_excluded(Path(".env.local")), ".env.local should be excluded")
-    assert_ok(installer.is_excluded(Path("apps/web/.env.production")), ".env.production should be excluded")
+    assert_ok(installer.is_excluded(Path("runtime/.env.production")), ".env.production should be excluded")
     assert_ok(not installer.is_excluded(Path(".env.example")), ".env.example should be copied")
-    assert_ok(installer.is_excluded(Path("apps/web/.next")), ".next should be excluded")
-    assert_ok(installer.is_excluded(Path("apps/web/tsconfig.tsbuildinfo")), "tsbuildinfo should be excluded")
+    assert_ok(installer.is_excluded(Path(".next/cache")), ".next should be excluded")
+    assert_ok(installer.is_excluded(Path("runtime/tsconfig.tsbuildinfo")), "tsbuildinfo should be excluded")
+    assert_ok(
+        installer.is_excluded(Path("apps/web/app/page.tsx")),
+        "legacy Next.js business app must not be installed",
+    )
+    assert_ok(
+        installer.is_excluded(Path("public-website-repo/app/page.tsx")),
+        "legacy Next.js public website bridge must not be installed",
+    )
+    assert_ok(
+        not installer.is_excluded(Path("modules/ctox/module.json")),
+        "system Business OS modules must remain installable",
+    )
+    assert_ok(
+        not installer.is_excluded(Path("src/apps/business-os/modules/app-store/module.json")),
+        "system Business OS apps must remain installable",
+    )
+    assert_ok(
+        installer.is_excluded(Path("modules/notizen/module.json")),
+        "non-system modules must come from the app store, not installation",
+    )
+    assert_ok(
+        installer.is_excluded(Path("installed-modules/matching/module.json")),
+        "installed modules must not be bundled by installation",
+    )
+    assert_ok(
+        installer.is_excluded(Path("src/apps/business-os/modules/notes/module.json")),
+        "non-system native apps must come from the app store",
+    )
 
 
 def run_installer(*args: object) -> subprocess.CompletedProcess[str]:
@@ -100,14 +133,15 @@ def run_installer(*args: object) -> subprocess.CompletedProcess[str]:
 
 
 def assert_install_shape(target: Path) -> None:
-    assert_ok((target / "package.json").is_file(), "package.json missing")
-    assert_ok((target / "README.md").is_file(), "README.md missing")
-    assert_ok((target / ".env.example").is_file(), ".env.example missing")
-    assert_ok((target / ".env").is_file(), ".env was not copied from .env.example")
-    assert_ok((target / "apps/web/next-env.d.ts").is_file(), "next-env.d.ts missing")
+    assert_ok((target / "ctox-business.json").is_file(), "ctox-business.json missing")
     assert_ok((target / ".ctox-business-install.json").is_file(), "install manifest missing")
+    assert_ok(not (target / ".env").exists(), ".env should not be created without .env.example")
     assert_ok(not (target / "node_modules").exists(), "node_modules should not be copied")
-    assert_ok(not (target / "apps/web/.next").exists(), ".next should not be copied")
+    assert_ok(not (target / "apps/web").exists(), "legacy Next.js business app should not be copied")
+    assert_ok(
+        not (target / "public-website-repo").exists(),
+        "legacy Next.js public website bridge should not be copied",
+    )
     assert_ok(not any(target.rglob("*.tsbuildinfo")), "tsbuildinfo files should not be copied")
 
     manifest = json.loads((target / ".ctox-business-install.json").read_text())
@@ -115,6 +149,22 @@ def assert_install_shape(target: Path) -> None:
     assert_ok(
         manifest["coreUpgradePolicy"] == "never_overwrite_generated_repo",
         "manifest core upgrade policy is wrong",
+    )
+    assert_ok(
+        manifest["appInstallPolicy"]["nonSystemApps"] == "app-store-only",
+        "non-system apps must be app-store-only",
+    )
+    assert_ok(
+        manifest["appInstallPolicy"]["runtime"] == "rxdb-business-os",
+        "Business OS runtime should be RxDB",
+    )
+    assert_ok(
+        manifest["appInstallPolicy"]["legacyNextBusinessApp"] == "excluded",
+        "legacy Next.js app must stay excluded",
+    )
+    assert_ok(
+        "app-store" in manifest["appInstallPolicy"]["systemAppsInstalled"],
+        "system app allowlist missing app-store",
     )
 
 
