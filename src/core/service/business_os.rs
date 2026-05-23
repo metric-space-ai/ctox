@@ -12,10 +12,16 @@ use std::process::Command;
 use crate::persistence;
 use crate::skill_store;
 
-const BUSINESS_STACK_SKILL: &str = "skills/system/product_engineering/business-stack/SKILL.md";
-const BUSINESS_STACK_INSTALLER: &str =
-    "skills/system/product_engineering/business-stack/scripts/install_business_stack.py";
+const BUSINESS_STACK_SKILL_CANDIDATES: &[&str] = &[
+    "src/skills/system/product_engineering/business-stack/SKILL.md",
+    "skills/system/product_engineering/business-stack/SKILL.md",
+];
+const BUSINESS_STACK_INSTALLER_CANDIDATES: &[&str] = &[
+    "skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
+    "src/skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
+];
 const BUSINESS_STACK_TEMPLATE: &str = "templates/business-basic";
+const BUSINESS_OS_APP_CANDIDATES: &[&str] = &["src/apps/business-os", "business-os"];
 const ACTIVATION_PAYLOAD_KEY: &str = "business_os.skill_activation.v1";
 
 const CORE_MODULES: &[(&str, &str)] = &[
@@ -302,10 +308,11 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
 }
 
 pub fn business_os_status_text(root: &Path) -> String {
-    let skill = root.join(BUSINESS_STACK_SKILL);
-    let installer = root.join(BUSINESS_STACK_INSTALLER);
+    let skill = existing_file_path(root, BUSINESS_STACK_SKILL_CANDIDATES);
+    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
     let template = root.join(BUSINESS_STACK_TEMPLATE);
     let manifest = template.join("ctox-business.json");
+    let native_app = existing_dir_path(root, BUSINESS_OS_APP_CANDIDATES);
 
     format!(
         "CTOX Business OS\n\
@@ -331,12 +338,12 @@ pub fn business_os_status_text(root: &Path) -> String {
         installer_status = exists_label(installer.is_file()),
         template_status = exists_label(template.is_dir()),
         manifest_status = exists_label(manifest.is_file()),
-        native_app_status = exists_label(root.join("business-os/index.html").is_file()),
+        native_app_status = exists_label(native_app.join("index.html").is_file()),
         skill = skill.display(),
         installer = installer.display(),
         template = template.display(),
         manifest = manifest.display(),
-        native_app = root.join("business-os").display(),
+        native_app = native_app.display(),
         native_store = root.join("runtime/business-os.sqlite3").display(),
     )
 }
@@ -591,7 +598,7 @@ fn install_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("usage: ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]")?;
 
-    let installer = root.join(BUSINESS_STACK_INSTALLER);
+    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
     if !installer.is_file() {
         anyhow::bail!("Business OS installer is missing: {}", installer.display());
     }
@@ -639,6 +646,22 @@ fn exists_label(exists: bool) -> &'static str {
     } else {
         "missing"
     }
+}
+
+fn existing_file_path(root: &Path, candidates: &[&str]) -> PathBuf {
+    candidates
+        .iter()
+        .map(|candidate| root.join(candidate))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| root.join(candidates[0]))
+}
+
+fn existing_dir_path(root: &Path, candidates: &[&str]) -> PathBuf {
+    candidates
+        .iter()
+        .map(|candidate| root.join(candidate))
+        .find(|path| path.is_dir())
+        .unwrap_or_else(|| root.join(candidates[0]))
 }
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {

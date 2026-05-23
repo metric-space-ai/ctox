@@ -6,9 +6,14 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
 
-const BUSINESS_STACK_SKILL: &str = "skills/system/product_engineering/business-stack/SKILL.md";
-const BUSINESS_STACK_INSTALLER: &str =
-    "skills/system/product_engineering/business-stack/scripts/install_business_stack.py";
+const BUSINESS_STACK_SKILL_CANDIDATES: &[&str] = &[
+    "src/skills/system/product_engineering/business-stack/SKILL.md",
+    "skills/system/product_engineering/business-stack/SKILL.md",
+];
+const BUSINESS_STACK_INSTALLER_CANDIDATES: &[&str] = &[
+    "skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
+    "src/skills/system/product_engineering/business-stack/scripts/install_business_stack.py",
+];
 const BUSINESS_STACK_TEMPLATE: &str = "templates/business-basic";
 
 pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
@@ -30,8 +35,8 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
 }
 
 pub fn business_os_status_text(root: &Path) -> String {
-    let skill = root.join(BUSINESS_STACK_SKILL);
-    let installer = root.join(BUSINESS_STACK_INSTALLER);
+    let skill = existing_file_path(root, BUSINESS_STACK_SKILL_CANDIDATES);
+    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
     let template = root.join(BUSINESS_STACK_TEMPLATE);
     let manifest = template.join("ctox-business.json");
 
@@ -67,7 +72,7 @@ fn install_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> {
         .map(PathBuf::from)
         .context("usage: ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]")?;
 
-    let installer = root.join(BUSINESS_STACK_INSTALLER);
+    let installer = existing_file_path(root, BUSINESS_STACK_INSTALLER_CANDIDATES);
     if !installer.is_file() {
         anyhow::bail!("Business OS installer is missing: {}", installer.display());
     }
@@ -115,6 +120,14 @@ fn exists_label(exists: bool) -> &'static str {
     } else {
         "missing"
     }
+}
+
+fn existing_file_path(root: &Path, candidates: &[&str]) -> PathBuf {
+    candidates
+        .iter()
+        .map(|candidate| root.join(candidate))
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| root.join(candidates[0]))
 }
 
 fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
