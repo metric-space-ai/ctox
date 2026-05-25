@@ -321,6 +321,8 @@ function alignChatWindows(root) {
 }
 
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
+  initSchedulerLoop({ root, state, commandBus, db, getActiveModule });
+
   const selectedDate = state.selectedDate || getLocalDateString(Date.now());
   const chatsOfSelectedDate = state.chats.filter((chat) => getLocalDateString(chat.createdAt) === selectedDate);
   const openChats = chatsOfSelectedDate.filter((chat) => chat.open !== false);
@@ -331,13 +333,16 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   root.classList.toggle('is-collapsed', dockCollapsed);
 
   // --- SMART IN-PLACE DOM UPDATE FAST-PATH ---
+  const datePickerEl = root.querySelector('[data-chat-date-picker]');
+  const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
   const openChatIds = openChats.map(c => c.id);
   const canUpdateInPlace = existingWindows.length === openChats.length &&
                            currentWindowIds.every((id, idx) => id === openChatIds[idx]) &&
                            root.querySelector('[data-chat-dock]') &&
-                           wasCollapsed === dockCollapsed;
+                           wasCollapsed === dockCollapsed &&
+                           matchesCurrentDate;
 
   if (canUpdateInPlace) {
     // 1. Update dock state / collapse class
@@ -471,24 +476,16 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 
   root.querySelector('[data-chat-date-prev]')?.addEventListener('click', async () => {
     shiftSelectedDate(state, -1);
-    const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
-    if (chatsOfDate.length > 0) {
-      state.activeChatId = chatsOfDate[0].id;
-    } else {
-      state.activeChatId = '';
-    }
+    const chat = ensureChat(state);
+    chat.minimized = false;
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   });
 
   root.querySelector('[data-chat-date-next]')?.addEventListener('click', async () => {
     shiftSelectedDate(state, 1);
-    const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
-    if (chatsOfDate.length > 0) {
-      state.activeChatId = chatsOfDate[0].id;
-    } else {
-      state.activeChatId = '';
-    }
+    const chat = ensureChat(state);
+    chat.minimized = false;
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   });
@@ -497,12 +494,8 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     const val = event.currentTarget.value;
     if (val) {
       state.selectedDate = val;
-      const chatsOfDate = state.chats.filter(c => getLocalDateString(c.createdAt) === state.selectedDate);
-      if (chatsOfDate.length > 0) {
-        state.activeChatId = chatsOfDate[0].id;
-      } else {
-        state.activeChatId = '';
-      }
+      const chat = ensureChat(state);
+      chat.minimized = false;
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     }
@@ -616,6 +609,83 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       });
     });
 
+    node.querySelector('[data-chat-cancel-schedule]')?.addEventListener('click', async () => {
+      await cancelScheduledChat(state, chat, db, root, commandBus, getActiveModule);
+    });
+
+    node.querySelector('[data-chat-time-input]')?.addEventListener('change', async (event) => {
+      const timeVal = event.currentTarget.value;
+      if (timeVal) {
+        const [hours, minutes] = timeVal.split(':').map(Number);
+        const d = new Date(chat.createdAt);
+        d.setHours(hours, minutes, 0, 0);
+        chat.createdAt = d.getTime();
+        chat.updated_at_ms = Date.now();
+        await persistChatState({ state, db });
+        renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      }
+    });
+
+    node.querySelectorAll('[data-chat-clip]').forEach((clipBtn) => {
+      clipBtn.addEventListener('click', () => {
+        const fileInput = node.querySelector(`[data-chat-file-input="${chat.id}"]`);
+        fileInput?.click();
+      });
+    });
+
+    const fileInput = node.querySelector(`[data-chat-file-input="${chat.id}"]`);
+    fileInput?.addEventListener('change', async (e) => {
+      const files = e.currentTarget.files;
+      if (files?.length) {
+        for (const file of Array.from(files)) {
+          await addAttachmentToChatState(chat, file);
+        }
+        await persistChatState({ state, db });
+        renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      }
+    });
+
+    node.querySelectorAll('[data-remove-attachment]').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        const parts = btn.dataset.removeAttachment.split(':');
+        const attIdx = parseInt(parts[parts.length - 1], 10);
+        if (chat.attachments && chat.attachments[attIdx]) {
+          chat.attachments.splice(attIdx, 1);
+          await persistChatState({ state, db });
+          renderChatRoot({ root, state, commandBus, db, getActiveModule });
+        }
+      });
+    });
+
+    node.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      node.classList.add('drag-active');
+    });
+    node.addEventListener('dragleave', (e) => {
+      if (e.relatedTarget && node.contains(e.relatedTarget)) return;
+      node.classList.remove('drag-active');
+    });
+    node.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      node.classList.remove('drag-active');
+      const files = e.dataTransfer?.files;
+      if (files?.length) {
+        let added = false;
+        for (const file of Array.from(files)) {
+          if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+            await addAttachmentToChatState(chat, file);
+            added = true;
+          }
+        }
+        if (added) {
+          await persistChatState({ state, db });
+          renderChatRoot({ root, state, commandBus, db, getActiveModule });
+        }
+      }
+    });
+
     const textarea = node.querySelector('[name="message"]');
     if (textarea) {
       const adjustHeight = () => {
@@ -625,6 +695,25 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       textarea.addEventListener('input', (event) => {
         chat.draft = event.currentTarget.value;
         adjustHeight();
+      });
+      textarea.addEventListener('paste', async (e) => {
+        const items = e.clipboardData?.items;
+        if (!items) return;
+        let fileAdded = false;
+        for (const item of items) {
+          if (item.type.startsWith('image/') || item.type === 'application/pdf') {
+            const file = item.getAsFile();
+            if (file) {
+              e.preventDefault();
+              await addAttachmentToChatState(chat, file);
+              fileAdded = true;
+            }
+          }
+        }
+        if (fileAdded) {
+          await persistChatState({ state, db });
+          renderChatRoot({ root, state, commandBus, db, getActiveModule });
+        }
       });
       window.requestAnimationFrame(adjustHeight);
     }
@@ -666,9 +755,51 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, getActi
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
   if (!text) return;
+
+  const isFuture = chat.createdAt > Date.now();
+  if (isFuture) {
+    chat.__submitting = true;
+    chat.draft = '';
+    chat.showFollowUp = false;
+    chat.attachments = [];
+    if (input) input.value = '';
+    try {
+      const now = Date.now();
+      const messageId = `chatmsg_${crypto.randomUUID()}`;
+      const commandId = `cmd_${crypto.randomUUID()}`;
+      
+      chat.messages.push({
+        id: messageId,
+        role: 'user',
+        text,
+        createdAt: now,
+      });
+      
+      chat.messages.push({
+        id: `status_${commandId}`,
+        role: 'ctox',
+        text: 'Ausführung verzögert/geplant.',
+        commandId,
+        taskId: '',
+        status: 'scheduled',
+        createdAt: now,
+      });
+      
+      chat.lastTrackingId = commandId;
+      touchChats(state, [chat]);
+      
+      await persistChatState({ state, db });
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    } finally {
+      delete chat.__submitting;
+    }
+    return;
+  }
+
   chat.__submitting = true;
   chat.draft = '';
   chat.showFollowUp = false; // Reset follow-up container state
+  chat.attachments = [];
   if (input) input.value = '';
   try {
     await submitChatMessage({
@@ -763,6 +894,10 @@ async function collapseChatWindow({ root, state, commandBus, db, getActiveModule
 }
 
 function getTaskState(chat) {
+  const isFuture = chat.createdAt > Date.now();
+  const hasScheduledMessage = Array.isArray(chat.messages) && chat.messages.some(m => m.status === 'scheduled');
+  if (isFuture && hasScheduledMessage) return 'scheduled';
+
   if (!chat.lastTrackingId) return 'idle';
   const trackingMsg = [...chat.messages].reverse().find(m => 
     (m.commandId && m.commandId === chat.lastTrackingId) || 
@@ -770,6 +905,7 @@ function getTaskState(chat) {
   );
   if (!trackingMsg) return 'idle';
   const status = String(trackingMsg.status || '').toLowerCase();
+  if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
   if (status === 'success' || status === 'completed' || status === 'done' || status === 'erledigt') return 'success';
   if (['failed', 'blocked', 'stale_missing_native', 'error'].includes(status)) return 'failed';
@@ -788,6 +924,23 @@ function expandChatOnly(state, activeChat) {
 function chatWindow(chat, activeId, relation = 'center') {
   const moduleName = chat.contextMeta?.module || 'ctox';
   const taskState = getTaskState(chat);
+  const isFuture = chat.createdAt > Date.now();
+
+  const stagedAttachments = chat.attachments || [];
+  const attachmentsHtml = stagedAttachments.length ? `
+    <div class="ctox-chat-attachments-preview">
+      ${stagedAttachments.map((att, idx) => `
+        <div class="ctox-attachment-item" data-att-idx="${idx}">
+          ${att.mimeType.startsWith('image/') 
+            ? `<img class="ctox-attachment-thumbnail" src="${escapeAttr(att.base64Data)}" alt="${escapeAttr(att.name)}" />`
+            : `<span class="ctox-attachment-icon">📄</span>`
+          }
+          <span class="ctox-attachment-name" title="${escapeAttr(att.name)}">${escapeHtml(att.name)}</span>
+          <button type="button" class="ctox-attachment-remove" data-remove-attachment="${escapeAttr(chat.id)}:${idx}" title="Entfernen">×</button>
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
 
   let statusBadgeHtml = '';
   if (taskState === 'running') {
@@ -818,11 +971,40 @@ function chatWindow(chat, activeId, relation = 'center') {
         <span>Blocked</span>
       </span>
     `;
+  } else if (taskState === 'scheduled') {
+    statusBadgeHtml = `
+      <span class="ctox-chat-status-badge is-scheduled" title="Verzögerte Ausführung geplant">
+        <svg class="ctox-clock-pulse" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+        <span>Geplant</span>
+      </span>
+    `;
   }
 
   // Determine what to show at the bottom
   let bottomHtml = '';
-  if (taskState === 'queued' || taskState === 'running') {
+  if (taskState === 'scheduled') {
+    const timeText = getFormattedDateTime(chat.createdAt);
+    bottomHtml = `
+      <div class="ctox-chat-scheduler-card">
+        <div class="ctox-scheduler-glow"></div>
+        <div class="ctox-scheduler-header">
+          <svg class="ctox-clock-spinner" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <div class="ctox-scheduler-info">
+            <strong>Verzögerte Ausführung geplant</strong>
+            <span>Wird ausgeführt am: ${timeText}</span>
+          </div>
+        </div>
+        <div class="ctox-scheduler-timer-container">
+          <span class="ctox-scheduler-timer-badge">Timer:</span>
+          <strong class="ctox-scheduler-timer" data-countdown-timer="${chat.id}">${getCountdownText(chat.createdAt)}</strong>
+        </div>
+        <button class="ctox-scheduler-cancel-btn" type="button" data-chat-cancel-schedule="${chat.id}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+          <span>Planung abbrechen</span>
+        </button>
+      </div>
+    `;
+  } else if (taskState === 'queued' || taskState === 'running') {
     // Hide input, show active progress card
     const trackingMsg = [...chat.messages].reverse().find(m => 
       (m.commandId && m.commandId === chat.lastTrackingId) || 
@@ -851,7 +1033,12 @@ function chatWindow(chat, activeId, relation = 'center') {
   } else if (taskState === 'success' || taskState === 'failed') {
     if (chat.showFollowUp) {
       bottomHtml = `
+        ${attachmentsHtml}
         <form class="ctox-chat-form" data-chat-form>
+          <input type="file" multiple accept="image/*,application/pdf" style="display: none;" data-chat-file-input="${chat.id}" />
+          <button type="button" class="ctox-chat-clip-btn" data-chat-clip="${chat.id}" title="Datei hinzufügen">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+          </button>
           <textarea name="message" placeholder="Folgeaufgabe eingeben..." required>${escapeHtml(chat.draft || '')}</textarea>
           <button type="submit" data-chat-send aria-label="Senden">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
@@ -871,7 +1058,12 @@ function chatWindow(chat, activeId, relation = 'center') {
   } else {
     // idle state
     bottomHtml = `
+      ${attachmentsHtml}
       <form class="ctox-chat-form" data-chat-form>
+        <input type="file" multiple accept="image/*,application/pdf" style="display: none;" data-chat-file-input="${chat.id}" />
+        <button type="button" class="ctox-chat-clip-btn" data-chat-clip="${chat.id}" title="Datei hinzufügen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+        </button>
         <textarea name="message" placeholder="Aufgabe an CTOX..." required>${escapeHtml(chat.draft || '')}</textarea>
         <button type="submit" data-chat-send aria-label="Senden">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
@@ -882,6 +1074,24 @@ function chatWindow(chat, activeId, relation = 'center') {
 
   const isMinimizedClass = chat.minimized ? 'is-minimized' : '';
   const taskStateClass = `is-task-${taskState}`;
+
+  let schedulerBarHtml = '';
+  if (isFuture) {
+    schedulerBarHtml = `
+      <div class="ctox-chat-scheduler-bar">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <svg class="ctox-clock-pulse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <span>Planung:</span>
+          <strong>${formatGermanDateLabel(getLocalDateString(chat.createdAt))}</strong>
+          <span>um</span>
+          <input type="time" class="ctox-chat-time-input" data-chat-time-input="${chat.id}" value="${getFormattedTime(chat.createdAt)}" />
+        </div>
+        <div>
+          <span class="ctox-chat-countdown" data-countdown-timer="${chat.id}">${getCountdownText(chat.createdAt)}</span>
+        </div>
+      </div>
+    `;
+  }
 
   return `
     <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-chat-rel="${escapeAttr(relation)}">
@@ -910,6 +1120,15 @@ function chatWindow(chat, activeId, relation = 'center') {
           </button>
         </div>
       </header>
+      <div class="ctox-chat-drag-overlay">
+        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="17 8 12 3 7 8"></polyline>
+          <line x1="12" y1="3" x2="12" y2="15"></line>
+        </svg>
+        <strong>Datei hier ablegen</strong>
+      </div>
+      ${schedulerBarHtml}
       <div class="ctox-chat-messages">
         ${chat.messages.length ? chat.messages.map(messageMarkup).join('') : '<div class="ctox-chat-empty">CTOX Aufgabe eingeben.</div>'}
       </div>
@@ -1065,6 +1284,7 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
       chat_id: chat.id,
       message_id: messageId,
       conversation: compactConversation(chat.messages),
+      attachments: chat.attachments || [],
       inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
       outbound_channel: 'business_os_chat',
       response_channel: 'business_os_chat',
@@ -1252,7 +1472,8 @@ function formatGermanDateLabel(dateStr) {
 }
 
 function shiftSelectedDate(state, days) {
-  const [y, m, d] = state.selectedDate.split('-').map(Number);
+  const selectedDate = state.selectedDate || getLocalDateString(Date.now());
+  const [y, m, d] = selectedDate.split('-').map(Number);
   const date = new Date(y, m - 1, d);
   date.setDate(date.getDate() + days);
   state.selectedDate = getLocalDateString(date);
@@ -1358,6 +1579,7 @@ function readChatState(session) {
           createdAt: chat.createdAt || Date.now(),
           updated_at_ms: chat.updated_at_ms || Date.now(),
           showFollowUp: Boolean(chat.showFollowUp),
+          attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
         })),
     };
   } catch {
@@ -1381,6 +1603,7 @@ function writeChatState(state) {
       owner_user_id: chat.owner_user_id || state.ownerUserId || '',
       updated_at_ms: chat.updated_at_ms || Date.now(),
       showFollowUp: Boolean(chat.showFollowUp),
+      attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
     })),
   }));
 }
@@ -1403,6 +1626,7 @@ async function persistChatState({ state, db }) {
       contextMeta: chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {},
       updated_at_ms: chat.updated_at_ms,
       showFollowUp: Boolean(chat.showFollowUp),
+      attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
     };
     const existing = await collection.findOne(chat.id).exec();
     if (existing) await existing.incrementalPatch(doc);
@@ -1480,6 +1704,7 @@ function normalizeChat(chat) {
     createdAt: chat.createdAt || Date.now(),
     updated_at_ms: chat.updated_at_ms || Date.now(),
     showFollowUp: Boolean(chat.showFollowUp),
+    attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
   };
 }
 
@@ -2661,6 +2886,256 @@ function installChatStyles() {
         bottom: 0 !important;
       }
     }
+
+    /* Scheduled Task and Timer Styles */
+    .ctox-chat-status-badge.is-scheduled {
+      border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      color: var(--accent);
+    }
+    
+    @keyframes ctoxClockRotate {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .ctox-clock-pulse {
+      animation: ctoxPulseQueuedDot 2s infinite ease-in-out;
+    }
+    
+    .ctox-chat-scheduler-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 12px;
+      background: color-mix(in srgb, var(--surface) 25%, transparent);
+      border-bottom: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
+      font-size: 10.5px;
+      color: var(--muted);
+      gap: 4px;
+    }
+    
+    .ctox-chat-time-input {
+      border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+      border-radius: 4px;
+      background: var(--surface-2);
+      color: var(--text);
+      font-size: 10px;
+      padding: 1px 4px;
+      outline: none;
+      width: 54px;
+      transition: border-color 0.2s ease;
+    }
+    .ctox-chat-time-input:focus {
+      border-color: var(--accent);
+    }
+    
+    .ctox-chat-scheduler-card {
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin: 8px 12px;
+      padding: 10px 12px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--line));
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--accent) 4%, transparent);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.02);
+    }
+    
+    .ctox-scheduler-glow {
+      position: absolute;
+      top: -30px;
+      right: -30px;
+      width: 80px;
+      height: 80px;
+      background: radial-gradient(circle, color-mix(in srgb, var(--accent) 25%, transparent) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    
+    .ctox-scheduler-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .ctox-clock-spinner {
+      color: var(--accent);
+      animation: ctoxClockRotate 8s linear infinite;
+    }
+    
+    .ctox-scheduler-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    
+    .ctox-scheduler-info strong {
+      font-size: 11px;
+      font-weight: 760;
+      color: var(--text);
+    }
+    
+    .ctox-scheduler-info span {
+      font-size: 9.5px;
+      color: var(--muted);
+    }
+    
+    .ctox-scheduler-timer-container {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+      padding: 5px 8px;
+      border-radius: 6px;
+      width: fit-content;
+    }
+    
+    .ctox-scheduler-timer-badge {
+      font-size: 9px;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    
+    .ctox-scheduler-timer {
+      font-size: 13px;
+      font-family: monospace;
+      color: var(--accent);
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    
+    .ctox-scheduler-cancel-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      height: 26px;
+      border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+      border-radius: 6px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 10.5px;
+      font-weight: 600;
+      cursor: pointer;
+      width: fit-content;
+      padding: 0 8px;
+      transition: all 0.2s ease;
+    }
+    
+    .ctox-scheduler-cancel-btn:hover {
+      background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
+      color: var(--accent);
+      border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+    }
+    
+    /* Attachment styles */
+    .ctox-chat-attachments-preview {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 8px 10px;
+      background: var(--surface-2);
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      max-height: 120px;
+      overflow-y: auto;
+    }
+    
+    .ctox-attachment-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 4px 6px;
+      font-size: 11px;
+      max-width: 140px;
+      position: relative;
+    }
+    
+    .ctox-attachment-thumbnail {
+      width: 18px;
+      height: 18px;
+      object-fit: cover;
+      border-radius: 3px;
+    }
+    
+    .ctox-attachment-icon {
+      font-size: 12px;
+    }
+    
+    .ctox-attachment-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      color: var(--text);
+    }
+    
+    .ctox-attachment-remove {
+      background: none;
+      border: none;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0 2px;
+      transition: color 0.15s ease;
+    }
+    
+    .ctox-attachment-remove:hover {
+      color: var(--accent);
+    }
+    
+    .ctox-chat-clip-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+      padding: 0;
+    }
+    
+    .ctox-chat-clip-btn:hover {
+      background: var(--surface-2);
+      color: var(--accent);
+    }
+    
+    /* Drag & Drop overlay */
+    .ctox-chat-drag-overlay {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: color-mix(in srgb, var(--accent) 92%, black);
+      color: white;
+      z-index: 100;
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      border-radius: 12px;
+      opacity: 0.95;
+    }
+    
+    .ctox-chat-window.drag-active .ctox-chat-drag-overlay {
+      display: flex;
+    }
+    
+    .ctox-chat-drag-overlay svg {
+      animation: ctoxClockPulse 2s infinite ease-in-out;
+    }
   `;
   document.head.append(style);
 }
@@ -2677,4 +3152,206 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = (error) => reject(error);
+  });
+}
+
+async function addAttachmentToChatState(chat, file) {
+  if (file.size > 8 * 1024 * 1024) {
+    alert("Datei ist zu groß. Maximale Dateigröße beträgt 8MB.");
+    return;
+  }
+  if (!chat.attachments) {
+    chat.attachments = [];
+  }
+  if (chat.attachments.some((a) => a.name === file.name && a.size === file.size)) {
+    return;
+  }
+  try {
+    const base64Data = await fileToBase64(file);
+    chat.attachments.push({
+      name: file.name,
+      mimeType: file.type || 'application/octet-stream',
+      size: file.size,
+      base64Data,
+    });
+  } catch (err) {
+    console.error("Fehler beim Konvertieren der Datei zu Base64", err);
+  }
+}
+
+// ----------------------------------------------------
+// Future Chats & Countdown Timer Scheduler Helpers
+// ----------------------------------------------------
+
+function getFormattedTime(timestamp) {
+  const d = new Date(timestamp);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function getFormattedDateTime(timestamp) {
+  const dateStr = getLocalDateString(timestamp);
+  const dateLabel = formatGermanDateLabel(dateStr);
+  const timeStr = getFormattedTime(timestamp);
+  return `${dateLabel} um ${timeStr}`;
+}
+
+function getCountdownText(timestamp) {
+  const diff = timestamp - Date.now();
+  if (diff <= 0) return '00:00:00';
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+  
+  const hh = String(hours).padStart(2, '0');
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
+  if (window._ctoxChatSchedulerInterval) return;
+  
+  window._ctoxChatSchedulerInterval = setInterval(async () => {
+    // 1. Update countdown displays in DOM
+    const timerEls = root.querySelectorAll('[data-countdown-timer]');
+    timerEls.forEach(el => {
+      const chatId = el.dataset.countdownTimer;
+      const chat = state.chats.find(c => c.id === chatId);
+      if (chat) {
+        el.textContent = getCountdownText(chat.createdAt);
+      }
+    });
+    
+    // 2. Check for scheduled chats whose time has arrived
+    const nowMs = Date.now();
+    let stateChanged = false;
+    
+    for (const chat of state.chats) {
+      const scheduledMsgIdx = Array.isArray(chat.messages) 
+        ? chat.messages.findIndex(m => m.status === 'scheduled') 
+        : -1;
+        
+      if (scheduledMsgIdx >= 0 && chat.createdAt <= nowMs) {
+        const scheduledMsg = chat.messages[scheduledMsgIdx];
+        console.log(`[business-chat] Executing scheduled chat task for chat ${chat.id}`);
+        
+        scheduledMsg.status = 'pending_sync';
+        const commandId = scheduledMsg.commandId || `cmd_${crypto.randomUUID()}`;
+        chat.lastTrackingId = commandId;
+        scheduledMsg.commandId = commandId;
+        
+        stateChanged = true;
+        
+        const text = scheduledMsg.text || '';
+        const now = Date.now();
+        const command = {
+          id: commandId,
+          module: chat.contextMeta?.module || 'ctox',
+          type: chat.contextMeta?.command_type || 'business_os.chat.task',
+          record_id: chat.id,
+          inbound_channel: CHAT_CHANNEL,
+          payload: {
+            title: titleFromText(text),
+            instruction: text,
+            prompt: text,
+            chat_id: chat.id,
+            message_id: scheduledMsg.id,
+            conversation: compactConversation(chat.messages),
+            inbound_channel: CHAT_CHANNEL,
+            outbound_channel: 'business_os_chat',
+            response_channel: 'business_os_chat',
+            reply_to: chat.id,
+            thread_key: `business-os/chat/${chat.id}`,
+            priority: 'normal',
+            source_module: chat.contextMeta?.module || 'ctox',
+          },
+          client_context: {
+            source: 'business-os-chat',
+            module: chat.contextMeta?.module || 'ctox',
+            source_module: chat.contextMeta?.module || 'ctox',
+            source_title: chat.contextMeta?.source_title || 'CTOX',
+            inbound_channel: CHAT_CHANNEL,
+            outbound_channel: 'business_os_chat',
+            chat_id: chat.id,
+            message_id: scheduledMsg.id,
+            url: location.href,
+            language: document.documentElement.lang || 'de',
+            created_at: new Date(now).toISOString(),
+          },
+        };
+        
+        (async () => {
+          try {
+            const result = await commandBus.dispatch(command);
+            const taskId = result.task_id || '';
+            const acceptedCommandId = result.command_id || commandId;
+            chat.lastTrackingId = taskId || acceptedCommandId;
+            
+            const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
+            if (statusMsg) {
+              statusMsg.text = taskId
+                ? 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.'
+                : 'Command angelegt. Keine CTOX Queue-ID erhalten.';
+              statusMsg.commandId = acceptedCommandId;
+              statusMsg.taskId = taskId;
+              statusMsg.status = result.task_status || result.status || 'queued';
+            }
+          } catch (error) {
+            const failedCommandId = error?.command_id || error?.commandId || commandId;
+            const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
+            if (statusMsg) {
+              statusMsg.text = error?.message || String(error);
+              statusMsg.commandId = failedCommandId;
+              statusMsg.status = error?.status || 'failed';
+            }
+          }
+          
+          await persistChatState({ state, db });
+          renderChatRoot({ root, state, commandBus, db, getActiveModule });
+          
+          syncTrackedMessages({ state, db }).then((changed) => {
+            if (changed) persistChatState({ state, db });
+            if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+          }).catch(() => {});
+        })();
+      }
+    }
+    
+    if (stateChanged) {
+      await persistChatState({ state, db });
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    }
+  }, 1000);
+}
+
+async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveModule) {
+  const messages = chat.messages || [];
+  const statusMsgIdx = [...messages].reverse().findIndex(m => m.role === 'ctox' && m.status === 'scheduled');
+  if (statusMsgIdx >= 0) {
+    const actualStatusIdx = messages.length - 1 - statusMsgIdx;
+    const statusMsg = messages[actualStatusIdx];
+    const userMsgIdx = messages.findIndex(m => m.role === 'user' && m.id === statusMsg.id.replace('status_', 'chatmsg_'));
+    const actualUserIdx = userMsgIdx >= 0 ? userMsgIdx : actualStatusIdx - 1;
+    
+    if (actualUserIdx >= 0 && messages[actualUserIdx].role === 'user') {
+      chat.draft = messages[actualUserIdx].text || '';
+    }
+    
+    chat.messages = messages.filter((_, idx) => idx !== actualStatusIdx && idx !== actualUserIdx);
+  }
+  
+  chat.lastTrackingId = '';
+  touchChats(state, [chat]);
+  await persistChatState({ state, db });
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
 }
