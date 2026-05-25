@@ -229,9 +229,20 @@ export async function openReactSettings({
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
       const authWindow = window.open('about:blank', 'ctox-chatgpt-subscription');
+      writeSubscriptionAuthWindow(
+        authWindow,
+        'ChatGPT Login wird vorbereitet',
+        'CTOX speichert die Runtime-Einstellung und fordert die Login-URL an.',
+      );
       settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
       render();
       try {
+        const runtimePayload = runtimePayloadFromForm(body);
+        settingsState.runtimeSettings = runtimeSettingsWithDraft(
+          settingsState.runtimeSettings,
+          runtimePayload,
+        );
+        await saveRuntimeSettings(runtimePayload, { commandBus, db, session });
         const payload = await startSubscriptionAuth({ commandBus, db, session });
         if (!payload.auth_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (authWindow && !authWindow.closed) {
@@ -243,7 +254,12 @@ export async function openReactSettings({
         setTimeout(refreshRuntimeSettings, 3000);
         setTimeout(refreshRuntimeSettings, 9000);
       } catch (error) {
-        if (authWindow && !authWindow.closed) authWindow.close();
+        writeSubscriptionAuthWindow(
+          authWindow,
+          'ChatGPT Login konnte nicht gestartet werden',
+          String(error?.message || error),
+          true,
+        );
         settingsState.commandStatus = String(error?.message || error);
       }
       render();
@@ -1098,6 +1114,7 @@ async function loadRuntimeSettings({ db } = {}) {
 }
 
 async function saveRuntimeSettings(payload, { commandBus, db, session } = {}) {
+  const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
   await dispatchModuleCommand({
     commandBus,
     db,
@@ -1108,20 +1125,31 @@ async function saveRuntimeSettings(payload, { commandBus, db, session } = {}) {
     payload,
     source: 'business-os-settings',
   });
-  return waitForRuntimeSettingsProjection(db);
+  return waitForRuntimeSettingsProjection(db, {
+    payload,
+    previousUpdatedAtMs: Number(previousSettings?.updated_at_ms || 0),
+  });
 }
 
-async function waitForRuntimeSettingsProjection(db, timeoutMs = 10000) {
+async function waitForRuntimeSettingsProjection(db, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 10000);
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
+  let lastSettings = null;
   while (Date.now() < deadline) {
     try {
-      return await loadRuntimeSettings({ db });
+      const settings = await loadRuntimeSettings({ db });
+      lastSettings = settings;
+      if (runtimeSettingsReflectPayload(settings, options.payload, options.previousUpdatedAtMs)) {
+        return settings;
+      }
+      lastError = new Error('Runtime-Status wurde noch nicht aktualisiert.');
     } catch (error) {
       lastError = error;
-      await delay(300);
     }
+    await delay(300);
   }
+  if (lastSettings) return lastSettings;
   throw lastError || new Error('Runtime-Status wurde nicht synchronisiert.');
 }
 
@@ -1137,6 +1165,42 @@ async function startSubscriptionAuth({ commandBus, db, session } = {}) {
     source: 'business-os-settings',
   });
   return command.result || command;
+}
+
+function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {
+  if (!payload) return true;
+  const runtime = settings?.runtime || {};
+  const auth = settings?.auth || {};
+  const provider = String(payload.provider || 'local').toLowerCase();
+  const authMode = normalizedRuntimeAuthMode(provider, payload.auth_mode);
+  const updatedAtMs = Number(settings?.updated_at_ms || 0);
+  if (previousUpdatedAtMs > 0 && updatedAtMs <= previousUpdatedAtMs) return false;
+  if (String(runtime.provider || '').toLowerCase() !== provider) return false;
+  if (String(auth.mode || '').toLowerCase() !== authMode) return false;
+  if (payload.chat_model && String(runtime.chat_model || '') !== String(payload.chat_model)) return false;
+  if (payload.context && String(runtime.context || '') !== String(payload.context)) return false;
+  if (Number(payload.max_run_secs || 0) > 0
+    && Number(runtime.max_run_secs || 0) !== Number(payload.max_run_secs)) {
+    return false;
+  }
+  return true;
+}
+
+function writeSubscriptionAuthWindow(authWindow, title, message, danger = false) {
+  if (!authWindow || authWindow.closed) return;
+  try {
+    authWindow.document.title = title;
+    authWindow.document.body.innerHTML = `
+      <main style="font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111819; color: #f4f8f8;">
+        <section style="max-width: 520px; padding: 32px; border: 1px solid ${danger ? '#ff4d4d' : '#16d9ad'}; border-radius: 10px; background: #162021;">
+          <h1 style="margin: 0 0 12px; font-size: 22px;">${escapeHtml(title)}</h1>
+          <p style="margin: 0; color: #a8b6ba; line-height: 1.5;">${escapeHtml(message)}</p>
+        </section>
+      </main>
+    `;
+  } catch {
+    // Cross-origin navigation can make the placeholder window no longer writable.
+  }
 }
 
 async function loadModuleCatalog({ db } = {}) {

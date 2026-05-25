@@ -1,7 +1,7 @@
 import { createBusinessDb, resetBusinessDb } from './shared/db.js?v=20260522-rxdb-fork1';
 import { createSyncRuntime } from './shared/sync.js?v=20260522-replication-io1';
 import { createCommandBus } from './shared/command-bus.js?v=20260521-rxdb-db32';
-import { openReactSettings } from './shared/react-settings.js?v=20260518-runtime-auth-oauth3';
+import { openReactSettings } from './shared/react-settings.js?v=20260525-runtime-auth-health1';
 import { dispatchBusinessReport, initBusinessReporter } from './shared/business-reporter.js?v=20260520-rxdb-reports1';
 import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-ux-theme1';
 import { createEventBus } from './shared/event-bus.js?v=20260519-shell-os1';
@@ -25,7 +25,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260522-replication-io1';
+const APP_BUILD = '20260525-runtime-auth-health1';
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260521-rxdb-db13';
 const CTOX_HEALTH_POLL_MS = 10000;
@@ -746,6 +746,9 @@ function wireShellActions() {
   });
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
+  });
+  document.querySelector('[data-ctox-shell-warning]')?.addEventListener('click', () => {
+    openSettingsDrawer({ initialTab: 'runtime' });
   });
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
@@ -3707,8 +3710,7 @@ async function refreshShellCtoxHealth() {
 
 function isPendingCtoxHealthError(error) {
   const message = String(error?.message || error || '');
-  return message.includes('Runtime-Status wurde noch nicht synchronisiert')
-    || message.includes('ctox_runtime_settings collection is required');
+  return message.includes('ctox_runtime_settings collection is required');
 }
 
 async function loadShellCtoxHealth() {
@@ -3720,8 +3722,9 @@ async function loadShellCtoxHealth() {
   if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
     throw new Error('Runtime-Status wurde noch nicht synchronisiert.');
   }
+  const diagnostics = runtime.diagnostics || {};
   return {
-    ok: runtime.ok !== false,
+    ok: runtime.ok !== false && diagnostics.needs_attention !== true,
     ctox_service: runtime.service || null,
     runtime_settings: runtime,
   };
@@ -3752,6 +3755,19 @@ function shellCtoxHealthProblem(status) {
   if (service.running === false) return shellText('ctoxStopped');
   const lastError = String(service.last_error || '').trim();
   if (lastError) return `${shellText('ctoxLastError')}: ${lastError}`;
+  const runtimeSettings = status.runtime_settings || {};
+  const diagnostics = runtimeSettings.diagnostics || {};
+  if (diagnostics.auth_needs_attention === true) {
+    return String(diagnostics.auth_message || diagnostics.message || shellText('ctoxStatusUnavailable'));
+  }
+  if (diagnostics.needs_attention === true) {
+    return String(diagnostics.message || shellText('ctoxStatusUnavailable'));
+  }
+  const auth = runtimeSettings.auth || {};
+  const provider = String(runtimeSettings.runtime?.provider || '').toLowerCase();
+  if (provider && provider !== 'local' && auth.configured === false) {
+    return String(diagnostics.auth_message || shellText('ctoxStatusUnavailable'));
+  }
   return '';
 }
 
