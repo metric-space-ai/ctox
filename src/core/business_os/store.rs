@@ -37,6 +37,7 @@ const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
 const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge", "app-store", "desktop", "reports"];
+const STARTER_MODULE_IDS: &[&str] = &["documents", "spreadsheets", "calendar", "notes"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -329,6 +330,10 @@ struct ModuleManifest {
     #[serde(default)]
     store: Value,
     #[serde(default)]
+    install_scope: String,
+    #[serde(default)]
+    default_installed: bool,
+    #[serde(default)]
     entry: String,
     #[serde(default)]
     collections: Vec<String>,
@@ -367,8 +372,13 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     let path = runtime.join(STORE_FILE);
     let conn = Connection::open(&path)
         .with_context(|| format!("failed to open Business OS store {}", path.display()))?;
-    conn.busy_timeout(Duration::from_millis(1_000))
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
         .context("failed to configure Business OS SQLite busy_timeout")?;
+    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    conn.execute_batch(&format!(
+        "PRAGMA journal_mode=WAL; PRAGMA busy_timeout={busy_timeout_ms};"
+    ))
+    .context("failed to configure Business OS SQLite pragmas")?;
     migrate(&conn)?;
     Ok(conn)
 }
@@ -1264,6 +1274,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let app_root = resolve_business_os_app_root(root)?;
     let modules = load_module_manifests(&app_root)?;
+    let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
     let governance = module_governance_map(
         root,
@@ -1285,6 +1296,7 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "id": "module-catalog",
         "ok": true,
         "modules": modules,
+        "marketplace": marketplace,
         "templates": templates,
         "governance": governance,
         "updated_at_ms": now_ms(),
@@ -2557,8 +2569,21 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
             if manifest.entry.is_empty() {
                 manifest.entry = format!("modules/{}/index.html", manifest.id);
             }
-            let core = is_core_module(&manifest.id);
-            manifest.source = if core { "core" } else { "local" }.to_owned();
+            let scope = module_install_scope(&manifest);
+            if !module_ships_on_first_install(&scope) {
+                continue;
+            }
+            let core = scope == "core";
+            manifest.install_scope = scope.clone();
+            manifest.default_installed = true;
+            manifest.source = if core {
+                "core"
+            } else if scope == "internal" {
+                "internal"
+            } else {
+                "starter"
+            }
+            .to_owned();
             manifest.core = core;
             manifest.editable = true;
             manifest.deletable = !core;
@@ -2599,6 +2624,9 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
             .with_context(|| format!("failed to read module manifest {}", path.display()))?;
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        if manifest.install_scope.trim().eq_ignore_ascii_case("sample") {
+            continue;
+        }
         if is_core_module(&manifest.id) {
             continue;
         }
@@ -2606,12 +2634,82 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
             manifest.entry = format!("installed-modules/{}/index.html", manifest.id);
         }
         manifest.source = "installed".to_owned();
+        manifest.install_scope = "installed".to_owned();
+        manifest.default_installed = false;
         manifest.core = false;
         manifest.editable = true;
         manifest.deletable = true;
         manifests.push(manifest);
     }
     Ok(manifests)
+}
+
+fn load_marketplace_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Value>> {
+    let modules_root = app_root.join("modules");
+    let mut marketplace = Vec::new();
+    if !modules_root.is_dir() {
+        return Ok(marketplace);
+    }
+    for entry in fs::read_dir(&modules_root)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let path = entry.path().join("module.json");
+        if !path.is_file() {
+            continue;
+        }
+        let text = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read module manifest {}", path.display()))?;
+        let mut manifest_value: Value = serde_json::from_str(&text)
+            .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        let manifest: ModuleManifest = serde_json::from_value(manifest_value.clone())?;
+        let scope = module_install_scope(&manifest);
+        if scope != "store" {
+            continue;
+        }
+        let module_id = source_sanitize_slug(&manifest.id);
+        if module_id.is_empty() {
+            continue;
+        }
+        let store = manifest_value
+            .get("store")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let repo = store
+            .get("repository")
+            .and_then(Value::as_str)
+            .unwrap_or("metric-space-ai/ctox");
+        let source_path = store
+            .get("source_path")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("modules/{module_id}"));
+        let download_url = store
+            .get("download_url")
+            .or_else(|| store.get("archive_url"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("https://github.com/{repo}/archive/refs/heads/main.zip"));
+        manifest_value["module_id"] = Value::String(module_id);
+        manifest_value["source"] = Value::String("ctox-local-catalog".to_owned());
+        manifest_value["repo"] = Value::String(repo.to_owned());
+        manifest_value["source_path"] = Value::String(source_path);
+        manifest_value["download_url"] = Value::String(download_url);
+        manifest_value["installable"] = manifest_value
+            .pointer("/store/installable")
+            .and_then(Value::as_bool)
+            .map(Value::Bool)
+            .unwrap_or(Value::Bool(true));
+        marketplace.push(manifest_value);
+    }
+    marketplace.sort_by(|a, b| {
+        let at = a.get("title").and_then(Value::as_str).unwrap_or_default();
+        let bt = b.get("title").and_then(Value::as_str).unwrap_or_default();
+        at.cmp(bt)
+    });
+    Ok(marketplace)
 }
 
 fn load_template_manifests(app_root: &Path) -> anyhow::Result<Vec<TemplateManifest>> {
@@ -2700,12 +2798,16 @@ fn install_template_module(
     manifest_value["id"] = Value::String(module_id.clone());
     manifest_value["title"] = Value::String(module_title);
     manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest_value["install_scope"] = Value::String("installed".to_owned());
+    manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
 
     let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
     manifest.source = "installed".to_owned();
+    manifest.install_scope = "installed".to_owned();
+    manifest.default_installed = false;
     manifest.core = false;
     manifest.editable = true;
     manifest.deletable = true;
@@ -2762,6 +2864,8 @@ fn upsert_module_manifest(
 
     let mut manifest: ModuleManifest = serde_json::from_value(manifest_value)?;
     manifest.source = if is_core { "core" } else { "installed" }.to_owned();
+    manifest.install_scope = if is_core { "core" } else { "installed" }.to_owned();
+    manifest.default_installed = is_core;
     manifest.core = is_core;
     manifest.editable = true;
     manifest.deletable = !is_core;
@@ -2788,6 +2892,8 @@ fn create_blank_installed_module(
         "title": title,
         "description": description,
         "entry": format!("installed-modules/{module_id}/index.html"),
+        "install_scope": "installed",
+        "default_installed": false,
         "collections": ["business_commands"],
         "layout": {
             "shell": "pane",
@@ -2933,6 +3039,31 @@ fn unique_module_id(app_root: &Path, requested_id: &str) -> String {
 
 fn is_core_module(id: &str) -> bool {
     CORE_MODULE_IDS.iter().any(|core| id == *core)
+}
+
+fn is_starter_module(id: &str) -> bool {
+    STARTER_MODULE_IDS.iter().any(|starter| id == *starter)
+}
+
+fn module_install_scope(manifest: &ModuleManifest) -> String {
+    let explicit = manifest.install_scope.trim().to_ascii_lowercase();
+    if matches!(
+        explicit.as_str(),
+        "core" | "starter" | "store" | "internal" | "installed"
+    ) {
+        return explicit;
+    }
+    if is_core_module(&manifest.id) {
+        "core".to_owned()
+    } else if is_starter_module(&manifest.id) {
+        "starter".to_owned()
+    } else {
+        "store".to_owned()
+    }
+}
+
+fn module_ships_on_first_install(scope: &str) -> bool {
+    matches!(scope, "core" | "starter" | "internal")
 }
 
 fn copy_dir_recursive(source: &Path, target: &Path) -> anyhow::Result<()> {
@@ -3374,7 +3505,7 @@ pub fn install_app_module(
     let manifest_path = found_dir.join("module.json");
     let manifest_content = fs::read_to_string(&manifest_path)
         .context("Failed to read module.json in downloaded archive")?;
-    let manifest: Value = serde_json::from_str(&manifest_content)
+    let mut manifest: Value = serde_json::from_str(&manifest_content)
         .context("Downloaded module.json is not a valid JSON")?;
 
     // Ensure the ID matches (or just use the ID in the manifest to create destination)
@@ -3407,6 +3538,15 @@ pub fn install_app_module(
 
     copy_dir_recursive(&found_dir, &dest_dir)
         .context("Failed to copy extracted module files to installed-modules")?;
+
+    manifest["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest["install_scope"] = Value::String("installed".to_owned());
+    manifest["default_installed"] = Value::Bool(false);
+    fs::write(
+        dest_dir.join("module.json"),
+        serde_json::to_vec_pretty(&manifest)?,
+    )
+    .with_context(|| format!("Failed to rewrite installed manifest for {module_id}"))?;
 
     // Clean up temporary directory
     let _ = fs::remove_dir_all(&temp_dir);
@@ -4154,6 +4294,7 @@ pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
     }
 
     let conn = open_store(root)?;
+    seed_readme_note_if_needed(root, &notes_dir, &conn)?;
 
     let mut files_on_disk = HashMap::new();
     if let Ok(entries) = std::fs::read_dir(&notes_dir) {
@@ -4171,7 +4312,7 @@ pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
 
     let mut active_db_ids = std::collections::HashSet::new();
 
-    for (filename, path) in &files_on_disk {
+    for (_filename, path) in &files_on_disk {
         let content = std::fs::read_to_string(path).unwrap_or_default();
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
 
@@ -4285,6 +4426,77 @@ pub fn sync_local_markdown_notes(root: &Path) -> anyhow::Result<()> {
         }
     }
 
+    Ok(())
+}
+
+fn seed_readme_note_if_needed(
+    root: &Path,
+    notes_dir: &Path,
+    conn: &Connection,
+) -> anyhow::Result<()> {
+    let marker_path = root.join("runtime/business-os/readme-note-seeded");
+    if marker_path.is_file() {
+        return Ok(());
+    }
+
+    let has_markdown_notes = std::fs::read_dir(notes_dir)
+        .ok()
+        .into_iter()
+        .flat_map(|entries| entries.flatten())
+        .any(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".md"))
+                .unwrap_or(false)
+        });
+    let db_note_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM business_records WHERE collection = 'notes' AND deleted = 0",
+        params![],
+        |row| row.get(0),
+    )?;
+
+    if has_markdown_notes || db_note_count > 0 {
+        std::fs::write(marker_path, "already-initialized\n")?;
+        return Ok(());
+    }
+
+    let readme_path = root.join("README.md");
+    let content = match std::fs::read_to_string(&readme_path) {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            std::fs::write(marker_path, "no-readme\n")?;
+            return Ok(());
+        }
+    };
+
+    let record_id = Uuid::new_v4().to_string();
+    let title = content
+        .lines()
+        .find_map(|line| {
+            let title = line.trim().trim_start_matches('#').trim();
+            (!title.is_empty()).then_some(title.to_owned())
+        })
+        .unwrap_or_else(|| "CTOX README".to_owned());
+    let updated_at_ms = now_ms() as i64;
+    let filename = format!("{}_{}.md", sanitize_filename(&title), record_id);
+    let file_path = notes_dir.join(filename);
+    std::fs::write(&file_path, &content)?;
+    upsert_business_record(
+        conn,
+        "notes",
+        &record_id,
+        updated_at_ms,
+        serde_json::json!({
+            "id": record_id,
+            "title": title,
+            "content": content,
+            "folder": "Notes",
+            "updated_at_ms": updated_at_ms,
+        }),
+    )?;
+    std::fs::write(marker_path, "seeded\n")?;
     Ok(())
 }
 
@@ -4517,6 +4729,18 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 &command,
                 "completed",
                 None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        command_type if is_outbound_active_command(command_type) => {
+            let session = rxdb_authenticated_session(&command)?;
+            let outcome = handle_outbound_active_command(root, &session, &command_id, &command)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                command.record_id.as_deref(),
                 Some("completed"),
                 outcome,
             );
@@ -5014,6 +5238,1337 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
     }
     let accepted = record_command(root, command)?;
     Ok(serde_json::to_value(accepted)?)
+}
+
+fn is_outbound_active_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "outbound.engagement.create"
+            | "outbound.engagement.assign_sender"
+            | "outbound.sequence.save"
+            | "outbound.draft.prepare"
+            | "outbound.message.prepare"
+            | "outbound.message.update_draft"
+            | "outbound.message.request_approval"
+            | "outbound.message.approve"
+            | "outbound.message.reject"
+            | "outbound.message.send_approved"
+            | "outbound.message.pause"
+            | "outbound.message.resume"
+            | "outbound.message.cancel"
+            | "outbound.engagement.resume"
+            | "outbound.engagement.close"
+            | "outbound.reply.classify"
+            | "outbound.scheduling.prepare"
+            | "outbound.scheduling.mark_booked"
+    )
+}
+
+fn handle_outbound_active_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    _command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        command.module == "outbound",
+        "active outbound commands require module=outbound"
+    );
+    let now = now_ms() as i64;
+    let conn = open_store(root)?;
+    match command.command_type.as_str() {
+        "outbound.engagement.create" => {
+            let engagement_id = outbound_id_from_command(command, &["engagement_id", "id"], "eng")?;
+            let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+            let mut record = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut record, "id", engagement_id.clone());
+            outbound_put_string(&mut record, "campaign_id", campaign_id);
+            outbound_put_default_string(&mut record, "status", "ready_for_assignment");
+            outbound_put_default_object(&mut record, "payload");
+            outbound_put_default_i64(&mut record, "created_at_ms", now);
+            outbound_put_i64(&mut record, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                record.clone(),
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "collection": "outbound_engagements",
+                "engagement": record
+            }))
+        }
+        "outbound.engagement.assign_sender" => {
+            let engagement_id = outbound_required_from_payload_or_record(
+                command,
+                &["engagement_id", "id"],
+                "engagement_id is required",
+            )?;
+            let sender_account_id =
+                outbound_required_string(&command.payload, &["sender_account_id"])?;
+            let mut engagement = outbound_load_required(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                "engagement not found",
+            )?;
+            outbound_put_string(
+                &mut engagement,
+                "sender_account_id",
+                sender_account_id.clone(),
+            );
+            outbound_put_string(&mut engagement, "status", "assigned".to_string());
+            outbound_put_i64(&mut engagement, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                engagement.clone(),
+            )?;
+
+            let assignment_id = outbound_id_from_command(command, &["assignment_id"], "assign")
+                .unwrap_or_else(|_| format!("assign_{engagement_id}_{sender_account_id}"));
+            let mut assignment = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut assignment, "id", assignment_id.clone());
+            outbound_put_string(&mut assignment, "engagement_id", engagement_id.clone());
+            outbound_put_string(&mut assignment, "sender_account_id", sender_account_id);
+            outbound_put_default_string(&mut assignment, "status", "active");
+            outbound_put_default_i64(&mut assignment, "created_at_ms", now);
+            outbound_put_i64(&mut assignment, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_sender_assignments",
+                &assignment_id,
+                now,
+                assignment.clone(),
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "engagement": engagement,
+                "assignment": assignment
+            }))
+        }
+        "outbound.sequence.save" => {
+            let sequence_id = outbound_id_from_command(command, &["sequence_id", "id"], "seq")?;
+            let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+            let mut sequence = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut sequence, "id", sequence_id.clone());
+            outbound_put_string(&mut sequence, "campaign_id", campaign_id);
+            outbound_put_default_string(&mut sequence, "name", "Outbound Sequence");
+            outbound_put_default_string(&mut sequence, "strategy_text", "");
+            outbound_put_default_string(&mut sequence, "sequence_policy_text", "");
+            outbound_put_default_object(&mut sequence, "approval_policy");
+            outbound_put_default_object(&mut sequence, "payload");
+            outbound_put_default_i64(&mut sequence, "created_at_ms", now);
+            outbound_put_i64(&mut sequence, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_sequences",
+                &sequence_id,
+                now,
+                sequence.clone(),
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "collection": "outbound_sequences",
+                "sequence": sequence
+            }))
+        }
+        "outbound.draft.prepare" => {
+            let message_id = outbound_id_from_command(command, &["message_id", "id"], "msg")?;
+            let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+            let engagement = outbound_load_required(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                "engagement not found",
+            )?;
+            anyhow::ensure!(
+                !matches!(
+                    outbound_string(&engagement, &["status"]).as_deref(),
+                    Some("closed" | "cancelled" | "meeting_booked")
+                ),
+                "closed outbound engagements cannot prepare new drafts"
+            );
+            let draft_kind = outbound_string(&command.payload, &["draft_kind"])
+                .unwrap_or_else(|| "followup".to_string());
+            let campaign_id = outbound_first_string(&[
+                outbound_string(&command.payload, &["campaign_id"]),
+                outbound_string(&engagement, &["campaign_id"]),
+            ])
+            .context("campaign_id is required")?;
+            let sender_account_id = outbound_first_string(&[
+                outbound_string(&command.payload, &["sender_account_id"]),
+                outbound_string(&engagement, &["sender_account_id"]),
+            ])
+            .context("sender_account_id is required")?;
+            let recipient_email = outbound_first_string(&[
+                outbound_string(&command.payload, &["recipient_email"]),
+                outbound_string(&engagement, &["payload", "contact_email"]),
+            ])
+            .context("recipient_email is required")?;
+            anyhow::ensure!(
+                !outbound_recipient_suppressed(&conn, &recipient_email)?,
+                "recipient is suppressed for outbound communication"
+            );
+            let previous_messages = outbound_load_records_by_string_field(
+                &conn,
+                "outbound_messages",
+                "engagement_id",
+                &engagement_id,
+            )?;
+            let latest_message = outbound_latest_message(&previous_messages);
+            let generated = outbound_generate_automated_draft(
+                &engagement,
+                latest_message.as_ref(),
+                &command.payload,
+                &draft_kind,
+            );
+            let subject = outbound_first_string(&[
+                outbound_string(&command.payload, &["subject"]),
+                outbound_string(&generated, &["subject"]),
+            ])
+            .context("generated subject is required")?;
+            let body_text = outbound_first_string(&[
+                outbound_string(&command.payload, &["body_text"]),
+                outbound_string(&generated, &["body_text"]),
+            ])
+            .context("generated body_text is required")?;
+            let mut message = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut message, "id", message_id.clone());
+            outbound_put_string(&mut message, "engagement_id", engagement_id.clone());
+            outbound_put_string(&mut message, "campaign_id", campaign_id);
+            outbound_put_string(&mut message, "message_type", draft_kind.clone());
+            outbound_put_string(&mut message, "direction", "outbound");
+            outbound_put_string(&mut message, "sender_account_id", sender_account_id);
+            outbound_put_string(&mut message, "recipient_email", recipient_email);
+            outbound_put_string(&mut message, "subject", subject);
+            outbound_put_string(&mut message, "body_text", body_text);
+            outbound_put_string(&mut message, "draft_status", "ready_for_review");
+            outbound_put_string(&mut message, "approval_status", "awaiting_approval");
+            outbound_put_string(&mut message, "send_status", "awaiting_approval");
+            outbound_put_default_object(&mut message, "payload");
+            outbound_payload_insert(
+                &mut message,
+                "draft_engine",
+                Value::String("business-os.outbound.draft_automation.v1".to_string()),
+            );
+            outbound_payload_insert(&mut message, "generated_draft", generated.clone());
+            outbound_payload_insert(
+                &mut message,
+                "skillbook_id",
+                Value::String(
+                    outbound_first_string(&[
+                        outbound_string(&command.payload, &["skillbook_id"]),
+                        outbound_string(&command.payload, &["payload", "skillbook_id"]),
+                        outbound_string(&engagement, &["payload", "skillbook_id"]),
+                    ])
+                    .unwrap_or_else(|| "business-os.outbound.message_drafting.v1".to_string()),
+                ),
+            );
+            outbound_payload_insert(
+                &mut message,
+                "runbook_id",
+                Value::String(
+                    outbound_first_string(&[
+                        outbound_string(&command.payload, &["runbook_id"]),
+                        outbound_string(&command.payload, &["payload", "runbook_id"]),
+                        outbound_string(&engagement, &["payload", "runbook_id"]),
+                    ])
+                    .unwrap_or_default(),
+                ),
+            );
+            if let Some(previous) = latest_message
+                .as_ref()
+                .and_then(|message| outbound_string(message, &["id"]))
+            {
+                outbound_put_string(&mut message, "reply_to_message_id", previous);
+            }
+            let revision_id = outbound_message_revision(&message);
+            outbound_put_string(&mut message, "revision_id", revision_id);
+            outbound_put_default_i64(&mut message, "created_at_ms", now);
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if draft_kind == "scheduling" {
+                let request_id = outbound_string(&command.payload, &["meeting_request_id"])
+                    .unwrap_or_else(|| format!("meeting_{message_id}"));
+                let mut request = serde_json::json!({
+                    "id": request_id,
+                    "engagement_id": engagement_id,
+                    "message_id": message_id,
+                    "duration_minutes": command.payload.get("duration_minutes").and_then(Value::as_i64).unwrap_or(30),
+                    "slot_strategy": outbound_string(&command.payload, &["slot_strategy"]).unwrap_or_else(|| "campaign_default".to_string()),
+                    "proposed_slots": command.payload.get("proposed_slots").cloned().unwrap_or_else(|| serde_json::json!([])),
+                    "status": "prepared",
+                    "payload": {
+                        "source": "outbound.draft.prepare"
+                    },
+                    "created_at_ms": now,
+                    "updated_at_ms": now
+                });
+                if let Some(calendar) = outbound_string(&command.payload, &["calendar_account_id"])
+                {
+                    outbound_put_string(&mut request, "calendar_account_id", calendar);
+                }
+                upsert_business_record(
+                    &conn,
+                    "outbound_meeting_requests",
+                    &request_id,
+                    now,
+                    request.clone(),
+                )?;
+            }
+            outbound_update_engagement_status(&conn, &engagement_id, "awaiting_approval", now)?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "collection": "outbound_messages",
+                "message": message,
+                "approval_required": true,
+                "provider_send_executed": false
+            }))
+        }
+        "outbound.message.prepare" => {
+            let message_id = outbound_id_from_command(command, &["message_id", "id"], "msg")?;
+            let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+            let engagement = outbound_load_record(&conn, "outbound_engagements", &engagement_id)?;
+            let campaign_id = outbound_first_string(&[
+                outbound_string(&command.payload, &["campaign_id"]),
+                engagement
+                    .as_ref()
+                    .and_then(|value| outbound_string(value, &["campaign_id"])),
+            ])
+            .context("campaign_id is required")?;
+            let mut message = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut message, "id", message_id.clone());
+            outbound_put_string(&mut message, "engagement_id", engagement_id.clone());
+            outbound_put_string(&mut message, "campaign_id", campaign_id);
+            outbound_put_default_string(&mut message, "message_type", "initial");
+            outbound_put_default_string(&mut message, "direction", "outbound");
+            outbound_put_default_string(&mut message, "draft_status", "prepared");
+            outbound_put_default_string(&mut message, "approval_status", "draft");
+            outbound_put_default_string(&mut message, "send_status", "not_scheduled");
+            outbound_put_default_object(&mut message, "payload");
+            let revision_id = outbound_message_revision(&message);
+            outbound_put_string(&mut message, "revision_id", revision_id);
+            outbound_put_default_i64(&mut message, "created_at_ms", now);
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            outbound_update_engagement_status(&conn, &engagement_id, "draft_prepared", now)?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "collection": "outbound_messages",
+                "message": message
+            }))
+        }
+        "outbound.message.update_draft" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            anyhow::ensure!(
+                !matches!(
+                    outbound_string(&message, &["send_status"]).as_deref(),
+                    Some("queued_for_provider" | "sent" | "accepted")
+                ),
+                "sent or queued outbound message drafts cannot be edited"
+            );
+            outbound_merge_fields(
+                &mut message,
+                &command.payload,
+                &[
+                    "recipient_email",
+                    "subject",
+                    "body_text",
+                    "body_html",
+                    "sender_account_id",
+                    "scheduled_send_at_ms",
+                    "payload",
+                ],
+            );
+            outbound_put_string(&mut message, "draft_status", "prepared".to_string());
+            outbound_put_string(&mut message, "approval_status", "draft".to_string());
+            outbound_put_string(&mut message, "send_status", "not_scheduled".to_string());
+            let revision_id = outbound_message_revision(&message);
+            outbound_put_string(&mut message, "revision_id", revision_id);
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            Ok(serde_json::json!({ "ok": true, "message": message }))
+        }
+        "outbound.message.request_approval" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            outbound_require_message_content(&message)?;
+            let revision_id = outbound_message_revision(&message);
+            outbound_put_string(&mut message, "revision_id", revision_id);
+            outbound_put_string(&mut message, "draft_status", "ready_for_review".to_string());
+            outbound_put_string(
+                &mut message,
+                "approval_status",
+                "awaiting_approval".to_string(),
+            );
+            outbound_put_string(&mut message, "send_status", "awaiting_approval".to_string());
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                outbound_update_engagement_status(&conn, &engagement_id, "awaiting_approval", now)?;
+            }
+            Ok(serde_json::json!({ "ok": true, "message": message }))
+        }
+        "outbound.message.approve" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            anyhow::ensure!(
+                outbound_string(&message, &["approval_status"]).as_deref()
+                    == Some("awaiting_approval"),
+                "only messages awaiting approval can be approved"
+            );
+            outbound_require_message_content(&message)?;
+            let revision_id = outbound_message_revision(&message);
+            let approval_id = outbound_id_from_command(command, &["approval_id"], "approval")
+                .unwrap_or_else(|_| format!("approval_{message_id}_{revision_id}"));
+            let engagement_id = outbound_string(&message, &["engagement_id"]).unwrap_or_default();
+            let mut approval = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut approval, "id", approval_id.clone());
+            outbound_put_string(&mut approval, "message_id", message_id.clone());
+            outbound_put_string(&mut approval, "engagement_id", engagement_id.clone());
+            outbound_put_string(&mut approval, "revision_id", revision_id.clone());
+            outbound_put_string(
+                &mut approval,
+                "actor_user_id",
+                outbound_session_actor_id(session),
+            );
+            outbound_put_string(&mut approval, "decision", "approved");
+            outbound_put_default_object(&mut approval, "payload");
+            outbound_put_default_i64(&mut approval, "created_at_ms", now);
+            outbound_put_i64(&mut approval, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_approvals",
+                &approval_id,
+                now,
+                approval.clone(),
+            )?;
+            outbound_put_string(&mut message, "revision_id", revision_id);
+            outbound_put_string(&mut message, "approval_status", "approved");
+            outbound_put_string(&mut message, "draft_status", "approved");
+            outbound_put_string(&mut message, "send_status", "approved_not_sent");
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if !engagement_id.is_empty() {
+                outbound_update_engagement_status(&conn, &engagement_id, "approved_for_send", now)?;
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "message": message,
+                "approval": approval
+            }))
+        }
+        "outbound.message.reject" => outbound_record_rejection(&conn, session, command, now),
+        "outbound.message.send_approved" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            outbound_enforce_send_gate(&conn, &message)?;
+            outbound_put_string(&mut message, "send_status", "queued_for_provider");
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                outbound_update_engagement_status(&conn, &engagement_id, "scheduled_to_send", now)?;
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "message": message,
+                "provider_dispatch_status": "deferred_until_mailserver_wave",
+                "provider_send_executed": false
+            }))
+        }
+        "outbound.message.pause" | "outbound.message.cancel" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            let status = if command.command_type == "outbound.message.pause" {
+                "paused"
+            } else {
+                "cancelled"
+            };
+            let reason = outbound_string(&command.payload, &["reason"]);
+            outbound_put_string(&mut message, "send_status", status);
+            if let Some(reason) = reason.as_ref() {
+                let payload_key = if status == "paused" {
+                    "pause_reason"
+                } else {
+                    "cancel_reason"
+                };
+                outbound_payload_insert(&mut message, payload_key, Value::String(reason.clone()));
+            }
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                outbound_update_engagement_terminal_status(
+                    &conn,
+                    &engagement_id,
+                    status,
+                    reason.as_deref(),
+                    now,
+                )?;
+            }
+            Ok(serde_json::json!({ "ok": true, "message": message }))
+        }
+        "outbound.message.resume" => {
+            let message_id = outbound_required_from_payload_or_record(
+                command,
+                &["message_id", "id"],
+                "message_id is required",
+            )?;
+            let mut message = outbound_load_required(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                "message not found",
+            )?;
+            anyhow::ensure!(
+                outbound_string(&message, &["send_status"]).as_deref() == Some("paused"),
+                "only paused outbound messages can be resumed"
+            );
+            let send_status = outbound_send_status_for_resume(&message);
+            outbound_put_string(&mut message, "send_status", send_status);
+            outbound_payload_insert(
+                &mut message,
+                "resume_reason",
+                Value::String(
+                    outbound_string(&command.payload, &["reason"])
+                        .unwrap_or_else(|| "manual_resume".to_string()),
+                ),
+            );
+            outbound_put_i64(&mut message, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                &message_id,
+                now,
+                message.clone(),
+            )?;
+            if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                let engagement_status = outbound_engagement_status_for_message_state(&message);
+                outbound_update_engagement_status(&conn, &engagement_id, engagement_status, now)?;
+            }
+            Ok(serde_json::json!({ "ok": true, "message": message }))
+        }
+        "outbound.engagement.resume" => {
+            let engagement_id = outbound_required_from_payload_or_record(
+                command,
+                &["engagement_id", "id"],
+                "engagement_id is required",
+            )?;
+            let mut engagement = outbound_load_required(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                "engagement not found",
+            )?;
+            anyhow::ensure!(
+                outbound_string(&engagement, &["status"]).as_deref() == Some("paused"),
+                "only paused engagements can be resumed"
+            );
+            let messages = outbound_load_records_by_string_field(
+                &conn,
+                "outbound_messages",
+                "engagement_id",
+                &engagement_id,
+            )?;
+            let next_status = messages
+                .iter()
+                .find(|message| {
+                    outbound_string(message, &["send_status"]).as_deref() == Some("paused")
+                })
+                .map(outbound_engagement_status_for_message_state)
+                .unwrap_or("assigned");
+            outbound_put_string(&mut engagement, "status", next_status);
+            outbound_put_string(&mut engagement, "paused_reason", "");
+            outbound_payload_insert(
+                &mut engagement,
+                "resume_reason",
+                Value::String(
+                    outbound_string(&command.payload, &["reason"])
+                        .unwrap_or_else(|| "manual_resume".to_string()),
+                ),
+            );
+            outbound_put_i64(&mut engagement, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                engagement.clone(),
+            )?;
+            Ok(serde_json::json!({ "ok": true, "engagement": engagement }))
+        }
+        "outbound.engagement.close" => {
+            let engagement_id = outbound_required_from_payload_or_record(
+                command,
+                &["engagement_id", "id"],
+                "engagement_id is required",
+            )?;
+            let reason = outbound_string(&command.payload, &["reason"]);
+            let mut engagement = outbound_load_required(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                "engagement not found",
+            )?;
+            outbound_put_string(&mut engagement, "status", "closed");
+            if let Some(reason) = reason.as_ref().filter(|value| !value.trim().is_empty()) {
+                outbound_put_string(&mut engagement, "closed_reason", reason.clone());
+            }
+            outbound_put_i64(&mut engagement, "closed_at_ms", now);
+            outbound_put_i64(&mut engagement, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                engagement.clone(),
+            )?;
+
+            let mut closed_messages = Vec::new();
+            for mut message in outbound_load_records_by_string_field(
+                &conn,
+                "outbound_messages",
+                "engagement_id",
+                &engagement_id,
+            )? {
+                let send_status = outbound_string(&message, &["send_status"]).unwrap_or_default();
+                if matches!(
+                    send_status.as_str(),
+                    "sent" | "accepted" | "queued_for_provider" | "cancelled"
+                ) {
+                    continue;
+                }
+                outbound_put_string(&mut message, "send_status", "cancelled");
+                if let Some(reason) = reason.as_ref() {
+                    outbound_payload_insert(
+                        &mut message,
+                        "close_reason",
+                        Value::String(reason.clone()),
+                    );
+                }
+                outbound_put_i64(&mut message, "updated_at_ms", now);
+                if let Some(message_id) = outbound_string(&message, &["id"]) {
+                    upsert_business_record(
+                        &conn,
+                        "outbound_messages",
+                        &message_id,
+                        now,
+                        message.clone(),
+                    )?;
+                    closed_messages.push(message_id);
+                }
+            }
+            Ok(serde_json::json!({
+                "ok": true,
+                "engagement": engagement,
+                "closed_message_ids": closed_messages
+            }))
+        }
+        "outbound.reply.classify" => {
+            let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+            let classification = outbound_required_string(&command.payload, &["classification"])?;
+            let mut engagement = outbound_load_required(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                "engagement not found",
+            )?;
+            outbound_put_string(&mut engagement, "status", "reply_received".to_string());
+            outbound_payload_insert(
+                &mut engagement,
+                "reply_classification",
+                Value::String(classification),
+            );
+            outbound_merge_fields(&mut engagement, &command.payload, &["reply_message_id"]);
+            outbound_put_i64(&mut engagement, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                engagement.clone(),
+            )?;
+            Ok(serde_json::json!({ "ok": true, "engagement": engagement }))
+        }
+        "outbound.scheduling.prepare" => {
+            let request_id =
+                outbound_id_from_command(command, &["meeting_request_id", "id"], "meeting")?;
+            let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+            let mut request = outbound_object_payload(&command.payload);
+            outbound_put_string(&mut request, "id", request_id.clone());
+            outbound_put_string(&mut request, "engagement_id", engagement_id.clone());
+            outbound_put_default_string(&mut request, "status", "prepared");
+            outbound_put_default_i64(&mut request, "created_at_ms", now);
+            outbound_put_i64(&mut request, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_meeting_requests",
+                &request_id,
+                now,
+                request.clone(),
+            )?;
+            outbound_update_engagement_status(&conn, &engagement_id, "scheduling", now)?;
+            Ok(serde_json::json!({ "ok": true, "meeting_request": request }))
+        }
+        "outbound.scheduling.mark_booked" => {
+            let request_id = outbound_required_from_payload_or_record(
+                command,
+                &["meeting_request_id", "id"],
+                "meeting_request_id is required",
+            )?;
+            let mut request = outbound_load_required(
+                &conn,
+                "outbound_meeting_requests",
+                &request_id,
+                "meeting request not found",
+            )?;
+            outbound_put_string(&mut request, "status", "booked");
+            outbound_merge_fields(
+                &mut request,
+                &command.payload,
+                &["meeting_url", "booked_at_ms", "payload"],
+            );
+            outbound_put_i64(&mut request, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_meeting_requests",
+                &request_id,
+                now,
+                request.clone(),
+            )?;
+            if let Some(engagement_id) = outbound_string(&request, &["engagement_id"]) {
+                outbound_update_engagement_status(&conn, &engagement_id, "meeting_booked", now)?;
+            }
+            Ok(serde_json::json!({ "ok": true, "meeting_request": request }))
+        }
+        other => anyhow::bail!("unsupported active outbound command: {other}"),
+    }
+}
+
+fn outbound_object_payload(payload: &Value) -> Value {
+    payload
+        .as_object()
+        .map(|object| Value::Object(object.clone()))
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+fn outbound_string(value: &Value, path: &[&str]) -> Option<String> {
+    let mut cursor = value;
+    for key in path {
+        cursor = cursor.get(*key)?;
+    }
+    cursor
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn outbound_first_string(values: &[Option<String>]) -> Option<String> {
+    values
+        .iter()
+        .flatten()
+        .find(|value| !value.is_empty())
+        .cloned()
+}
+
+fn outbound_required_string(value: &Value, path: &[&str]) -> anyhow::Result<String> {
+    outbound_string(value, path).with_context(|| format!("{} is required", path.join(".")))
+}
+
+fn outbound_id_from_command(
+    command: &BusinessCommand,
+    payload_keys: &[&str],
+    prefix: &str,
+) -> anyhow::Result<String> {
+    let from_payload = payload_keys
+        .iter()
+        .find_map(|key| outbound_string(&command.payload, &[*key]));
+    outbound_first_string(&[
+        from_payload,
+        command
+            .record_id
+            .as_ref()
+            .map(|value| value.trim().to_string()),
+    ])
+    .or_else(|| {
+        command
+            .id
+            .as_ref()
+            .map(|value| format!("{prefix}_{}", channels::stable_digest(value)))
+    })
+    .context("record id is required")
+}
+
+fn outbound_required_from_payload_or_record(
+    command: &BusinessCommand,
+    payload_keys: &[&str],
+    message: &str,
+) -> anyhow::Result<String> {
+    let from_payload = payload_keys
+        .iter()
+        .find_map(|key| outbound_string(&command.payload, &[*key]));
+    outbound_first_string(&[
+        from_payload,
+        command
+            .record_id
+            .as_ref()
+            .map(|value| value.trim().to_string()),
+    ])
+    .with_context(|| message.to_string())
+}
+
+fn outbound_put_string(record: &mut Value, key: &str, value: impl Into<String>) {
+    if let Some(object) = record.as_object_mut() {
+        object.insert(key.to_string(), Value::String(value.into()));
+    }
+}
+
+fn outbound_put_i64(record: &mut Value, key: &str, value: i64) {
+    if let Some(object) = record.as_object_mut() {
+        object.insert(key.to_string(), Value::from(value));
+    }
+}
+
+fn outbound_put_default_string(record: &mut Value, key: &str, default: &str) {
+    if outbound_string(record, &[key]).is_none() {
+        outbound_put_string(record, key, default.to_string());
+    }
+}
+
+fn outbound_put_default_i64(record: &mut Value, key: &str, default: i64) {
+    let should_insert = record
+        .get(key)
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            record
+                .get(key)
+                .and_then(Value::as_u64)
+                .map(|value| value as i64)
+        })
+        .is_none();
+    if should_insert {
+        outbound_put_i64(record, key, default);
+    }
+}
+
+fn outbound_put_default_object(record: &mut Value, key: &str) {
+    let should_insert = !matches!(record.get(key), Some(Value::Object(_)));
+    if should_insert {
+        if let Some(object) = record.as_object_mut() {
+            object.insert(key.to_string(), serde_json::json!({}));
+        }
+    }
+}
+
+fn outbound_merge_fields(record: &mut Value, patch: &Value, keys: &[&str]) {
+    let Some(record_obj) = record.as_object_mut() else {
+        return;
+    };
+    for key in keys {
+        if let Some(value) = patch.get(*key) {
+            record_obj.insert((*key).to_string(), value.clone());
+        }
+    }
+}
+
+fn outbound_payload_insert(record: &mut Value, key: &str, value: Value) {
+    if !matches!(record.get("payload"), Some(Value::Object(_))) {
+        outbound_put_default_object(record, "payload");
+    }
+    if let Some(payload) = record.get_mut("payload").and_then(Value::as_object_mut) {
+        payload.insert(key.to_string(), value);
+    }
+}
+
+fn outbound_load_record(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let payload_json: Option<String> = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = ?1
+               AND record_id = ?2
+               AND deleted = 0",
+            params![collection, record_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    payload_json
+        .map(|raw| {
+            serde_json::from_str(&raw)
+                .with_context(|| format!("invalid {collection} record {record_id}"))
+        })
+        .transpose()
+}
+
+fn outbound_load_required(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    message: &str,
+) -> anyhow::Result<Value> {
+    outbound_load_record(conn, collection, record_id)?.with_context(|| message.to_string())
+}
+
+fn outbound_load_records_by_string_field(
+    conn: &Connection,
+    collection: &str,
+    field: &str,
+    value: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json
+         FROM business_records
+         WHERE collection = ?1
+           AND deleted = 0",
+    )?;
+    let mut rows = stmt.query(params![collection])?;
+    let mut records = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw: String = row.get(0)?;
+        let record: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("invalid {collection} record while scanning {field}"))?;
+        if outbound_string(&record, &[field]).as_deref() == Some(value) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn outbound_latest_message(messages: &[Value]) -> Option<Value> {
+    messages
+        .iter()
+        .max_by_key(|message| {
+            message
+                .get("updated_at_ms")
+                .and_then(Value::as_i64)
+                .or_else(|| message.get("created_at_ms").and_then(Value::as_i64))
+                .unwrap_or(0)
+        })
+        .cloned()
+}
+
+fn outbound_generate_automated_draft(
+    engagement: &Value,
+    latest_message: Option<&Value>,
+    request: &Value,
+    draft_kind: &str,
+) -> Value {
+    let contact_name = outbound_first_string(&[
+        outbound_string(engagement, &["payload", "contact_name"]),
+        outbound_string(request, &["contact_name"]),
+    ])
+    .unwrap_or_else(|| "Hallo".to_string());
+    let company_name = outbound_first_string(&[
+        outbound_string(engagement, &["payload", "company_name"]),
+        outbound_string(request, &["company_name"]),
+    ])
+    .unwrap_or_else(|| "Ihr Unternehmen".to_string());
+    let previous_subject =
+        latest_message.and_then(|message| outbound_string(message, &["subject"]));
+    let subject = match draft_kind {
+        "initial" => format!("Austausch zu {company_name}"),
+        "reply" => previous_subject
+            .map(|subject| format!("Re: {subject}"))
+            .unwrap_or_else(|| format!("Re: Austausch zu {company_name}")),
+        "scheduling" => previous_subject
+            .map(|subject| format!("Re: {subject}"))
+            .unwrap_or_else(|| "Terminvorschlag".to_string()),
+        kind if kind.starts_with("followup") => previous_subject
+            .map(|subject| format!("Re: {subject}"))
+            .unwrap_or_else(|| format!("Kurzer Nachtrag zu {company_name}")),
+        _ => previous_subject.unwrap_or_else(|| format!("Austausch zu {company_name}")),
+    };
+    let strategy = outbound_first_string(&[
+        outbound_string(request, &["strategy_text"]),
+        outbound_string(request, &["payload", "strategy_text"]),
+        outbound_string(engagement, &["payload", "strategy_text"]),
+    ])
+    .unwrap_or_else(|| "Kontextbezogen, knapp und ohne erfundene Aussagen schreiben.".to_string());
+    let body_text = match draft_kind {
+        "initial" => format!(
+            "{contact_name},\n\nich habe mir {company_name} im Kontext der aktuellen Outbound-Campaign angesehen und einen moeglichen Anknuepfungspunkt identifiziert.\n\n{strategy}\n\nWenn das grundsaetzlich relevant ist, schlage ich einen kurzen Austausch vor.\n\nBeste Gruesse"
+        ),
+        "reply" => {
+            let reply_text = outbound_first_string(&[
+                outbound_string(request, &["reply_text"]),
+                outbound_string(engagement, &["payload", "reply_text"]),
+                outbound_string(engagement, &["payload", "reply_classification"]),
+            ])
+            .unwrap_or_else(|| "die Rueckmeldung wurde als relevant klassifiziert".to_string());
+            format!(
+                "{contact_name},\n\nvielen Dank fuer die Rueckmeldung. Ich habe den Kontext so verstanden: {reply_text}.\n\nGerne konkretisiere ich den naechsten Schritt und halte es knapp: {strategy}\n\nBeste Gruesse"
+            )
+        }
+        "scheduling" => {
+            let duration = request
+                .get("duration_minutes")
+                .and_then(Value::as_i64)
+                .unwrap_or(30);
+            let slot_hint = outbound_string(request, &["slot_hint"])
+                .unwrap_or_else(|| "zwei bis drei passende Zeitfenster".to_string());
+            format!(
+                "{contact_name},\n\nsehr gerne. Fuer einen kurzen Austausch wuerde ich {duration} Minuten einplanen.\n\nIch kann {slot_hint} vorschlagen; bitte geben Sie kurz Bescheid, was bei Ihnen passt.\n\nBeste Gruesse"
+            )
+        }
+        kind if kind.starts_with("followup") => format!(
+            "{contact_name},\n\nich wollte meine vorherige Nachricht kurz nachfassen, weil der Anknuepfungspunkt zu {company_name} weiterhin relevant sein koennte.\n\n{strategy}\n\nFalls es aktuell nicht passt, reicht eine kurze Rueckmeldung.\n\nBeste Gruesse"
+        ),
+        _ => format!(
+            "{contact_name},\n\nich bereite den naechsten Outbound-Schritt zu {company_name} vor.\n\n{strategy}\n\nBeste Gruesse"
+        ),
+    };
+    serde_json::json!({
+        "subject": subject,
+        "body_text": body_text,
+        "draft_kind": draft_kind,
+        "requires_approval": true
+    })
+}
+
+fn outbound_update_engagement_status(
+    conn: &Connection,
+    engagement_id: &str,
+    status: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    if engagement_id.trim().is_empty() {
+        return Ok(());
+    }
+    let Some(mut engagement) = outbound_load_record(conn, "outbound_engagements", engagement_id)?
+    else {
+        return Ok(());
+    };
+    outbound_put_string(&mut engagement, "status", status.to_string());
+    outbound_put_i64(&mut engagement, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_engagements", engagement_id, now, engagement)
+}
+
+fn outbound_send_status_for_resume(message: &Value) -> &'static str {
+    match outbound_string(message, &["approval_status"]).as_deref() {
+        Some("approved") => "approved_not_sent",
+        Some("awaiting_approval") => "awaiting_approval",
+        Some("rejected") => "rejected",
+        _ => "not_scheduled",
+    }
+}
+
+fn outbound_engagement_status_for_message_state(message: &Value) -> &'static str {
+    match outbound_string(message, &["approval_status"]).as_deref() {
+        Some("approved") => "approved_for_send",
+        Some("awaiting_approval") => "awaiting_approval",
+        Some("rejected") => "rejected",
+        _ => "draft_prepared",
+    }
+}
+
+fn outbound_update_engagement_terminal_status(
+    conn: &Connection,
+    engagement_id: &str,
+    status: &str,
+    reason: Option<&str>,
+    now: i64,
+) -> anyhow::Result<()> {
+    if engagement_id.trim().is_empty() {
+        return Ok(());
+    }
+    let Some(mut engagement) = outbound_load_record(conn, "outbound_engagements", engagement_id)?
+    else {
+        return Ok(());
+    };
+    outbound_put_string(&mut engagement, "status", status.to_string());
+    if let Some(reason) = reason.map(str::trim).filter(|value| !value.is_empty()) {
+        let key = if status == "paused" {
+            "paused_reason"
+        } else {
+            "closed_reason"
+        };
+        outbound_put_string(&mut engagement, key, reason.to_string());
+    }
+    outbound_put_i64(&mut engagement, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_engagements", engagement_id, now, engagement)
+}
+
+fn outbound_message_revision(message: &Value) -> String {
+    let material = serde_json::json!({
+        "sender_account_id": outbound_string(message, &["sender_account_id"]).unwrap_or_default(),
+        "recipient_email": outbound_string(message, &["recipient_email"]).unwrap_or_default(),
+        "subject": outbound_string(message, &["subject"]).unwrap_or_default(),
+        "body_text": outbound_string(message, &["body_text"]).unwrap_or_default(),
+        "body_html": outbound_string(message, &["body_html"]).unwrap_or_default(),
+    });
+    format!("rev_{}", channels::stable_digest(&material.to_string()))
+}
+
+fn outbound_require_message_content(message: &Value) -> anyhow::Result<()> {
+    let has_body = outbound_string(message, &["body_text"]).is_some()
+        || outbound_string(message, &["body_html"]).is_some();
+    anyhow::ensure!(has_body, "message body is required before approval");
+    Ok(())
+}
+
+fn outbound_session_actor_id(session: &BusinessOsSession) -> String {
+    session
+        .user
+        .as_ref()
+        .map(|user| user.id.clone())
+        .unwrap_or_else(|| "business-os-user".to_string())
+}
+
+fn outbound_record_rejection(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let message_id = outbound_required_from_payload_or_record(
+        command,
+        &["message_id", "id"],
+        "message_id is required",
+    )?;
+    let mut message =
+        outbound_load_required(conn, "outbound_messages", &message_id, "message not found")?;
+    let revision_id = outbound_string(&message, &["revision_id"])
+        .unwrap_or_else(|| outbound_message_revision(&message));
+    let approval_id = outbound_id_from_command(command, &["approval_id"], "approval")
+        .unwrap_or_else(|_| format!("rejection_{message_id}_{revision_id}"));
+    let engagement_id = outbound_string(&message, &["engagement_id"]).unwrap_or_default();
+    let mut approval = outbound_object_payload(&command.payload);
+    outbound_put_string(&mut approval, "id", approval_id.clone());
+    outbound_put_string(&mut approval, "message_id", message_id.clone());
+    outbound_put_string(&mut approval, "engagement_id", engagement_id.clone());
+    outbound_put_string(&mut approval, "revision_id", revision_id);
+    outbound_put_string(
+        &mut approval,
+        "actor_user_id",
+        outbound_session_actor_id(session),
+    );
+    outbound_put_string(&mut approval, "decision", "rejected");
+    outbound_put_default_i64(&mut approval, "created_at_ms", now);
+    outbound_put_i64(&mut approval, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_approvals",
+        &approval_id,
+        now,
+        approval.clone(),
+    )?;
+    outbound_put_string(&mut message, "approval_status", "rejected");
+    outbound_put_string(&mut message, "send_status", "blocked");
+    outbound_put_i64(&mut message, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_messages", &message_id, now, message.clone())?;
+    if !engagement_id.is_empty() {
+        outbound_update_engagement_status(conn, &engagement_id, "draft_rejected", now)?;
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": message,
+        "approval": approval
+    }))
+}
+
+fn outbound_enforce_send_gate(conn: &Connection, message: &Value) -> anyhow::Result<()> {
+    let message_id = outbound_required_string(message, &["id"])?;
+    anyhow::ensure!(
+        outbound_string(message, &["approval_status"]).as_deref() == Some("approved"),
+        "outbound message must be approved before send"
+    );
+    let revision_id = outbound_string(message, &["revision_id"])
+        .unwrap_or_else(|| outbound_message_revision(message));
+    anyhow::ensure!(
+        outbound_has_matching_approval(conn, &message_id, &revision_id)?,
+        "approved outbound message has no matching approval for current revision"
+    );
+    let sender_account_id = outbound_required_string(message, &["sender_account_id"])?;
+    let recipient_email = outbound_required_string(message, &["recipient_email"])?;
+    outbound_require_message_content(message)?;
+    anyhow::ensure!(
+        !outbound_recipient_suppressed(conn, &recipient_email)?,
+        "recipient is suppressed for outbound communication"
+    );
+    outbound_enforce_account_limit(conn, &sender_account_id)?;
+    Ok(())
+}
+
+fn outbound_has_matching_approval(
+    conn: &Connection,
+    message_id: &str,
+    revision_id: &str,
+) -> anyhow::Result<bool> {
+    let mut stmt = conn.prepare(
+        "SELECT payload_json
+         FROM business_records
+         WHERE collection = 'outbound_approvals'
+           AND deleted = 0",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let payload: Value = serde_json::from_str(&row?)?;
+        if outbound_string(&payload, &["message_id"]).as_deref() == Some(message_id)
+            && outbound_string(&payload, &["revision_id"]).as_deref() == Some(revision_id)
+            && outbound_string(&payload, &["decision"]).as_deref() == Some("approved")
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn outbound_recipient_suppressed(conn: &Connection, recipient_email: &str) -> anyhow::Result<bool> {
+    let recipient = recipient_email.trim().to_ascii_lowercase();
+    let domain = recipient.split('@').nth(1).unwrap_or_default().to_string();
+    let mut stmt = conn.prepare(
+        "SELECT payload_json
+         FROM business_records
+         WHERE collection = 'outbound_suppression_entries'
+           AND deleted = 0",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let payload: Value = serde_json::from_str(&row?)?;
+        let status = outbound_string(&payload, &["status"]).unwrap_or_else(|| "active".to_string());
+        if matches!(status.as_str(), "inactive" | "deleted" | "expired") {
+            continue;
+        }
+        let suppressed_email = outbound_string(&payload, &["email"])
+            .or_else(|| outbound_string(&payload, &["recipient_email"]))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let suppressed_domain = outbound_string(&payload, &["domain"])
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if !suppressed_email.is_empty() && suppressed_email == recipient {
+            return Ok(true);
+        }
+        if !suppressed_domain.is_empty() && suppressed_domain == domain {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn outbound_enforce_account_limit(
+    conn: &Connection,
+    sender_account_id: &str,
+) -> anyhow::Result<()> {
+    let Some(limit) = outbound_load_record(conn, "outbound_account_limits", sender_account_id)?
+    else {
+        return Ok(());
+    };
+    let blocked = limit
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    anyhow::ensure!(
+        !blocked,
+        "sender account is blocked for outbound communication"
+    );
+    if let Some(remaining) = limit.get("remaining_today").and_then(Value::as_i64) {
+        anyhow::ensure!(remaining > 0, "sender account daily limit exhausted");
+    }
+    if let (Some(sent), Some(limit_value)) = (
+        limit.get("daily_sent_count").and_then(Value::as_i64),
+        limit.get("daily_limit").and_then(Value::as_i64),
+    ) {
+        anyhow::ensure!(sent < limit_value, "sender account daily limit exhausted");
+    }
+    Ok(())
 }
 
 fn get_public_key(private_key_pem: &str) -> String {
@@ -6552,6 +8107,11 @@ fn create_ctox_queue_task(
     command_id: &str,
     command: &BusinessCommand,
 ) -> anyhow::Result<Option<channels::QueueTaskView>> {
+    if let Some(existing_id) = find_queue_task_for_command(root, command_id) {
+        if let Some(existing) = channels::load_queue_task(root, &existing_id)? {
+            return Ok(Some(existing));
+        }
+    }
     let title = command_title(command);
     let prompt = command_prompt(command_id, command);
     let priority = command
@@ -7162,6 +8722,597 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_message_send_approved_requires_matching_current_revision() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_engagement",
+                "command_id": "cmd_engagement",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_test",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_test",
+                    "company_id": "company_test",
+                    "contact_id": "contact_test"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_prepare",
+                "command_id": "cmd_prepare",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_test",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_test",
+                    "campaign_id": "camp_test",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        let before_approval = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_before_approval",
+                "command_id": "cmd_send_before_approval",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_test",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_test" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("send must be blocked before approval");
+        assert!(
+            before_approval.to_string().contains("must be approved"),
+            "{before_approval}"
+        );
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_request_approval",
+                "command_id": "cmd_request_approval",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_test",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_test" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_approve",
+                "command_id": "cmd_approve",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_test",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_test" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let send = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_after_approval",
+                "command_id": "cmd_send_after_approval",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_test",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_test" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            send.pointer("/result/provider_send_executed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            send.pointer("/result/message/send_status")
+                .and_then(Value::as_str),
+            Some("queued_for_provider")
+        );
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_prepare_second",
+                "command_id": "cmd_prepare_second",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_revision",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_test",
+                    "campaign_id": "camp_test",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Old body"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_request_second",
+                "command_id": "cmd_request_second",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_revision",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_revision" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_approve_second",
+                "command_id": "cmd_approve_second",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_revision",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_revision" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let mut stale_message =
+            outbound_load_required(&conn, "outbound_messages", "msg_revision", "message")?;
+        outbound_put_string(&mut stale_message, "body_text", "Changed body");
+        outbound_put_string(&mut stale_message, "approval_status", "approved");
+        outbound_put_string(&mut stale_message, "send_status", "approved_not_sent");
+        let changed_revision = outbound_message_revision(&stale_message);
+        outbound_put_string(&mut stale_message, "revision_id", changed_revision);
+        upsert_business_record(
+            &conn,
+            "outbound_messages",
+            "msg_revision",
+            now_ms() as i64,
+            stale_message,
+        )?;
+        drop(conn);
+
+        let changed_revision_send = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_changed_revision",
+                "command_id": "cmd_send_changed_revision",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_revision",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_revision" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("changed message body must invalidate approval");
+        assert!(
+            changed_revision_send
+                .to_string()
+                .contains("no matching approval for current revision"),
+            "{changed_revision_send}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_sequence_save_persists_strategy_policy_and_touchpoints() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let saved = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_sequence_save",
+                "command_id": "cmd_sequence_save",
+                "module": "outbound",
+                "command_type": "outbound.sequence.save",
+                "record_id": "seq_campaign",
+                "status": "pending_sync",
+                "payload": {
+                    "sequence_id": "seq_campaign",
+                    "campaign_id": "camp_sequence",
+                    "name": "CTOX Active Outbound",
+                    "strategy_text": "Bereite jede Nachricht vor und warte auf Freigabe.",
+                    "sequence_policy_text": "Initiale Nachricht, 5 Werktage warten, Follow-up 1.",
+                    "send_window": { "text": "Werktags 09:00-16:00" },
+                    "touchpoints": [
+                        { "type": "initial", "wait_days_after_previous": 0, "requires_approval": true },
+                        { "type": "followup_1", "wait_days_after_previous": 5, "requires_approval": true }
+                    ],
+                    "stop_rules": [
+                        { "type": "hard_stop", "text": "Stoppe bei Antwort, Opt-out oder Termin." }
+                    ],
+                    "approval_policy": {
+                        "require_all_messages": true,
+                        "policy_text": "Jede ausgehende Nachricht braucht Freigabe."
+                    },
+                    "scheduling_policy": {
+                        "strategy_text": "Bei Interesse Terminantwort vorbereiten.",
+                        "duration_minutes": 30,
+                        "slot_proposal_count": 3
+                    },
+                    "compliance_policy": {
+                        "policy_text": "Keine Nachricht nach Opt-out.",
+                        "suppression_policy_text": "Suppressions hart beachten."
+                    },
+                    "payload": {
+                        "sender_account_id": "sender@example.com",
+                        "skillbook_id": "business-os-outbound-active",
+                        "runbook_id": "runbook-active-outbound"
+                    }
+                },
+                "client_context": actor
+            }),
+        )?;
+
+        assert_eq!(
+            saved.pointer("/result/collection").and_then(Value::as_str),
+            Some("outbound_sequences")
+        );
+        assert_eq!(
+            saved
+                .pointer("/result/sequence/strategy_text")
+                .and_then(Value::as_str),
+            Some("Bereite jede Nachricht vor und warte auf Freigabe.")
+        );
+
+        let conn = open_store(root)?;
+        let sequence =
+            outbound_load_required(&conn, "outbound_sequences", "seq_campaign", "sequence")?;
+        assert_eq!(
+            outbound_string(&sequence, &["campaign_id"]).as_deref(),
+            Some("camp_sequence")
+        );
+        assert_eq!(
+            sequence
+                .pointer("/approval_policy/require_all_messages")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            sequence
+                .pointer("/touchpoints/1/wait_days_after_previous")
+                .and_then(Value::as_i64),
+            Some(5)
+        );
+        assert_eq!(
+            sequence
+                .pointer("/stop_rules/0/type")
+                .and_then(Value::as_str),
+            Some("hard_stop")
+        );
+        assert_eq!(
+            sequence
+                .pointer("/scheduling_policy/duration_minutes")
+                .and_then(Value::as_i64),
+            Some(30)
+        );
+        assert_eq!(
+            sequence
+                .pointer("/compliance_policy/policy_text")
+                .and_then(Value::as_str),
+            Some("Keine Nachricht nach Opt-out.")
+        );
+        assert_eq!(
+            sequence
+                .pointer("/payload/skillbook_id")
+                .and_then(Value::as_str),
+            Some("business-os-outbound-active")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_draft_prepare_creates_approval_gated_automated_messages() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_engagement_auto",
+                "command_id": "cmd_engagement_auto",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_auto",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_auto",
+                    "company_id": "company_auto",
+                    "contact_id": "contact_auto",
+                    "payload": {
+                        "company_name": "ACME GmbH",
+                        "contact_name": "Frau Beispiel",
+                        "contact_email": "lead@example.com",
+                        "strategy_text": "Kurz, belegt und respektvoll nachfassen.",
+                        "skillbook_id": "business-os.outbound.message_drafting.v1",
+                        "runbook_id": "runbook-active-outbound"
+                    }
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_assign_auto",
+                "command_id": "cmd_assign_auto",
+                "module": "outbound",
+                "command_type": "outbound.engagement.assign_sender",
+                "record_id": "eng_auto",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_auto",
+                    "sender_account_id": "sender@example.com"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        let followup = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_auto_followup",
+                "command_id": "cmd_auto_followup",
+                "module": "outbound",
+                "command_type": "outbound.draft.prepare",
+                "record_id": "msg_auto_followup",
+                "status": "pending_sync",
+                "payload": {
+                    "message_id": "msg_auto_followup",
+                    "engagement_id": "eng_auto",
+                    "draft_kind": "followup_1"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            followup
+                .pointer("/result/message/approval_status")
+                .and_then(Value::as_str),
+            Some("awaiting_approval")
+        );
+        assert_eq!(
+            followup
+                .pointer("/result/provider_send_executed")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            followup
+                .pointer("/result/message/payload/skillbook_id")
+                .and_then(Value::as_str),
+            Some("business-os.outbound.message_drafting.v1")
+        );
+
+        let scheduling = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_auto_scheduling",
+                "command_id": "cmd_auto_scheduling",
+                "module": "outbound",
+                "command_type": "outbound.draft.prepare",
+                "record_id": "msg_auto_scheduling",
+                "status": "pending_sync",
+                "payload": {
+                    "message_id": "msg_auto_scheduling",
+                    "engagement_id": "eng_auto",
+                    "draft_kind": "scheduling",
+                    "duration_minutes": 45,
+                    "slot_hint": "drei Slots in der kommenden Woche"
+                },
+                "client_context": actor
+            }),
+        )?;
+        assert_eq!(
+            scheduling
+                .pointer("/result/message/message_type")
+                .and_then(Value::as_str),
+            Some("scheduling")
+        );
+        assert_eq!(
+            scheduling
+                .pointer("/result/message/send_status")
+                .and_then(Value::as_str),
+            Some("awaiting_approval")
+        );
+
+        let conn = open_store(root)?;
+        let meeting = outbound_load_required(
+            &conn,
+            "outbound_meeting_requests",
+            "meeting_msg_auto_scheduling",
+            "meeting request",
+        )?;
+        assert_eq!(
+            outbound_string(&meeting, &["status"]).as_deref(),
+            Some("prepared")
+        );
+        assert_eq!(
+            meeting.get("duration_minutes").and_then(Value::as_i64),
+            Some(45)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_pause_resume_and_close_updates_engagement_state() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_engagement_lifecycle",
+                "command_id": "cmd_engagement_lifecycle",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_lifecycle",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_lifecycle",
+                    "company_id": "company_lifecycle",
+                    "contact_id": "contact_lifecycle"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_prepare_lifecycle",
+                "command_id": "cmd_prepare_lifecycle",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_lifecycle",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_lifecycle",
+                    "campaign_id": "camp_lifecycle",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_pause_lifecycle",
+                "command_id": "cmd_pause_lifecycle",
+                "module": "outbound",
+                "command_type": "outbound.message.pause",
+                "record_id": "msg_lifecycle",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_lifecycle", "reason": "manual review" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let paused_message =
+            outbound_load_required(&conn, "outbound_messages", "msg_lifecycle", "message")?;
+        let paused_engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_lifecycle", "engagement")?;
+        assert_eq!(
+            outbound_string(&paused_message, &["send_status"]).as_deref(),
+            Some("paused")
+        );
+        assert_eq!(
+            outbound_string(&paused_engagement, &["status"]).as_deref(),
+            Some("paused")
+        );
+        assert_eq!(
+            outbound_string(&paused_engagement, &["paused_reason"]).as_deref(),
+            Some("manual review")
+        );
+        drop(conn);
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_resume_lifecycle",
+                "command_id": "cmd_resume_lifecycle",
+                "module": "outbound",
+                "command_type": "outbound.message.resume",
+                "record_id": "msg_lifecycle",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_lifecycle", "reason": "ready" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let resumed_message =
+            outbound_load_required(&conn, "outbound_messages", "msg_lifecycle", "message")?;
+        let resumed_engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_lifecycle", "engagement")?;
+        assert_eq!(
+            outbound_string(&resumed_message, &["send_status"]).as_deref(),
+            Some("not_scheduled")
+        );
+        assert_eq!(
+            outbound_string(&resumed_engagement, &["status"]).as_deref(),
+            Some("draft_prepared")
+        );
+        drop(conn);
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_close_lifecycle",
+                "command_id": "cmd_close_lifecycle",
+                "module": "outbound",
+                "command_type": "outbound.engagement.close",
+                "record_id": "eng_lifecycle",
+                "status": "pending_sync",
+                "payload": { "engagement_id": "eng_lifecycle", "reason": "not a fit" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let closed_message =
+            outbound_load_required(&conn, "outbound_messages", "msg_lifecycle", "message")?;
+        let closed_engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_lifecycle", "engagement")?;
+        assert_eq!(
+            outbound_string(&closed_message, &["send_status"]).as_deref(),
+            Some("cancelled")
+        );
+        assert_eq!(
+            outbound_string(&closed_engagement, &["status"]).as_deref(),
+            Some("closed")
+        );
+        assert_eq!(
+            outbound_string(&closed_engagement, &["closed_reason"]).as_deref(),
+            Some("not a fit")
+        );
+
         Ok(())
     }
 

@@ -1,4 +1,105 @@
+console.log('[notes-module] Top-level evaluation started');
+import * as Lexical from '../../vendor/lexical.mjs';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
+
+const ElementNode = Object.getPrototypeOf(Lexical.HeadingNode);
+
+class CustomHTMLNode extends ElementNode {
+  static getType() {
+    return 'custom-html';
+  }
+
+  static clone(node) {
+    return new CustomHTMLNode(node.__html, node.__tagName, node.__className, node.__key);
+  }
+
+  constructor(html = '', tagName = 'div', className = '', key) {
+    super(key);
+    this.__html = html;
+    this.__tagName = tagName;
+    this.__className = className;
+  }
+
+  createDOM(config) {
+    const dom = document.createElement(this.__tagName);
+    if (this.__className) dom.className = this.__className;
+    dom.innerHTML = this.__html;
+    return dom;
+  }
+
+  updateDOM(prevNode, dom) {
+    if (prevNode.__html !== this.__html || prevNode.__tagName !== this.__tagName || prevNode.__className !== this.__className) {
+      if (this.__className) dom.className = this.__className;
+      else dom.removeAttribute('class');
+      dom.innerHTML = this.__html;
+    }
+    return false;
+  }
+
+  exportDOM() {
+    const element = document.createElement(this.__tagName);
+    if (this.__className) element.className = this.__className;
+    element.innerHTML = this.__html;
+    return { element };
+  }
+
+  static importDOM() {
+    return {
+      div: (domNode) => {
+        if (domNode.classList.contains('notes-todo-row') || domNode.classList.contains('callout')) {
+          return {
+            conversion: (node) => ({
+              node: new CustomHTMLNode(node.innerHTML, node.tagName.toLowerCase(), node.className)
+            }),
+            priority: 1
+          };
+        }
+        return null;
+      },
+      table: (domNode) => {
+        if (domNode.classList.contains('notes-table')) {
+          return {
+            conversion: (node) => ({
+              node: new CustomHTMLNode(node.innerHTML, 'table', node.className)
+            }),
+            priority: 1
+          };
+        }
+        return null;
+      },
+      pre: (domNode) => {
+        if (domNode.classList.contains('nn-code-block')) {
+          return {
+            conversion: (node) => ({
+              node: new CustomHTMLNode(node.innerHTML, 'pre', node.className)
+            }),
+            priority: 1
+          };
+        }
+        return null;
+      }
+    };
+  }
+
+  exportJSON() {
+    return {
+      type: 'custom-html',
+      version: 1,
+      html: this.__html,
+      tagName: this.__tagName,
+      className: this.__className,
+    };
+  }
+
+  static importJSON(serializedNode) {
+    return new CustomHTMLNode(
+      serializedNode.html,
+      serializedNode.tagName,
+      serializedNode.className
+    );
+  }
+}
 
 const SAVE_DEBOUNCE_MS = 250;
 const NOTES_RENDER_DEBOUNCE_MS = 50;
@@ -9,26 +110,34 @@ const labels = {
     notes: 'Notizen',
     newNote: 'Neue Notiz',
     untitled: 'Unbenannte Notiz',
-    search: 'Suchen...',
+    search: 'Durchsuche Notizen...',
     saving: 'Speichern…',
     saved: 'Gespeichert',
     words: 'Wörter',
+    chars: 'Zeichen',
     deleteConfirm: 'Möchtest du diese Notiz wirklich löschen?',
-    newFolderPrompt: 'Name für den neuen Ordner:',
+    newNotebookPrompt: 'Name für das neue Notizbuch:',
+    newTagPrompt: 'Name für den neuen Tag:',
     defaultFolder: 'Notizen',
+    noNotes: 'Keine Notizen vorhanden',
+    readTime: 'Min. Lesezeit',
   },
   en: {
     allNotes: 'All Notes',
     notes: 'Notes',
     newNote: 'New Note',
     untitled: 'Untitled Note',
-    search: 'Search...',
+    search: 'Search notes...',
     saving: 'Saving…',
     saved: 'Saved',
     words: 'words',
+    chars: 'characters',
     deleteConfirm: 'Are you sure you want to delete this note?',
-    newFolderPrompt: 'Name for the new folder:',
+    newNotebookPrompt: 'Name for the new notebook:',
+    newTagPrompt: 'Name for the new tag:',
     defaultFolder: 'Notes',
+    noNotes: 'No notes available',
+    readTime: 'min read',
   }
 };
 
@@ -36,48 +145,141 @@ const state = {
   ctx: null,
   lang: 'de',
   notes: [],
-  folders: ['Notes'],
-  activeFolder: 'All Notes',
+  notebooks: [],
+  tags: [],
+  activeCategory: 'notes', // 'notes', 'favorites', 'trash'
+  activeNotebook: '',
+  activeTag: '',
   activeNoteId: '',
   searchQuery: '',
-  activeTab: 'edit',
+  sortMode: 'updated', // 'updated', 'created', 'title'
+  viewMode: 'list', // 'list', 'compact'
+  appLocked: false,
+  pinBuffer: '',
+  activeNoteDecrypted: {}, // noteId -> passcode (string)
+  activeNoteDecryptedContent: {}, // noteId -> decrypted plainText content (string)
   saveTimer: null,
   localSubscriptionCleanup: null,
   renderTimer: null,
   t: (key, fallback) => fallback ?? key,
+  contextMenu: null,
+  contextMenuCleanup: null,
+  lexicalEditor: null,
+  lexicalRichTextCleanup: null,
+  lexicalUpdateListenerCleanup: null,
+  lastLexicalHtml: '',
+  hydratingEditor: false,
+  renderedNoteId: '',
 };
 
 const els = {};
 
+function getCollection() {
+  const isNotizen = state.ctx?.module?.id === 'notizen';
+  return isNotizen ? state.ctx?.db?.raw?.notes_records : state.ctx?.db?.raw?.notes;
+}
+
 export async function mount(ctx) {
   state.ctx = ctx;
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
+  
+  // Inject stylesheet dynamically
+  const styleLink = document.createElement('link');
+  styleLink.rel = 'stylesheet';
+  styleLink.href = new URL('./index.css', import.meta.url).href;
+  styleLink.id = state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles';
+  document.head.appendChild(styleLink);
   
   // Load dynamic locales
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
   
   // Set up HTML structure
-  ctx.host.innerHTML = documentTemplate();
+  ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
   
   // Apply translation to static labels in mounted DOM
   applyStaticLabels(ctx.host, state.t);
   
+  // Initial Cache Load so we are functional immediately
+  // loadFromLocalCache();
+  
   bindElements(ctx.host);
+  
+  // Initialize Lexical Editor
+  state.lexicalEditor = Lexical.createEditor({
+    theme: {
+      paragraph: 'notes-paragraph',
+      heading: {
+        h1: 'notes-h1',
+        h2: 'notes-h2',
+        h3: 'notes-h3',
+      },
+      list: {
+        ul: 'notes-ul',
+        ol: 'notes-ol',
+        listitem: 'notes-li',
+      },
+      text: {
+        bold: 'notes-bold',
+        italic: 'notes-italic',
+        underline: 'notes-underline',
+        strikethrough: 'notes-strikethrough',
+        code: 'notes-code',
+      }
+    },
+    nodes: [
+      Lexical.HeadingNode,
+      Lexical.QuoteNode,
+      Lexical.ListNode,
+      Lexical.ListItemNode,
+      Lexical.LinkNode,
+      Lexical.AutoLinkNode,
+      Lexical.CodeNode,
+      CustomHTMLNode
+    ]
+  });
+
+  if (els.editor) {
+    state.lexicalEditor.setRootElement(els.editor);
+  }
+  state.lexicalRichTextCleanup = Lexical.registerRichText?.(state.lexicalEditor) || null;
+
+  state.lexicalUpdateListenerCleanup = state.lexicalEditor.registerUpdateListener(({ editorState }) => {
+    if (state.hydratingEditor) return;
+    editorState.read(() => {
+      const html = Lexical.$generateHtmlFromNodes(state.lexicalEditor);
+      if (html !== state.lastLexicalHtml) {
+        state.lastLexicalHtml = html;
+        processContentInput(html);
+      }
+    });
+  });
+
   wireEvents();
   
   // Setup column resizing logic
   const resizerCleanup = setupResizers(ctx.host);
   
-  // Load initial notes and wire up RxDB subscription
+  // Setup App Lock on startup if cached as locked
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+  if (localStorage.getItem(`${cachePrefix}.appLocked`) === 'true') {
+    state.appLocked = true;
+    if (els.clientLockScreen) {
+      els.clientLockScreen.removeAttribute('hidden');
+    }
+  }
+  
+  // Load notes and wire up database merge sync
   await loadNotesFromLocal();
   state.localSubscriptionCleanup = wireLocalRealtime();
+  state.contextMenuCleanup = initNotesContextMenu(state);
   
   // Pre-select first note if available
-  if (state.notes.length > 0) {
-    selectNote(state.notes[0].id);
+  const initialNotes = getFilteredNotes();
+  if (initialNotes.length > 0) {
+    selectNote(initialNotes[0].id);
   } else {
     renderEditor();
   }
@@ -86,11 +288,27 @@ export async function mount(ctx) {
     if (state.saveTimer) clearTimeout(state.saveTimer);
     if (state.renderTimer) clearTimeout(state.renderTimer);
     
+    state.lexicalUpdateListenerCleanup?.();
+    state.lexicalUpdateListenerCleanup = null;
+    state.lexicalRichTextCleanup?.();
+    state.lexicalRichTextCleanup = null;
+    state.lexicalEditor?.setRootElement(null);
+    state.lexicalEditor = null;
+    state.lastLexicalHtml = '';
+    state.renderedNoteId = '';
+
     state.localSubscriptionCleanup?.();
     state.localSubscriptionCleanup = null;
     
+    state.contextMenuCleanup?.();
+    state.contextMenu?.remove();
+    state.contextMenu = null;
+    
     resizerCleanup();
     unbindEvents();
+    
+    // Clean up stylesheet
+    document.getElementById(state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles')?.remove();
   };
 }
 
@@ -101,86 +319,260 @@ function applyStaticLabels(root, t) {
   root.querySelectorAll('[data-t-placeholder]').forEach(el => el.placeholder = t(el.dataset.tPlaceholder));
 }
 
-function documentTemplate() {
-  return document.querySelector('main[data-notes-root]')?.outerHTML || '';
+async function loadModuleMarkup() {
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
 }
 
 function bindElements(host) {
   els.root = host.querySelector('[data-notes-root]');
-  els.folderList = host.querySelector('[data-folder-list]');
+  
+  // Keypads & Zero-Knowledge client Lock Screens
+  els.clientLockScreen = host.querySelector('[data-client-lock-screen]');
+  els.pinDots = host.querySelectorAll('.nn-pin-dot');
+  els.pinPad = host.querySelector('.nn-pin-pad');
+  els.lockAppBtn = host.querySelector('[data-action="lock-app"]');
+  
+  // Sidebar Panes & list components
+  els.folderList = host.querySelector('.nn-nav-list');
+  els.notebooksList = host.querySelector('[data-notebooks-list]');
+  els.tagsList = host.querySelector('[data-tags-list]');
+  
+  // List Pane
   els.notesList = host.querySelector('[data-notes-list]');
   els.notesCountLabel = host.querySelector('[data-notes-count-label]');
+  els.listKicker = host.querySelector('[data-list-kicker]');
   els.search = host.querySelector('[data-search]');
+  els.filterTrigger = host.querySelector('[data-action="toggle-filter"]');
+  els.filterPopover = host.querySelector('[data-filter-popover]');
   
-  els.selectedFolder = host.querySelector('[data-selected-folder]');
-  els.selectedTitle = host.querySelector('[data-selected-title]');
-  els.editor = host.querySelector('[data-notes-editor]');
-  els.preview = host.querySelector('[data-notes-preview]');
+  // Editor Meta Controls
+  els.notebookSelectBtn = host.querySelector('.nn-notebook-select-btn');
+  els.noteNotebookLabel = host.querySelector('[data-note-notebook-label]');
+  els.notebookDropdown = host.querySelector('[data-notebook-dropdown]');
   
-  els.splitEditor = host.querySelector('[data-notes-split-editor]');
-  els.splitPreview = host.querySelector('[data-notes-split-preview]');
+  els.tagsSelectBtn = host.querySelector('.nn-tags-select-btn');
+  els.tagsDropdown = host.querySelector('[data-tags-dropdown]');
   
-  els.status = host.querySelector('[data-notes-status]');
-  els.words = host.querySelector('[data-notes-words]');
-  
-  els.tabs = host.querySelectorAll('.segmented button');
+  els.starBtn = host.querySelector('[data-action="star-note"]');
+  els.lockNoteBtn = host.querySelector('[data-action="lock-note"]');
   els.deleteBtn = host.querySelector('[data-action="delete-note"]');
   els.createNoteBtn = host.querySelector('[data-action="create-note"]');
-  els.createFolderBtn = host.querySelector('[data-action="create-folder"]');
+  
+  // Editor Lock Screen
+  els.noteLockScreen = host.querySelector('[data-note-lock-screen]');
+  els.notePasscodeInput = host.querySelector('[data-note-passcode-input]');
+  els.decryptNoteBtn = host.querySelector('[data-action="decrypt-note"]');
+  
+  // Editor Paper Sheet
+  els.paperSheet = host.querySelector('[data-paper-sheet-pane]');
+  els.noteBadgesContainer = host.querySelector('[data-note-badges-container]');
+  els.noteDate = host.querySelector('[data-note-date]');
+  els.editor = host.querySelector('[data-notes-editor]');
+  els.editorWorkspace = host.querySelector('.nn-editor-workspace');
+  
+  // Toolbar Inserters
+  els.formatBtn = host.querySelector('[data-action="format-text"]');
+  els.headersDropdown = host.querySelector('[data-headers-dropdown]');
+  els.checklistBtn = host.querySelector('[data-action="insert-checklist"]');
+  els.tableBtn = host.querySelector('[data-action="insert-table"]');
+  els.codeblockBtn = host.querySelector('[data-action="insert-codeblock"]');
+  els.formatCalloutsBtn = host.querySelector('[data-action="format-callouts"]');
+  els.calloutsDropdown = host.querySelector('[data-callouts-dropdown]');
+  els.timestampBtn = host.querySelector('[data-action="insert-timestamp"]');
+  
+  // Footer Stats
+  els.status = host.querySelector('[data-notes-status]');
+  els.readTime = host.querySelector('[data-notes-read-time]');
+  els.words = host.querySelector('[data-notes-words]');
+  els.chars = host.querySelector('[data-notes-chars]');
 }
 
 function wireEvents() {
-  els.search?.addEventListener('input', handleSearch);
-  els.editor?.addEventListener('input', handleEditorInput);
-  els.splitEditor?.addEventListener('input', handleSplitEditorInput);
+  // App PIN lock pad
+  els.pinPad?.addEventListener('click', handlePinPadClick);
+  els.lockAppBtn?.addEventListener('click', handleLockAppClick);
   
-  els.tabs?.forEach(btn => {
-    btn.addEventListener('click', handleTabClick);
+  // Sidebar items togglers and creations
+  els.root?.querySelectorAll('[data-toggle-nav]').forEach(el => {
+    el.addEventListener('click', handleToggleNavClick);
+  });
+  els.root?.querySelector('[data-action="create-notebook"]')?.addEventListener('click', handleCreateNotebookClick);
+  els.root?.querySelector('[data-action="create-tag"]')?.addEventListener('click', handleCreateTagClick);
+  
+  // Search and Sort Filters
+  els.search?.addEventListener('input', handleSearch);
+  els.filterTrigger?.addEventListener('click', handleFilterTriggerClick);
+  els.filterPopover?.querySelectorAll('[data-sort]').forEach(el => {
+    el.addEventListener('click', handleSortClick);
+  });
+  els.filterPopover?.querySelectorAll('[data-view-mode]').forEach(el => {
+    el.addEventListener('click', handleViewModeClick);
   });
   
+  // Editor Meta controls clicks
+  els.notebookSelectBtn?.addEventListener('click', handleNotebookSelectBtnClick);
+  els.tagsSelectBtn?.addEventListener('click', handleTagsSelectBtnClick);
+  
+  els.starBtn?.addEventListener('click', handleStarNoteClick);
+  els.lockNoteBtn?.addEventListener('click', handleLockNoteClick);
   els.deleteBtn?.addEventListener('click', handleDeleteNote);
   els.createNoteBtn?.addEventListener('click', handleCreateNote);
-  els.createFolderBtn?.addEventListener('click', handleCreateFolder);
+  
+  // Decrypt locked notes click/keypress handlers
+  els.decryptNoteBtn?.addEventListener('click', handleDecryptNoteClick);
+  els.notePasscodeInput?.addEventListener('keydown', handleDecryptNoteKeydown);
+  
+  // Editor core formatting actions
+  els.editor?.addEventListener('input', handleEditorInput);
+  els.editor?.addEventListener('keydown', handleEditorKeydown);
+  els.editor?.addEventListener('click', handleEditorClick);
+  
+  els.formatBtn?.addEventListener('click', handleFormatBtnClick);
+  state.ctx.host?.querySelectorAll('[data-format-cmd]').forEach(btn => {
+    btn.addEventListener('click', handleFormatCommandClick);
+  });
+  
+  els.checklistBtn?.addEventListener('click', handleChecklistBtnClick);
+  els.tableBtn?.addEventListener('click', handleTableBtnClick);
+  els.codeblockBtn?.addEventListener('click', handleCodeblockBtnClick);
+  
+  els.formatCalloutsBtn?.addEventListener('click', handleFormatCalloutsClick);
+  els.calloutsDropdown?.querySelectorAll('[data-callout-type]').forEach(btn => {
+    btn.addEventListener('click', handleCalloutCommandClick);
+  });
+  
+  els.timestampBtn?.addEventListener('click', handleTimestampBtnClick);
+  
+  // Global closes and custom circular checklist toggles
+  document.addEventListener('click', handleGlobalClick);
+  els.editor?.addEventListener('click', handleEditorCheckboxClick);
 }
 
 function unbindEvents() {
+  els.pinPad?.removeEventListener('click', handlePinPadClick);
+  els.lockAppBtn?.removeEventListener('click', handleLockAppClick);
   els.search?.removeEventListener('input', handleSearch);
-  els.editor?.removeEventListener('input', handleEditorInput);
-  els.splitEditor?.removeEventListener('input', handleSplitEditorInput);
+  els.filterTrigger?.removeEventListener('click', handleFilterTriggerClick);
+  els.notebookSelectBtn?.removeEventListener('click', handleNotebookSelectBtnClick);
+  els.tagsSelectBtn?.removeEventListener('click', handleTagsSelectBtnClick);
+  els.starBtn?.removeEventListener('click', handleStarNoteClick);
+  els.lockNoteBtn?.removeEventListener('click', handleLockNoteClick);
   els.deleteBtn?.removeEventListener('click', handleDeleteNote);
   els.createNoteBtn?.removeEventListener('click', handleCreateNote);
-  els.createFolderBtn?.removeEventListener('click', handleCreateFolder);
+  els.decryptNoteBtn?.removeEventListener('click', handleDecryptNoteClick);
+  els.notePasscodeInput?.removeEventListener('keydown', handleDecryptNoteKeydown);
+  els.editor?.removeEventListener('input', handleEditorInput);
+  els.editor?.removeEventListener('keydown', handleEditorKeydown);
+  els.editor?.removeEventListener('click', handleEditorClick);
+  els.formatBtn?.removeEventListener('click', handleFormatBtnClick);
+  els.checklistBtn?.removeEventListener('click', handleChecklistBtnClick);
+  els.tableBtn?.removeEventListener('click', handleTableBtnClick);
+  els.codeblockBtn?.removeEventListener('click', handleCodeblockBtnClick);
+  els.formatCalloutsBtn?.removeEventListener('click', handleFormatCalloutsClick);
+  els.timestampBtn?.removeEventListener('click', handleTimestampBtnClick);
+  
+  document.removeEventListener('click', handleGlobalClick);
+  els.editor?.removeEventListener('click', handleEditorCheckboxClick);
 }
 
-async function loadNotesFromLocal() {
-  const collection = state.ctx.db?.raw?.notes;
-  if (!collection) return;
-  
+// Local Cache Persistence
+function saveToLocalCache() {
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+  localStorage.setItem(`${cachePrefix}.local_records`, JSON.stringify(state.notes));
+  localStorage.setItem(`${cachePrefix}.local_notebooks`, JSON.stringify(state.notebooks));
+  localStorage.setItem(`${cachePrefix}.local_tags`, JSON.stringify(state.tags));
+}
+
+function loadFromLocalCache() {
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
   try {
-    const docs = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
-    state.notes = docs.map(d => d.toJSON()).filter(n => n.id);
-    
-    // Extract organic folder list from notes
-    const folderSet = new Set();
-    state.notes.forEach(note => {
-      if (note.folder) folderSet.add(note.folder);
-    });
-    folderSet.add('Notes'); // Always have default folder
-    state.folders = Array.from(folderSet);
-    
-    scheduleRender();
-  } catch (error) {
-    console.error('[notes] failed to load notes', error);
+    const recs = localStorage.getItem(`${cachePrefix}.local_records`);
+    if (recs) state.notes = JSON.parse(recs);
+    const notebooks = localStorage.getItem(`${cachePrefix}.local_notebooks`);
+    if (notebooks) state.notebooks = JSON.parse(notebooks);
+    const tags = localStorage.getItem(`${cachePrefix}.local_tags`);
+    if (tags) state.tags = JSON.parse(tags);
+  } catch (e) {
+    console.error('Failed to load local cache', e);
+  }
+}
+async function decryptLockedNotesInMemory() {
+  for (const note of state.notes) {
+    if (note.is_locked) {
+      const passcode = state.activeNoteDecrypted[note.id];
+      if (passcode) {
+        try {
+          const encryptedData = JSON.parse(note.content);
+          const decrypted = await decryptContent(encryptedData, passcode);
+          state.activeNoteDecryptedContent[note.id] = decrypted;
+        } catch (e) {
+          console.warn('Failed to decrypt locked note on load', e);
+          delete state.activeNoteDecrypted[note.id];
+          delete state.activeNoteDecryptedContent[note.id];
+        }
+      }
+    }
   }
 }
 
+async function loadNotesFromLocal() {
+  const collection = getCollection();
+  const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+  if (!collection) {
+    state.notes = [];
+    syncNotebooksAndTags();
+    scheduleRender();
+    return;
+  }
+  
+  try {
+    const docs = await collection.find().exec();
+    const serverNotes = docs.map(d => d.toJSON()).filter(n => n.id);
+    
+    // Use RxDB as the absolute single source of truth
+    state.notes = serverNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+    
+    await decryptLockedNotesInMemory();
+    
+    syncNotebooksAndTags();
+    saveToLocalCache(); // Passive write-only mirror purely for Playwright E2E tests to read
+    scheduleRender();
+  } catch (error) {
+    console.error(`${logPrefix} failed to load notes`, error);
+    state.notes = [];
+    syncNotebooksAndTags();
+    scheduleRender();
+  }
+}
+function syncNotebooksAndTags() {
+  const scannedNotebooks = new Set();
+  const scannedTags = new Set();
+  state.notes.forEach(note => {
+    if (note.notebook) scannedNotebooks.add(note.notebook);
+    if (note.tags) {
+      (note.tags || '').split(',').map(t => t.trim()).filter(Boolean).forEach(tag => scannedTags.add(tag));
+    }
+  });
+  
+  // Restore empty placeholders from cached arrays
+  state.notebooks.forEach(nb => scannedNotebooks.add(nb));
+  state.tags.forEach(tg => scannedTags.add(tg));
+  
+  state.notebooks = Array.from(scannedNotebooks).sort();
+  state.tags = Array.from(scannedTags).sort();
+}
+
 function wireLocalRealtime() {
-  const collection = state.ctx.db?.raw?.notes;
+  const collection = getCollection();
   if (!collection) return null;
   
+  const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
   const sub = collection.$.subscribe(() => {
     loadNotesFromLocal().catch(err => {
-      console.warn('[notes] failed to refresh local notes', err);
+      console.warn(`${logPrefix} failed to refresh notes`, err);
     });
   });
   
@@ -198,93 +590,257 @@ function scheduleRender() {
 }
 
 function renderAll() {
-  renderFolders();
+  renderSidebar();
   renderNotesList();
   renderEditor();
 }
 
-function renderFolders() {
-  if (!els.folderList) return;
-  
-  const allNotesActive = state.activeFolder === 'All Notes';
-  
-  let html = `
-    <div class="notes-folder-item ${allNotesActive ? 'active' : ''}" data-folder-select="All Notes">
-      ${state.t('allNotes')}
-    </div>
-  `;
-  
-  state.folders.forEach(folder => {
-    const active = state.activeFolder === folder;
-    html += `
-      <div class="notes-folder-item ${active ? 'active' : ''}" data-folder-select="${folder}">
-        ${folder === 'Notes' ? state.t('defaultFolder') : folder}
-      </div>
-    `;
+function renderSidebar() {
+  // Bind category selection styles
+  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
+    const category = el.getAttribute('data-nav-category');
+    const active = state.activeCategory === category && !state.activeNotebook && !state.activeTag;
+    el.classList.toggle('active', active);
+    
+    // Set Count Badge
+    const countEl = el.querySelector('.notes-folder-count');
+    if (countEl) {
+      if (category === 'notes') {
+        countEl.textContent = state.notes.filter(n => !n.is_trashed).length;
+      } else if (category === 'favorites') {
+        countEl.textContent = state.notes.filter(n => n.is_favorite && !n.is_trashed).length;
+      } else if (category === 'trash') {
+        countEl.textContent = state.notes.filter(n => n.is_trashed).length;
+      }
+    }
   });
   
-  els.folderList.innerHTML = html;
-  
-  // Bind folder selection clicks
-  els.folderList.querySelectorAll('[data-folder-select]').forEach(el => {
-    el.addEventListener('click', () => {
-      const folder = el.getAttribute('data-folder-select');
-      state.activeFolder = folder;
-      scheduleRender();
+  // Render Notebooks sublist
+  if (els.notebooksList) {
+    let html = '';
+    state.notebooks.forEach(nb => {
+      const active = state.activeNotebook === nb && !state.activeCategory && !state.activeTag;
+      const count = state.notes.filter(n => n.notebook === nb && !n.is_trashed).length;
+      html += `
+        <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-notebook="${escapeHtml(nb)}">
+          <div class="notes-folder-item-left">
+            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path>
+              <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path>
+            </svg>
+            <span class="notes-folder-name">${escapeHtml(nb)}</span>
+          </div>
+          <span class="notes-folder-count">${count}</span>
+        </div>
+      `;
     });
-  });
+    els.notebooksList.innerHTML = html;
+    
+    els.notebooksList.querySelectorAll('[data-nav-notebook]').forEach(el => {
+      el.addEventListener('click', () => {
+        const nb = el.getAttribute('data-nav-notebook');
+        state.activeCategory = '';
+        state.activeTag = '';
+        state.activeNotebook = nb;
+        
+        const filtered = getFilteredNotes();
+        if (filtered.length > 0) selectNote(filtered[0].id);
+        else selectNote('');
+        scheduleRender();
+      });
+    });
+  }
+  
+  // Render Tags sublist
+  if (els.tagsList) {
+    let html = '';
+    state.tags.forEach(tg => {
+      const active = state.activeTag === tg && !state.activeCategory && !state.activeNotebook;
+      const count = state.notes.filter(n => {
+        return (n.tags || '').split(',').map(x => x.trim()).includes(tg) && !n.is_trashed;
+      }).length;
+      html += `
+        <div class="notes-folder-item ${active ? 'active' : ''}" data-nav-tag="${escapeHtml(tg)}">
+          <div class="notes-folder-item-left">
+            <svg class="notes-folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+              <line x1="7" y1="7" x2="7.01" y2="7"></line>
+            </svg>
+            <span class="notes-folder-name">${escapeHtml(tg)}</span>
+          </div>
+          <span class="notes-folder-count">${count}</span>
+        </div>
+      `;
+    });
+    els.tagsList.innerHTML = html;
+    
+    els.tagsList.querySelectorAll('[data-nav-tag]').forEach(el => {
+      el.addEventListener('click', () => {
+        const tg = el.getAttribute('data-nav-tag');
+        state.activeCategory = '';
+        state.activeNotebook = '';
+        state.activeTag = tg;
+        
+        const filtered = getFilteredNotes();
+        if (filtered.length > 0) selectNote(filtered[0].id);
+        else selectNote('');
+        scheduleRender();
+      });
+    });
+  }
+}
+
+function getFilteredNotes() {
+  let list = state.notes;
+  
+  if (state.activeCategory === 'favorites') {
+    list = list.filter(n => n.is_favorite && !n.is_trashed);
+  } else if (state.activeCategory === 'trash') {
+    list = list.filter(n => n.is_trashed);
+  } else if (state.activeCategory === 'notes') {
+    list = list.filter(n => !n.is_trashed);
+  } else if (state.activeNotebook) {
+    list = list.filter(n => n.notebook === state.activeNotebook && !n.is_trashed);
+  } else if (state.activeTag) {
+    list = list.filter(n => (n.tags || '').split(',').map(x => x.trim()).includes(state.activeTag) && !n.is_trashed);
+  }
+  
+  // Search query filter
+  const query = state.searchQuery.toLowerCase().trim();
+  if (query) {
+    list = list.filter(n => {
+      let textToSearch = n.content || '';
+      if (n.is_locked) {
+        textToSearch = state.activeNoteDecryptedContent[n.id] || '';
+      }
+      const titleMatch = (n.title || '').toLowerCase().includes(query);
+      const textMatch = getPlainText(textToSearch).toLowerCase().includes(query);
+      return titleMatch || textMatch;
+    });
+  }
+  // Sort
+  if (state.sortMode === 'title') {
+    list.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+  } else if (state.sortMode === 'created') {
+    list.sort((a, b) => a.updated_at_ms - b.updated_at_ms);
+  } else {
+    list.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+  }
+  
+  return list;
 }
 
 function renderNotesList() {
   if (!els.notesList) return;
   
-  const query = state.searchQuery.toLowerCase().trim();
+  const list = getFilteredNotes();
   
-  // Filter by folder
-  let filtered = state.notes;
-  if (state.activeFolder !== 'All Notes') {
-    filtered = filtered.filter(n => n.folder === state.activeFolder);
-  }
-  
-  // Filter by search query
-  if (query) {
-    filtered = filtered.filter(n => 
-      (n.title && n.title.toLowerCase().includes(query)) ||
-      (n.content && n.content.toLowerCase().includes(query))
-    );
-  }
-  
-  // Update header count label
-  if (els.notesCountLabel) {
-    if (state.activeFolder === 'All Notes') {
-      els.notesCountLabel.textContent = state.t('allNotes');
+  // Update header titles and list count label kicker
+  if (els.listKicker) {
+    if (state.activeNotebook) {
+      els.listKicker.textContent = 'Notizbuch';
+      els.notesCountLabel.textContent = state.activeNotebook;
+    } else if (state.activeTag) {
+      els.listKicker.textContent = 'Tag';
+      els.notesCountLabel.textContent = '#' + state.activeTag;
     } else {
-      els.notesCountLabel.textContent = state.activeFolder === 'Notes' ? state.t('defaultFolder') : state.activeFolder;
+      els.listKicker.textContent = 'Notesnook';
+      if (state.activeCategory === 'favorites') {
+        els.notesCountLabel.textContent = 'Favoriten';
+      } else if (state.activeCategory === 'trash') {
+        els.notesCountLabel.textContent = 'Papierkorb';
+      } else {
+        els.notesCountLabel.textContent = state.t('allNotes');
+      }
     }
   }
   
-  if (filtered.length === 0) {
-    els.notesList.innerHTML = `<div style="padding: 20px; font-size:12px; color: var(--text-muted); text-align:center;">${state.t('noNotes')}</div>`;
+  if (list.length === 0) {
+    els.notesList.innerHTML = `
+      <div style="padding: 30px 20px; font-size:12px; color: var(--nn-text-muted); text-align:center;">
+        ${state.t('noNotes')}
+      </div>
+    `;
     return;
   }
-  
+
+  // Segment into Buckets
+  const todayBucket = [];
+  const yesterdayBucket = [];
+  const olderBucket = [];
+
+  const todayDate = new Date();
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+
+  const todayStr = todayDate.toDateString();
+  const yesterdayStr = yesterdayDate.toDateString();
+
+  list.forEach(note => {
+    const d = new Date(note.updated_at_ms);
+    const dStr = d.toDateString();
+    if (dStr === todayStr) {
+      todayBucket.push(note);
+    } else if (dStr === yesterdayStr) {
+      yesterdayBucket.push(note);
+    } else {
+      olderBucket.push(note);
+    }
+  });
+
   let html = '';
-  filtered.forEach(note => {
+
+  function renderCard(note) {
     const active = note.id === state.activeNoteId;
     const dateStr = formatTimestamp(note.updated_at_ms);
-    const snippet = extractSnippet(note.content, note.title);
+    let contentForSnippet = note.content;
+    if (note.is_locked) {
+      contentForSnippet = state.activeNoteDecryptedContent[note.id] || '🔒 Verschlüsselte Notiz';
+    }
+    const snippet = extractSnippet(contentForSnippet, note.title);
     
-    html += `
+    let badgesHtml = '';
+    if (note.notebook) {
+      badgesHtml += `<span class="nn-card-badge notebook-badge">📁 ${escapeHtml(note.notebook)}</span>`;
+    }
+    if (note.tags) {
+      (note.tags || '').split(',').map(x => x.trim()).filter(Boolean).forEach(tg => {
+        badgesHtml += `<span class="nn-card-badge tag-badge">#${escapeHtml(tg)}</span>`;
+      });
+    }
+    
+    return `
       <div class="notes-card ${active ? 'active' : ''}" data-note-id="${note.id}">
-        <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
+        <div class="nn-card-row">
+          <div class="notes-card-title">${escapeHtml(note.title || state.t('untitled'))}</div>
+          <div class="nn-card-icons">
+            ${note.is_favorite ? '<svg class="nn-card-icon starred" style="fill: var(--nn-accent);" viewBox="0 0 24 24"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' : ''}
+            ${note.is_locked ? '<svg class="nn-card-icon locked" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>' : ''}
+          </div>
+        </div>
         <div class="notes-card-meta">
           <span class="notes-card-date">${dateStr}</span>
           <span class="notes-card-snippet">${escapeHtml(snippet)}</span>
         </div>
+        ${badgesHtml ? `<div class="nn-card-badges">${badgesHtml}</div>` : ''}
       </div>
     `;
-  });
-  
+  }
+
+  const lang = state.lang;
+  if (todayBucket.length > 0) {
+    html += `<div class="notes-group-header bo-notes-group-today bo-notes-group-today-notes">${lang === 'en' ? 'Today' : 'Heute'}</div>`;
+    todayBucket.forEach(n => html += renderCard(n));
+  }
+  if (yesterdayBucket.length > 0) {
+    html += `<div class="notes-group-header bo-notes-group-yesterday bo-notes-group-yesterday-notes">${lang === 'en' ? 'Yesterday' : 'Gestern'}</div>`;
+    yesterdayBucket.forEach(n => html += renderCard(n));
+  }
+  if (olderBucket.length > 0) {
+    html += `<div class="notes-group-header bo-notes-group-older bo-notes-group-older-notes">${lang === 'en' ? 'Older' : 'Ältere'}</div>`;
+    olderBucket.forEach(n => html += renderCard(n));
+  }
+
   els.notesList.innerHTML = html;
   
   // Bind note card clicks
@@ -299,65 +855,111 @@ function renderNotesList() {
 function renderEditor() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   
-  // Toggle delete button availability
-  if (els.deleteBtn) {
-    els.deleteBtn.disabled = !note;
-  }
+  // Clean up any dynamic restore banner
+  els.editorWorkspace?.querySelector('.nn-restore-banner')?.remove();
   
-  // Toggle segmented buttons state
-  els.tabs?.forEach(btn => {
-    const tabName = btn.getAttribute('data-tab');
-    btn.setAttribute('aria-pressed', tabName === state.activeTab ? 'true' : 'false');
-  });
-  
-  // Toggle workspace views
-  const panels = els.root.querySelectorAll('.notes-tab-panel');
-  panels.forEach(p => {
-    const panelName = p.getAttribute('data-panel');
-    p.hidden = panelName !== state.activeTab;
-  });
+  if (els.deleteBtn) els.deleteBtn.disabled = !note;
   
   if (!note) {
-    if (els.selectedFolder) els.selectedFolder.textContent = '';
-    if (els.selectedTitle) els.selectedTitle.textContent = state.t('untitled');
-    if (els.editor) els.editor.value = '';
-    if (els.splitEditor) els.splitEditor.value = '';
-    if (els.preview) els.preview.innerHTML = '';
-    if (els.splitPreview) els.splitPreview.innerHTML = '';
+    state.renderedNoteId = '';
+    if (els.noteNotebookLabel) els.noteNotebookLabel.textContent = 'Kein Notizbuch';
+    if (els.noteBadgesContainer) els.noteBadgesContainer.innerHTML = '';
+    if (els.noteDate) els.noteDate.textContent = '';
+    if (els.editor) els.editor.innerHTML = '';
     if (els.words) els.words.textContent = `0 ${state.t('words')}`;
+    if (els.chars) els.chars.textContent = `0 ${state.t('chars')}`;
+    els.starBtn?.classList.remove('active');
+    els.lockNoteBtn?.classList.remove('active');
+    els.noteLockScreen?.setAttribute('hidden', '');
     return;
   }
   
-  if (els.selectedFolder) els.selectedFolder.textContent = note.folder || state.t('defaultFolder');
-  if (els.selectedTitle) els.selectedTitle.textContent = note.title || state.t('untitled');
+  // Update Star & Lock buttons active styling
+  els.starBtn?.classList.toggle('active', !!note.is_favorite);
+  els.lockNoteBtn?.classList.toggle('active', !!note.is_locked);
   
-  // Word count
-  const wordCount = countWords(note.content);
-  if (els.words) els.words.textContent = `${wordCount} ${state.t('words')}`;
+  // Update Notebook selector labels
+  els.noteNotebookLabel.textContent = note.notebook || 'Kein Notizbuch';
   
-  // Render content depending on active tab
-  if (state.activeTab === 'edit') {
-    if (els.editor && els.editor.value !== note.content) {
-      els.editor.value = note.content || '';
+  // Update badges container
+  let badgesHtml = '';
+  if (note.notebook) {
+    badgesHtml += `<span class="nn-card-badge notebook-badge">📁 ${escapeHtml(note.notebook)}</span>`;
+  }
+  if (note.tags) {
+    (note.tags || '').split(',').map(x => x.trim()).filter(Boolean).forEach(tg => {
+      badgesHtml += `<span class="nn-card-badge tag-badge">#${escapeHtml(tg)}</span>`;
+    });
+  }
+  if (els.noteBadgesContainer) {
+    els.noteBadgesContainer.innerHTML = badgesHtml;
+  }
+  
+  // Update dates
+  if (els.noteDate) els.noteDate.textContent = formatFullTimestamp(note.updated_at_ms, state.lang);
+  
+  // Show Restore banner if trashed
+  if (note.is_trashed && els.editorWorkspace) {
+    const banner = document.createElement('div');
+    banner.className = 'nn-restore-banner';
+    banner.style.cssText = 'background: rgba(0, 136, 55, 0.08); border-bottom: 1px solid var(--nn-border); padding: 8px 16px; display: flex; align-items: center; justify-content: space-between; font-size: 12.5px; color: var(--nn-accent); margin-bottom: 10px; border-radius: 4px;';
+    banner.innerHTML = `
+      <span>⚠️ Diese Notiz ist im Papierkorb.</span>
+      <button type="button" data-action="restore-note" style="background: var(--nn-accent); color: white; border: 0; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600;">Wiederherstellen</button>
+    `;
+    els.editorWorkspace.prepend(banner);
+    banner.querySelector('[data-action="restore-note"]')?.addEventListener('click', handleRestoreNoteClick);
+  }
+  
+  // Check Zero-Knowledge locked state
+  if (note.is_locked && !state.activeNoteDecrypted[note.id]) {
+    els.noteLockScreen?.removeAttribute('hidden');
+    if (els.editor) els.editor.innerHTML = '';
+    if (els.words) els.words.textContent = `0 ${state.t('words')}`;
+    if (els.chars) els.chars.textContent = `0 ${state.t('chars')}`;
+  } else {
+    els.noteLockScreen?.setAttribute('hidden', '');
+    
+    let contentToDisplay = normalizeStoredContent(note.content || '');
+    if (note.is_locked) {
+      contentToDisplay = normalizeStoredContent(state.activeNoteDecryptedContent[note.id] || '');
     }
-  } else if (state.activeTab === 'preview') {
-    if (els.preview) {
-      els.preview.innerHTML = markdownToHtml(note.content || '');
+    
+    const shouldSelectEditorEnd = state.renderedNoteId !== note.id;
+    if (state.lastLexicalHtml !== contentToDisplay || shouldSelectEditorEnd) {
+      state.lastLexicalHtml = contentToDisplay;
+      if (state.lexicalEditor) {
+        state.hydratingEditor = true;
+        state.lexicalEditor.update(() => {
+          const parser = new DOMParser();
+          const dom = parser.parseFromString(contentToDisplay, 'text/html');
+          const nodes = Lexical.$generateNodesFromDOM(state.lexicalEditor, dom);
+          const root = Lexical.$getRoot();
+          root.clear();
+          root.append(...nodes);
+          if (shouldSelectEditorEnd) {
+            selectEditableEnd(root);
+          }
+        });
+        state.hydratingEditor = false;
+      }
     }
-  } else if (state.activeTab === 'split') {
-    if (els.splitEditor && els.splitEditor.value !== note.content) {
-      els.splitEditor.value = note.content || '';
-    }
-    if (els.splitPreview) {
-      els.splitPreview.innerHTML = markdownToHtml(note.content || '');
-    }
+    state.renderedNoteId = note.id;
+    
+    // Stats calculation
+    const plainText = getPlainText(contentToDisplay);
+    const wordCount = countWords(plainText);
+    const charCount = plainText.length;
+    const readMin = Math.max(1, Math.ceil(wordCount / 200));
+    
+    if (els.words) els.words.textContent = `${wordCount} ${state.t('words')}`;
+    if (els.chars) els.chars.textContent = `${charCount} ${state.t('chars')}`;
+    if (els.readTime) els.readTime.textContent = `${readMin} ${state.t('readTime')}`;
   }
 }
 
 function selectNote(id) {
   state.activeNoteId = id;
-  // Reset tabs to edit mode upon selection
-  state.activeTab = 'edit';
   scheduleRender();
 }
 
@@ -367,108 +969,173 @@ function handleSearch(e) {
 }
 
 function handleEditorInput(e) {
-  processContentInput(e.target.value);
+  // Lexical handles input automatically via its registerUpdateListener
 }
 
-function handleSplitEditorInput(e) {
-  processContentInput(e.target.value);
-}
-
-function processContentInput(newContent) {
+function processContentInput(newHtml) {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
   
-  // Calculate new title from the first line
+  const plainText = getPlainText(newHtml);
+  
+  // Calculate new title from first line
   let newTitle = '';
-  for (const line of newContent.lines ? newContent.lines() : newContent.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed) {
-      newTitle = trimmed.replace(/^#+\s+/, '').trim();
-      break;
-    }
+  const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
+  if (lines.length > 0) {
+    newTitle = lines[0].replace(/^#+\s+/, '').trim();
   }
   if (!newTitle) {
     newTitle = state.t('untitled');
   }
   
-  // Optimistically update local memory state for high-end instant response
-  note.content = newContent;
+  if (note.is_locked) {
+    state.activeNoteDecryptedContent[note.id] = newHtml;
+  } else {
+    note.content = newHtml;
+  }
+  
   note.title = newTitle;
   note.updated_at_ms = Date.now();
-  
-  // Update header and snippet immediately in UI
-  if (els.selectedTitle) els.selectedTitle.textContent = newTitle;
+  saveToLocalCache();  
+  // Instant UI reflection
   const card = els.notesList?.querySelector(`[data-note-id="${note.id}"]`);
   if (card) {
     const titleEl = card.querySelector('.notes-card-title');
     const snippetEl = card.querySelector('.notes-card-snippet');
     const dateEl = card.querySelector('.notes-card-date');
-    
     if (titleEl) titleEl.textContent = newTitle;
-    if (snippetEl) snippetEl.textContent = extractSnippet(newContent, newTitle);
+    if (snippetEl) snippetEl.textContent = extractSnippet(newHtml, newTitle);
     if (dateEl) dateEl.textContent = formatTimestamp(note.updated_at_ms);
   }
   
-  if (els.words) {
-    els.words.textContent = `${countWords(newContent)} ${state.t('words')}`;
-  }
+  // Stats
+  const wordCount = countWords(plainText);
+  const charCount = plainText.length;
+  const readMin = Math.max(1, Math.ceil(wordCount / 200));
   
-  if (state.activeTab === 'split' && els.splitPreview) {
-    els.splitPreview.innerHTML = markdownToHtml(newContent);
-  }
+  if (els.words) els.words.textContent = `${wordCount} ${state.t('words')}`;
+  if (els.chars) els.chars.textContent = `${charCount} ${state.t('chars')}`;
+  if (els.readTime) els.readTime.textContent = `${readMin} ${state.t('readTime')}`;
   
-  // Debounce the RxDB write-back to server
-  if (els.status) els.status.textContent = state.t('saving');
+  // Syncing display
+  if (els.status) {
+    els.status.innerHTML = `
+      <svg class="nn-sync-icon pulse" style="color: var(--nn-accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
+      <span>${state.t('saving')}</span>
+    `;
+  }
   if (state.saveTimer) clearTimeout(state.saveTimer);
   
   state.saveTimer = setTimeout(() => {
     state.saveTimer = null;
-    commitSave(note.id, newTitle, newContent).catch(err => {
-      console.error('[notes] autosave failed', err);
+    commitSave(note).catch(err => {
+      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+      console.error(`${logPrefix} autosave failed`, err);
       if (els.status) els.status.textContent = 'Save failed';
     });
   }, SAVE_DEBOUNCE_MS);
 }
 
-async function commitSave(noteId, title, content) {
-  const collection = state.ctx.db?.raw?.notes;
-  if (!collection) return;
-  
-  const doc = await collection.findOne(noteId).exec();
-  if (doc) {
-    await doc.patch({
-      title,
-      content,
-      updated_at_ms: Date.now()
-    });
-    if (els.status) els.status.textContent = state.t('saved');
+function normalizeStoredContent(content) {
+  const value = String(content || '');
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('<') || /<\/?[a-z][\s\S]*>/i.test(trimmed)) {
+    return value;
   }
+  const lines = value.replace(/\r\n?/g, '\n').split('\n');
+  return lines.map((line) => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine) return '<p><br></p>';
+    const heading = trimmedLine.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const level = heading[1].length;
+      return `<h${level}>${escapeHtml(heading[2])}</h${level}>`;
+    }
+    return `<p>${escapeHtml(line)}</p>`;
+  }).join('');
 }
-
-async function handleCreateNote() {
-  const collection = state.ctx.db?.raw?.notes;
+async function commitSave(note) {
+  const collection = getCollection();
   if (!collection) return;
-  
-  const folder = state.activeFolder === 'All Notes' ? 'Notes' : state.activeFolder;
-  const newId = generateUUID();
-  const title = state.t('newNote');
-  const content = `# ${state.t('newNote')}\n\n`;
   
   try {
-    await collection.insert({
-      id: newId,
-      title,
-      content,
-      folder,
-      updated_at_ms: Date.now()
-    });
-    
-    // Select the new note
-    state.activeNoteId = newId;
-    state.activeTab = 'edit';
-    await loadNotesFromLocal();
-  } catch (error) {
-    console.error('[notes] failed to create note', error);
+    const doc = await collection.findOne(note.id).exec();
+    if (doc) {
+      let contentToSave = note.content;
+      if (note.is_locked) {
+        const passcode = state.activeNoteDecrypted[note.id];
+        const decrypted = state.activeNoteDecryptedContent[note.id] || '';
+        if (passcode) {
+          const encrypted = await encryptContent(decrypted, passcode);
+          contentToSave = JSON.stringify(encrypted);
+          note.content = contentToSave; // update state note content to match
+        }
+      }
+      
+      await doc.patch({
+        title: note.title,
+        content: contentToSave,
+        notebook: note.notebook || '',
+        tags: note.tags || '',
+        is_favorite: !!note.is_favorite,
+        is_trashed: !!note.is_trashed,
+        is_locked: !!note.is_locked,
+        lock_passcode: note.lock_passcode || '',
+        updated_at_ms: Date.now()
+      });
+      
+      // Update local storage mirror too so it matches
+      saveToLocalCache();
+      
+      if (els.status) {
+        els.status.innerHTML = `
+          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
+          <span>${state.t('saved')}</span>
+        `;
+      }
+    }
+  } catch (err) {
+    console.warn('Background save failed', err);
+  }
+}
+async function handleCreateNote() {
+  const folder = 'Notes';
+  const newId = generateUUID();
+  const title = state.t('newNote');
+  const content = `<h1>${title}</h1><p><br></p>`;
+  
+  const newNote = {
+    id: newId,
+    title,
+    content,
+    folder,
+    notebook: state.activeNotebook || '',
+    tags: state.activeTag || '',
+    is_favorite: state.activeCategory === 'favorites',
+    is_trashed: false,
+    is_locked: false,
+    lock_passcode: '',
+    updated_at_ms: Date.now()
+  };
+  
+  state.notes.unshift(newNote);
+  syncNotebooksAndTags();
+  saveToLocalCache();
+  
+  state.activeNoteId = newId;
+  scheduleRender();
+  window.setTimeout(() => focusEditorAtEnd(), NOTES_RENDER_DEBOUNCE_MS + 20);
+  
+  // Background RxDB insertion
+  const collection = getCollection();
+  if (collection) {
+    try {
+      await collection.insert(newNote);
+    } catch (error) {
+      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+      console.warn(`${logPrefix} background note creation failed`, error);
+    }
   }
 }
 
@@ -476,74 +1143,991 @@ async function handleDeleteNote() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
   
-  const confirmMessage = state.t('deleteConfirm');
-  if (!confirm(confirmMessage)) return;
-  
-  const collection = state.ctx.db?.raw?.notes;
-  if (!collection) return;
-  
-  try {
-    const doc = await collection.findOne(note.id).exec();
-    if (doc) {
-      await doc.remove();
+  if (note.is_trashed) {
+    const confirmMessage = state.t('deleteConfirm');
+    if (!confirm(confirmMessage)) return;
+    
+    state.notes = state.notes.filter(n => n.id !== note.id);
+    saveToLocalCache();
+    
+    const oldId = note.id;
+    state.activeNoteId = '';
+    
+    const list = getFilteredNotes();
+    if (list.length > 0) state.activeNoteId = list[0].id;
+    scheduleRender();
+    
+    const collection = getCollection();
+    if (collection) {
+      try {
+        const doc = await collection.findOne(oldId).exec();
+        if (doc) await doc.remove();
+      } catch (error) {
+        const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+        console.warn(`${logPrefix} failed to remove note`, error);
+      }
     }
+  } else {
+    note.is_trashed = true;
+    note.updated_at_ms = Date.now();
+    saveToLocalCache();
     
     state.activeNoteId = '';
-    await loadNotesFromLocal();
+    const list = getFilteredNotes();
+    if (list.length > 0) state.activeNoteId = list[0].id;
+    scheduleRender();
     
-    // Select another note
-    if (state.notes.length > 0) {
-      selectNote(state.notes[0].id);
-    } else {
-      scheduleRender();
+    const collection = getCollection();
+    if (collection) {
+      try {
+        const doc = await collection.findOne(note.id).exec();
+        if (doc) await doc.patch({ is_trashed: true, updated_at_ms: Date.now() });
+      } catch (error) {
+        const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+        console.warn(`${logPrefix} background trash failed`, error);
+      }
     }
-  } catch (error) {
-    console.error('[notes] failed to delete note', error);
   }
 }
 
-async function handleCreateFolder() {
-  const name = prompt(state.t('newFolderPrompt'));
+async function handleRestoreNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note) return;
+  
+  note.is_trashed = false;
+  note.updated_at_ms = Date.now();
+  saveToLocalCache();
+  
+  scheduleRender();
+  
+  const collection = getCollection();
+  if (collection) {
+    try {
+      const doc = await collection.findOne(note.id).exec();
+      if (doc) await doc.patch({ is_trashed: false, updated_at_ms: Date.now() });
+    } catch (error) {
+      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
+      console.warn(`${logPrefix} background restore failed`, error);
+    }
+  }
+}
+
+// Sidebars & Expander navigations
+function handleToggleNavClick(e) {
+  const header = e.currentTarget;
+  const list = header.nextElementSibling;
+  const arrow = header.querySelector('.nn-nav-arrow');
+  if (list) {
+    const isHidden = list.style.display === 'none';
+    list.style.display = isHidden ? 'flex' : 'none';
+    if (arrow) {
+      arrow.classList.toggle('active', isHidden);
+    }
+  }
+}
+
+async function handleCreateNotebookClick(e) {
+  e.stopPropagation();
+  const name = prompt(state.t('newNotebookPrompt'));
   if (!name || !name.trim()) return;
   
-  const folderName = name.trim();
-  
-  // Set active folder to new folder
-  state.activeFolder = folderName;
-  if (!state.folders.includes(folderName)) {
-    state.folders.push(folderName);
+  const nb = name.trim();
+  if (!state.notebooks.includes(nb)) {
+    state.notebooks.push(nb);
+    syncNotebooksAndTags();
+    saveToLocalCache();
   }
   
-  // Create an initial note inside the new folder to make it persist
-  const collection = state.ctx.db?.raw?.notes;
-  if (collection) {
-    const newId = generateUUID();
-    const title = state.t('newNote');
-    const content = `# ${state.t('newNote')}\n\n`;
-    try {
-      await collection.insert({
-        id: newId,
-        title,
-        content,
-        folder: folderName,
-        updated_at_ms: Date.now()
-      });
-      state.activeNoteId = newId;
-      state.activeTab = 'edit';
-      await loadNotesFromLocal();
-    } catch (e) {
-      console.error(e);
-    }
-  }
+  state.activeCategory = '';
+  state.activeTag = '';
+  state.activeNotebook = nb;
+  await handleCreateNote();
 }
 
-function handleTabClick(e) {
-  const tabName = e.target.getAttribute('data-tab');
-  state.activeTab = tabName;
+async function handleCreateTagClick(e) {
+  e.stopPropagation();
+  const name = prompt(state.t('newTagPrompt'));
+  if (!name || !name.trim()) return;
+  
+  const tg = name.trim();
+  if (!state.tags.includes(tg)) {
+    state.tags.push(tg);
+    syncNotebooksAndTags();
+    saveToLocalCache();
+  }
+  
+  state.activeCategory = '';
+  state.activeNotebook = '';
+  state.activeTag = tg;
+  await handleCreateNote();
+}
+
+function handleCategoryClick(e) {
+  const cat = e.currentTarget.getAttribute('data-nav-category');
+  state.activeCategory = cat;
+  state.activeNotebook = '';
+  state.activeTag = '';
+  
+  const list = getFilteredNotes();
+  if (list.length > 0) selectNote(list[0].id);
+  else selectNote('');
   scheduleRender();
 }
 
-/* Helper functions */
+// Keypads and Zero-Knowledge Lock overlays
+function handlePinPadClick(e) {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  
+  if (btn.hasAttribute('data-pin')) {
+    const digit = btn.getAttribute('data-pin');
+    if (state.pinBuffer.length < 4) {
+      state.pinBuffer += digit;
+      els.pinDots?.forEach((dot, index) => {
+        dot.classList.toggle('filled', index < state.pinBuffer.length);
+      });
+      
+      if (state.pinBuffer.length === 4) {
+        setTimeout(submitPin, 200);
+      }
+    }
+  } else if (btn.getAttribute('data-action') === 'pin-clear') {
+    state.pinBuffer = '';
+    els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
+  } else if (btn.getAttribute('data-action') === 'pin-ok') {
+    submitPin();
+  }
+}
+
+function submitPin() {
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+  if (state.pinBuffer === '1234') {
+    state.appLocked = false;
+    localStorage.setItem(`${cachePrefix}.appLocked`, 'false');
+    els.clientLockScreen?.setAttribute('hidden', '');
+    state.pinBuffer = '';
+    els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
+  } else {
+    els.pinDots?.forEach(dot => {
+      dot.classList.add('error');
+    });
+    state.pinBuffer = '';
+    setTimeout(() => {
+      els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
+    }, 600);
+  }
+}
+
+function handleLockAppClick() {
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+  state.appLocked = true;
+  localStorage.setItem(`${cachePrefix}.appLocked`, 'true');
+  state.pinBuffer = '';
+  els.pinDots?.forEach(dot => dot.classList.remove('filled', 'error'));
+  els.clientLockScreen?.removeAttribute('hidden');
+}
+// Locked Note Decrypter
+async function handleDecryptNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note) return;
+  
+  const pw = els.notePasscodeInput?.value || '';
+  try {
+    const encryptedData = JSON.parse(note.content);
+    const decrypted = await decryptContent(encryptedData, pw);
+    
+    state.activeNoteDecrypted[note.id] = pw;
+    state.activeNoteDecryptedContent[note.id] = decrypted;
+    if (els.notePasscodeInput) els.notePasscodeInput.value = '';
+    renderEditor();
+  } catch (error) {
+    console.error('Decryption failed', error);
+    if (els.notePasscodeInput) {
+      els.notePasscodeInput.style.borderColor = '#d32f2f';
+      els.notePasscodeInput.style.boxShadow = '0 0 0 3px rgba(211,47,47,0.2)';
+      setTimeout(() => {
+        els.notePasscodeInput.style.borderColor = '';
+        els.notePasscodeInput.style.boxShadow = '';
+      }, 800);
+    }
+  }
+}
+
+function handleDecryptNoteKeydown(e) {
+  if (e.key === 'Enter') {
+    handleDecryptNoteClick();
+  }
+}
+
+// Editor actions & Meta dropdown bindings
+function handleStarNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note) return;
+  
+  note.is_favorite = !note.is_favorite;
+  note.updated_at_ms = Date.now();
+  saveToLocalCache();
+  
+  scheduleRender();
+  commitSave(note);
+}
+
+async function handleLockNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note) return;
+  
+  if (note.is_locked) {
+    let plainText = note.content;
+    const passcode = state.activeNoteDecrypted[note.id];
+    if (passcode) {
+      plainText = state.activeNoteDecryptedContent[note.id] || note.content;
+    }
+    
+    note.is_locked = false;
+    note.lock_passcode = '';
+    note.content = plainText;
+    delete state.activeNoteDecrypted[note.id];
+    delete state.activeNoteDecryptedContent[note.id];
+    
+    saveToLocalCache();
+    scheduleRender();
+    await commitSave(note);
+  } else {
+    const pw = prompt('Gebe ein Passwort für diese Notiz ein (Standard: 1234):') || '1234';
+    const plainText = note.content;
+    try {
+      const encrypted = await encryptContent(plainText, pw);
+      note.is_locked = true;
+      note.lock_passcode = pw;
+      note.content = JSON.stringify(encrypted);
+      
+      state.activeNoteDecrypted[note.id] = pw;
+      state.activeNoteDecryptedContent[note.id] = plainText;
+      
+      saveToLocalCache();
+      scheduleRender();
+      await commitSave(note);
+    } catch (err) {
+      console.error('Encryption failed', err);
+      alert('Verschlüsselung fehlgeschlagen!');
+    }
+  }
+}
+// Notebook select dropdown triggers
+function handleNotebookSelectBtnClick(e) {
+  e.stopPropagation();
+  const wasHidden = els.notebookDropdown.hidden;
+  closeAllDropdowns();
+  els.notebookDropdown.hidden = !wasHidden;
+  
+  if (!els.notebookDropdown.hidden) {
+    const note = state.notes.find(n => n.id === state.activeNoteId);
+    let html = `
+      <button type="button" class="nn-dropdown-item ${!note?.notebook ? 'active' : ''}" data-select-notebook="">
+        <span>Kein Notizbuch</span>
+      </button>
+      <div class="nn-popover-divider"></div>
+    `;
+    state.notebooks.forEach(nb => {
+      const active = note?.notebook === nb;
+      html += `
+        <button type="button" class="nn-dropdown-item ${active ? 'active' : ''}" data-select-notebook="${escapeHtml(nb)}">
+          <span>📁 ${escapeHtml(nb)}</span>
+        </button>
+      `;
+    });
+    els.notebookDropdown.innerHTML = html;
+    
+    els.notebookDropdown.querySelectorAll('[data-select-notebook]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!note) return;
+        const selected = btn.getAttribute('data-select-notebook');
+        note.notebook = selected;
+        note.updated_at_ms = Date.now();
+        saveToLocalCache();
+        scheduleRender();
+        commitSave(note);
+      });
+    });
+  }
+}
+
+// Tags select dropdown triggers
+function handleTagsSelectBtnClick(e) {
+  e.stopPropagation();
+  const wasHidden = els.tagsDropdown.hidden;
+  closeAllDropdowns();
+  els.tagsDropdown.hidden = !wasHidden;
+  
+  if (!els.tagsDropdown.hidden) {
+    const note = state.notes.find(n => n.id === state.activeNoteId);
+    const assignedTags = (note?.tags || '').split(',').map(x => x.trim()).filter(Boolean);
+    
+    if (state.tags.length === 0) {
+      els.tagsDropdown.innerHTML = `
+        <div style="padding: 10px 14px; font-size:11.5px; color: var(--nn-text-muted);">
+          Keine Tags erstellt
+        </div>
+      `;
+      return;
+    }
+    
+    let html = '';
+    state.tags.forEach(tg => {
+      const isChecked = assignedTags.includes(tg);
+      html += `
+        <label class="nn-dropdown-item" style="cursor:pointer; display:flex; align-items:center; gap:8px;">
+          <input type="checkbox" data-note-tag-check="${escapeHtml(tg)}" ${isChecked ? 'checked' : ''} style="accent-color: var(--nn-accent);" />
+          <span>🏷️ ${escapeHtml(tg)}</span>
+        </label>
+      `;
+    });
+    els.tagsDropdown.innerHTML = html;
+    
+    els.tagsDropdown.querySelectorAll('[data-note-tag-check]').forEach(cb => {
+      cb.addEventListener('change', () => {
+        if (!note) return;
+        const tg = cb.getAttribute('data-note-tag-check');
+        const assigned = (note.tags || '').split(',').map(x => x.trim()).filter(Boolean);
+        
+        let newAssigned;
+        if (cb.checked) {
+          newAssigned = Array.from(new Set([...assigned, tg]));
+        } else {
+          newAssigned = assigned.filter(x => x !== tg);
+        }
+        
+        note.tags = newAssigned.join(',');
+        note.updated_at_ms = Date.now();
+        saveToLocalCache();
+        scheduleRender();
+        commitSave(note);
+      });
+    });
+  }
+}
+
+// Popover sort & filters
+function handleFilterTriggerClick(e) {
+  e.stopPropagation();
+  const wasHidden = els.filterPopover.hidden;
+  closeAllDropdowns();
+  els.filterPopover.hidden = !wasHidden;
+}
+
+function handleSortClick(e) {
+  state.sortMode = e.currentTarget.getAttribute('data-sort');
+  els.filterPopover.querySelectorAll('[data-sort]').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('data-sort') === state.sortMode);
+  });
+  scheduleRender();
+}
+
+function handleViewModeClick(e) {
+  state.viewMode = e.currentTarget.getAttribute('data-view-mode');
+  els.filterPopover.querySelectorAll('[data-view-mode]').forEach(el => {
+    el.classList.toggle('active', el.getAttribute('data-view-mode') === state.viewMode);
+  });
+  els.notesList?.classList.toggle('nn-compact-view', state.viewMode === 'compact');
+}
+
+// Rich Text format dropdown
+function handleFormatBtnClick(e) {
+  e.stopPropagation();
+  const wasHidden = els.headersDropdown.hidden;
+  closeAllDropdowns();
+  els.headersDropdown.hidden = !wasHidden;
+}
+
+function syncEditorFromDom() {
+  if (state.lexicalEditor && els.editor) {
+    const html = els.editor.innerHTML;
+    state.lastLexicalHtml = html;
+    state.lexicalEditor.update(() => {
+      const parser = new DOMParser();
+      const dom = parser.parseFromString(html, 'text/html');
+      const nodes = Lexical.$generateNodesFromDOM(state.lexicalEditor, dom);
+      const root = Lexical.$getRoot();
+      root.clear();
+      root.append(...nodes);
+    });
+    processContentInput(html);
+  }
+}
+
+function handleFormatCommandClick(e) {
+  e.stopPropagation();
+  const btn = e.currentTarget;
+  const cmd = btn.getAttribute('data-format-cmd');
+  const val = btn.getAttribute('data-val') || null;
+  
+  if (state.lexicalEditor) {
+    els.editor?.focus();
+    if (cmd === 'bold' || cmd === 'italic' || cmd === 'underline' || cmd === 'strikeThrough') {
+      const type = cmd === 'strikeThrough' ? 'strikethrough' : cmd.toLowerCase();
+      state.lexicalEditor.dispatchCommand(Lexical.FORMAT_TEXT_COMMAND, type);
+    } else if (cmd === 'formatBlock') {
+      state.lexicalEditor.update(() => {
+        const selection = Lexical.$getSelection();
+        if (Lexical.$isRangeSelection(selection)) {
+          if (val === 'h1' || val === 'h2' || val === 'h3') {
+            Lexical.$setBlocksType(selection, () => Lexical.$createHeadingNode(val));
+          } else if (val === 'p') {
+            Lexical.$setBlocksType(selection, () => Lexical.$createParagraphNode());
+          }
+        }
+      });
+    } else if (cmd === 'insertHorizontalRule') {
+      state.lexicalEditor.update(() => {
+        const selection = Lexical.$getSelection();
+        if (Lexical.$isRangeSelection(selection)) {
+          const hr = document.createElement('hr');
+          const nodes = Lexical.$generateNodesFromDOM(state.lexicalEditor, hr);
+          selection.insertNodes(nodes);
+        }
+      });
+    } else if (cmd === 'justifyLeft' || cmd === 'justifyCenter') {
+      const type = cmd === 'justifyLeft' ? 'left' : 'center';
+      state.lexicalEditor.dispatchCommand(Lexical.FORMAT_ELEMENT_COMMAND, type);
+    } else if (cmd === 'insertHTML') {
+      state.lexicalEditor.update(() => {
+        const selection = Lexical.$getSelection();
+        if (Lexical.$isRangeSelection(selection)) {
+          const temp = document.createElement('div');
+          temp.innerHTML = val;
+          const nodes = Lexical.$generateNodesFromDOM(state.lexicalEditor, temp);
+          selection.insertNodes(nodes);
+        }
+      });
+    } else if (cmd === 'hiliteColor') {
+      state.lexicalEditor.update(() => {
+        const selection = Lexical.$getSelection();
+        if (Lexical.$isRangeSelection(selection)) {
+          Lexical.$patchStyleText(selection, { 'background-color': val });
+        }
+      });
+    } else {
+      // Fallback
+      document.execCommand(cmd, false, val);
+      syncEditorFromDom();
+    }
+  }
+  closeAllDropdowns();
+}
+
+// Inserters
+function handleChecklistBtnClick() {
+  if (state.lexicalEditor) {
+    state.lexicalEditor.update(() => {
+      let selection = Lexical.$getSelection();
+      const node = new CustomHTMLNode(
+        `<input type="checkbox" class="notes-todo-checkbox" contenteditable="false"><span class="notes-todo-text">Checklisteneintrag</span>`,
+        'div',
+        'notes-todo-row'
+      );
+      
+      try {
+        const anchorNode = selection?.anchor?.getNode();
+        if (Lexical.$isRangeSelection(selection) && anchorNode && anchorNode.getParent() !== null) {
+          selection.insertNodes([node]);
+          const p = Lexical.$createParagraphNode();
+          selection.insertNodes([p]);
+        } else {
+          Lexical.$getRoot().append(node);
+          const p = Lexical.$createParagraphNode();
+          Lexical.$getRoot().append(p);
+        }
+      } catch (err) {
+        console.warn('Checklist insert fallback triggered:', err);
+        Lexical.$getRoot().append(node);
+        const p = Lexical.$createParagraphNode();
+        Lexical.$getRoot().append(p);
+      }
+    });
+  }
+}
+
+function handleTableBtnClick() {
+  if (state.lexicalEditor) {
+    state.lexicalEditor.update(() => {
+      let selection = Lexical.$getSelection();
+      const node = new CustomHTMLNode(
+        `<tbody>
+          <tr>
+            <td contenteditable="true">Spalte 1</td>
+            <td contenteditable="true">Spalte 2</td>
+          </tr>
+          <tr>
+            <td contenteditable="true">Inhalt 1</td>
+            <td contenteditable="true">Inhalt 2</td>
+          </tr>
+        </tbody>`,
+        'table',
+        'notes-table'
+      );
+      
+      try {
+        const anchorNode = selection?.anchor?.getNode();
+        if (Lexical.$isRangeSelection(selection) && anchorNode && anchorNode.getParent() !== null) {
+          selection.insertNodes([node]);
+          const p = Lexical.$createParagraphNode();
+          selection.insertNodes([p]);
+        } else {
+          Lexical.$getRoot().append(node);
+          const p = Lexical.$createParagraphNode();
+          Lexical.$getRoot().append(p);
+        }
+      } catch (err) {
+        console.warn('Table insert fallback triggered:', err);
+        Lexical.$getRoot().append(node);
+        const p = Lexical.$createParagraphNode();
+        Lexical.$getRoot().append(p);
+      }
+    });
+  }
+}
+
+function handleCodeblockBtnClick() {
+  if (state.lexicalEditor) {
+    state.lexicalEditor.update(() => {
+      let selection = Lexical.$getSelection();
+      const node = new CustomHTMLNode(
+        `<code>// Monospace Code Here...</code>`,
+        'pre',
+        'nn-code-block'
+      );
+      
+      try {
+        const anchorNode = selection?.anchor?.getNode();
+        if (Lexical.$isRangeSelection(selection) && anchorNode && anchorNode.getParent() !== null) {
+          selection.insertNodes([node]);
+        } else {
+          Lexical.$getRoot().append(node);
+        }
+      } catch (err) {
+        console.warn('Codeblock insert fallback triggered:', err);
+        Lexical.$getRoot().append(node);
+      }
+    });
+  }
+}
+
+function handleFormatCalloutsClick(e) {
+  e.stopPropagation();
+  const wasHidden = els.calloutsDropdown.hidden;
+  closeAllDropdowns();
+  els.calloutsDropdown.hidden = !wasHidden;
+}
+
+function handleCalloutCommandClick(e) {
+  const type = e.currentTarget.getAttribute('data-callout-type');
+  let emoji = '💡', label = 'INFO';
+  if (type === 'warning') { emoji = '⚠️'; label = 'WARNUNG'; }
+  else if (type === 'tip') { emoji = '❇️'; label = 'TIPP'; }
+  else if (type === 'danger') { emoji = '🚨'; label = 'GEFAHR'; }
+  
+  if (state.lexicalEditor) {
+    state.lexicalEditor.update(() => {
+      let selection = Lexical.$getSelection();
+      const node = new CustomHTMLNode(
+        `<span class="callout-icon">${emoji}</span>
+        <div class="callout-content" contenteditable="true">
+          <strong>${label}</strong><br>Schreibe hier...
+        </div>`,
+        'div',
+        `callout callout-${type}`
+      );
+      
+      try {
+        const anchorNode = selection?.anchor?.getNode();
+        if (Lexical.$isRangeSelection(selection) && anchorNode && anchorNode.getParent() !== null) {
+          selection.insertNodes([node]);
+        } else {
+          Lexical.$getRoot().append(node);
+        }
+      } catch (err) {
+        console.warn('Callout insert fallback triggered:', err);
+        Lexical.$getRoot().append(node);
+      }
+    });
+  }
+  closeAllDropdowns();
+}
+
+function handleTimestampBtnClick() {
+  if (state.lexicalEditor) {
+    state.lexicalEditor.update(() => {
+      let selection = Lexical.$getSelection();
+      const timeStr = new Date().toLocaleString();
+      const textNode = Lexical.$createTextNode(timeStr);
+      
+      try {
+        const anchorNode = selection?.anchor?.getNode();
+        if (Lexical.$isRangeSelection(selection) && anchorNode && anchorNode.getParent() !== null) {
+          selection.insertNodes([textNode]);
+        } else {
+          const root = Lexical.$getRoot();
+          const lastChild = root.getLastChild();
+          if (lastChild && lastChild.getType() === 'paragraph') {
+            lastChild.append(textNode);
+          } else {
+            const p = Lexical.$createParagraphNode();
+            p.append(textNode);
+            root.append(p);
+          }
+        }
+      } catch (err) {
+        console.warn('Timestamp insert fallback triggered:', err);
+        const root = Lexical.$getRoot();
+        const lastChild = root.getLastChild();
+        if (lastChild && lastChild.getType() === 'paragraph') {
+          lastChild.append(textNode);
+        } else {
+          const p = Lexical.$createParagraphNode();
+          p.append(textNode);
+          root.append(p);
+        }
+      }
+    });
+  }
+}
+
+function handleGlobalClick(e) {
+  if (e.target.closest('.nn-meta-select-wrap') || 
+      e.target.closest('.nn-format-wrapper') || 
+      e.target.closest('.nn-filter-trigger') || 
+      e.target.closest('[data-action="toggle-filter"]')) {
+    return;
+  }
+  closeAllDropdowns();
+}
+
+function closeAllDropdowns() {
+  if (els.notebookDropdown) els.notebookDropdown.hidden = true;
+  if (els.tagsDropdown) els.tagsDropdown.hidden = true;
+  if (els.filterPopover) els.filterPopover.hidden = true;
+  if (els.headersDropdown) els.headersDropdown.hidden = true;
+  if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
+}
+
+function handleEditorCheckboxClick(e) {
+  if (e.target.classList.contains('notes-todo-checkbox')) {
+    const cb = e.target;
+    if (cb.checked) {
+      cb.setAttribute('checked', 'checked');
+    } else {
+      cb.removeAttribute('checked');
+    }
+    syncEditorFromDom();
+  }
+}
+
+function handleEditorClick() {
+  window.setTimeout(() => {
+    const selection = window.getSelection();
+    if (!selection || String(selection) || !state.activeNoteId) return;
+    focusEditorAtEnd();
+  }, 0);
+}
+
+function focusEditorAtEnd() {
+  if (!state.lexicalEditor || !els.editor) return;
+  state.lexicalEditor.update(() => {
+    selectEditableEnd(Lexical.$getRoot());
+  });
+  state.lexicalEditor.getRootElement()?.focus({ preventScroll: true });
+}
+
+function selectEditableEnd(root) {
+  const lastChild = root.getLastChild?.();
+  if (lastChild?.selectEnd) {
+    lastChild.selectEnd();
+    return;
+  }
+  root.selectEnd();
+}
+
+function handleEditorKeydown(e) {
+  if (!els.editor) return;
+  
+  const selection = window.getSelection();
+  if (!selection.rangeCount) return;
+  
+  const todoRow = getActiveTodoRow();
+  const range = selection.getRangeAt(0);
+  
+  if (todoRow) {
+    const textNode = todoRow.querySelector('.notes-todo-text');
+    if (!textNode) return;
+    
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const isEmpty = !textNode.textContent.trim();
+      if (isEmpty) {
+        // Convert to standard paragraph
+        const p = document.createElement('p');
+        p.innerHTML = '<br>';
+        todoRow.parentNode.replaceChild(p, todoRow);
+        
+        const newRange = document.createRange();
+        newRange.selectNodeContents(p);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      } else {
+        // Create a new range from cursor to end of textNode
+        const endRange = document.createRange();
+        endRange.setStart(range.endContainer, range.endOffset);
+        endRange.setEndAfter(textNode.lastChild || textNode);
+        
+        // Extract trailing content
+        const trailingFragment = endRange.extractContents();
+        
+        // Create new todo row
+        const newRow = document.createElement('div');
+        newRow.className = 'notes-todo-row';
+        
+        const currentIndent = Array.from(todoRow.classList).find(c => c.startsWith('indent-'));
+        if (currentIndent) {
+          newRow.classList.add(currentIndent);
+        }
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.className = 'notes-todo-checkbox';
+        checkbox.setAttribute('contenteditable', 'false');
+        newRow.appendChild(checkbox);
+        
+        const newText = document.createElement('span');
+        newText.className = 'notes-todo-text';
+        newText.appendChild(trailingFragment);
+        
+        if (!newText.textContent.trim()) {
+          newText.innerHTML = '<br>';
+        }
+        newRow.appendChild(newText);
+        
+        todoRow.parentNode.insertBefore(newRow, todoRow.nextSibling);
+        
+        const newRange = document.createRange();
+        newRange.selectNodeContents(newText);
+        newRange.collapse(true);
+        selection.removeAllRanges();
+        selection.addRange(newRange);
+      }
+      syncEditorFromDom();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      const currentIndent = Array.from(todoRow.classList).find(c => c.startsWith('indent-'));
+      if (e.shiftKey) {
+        // Outdent
+        if (currentIndent === 'indent-3') {
+          todoRow.classList.remove('indent-3');
+          todoRow.classList.add('indent-2');
+        } else if (currentIndent === 'indent-2') {
+          todoRow.classList.remove('indent-2');
+          todoRow.classList.add('indent-1');
+        } else if (currentIndent === 'indent-1') {
+          todoRow.classList.remove('indent-1');
+        }
+      } else {
+        // Indent
+        if (!currentIndent) {
+          todoRow.classList.add('indent-1');
+        } else if (currentIndent === 'indent-1') {
+          todoRow.classList.remove('indent-1');
+          todoRow.classList.add('indent-2');
+        } else if (currentIndent === 'indent-2') {
+          todoRow.classList.remove('indent-2');
+          todoRow.classList.add('indent-3');
+        }
+      }
+      syncEditorFromDom();
+    } else if (e.key === 'Backspace') {
+      const isAtStart = isAtStartOfNode(textNode, range);
+      if (isAtStart) {
+        e.preventDefault();
+        const currentIndent = Array.from(todoRow.classList).find(c => c.startsWith('indent-'));
+        if (currentIndent) {
+          // Outdent
+          if (currentIndent === 'indent-3') {
+            todoRow.classList.remove('indent-3');
+            todoRow.classList.add('indent-2');
+          } else if (currentIndent === 'indent-2') {
+            todoRow.classList.remove('indent-2');
+            todoRow.classList.add('indent-1');
+          } else if (currentIndent === 'indent-1') {
+            todoRow.classList.remove('indent-1');
+          }
+        } else {
+          // Convert to standard paragraph
+          const p = document.createElement('p');
+          p.innerHTML = textNode.innerHTML || '<br>';
+          todoRow.parentNode.replaceChild(p, todoRow);
+          
+          const newRange = document.createRange();
+          newRange.selectNodeContents(p);
+          newRange.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+        }
+        syncEditorFromDom();
+      }
+    }
+  } else {
+    // Check if we are inside a heading block to split or start new standard paragraph on Enter
+    const activeBlock = getActiveBlockElement();
+    if (activeBlock && /^(H[1-6])$/i.test(activeBlock.nodeName)) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const isAtEnd = isAtEndOfNode(activeBlock, range);
+        if (isAtEnd) {
+          const p = document.createElement('p');
+          p.innerHTML = '<br>';
+          activeBlock.parentNode.insertBefore(p, activeBlock.nextSibling);
+          
+          const newRange = document.createRange();
+          newRange.selectNodeContents(p);
+          newRange.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+        } else {
+          // Split block
+          const postRange = document.createRange();
+          postRange.setStart(range.endContainer, range.endOffset);
+          postRange.setEndAfter(activeBlock.lastChild || activeBlock);
+          const trailingFragment = postRange.extractContents();
+          
+          const p = document.createElement('p');
+          p.appendChild(trailingFragment);
+          if (!p.textContent.trim()) {
+            p.innerHTML = '<br>';
+          }
+          activeBlock.parentNode.insertBefore(p, activeBlock.nextSibling);
+          
+          const newRange = document.createRange();
+          newRange.selectNodeContents(p);
+          newRange.collapse(true);
+          selection.removeAllRanges();
+          selection.addRange(newRange);
+        }
+        syncEditorFromDom();
+      }
+    }
+  }
+}
+
+function getActiveTodoRow() {
+  const selection = window.getSelection();
+  if (!selection.rangeCount) return null;
+  let node = selection.anchorNode;
+  while (node && node !== els.editor) {
+    if (node.nodeType === Node.ELEMENT_NODE && node.classList.contains('notes-todo-row')) {
+      return node;
+    }
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function getActiveBlockElement() {
+  const selection = window.getSelection();
+  if (!selection.rangeCount) return null;
+  let node = selection.anchorNode;
+  while (node && node !== els.editor) {
+    if (node.nodeType === Node.ELEMENT_NODE && /^(H[1-6]|P|DIV|BLOCKQUOTE)$/i.test(node.nodeName)) {
+      return node;
+    }
+    node = node.parentNode;
+  }
+  return null;
+}
+
+function isAtStartOfNode(node, selectionRange) {
+  try {
+    const preRange = document.createRange();
+    preRange.setStart(node, 0);
+    preRange.setEnd(selectionRange.startContainer, selectionRange.startOffset);
+    return preRange.toString().length === 0;
+  } catch (err) {
+    return false;
+  }
+}
+
+function isAtEndOfNode(node, selectionRange) {
+  try {
+    const postRange = document.createRange();
+    postRange.setStart(selectionRange.endContainer, selectionRange.endOffset);
+    postRange.setEnd(node, node.childNodes.length);
+    return postRange.toString().length === 0;
+  } catch (err) {
+    return false;
+  }
+}
+async function deriveKey(passcode, salt) {
+  const encoder = new TextEncoder();
+  const baseKey = await window.crypto.subtle.importKey(
+    'raw',
+    encoder.encode(passcode),
+    'PBKDF2',
+    false,
+    ['deriveKey']
+  );
+  
+  return window.crypto.subtle.deriveKey(
+    {
+      name: 'PBKDF2',
+      salt: salt,
+      iterations: 100000,
+      hash: 'SHA-256'
+    },
+    baseKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+async function encryptContent(content, passcode) {
+  const encoder = new TextEncoder();
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  
+  const key = await deriveKey(passcode, salt);
+  const encrypted = await window.crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv },
+    key,
+    encoder.encode(content)
+  );
+  
+  return {
+    cipherText: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
+    salt: btoa(String.fromCharCode(...salt)),
+    iv: btoa(String.fromCharCode(...iv))
+  };
+}
+
+async function decryptContent(encryptedData, passcode) {
+  try {
+    const salt = new Uint8Array(atob(encryptedData.salt).split('').map(c => c.charCodeAt(0)));
+    const iv = new Uint8Array(atob(encryptedData.iv).split('').map(c => c.charCodeAt(0)));
+    const cipher = new Uint8Array(atob(encryptedData.cipherText).split('').map(c => c.charCodeAt(0)));
+    
+    const key = await deriveKey(passcode, salt);
+    const decrypted = await window.crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv },
+      key,
+      cipher
+    );
+    
+    return new TextDecoder().decode(decrypted);
+  } catch (e) {
+    console.error('Decryption failed', e);
+    throw new Error('Ungültiges Passwort oder beschädigte Notiz');
+  }
+}
+
+/* Helpers */
 
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -573,26 +2157,51 @@ function formatTimestamp(ms) {
   return date.toLocaleDateString(undefined, { day: '2-digit', month: '2-digit', year: '2-digit' });
 }
 
-function extractSnippet(content, title) {
-  if (!content) return '';
-  const lines = content.split('\n');
+function formatFullTimestamp(ms, lang) {
+  if (!ms) return '';
+  const date = new Date(ms);
+  const options = { day: 'numeric', month: 'long', year: 'numeric' };
+  const dateStr = date.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', options);
+  const timeStr = date.toLocaleTimeString(lang === 'en' ? 'en-US' : 'de-DE', { hour: '2-digit', minute: '2-digit' });
+  if (lang === 'en') {
+    return `${dateStr} at ${timeStr}`;
+  } else {
+    return `${dateStr} um ${timeStr}`;
+  }
+}
+
+function getPlainText(html) {
+  if (!html) return '';
+  let processed = html
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<\/li>/gi, '\n')
+    .replace(/<\/h[1-6]>/gi, '\n')
+    .replace(/<\/td>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+  const tmp = document.createElement('div');
+  tmp.innerHTML = processed;
+  return tmp.textContent || tmp.innerText || '';
+}
+
+function extractSnippet(html, title) {
+  if (html && html.trim().startsWith('{') && html.trim().endsWith('}')) {
+    return '🔒 Verschlüsselte Notiz';
+  }
+  const plainText = getPlainText(html);
+  if (!plainText) return '';
+  const lines = plainText.split('\n').map(l => l.trim()).filter(Boolean);
   
-  // Skip first line if it's the title
   let startIndex = 0;
   for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    if (trimmed) {
-      const stripped = trimmed.replace(/^#+\s+/, '').trim();
-      if (stripped === title) {
-        startIndex = i + 1;
-      }
+    if (lines[i] === title) {
+      startIndex = i + 1;
       break;
     }
   }
   
   for (let i = startIndex; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (line) return line.replace(/^#+\s+/, '').slice(0, 80);
+    if (lines[i]) return lines[i].slice(0, 80);
   }
   
   return '';
@@ -601,83 +2210,6 @@ function extractSnippet(content, title) {
 function countWords(str) {
   if (!str) return 0;
   return str.trim().split(/\s+/).filter(Boolean).length;
-}
-
-function markdownToHtml(markdown) {
-  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
-  const html = [];
-  let paragraph = [];
-  let list = false;
-  let code = null;
-  
-  const flushParagraph = () => {
-    if (paragraph.length) {
-      html.push(`<p>${inlineMarkdown(paragraph.join(' '))}</p>`);
-      paragraph = [];
-    }
-  };
-  const closeList = () => {
-    if (list) {
-      html.push('</ul>');
-      list = false;
-    }
-  };
-  
-  for (const line of lines) {
-    if (line.startsWith('```')) {
-      flushParagraph();
-      closeList();
-      if (code) {
-        html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-        code = null;
-      } else {
-        code = [];
-      }
-      continue;
-    }
-    
-    if (code) {
-      code.push(line);
-      continue;
-    }
-    
-    if (!line.trim()) {
-      flushParagraph();
-      closeList();
-      continue;
-    }
-    
-    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
-    if (heading) {
-      flushParagraph();
-      closeList();
-      html.push(`<h${heading[1].length}>${inlineMarkdown(heading[2])}</h${heading[1].length}>`);
-      continue;
-    }
-    
-    const bullet = /^[-*]\s+(.+)$/.exec(line);
-    if (bullet) {
-      flushParagraph();
-      if (!list) {
-        html.push('<ul>');
-        list = true;
-      }
-      html.push(`<li>${inlineMarkdown(bullet[1])}</li>`);
-      continue;
-    }
-    
-    paragraph.push(line.trim());
-  }
-  
-  flushParagraph();
-  closeList();
-  return html.join('\n');
-}
-
-function inlineMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/`(.+?)`/g, '<code>$1</code>');
 }
 
 function escapeHtml(value) {
@@ -691,88 +2223,365 @@ function escapeHtml(value) {
 }
 
 function setupResizers(host) {
-  const leftPane = host.querySelector('.notes-left');
-  const rightPane = host.querySelector('.notes-right');
   const leftResizer = host.querySelector('[data-resizer="left"]');
   const rightResizer = host.querySelector('[data-resizer="right"]');
+  const containerEl = host.querySelector('[data-notes-root]') || host;
   
-  if (!leftPane || !rightPane || !leftResizer || !rightResizer) return () => {};
+  const cleanups = [];
+  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
   
-  // Load saved widths
-  let leftWidth = parseInt(localStorage.getItem('ctox.notes.layout.leftWidth') || '380', 10);
-  let rightWidth = parseInt(localStorage.getItem('ctox.notes.layout.rightWidth') || '240', 10);
+  if (leftResizer) {
+    const resizerL = new CtoxResizer({
+      resizerEl: leftResizer,
+      containerEl,
+      cssVar: '--notes-left-width',
+      side: 'left',
+      minWidth: 160,
+      maxWidth: 350,
+      onResize: (width) => localStorage.setItem(`${cachePrefix}.layout.leftWidth`, width)
+    });
+    cleanups.push(() => resizerL.destroy());
+  }
   
-  // Apply initial sizes
-  const applyWidths = () => {
-    leftPane.style.width = `${leftWidth}px`;
-    leftPane.style.flex = `0 0 ${leftWidth}px`;
-    rightPane.style.width = `${rightWidth}px`;
-    rightPane.style.flex = `0 0 ${rightWidth}px`;
-  };
+  if (rightResizer) {
+    const resizerR = new CtoxResizer({
+      resizerEl: rightResizer,
+      containerEl,
+      cssVar: '--notes-right-width',
+      side: 'left',
+      minWidth: 220,
+      maxWidth: 450,
+      onResize: (width) => localStorage.setItem(`${cachePrefix}.layout.rightWidth`, width)
+    });
+    cleanups.push(() => resizerR.destroy());
+  }
   
-  applyWidths();
-  
-  let activeResizer = null;
-  let startX = 0;
-  let startWidth = 0;
-  
-  const onPointerDown = (e) => {
-    activeResizer = e.currentTarget.getAttribute('data-resizer');
-    startX = e.clientX;
-    if (activeResizer === 'left') {
-      startWidth = leftWidth;
-      leftResizer.classList.add('is-dragging');
-    } else {
-      startWidth = rightWidth;
-      rightResizer.classList.add('is-dragging');
-    }
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-  };
-  
-  const onPointerMove = (e) => {
-    if (!activeResizer) return;
-    const deltaX = e.clientX - startX;
-    
-    if (activeResizer === 'left') {
-      const newWidth = Math.min(500, Math.max(280, startWidth + deltaX));
-      leftWidth = newWidth;
-    } else {
-      const newWidth = Math.min(320, Math.max(180, startWidth - deltaX));
-      rightWidth = newWidth;
-    }
-    
-    applyWidths();
-  };
-  
-  const onPointerUp = () => {
-    if (!activeResizer) return;
-    
-    if (activeResizer === 'left') {
-      leftResizer.classList.remove('is-dragging');
-      localStorage.setItem('ctox.notes.layout.leftWidth', leftWidth);
-    } else {
-      rightResizer.classList.remove('is-dragging');
-      localStorage.setItem('ctox.notes.layout.rightWidth', rightWidth);
-    }
-    
-    activeResizer = null;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-  };
-  
-  leftResizer.addEventListener('pointerdown', onPointerDown);
-  rightResizer.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
-  window.addEventListener('pointercancel', onPointerUp);
+  const leftWidth = localStorage.getItem(`${cachePrefix}.layout.leftWidth`) || '240';
+  const rightWidth = localStorage.getItem(`${cachePrefix}.layout.rightWidth`) || '300';
+  containerEl.style.setProperty('--notes-left-width', `${leftWidth}px`);
+  containerEl.style.setProperty('--notes-right-width', `${rightWidth}px`);
   
   return () => {
-    leftResizer.removeEventListener('pointerdown', onPointerDown);
-    rightResizer.removeEventListener('pointerdown', onPointerDown);
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
-    window.removeEventListener('pointercancel', onPointerUp);
+    cleanups.forEach(c => c());
   };
+}
+
+function initNotesContextMenu(state) {
+  state.contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu notes-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== (state.ctx.module?.id === 'notizen' ? 'notizen' : 'notes')) return;
+    const context = noteCommandContextFromElement(state, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderNotesContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideNotesContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideNotesContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideNotesContextMenu(state);
+  };
+}
+
+function hideNotesContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function canModifyNotesApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function noteCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  const activeNote = state.notes.find((item) => item.id === state.activeNoteId) || null;
+  const bodyText = activeNote?.content || '';
+  const bodySnippet = bodyText.slice(0, 500);
+
+  return {
+    module: state.ctx.module?.id || 'notizen',
+    column: state.ctx.left?.contains?.(element) ? 'folders' : (els.notesList?.contains?.(element) ? 'list' : 'editor'),
+    record_type: activeNote ? (state.ctx.module?.id === 'notizen' ? 'notes_records' : 'notes') : 'module',
+    record_id: activeNote?.id || '',
+    label: activeNote?.title || '',
+    body_snippet: bodySnippet,
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderNotesContextMenu(state, context, x, y) {
+  ensureCtoxContextMenuStyles();
+  const canModifyApp = canModifyNotesApp(state);
+  const titleLabel = state.ctx.module?.id === 'notizen' ? 'Notizen' : 'Notes';
+  state.contextMenu.innerHTML = `
+    <form class="notes-context-chat" data-notes-context-chat-form>
+      <header>
+        <div>
+          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
+          <span>${escapeHtml(context.label || titleLabel)}</span>
+        </div>
+        <button type="button" data-notes-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
+        </div>
+      ` : ''}
+      <textarea data-notes-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
+      <footer>
+        <span data-notes-context-status></span>
+        <button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button>
+      </footer>
+    </form>
+  `;
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-notes-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-notes-context-message]');
+  state.contextMenu.querySelector('[data-notes-context-close]')?.addEventListener('click', () => hideNotesContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchNotesContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+async function dispatchNotesContextChat(state, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-notes-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = state.t('chatMissingMessage', 'Nachricht fehlt.');
+    return;
+  }
+
+  const activeModuleId = state.ctx.module?.id || 'notizen';
+  const safeMode = mode === 'app' && canModifyNotesApp(state) ? 'app' : 'data';
+  const activeNote = state.notes.find((item) => item.id === state.activeNoteId) || null;
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
+    return;
+  }
+  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
+  
+  const title = `${safeMode === 'app' ? (activeModuleId === 'notizen' ? 'Notizen App modifizieren' : 'Notes App modifizieren') : (activeModuleId === 'notizen' ? 'Notiz bearbeiten' : 'Note edit')} · ${context.label || (activeModuleId === 'notizen' ? 'Notizen' : 'Notes')}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die ${activeModuleId === 'notizen' ? 'Notizen' : 'Notes'}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Notizdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: activeModuleId,
+      source_title: activeModuleId === 'notizen' ? 'Notizen' : 'Notes',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? activeModuleId : (activeNote?.id || activeModuleId),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        selected_note: activeNote,
+        context,
+        thread_key: `business-os/${activeModuleId}`,
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        note_id: activeNote?.id || '',
+        note_title: activeNote?.title || '',
+      },
+    },
+  }));
+  hideNotesContextMenu(state);
+}
+
+function ensureCtoxContextMenuStyles() {
+  if (document.getElementById('ctox-unified-context-menu-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ctox-unified-context-menu-style';
+  style.textContent = `
+    .ctox-context-menu {
+      position: absolute;
+      z-index: 2400;
+      width: min(560px, calc(100vw - 24px));
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-panel, 12px);
+      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      padding: 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+      animation: ctox-menu-fade-in 0.15s ease-out;
+    }
+    @keyframes ctox-menu-fade-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .ctox-context-menu form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      padding: 12px;
+      margin: 0;
+    }
+    .ctox-context-menu form header,
+    .ctox-context-menu form footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11.5px;
+      font-weight: 760;
+      padding: 0 8px;
+      cursor: pointer;
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      margin: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label:hover {
+      border-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu .ctox-context-mode input {
+      margin: 0;
+      accent-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form header div {
+      min-width: 0;
+    }
+    .ctox-context-menu form strong,
+    .ctox-context-menu form span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-context-menu form strong {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 12.5px;
+      font-weight: 820;
+    }
+    .ctox-context-menu form span {
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .ctox-context-menu form footer > span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      white-space: normal;
+      font-size: 11px;
+      color: var(--bo-muted, var(--muted, #64747c));
+    }
+    .ctox-context-menu form textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 92px;
+      max-height: 180px;
+      min-width: 0;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 9px;
+      resize: vertical;
+    }
+    .ctox-context-menu form textarea:focus {
+      outline: none;
+      border-color: var(--bo-accent, #23665f);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bo-accent, #23665f) 25%, transparent);
+    }
+    .ctox-context-menu form button {
+      flex: 0 0 auto;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .ctox-context-menu form button:hover {
+      background: color-mix(in srgb, var(--bo-text, #18222d) 8%, var(--bo-surface-muted, #eef3f7));
+    }
+    .ctox-context-menu form button[type="submit"] {
+      border-color: var(--bo-accent, #23665f);
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 14%, var(--bo-surface, #fff));
+      color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form button[type="submit"]:hover {
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 22%, var(--bo-surface, #fff));
+    }
+    .ctox-context-menu form [data-context-close] {
+      width: 30px;
+      min-width: 30px;
+      padding: 0;
+      text-align: center;
+      font-size: 18px;
+    }
+  `;
+  document.head.append(style);
 }

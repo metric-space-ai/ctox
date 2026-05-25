@@ -1,235 +1,531 @@
-/* --- Business OS Notes Module Styling --- */
+/* ==========================================================================
+   Notesnook Visual & Theme Design System (Premium Port)
+   ========================================================================== */
 
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  /* Notesnook Core Brand Accent - Consuming Business-OS System Custom Properties */
+  --nn-background: var(--bo-background, var(--bg, #f6f8fb));
+  --nn-panel-bg: var(--bo-surface, var(--surface, #ffffff));
+  --nn-panel-bg-sec: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+  
+  --nn-accent: var(--bo-accent, var(--accent, #ff9500));
+  --nn-accent-hover: color-mix(in srgb, var(--nn-accent) 8%, transparent);
+  --nn-accent-active: color-mix(in srgb, var(--nn-accent) 16%, transparent);
+  --nn-accent-foreground: #ffffff;
+
+  /* Default Light Theme Values */
+  --nn-border: var(--bo-border, var(--line, #d8e1e5));
+  --nn-text: var(--bo-text, var(--text, #18222d));
+  --nn-text-strong: var(--bo-text, var(--text, #18222d));
+  --nn-text-muted: var(--bo-muted, var(--muted, #64747c));
+  --nn-hover: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+  --nn-shadow: var(--sh-subtle, 0 8px 22px rgba(23, 33, 38, 0.08));
+  --nn-paper-shadow: var(--sh-subtle, 0 8px 22px rgba(23, 33, 38, 0.08));
+  
+  --notes-sidebar-w: var(--notes-left-width, 240px);
+  --notes-list-w: var(--notes-right-width, 300px);
+}
+
+/* Dark Theme Variables */
+:root[data-theme="dark"] {
+  --nn-background: var(--bo-background, var(--bg, #181818));
+  --nn-panel-bg: var(--bo-surface, var(--surface, #202020));
+  --nn-panel-bg-sec: var(--bo-surface-muted, var(--surface-2, #2b2b2b));
+  --nn-border: var(--bo-border, var(--line, #2b2b2b));
+  --nn-text: var(--bo-text, var(--text, #d3d3d3));
+  --nn-text-strong: var(--bo-text, var(--text, #e3e3e3));
+  --nn-text-muted: var(--bo-muted, var(--muted, #818589));
+  --nn-hover: rgba(255, 255, 255, 0.06);
+  --nn-shadow: 0 1px 4px rgba(0,0,0,0.3), 0 6px 20px rgba(0,0,0,0.4);
+  --nn-paper-shadow: 0 8px 32px rgba(0,0,0,0.25);
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* Layout Root */
 .notes-module[data-notes-root] {
   display: flex;
   height: 100%;
   width: 100%;
-  background: var(--surface-1, #1e1e1e);
-  color: var(--text, #f5f5f7);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--nn-background);
+  color: var(--nn-text);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   overflow: hidden;
+  box-sizing: border-box;
+  position: relative;
+  transition: background 0.25s, color 0.25s;
 }
 
-/* Three Pane Resizing Layout */
-.notes-pane {
+/* --- Columns Layout --- */
+.notes-sidebar-pane,
+.notes-list-pane,
+.notes-center {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow: hidden;
   position: relative;
-  background: var(--surface-1, #1e1e1e);
+  box-sizing: border-box;
 }
 
-/* Left Explorer Pane: Sidebar Folder + Note List */
-.notes-left {
-  flex: 0 0 380px;
-  min-width: 280px;
-  max-width: 500px;
-  flex-direction: row !important;
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
+/* 1. Left Sidebar Pane */
+.notes-sidebar-pane {
+  width: var(--notes-sidebar-w);
+  min-width: 180px;
+  max-width: 380px;
+  flex: 0 0 var(--notes-sidebar-w);
+  background: var(--nn-panel-bg);
+  border-right: 1px solid var(--nn-border);
+  z-index: 5;
+  transition: background 0.25s, border-color 0.25s;
 }
 
-.notes-sidebar {
-  flex: 0 0 140px;
-  height: 100%;
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.05));
-  background: var(--surface-2, rgba(20, 20, 20, 0.6));
-  backdrop-filter: blur(10px);
-  display: flex;
-  flex-direction: column;
-}
-
+/* 2. Middle List Pane */
 .notes-list-pane {
-  flex: 1;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-1, #1a1a1c);
+  width: var(--notes-list-w);
+  min-width: 240px;
+  max-width: 480px;
+  flex: 0 0 var(--notes-list-w);
+  background: var(--nn-background);
+  border-right: 1px solid var(--nn-border);
+  z-index: 4;
+  transition: background 0.25s, border-color 0.25s;
 }
 
-/* Center Editor Pane */
+/* 3. Right Editor Pane */
 .notes-center {
   flex: 1;
-  min-width: 400px;
-  background: var(--surface-1, #1e1e1e);
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
+  background: var(--nn-background);
+  z-index: 3;
 }
 
-/* Right Panel */
-.notes-right {
-  flex: 0 0 240px;
-  min-width: 180px;
-  max-width: 320px;
-  background: var(--surface-2, rgba(20, 20, 20, 0.4));
-  backdrop-filter: blur(8px);
-}
-
-/* Headers */
-.notes-pane-head {
-  padding: 16px 20px;
+/* --- Brand Header (Left Sidebar) --- */
+.nn-brand-head {
+  padding: 18px 18px 12px 18px;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.05));
+  border-bottom: 1px solid var(--nn-border);
+}
+
+.nn-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.nn-logo-container {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--nn-accent);
+  color: var(--nn-accent-foreground);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(255, 149, 0, 0.3);
+}
+
+.nn-logo-svg {
+  width: 20px;
+  height: 20px;
+}
+
+.nn-brand-texts h2 {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--nn-text-strong);
+  letter-spacing: -0.01em;
+}
+
+.nn-badge {
+  font-size: 9px;
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-weight: 700;
+  text-transform: uppercase;
+  margin-top: 1px;
+  display: inline-block;
+}
+
+/* --- Left Sidebar lists (Notebooks / Tags) --- */
+.nn-nav-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nn-sidebar-divider {
+  height: 1px;
+  background: var(--nn-border);
+  margin: 10px 8px;
+}
+
+.nn-nav-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 4px 6px;
+  margin-top: 12px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--nn-text-muted);
+}
+
+.nn-nav-header-left {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.nn-nav-arrow {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.2s ease;
+  transform: rotate(0deg);
+}
+
+.nn-nav-arrow.active {
+  transform: rotate(90deg);
+}
+
+.nn-add-sidebar-btn {
+  border: 0;
+  background: transparent;
+  color: var(--nn-text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+}
+
+.nn-add-sidebar-btn:hover {
+  background: var(--nn-hover);
+  color: var(--nn-accent);
+}
+
+.nn-sidebar-sublist {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 10px;
+}
+
+/* Sidebar Item Styling */
+.notes-folder-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--nn-text);
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.notes-folder-item:hover {
+  background: var(--nn-hover);
+  color: var(--nn-text-strong);
+}
+
+.notes-folder-item.active {
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
+  font-weight: 600;
+}
+
+.notes-folder-item.active .notes-folder-icon {
+  color: var(--nn-accent);
+}
+
+.notes-folder-icon {
+  width: 16px;
+  height: 16px;
+  color: var(--nn-text-muted);
+  margin-right: 10px;
   flex-shrink: 0;
 }
 
-.notes-pane-head span {
-  font-size: 10px;
+.notes-folder-count {
+  font-size: 11px;
+  background: var(--nn-border);
+  color: var(--nn-text-muted);
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.notes-folder-item.active .notes-folder-count {
+  background: var(--nn-accent);
+  color: var(--nn-accent-foreground);
+}
+
+/* --- Left Sidebar Footer (Lock App) --- */
+.nn-sidebar-footer {
+  padding: 10px;
+  border-top: 1px solid var(--nn-border);
+}
+
+.nn-lock-client-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--nn-border);
+  background: var(--nn-background);
+  color: var(--nn-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nn-lock-client-btn:hover {
+  border-color: var(--nn-accent);
+  color: var(--nn-accent);
+  background: var(--nn-accent-hover);
+}
+
+.nn-footer-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* --- Middle Pane (Notes List) --- */
+.nn-list-head {
+  padding: 18px 18px 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--nn-border);
+}
+
+.nn-kicker {
+  font-size: 9px;
   text-transform: uppercase;
-  letter-spacing: 0.12em;
-  color: var(--accent, #e5a93c);
-  font-weight: 700;
+  letter-spacing: 0.1em;
+  font-weight: 800;
+  color: var(--nn-accent);
   display: block;
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
-.notes-pane-head h2 {
-  font-size: 16px;
-  font-weight: 700;
+.nn-list-head h2 {
+  font-size: 15px;
+  font-weight: 750;
   margin: 0;
-  color: var(--text-strong, #ffffff);
+  color: var(--nn-text-strong);
 }
 
-/* Icon Buttons */
-.notes-pane-head .icon-button {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 0;
-  background: transparent;
-  color: var(--accent, #e5a93c);
+.nn-filter-trigger {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  border: 1px solid var(--nn-border);
+  background: var(--nn-panel-bg);
+  color: var(--nn-text);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: background 0.25s, transform 0.15s;
+  transition: all 0.15s;
 }
 
-.notes-pane-head .icon-button:hover {
-  background: rgba(229, 169, 60, 0.12);
-  transform: scale(1.08);
+.nn-filter-trigger:hover {
+  background: var(--nn-hover);
+  color: var(--nn-accent);
+  border-color: var(--nn-accent);
 }
 
-.notes-pane-head .icon-button:active {
-  transform: scale(0.95);
+.nn-filter-trigger svg {
+  width: 16px;
+  height: 16px;
 }
 
-/* Folder List */
-.notes-folder-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.notes-folder-item {
-  display: flex;
-  align-items: center;
-  padding: 8px 12px;
+/* Filter Popover Dropdown */
+.nn-filter-popover {
+  position: absolute;
+  top: 40px;
+  right: 0;
+  width: 220px;
+  background: var(--nn-panel-bg);
+  border: 1px solid var(--nn-border);
   border-radius: 8px;
+  box-shadow: var(--nn-shadow);
+  z-index: 100;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: popIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nn-popover-section h4 {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--nn-text-muted);
+  margin: 0 0 6px 4px;
+}
+
+.nn-popover-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--nn-text);
   cursor: pointer;
-  font-size: 13px;
-  color: var(--text-muted, #a0a0a5);
-  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
-  margin-bottom: 2px;
   font-weight: 500;
 }
 
-.notes-folder-item::before {
-  content: "📁";
-  margin-right: 8px;
-  font-size: 14px;
+.nn-popover-item:hover {
+  background: var(--nn-hover);
+  color: var(--nn-text-strong);
 }
 
-.notes-folder-item[data-folder="All Notes"]::before {
-  content: "📂";
-}
-
-.notes-folder-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-strong, #ffffff);
-}
-
-.notes-folder-item.active {
-  background: rgba(229, 169, 60, 0.15);
-  color: var(--accent, #e5a93c);
+.nn-popover-item.active {
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
   font-weight: 600;
 }
 
-/* Search Box */
-.notes-search-wrapper {
-  padding: 10px 14px;
-  flex-shrink: 0;
+.nn-popover-divider {
+  height: 1px;
+  background: var(--nn-border);
+  margin: 2px 0;
 }
 
-.notes-search {
+/* Search Bar (Middle Pane) */
+.notes-search-container {
+  position: relative;
   width: 100%;
-  padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
-  background: rgba(0, 0, 0, 0.2);
-  color: var(--text, #ffffff);
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+}
+
+.notes-search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--nn-text-muted);
+  pointer-events: none;
+}
+
+.nn-input-search {
+  width: 100%;
+  padding: 7px 10px 7px 30px;
+  border-radius: 6px;
+  border: 1px solid var(--nn-border);
+  background: var(--nn-panel-bg);
+  color: var(--nn-text-strong);
+  font-size: 12px;
   outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s;
+  font-weight: 500;
+  transition: all 0.15s;
 }
 
-.notes-search:focus {
-  border-color: var(--accent, #e5a93c);
-  box-shadow: 0 0 0 3px rgba(229, 169, 60, 0.15);
+.nn-input-search:focus {
+  border-color: var(--nn-accent);
+  background: var(--nn-background);
+  box-shadow: 0 0 0 3px rgba(255, 149, 0, 0.12);
 }
 
-/* Notes List */
-.notes-scroll {
+/* --- Note Cards (Middle Pane) --- */
+.nn-cards-scroll {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+
+.notes-group-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--nn-text-muted);
+  margin: 14px 4px 6px 4px;
 }
 
 .notes-card {
   display: flex;
   flex-direction: column;
   padding: 12px 16px;
-  border-radius: 12px;
   cursor: pointer;
-  margin-bottom: 4px;
-  transition: all 0.25s cubic-bezier(0.25, 0.8, 0.25, 1);
+  background: var(--nn-background);
+  border: 0;
+  border-bottom: 1px solid var(--nn-border);
   position: relative;
-  background: transparent;
-  border: 1px solid transparent;
+  transition: all 0.15s ease;
+  margin-bottom: 0;
+  border-left: 4px solid transparent;
 }
 
 .notes-card:hover {
-  background: rgba(255, 255, 255, 0.02);
-  transform: translateY(-1px);
+  background: var(--nn-hover);
 }
 
 .notes-card.active {
-  background: rgba(229, 169, 60, 0.08);
-  border-color: rgba(229, 169, 60, 0.2);
+  background: var(--nn-accent-hover);
+  border-left: 4px solid var(--nn-accent);
+  box-shadow: none;
 }
 
 .notes-card-title {
-  font-size: 13px;
+  font-size: 13.5px;
   font-weight: 600;
-  color: var(--text-strong, #ffffff);
+  color: var(--nn-text-strong);
   margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .notes-card-meta {
   display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nn-card-meta-row {
+  display: flex;
   align-items: center;
+  justify-content: space-between;
   font-size: 11px;
-  color: var(--text-muted, #8e8e93);
+  color: var(--nn-text-muted);
 }
 
 .notes-card-date {
   font-weight: 500;
-  margin-right: 8px;
-  color: var(--text-muted, #8e8e93);
+  flex-shrink: 0;
 }
 
 .notes-card-snippet {
@@ -237,76 +533,312 @@
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
+  color: var(--nn-text-muted);
+  font-size: 11px;
 }
 
-/* Editor Workspace */
-.notes-center-head {
-  border-bottom: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
-}
-
-.notes-note-meta span {
-  font-size: 10px;
-  text-transform: uppercase;
-  color: var(--text-muted, #8e8e93);
-  font-weight: 600;
-}
-
-.notes-note-meta h2 {
-  font-size: 15px;
-  font-weight: 700;
-  margin: 2px 0 0 0;
-  color: var(--text-strong, #ffffff);
-}
-
-/* Segmented Control */
-.segmented {
+/* Badges on card */
+.nn-card-badges {
   display: flex;
-  background: rgba(0, 0, 0, 0.25);
-  border-radius: 8px;
-  padding: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 2px;
 }
 
-.segmented button {
-  padding: 6px 12px;
+.nn-card-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.nn-card-badge.notebook-badge {
+  background: var(--nn-border);
+  color: var(--nn-text);
+  border: 1px solid rgba(0,0,0,0.05);
+}
+
+.nn-card-badge.tag-badge {
+  background: rgba(0, 136, 55, 0.08);
+  color: var(--nn-accent);
+  border: 1px solid rgba(0, 136, 55, 0.1);
+}
+
+/* Card Icons */
+.nn-card-icons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--nn-text-muted);
+}
+
+.nn-card-icon {
+  width: 11px;
+  height: 11px;
+  flex-shrink: 0;
+}
+
+.nn-card-icon.starred {
+  color: #d97706; /* Star Amber */
+  fill: #d97706;
+}
+
+.nn-card-icon.locked {
+  color: var(--nn-accent);
+}
+
+/* --- Right Editor Header --- */
+.nn-editor-head {
+  border-bottom: 1px solid var(--nn-border);
+  background: var(--nn-background);
+  padding: 12px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.nn-note-meta-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nn-meta-select-wrap {
+  position: relative;
+}
+
+.nn-meta-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--nn-border);
+  background: var(--nn-panel-bg);
+  color: var(--nn-text);
+  font-size: 11.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: all 0.15s;
+  max-width: 150px;
+}
+
+.nn-meta-btn:hover {
+  background: var(--nn-hover);
+  color: var(--nn-text-strong);
+  border-color: var(--nn-accent);
+}
+
+.nn-meta-btn svg {
+  width: 12px;
+  height: 12px;
+  color: var(--nn-text-muted);
+  flex-shrink: 0;
+}
+
+.nn-caret {
+  width: 8px !important;
+  height: 8px !important;
+  margin-left: 2px;
+  color: var(--nn-text-muted);
+}
+
+/* Dropdown list for note assignments */
+.nn-dropdown-menu {
+  position: absolute;
+  top: 32px;
+  left: 0;
+  min-width: 180px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--nn-panel-bg);
+  border: 1px solid var(--nn-border);
   border-radius: 6px;
+  box-shadow: var(--nn-shadow);
+  z-index: 100;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nn-dropdown-item {
+  width: 100%;
+  text-align: left;
   border: 0;
   background: transparent;
-  color: var(--text-muted, #8e8e93);
-  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--nn-text);
+  cursor: pointer;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nn-dropdown-item:hover {
+  background: var(--nn-hover);
+  color: var(--nn-text-strong);
+}
+
+.nn-dropdown-item.active {
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
+  font-weight: 600;
+}
+
+.nn-dropdown-item-check {
+  width: 12px;
+  height: 12px;
+  color: var(--nn-accent);
+}
+
+/* Tags management dropdown */
+.nn-tags-dropdown {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.nn-tag-select-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--nn-text);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+
+.nn-tag-select-item:hover {
+  background: var(--nn-hover);
+}
+
+.nn-tag-select-item input {
+  accent-color: var(--nn-accent);
+  cursor: pointer;
+}
+
+/* Editor Action Controls */
+.nn-editor-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nn-action-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  border: 0;
+  background: transparent;
+  color: var(--nn-text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nn-action-btn svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+
+.nn-action-btn:hover {
+  background: var(--nn-hover);
+  color: var(--nn-text-strong);
+}
+
+.nn-action-btn.active {
+  color: var(--nn-accent);
+  background: var(--nn-accent-hover);
+}
+
+.nn-action-btn.active .nn-star-icon {
+  color: #d97706;
+  fill: #d97706;
+}
+
+.nn-action-btn.active .nn-lock-icon {
+  color: var(--nn-accent);
+}
+
+.nn-trash-btn:hover {
+  color: #dc2626 !important;
+  background: rgba(220, 38, 38, 0.08) !important;
+}
+
+/* New Note trigger in editor head */
+.nn-new-note-trigger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid var(--nn-accent);
+  background: var(--nn-accent);
+  color: var(--nn-accent-foreground);
+  font-size: 11.5px;
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.2s;
+  box-shadow: 0 2px 6px rgba(0, 136, 55, 0.15);
+  transition: all 0.15s;
 }
 
-.segmented button:hover {
-  color: var(--text, #ffffff);
+.nn-new-note-trigger:hover {
+  background: #00732e;
+  box-shadow: 0 2px 8px rgba(0, 136, 55, 0.25);
 }
 
-.segmented button[aria-pressed="true"] {
-  background: rgba(229, 169, 60, 0.18);
-  color: var(--accent, #e5a93c);
+.nn-new-note-trigger svg {
+  width: 12px;
+  height: 12px;
 }
 
-/* Editor Workspace Content */
-.notes-editor-workspace {
+/* --- Centered Paper Sheet & Desk --- */
+.nn-editor-workspace {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  height: calc(100% - 110px);
+  overflow-y: auto;
+  position: relative;
+  background: var(--nn-panel-bg);
+  padding: 24px 16px;
 }
 
-.notes-tab-panel {
-  flex: 1;
+.nn-paper-sheet {
+  max-width: 820px;
+  width: 100%;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  height: 100%;
-  overflow: hidden;
+  flex: 1;
+  background: var(--nn-background);
+  border: 1px solid var(--nn-border);
+  border-radius: 8px;
+  box-shadow: var(--nn-paper-shadow);
+  position: relative;
+  box-sizing: border-box;
 }
 
-/* Textarea Editor */
-.notes-textarea {
+.nn-note-badges {
+  padding: 24px 48px 0 48px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+/* WYSIWYG Editor Textarea */
+.nn-wysiwyg-editor {
   flex: 1;
   width: 100%;
   height: 100%;
@@ -314,258 +846,618 @@
   outline: 0;
   resize: none;
   background: transparent;
-  color: var(--text, #e4e4e7);
-  padding: 24px;
-  font-family: -apple-system-font, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
-  font-size: 14px;
+  color: var(--nn-text);
+  padding: 16px 48px 48px 48px;
+  font-family: 'Inter', -apple-system, sans-serif;
+  font-size: 14.5px;
   line-height: 1.6;
   overflow-y: auto;
+  caret-color: var(--nn-accent);
+  box-sizing: border-box;
 }
 
-.notes-textarea::placeholder {
-  color: rgba(255, 255, 255, 0.25);
+.nn-wysiwyg-editor::selection {
+  background: var(--nn-accent-hover);
 }
 
-/* Preview / Render Area */
-.notes-preview-doc,
-.notes-split-preview {
-  flex: 1;
-  padding: 24px 30px;
-  overflow-y: auto;
-  line-height: 1.6;
-  color: var(--text, #e4e4e7);
-  font-size: 14px;
+.nn-wysiwyg-editor::placeholder {
+  color: var(--nn-text-muted);
+  opacity: 0.5;
 }
 
-.notes-preview-doc h1,
-.notes-split-preview h1 {
-  font-size: 20px;
-  font-weight: 800;
-  color: var(--text-strong, #ffffff);
-  margin-top: 0;
-  margin-bottom: 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-  padding-bottom: 8px;
-}
-
-.notes-preview-doc h2,
-.notes-split-preview h2 {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text-strong, #ffffff);
-  margin-top: 24px;
-  margin-bottom: 12px;
-}
-
-.notes-preview-doc h3,
-.notes-split-preview h3 {
-  font-size: 14px;
-  font-weight: 700;
-  color: var(--text-strong, #ffffff);
+/* Headings inside Editor */
+.nn-wysiwyg-editor h1,
+.nn-wysiwyg-editor h2,
+.nn-wysiwyg-editor h3 {
+  color: var(--nn-text-strong);
   margin-top: 18px;
   margin-bottom: 8px;
+  font-weight: 700;
+  line-height: 1.35;
 }
 
-.notes-preview-doc p,
-.notes-split-preview p {
-  margin-bottom: 16px;
+.nn-wysiwyg-editor h1 {
+  font-size: 22px;
+  border-bottom: 1px solid var(--nn-border);
+  padding-bottom: 6px;
+  margin-top: 0;
 }
 
-.notes-preview-doc ul,
-.notes-split-preview ul {
-  padding-left: 20px;
-  margin-bottom: 16px;
+.nn-wysiwyg-editor h2 {
+  font-size: 16.5px;
 }
 
-.notes-preview-doc li,
-.notes-split-preview li {
-  margin-bottom: 6px;
+.nn-wysiwyg-editor h3 {
+  font-size: 14.5px;
 }
 
-.notes-preview-doc code,
-.notes-split-preview code {
-  background: rgba(255, 255, 255, 0.06);
-  padding: 2px 6px;
+.nn-wysiwyg-editor p {
+  margin-bottom: 10px;
+}
+
+/* Custom Inline Code */
+.nn-inline-code {
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 12.5px;
+  background: var(--nn-panel-bg-sec);
+  color: var(--nn-accent);
+  padding: 2px 5px;
   border-radius: 4px;
-  font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
-  font-size: 12px;
-  color: var(--accent, #e5a93c);
+  font-weight: 500;
 }
 
-.notes-preview-doc pre,
-.notes-split-preview pre {
-  background: rgba(0, 0, 0, 0.3);
+/* Custom pre / Code Block */
+.nn-code-block {
+  font-family: 'JetBrains Mono', Consolas, Monaco, monospace;
+  font-size: 12.5px;
+  background: var(--nn-panel-bg-sec);
+  color: var(--nn-text-strong);
   padding: 12px 16px;
-  border-radius: 8px;
+  border-radius: 6px;
+  border-left: 3px solid var(--nn-accent);
+  margin: 12px 0;
   overflow-x: auto;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  margin-bottom: 16px;
+  line-height: 1.5;
 }
 
-.notes-preview-doc pre code,
-.notes-split-preview pre code {
+.nn-code-block code {
+  font-family: inherit;
   background: transparent;
   padding: 0;
-  color: #a78bfa;
+  color: inherit;
+  border: 0;
 }
 
-/* Split Pane View */
-.notes-split-panel {
-  flex-direction: row !important;
+/* Custom Callout Box Block */
+.callout {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin: 14px 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  box-sizing: border-box;
 }
 
-.notes-split-textarea {
-  flex: 0 0 50%;
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.05));
-  background: rgba(0, 0, 0, 0.08);
+.callout-icon {
+  font-size: 18px;
+  user-select: none;
+  flex-shrink: 0;
 }
 
-.notes-split-preview {
-  flex: 0 0 50%;
-  background: transparent;
+.callout-content {
+  flex: 1;
+  outline: 0;
 }
 
-/* Footer status bar */
-.notes-editor-footer {
+.callout-content strong {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+/* Callout variants */
+.callout-info {
+  background: rgba(2, 136, 209, 0.06);
+  border-left: 4px solid #0288d1;
+  color: var(--nn-text);
+}
+.callout-info .callout-content strong {
+  color: #0288d1;
+}
+
+.callout-warning {
+  background: rgba(245, 124, 0, 0.06);
+  border-left: 4px solid #f57c00;
+  color: var(--nn-text);
+}
+.callout-warning .callout-content strong {
+  color: #f57c00;
+}
+
+.callout-tip {
+  background: rgba(0, 136, 55, 0.06);
+  border-left: 4px solid #008837;
+  color: var(--nn-text);
+}
+.callout-tip .callout-content strong {
+  color: #008837;
+}
+
+.callout-danger {
+  background: rgba(211, 47, 47, 0.06);
+  border-left: 4px solid #d32f2f;
+  color: var(--nn-text);
+}
+.callout-danger .callout-content strong {
+  color: #d32f2f;
+}
+
+/* Checklists styling */
+.notes-todo-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 6px;
+  transition: padding-left 0.15s ease;
+}
+
+.notes-todo-row.indent-1 {
+  padding-left: 24px;
+}
+
+.notes-todo-row.indent-2 {
+  padding-left: 48px;
+}
+
+.notes-todo-row.indent-3 {
+  padding-left: 72px;
+}
+
+.notes-todo-checkbox {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--nn-accent);
+  border-radius: 50%;
+  cursor: pointer;
+  margin-top: 2px;
+  flex-shrink: 0;
+  position: relative;
+  outline: none;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.notes-todo-checkbox:checked {
+  background-color: var(--nn-accent);
+  border-color: var(--nn-accent);
+}
+
+.notes-todo-checkbox:checked::after {
+  content: "";
+  width: 4px;
+  height: 8px;
+  border: solid #ffffff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+  position: absolute;
+  top: 1px;
+  left: 5px;
+}
+
+.notes-todo-text {
+  flex: 1;
+  outline: 0;
+}
+
+.notes-todo-checkbox:checked + .notes-todo-text {
+  text-decoration: line-through;
+  opacity: 0.65;
+  color: var(--nn-text-muted);
+}
+
+/* Table styling */
+.notes-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+}
+
+.notes-table td {
+  border: 1px solid var(--nn-border);
+  padding: 6px 10px;
+  font-size: 13px;
+  outline: none;
+}
+
+.notes-table td:focus {
+  background: var(--nn-accent-hover);
+  box-shadow: inset 0 0 0 1px var(--nn-accent);
+}
+
+/* Horizontal line */
+.nn-wysiwyg-editor hr {
+  border: 0;
+  height: 1px;
+  background: var(--nn-border);
+  margin: 16px 0;
+}
+
+/* --- Floating Editor Format Toolbar --- */
+.nn-floating-toolbar-wrapper {
+  padding: 10px 16px;
+  background: var(--nn-background);
+  border-top: 1px solid var(--nn-border);
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.nn-editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--nn-panel-bg);
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--nn-border);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.nn-toolbar-btn {
+  width: 28px;
   height: 28px;
-  border-top: 1px solid var(--hairline, rgba(255, 255, 255, 0.05));
-  background: var(--surface-2, #161618);
+  border-radius: 5px;
+  color: var(--nn-text);
+  border: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.nn-toolbar-btn:hover {
+  background: var(--nn-hover);
+  color: var(--nn-accent);
+}
+
+.nn-toolbar-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.nn-format-wrapper {
+  position: relative;
+}
+
+.nn-toolbar-dropdown {
+  position: absolute;
+  bottom: 34px;
+  left: 0;
+  width: 180px;
+  background: var(--nn-panel-bg);
+  border: 1px solid var(--nn-border);
+  border-radius: 6px;
+  box-shadow: var(--nn-shadow);
+  z-index: 100;
+  padding: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* --- Editor Status Footer --- */
+.nn-editor-footer {
+  height: 30px;
+  border-top: 1px solid var(--nn-border);
+  background: var(--nn-panel-bg);
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0 16px;
   font-size: 11px;
-  color: var(--text-muted, #8e8e93);
+  color: var(--nn-text-muted);
   flex-shrink: 0;
+  transition: background 0.25s, border-color 0.25s;
 }
 
-/* Right column info card styling */
-.notes-right-content {
-  padding: 20px;
-  overflow-y: auto;
+.nn-sync-indicator {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.notes-info-card {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
-  border-radius: 12px;
-  padding: 16px;
-}
-
-.notes-info-card h3 {
-  font-size: 13px;
-  font-weight: 700;
-  margin: 0 0 10px 0;
-  color: var(--text-strong, #ffffff);
-}
-
-.notes-info-card p {
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-muted, #8e8e93);
-  margin: 0 0 12px 0;
-}
-
-.notes-markdown-guide {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.notes-markdown-guide li {
-  font-size: 12px;
-  color: var(--text, #e4e4e7);
-  display: flex;
-  justify-content: space-between;
   align-items: center;
+  gap: 5px;
+  font-weight: 500;
 }
 
-.notes-markdown-guide code {
-  font-size: 10px;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 5px;
+.nn-sync-icon {
+  width: 12px;
+  height: 12px;
+  color: var(--nn-accent);
+}
+
+/* Pulse Animation for Syncing status */
+.nn-sync-indicator.syncing {
+  color: var(--nn-text);
+}
+
+.nn-sync-indicator.syncing .nn-sync-icon {
+  animation: pulseGreen 1s infinite alternate;
+}
+
+@keyframes pulseGreen {
+  from { opacity: 0.4; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1.05); }
+}
+
+.nn-read-time {
+  font-weight: 600;
+  background: var(--nn-border);
+  color: var(--nn-text-strong);
+  padding: 1px 6px;
   border-radius: 4px;
-  color: var(--accent, #e5a93c);
+  font-size: 10.5px;
 }
 
-.notes-path-display {
-  background: #000000;
-  padding: 6px 10px;
-  border-radius: 6px;
-  margin-bottom: 10px;
+.nn-stats {
+  margin-left: 10px;
+  font-weight: 500;
 }
 
-.notes-path-display code {
-  font-size: 10px;
-  font-family: monospace;
-  color: #34d399;
-}
-
-.notes-sync-hint {
-  font-size: 11px !important;
-  font-style: italic;
-  margin: 0 !important;
-}
-
-/* Custom Scrollbar */
-.notes-scroll::-webkit-scrollbar,
-.notes-folder-list::-webkit-scrollbar,
-.notes-textarea::-webkit-scrollbar,
-.notes-preview-doc::-webkit-scrollbar,
-.notes-split-preview::-webkit-scrollbar,
-.notes-right-content::-webkit-scrollbar {
-  width: 6px;
-}
-
-.notes-scroll::-webkit-scrollbar-thumb,
-.notes-folder-list::-webkit-scrollbar-thumb,
-.notes-textarea::-webkit-scrollbar-thumb,
-.notes-preview-doc::-webkit-scrollbar-thumb,
-.notes-split-preview::-webkit-scrollbar-thumb,
-.notes-right-content::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 10px;
-}
-
-.notes-scroll::-webkit-scrollbar-track,
-.notes-folder-list::-webkit-scrollbar-track,
-.notes-textarea::-webkit-scrollbar-track,
-.notes-preview-doc::-webkit-scrollbar-track,
-.notes-split-preview::-webkit-scrollbar-track,
-.notes-right-content::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-/* Notes Column Resizer */
-.notes-resizer {
-  width: 6px;
-  margin: 0 -3px;
-  cursor: col-resize;
-  z-index: 10;
-  flex-shrink: 0;
-  position: relative;
-  background: transparent;
-}
-
-.notes-resizer::after {
-  content: "";
+/* --- Client App PIN Pad Lock Screen (Zero-Knowledge Overlay) --- */
+.nn-pin-overlay {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 2px;
-  width: 2px;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(24, 24, 24, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+}
+
+.nn-pin-container {
+  background: #202020;
+  border: 1px solid #333333;
+  border-radius: 12px;
+  padding: 30px;
+  width: 280px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+  text-align: center;
+  animation: scaleIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nn-shield-logo {
+  width: 54px;
+  height: 54px;
+  border-radius: 50%;
+  background: rgba(0, 136, 55, 0.15);
+  color: var(--nn-accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 16px auto;
+  box-shadow: 0 0 20px rgba(0, 136, 55, 0.1);
+}
+
+.nn-shield-logo svg {
+  width: 28px;
+  height: 28px;
+}
+
+.nn-pin-container h2 {
+  font-size: 16px;
+  font-weight: 700;
+  margin: 0 0 4px 0;
+}
+
+.nn-pin-container p {
+  font-size: 12px;
+  color: #a0a0a0;
+  margin: 0 0 20px 0;
+}
+
+/* PIN Dots Display */
+.nn-pin-display {
+  display: flex;
+  justify-content: center;
+  gap: 15px;
+  margin-bottom: 24px;
+}
+
+.nn-pin-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #505050;
   background: transparent;
-  transition: background-color 0.2s;
+  transition: all 0.15s;
 }
 
-.notes-resizer:hover::after,
-.notes-resizer.is-dragging::after {
-  background-color: var(--accent, #e5a93c);
+.nn-pin-dot.filled {
+  background: var(--nn-accent);
+  border-color: var(--nn-accent);
+  box-shadow: 0 0 8px var(--nn-accent);
 }
 
+.nn-pin-dot.error {
+  background: #dc2626;
+  border-color: #dc2626;
+  box-shadow: 0 0 8px #dc2626;
+  animation: shake 0.2s 2;
+}
+
+/* Keypad Grid */
+.nn-pin-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.nn-pin-pad button {
+  height: 48px;
+  border-radius: 50%;
+  border: 1px solid #333333;
+  background: #252525;
+  color: #ffffff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, transform 0.1s;
+}
+
+.nn-pin-pad button:hover {
+  background: #333333;
+}
+
+.nn-pin-pad button:active {
+  transform: scale(0.95);
+  background: var(--nn-accent);
+}
+
+.nn-pin-pad button[data-action] {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.nn-pin-pad button[data-action="pin-clear"] {
+  color: #a0a0a0;
+  border: 0;
+  background: transparent;
+}
+
+.nn-pin-pad button[data-action="pin-ok"] {
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
+  border-color: var(--nn-accent);
+}
+
+.nn-pin-pad button[data-action="pin-ok"]:hover {
+  background: var(--nn-accent);
+  color: #ffffff;
+}
+
+.nn-pin-hint {
+  margin-top: 20px;
+  font-size: 10px;
+  color: #808080;
+}
+
+/* --- Note Decryption Locked Pad Overlay --- */
+.nn-note-lock-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--nn-panel-bg);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.nn-note-lock-pad {
+  max-width: 420px;
+  width: 90%;
+  padding: 30px;
+  background: var(--nn-background);
+  border: 1px solid var(--nn-border);
+  border-radius: 8px;
+  box-shadow: var(--nn-shadow);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.nn-lock-icon-huge {
+  margin-bottom: 16px;
+}
+
+.nn-lock-icon-huge svg {
+  width: 48px;
+  height: 48px;
+}
+
+.nn-note-lock-pad h3 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0 0 6px 0;
+  color: var(--nn-text-strong);
+}
+
+.nn-note-lock-pad p {
+  font-size: 12px;
+  color: var(--nn-text-muted);
+  margin: 0 0 20px 0;
+}
+
+.nn-decrypt-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 16px;
+}
+
+.nn-decrypt-input {
+  flex: 1;
+  max-width: 220px;
+  padding: 6px 12px;
+  border-radius: 5px;
+  border: 1px solid var(--nn-border);
+  background: var(--nn-panel-bg);
+  color: var(--nn-text-strong);
+  font-size: 13px;
+  outline: none;
+}
+
+.nn-decrypt-input:focus {
+  border-color: var(--nn-accent);
+}
+
+.nn-decrypt-btn {
+  padding: 6px 16px;
+  border-radius: 5px;
+  border: 0;
+  background: var(--nn-accent);
+  color: var(--nn-accent-foreground);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.nn-decrypt-btn:hover {
+  background: #00732e;
+}
+
+.nn-lock-hint {
+  font-size: 10px;
+  color: var(--nn-text-muted);
+}
+
+/* Animations */
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.96) translateY(-5px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes shake {
+  0% { transform: translateX(0); }
+  25% { transform: translateX(-6px); }
+  75% { transform: translateX(6px); }
+  100% { transform: translateX(0); }
+}

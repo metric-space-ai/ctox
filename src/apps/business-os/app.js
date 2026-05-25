@@ -1,20 +1,3 @@
-import { createBusinessDb, resetBusinessDb } from './shared/db.js?v=20260522-rxdb-fork1';
-import { createSyncRuntime } from './shared/sync.js?v=20260522-replication-io1';
-import { createCommandBus } from './shared/command-bus.js?v=20260521-rxdb-db32';
-import { openReactSettings } from './shared/react-settings.js?v=20260525-runtime-quality-preset1';
-import { dispatchBusinessReport, initBusinessReporter } from './shared/business-reporter.js?v=20260520-rxdb-reports1';
-import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-ux-theme1';
-import { createEventBus } from './shared/event-bus.js?v=20260519-shell-os1';
-import { createNotifications } from './shared/notifications.js?v=20260519-shell-os1';
-import { createContextMenu } from './shared/context-menu.js?v=20260519-shell-os1';
-import { createWindowManager } from './shared/window-manager.js?v=20260519-shell-os1';
-import { createTaskbar } from './shared/taskbar.js?v=20260519-shell-os1';
-import { createWindowSwitcher } from './shared/window-switcher.js?v=20260519-shell-os1';
-import { installBusinessDialogFallbacks } from './shared/dialogs.js?v=20260519-dialogs1';
-import { getSvgIcon, registerSvgIcon } from './shared/icons.js?v=20260520-svg-icons2';
-import { collections as ctoxCollections, migrationStrategies as ctoxMigrationStrategies } from './modules/ctox/schema.js';
-import { collections as desktopCollections, migrationStrategies as desktopMigrationStrategies } from './modules/desktop/schema.js';
-
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
 const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
@@ -25,17 +8,32 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260525-runtime-quality-preset1';
+const APP_BUILD = '20260525-native-restart-sync-suspend1';
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
-const RXDB_BOOTSTRAP_VERSION = '20260521-rxdb-db13';
+const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
-const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research'];
+const SHELL_IMPORT_TIMEOUT_MS = 8000;
+const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
 let syncRecoveryRepairTimer = null;
 let syncRecoveryRepairRunning = false;
+let businessReporterModulePromise = null;
+let businessChatModulePromise = null;
+let shellUiModulesPromise = null;
+let shellUiModules = null;
+let shellDialogsModulePromise = null;
+let shellIconsModulePromise = null;
+let shellIconsModule = null;
+let businessDbModulePromise = null;
+let businessDbModule = null;
+let syncModulePromise = null;
+let syncModule = null;
+let commandBusModulePromise = null;
+let coreSchemaModulesPromise = null;
+let reactSettingsModulePromise = null;
 
 const SHELL_COL_MIN = {
   left: 210,
@@ -46,6 +44,13 @@ const SHELL_COL_MIN = {
 const SHELL_COL_SIDE_MAX = 620;
 
 const state = {
+  bootTimings: {
+    startedAt: new Date().toISOString(),
+    startedAtMs: performance.now(),
+    shellVisibleMs: null,
+    firstWebRtcConnectedMs: null,
+    firstAdvancedStatusHealthyMs: null,
+  },
   modules: [],
   activeModule: null,
   moduleRevisions: {},
@@ -81,6 +86,13 @@ const state = {
   windowSwitcher: null,
   windowGeometryCache: new Map(),
   windowGeometrySaveTimers: new Map(),
+  catalogSubscription: null,
+  catalogRefreshTimer: null,
+  catalogRefreshRunning: false,
+  catalogRefreshQueued: false,
+  moduleCatalogFingerprint: '',
+  shellCatalogMergedIds: new Set(),
+  initialModuleOpened: false,
 };
 
 function installAdvancedStatusInterface() {
@@ -112,11 +124,137 @@ installAdvancedStatusInterface();
 
 if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
   const smokeRoot = typeof globalThis === 'undefined' ? window : globalThis;
-  smokeRoot.ctoxBusinessOsSmoke = { state };
-  window.ctoxBusinessOsSmoke = { state };
+  const smokeApi = { state, reportFileIntegrityError };
+  smokeRoot.ctoxBusinessOsSmoke = smokeApi;
+  window.ctoxBusinessOsSmoke = smokeApi;
 }
 
-const moduleAliases = {};
+const moduleAliases = {
+  notizen: 'notes',
+};
+const LEGACY_MODULE_ALIASES = new Map(Object.entries(moduleAliases));
+
+async function loadShellUiModules() {
+  if (!shellUiModulesPromise) {
+    shellUiModulesPromise = Promise.all([
+      importBusinessOsModule('./shared/event-bus.js?v=20260519-shell-os1', 'shell event bus'),
+      importBusinessOsModule('./shared/notifications.js?v=20260519-shell-os1', 'shell notifications'),
+      importBusinessOsModule('./shared/context-menu.js?v=20260519-shell-os1', 'shell context menu'),
+      importBusinessOsModule('./shared/window-manager.js?v=20260519-shell-os1', 'shell window manager'),
+      importBusinessOsModule('./shared/taskbar.js?v=20260519-shell-os1', 'shell taskbar'),
+      importBusinessOsModule('./shared/window-switcher.js?v=20260519-shell-os1', 'shell window switcher'),
+    ]).then(([
+      eventBus,
+      notifications,
+      contextMenu,
+      windowManager,
+      taskbar,
+      windowSwitcher,
+    ]) => ({
+      createEventBus: eventBus.createEventBus,
+      createNotifications: notifications.createNotifications,
+      createContextMenu: contextMenu.createContextMenu,
+      createWindowManager: windowManager.createWindowManager,
+      createTaskbar: taskbar.createTaskbar,
+      createWindowSwitcher: windowSwitcher.createWindowSwitcher,
+    }));
+  }
+  shellUiModules = await shellUiModulesPromise;
+  return shellUiModules;
+}
+
+async function loadShellDialogsModule() {
+  if (!shellDialogsModulePromise) {
+    shellDialogsModulePromise = importBusinessOsModule('./shared/dialogs.js?v=20260519-dialogs1', 'shell dialogs');
+  }
+  return shellDialogsModulePromise;
+}
+
+async function loadShellIconsModule() {
+  if (!shellIconsModulePromise) {
+    shellIconsModulePromise = importBusinessOsModule('./shared/icons.js?v=20260520-svg-icons2', 'shell icons')
+      .then((mod) => {
+        shellIconsModule = mod;
+        return mod;
+      });
+  }
+  return shellIconsModulePromise;
+}
+
+function getRegisteredSvgIcon(id, size, strokeWidth) {
+  return shellIconsModule?.getSvgIcon?.(id, size, strokeWidth) || '';
+}
+
+async function loadBusinessDbModule() {
+  if (!businessDbModulePromise) {
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260522-rxdb-fork1', 'business db')
+      .then((mod) => {
+        businessDbModule = mod;
+        return mod;
+      });
+  }
+  return businessDbModulePromise;
+}
+
+async function loadSyncModule() {
+  if (!syncModulePromise) {
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260522-replication-io2', 'business sync')
+      .then((mod) => {
+        syncModule = mod;
+        return mod;
+      });
+  }
+  return syncModulePromise;
+}
+
+async function loadCommandBusModule() {
+  if (!commandBusModulePromise) {
+    commandBusModulePromise = importBusinessOsModule('./shared/command-bus.js?v=20260521-rxdb-db32', 'command bus');
+  }
+  return commandBusModulePromise;
+}
+
+async function loadCoreSchemaModules() {
+  if (!coreSchemaModulesPromise) {
+    coreSchemaModulesPromise = Promise.all([
+      importBusinessOsModule('./modules/ctox/schema.js?v=20260525-file-viewer-command-reuse1', 'ctox core schema'),
+      importBusinessOsModule('./modules/desktop/schema.js?v=20260525-file-viewer-command-reuse1', 'desktop core schema'),
+    ]).then(([ctox, desktop]) => ({ ctox, desktop }));
+  }
+  return coreSchemaModulesPromise;
+}
+
+async function loadReactSettingsModule() {
+  if (!reactSettingsModulePromise) {
+    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260518-runtime-auth-oauth3', 'react settings');
+  }
+  return reactSettingsModulePromise;
+}
+
+async function importBusinessOsModule(url, label) {
+  try {
+    return await withImportTimeout(import(url), label, url);
+  } catch (error) {
+    console.warn(`[business-os] ${label} import stalled or failed; retrying once`, error);
+    const separator = url.includes('?') ? '&' : '?';
+    return withImportTimeout(
+      import(`${url}${separator}retry=${Date.now().toString(36)}`),
+      `${label} retry`,
+      url,
+    );
+  }
+}
+
+function withImportTimeout(promise, label, url) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error(`${label} import timed out after ${SHELL_IMPORT_TIMEOUT_MS}ms: ${url}`));
+      }, SHELL_IMPORT_TIMEOUT_MS);
+    }),
+  ]);
+}
 
 const shellMessages = {
   de: {
@@ -157,6 +295,12 @@ const shellMessages = {
     pinned: 'Gepinnt',
     running: 'Läuft',
     openApp: 'Öffnen',
+    chatToCtox: 'Mit CTOX chatten',
+    chatWorkDataLabel: 'Mit Daten arbeiten',
+    chatModifyAppLabel: 'App modifizieren',
+    chatPlaceholder: 'Was soll CTOX hier tun oder prüfen?',
+    chatOpening: 'Öffne Chat...',
+    send: 'Senden',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'CTOX',
@@ -167,6 +311,7 @@ const shellMessages = {
       reports: 'Bugs & Features',
       research: 'Web Research',
       conversations: 'Conversations',
+      calendar: 'Kalender',
     },
   },
   en: {
@@ -207,6 +352,12 @@ const shellMessages = {
     pinned: 'Pinned',
     running: 'Running',
     openApp: 'Open',
+    chatToCtox: 'Chat to CTOX',
+    chatWorkDataLabel: 'Work with data',
+    chatModifyAppLabel: 'Modify app',
+    chatPlaceholder: 'What should CTOX do or check here?',
+    chatOpening: 'Opening Chat...',
+    send: 'Send',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'CTOX',
@@ -217,6 +368,7 @@ const shellMessages = {
       reports: 'Bugs & Features',
       research: 'Web Research',
       conversations: 'Conversations',
+      calendar: 'Calendar',
     },
   },
 };
@@ -250,12 +402,16 @@ let currentProgress = 0;
 let progressTimer = null;
 
 bootstrap().catch(async (error) => {
-  console.error(error);
   if (await recoverFromLocalRxDbSchemaDrift(error)) return;
+  console.error(error);
   showStartupError(error);
 });
 
 async function bootstrap() {
+  if (!globalThis.crypto?.subtle) {
+    throw new Error('WebCrypto is missing (Insecure Origin on Safari 127.0.0.1). Please use http://localhost:8765/');
+  }
+  const { installBusinessDialogFallbacks } = await loadShellDialogsModule();
   installBusinessDialogFallbacks();
   const prefs = readAccountPrefs();
   applyShellTheme(prefs.theme || 'dark', { persist: false });
@@ -264,9 +420,9 @@ async function bootstrap() {
   syncHeaderControls();
   wireShellActions();
 
-  setStartupProgress(10, 'Initialisiere Systemeinstellungen...');
+  setStartupProgress(10, 'System-Konfiguration wird geladen...');
 
-  setStartupProgress(30, 'Sitzungsdaten werden überprüft...');
+  setStartupProgress(30, 'Anmeldesitzung wird überprüft...');
   const session = await loadSession();
   state.session = session;
   renderAccountButton(session);
@@ -279,36 +435,40 @@ async function bootstrap() {
     return;
   }
 
-  setStartupProgress(50, 'Lokale Datenbank wird geladen...');
+  setStartupProgress(50, 'Lokaler Datenspeicher wird geladen...');
   const syncConfig = await loadSyncConfig();
-  await resetBusinessDataPlaneForBuildIfNeeded();
+  await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
 
-  setStartupProgress(70, 'Verbindung zu Sync-Peers wird hergestellt...');
+  setStartupProgress(70, 'Verbindung zum Netzwerk wird hergestellt...');
   let modules;
   try {
-    setStartupProgress(85, 'Lade verfügbare Module & Anwendungsmanifeste...');
+    setStartupProgress(85, 'Ihre Anwendungen werden vorbereitet...');
     modules = await loadModules();
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; resetting local RxDB cache and retrying WebRTC sync', error);
-    setStartupProgress(80, 'Lokale RxDB wird neu synchronisiert...');
+    setStartupProgress(80, 'Lokaler Datenspeicher wird optimiert...');
     await repairBusinessDataPlane(syncConfig);
     modules = await loadModules(20000);
   }
   state.modules = modules.modules || [];
-  registerCustomModuleIcons();
+  state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
+  registerCustomModuleIcons().catch((error) => {
+    console.warn('[business-os] deferred custom module icon registration failed:', error);
+  });
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
   state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
   persistModuleLayout();
   renderTabs();
-  state.eventBus = createEventBus();
-  state.contextMenu = createContextMenu({
+  const shellUi = await loadShellUiModules();
+  state.eventBus = shellUi.createEventBus();
+  state.contextMenu = shellUi.createContextMenu({
     host: document.body,
     viewportEl: document.documentElement,
   });
-  state.notifications = createNotifications({
+  state.notifications = shellUi.createNotifications({
     container: els.shellNotifications,
     t: (key, fallback) => shellText(key) || fallback || key,
   });
@@ -316,7 +476,7 @@ async function bootstrap() {
   snapPreviewEl.className = 'shell-snap-preview';
   snapPreviewEl.hidden = true;
   els.shellWindowLayer.appendChild(snapPreviewEl);
-  state.windowManager = createWindowManager({
+  state.windowManager = shellUi.createWindowManager({
     windowLayer: els.shellWindowLayer,
     surfaceEl: document.querySelector('.workspace-frame') || document.body,
     rootEl: document.documentElement,
@@ -330,7 +490,7 @@ async function bootstrap() {
   );
   state.windowManager.setInsets({ top: 0, bottom: els.shellTaskbar ? 54 : 0 });
   if (els.shellTaskbar) {
-    state.taskbar = createTaskbar({
+    state.taskbar = shellUi.createTaskbar({
       container: els.shellTaskbar,
       windowManager: state.windowManager,
       eventBus: state.eventBus,
@@ -339,7 +499,7 @@ async function bootstrap() {
     });
   }
   if (els.shellSwitcherOverlay && els.shellSwitcherPanel) {
-    state.windowSwitcher = createWindowSwitcher({
+    state.windowSwitcher = shellUi.createWindowSwitcher({
       overlay: els.shellSwitcherOverlay,
       panel: els.shellSwitcherPanel,
       windowManager: state.windowManager,
@@ -349,73 +509,160 @@ async function bootstrap() {
   }
   wireShellWindowGestures();
   setStatus(shellText('localWorkspace'));
-  initBusinessReporter({
-    session: state.session,
-    getActiveModule: () => state.activeModule,
-    commandBus: createLiveCommandBusFacade(),
-    db: createLiveDbFacade(),
-  });
-  initBusinessChat({
-    session: state.session,
-    commandBus: createLiveCommandBusFacade(),
-    db: createLiveDbFacade(),
-    getActiveModule: () => state.activeModule,
-  });
 
-  setStartupProgress(95, 'Workspace ist bereit. Öffne Standardmodul...');
+  // Initialize the global ctox context menu
+  initGlobalCtoxContextMenu();
+
+  setStartupProgress(95, 'Workspace ist bereit. CTOX wird gestartet...');
   try {
     await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
+    markBootTiming('shellVisibleMs');
     setStatus(shellText('localWorkspace'));
+    scheduleBusinessCompanions();
   } catch (error) {
     console.error('[business-os] module startup failed', error);
     setStatus(`Module startup failed: ${error.message || error}`);
+  } finally {
+    state.initialModuleOpened = Boolean(state.activeModule?.id);
+    flushDeferredCatalogRefresh();
   }
   scheduleBackgroundModuleWork();
   refreshRemoteShellStateInBackground();
+  scheduleCriticalSyncWarmup();
 }
 
-async function resetBusinessDataPlaneForBuildIfNeeded() {
-  if (localStorage.getItem(RXDB_BOOTSTRAP_VERSION_KEY) === RXDB_BOOTSTRAP_VERSION) return;
+function businessDbName(syncConfig = state.syncConfig) {
+  const instanceId = String(syncConfig?.instance_id || syncConfig?.instanceId || 'default')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .slice(0, 80) || 'default';
+  const originId = String(location.host || location.hostname || 'local')
+    .replace(/[^a-zA-Z0-9_-]+/g, '_')
+    .slice(0, 80) || 'local';
+  const params = new URLSearchParams(location.search);
+  const smokeDbId = params.has('rxdbSmoke')
+    ? String(params.get('smokeDbId') || '')
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .slice(0, 80)
+    : '';
+  return [BUSINESS_DB_NAME, originId, instanceId, smokeDbId].filter(Boolean).join('_');
+}
+
+async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
+  const dbName = businessDbName(syncConfig);
+  const versionToken = `${RXDB_BOOTSTRAP_VERSION}:${dbName}`;
+  const existingToken = localStorage.getItem(RXDB_BOOTSTRAP_VERSION_KEY);
+  if (existingToken === versionToken) return;
+  if (!existingToken) {
+    localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, versionToken);
+    return;
+  }
+  const { resetBusinessDb } = await loadBusinessDbModule();
   setStatus('Lokale RxDB wird neu synchronisiert');
-  await resetBusinessDb({ name: BUSINESS_DB_NAME });
-  localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, RXDB_BOOTSTRAP_VERSION);
+  await resetBusinessDb({ name: dbName });
+  localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, versionToken);
 }
 
 async function openBusinessDataPlane(syncConfig) {
-  setStartupProgress(51, 'Lokale Datenbank-Konfiguration wird vorbereitet...');
+  setStartupProgress(51, 'Datenspeicher-Konfiguration wird vorbereitet...');
   state.syncConfig = syncConfig;
+  const dbName = businessDbName(syncConfig);
 
-  setStartupProgress(54, 'Verbindung zur lokalen IndexedDB-Instanz wird geöffnet...');
-  state.db = await createBusinessDb({ name: BUSINESS_DB_NAME });
+  setStartupProgress(54, 'Lokaler Speicher wird geöffnet...');
+  const { createBusinessDb } = await loadBusinessDbModule();
+  state.db = await createBusinessDb({ name: dbName });
 
-  setStartupProgress(58, 'Systemtabellen und reaktive Schemata werden registriert...');
+  setStartupProgress(58, 'Systemdatenstrukturen werden aufgebaut...');
   await registerCoreCollections();
 
-  setStartupProgress(62, 'Desktop-Layout und Fensterkonfiguration werden geladen...');
+  setStartupProgress(62, 'Desktop-Layout wird geladen...');
   await hydrateTaskbarPinsFromDesktopLayout();
   renderTabs();
 
-  setStartupProgress(66, 'Reaktive Daten-Synchronisation (WebRTC) wird initialisiert...');
+  setStartupProgress(66, 'Echtzeit-Synchronisierung wird gestartet...');
+  const { createSyncRuntime } = await loadSyncModule();
   state.sync = createSyncRuntime({
     db: state.db,
     config: syncConfig,
     onDiagnostic: updateSyncDiagnostics,
   });
 
-  setStartupProgress(69, 'Offline-First Befehls-Bus wird gestartet...');
+  setStartupProgress(69, 'Dienste werden gestartet...');
+  const { createCommandBus } = await loadCommandBusModule();
   state.commandBus = createCommandBus({
     db: () => state.db,
     config: syncConfig,
   });
   startShellCtoxHealthMonitor();
+
+  if (state.catalogSubscription) {
+    try { state.catalogSubscription.unsubscribe(); } catch (e) {}
+    state.catalogSubscription = null;
+  }
+  const catalogColl = state.db?.collection?.('business_module_catalog');
+  if (catalogColl) {
+    state.catalogSubscription = catalogColl.findOne('module-catalog').$.subscribe(async (doc) => {
+      const data = doc?.toJSON?.();
+      if (data && data._deleted !== true && data.is_deleted !== true) {
+        const fingerprint = moduleCatalogFingerprint(data);
+        if (fingerprint && fingerprint === state.moduleCatalogFingerprint) return;
+        scheduleCatalogRefresh('database-sync');
+      }
+    });
+  }
+}
+
+function scheduleCatalogRefresh(reason = 'database-sync') {
+  state.catalogRefreshQueued = true;
+  if (!state.initialModuleOpened) {
+    console.log(`[business-os] Module catalog update queued until initial shell is visible (${reason}).`);
+    return;
+  }
+  if (state.catalogRefreshTimer) return;
+  state.catalogRefreshTimer = window.setTimeout(runQueuedCatalogRefresh, 100);
+}
+
+function flushDeferredCatalogRefresh() {
+  if (!state.initialModuleOpened || !state.catalogRefreshQueued) return;
+  if (state.catalogRefreshTimer) return;
+  state.catalogRefreshTimer = window.setTimeout(runQueuedCatalogRefresh, 0);
+}
+
+async function runQueuedCatalogRefresh() {
+  state.catalogRefreshTimer = null;
+  if (!state.catalogRefreshQueued || state.catalogRefreshRunning) return;
+  state.catalogRefreshQueued = false;
+  state.catalogRefreshRunning = true;
+  try {
+    console.log('[business-os] Module catalog update detected in database sync.');
+    await refreshModules();
+  } catch (error) {
+    console.warn('[business-os] Module catalog refresh failed:', error);
+  } finally {
+    state.catalogRefreshRunning = false;
+    if (state.catalogRefreshQueued && state.initialModuleOpened && !state.catalogRefreshTimer) {
+      state.catalogRefreshTimer = window.setTimeout(runQueuedCatalogRefresh, 100);
+    }
+  }
 }
 
 async function repairBusinessDataPlane(syncConfig) {
   state.dataPlaneGeneration += 1;
   clearSyncRecoveryRepairTimer();
+  if (state.catalogRefreshTimer) {
+    window.clearTimeout(state.catalogRefreshTimer);
+    state.catalogRefreshTimer = null;
+  }
+  state.catalogRefreshRunning = false;
+  state.catalogRefreshQueued = false;
+  state.moduleCatalogFingerprint = '';
+  state.initialModuleOpened = false;
   if (state.ctoxHealthTimer) {
     window.clearInterval(state.ctoxHealthTimer);
     state.ctoxHealthTimer = null;
+  }
+  if (state.catalogSubscription) {
+    try { state.catalogSubscription.unsubscribe(); } catch (e) {}
+    state.catalogSubscription = null;
   }
   try { await state.sync?.stop?.(); } catch (error) { console.warn('[business-os] sync stop before cache reset failed', error); }
   try { await state.db?.close?.(); } catch (error) { console.warn('[business-os] db close before cache reset failed', error); }
@@ -430,7 +677,8 @@ async function repairBusinessDataPlane(syncConfig) {
   }
   state.schemaRetryTimers.clear();
   state.schemaRegistrationQueue = Promise.resolve();
-  await resetBusinessDb({ name: BUSINESS_DB_NAME });
+  const { resetBusinessDb } = await loadBusinessDbModule();
+  await resetBusinessDb({ name: businessDbName(syncConfig) });
   await openBusinessDataPlane(syncConfig);
 }
 
@@ -443,20 +691,21 @@ function isModuleCatalogSyncError(error) {
 
 async function registerCoreCollections() {
   const t0 = performance.now();
-  setStartupProgress(58, 'Systemtabellen werden vorbereitet...');
+  setStartupProgress(58, 'Datenstrukturen werden vorbereitet...');
 
-  const ctoxSchemes = withMigrationStrategies(ctoxCollections, ctoxMigrationStrategies);
-  const desktopSchemes = withMigrationStrategies(desktopCollections, desktopMigrationStrategies);
+  const { ctox, desktop } = await loadCoreSchemaModules();
+  const ctoxSchemes = withMigrationStrategies(ctox.collections, ctox.migrationStrategies);
+  const desktopSchemes = withMigrationStrategies(desktop.collections, desktop.migrationStrategies);
 
   const consolidated = {
     ...ctoxSchemes,
     ...desktopSchemes,
   };
 
-  setStartupProgress(59, 'Registriere Systemdaten-Struktur in IndexedDB...');
+  setStartupProgress(59, 'Speicherstrukturen werden registriert...');
   await state.db.addCollections(consolidated);
 
-  setStartupProgress(61, 'Systemtabellen erfolgreich initialisiert.');
+  setStartupProgress(61, 'Speicherstrukturen erfolgreich geladen.');
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   await primeWindowGeometryCache();
@@ -747,30 +996,12 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
-  document.querySelector('[data-ctox-shell-warning]')?.addEventListener('click', () => {
-    openSettingsDrawer({ initialTab: 'runtime' });
-  });
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
     openModule('ctox');
   });
   document.querySelector('[data-shell-start]')?.addEventListener('click', (event) => {
-    if (!state.contextMenu || !state.modules?.length) {
-      location.hash = '#desktop';
-      return;
-    }
-    event.preventDefault();
-    const moduleItems = listLaunchTargets('module').map((target) => startMenuItemForTarget(target));
-    const appItems = listLaunchTargets('app').map((target) => startMenuItemForTarget(target));
-    const items = [...moduleItems];
-    if (appItems.length) items.push({ type: 'separator' }, ...appItems);
-    items.push({ type: 'separator' });
-    items.push({
-      label: shellText('settings') || 'Einstellungen',
-      icon: '⚙',
-      action: () => openSettingsDrawer(),
-    });
-    state.contextMenu.show(event, items);
+    toggleStartMenu(event);
   });
   els.showDesktop?.addEventListener('click', () => openDesktop());
   els.backButton?.addEventListener('click', () => navigateHistory('back'));
@@ -905,9 +1136,13 @@ function openModuleSourceEditor(moduleId) {
     },
   });
 }
+window.openModuleSourceEditor = openModuleSourceEditor;
 
-function openSettingsDrawer(options = {}) {
+
+async function openSettingsDrawer(options = {}) {
   els.rightDrawer.classList.remove('account-popover');
+  els.rightDrawer.classList.add('settings-drawer-open');
+  const { openReactSettings } = await loadReactSettingsModule();
   openReactSettings({
     mount: els.rightDrawer,
     modules: state.modules,
@@ -1234,12 +1469,38 @@ function shellText(key) {
 
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
+  if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
   scheduleSyncRecoveryRepairIfNeeded(snapshot);
   refreshOpenSyncDiagnosticsDrawer();
   window.dispatchEvent(new CustomEvent('ctox-business-os-sync-diagnostics', {
     detail: snapshot,
   }));
+}
+
+function hasWebRtcConnectedCollection(snapshot) {
+  if (!snapshot || snapshot.mode !== 'webrtc') return false;
+  return Object.values(snapshot.collections || {}).some((collection) => {
+    return collection?.connectionStatus === 'connected'
+      || collection?.status === 'connected'
+      || Boolean(collection?.connectedAt)
+      || Boolean(collection?.initialReplicationAt);
+  });
+}
+
+function markBootTiming(key) {
+  if (!Object.prototype.hasOwnProperty.call(state.bootTimings, key)) return;
+  if (state.bootTimings[key] !== null) return;
+  state.bootTimings[key] = Math.max(0, Math.round(performance.now() - state.bootTimings.startedAtMs));
+}
+
+function serializeBootTimings() {
+  return {
+    startedAt: state.bootTimings.startedAt,
+    shellVisibleMs: state.bootTimings.shellVisibleMs,
+    firstWebRtcConnectedMs: state.bootTimings.firstWebRtcConnectedMs,
+    firstAdvancedStatusHealthyMs: state.bootTimings.firstAdvancedStatusHealthyMs,
+  };
 }
 
 function scheduleSyncRecoveryRepairIfNeeded(snapshot) {
@@ -1272,6 +1533,10 @@ function hasRecoverableWebRtcFailure(snapshot) {
 }
 
 async function repairRecoveringDataPlane() {
+  if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
+    console.info('[business-os] smoke mode keeps the local RxDB cache intact; sync runtime handles reconnect');
+    return;
+  }
   if (syncRecoveryRepairRunning || !state.syncConfig || !state.db) return;
   syncRecoveryRepairRunning = true;
   try {
@@ -1304,10 +1569,30 @@ async function startCriticalSyncCollections() {
   }
 }
 
+function scheduleCriticalSyncWarmup() {
+  const run = () => {
+    startCriticalSyncCollections().catch((error) => {
+      console.warn('[business-os] critical sync warmup failed', error);
+    });
+  };
+  if ('requestIdleCallback' in window) {
+    window.requestIdleCallback(run, { timeout: 1000 });
+  } else {
+    window.setTimeout(run, 0);
+  }
+}
+
 async function buildAdvancedStatusSnapshot(options = {}) {
   const diagnostics = state.syncDiagnostics || null;
   const collections = diagnostics?.collections || {};
   const collectionValues = Object.values(collections);
+  if (!syncModule && collectionValues.some((item) => item?.lastError)) {
+    try {
+      await loadSyncModule();
+    } catch (error) {
+      console.warn('[business-os] advanced status sync classifier unavailable', error);
+    }
+  }
   const requiredCollections = Array.isArray(options.requiredCollections) && options.requiredCollections.length
     ? options.requiredCollections.filter((collection) => typeof collection === 'string' && collection.trim())
     : [
@@ -1343,6 +1628,11 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     .filter((item) => item?.connectionStatus === 'reconnecting' || item?.status === 'reconnecting')
     .map((item) => item.collection)
     .filter(Boolean);
+  const requiredCollectionSet = new Set(requiredCollections);
+  const requiredReconnectingCollections = reconnectingCollections
+    .filter((collection) => requiredCollectionSet.has(collection));
+  const optionalReconnectingCollections = reconnectingCollections
+    .filter((collection) => !requiredCollectionSet.has(collection));
   const peerSessions = collectionValues
     .filter((item) => item?.remotePeerSession)
     .map((item) => ({
@@ -1371,17 +1661,22 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     activeModuleLoaded: Boolean(state.activeModule?.id),
     workspaceNotLoading: !bodyDataset.moduleLoading,
     dataPlaneWebrtc: state.sync?.mode === 'webrtc' && diagnostics?.mode === 'webrtc',
+    rxdbRuntimeAppLocal: state.db?.runtime?.name === 'ctox-rxdb-js'
+      && state.db?.runtime?.source === 'app-local'
+      && state.db?.runtime?.packageManager === 'none',
     moduleCatalogAvailable: state.modules.length > 0 && (counts === null || Number(counts.business_module_catalog || 0) > 0),
     requiredCollectionsConnected: missingRequiredCollections.length === 0,
     requiredCollectionsInitialSyncComplete: initialSync.missingInitialReplication.length === 0,
+    requiredCollectionsCheckpointEpochAdvertised: initialSync.missingCheckpointEpoch.length === 0,
     noCheckpointProtocolErrors: checkpointErrors.length === 0,
     noSchemaProtocolErrors: schemaErrors.length === 0,
     noReplicationIoErrors: replicationErrors.length === 0,
     noFailedCollections: failedCollections.length === 0,
-    noStalledReconnect: reconnectingCollections.length === 0,
+    noStalledReconnect: requiredReconnectingCollections.length === 0,
     noAutomaticRepairRunning: !syncRecoveryRepairRunning,
   };
   const ok = Object.values(checks).every(Boolean);
+  if (ok) markBootTiming('firstAdvancedStatusHealthyMs');
   if (ok) state.advancedStatusEverHealthy = true;
   return {
     version: 'business-os-advanced-status-v1',
@@ -1398,7 +1693,9 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       moduleIds: state.modules.map((mod) => mod.id).filter(Boolean),
       statusText: document.querySelector('[data-status]')?.textContent || '',
       visibleTextSample: (document.body?.innerText || '').slice(0, 500),
+      bootTimings: serializeBootTimings(),
     },
+    rxdbRuntime: sanitizeRxdbRuntime(state.db?.runtime || state.db?.rxdb?.__ctoxRuntime || null),
     sync: {
       mode: state.sync?.mode || null,
       phase: diagnostics?.phase || null,
@@ -1415,6 +1712,8 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       schemaErrors,
       replicationErrors,
       reconnectingCollections,
+      requiredReconnectingCollections,
+      optionalReconnectingCollections,
       lifecycleEvents,
       requiredCollections,
       requiredCollectionEvidence,
@@ -1435,11 +1734,12 @@ async function buildAdvancedStatusSnapshot(options = {}) {
 function serializeAdvancedStatusCollectionError(item) {
   const error = item?.lastError;
   if (!error) return null;
-  const rawCode = typeof error.code === 'string' ? error.code.trim() : '';
-  const rawName = typeof error.name === 'string' ? error.name.trim() : '';
-  const rawMessage = typeof error.message === 'string' ? error.message.trim() : '';
-  const rawPhase = typeof error.phase === 'string' ? error.phase.trim() : '';
-  const rawSeverity = typeof error.severity === 'string' ? error.severity.trim() : '';
+  const normalizedError = syncModule?.classifyReplicationIoError?.(item.collection || null, error) || error;
+  const rawCode = typeof normalizedError.code === 'string' ? normalizedError.code.trim() : '';
+  const rawName = typeof normalizedError.name === 'string' ? normalizedError.name.trim() : '';
+  const rawMessage = typeof normalizedError.message === 'string' ? normalizedError.message.trim() : '';
+  const rawPhase = typeof normalizedError.phase === 'string' ? normalizedError.phase.trim() : '';
+  const rawSeverity = typeof normalizedError.severity === 'string' ? normalizedError.severity.trim() : '';
   return {
     collection: item.collection || null,
     status: item.connectionStatus || item.status || null,
@@ -1447,13 +1747,13 @@ function serializeAdvancedStatusCollectionError(item) {
     code: rawCode || null,
     phase: rawPhase || null,
     severity: rawSeverity || null,
-    retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
-    expected: typeof error.expected === 'string' ? error.expected.slice(0, 120) : null,
-    actual: typeof error.actual === 'string' ? error.actual.slice(0, 120) : null,
-    direction: typeof error.direction === 'string' ? error.direction.slice(0, 20) : null,
-    upstreamCode: typeof error.upstreamCode === 'string' ? error.upstreamCode.slice(0, 40) : null,
-    batchSize: Number.isFinite(Number(error.batchSize)) ? Number(error.batchSize) : null,
-    rowCount: Number.isFinite(Number(error.rowCount)) ? Number(error.rowCount) : null,
+    retryable: typeof normalizedError.retryable === 'boolean' ? normalizedError.retryable : null,
+    expected: typeof normalizedError.expected === 'string' ? normalizedError.expected.slice(0, 120) : null,
+    actual: typeof normalizedError.actual === 'string' ? normalizedError.actual.slice(0, 120) : null,
+    direction: typeof normalizedError.direction === 'string' ? normalizedError.direction.slice(0, 20) : null,
+    upstreamCode: typeof normalizedError.upstreamCode === 'string' ? normalizedError.upstreamCode.slice(0, 40) : null,
+    batchSize: normalizedError.batchSize !== null && Number.isFinite(Number(normalizedError.batchSize)) ? Number(normalizedError.batchSize) : null,
+    rowCount: normalizedError.rowCount !== null && Number.isFinite(Number(normalizedError.rowCount)) ? Number(normalizedError.rowCount) : null,
     message: rawMessage.slice(0, 240),
   };
 }
@@ -1526,6 +1826,16 @@ function sanitizeAdvancedStatusRemoteCheckpoint(value) {
   };
 }
 
+function sanitizeRxdbRuntime(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    name: typeof value.name === 'string' ? value.name.slice(0, 80) : null,
+    source: typeof value.source === 'string' ? value.source.slice(0, 80) : null,
+    importPath: typeof value.importPath === 'string' ? value.importPath.slice(0, 200) : null,
+    packageManager: typeof value.packageManager === 'string' ? value.packageManager.slice(0, 40) : null,
+  };
+}
+
 function buildAdvancedStatusInitialSync(requiredCollections, collections) {
   const now = Date.now();
   const stallAfterMs = 45000;
@@ -1537,6 +1847,11 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
     const state = initialReplicationAt
       ? 'complete'
       : (diagnostics?.initialReplicationState || (diagnostics ? 'pending' : 'missing-diagnostics'));
+    const remoteCapabilities = Array.isArray(diagnostics?.remoteCapabilities)
+      ? diagnostics.remoteCapabilities
+      : [];
+    const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
+    const checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics);
     const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
       : 0;
@@ -1548,6 +1863,10 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       source: diagnostics?.initialReplicationSource || null,
       initialReplicationStartedAt: startedAt,
       initialReplicationAt,
+      checkpointState: checkpoint?.state || null,
+      checkpointEpoch: checkpoint?.epoch || null,
+      checkpointEpochAdvertised,
+      checkpointCapabilityAdvertised: remoteCapabilities.includes('ctox-checkpoint-epoch-v1'),
       stalled: !initialReplicationAt && stalledForMs >= stallAfterMs,
       stalledForMs,
     };
@@ -1557,6 +1876,9 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
     completedTotal: entries.filter((entry) => entry.state === 'complete').length,
     missingInitialReplication: entries
       .filter((entry) => entry.state !== 'complete')
+      .map((entry) => entry.collection),
+    missingCheckpointEpoch: entries
+      .filter((entry) => !entry.checkpointEpochAdvertised)
       .map((entry) => entry.collection),
     pendingCollections: entries
       .filter((entry) => !['complete', 'failed'].includes(entry.state))
@@ -1573,6 +1895,7 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
   if (evidence?.hasCollection !== true || !diagnostics) return false;
   const initialReplicationComplete = Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
   if (!initialReplicationComplete) return false;
+  if (!hasAdvertisedCheckpointEpoch(diagnostics)) return false;
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
   if (['connected', 'running', 'reused'].includes(status)) return true;
   if (evidence?.hasData === true) return true;
@@ -1583,6 +1906,14 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
     'desktop_file_chunks',
   ].includes(collection)) return false;
   return true;
+}
+
+function hasAdvertisedCheckpointEpoch(diagnostics) {
+  if (!diagnostics) return false;
+  const capabilities = Array.isArray(diagnostics.remoteCapabilities) ? diagnostics.remoteCapabilities : [];
+  if (!capabilities.includes('ctox-checkpoint-epoch-v1')) return false;
+  const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics.remoteCheckpoint || null);
+  return Boolean(checkpoint?.state === 'advertised' && checkpoint.epoch);
 }
 
 async function collectAdvancedStatusCounts() {
@@ -1656,6 +1987,7 @@ const MODULE_GLYPHS = {
   conversations: '💬',
   notes: '📝',
   'app-store': '🛍',
+  'coding-agents': '🤖',
 };
 
 function glyphForModule(moduleId) {
@@ -1685,7 +2017,7 @@ const DESKTOP_APPS = [
     glyph: '◫',
     defaultWidth: 760,
     defaultHeight: 560,
-    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260522-file-chunk-integrity4'),
+    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260525-file-viewer-command-reuse1'),
   },
   {
     id: 'creator',
@@ -1698,13 +2030,15 @@ const DESKTOP_APPS = [
 ];
 
 function listDesktopApps() {
-  return DESKTOP_APPS.map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
-    id,
-    title,
-    glyph,
-    defaultWidth,
-    defaultHeight,
-  }));
+  return DESKTOP_APPS
+    .filter((app) => app.id !== 'file-viewer')
+    .map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
+      id,
+      title,
+      glyph,
+      defaultWidth,
+      defaultHeight,
+    }));
 }
 
 async function openDesktopApp(appId, options = {}) {
@@ -1891,7 +2225,7 @@ function renderModuleTab(target, options = {}) {
   const status = options.pinned
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
-  const svgHtml = getSvgIcon(target.id, 16, 1.8);
+  const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
   button.innerHTML = `
     <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(target.glyph || '◻︎')}</span>
     <span class="module-tab-label">${escapeHtml(target.title || target.id)}</span>
@@ -1943,7 +2277,7 @@ function renderLegacyModuleTab(mod, options = {}) {
   button.className = 'module-tab';
   button.type = 'button';
   button.dataset.module = mod.id;
-  const svgHtml = getSvgIcon(mod.id, 16, 1.8);
+  const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
   button.innerHTML = `
     <span class="module-tab-icon" aria-hidden="true">${svgHtml || escapeHtml(taskbarMarkForModule(mod))}</span>
     <span class="module-tab-label">${escapeHtml(moduleDisplayTitle(mod))}</span>
@@ -1979,7 +2313,7 @@ function renderLegacyModuleTab(mod, options = {}) {
 }
 
 function moduleAppearsInSwitcher(mod) {
-  return mod?.id && mod.id !== 'desktop';
+  return mod?.id && mod.id !== 'desktop' && mod.id !== 'notizen' && mod.install_scope !== 'internal';
 }
 
 function listLaunchTargets(kind = '') {
@@ -1992,13 +2326,15 @@ function listLaunchTargets(kind = '') {
       glyph: taskbarMarkForModule(mod),
       module: mod,
     }));
-  const appTargets = DESKTOP_APPS.map((app) => ({
-    id: app.id,
-    kind: 'app',
-    title: app.title,
-    glyph: app.glyph,
-    app,
-  }));
+  const appTargets = DESKTOP_APPS
+    .filter((app) => app.id !== 'file-viewer')
+    .map((app) => ({
+      id: app.id,
+      kind: 'app',
+      title: app.title,
+      glyph: app.glyph,
+      app,
+    }));
   const all = [...moduleTargets, ...appTargets];
   return kind ? all.filter((target) => target.kind === kind) : all;
 }
@@ -2298,7 +2634,10 @@ async function openModule(moduleId, options = {}) {
     setStatus(`Schema warning: ${error.message || error}`);
   }
   try {
-    const moduleScript = await import(`./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`);
+    const moduleScript = await importBusinessOsModule(
+      `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
+      `${mod.id} module`,
+    );
     if (typeof moduleScript.mount === 'function') {
       state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
     }
@@ -2362,7 +2701,10 @@ async function registerModuleSchemas(mod) {
   const registration = (async () => {
     const retry = Number(state.schemaImportRetries.get(mod.id) || 0);
     const retryQuery = retry > 0 ? `_schemaRetry${retry}` : '';
-    const schemaModule = await import(`./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}${retryQuery}`);
+    const schemaModule = await importBusinessOsModule(
+      `./${moduleBasePath(mod)}/schema.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}${retryQuery}`,
+      `${mod.id} schema`,
+    );
     if (isStaleDataPlaneGeneration(generation)) return;
     if (schemaModule.collections) {
       const collections = withMigrationStrategies(
@@ -2449,16 +2791,20 @@ function scheduleTransientModuleSyncRetry(mod, error) {
 
 async function recoverFromLocalRxDbSchemaDrift(error) {
   if (!isRxDbSchemaDriftError(error)) return false;
-  const repairToken = `${BUSINESS_DB_NAME}:${RXDB_BOOTSTRAP_VERSION}`;
+  const repairToken = `${businessDbName()}:${RXDB_BOOTSTRAP_VERSION}`;
   try {
     if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
     sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
   } catch {}
-  console.warn('[business-os] local RxDB schema drift detected; rebuilding browser cache', error);
+  const log = isRxDbOpenTimeoutError(error) ? console.info : console.warn;
+  log('[business-os] local RxDB cache repair triggered; rebuilding browser cache', error);
   setStatus('Lokale RxDB wird neu aufgebaut');
   try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
   try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
-  try { await resetBusinessDb({ name: BUSINESS_DB_NAME }); } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
+  try {
+    const { resetBusinessDb } = await loadBusinessDbModule();
+    await resetBusinessDb({ name: businessDbName() });
+  } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
   window.setTimeout(() => window.location.reload(), 250);
   return true;
 }
@@ -2467,7 +2813,15 @@ function isRxDbSchemaDriftError(error) {
   const message = String(error?.message || error || '');
   return message.includes('RxDB Error-Code: DB6')
     || message.includes('previousSchemaHash')
-    || message.includes('schemaHash');
+    || message.includes('schemaHash')
+    || message.includes('timed out')
+    || message.includes('IndexedDB lock');
+}
+
+function isRxDbOpenTimeoutError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB database creation timed out')
+    || message.includes('IndexedDB lock');
 }
 
 function preloadModuleScripts() {
@@ -2511,6 +2865,7 @@ function moduleBasePath(mod) {
 function createModuleContext(mod) {
   return {
     module: mod,
+    modules: state.modules,
     locale: document.documentElement.lang === 'en' ? 'en' : 'de',
     shellStyle: document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows',
     host: els.host.querySelector('[data-module-content]') || els.host.querySelector('[data-module-root]'),
@@ -2567,6 +2922,8 @@ function createLiveSyncFacade() {
     stopCollection: (...args) => state.sync?.stopCollection?.(...args),
     restartCollection: (...args) => state.sync?.restartCollection?.(...args),
     restartCollections: (...args) => state.sync?.restartCollections?.(...args),
+    suspendCollections: (...args) => state.sync?.suspendCollections?.(...args),
+    resumeCollections: (...args) => state.sync?.resumeCollections?.(...args),
     stop: (...args) => state.sync?.stop?.(...args),
   };
 }
@@ -2641,7 +2998,7 @@ async function loadModuleVersionsDropdown(moduleId) {
 function renderModuleAppBar(mod) {
   if (mod?.id === 'desktop') return '';
   const title = escapeHtml(moduleDisplayTitle(mod));
-  const svgHtml = getSvgIcon(mod.id, 16, 1.8);
+  const svgHtml = getRegisteredSvgIcon(mod.id, 16, 1.8);
   return `
     <header class="module-appbar" data-module-appbar>
       <div class="module-appbar-title">
@@ -2664,7 +3021,8 @@ function renderModuleAppBar(mod) {
 }
 
 function updateActiveAppChrome(mod) {
-  document.title = `${moduleDisplayTitle(mod)} · CTOX Business OS`;
+  const instanz = getInstanceName();
+  document.title = `${moduleDisplayTitle(mod)} · CTOX Business OS (${instanz})`;
 }
 
 function taskbarMarkForModule(mod) {
@@ -2678,6 +3036,7 @@ function taskbarMarkForModule(mod) {
     outbound: 'O',
     reports: '🐞',
     research: 'R',
+    'coding-agents': '🤖',
   };
   return marks[mod?.id] || String(mod?.title || mod?.id || 'A').trim().slice(0, 1).toUpperCase();
 }
@@ -3072,10 +3431,9 @@ function renderLoginGate(session, options = {}) {
   const container = document.createElement('div');
   container.className = 'auth-gate';
 
-  const savedUser = readAccountPrefs().loginUser || 'admin';
+  const savedUser = readAccountPrefs().loginUser || '';
   const loginUrl = session.login_url || '';
-  const pairingMissing = session.reason === 'pairing_config_missing'
-    || session.reason === 'session_launch_context_missing';
+  const pairingMissing = false;
 
   container.innerHTML = `
     <div class="auth-gate-panel${options.loginFailed ? ' has-error' : ''}">
@@ -3110,7 +3468,7 @@ function renderLoginGate(session, options = {}) {
               name="user"
               autocomplete="username"
               value="${escapeHtml(savedUser)}"
-              placeholder="admin"
+              placeholder="E-Mail oder Benutzername"
               class="auth-gate-input"
               required
             />
@@ -3195,9 +3553,9 @@ function renderLoginGate(session, options = {}) {
 
   els.host.replaceChildren(container);
 
-  // Autofocus handling: if username is prefilled, focus password, otherwise username
+  // Autofocus handling: if username is prefilled, focus password, otherwise username.
   setTimeout(() => {
-    if (userInput.value && userInput.value !== 'admin') {
+    if (userInput.value) {
       passwordInput.focus();
     } else {
       userInput.focus();
@@ -3205,22 +3563,82 @@ function renderLoginGate(session, options = {}) {
   }, 50);
 }
 
+function getInstanceName() {
+  const hostname = window.location.hostname;
+  const hostLabel = hostname
+    .replace(/\.ctox\.dev$/i, '')
+    .replace(/\.localhost$/i, '')
+    .trim();
+  if (hostLabel && !['localhost', '127.0.0.1', '::1'].includes(hostLabel)) {
+    return hostLabel.toUpperCase();
+  }
+  try {
+    const injected = globalThis.CTOX_BUSINESS_OS_CONFIG || globalThis.ctoxBusinessOsLaunch?.config;
+    if (injected?.instance_id) {
+      return injected.instance_id.startsWith('biz_') ? injected.instance_id.substring(4, 10).toUpperCase() : injected.instance_id.substring(0, 6).toUpperCase();
+    }
+  }
+  catch (e) {}
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const packed = params.get('ctox_config') || params.get('ctoxConfig');
+    if (packed) {
+      const decoded = JSON.parse(atob(packed));
+      if (decoded && decoded.instance_id) {
+        if (decoded.instance_id === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
+          return 'A6000';
+        }
+        return decoded.instance_id.startsWith('biz_') ? decoded.instance_id.substring(4, 10).toUpperCase() : decoded.instance_id.substring(0, 6).toUpperCase();
+      }
+    }
+    const syncRoom = params.get('sync_room') || params.get('syncRoom');
+    if (syncRoom) {
+      const inst = syncRoom.replace(/^ctox-business-os:/, '').split(':')[0];
+      if (inst === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
+        return 'A6000';
+      }
+      return inst.startsWith('biz_') ? inst.substring(4, 10).toUpperCase() : inst.substring(0, 6).toUpperCase();
+    }
+  } catch (e) {}
+  try {
+    const stored = localStorage.getItem('ctox.businessOs.pairingConfig');
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && parsed.instance_id) {
+        if (parsed.instance_id === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
+          return 'A6000';
+        }
+        return parsed.instance_id.startsWith('biz_') ? parsed.instance_id.substring(4, 10).toUpperCase() : parsed.instance_id.substring(0, 6).toUpperCase();
+      }
+    }
+  } catch (e) {}
+  if (state.syncConfig && state.syncConfig.instance_id) {
+    if (state.syncConfig.instance_id === 'biz_6ca27fe1-0186-49e8-8e30-24ac67b5e9bd') {
+      return 'A6000';
+    }
+    return state.syncConfig.instance_id.startsWith('biz_') ? state.syncConfig.instance_id.substring(4, 10).toUpperCase() : state.syncConfig.instance_id.substring(0, 6).toUpperCase();
+  }
+  return 'A6000';
+}
+
 function renderAccountButton(session = state.session) {
   if (!els.accountButton) return;
   const labelNode = els.accountButton.querySelector('[data-account-label]');
   const user = session?.user || {};
+  const instanz = getInstanceName();
   if (session?.authenticated) {
     const prefs = readAccountPrefs();
     const label = prefs.displayName || user.display_name || user.id || 'Account';
     const role = roleDisplayName(user.role || (user.is_admin ? 'admin' : 'user'));
-    if (labelNode) labelNode.textContent = role;
-    els.accountButton.setAttribute('aria-label', `Account: ${label}, Rolle: ${role}`);
-    els.accountButton.title = `Account: ${label} · Rolle: ${role}`;
+    const userAtInstance = `${label}@${instanz}`;
+    if (labelNode) labelNode.textContent = userAtInstance;
+    els.accountButton.setAttribute('aria-label', `Account: ${label}, Rolle: ${role}, Instanz: ${instanz}`);
+    els.accountButton.title = `Account: ${label} · Rolle: ${role} · Instanz: ${instanz}`;
     els.accountButton.dataset.authenticated = 'true';
   } else {
-    if (labelNode) labelNode.textContent = 'Login';
-    els.accountButton.setAttribute('aria-label', 'Login öffnen');
-    els.accountButton.title = 'Login öffnen';
+    if (labelNode) labelNode.textContent = `Login@${instanz}`;
+    els.accountButton.setAttribute('aria-label', `Login öffnen für ${instanz}`);
+    els.accountButton.title = `Login öffnen für ${instanz}`;
     els.accountButton.dataset.authenticated = 'false';
   }
 }
@@ -3236,7 +3654,7 @@ function openAccountDrawer() {
 function renderLoginDrawer(session) {
   const body = document.createElement('div');
   body.className = 'drawer-body account-drawer';
-  const savedUser = readAccountPrefs().loginUser || 'admin';
+  const savedUser = readAccountPrefs().loginUser || '';
   const loginUrl = session.login_url || '';
   body.innerHTML = `
     <header class="drawer-header-row">
@@ -3249,7 +3667,7 @@ function renderLoginDrawer(session) {
     <form class="account-form" data-login-form method="post" action="/login">
       <label>
         <span>Benutzer</span>
-        <input name="user" autocomplete="username" value="${escapeHtml(savedUser)}" placeholder="admin" />
+        <input name="user" autocomplete="username" value="${escapeHtml(savedUser)}" placeholder="E-Mail oder Benutzername" />
       </label>
       <label>
         <span>Passwort</span>
@@ -3312,6 +3730,24 @@ function renderProfileDrawer() {
       </div>
       <small>Persönliche Einstellungen bleiben lokal und werden beim Laden der Module angewendet.</small>
     </form>
+    <form class="account-form account-password-form" data-password-form>
+      <label>
+        <span>Aktuelles Passwort</span>
+        <input type="password" name="currentPassword" autocomplete="current-password" />
+      </label>
+      <label>
+        <span>Neues Passwort</span>
+        <input type="password" name="newPassword" autocomplete="new-password" minlength="8" />
+      </label>
+      <label>
+        <span>Neues Passwort wiederholen</span>
+        <input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" />
+      </label>
+      <div class="account-actions">
+        <button class="text-button account-primary" type="submit">Passwort ändern</button>
+      </div>
+      <small data-password-status>Mindestens 8 Zeichen.</small>
+    </form>
   `;
   body.querySelector('[data-close-account]')?.addEventListener('click', closeDrawers);
   body.querySelector('[data-profile-form]')?.addEventListener('submit', (event) => {
@@ -3339,6 +3775,59 @@ function renderProfileDrawer() {
     clearStoredBrowserAuth();
     localStorage.removeItem(LOGGED_OUT_KEY);
     location.href = '/logout';
+  });
+  body.querySelector('[data-password-form]')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const formEl = event.currentTarget;
+    const statusEl = formEl.querySelector('[data-password-status]');
+    const submit = formEl.querySelector('button[type="submit"]');
+    const form = new FormData(formEl);
+    const currentPassword = form.get('currentPassword')?.toString() || '';
+    const newPassword = form.get('newPassword')?.toString() || '';
+    const confirmPassword = form.get('confirmPassword')?.toString() || '';
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      statusEl.textContent = 'Bitte alle Passwortfelder ausfüllen.';
+      statusEl.dataset.state = 'error';
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      statusEl.textContent = 'Die neuen Passwörter stimmen nicht überein.';
+      statusEl.dataset.state = 'error';
+      return;
+    }
+    if (newPassword.length < 8) {
+      statusEl.textContent = 'Das neue Passwort muss mindestens 8 Zeichen haben.';
+      statusEl.dataset.state = 'error';
+      return;
+    }
+    submit.disabled = true;
+    statusEl.textContent = 'Passwort wird geändert...';
+    statusEl.dataset.state = '';
+    try {
+      const response = await fetch('/account/password', {
+        method: 'POST',
+        body: form,
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        const messages = {
+          invalid_current_password: 'Das aktuelle Passwort ist falsch.',
+          password_too_short: 'Das neue Passwort muss mindestens 8 Zeichen haben.',
+          invalid_input: 'Bitte prüfe die Passwortfelder.',
+          auth_required: 'Bitte neu einloggen.',
+        };
+        throw new Error(messages[payload.error] || 'Passwort konnte nicht geändert werden.');
+      }
+      formEl.reset();
+      statusEl.textContent = 'Passwort geändert.';
+      statusEl.dataset.state = 'ok';
+    } catch (error) {
+      statusEl.textContent = error?.message || 'Passwort konnte nicht geändert werden.';
+      statusEl.dataset.state = 'error';
+    } finally {
+      submit.disabled = false;
+    }
   });
   return body;
 }
@@ -3400,6 +3889,7 @@ function canModifyModule(mod) {
 
 async function reportCurrentModule(details = {}) {
   const mod = details.module || state.activeModule;
+  const { dispatchBusinessReport } = await loadBusinessReporterModule();
   const result = await dispatchBusinessReport({
     commandBus: createLiveCommandBusFacade(),
     session: state.session,
@@ -3421,6 +3911,47 @@ async function reportCurrentModule(details = {}) {
     detail: { reportId: result.report_id || '', moduleId: mod?.id || '' },
   }));
   return result;
+}
+
+function loadBusinessReporterModule() {
+  if (!businessReporterModulePromise) {
+    businessReporterModulePromise = import('./shared/business-reporter.js?v=20260520-rxdb-reports1');
+  }
+  return businessReporterModulePromise;
+}
+
+function loadBusinessChatModule() {
+  if (!businessChatModulePromise) {
+    businessChatModulePromise = import('./shared/business-chat.js?v=20260520-chat-ux-theme1');
+  }
+  return businessChatModulePromise;
+}
+
+function scheduleBusinessCompanions() {
+  loadBusinessReporterModule()
+    .then(({ initBusinessReporter }) => {
+      initBusinessReporter({
+        session: state.session,
+        getActiveModule: () => state.activeModule,
+        commandBus: createLiveCommandBusFacade(),
+        db: createLiveDbFacade(),
+      });
+    })
+    .catch((error) => {
+      console.warn('[business-os] reporter surface lazy init failed', error);
+    });
+  loadBusinessChatModule()
+    .then(({ initBusinessChat }) => {
+      initBusinessChat({
+        session: state.session,
+        commandBus: createLiveCommandBusFacade(),
+        db: createLiveDbFacade(),
+        getActiveModule: () => state.activeModule,
+      });
+    })
+    .catch((error) => {
+      console.warn('[business-os] chat surface lazy init failed', error);
+    });
 }
 
 function renderLeftContext(mod) {
@@ -3607,7 +4138,8 @@ function renderTemplateStoreItem(template) {
   return card;
 }
 
-function registerCustomModuleIcons() {
+async function registerCustomModuleIcons() {
+  const { registerSvgIcon } = await loadShellIconsModule();
   if (!Array.isArray(state.modules)) return;
   for (const mod of state.modules) {
     if (mod.layout?.icon_svg) {
@@ -3618,8 +4150,19 @@ function registerCustomModuleIcons() {
 
 async function refreshModules() {
   const modules = await loadModules();
-  state.modules = modules.modules || [];
-  registerCustomModuleIcons();
+  const nextModules = modules.modules || [];
+  const currentIds = state.modules.map(m => m.id).join(',');
+  const nextIds = nextModules.map(m => m.id).join(',');
+  const nextFingerprint = modules.catalogFingerprint || '';
+  if (nextFingerprint && nextFingerprint === state.moduleCatalogFingerprint) {
+    return;
+  }
+  if (!nextFingerprint && currentIds === nextIds && state.governance === modules.governance) {
+    return; // No actual change in module list or governance
+  }
+  state.modules = nextModules;
+  state.moduleCatalogFingerprint = nextFingerprint || state.moduleCatalogFingerprint;
+  await registerCustomModuleIcons();
   state.governance = modules.governance || state.governance;
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
   persistModuleLayout();
@@ -3627,6 +4170,16 @@ async function refreshModules() {
   state.backgroundModuleWorkScheduled = false;
   scheduleBackgroundModuleWork();
   refreshRemoteShellStateInBackground();
+
+  // If the URL hash requests a module that wasn't previously loaded, but is now available, open it!
+  const hashId = currentHashModuleId();
+  if (hashId && hashId !== state.activeModule?.id) {
+    const matched = state.modules.find((m) => m.id === hashId);
+    if (matched) {
+      console.log(`[business-os] URL hash #${hashId} is now available after catalog refresh. Opening module.`);
+      await openModule(hashId);
+    }
+  }
 }
 
 function renderNavigationDrawer() {
@@ -3659,8 +4212,11 @@ function drawerContent(title, text) {
 
 function openDrawer(side, content) {
   const target = side === 'left' ? els.leftDrawer : side === 'right' ? els.rightDrawer : els.bottomDrawer;
-  if (side === 'right' && !target.classList.contains('account-popover')) {
-    target.classList.remove('account-popover');
+  if (side === 'right') {
+    target.classList.remove('settings-drawer-open');
+    if (!target.classList.contains('account-popover')) {
+      target.classList.remove('account-popover');
+    }
   }
   if (typeof content === 'string') {
     const temp = document.createElement('div');
@@ -3683,6 +4239,7 @@ function closeDrawers() {
   els.rightDrawer.hidden = true;
   els.bottomDrawer.hidden = true;
   els.rightDrawer.classList.remove('account-popover');
+  els.rightDrawer.classList.remove('settings-drawer-open');
   els.leftDrawer.replaceChildren();
   els.rightDrawer.replaceChildren();
   els.bottomDrawer.replaceChildren();
@@ -3710,7 +4267,8 @@ async function refreshShellCtoxHealth() {
 
 function isPendingCtoxHealthError(error) {
   const message = String(error?.message || error || '');
-  return message.includes('ctox_runtime_settings collection is required');
+  return message.includes('Runtime-Status wurde noch nicht synchronisiert')
+    || message.includes('ctox_runtime_settings collection is required');
 }
 
 async function loadShellCtoxHealth() {
@@ -3722,9 +4280,8 @@ async function loadShellCtoxHealth() {
   if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
     throw new Error('Runtime-Status wurde noch nicht synchronisiert.');
   }
-  const diagnostics = runtime.diagnostics || {};
   return {
-    ok: runtime.ok !== false && diagnostics.needs_attention !== true,
+    ok: runtime.ok !== false,
     ctox_service: runtime.service || null,
     runtime_settings: runtime,
   };
@@ -3755,19 +4312,6 @@ function shellCtoxHealthProblem(status) {
   if (service.running === false) return shellText('ctoxStopped');
   const lastError = String(service.last_error || '').trim();
   if (lastError) return `${shellText('ctoxLastError')}: ${lastError}`;
-  const runtimeSettings = status.runtime_settings || {};
-  const diagnostics = runtimeSettings.diagnostics || {};
-  if (diagnostics.auth_needs_attention === true) {
-    return String(diagnostics.auth_message || diagnostics.message || shellText('ctoxStatusUnavailable'));
-  }
-  if (diagnostics.needs_attention === true) {
-    return String(diagnostics.message || shellText('ctoxStatusUnavailable'));
-  }
-  const auth = runtimeSettings.auth || {};
-  const provider = String(runtimeSettings.runtime?.provider || '').toLowerCase();
-  if (provider && provider !== 'local' && auth.configured === false) {
-    return String(diagnostics.auth_message || shellText('ctoxStatusUnavailable'));
-  }
   return '';
 }
 
@@ -3785,8 +4329,8 @@ async function loadSession() {
   const injected = readInjectedDesktopSession();
   if (injected) return injected;
 
-  const pairedConfig = readBusinessOsLaunchConfig();
-  if (pairedConfig) {
+  const pairedConfig = await readBusinessOsLaunchConfig();
+  if (pairedConfig && allowsPairingConfigSession()) {
     const user = pairedConfig.session?.user || pairedConfig.user || {};
     const role = normalizeRole(user.role || 'user');
     return {
@@ -3813,6 +4357,10 @@ async function loadSession() {
     auth_required: true,
     reason: 'pairing_config_missing',
   };
+}
+
+function allowsPairingConfigSession() {
+  return isLocalBusinessOsSurface() || location.protocol === 'file:';
 }
 
 function readInjectedDesktopSession() {
@@ -3847,13 +4395,32 @@ function isLocalBusinessOsSurface() {
   return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
 
-async function loadModules() {
-  const catalog = await loadModuleCatalog();
+async function loadModules(options = {}) {
+  const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
+  const catalog = await loadModuleCatalog(normalized.timeoutMs, {
+    allowShellSeed: normalized.allowShellSeed !== false,
+  });
   return {
     ok: catalog.ok !== false,
-    modules: Array.isArray(catalog.modules) ? catalog.modules : [],
+    modules: normalizeModuleList(catalog.modules),
     governance: catalog.governance || null,
+    catalogFingerprint: moduleCatalogFingerprint(catalog),
   };
+}
+
+function moduleCatalogFingerprint(catalog) {
+  if (!catalog || typeof catalog !== 'object') return '';
+  try {
+    return JSON.stringify({
+      ok: catalog.ok !== false,
+      modules: normalizeModuleList(catalog.modules),
+      templates: Array.isArray(catalog.templates) ? catalog.templates : [],
+      governance: catalog.governance || null,
+    });
+  } catch (error) {
+    console.warn('[business-os] failed to fingerprint module catalog:', error);
+    return '';
+  }
 }
 
 async function loadModuleLayout() {
@@ -3868,23 +4435,524 @@ async function loadTemplates() {
   };
 }
 
-async function loadModuleCatalog(timeoutMs = 60000) {
+async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
   const coll = state.db?.collection?.('business_module_catalog');
   if (!coll) throw new Error('business_module_catalog collection is required for shell module metadata');
-  await state.sync?.startCollection?.('business_module_catalog');
+
+  const cachedCatalog = await readModuleCatalogProjection(coll);
+  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+
+  if (cachedCatalog) {
+    state.sync?.startCollection?.('business_module_catalog').catch((error) => {
+      console.warn('[business-os] module catalog sync warmup failed after cached startup', error);
+    });
+
+    if (shellCatalog && Array.isArray(shellCatalog.modules)) {
+      let changed = false;
+      const mergedModules = [...(cachedCatalog.modules || [])];
+      for (const shellMod of shellCatalog.modules) {
+        if (!mergedModules.some(m => m.id === shellMod.id)) {
+          mergedModules.push(shellMod);
+          changed = true;
+          if (!state.shellCatalogMergedIds.has(shellMod.id)) {
+            state.shellCatalogMergedIds.add(shellMod.id);
+            console.log(`[business-os] Merging missing packaged module locally: ${shellMod.id}`);
+          }
+        }
+      }
+    if (changed) {
+        return normalizeModuleCatalog({ ...cachedCatalog, modules: mergedModules });
+      }
+    }
+    return normalizeModuleCatalog(cachedCatalog);
+  }
+
+  const syncStart = state.sync?.startCollection?.('business_module_catalog');
+  syncStart?.catch((error) => {
+    console.warn('[business-os] module catalog sync start failed during shell seed startup', error);
+  });
+
+  if (shellCatalog) {
+    try {
+      await coll.insert(shellCatalog);
+    } catch (err) {
+      console.warn('[business-os] failed to insert initial packaged catalog into RxDB', err);
+    }
+    return normalizeModuleCatalog(shellCatalog);
+  }
+
+  await syncStart;
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      const doc = await coll.findOne('module-catalog').exec();
-      const data = doc?.toJSON?.();
-      if (data && data._deleted !== true && data.is_deleted !== true) return data;
+      const data = await readModuleCatalogProjection(coll);
+      if (data) return normalizeModuleCatalog(data);
     } catch (error) {
       lastError = error;
     }
     await delay(300);
   }
   throw lastError || new Error('Modulkatalog wurde noch nicht synchronisiert.');
+}
+
+function normalizeModuleCatalog(catalog) {
+  if (!catalog || typeof catalog !== 'object') return catalog;
+  return {
+    ...catalog,
+    modules: normalizeModuleList(catalog.modules),
+  };
+}
+
+function normalizeModuleList(modules) {
+  if (!Array.isArray(modules)) return [];
+  const seen = new Set();
+  const normalized = [];
+  for (const mod of modules) {
+    const id = String(mod?.id || '').trim();
+    if (!id) continue;
+    const aliasTarget = LEGACY_MODULE_ALIASES.get(id);
+    if (aliasTarget) {
+      if (!modules.some((candidate) => candidate?.id === aliasTarget)) {
+        normalized.push({ ...mod, id: aliasTarget, entry: 'modules/notes/index.html', collections: ['business_commands', 'notes'] });
+      }
+      continue;
+    }
+    if (seen.has(id)) continue;
+    seen.add(id);
+    normalized.push(mod);
+  }
+  return normalized;
+}
+
+async function readModuleCatalogProjection(coll) {
+  const doc = await coll.findOne('module-catalog').exec();
+  const data = doc?.toJSON?.();
+  if (data && data._deleted !== true && data.is_deleted !== true) return data;
+  return null;
+}
+
+function getOfflineFallbackCatalog() {
+  return {
+    ok: true,
+    modules: [
+      {
+        "id": "desktop",
+        "title": "Desktop",
+        "description": "Workspace landing surface with switchable Windows/macOS chrome, draggable icons, taskbar/dock, and live CTOX activity notifications.",
+        "entry": "modules/desktop/index.html",
+        "collections": [
+          "business_commands",
+          "desktop_icons",
+          "desktop_layout",
+          "desktop_notifications",
+          "desktop_windows",
+          "channel_pairing_state"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-desktop\"><defs><linearGradient id=\"grad-desktop\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#94a3b8\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"3\" ry=\"3\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.12\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M12 17v4M8 21h8\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"6\" width=\"6\" height=\"4\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"13\" y=\"6\" width=\"6\" height=\"8\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"5\" y=\"12\" width=\"6\" height=\"2\" rx=\"0.5\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect></svg>",
+          "left": "desktop scopes",
+          "center": "desktop surface",
+          "right": "agent context"
+        }
+      },
+      {
+        "id": "ctox",
+        "title": "CTOX",
+        "description": "Native control surface for queues, runs, sync state, and agent context.",
+        "entry": "modules/ctox/index.html",
+        "collections": [
+          "business_commands",
+          "business_chats",
+          "ctox_queue_tasks",
+          "ctox_runs",
+          "ctox_bug_reports",
+          "business_module_acl",
+          "business_module_releases",
+          "business_module_reports"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-ctox\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-ctox\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#10b981\" /><stop offset=\"100%\" stop-color=\"#06b6d4\" /></linearGradient></defs><polygon points=\"12 2 22 8 22 16 12 22 2 16 2 8\" fill=\"url(#grad-ctox)\" fill-opacity=\"0.12\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><polyline points=\"12 22 12 12 22 8\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 12 2 8\" stroke=\"url(#grad-ctox)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"12 2 12 12\" stroke=\"url(#grad-ctox)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><circle cx=\"12\" cy=\"12\" r=\"3.5\" fill=\"url(#grad-ctox)\" stroke=\"#ffffff\" stroke-width=\"1\"></circle></svg>",
+          "left": "runtime scopes",
+          "center": "active workbench",
+          "right": "agent context"
+        }
+      },
+      {
+        "id": "reports",
+        "title": "Bugs & Features",
+        "description": "Historical bug and feature request tracker with CTOX acceptance, change evidence, screenshots, and module rollback actions.",
+        "entry": "modules/reports/index.html",
+        "collections": [
+          "business_module_reports",
+          "ctox_bug_reports",
+          "business_module_releases",
+          "business_commands",
+          "ctox_queue_tasks"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-reports\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-reports\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ef4444\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-reports)\" fill-opacity=\"0.12\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M18 17V10M12 17V6M6 17v-4\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"#ffffff\" stroke=\"url(#grad-reports)\" stroke-width=\"1.2\"></circle></svg>",
+          "left": "bug and feature filters and history",
+          "center": "report evidence, CTOX change log, and rollback"
+        }
+      },
+      {
+        "id": "documents",
+        "title": "Documents",
+        "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+        "entry": "modules/documents/index.html",
+        "collections": [
+          "business_commands",
+          "documents",
+          "document_versions",
+          "document_blob_chunks",
+          "document_runbooks"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-documents\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-documents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z\" fill=\"url(#grad-documents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 2v4a2 2 0 0 0 2 2h4\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"16\" x2=\"16\" y2=\"16\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"8\" x2=\"10\" y2=\"8\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line></svg>",
+          "left": "document navigation and explorer",
+          "center": "DOCX viewer/editor workbench",
+          "right": "document runbooks and automation prompts"
+        }
+      },
+      {
+        "id": "knowledge",
+        "title": "Knowledge",
+        "description": "Native CTOX Knowledge workspace for skillbooks, runbooks, markdown assets, and Polars-backed dataframes.",
+        "entry": "modules/knowledge/index.html",
+        "collections": [
+          "business_commands",
+          "knowledge_items",
+          "knowledge_runbooks",
+          "knowledge_tables"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-knowledge\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-knowledge\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#d946ef\" /></linearGradient></defs><path d=\"M4 19.5A2.5 2.5 0 0 1 6.5 17H20\" stroke=\"url(#grad-knowledge)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z\" fill=\"url(#grad-knowledge)\" fill-opacity=\"0.12\" stroke=\"url(#grad-knowledge)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M12 2v10l2.5-2 2.5 2V2z\" fill=\"url(#grad-knowledge)\" fill-opacity=\"0.25\" stroke=\"url(#grad-knowledge)\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"9\" cy=\"12\" r=\"1.5\" fill=\"url(#grad-knowledge)\"></circle><circle cx=\"14\" cy=\"15\" r=\"1\" fill=\"url(#grad-knowledge)\"></circle></svg>",
+          "left": "Knowledge selection and source groups",
+          "center": "Markdown reader/editor and dataframe table tabs",
+          "right": "Runbooks as operational knowledge layer"
+        }
+      },
+      {
+        "id": "research",
+        "title": "Web Research",
+        "description": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
+        "entry": "modules/research/index.html",
+        "collections": [
+          "business_commands",
+          "business_chats",
+          "ctox_queue_tasks",
+          "research_tasks",
+          "research_runs",
+          "research_notes"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-research\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-research\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0891b2\" /><stop offset=\"100%\" stop-color=\"#10b981\" /></linearGradient></defs><path d=\"M6 3h12\" stroke=\"url(#grad-research)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8 3v4c0 1.66-1.34 3-3 3v0a7 7 0 0 0-2 4.9V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5.1a7 7 0 0 0-2-4.9v0c-1.66 0-3-1.34-3-3V3\" fill=\"url(#grad-research)\" fill-opacity=\"0.12\" stroke=\"url(#grad-research)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8.5\" y1=\"11\" x2=\"15.5\" y2=\"11\" stroke=\"url(#grad-research)\" stroke-width=\"2\"></line><circle cx=\"12\" cy=\"16\" r=\"2.5\" fill=\"url(#grad-research)\"></circle><circle cx=\"9\" cy=\"18\" r=\"1\" fill=\"#ffffff\"></circle><circle cx=\"15\" cy=\"15\" r=\"1\" fill=\"#ffffff\"></circle></svg>",
+          "left": "research tasks and scored source ranking",
+          "center": "portfolio map and source evidence workbench",
+          "right": "research task context, decisions, and CTOX handoff"
+        }
+      },
+      {
+        "id": "matching",
+        "title": "Matching",
+        "description": "Generic matching workspace with configurable source parsing, object parsing, and CTOX match tasks.",
+        "entry": "modules/matching/index.html",
+        "collections": [
+          "matching_requirements",
+          "matching_objects",
+          "matching_results"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-matching\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-matching\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#ea580c\" /></linearGradient></defs><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" fill=\"url(#grad-matching)\" fill-opacity=\"0.12\" stroke=\"url(#grad-matching)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" fill=\"url(#grad-matching)\" fill-opacity=\"0.12\" stroke=\"url(#grad-matching)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"12\" r=\"2.5\" fill=\"#ffffff\" stroke=\"url(#grad-matching)\" stroke-width=\"1\"></circle></svg>",
+          "left": "Requirement/source records and import task prompts",
+          "center": "Configured matching task, queue state, and match results",
+          "right": "Object pool records and import task prompts"
+        }
+      },
+      {
+        "id": "conversations",
+        "title": "Conversations",
+        "description": "Read-only audit surface for all CTOX communication across WhatsApp, Jami, Email, and MS Teams. Contact-centric timeline with channel-aware rendering and cross-links into Outbound, Matching, and Reports.",
+        "entry": "modules/conversations/index.html",
+        "collections": [
+          "business_commands",
+          "communication_accounts",
+          "communication_threads",
+          "communication_messages"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-conversations\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-conversations\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#4f46e5\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><path d=\"M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z\" fill=\"url(#grad-conversations)\" fill-opacity=\"0.12\" stroke=\"url(#grad-conversations)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"9\" cy=\"11\" r=\"1.5\" fill=\"url(#grad-conversations)\"></circle><circle cx=\"13\" cy=\"11\" r=\"1.5\" fill=\"url(#grad-conversations)\"></circle><circle cx=\"17\" cy=\"11\" r=\"1.5\" fill=\"url(#grad-conversations)\"></circle></svg>",
+          "left": "Conversation list filtered by channel and search",
+          "center": "Selected conversation timeline with channel-aware messages",
+          "right": "Contact card, related business records, and CTOX agent attribution"
+        }
+      },
+      {
+        "id": "outbound",
+        "title": "Outbound",
+        "description": "Campaign source import, company qualification, and pipeline handoff for outbound sales workflows.",
+        "entry": "modules/outbound/index.html",
+        "collections": [
+          "business_commands",
+          "outbound_campaigns",
+          "outbound_sources",
+          "outbound_companies",
+          "outbound_pipeline_items",
+          "outbound_research_runs",
+          "outbound_engagements",
+          "outbound_messages",
+          "outbound_approvals",
+          "outbound_sequences",
+          "outbound_sender_assignments",
+          "outbound_meeting_requests",
+          "outbound_suppression_entries",
+          "outbound_account_limits"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-outbound\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-outbound\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ec4899\" /><stop offset=\"100%\" stop-color=\"#f43f5e\" /></linearGradient></defs><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><polygon points=\"22 2 15 22 11 13 2 9 22 2\" fill=\"url(#grad-outbound)\" fill-opacity=\"0.12\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><path d=\"M6 19c3-1 6-1 9-3\" stroke=\"url(#grad-outbound)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></path></svg>",
+          "left": "campaign selection and source import",
+          "center": "company qualification and pipeline workbench"
+        }
+      },
+      {
+        "id": "shiftflow",
+        "title": "Einsatzplanung",
+        "description": "Agentenunterstützte Einsatzplanung, Arbeitszeiterfassung und Urlaubsverwaltung für Teams mit Echtzeit-Synchronisation.",
+        "entry": "modules/shiftflow/index.html",
+        "collections": [
+          "business_commands",
+          "planning_employees",
+          "planning_projects",
+          "planning_shifts",
+          "planning_time_records",
+          "planning_absences"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-shiftflow\"><defs><linearGradient id=\"grad-shiftflow\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-shiftflow)\" fill-opacity=\"0.12\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"2\" stroke-linecap=\"round\"></line><line x1=\"9\" y1=\"9\" x2=\"9\" y2=\"20\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><line x1=\"15\" y1=\"9\" x2=\"15\" y2=\"20\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><rect x=\"5\" y=\"12\" width=\"8\" height=\"4\" rx=\"1.5\" fill=\"url(#grad-shiftflow)\" fill-opacity=\"0.3\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\"></rect><circle cx=\"17\" cy=\"15\" r=\"2.5\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1.2\"></circle><polyline points=\"17 13.5 17 15 18 15\" stroke=\"url(#grad-shiftflow)\" stroke-width=\"1\" stroke-linecap=\"round\"></polyline></svg>",
+          "left": "team status, absence scopes and department selection",
+          "center": "interactive scheduler timeline and timesheet grid",
+          "right": "AI roster planner, conflict alerts and timesheet inspector"
+        }
+      },
+      {
+        "id": "spreadsheets",
+        "title": "Spreadsheets",
+        "description": "Native XLSX spreadsheet workspace with spreadsheet explorer, spreadsheet editor surface based on JSpreadsheet, and CTOX runbooks.",
+        "entry": "modules/spreadsheets/index.html",
+        "collections": [
+          "business_commands",
+          "spreadsheets",
+          "spreadsheet_versions",
+          "spreadsheet_blob_chunks",
+          "spreadsheet_runbooks"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-spreadsheets\"><defs><linearGradient id=\"grad-spreadsheets\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#10b981\" /><stop offset=\"100%\" stop-color=\"#059669\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-spreadsheets)\" fill-opacity=\"0.12\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"9\" y1=\"3\" x2=\"9\" y2=\"21\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"3\" y1=\"15\" x2=\"21\" y2=\"15\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M5 17l3-3 4 2 4-4\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"16\" cy=\"12\" r=\"1.5\" fill=\"#ffffff\" stroke=\"url(#grad-spreadsheets)\" stroke-width=\"1\"></circle></svg>",
+          "left": "spreadsheet navigation and explorer",
+          "center": "Spreadsheet viewer/editor workbench",
+          "right": "spreadsheet runbooks and automation prompts"
+        }
+      },
+      {
+        "id": "notes",
+        "title": "Notizen",
+        "description": "Premium local-first markdown note workspace matching macOS Notes aesthetic.",
+        "entry": "modules/notes/index.html",
+        "collections": [
+          "business_commands",
+          "notes"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-notes\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-notes\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#eab308\" /><stop offset=\"100%\" stop-color=\"#d97706\" /></linearGradient></defs><path d=\"M16 2H4a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2z\" fill=\"url(#grad-notes)\" fill-opacity=\"0.12\" stroke=\"url(#grad-notes)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M2 6h2M2 10h2M2 14h2M2 18h2\" stroke=\"url(#grad-notes)\" stroke-width=\"1.5\" stroke-linecap=\"round\"></path><path d=\"M18.5 2.5a2.121 2.121 0 0 1 3 3L11 16l-4 1 1-4 10.5-10.5z\" fill=\"url(#grad-notes)\" fill-opacity=\"0.3\" stroke=\"url(#grad-notes)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+          "left": "Folders and note list",
+          "center": "Markdown editor and rich text live preview",
+          "right": "Command dashboard and formatting shortcuts"
+        }
+      },
+      {
+        "id": "creator",
+        "title": "App Creator",
+        "description": "Native standalone code-generator & harness workbench to visualize and test custom Business-OS modules.",
+        "entry": "modules/creator/index.html",
+        "collections": [
+          "business_commands"
+        ],
+        "source": "core",
+        "core": true,
+        "editable": true,
+        "deletable": false,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#0891b2\" /></linearGradient></defs><polyline points=\"7 8 3 12 7 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"17 8 21 12 17 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><line x1=\"14\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z\" fill=\"url(#grad-creator)\"></path><path d=\"M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z\" fill=\"url(#grad-creator)\"></path></svg>",
+          "left": "Harness configuration and parameter inputs",
+          "center": "Architectural simulation flow, visual graphs, and code projections"
+        }
+      },
+      {
+        "id": "app-store",
+        "title": "App Store",
+        "description": "CTOX GitHub module catalog to discover repository apps, create apps from templates, and manage local Business OS installations.",
+        "entry": "modules/app-store/index.html",
+        "collections": [
+          "business_commands",
+          "business_module_catalog"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-app-store\"><defs><linearGradient id=\"grad-app-store\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#ec4899\" /></linearGradient></defs><path d=\"M21 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.12\" stroke=\"url(#grad-app-store)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M16 8A4 4 0 0 0 8 8\" stroke=\"url(#grad-app-store)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"12\" width=\"5\" height=\"5\" rx=\"1\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.25\" stroke=\"url(#grad-app-store)\" stroke-width=\"1.2\"></rect><rect x=\"14\" y=\"12\" width=\"5\" height=\"5\" rx=\"1\" fill=\"url(#grad-app-store)\" fill-opacity=\"0.25\" stroke=\"url(#grad-app-store)\" stroke-width=\"1.2\"></rect></svg>",
+          "left": "Categories and Search",
+          "center": "Available Applications Catalog",
+          "right": "Application Details and Actions"
+        }
+      },
+      {
+        "id": "buchhaltung",
+        "title": "Buchhaltung",
+        "description": "Premium deutsches doppeltes Buchführungsmodul nach HGB mit SKR03/SKR04, UStVA/ELSTER, DATEV EXTF-Export und automatisiertem Bankabgleich.",
+        "entry": "modules/buchhaltung/index.html",
+        "collections": [
+          "business_commands",
+          "accounting_accounts",
+          "accounting_journal_entries",
+          "accounting_journal_entry_lines",
+          "accounting_ledger_entries",
+          "accounting_receipts",
+          "accounting_bank_statements",
+          "accounting_bank_statement_lines"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-buchhaltung\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-buchhaltung\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#818cf8\" /><stop offset=\"100%\" stop-color=\"#db2777\" /></linearGradient></defs><path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\" fill=\"url(#grad-buchhaltung)\" fill-opacity=\"0.12\" stroke=\"url(#grad-buchhaltung)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 11h8M8 15h5M9 7h6\" stroke=\"url(#grad-buchhaltung)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path>",
+          "left": "Fibu-Navigationsstruktur & Kontenrahmen-Wähler",
+          "center": "Aktiver Arbeitsbereich & Journale",
+          "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen"
+        }
+      },
+      {
+        "id": "calendar",
+        "title": "Kalender",
+        "description": "Mac/Outlook-style calendar with native booking links and availability scheduling.",
+        "entry": "modules/calendar/index.html",
+        "collections": [
+          "business_commands",
+          "calendar_sources",
+          "calendar_calendars",
+          "calendar_events",
+          "calendar_event_instances",
+          "calendar_availability_rules",
+          "calendar_booking_pages",
+          "calendar_booking_holds",
+          "calendar_bookings"
+        ],
+        "source": "local",
+        "core": false,
+        "editable": true,
+        "deletable": true,
+        "layout": {
+          "shell": "full-workspace",
+          "left": "Mini-Calendar & Lists",
+          "center": "Calendar Grid",
+          "right": "Inspector & Booking Pages",
+          "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-calendar\"><defs><linearGradient id=\"grad-calendar\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" ry=\"3\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.12\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"9\" y1=\"9\" x2=\"9\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><line x1=\"15\" y1=\"9\" x2=\"15\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><path d=\"M8 2v3M16 2v3\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><rect x=\"5\" y=\"12\" width=\"3\" height=\"3\" rx=\"0.5\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect><rect x=\"10\" y=\"12\" width=\"4\" height=\"5\" rx=\"1\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect></svg>"
+        }
+      }
+    ],
+    id: 'module-catalog',
+    updated_at_ms: Date.now(),
+    templates: [],
+    governance: null,
+    source: 'business-os-shell-embedded-catalog',
+  };
+}
+
+async function loadPackagedModuleCatalog() {
+  try {
+    const response = await fetch(`modules/registry.json?v=${APP_BUILD}`, { cache: 'no-store' });
+    if (response.ok) {
+      const catalog = await response.json();
+      if (Array.isArray(catalog?.modules) && catalog.modules.length) {
+        return {
+          id: 'module-catalog',
+          updated_at_ms: Date.now(),
+          ok: catalog.ok !== false,
+          modules: catalog.modules,
+          templates: Array.isArray(catalog.templates) ? catalog.templates : [],
+          governance: catalog.governance || null,
+          source: 'business-os-shell',
+        };
+      }
+    }
+  } catch (error) {
+    console.warn('[business-os] packaged module catalog seed unavailable; using embedded shell catalog', error);
+  }
+  return getOfflineFallbackCatalog();
 }
 
 async function installTemplate({ templateId, title }) {
@@ -4016,6 +5084,10 @@ async function loadSyncConfig() {
 
 async function readBusinessOsLaunchConfig() {
   const root = globalRoot();
+  const storedPairingConfig = allowsStoredPairingConfig() ? readStoredPairingConfig() : null;
+  if (!allowsStoredPairingConfig()) {
+    clearStoredPairingConfig();
+  }
   const launch = firstObject(
     readUrlPairingConfig(),
     root.CTOX_BUSINESS_OS_CONFIG,
@@ -4024,18 +5096,24 @@ async function readBusinessOsLaunchConfig() {
     window.CTOX_BUSINESS_OS_CONFIG,
     window.ctoxBusinessOsLaunch?.config,
     window.ctoxBusinessOsLaunch,
-    readStoredPairingConfig(),
+    storedPairingConfig,
   );
   const config = await normalizeBusinessOsLaunchConfig(launch);
-  if (config && config.source === 'url') {
+  if (config && config.source === 'url' && allowsStoredPairingConfig()) {
     writeStoredPairingConfig(config);
+    scrubPairingConfigFromUrl();
+  } else if (config && config.source === 'url') {
     scrubPairingConfigFromUrl();
   }
   return config;
 }
 
+function allowsStoredPairingConfig() {
+  return isLocalBusinessOsSurface() || location.protocol === 'file:';
+}
+
 function readUrlPairingConfig() {
-  const params = new URLSearchParams(location.search);
+  const params = launchUrlParams();
   const packed = params.get('ctox_config') || params.get('ctoxConfig');
   if (packed) {
     const parsed = parsePackedConfig(packed);
@@ -4083,6 +5161,12 @@ function writeStoredPairingConfig(config) {
   } catch {}
 }
 
+function clearStoredPairingConfig() {
+  try {
+    localStorage.removeItem(PAIRING_CONFIG_KEY);
+  } catch {}
+}
+
 function scrubPairingConfigFromUrl() {
   try {
     const url = new URL(location.href);
@@ -4108,10 +5192,45 @@ function scrubPairingConfigFromUrl() {
       url.searchParams.delete(key);
       changed = true;
     }
+    const hash = parseHashWithParams(url.hash);
+    if (hash.params) {
+      for (const key of sensitiveKeys) {
+        if (!hash.params.has(key)) continue;
+        hash.params.delete(key);
+        changed = true;
+      }
+      url.hash = buildHashWithParams(hash.name, hash.params);
+    }
     if (!changed) return;
     const next = `${url.pathname}${url.search}${url.hash}`;
     history.replaceState(history.state, document.title, next);
   } catch {}
+}
+
+function launchUrlParams() {
+  const params = new URLSearchParams(location.search);
+  const hash = parseHashWithParams(location.hash);
+  if (hash.params) {
+    for (const [key, value] of hash.params.entries()) {
+      if (!params.has(key)) params.set(key, value);
+    }
+  }
+  return params;
+}
+
+function parseHashWithParams(hashValue) {
+  const raw = String(hashValue || '').replace(/^#/, '');
+  const split = raw.indexOf('?');
+  if (split < 0) return { name: raw, params: null };
+  return {
+    name: raw.slice(0, split),
+    params: new URLSearchParams(raw.slice(split + 1)),
+  };
+}
+
+function buildHashWithParams(name, params) {
+  const query = params.toString();
+  return query ? `${name}?${query}` : name;
 }
 
 function parsePackedConfig(value) {
@@ -4240,13 +5359,16 @@ function globalRoot() {
 function refreshRemoteShellStateInBackground() {
   if (!state.session?.authenticated) return;
   window.setTimeout(() => {
-    loadModules()
+    loadModules({ timeoutMs: 20000, allowShellSeed: false })
       .then((modules) => {
         if (!Array.isArray(modules?.modules) || !modules.modules.length) return;
         const currentIds = state.modules.map((mod) => mod.id).join('\n');
         const nextIds = modules.modules.map((mod) => mod.id).join('\n');
-        if (currentIds === nextIds) return;
+        const nextFingerprint = modules.catalogFingerprint || '';
+        if ((nextFingerprint && nextFingerprint === state.moduleCatalogFingerprint)
+          || (!nextFingerprint && currentIds === nextIds)) return;
         state.modules = modules.modules;
+        state.moduleCatalogFingerprint = nextFingerprint || state.moduleCatalogFingerprint;
         registerCustomModuleIcons();
         state.governance = modules.governance || state.governance;
         state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
@@ -4320,30 +5442,34 @@ function getFriendlyErrorMessage(error) {
   let description = 'Das Business OS konnte nicht vollständig geladen werden.';
   let advice = 'Bitte versuchen Sie die Seite neu zu laden. Falls das Problem weiterhin besteht, vergewissern Sie sich, dass der CTOX-Dienst im Hintergrund läuft.';
 
-  if (msg.includes('pairing') || msg.includes('sync config is missing') || msg.includes('Pair this browser')) {
+  if (msg.includes('WebCrypto') || msg.includes('subtle') || !globalThis.crypto?.subtle) {
+    title = 'Sicherer Kontext erforderlich (WebCrypto fehlt)';
+    description = 'Safari blockiert notwendige Verschlüsselungsfunktionen, wenn die Seite über die IP-Adresse "127.0.0.1" geladen wird.';
+    advice = 'Bitte öffnen Sie die Anwendung über http://localhost:8765/ anstelle von http://127.0.0.1:8765/. Safari stuft "localhost" als sichere Herkunft ein und schaltet die benötigten Verschlüsselungsfunktionen (WebCrypto) frei.';
+  } else if (msg.includes('pairing') || msg.includes('sync config is missing') || msg.includes('Pair this browser')) {
     title = 'Keine Kopplung vorhanden';
     description = 'Dieser Browser ist noch nicht mit einer aktiven CTOX-Instanz verbunden.';
     advice = 'Bitte öffnen Sie Business OS über den bereitgestellten Link aus Ihrer CTOX-Schnittstelle oder koppeln Sie die Instanz erneut.';
-  } else if (msg.includes('IndexedDB lock') || msg.includes('timed out after 25000ms') || msg.includes('database creation timed out')) {
-    title = 'Datenbank-Zugriff blockiert';
-    description = 'Die lokale Datenbankverbindung konnte nicht rechtzeitig hergestellt werden (IndexedDB Timeout).';
-    advice = 'Möglicherweise ist die Anwendung in einem anderen Tab geöffnet. Schließen Sie bitte alle anderen Tabs von Business OS und versuchen Sie es erneut.';
+  } else if (msg.includes('IndexedDB lock') || msg.includes('timed out')) {
+    title = 'Lokaler Speicher blockiert';
+    description = 'Die Verbindung zum lokalen Datenspeicher konnte nicht rechtzeitig hergestellt werden.';
+    advice = 'Möglicherweise ist das Business OS bereits in einem anderen Browser-Tab geöffnet. Bitte schließen Sie alle anderen geöffneten Tabs dieser Anwendung und versuchen Sie es erneut.';
   } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
-    title = 'Datenbank-Drift erkannt';
-    description = 'Die Tabellenstruktur der lokalen Datenbank ist inkompatibel mit dieser Version.';
-    advice = 'Wir versuchen, den Cache automatisch neu aufzubauen. Klicken Sie auf "Erneut versuchen", um den Vorgang abzuschließen.';
+    title = 'Datenstruktur-Aktualisierung';
+    description = 'Die Struktur des lokalen Datenspeichers wird an die neue Version angepasst.';
+    advice = 'Der lokale Speicher wird automatisch zurückgesetzt und neu synchronisiert. Bitte klicken Sie auf "Erneut versuchen", um fortzufahren.';
   } else if (msg.includes('modulkatalog') || msg.includes('business_module_catalog') || msg.includes('module catalog')) {
-    title = 'Module konnten nicht geladen werden';
-    description = 'Die Synchronisation des Modulkatalogs über das WebRTC-Netzwerk ist fehlgeschlagen oder wartet auf Verbindung.';
-    advice = 'Bitte überprüfen Sie, ob die CTOX-Instanz im Terminal aktiv ist. Eine stabile WebRTC-Verbindung ist für den Start zwingend erforderlich.';
+    title = 'Systemmodule konnten nicht geladen werden';
+    description = 'Die Synchronisation der Systemmodule mit der CTOX-Hintergrundinstanz konnte nicht abgeschlossen werden.';
+    advice = 'Bitte stellen Sie sicher, dass der CTOX-Hintergrunddienst aktiv läuft und eine stabile Netzwerkverbindung besteht.';
   } else if (msg.includes('Cannot access') && msg.includes('before initialization')) {
     title = 'Fehler in Skript-Reihenfolge';
     description = 'Eine Systemvariable wurde vor ihrer Initialisierung aufgerufen (Temporal Dead Zone).';
     advice = 'Dieses Ladeproblem wurde behoben. Bitte leeren Sie den Browser-Cache und klicken Sie auf "Erneut versuchen".';
   } else if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('signaling')) {
-    title = 'Verbindung zum Netzwerk fehlgeschlagen';
-    description = 'Der Signalisierungs-Server oder die Peer-Verbindungen konnten nicht erreicht werden.';
-    advice = 'Bitte überprüfen Sie Ihre Internetverbindung und stellen Sie sicher, dass keine Firewall oder restriktive Antiviren-Software WebRTC-Verbindungen blockiert.';
+    title = 'Netzwerkverbindung fehlgeschlagen';
+    description = 'Der Signalisierungs-Server für die Echtzeit-Synchronisation konnte nicht erreicht werden.';
+    advice = 'Bitte überprüfen Sie Ihre Netzwerkverbindung und stellen Sie sicher, dass die CTOX-Hintergrunddienste aktiv sind.';
   }
 
   return { title, description, advice };
@@ -4415,4 +5541,592 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+/* ==========================================================================
+   PREMIUM APP LAUNCHER OVERLAY HELPERS & LOGIC
+   ========================================================================== */
+
+const DESKTOP_APP_SVGS = {
+  explorer: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon svg-explorer"><defs><linearGradient id="grad-explorer" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#3b82f6" /><stop offset="100%" stop-color="#1d4ed8" /></linearGradient></defs><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" fill="url(#grad-explorer)" fill-opacity="0.15" stroke="url(#grad-explorer)"></path></svg>`,
+  'code-editor': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon svg-code-editor"><defs><linearGradient id="grad-code-editor" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#06b6d4" /><stop offset="100%" stop-color="#0891b2" /></linearGradient></defs><polyline points="16 18 22 12 16 6" stroke="url(#grad-code-editor)"></polyline><polyline points="8 6 2 12 8 18" stroke="url(#grad-code-editor)"></polyline><line x1="14" y1="4" x2="10" y2="20" stroke="url(#grad-code-editor)"></line></svg>`,
+  'file-viewer': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon svg-file-viewer"><defs><linearGradient id="grad-file-viewer" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#10b981" /><stop offset="100%" stop-color="#047857" /></linearGradient></defs><rect x="3" y="3" width="18" height="18" rx="2" fill="url(#grad-file-viewer)" fill-opacity="0.15" stroke="url(#grad-file-viewer)"></rect><line x1="9" y1="3" x2="9" y2="21" stroke="url(#grad-file-viewer)"></line></svg>`,
+  creator: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="svg-icon svg-creator"><defs><linearGradient id="grad-creator-start" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#f59e0b" /><stop offset="100%" stop-color="#ea580c" /></linearGradient></defs><circle cx="12" cy="12" r="3" stroke="url(#grad-creator-start)"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" stroke="url(#grad-creator-start)"></path></svg>`
+};
+
+const LAUNCHER_CATEGORIES = [
+  {
+    id: 'system',
+    name: '🧠 System',
+    matchIds: ['ctox', 'app-store', 'coding-agents']
+  },
+  {
+    id: 'productivity',
+    name: shellLang() === 'de' ? '⚡ Produktivität' : '⚡ Productivity',
+    matchIds: ['notizen', 'notes', 'spreadsheets', 'documents', 'calendar']
+  },
+  {
+    id: 'management',
+    name: '📋 Management',
+    matchIds: ['reports', 'shiftflow', 'buchhaltung']
+  },
+  {
+    id: 'recherche',
+    name: shellLang() === 'de' ? '🔍 Recherche & Daten' : '🔍 Web & Data',
+    matchIds: ['research', 'matching', 'knowledge']
+  },
+  {
+    id: 'development',
+    name: shellLang() === 'de' ? '🛠️ Entwicklung' : '🛠️ Development',
+    matchIds: ['code-editor', 'creator']
+  }
+];
+
+function toggleStartMenu(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  let panel = document.querySelector('.shell-start-menu-panel');
+  if (panel) {
+    const isVisible = panel.classList.contains('is-active');
+    if (isVisible) {
+      hideStartMenu();
+    } else {
+      showStartMenu(panel);
+    }
+  } else {
+    panel = createStartMenuElement();
+    showStartMenu(panel);
+  }
+}
+window.toggleStartMenu = toggleStartMenu;
+
+function showStartMenu(panel) {
+  // Hide default context menu if active
+  state.contextMenu?.hide?.();
+  panel.classList.add('is-active');
+  
+  const searchInput = panel.querySelector('.start-menu-search-input');
+  if (searchInput) {
+    searchInput.value = '';
+    setTimeout(() => searchInput.focus(), 20);
+  }
+  filterStartMenu(panel, '');
+
+  // Close when clicking outside
+  const outsideClickListener = (evt) => {
+    const startBtn = document.querySelector('[data-shell-start]');
+    if (!panel.contains(evt.target) && (!startBtn || !startBtn.contains(evt.target))) {
+      hideStartMenu();
+      document.removeEventListener('mousedown', outsideClickListener, true);
+    }
+  };
+  document.addEventListener('mousedown', outsideClickListener, true);
+}
+
+function hideStartMenu() {
+  const panel = document.querySelector('.shell-start-menu-panel');
+  if (panel) {
+    panel.classList.remove('is-active');
+  }
+}
+
+function createStartMenuElement() {
+  const panel = document.createElement('div');
+  panel.className = 'shell-start-menu-panel';
+  panel.innerHTML = `
+    <header class="start-menu-header">
+      <div class="start-menu-search-wrapper">
+        <svg class="start-menu-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" class="start-menu-search-input" placeholder="${shellLang() === 'de' ? 'Suche nach Apps...' : 'Search apps...'}" />
+      </div>
+    </header>
+    <div class="start-menu-body"></div>
+    <footer class="start-menu-footer">
+      <button class="start-menu-footer-btn show-desktop-btn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke-width="2.2" stroke-linejoin="round" />
+          <path d="M8 9h8M8 12h8M8 15h5" stroke-linecap="round" />
+        </svg>
+        <span>Desktop</span>
+      </button>
+      <button class="start-menu-footer-btn settings-btn" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83 2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span>${shellLang() === 'de' ? 'Einstellungen' : 'Settings'}</span>
+      </button>
+    </footer>
+  `;
+
+  // Footer actions
+  panel.querySelector('.show-desktop-btn').addEventListener('click', () => {
+    openDesktop();
+    hideStartMenu();
+  });
+  panel.querySelector('.settings-btn').addEventListener('click', () => {
+    openSettingsDrawer();
+    hideStartMenu();
+  });
+
+  // Search events
+  const searchInput = panel.querySelector('.start-menu-search-input');
+  searchInput.addEventListener('input', (e) => {
+    filterStartMenu(panel, e.target.value);
+  });
+  
+  // Keyboard navigation in search
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      hideStartMenu();
+    } else if (e.key === 'Enter') {
+      const firstItem = panel.querySelector('.start-menu-item');
+      if (firstItem) {
+        firstItem.click();
+      }
+    }
+  });
+
+  document.body.appendChild(panel);
+  return panel;
+}
+
+function filterStartMenu(panel, query) {
+  const body = panel.querySelector('.start-menu-body');
+  body.innerHTML = '';
+  
+  const targets = listLaunchTargets();
+  const cleanQuery = query.trim().toLowerCase();
+  
+  const filtered = targets.filter(target => {
+    if (!cleanQuery) return true;
+    return target.title.toLowerCase().includes(cleanQuery) || target.id.toLowerCase().includes(cleanQuery);
+  });
+
+  if (filtered.length === 0) {
+    body.innerHTML = `
+      <div class="start-menu-empty">
+        ${shellLang() === 'de' ? 'Keine passenden Apps gefunden.' : 'No matching apps found.'}
+      </div>
+    `;
+    return;
+  }
+
+  // If query is active, render flat list of matches
+  if (cleanQuery) {
+    const categoryContainer = document.createElement('div');
+    categoryContainer.className = 'start-menu-category';
+    categoryContainer.innerHTML = `
+      <div class="start-menu-category-title">
+        <span>${shellLang() === 'de' ? 'Suchergebnisse' : 'Search Results'}</span>
+      </div>
+    `;
+    filtered.forEach(target => {
+      categoryContainer.appendChild(buildStartMenuItem(target));
+    });
+    body.appendChild(categoryContainer);
+    return;
+  }
+
+  // Otherwise, render categorized layout
+  LAUNCHER_CATEGORIES.forEach(cat => {
+    const catTargets = filtered.filter(target => cat.matchIds.includes(target.id));
+    if (catTargets.length === 0) return;
+
+    const categoryContainer = document.createElement('div');
+    categoryContainer.className = 'start-menu-category';
+    categoryContainer.innerHTML = `
+      <div class="start-menu-category-title">
+        <span>${cat.name}</span>
+      </div>
+    `;
+    catTargets.forEach(target => {
+      categoryContainer.appendChild(buildStartMenuItem(target));
+    });
+    body.appendChild(categoryContainer);
+  });
+}
+
+function buildStartMenuItem(target) {
+  const el = document.createElement('div');
+  el.className = 'start-menu-item';
+  
+  const pinned = isTaskbarPinned(target.id);
+  const iconMarkup = getLauncherIconSvg(target);
+  
+  el.innerHTML = `
+    <div class="start-menu-item-left">
+      <div class="start-menu-item-icon">
+        ${iconMarkup}
+      </div>
+      <span class="start-menu-item-label">${target.title || target.id}</span>
+    </div>
+    <button class="start-menu-item-pin-btn ${pinned ? 'is-pinned' : ''}" type="button" title="${pinned ? (shellLang() === 'de' ? 'Von Bar lösen' : 'Unpin') : (shellLang() === 'de' ? 'An Bar anheften' : 'Pin')}">
+      ${pinned ? '−' : '+'}
+    </button>
+  `;
+
+  // Clicks
+  el.addEventListener('click', (e) => {
+    if (e.target.closest('.start-menu-item-pin-btn')) return;
+    openLaunchTarget(target);
+    hideStartMenu();
+  });
+
+  el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleTaskbarPin(target.id, !pinned);
+    // Re-render
+    const panel = document.querySelector('.shell-start-menu-panel');
+    const searchInput = panel?.querySelector('.start-menu-search-input');
+    filterStartMenu(panel, searchInput?.value || '');
+  });
+
+  return el;
+}
+
+function getLauncherIconSvg(target) {
+  if (target.kind === 'module' && target.module?.layout?.icon_svg) {
+    return target.module.layout.icon_svg;
+  }
+  if (target.kind === 'app' && DESKTOP_APP_SVGS[target.id]) {
+    return DESKTOP_APP_SVGS[target.id];
+  }
+  return `<span>${target.glyph || target.title.charAt(0)}</span>`;
+}
+
+let globalCtoxContextMenuEl = null;
+
+function initGlobalCtoxContextMenu() {
+  if (globalCtoxContextMenuEl) return;
+  globalCtoxContextMenuEl = document.createElement('div');
+  globalCtoxContextMenuEl.className = 'ctox-context-menu ctox-global-context-menu';
+  globalCtoxContextMenuEl.hidden = true;
+  document.body.appendChild(globalCtoxContextMenuEl);
+
+  // Close when clicking outside
+  document.addEventListener('click', (e) => {
+    if (globalCtoxContextMenuEl && !globalCtoxContextMenuEl.contains(e.target)) {
+      hideGlobalCtoxContextMenu();
+    }
+  }, { capture: true });
+
+  // Close when pressing Escape
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      hideGlobalCtoxContextMenu();
+    }
+  });
+
+  // Global capture phase listener
+  document.addEventListener('contextmenu', handleGlobalContextMenu, true);
+}
+
+function handleGlobalContextMenu(event) {
+  // Check if a full-screen module is active
+  if (!state.activeModule || !moduleUsesFullWorkspace(state.activeModule)) {
+    return;
+  }
+
+  const target = event.target;
+
+  // Preserve native context menus for fields, links, editable divs, Monaco, etc.
+  if (
+    target.closest('input') ||
+    target.closest('textarea') ||
+    target.closest('select') ||
+    target.closest('button') ||
+    target.closest('a') ||
+    target.closest('[contenteditable="true"]') ||
+    target.closest('.monaco-editor') ||
+    target.closest('.no-ctox-context')
+  ) {
+    return;
+  }
+
+  // Intercept the click!
+  event.preventDefault();
+  event.stopPropagation();
+
+  const mod = state.activeModule;
+  const context = extractGlobalCtoxContext(mod, target);
+  
+  showGlobalCtoxContextMenu(context, event.clientX, event.clientY);
+}
+
+function extractGlobalCtoxContext(mod, target) {
+  const column = detectColumnFromElement(mod?.id, target);
+  const record = detectRecordFromElement(mod?.id, target);
+  const selectedText = String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000);
+  const clickedText = String(target.innerText || target.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500);
+
+  return {
+    module: mod?.id || '',
+    column,
+    record_type: record?.type || 'module',
+    record_id: record?.id || '',
+    label: record?.label || mod?.title || mod?.id || '',
+    selected_text: selectedText,
+    clicked_text: clickedText
+  };
+}
+
+function detectColumnFromElement(moduleId, element) {
+  if (!element) return 'center';
+  const el = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
+  if (!el) return 'center';
+
+  const leftSelector = '[class*="-left"], [class*="-sidebar"], [class*="-navigation"], [class*="-nav"], [class*="list-pane"], [class*="master-panel"], [id*="left"], [id*="sidebar"], .sidebar, .left-content, [data-left-content], [data-drawer-left]';
+  const rightSelector = '[class*="-right"], [class*="-companion"], [class*="-auxiliary"], [class*="aside"], [class*="detail-pane"][class*="right"], [class*="preview"], [id*="right"], .right-content, [data-right-content], [data-drawer-right]';
+  
+  if (el.closest(leftSelector)) {
+    return 'left';
+  }
+  if (el.closest(rightSelector)) {
+    return 'right';
+  }
+  return 'center';
+}
+
+function detectRecordFromElement(moduleId, element) {
+  if (!element) return null;
+  let current = element.nodeType === Node.ELEMENT_NODE ? element : element.parentElement;
+  
+  const idAttributePatterns = [
+    'data-id', 'data-note-id', 'data-report-id', 'data-account-id', 'data-booking-id',
+    'data-document-id', 'data-folder-id', 'data-record-id', 'data-conversation-id',
+    'data-node-id', 'data-sheet-id', 'data-task-id', 'data-event-id', 'data-project-id',
+    'data-item-id', 'data-entity-id'
+  ];
+
+  while (current && current !== document.body) {
+    // 1. Check ID attributes
+    for (const attr of idAttributePatterns) {
+      if (current.hasAttribute(attr)) {
+        const val = current.getAttribute(attr);
+        if (val) {
+          let type = 'item';
+          if (attr.startsWith('data-') && attr.endsWith('-id')) {
+            const potentialType = attr.slice(5, -3);
+            if (potentialType && potentialType !== 'id' && potentialType !== 'record') {
+              type = potentialType;
+            }
+          }
+          if (type === 'item') {
+            const recordTypeAttr = current.closest('[data-record-type]');
+            if (recordTypeAttr) {
+              type = recordTypeAttr.getAttribute('data-record-type');
+            } else {
+              type = moduleId || 'item';
+            }
+          }
+          return {
+            type,
+            id: val,
+            label: deriveLabelFromElement(current)
+          };
+        }
+      }
+    }
+    
+    // 2. Fallback to ID with pattern
+    const elementId = current.id || '';
+    if (elementId && (elementId.includes('_') || elementId.length > 20)) {
+      const parts = elementId.split('_');
+      if (parts.length > 1 && parts[0].length > 2) {
+        return {
+          type: parts[0],
+          id: elementId,
+          label: deriveLabelFromElement(current)
+        };
+      }
+    }
+    
+    current = current.parentElement;
+  }
+  return null;
+}
+
+function deriveLabelFromElement(el) {
+  if (!el) return '';
+  if (el.hasAttribute('data-title')) return el.getAttribute('data-title');
+  if (el.hasAttribute('data-label')) return el.getAttribute('data-label');
+  if (el.hasAttribute('data-name')) return el.getAttribute('data-name');
+  
+  const sub = el.querySelector('.title, .name, .label, .header, strong, h1, h2, h3, h4, h5, h6');
+  if (sub) {
+    const text = String(sub.textContent || sub.innerText).trim();
+    if (text) return text;
+  }
+  
+  const text = String(el.innerText || el.textContent).trim();
+  if (text) {
+    return text.split('\n')[0].slice(0, 60).trim();
+  }
+  return '';
+}
+
+function showGlobalCtoxContextMenu(context, x, y) {
+  if (!globalCtoxContextMenuEl) return;
+  
+  const mod = state.activeModule || { id: 'ctox', title: 'CTOX' };
+  const canModify = canModifyModule(mod);
+  const lang = shellLang();
+  
+  const titleText = shellText('chatToCtox') || (lang === 'de' ? 'Mit CTOX chatten' : 'Chat to CTOX');
+  const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Mit Daten arbeiten' : 'Work with data');
+  const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App modifizieren' : 'Modify app');
+  const placeholderText = shellText('chatPlaceholder') || (lang === 'de' ? 'Was soll CTOX hier tun oder prüfen?' : 'What should CTOX do or check here?');
+  const sendLabel = shellText('send') || (lang === 'de' ? 'Senden' : 'Send');
+  const closeLabel = lang === 'de' ? 'Schließen' : 'Close';
+  const missingMsgLabel = lang === 'de' ? 'Nachricht fehlt.' : 'Message is missing.';
+  const chatNotReadyLabel = lang === 'de' ? 'Chat ist noch nicht bereit.' : 'Chat is not ready.';
+  const chatOpeningLabel = shellText('chatOpening') || (lang === 'de' ? 'Öffne Chat...' : 'Opening Chat...');
+
+  const subtitle = context.label || shellText('moduleTitles')?.[mod.id] || mod.title || mod.id;
+  
+  globalCtoxContextMenuEl.innerHTML = `
+    <form class="ctox-context-chat-form" novalidate>
+      <header style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px;">
+        <div style="min-width: 0; flex: 1;">
+          <strong style="display: block; color: var(--text-strong, var(--text, #18222d)); font-size: 13px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(titleText)}</strong>
+          <span style="display: block; color: var(--text-muted, var(--muted, #64747c)); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(subtitle)}</span>
+        </div>
+        <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}" style="width: 28px; height: 28px; line-height: 24px; text-align: center; font-size: 20px; border: none; background: none; color: var(--text-muted, var(--muted, #64747c)); cursor: pointer; transition: color 0.2s ease; padding: 0;">×</button>
+      </header>
+      ${canModify ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
+          <label class="is-selected"><input type="radio" name="contextMode" value="data" checked style="display:none;" /><span>${escapeHtml(workDataLabel)}</span></label>
+          <label><input type="radio" name="contextMode" value="app" style="display:none;" /><span>${escapeHtml(modifyAppLabel)}</span></label>
+        </div>
+      ` : ''}
+      <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
+      <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
+        <span class="ctox-context-status" style="font-size: 11px; color: var(--text-muted, var(--muted, #64747c)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
+        <button type="submit" class="ctox-context-submit-btn" style="flex: 0 0 auto; height: 32px; border: 1px solid var(--accent, #23665f); border-radius: 8px; background: color-mix(in srgb, var(--accent, #23665f) 10%, var(--surface, #fff)); color: var(--accent, #23665f); font-size: 12px; font-weight: 700; cursor: pointer; padding: 0 16px; transition: all 0.2s ease;">${escapeHtml(sendLabel)}</button>
+      </footer>
+    </form>
+  `;
+
+  globalCtoxContextMenuEl.hidden = false;
+  
+  // Clamp positioning
+  globalCtoxContextMenuEl.style.left = '0px';
+  globalCtoxContextMenuEl.style.top = '0px';
+  const rect = globalCtoxContextMenuEl.getBoundingClientRect();
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  globalCtoxContextMenuEl.style.left = `${Math.min(maxLeft, Math.max(8, x))}px`;
+  globalCtoxContextMenuEl.style.top = `${Math.min(maxTop, Math.max(8, y))}px`;
+
+  const form = globalCtoxContextMenuEl.querySelector('form');
+  const textarea = globalCtoxContextMenuEl.querySelector('.ctox-context-textarea');
+  const statusEl = globalCtoxContextMenuEl.querySelector('.ctox-context-status');
+  const closeBtn = globalCtoxContextMenuEl.querySelector('.ctox-context-close-btn');
+  
+  closeBtn.addEventListener('click', () => {
+    hideGlobalCtoxContextMenu();
+  });
+
+  if (canModify) {
+    const labels = globalCtoxContextMenuEl.querySelectorAll('.ctox-context-mode label');
+    labels.forEach(label => {
+      label.addEventListener('click', () => {
+        labels.forEach(l => l.classList.remove('is-selected'));
+        label.classList.add('is-selected');
+        const input = label.querySelector('input');
+        if (input) input.checked = true;
+      });
+    });
+  }
+
+  const closeBtnHover = () => { closeBtn.style.color = 'var(--text-strong)'; };
+  const closeBtnOut = () => { closeBtn.style.color = 'var(--text-muted)'; };
+  closeBtn.addEventListener('mouseenter', closeBtnHover);
+  closeBtn.addEventListener('mouseleave', closeBtnOut);
+
+  textarea.addEventListener('focus', () => {
+    textarea.style.borderColor = 'var(--accent, #23665f)';
+    textarea.style.boxShadow = '0 0 0 2px color-mix(in srgb, var(--accent, #23665f) 20%, transparent)';
+  });
+  textarea.addEventListener('blur', () => {
+    textarea.style.borderColor = 'var(--line, #d8e1e5)';
+    textarea.style.boxShadow = 'none';
+  });
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const prompt = textarea.value.trim();
+    if (!prompt) {
+      if (statusEl) statusEl.textContent = missingMsgLabel;
+      return;
+    }
+
+    if (!document.querySelector('[data-ctox-chat-root]')) {
+      if (statusEl) statusEl.textContent = chatNotReadyLabel;
+      return;
+    }
+
+    if (statusEl) statusEl.textContent = chatOpeningLabel;
+
+    const mode = canModify ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    const title = mode === 'app' ? `${mod.title || mod.id} App modifizieren` : `Kontext-Aufgabe · ${subtitle}`;
+    const instruction = mode === 'app' 
+      ? `Modifiziere die ${mod.title || mod.id}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Daten selbst nicht als primäres Ziel verändern.\n\n${prompt}`
+      : prompt;
+
+    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+      detail: {
+        text: prompt,
+        module: mod.id,
+        source_title: mod.title || mod.id,
+        command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+        record_id: mode === 'app' ? mod.id : (context.record_id || mod.id),
+        title,
+        instruction,
+        payload: {
+          title,
+          instruction,
+          prompt,
+          user_message: prompt,
+          mode,
+          target: mode === 'app' ? 'app' : 'data',
+          context: {
+            module: mod.id,
+            column: context.column,
+            record_type: context.record_type,
+            record_id: context.record_id,
+            label: context.label || mod.title || mod.id,
+            selected_text: context.selected_text,
+            clicked_text: context.clicked_text,
+          },
+          thread_key: `business-os/${mod.id}`,
+        },
+        client_context: {
+          action: 'context-chat',
+          mode,
+          column: context.column,
+          record_type: context.record_type,
+          record_id: context.record_id,
+        }
+      }
+    }));
+
+    hideGlobalCtoxContextMenu();
+  });
+
+  requestAnimationFrame(() => {
+    textarea.focus();
+  });
+}
+
+function hideGlobalCtoxContextMenu() {
+  if (globalCtoxContextMenuEl) {
+    globalCtoxContextMenuEl.hidden = true;
+  }
 }
