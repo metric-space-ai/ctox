@@ -9,6 +9,7 @@ use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
+use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 use serde::Deserialize;
@@ -1497,7 +1498,12 @@ pub fn pull_communication_accounts_for_business_os(
 ) -> Result<Value> {
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(empty_business_os_projection("communication_accounts"));
+    };
+    if !channel_projection_tables_exist(&conn, &["communication_accounts"])? {
+        return Ok(empty_business_os_projection("communication_accounts"));
+    }
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -1555,7 +1561,12 @@ pub fn pull_communication_threads_for_business_os(
 ) -> Result<Value> {
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(empty_business_os_projection("communication_threads"));
+    };
+    if !channel_projection_tables_exist(&conn, &["communication_threads"])? {
+        return Ok(empty_business_os_projection("communication_threads"));
+    }
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -1621,7 +1632,15 @@ pub fn pull_communication_messages_for_business_os(
 ) -> Result<Value> {
     let limit = limit.unwrap_or(500).clamp(1, 2_000);
     let db_path = resolve_db_path(root, None);
-    let conn = open_channel_db(&db_path)?;
+    let Some(conn) = open_channel_db_read_only(&db_path)? else {
+        return Ok(empty_business_os_projection("communication_messages"));
+    };
+    if !channel_projection_tables_exist(
+        &conn,
+        &["communication_messages", "communication_routing_state"],
+    )? {
+        return Ok(empty_business_os_projection("communication_messages"));
+    }
     let mut stmt = conn.prepare(
         r#"
         SELECT
@@ -5693,6 +5712,47 @@ pub(crate) fn open_channel_db(path: &Path) -> Result<Connection> {
         .context("failed to configure SQLite busy_timeout for channels")?;
     ensure_schema(&conn)?;
     Ok(conn)
+}
+
+fn open_channel_db_read_only(path: &Path) -> Result<Option<Connection>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .with_context(|| format!("failed to open channel db read-only {}", path.display()))?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+        .context("failed to configure SQLite busy_timeout for read-only channels")?;
+    conn.execute_batch("PRAGMA query_only = ON;")
+        .context("failed to configure read-only channel projection")?;
+    Ok(Some(conn))
+}
+
+fn channel_projection_tables_exist(conn: &Connection, tables: &[&str]) -> Result<bool> {
+    for table in tables {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1",
+                params![table],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .with_context(|| format!("failed to inspect channel projection table {table}"))?
+            .is_some();
+        if !exists {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn empty_business_os_projection(collection: &str) -> Value {
+    json!({
+        "ok": true,
+        "collection": collection,
+        "documents": [],
+        "count": 0,
+        "since_ms": 0,
+    })
 }
 
 fn ensure_schema(conn: &Connection) -> Result<()> {
