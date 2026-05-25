@@ -32,6 +32,7 @@ use url::Url;
 use uuid::Uuid;
 
 const STORE_FILE: &str = "business-os.sqlite3";
+const RXDB_STORE_FILE: &str = "business-os-rxdb.sqlite3";
 const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
@@ -383,6 +384,10 @@ pub fn open_store(root: &Path) -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
+pub fn rxdb_store_path(root: &Path) -> PathBuf {
+    root.join("runtime").join(RXDB_STORE_FILE)
+}
+
 pub fn status(root: &Path) -> anyhow::Result<BusinessOsStatus> {
     let path = root.join("runtime").join(STORE_FILE);
     let ctox_service = Some(cheap_ctox_service_status(root));
@@ -419,7 +424,7 @@ fn rxdb_data_plane_status(root: &Path) -> Value {
         ("ctox_queue_tasks", false),
     ];
 
-    let path = root.join("runtime/ctox.sqlite3");
+    let path = rxdb_store_path(root);
     if !path.is_file() {
         return serde_json::json!({
             "ok": false,
@@ -512,7 +517,7 @@ fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Re
 }
 
 fn rxdb_module_catalog_status(root: &Path) -> Value {
-    let path = root.join("runtime/ctox.sqlite3");
+    let path = rxdb_store_path(root);
     if !path.is_file() {
         return serde_json::json!({
             "ok": false,
@@ -2521,7 +2526,7 @@ pub fn materialize_desktop_file_command(
 }
 
 fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Value> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = rxdb_store_path(root);
     let conn = Connection::open(&database_path)
         .with_context(|| format!("failed to open {}", database_path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(10))?;
@@ -8678,7 +8683,7 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         fs::create_dir_all(root.join("runtime"))?;
-        let sqlite_path = root.join("runtime/ctox.sqlite3");
+        let sqlite_path = rxdb_store_path(root);
         let conn = Connection::open(sqlite_path)?;
         for collection in [
             "business_module_catalog",

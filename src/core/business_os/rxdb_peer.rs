@@ -130,7 +130,7 @@ pub fn native_peer_status(root: &Path) -> Value {
             .map(|peer| peer.peer_session_id.clone())
             .unwrap_or_default(),
         "lock_path": native_peer_lock_path(root).display().to_string(),
-        "database_path": root.join("runtime/ctox.sqlite3").display().to_string(),
+        "database_path": store::rxdb_store_path(root).display().to_string(),
     })
 }
 
@@ -253,7 +253,7 @@ fn sync_desktop_file_from_path_with_policy(
             DesktopFileContentPolicy::Lazy
         }
     });
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -305,7 +305,7 @@ pub fn sync_desktop_files_from_workspace_root(
         path: workspace_root,
         label,
     }];
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -338,7 +338,7 @@ pub fn sync_desktop_files_from_workspace_root(
 
 #[cfg(test)]
 fn sync_desktop_file_index(root: &Path) -> anyhow::Result<usize> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -371,7 +371,7 @@ fn sync_desktop_file_index(root: &Path) -> anyhow::Result<usize> {
 
 #[cfg(test)]
 fn sync_channel_state(root: &Path) -> anyhow::Result<usize> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -404,7 +404,7 @@ fn sync_channel_state(root: &Path) -> anyhow::Result<usize> {
 
 #[cfg(test)]
 fn sync_business_users(root: &Path) -> anyhow::Result<usize> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -437,7 +437,7 @@ fn sync_business_users(root: &Path) -> anyhow::Result<usize> {
 
 #[cfg(test)]
 fn sync_runtime_settings(root: &Path) -> anyhow::Result<()> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -470,7 +470,7 @@ fn sync_runtime_settings(root: &Path) -> anyhow::Result<()> {
 
 #[cfg(test)]
 fn sync_module_catalog(root: &Path) -> anyhow::Result<()> {
-    let database_path = root.join("runtime/ctox.sqlite3");
+    let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
@@ -523,7 +523,7 @@ async fn run_native_peer(
         signaling_url_with_native_metadata(&signaling_url, &sync_room, &signaling_room_password);
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
-    let database = open_database(root.join("runtime/ctox.sqlite3")).await?;
+    let database = open_database(store::rxdb_store_path(&root)).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
     let collections = database
         .add_collections(collection_creators())
@@ -2561,7 +2561,7 @@ mod tests {
 
         sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let mut stmt = conn
             .prepare("SELECT data FROM ctox_business_os__desktop_files__v0")
             .expect("desktop file query");
@@ -2616,7 +2616,7 @@ mod tests {
 
         sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file");
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let chunk_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 LIMIT 1",
@@ -2657,7 +2657,7 @@ mod tests {
 
         let canonical = file_path.canonicalize().expect("canonical file");
         let file_id = desktop_file_id(&canonical);
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let file = read_desktop_file_row(&conn, &file_id);
         let generation_id = file
             .get("content_generation_id")
@@ -2743,7 +2743,7 @@ mod tests {
 
         sync_desktop_file_from_path(root.path(), &file_path).expect("sync large file metadata");
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let file_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -2769,7 +2769,7 @@ mod tests {
 
         materialize_desktop_file_from_path(root.path(), &file_path)
             .expect("materialize large file content");
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let materialized_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -2812,7 +2812,7 @@ mod tests {
         fs::write(&file_path, b"short").expect("write updated artifact");
         sync_desktop_file_from_path(root.path(), &file_path).expect("sync updated desktop file");
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let file_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -2903,7 +2903,7 @@ mod tests {
                 .expect("sync updated desktop file");
         }
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let file_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -2973,7 +2973,7 @@ mod tests {
         let file_id = desktop_file_id(&canonical);
 
         sync_desktop_file_from_path(root.path(), &file_path).expect("sync desktop file metadata");
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         conn.execute("DELETE FROM ctox_business_os__desktop_file_chunks__v0", [])
             .expect("delete chunks");
         drop(conn);
@@ -3003,7 +3003,7 @@ mod tests {
             Some("completed")
         );
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let chunk_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_file_chunks__v0 LIMIT 1",
@@ -3064,8 +3064,7 @@ mod tests {
         let synced = sync_channel_state(root.path()).expect("sync channel state");
         assert!(synced >= BUSINESS_OS_CHANNEL_IDS.len() + 1);
 
-        let conn =
-            Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open rxdb sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let accounts: Vec<Value> = {
             let mut stmt = conn
                 .prepare("SELECT data FROM ctox_business_os__communication_accounts__v0")
@@ -3162,8 +3161,7 @@ mod tests {
         let synced = sync_business_users(root.path()).expect("sync business users");
         assert!(synced >= 2);
 
-        let conn =
-            Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open rxdb sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let user_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__business_users__v0 WHERE id = 'alice'",
@@ -3187,8 +3185,7 @@ mod tests {
 
         sync_runtime_settings(root.path()).expect("sync runtime settings");
 
-        let conn =
-            Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open rxdb sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let settings_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__ctox_runtime_settings__v0 WHERE id = 'runtime-settings'",
@@ -3230,8 +3227,7 @@ mod tests {
 
         sync_module_catalog(root.path()).expect("sync module catalog");
 
-        let conn =
-            Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open rxdb sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
         let catalog_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
@@ -3283,7 +3279,7 @@ mod tests {
         let indexed = sync_desktop_file_index(root.path()).expect("sync desktop file index");
         assert_eq!(indexed, 2);
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let folder_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = 'fs_ctox'",
@@ -3381,7 +3377,7 @@ mod tests {
         let indexed_after_delete =
             sync_desktop_file_index(root.path()).expect("sync desktop file index after delete");
         assert_eq!(indexed_after_delete, 1);
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let deleted_small_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -3405,7 +3401,7 @@ mod tests {
         let indexed_after_empty_root =
             sync_desktop_file_index(root.path()).expect("sync empty desktop file index");
         assert_eq!(indexed_after_empty_root, 0);
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let deleted_large_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -3435,7 +3431,7 @@ mod tests {
         assert_eq!(indexed, 1);
 
         let file_id = desktop_file_id(&file_path.canonicalize().expect("canonical file"));
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let file_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -3606,7 +3602,7 @@ mod tests {
         assert_eq!(indexed_after_rename, 1);
         let renamed_id = desktop_file_id(&renamed_path.canonicalize().expect("canonical renamed"));
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let original_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -3684,7 +3680,7 @@ mod tests {
             .expect("sync large workspace root");
         assert_eq!(indexed, DESKTOP_FILE_SCAN_MAX_FILES);
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let (removed_id, removed_path) = {
             let mut rows = conn
                 .prepare("SELECT id, data FROM ctox_business_os__desktop_files__v0")
@@ -3720,7 +3716,7 @@ mod tests {
             .expect("sync large workspace root after remove");
         assert_eq!(indexed_after_remove, DESKTOP_FILE_SCAN_MAX_FILES);
 
-        let conn = Connection::open(root.path().join("runtime/ctox.sqlite3")).expect("open sqlite");
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
         let row_json: String = conn
             .query_row(
                 "SELECT data FROM ctox_business_os__desktop_files__v0 WHERE id = ?1",
@@ -3741,7 +3737,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database
@@ -3888,7 +3884,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database
@@ -4015,7 +4011,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database
@@ -4073,7 +4069,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database
@@ -4203,7 +4199,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database
@@ -4349,7 +4345,7 @@ mod tests {
             .expect("runtime");
 
         runtime.block_on(async {
-            let database = open_test_database(root.path().join("runtime/ctox.sqlite3"))
+            let database = open_test_database(store::rxdb_store_path(root.path()))
                 .await
                 .expect("open rxdb sqlite");
             database

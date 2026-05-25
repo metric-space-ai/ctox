@@ -100,7 +100,7 @@ const businessPort = parsePositiveIntegerEnv('BUSINESS_PORT', process.env.BUSINE
 const signalingPort = parsePositiveIntegerEnv('SIGNALING_PORT', process.env.SIGNALING_PORT || '18876', { max: 65535 });
 const signalingUrl = `ws://127.0.0.1:${signalingPort}`;
 const signalingDebug = process.env.SIGNALING_DEBUG === '1';
-const sqlitePath = process.env.CTOX_SQLITE || path.join(runtimeRoot, 'runtime/ctox.sqlite3');
+const sqlitePath = process.env.CTOX_SQLITE || path.join(runtimeRoot, 'runtime/business-os-rxdb.sqlite3');
 const pagePath = process.env.SMOKE_PAGE_PATH || '/__rxdb_smoke__.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
 const useAppDb = process.env.SMOKE_USE_APP_DB === '1' || /^\/index\.html(?:[?#]|$)/.test(pagePath);
