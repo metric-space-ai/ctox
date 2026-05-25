@@ -670,8 +670,10 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     eprintln!("ctox service autonomy level: {active_level}");
     channels::ensure_store(root)?;
     governance::ensure_governance(root)?;
-    if let Err(err) = crate::skill_store::bootstrap_embedded_system_skills(root) {
-        eprintln!("ctox service: bootstrap_embedded_system_skills failed: {err:#}");
+    if runtime_env::config_flag(root, "CTOX_SERVICE_BOOTSTRAP_SYSTEM_SKILLS") {
+        if let Err(err) = crate::skill_store::bootstrap_embedded_system_skills(root) {
+            eprintln!("ctox service: bootstrap_embedded_system_skills failed: {err:#}");
+        }
     }
     let db_path = crate::paths::core_db(&root);
     let _ = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())?;
