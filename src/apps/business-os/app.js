@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260525-subscription-sync3';
+const APP_BUILD = '20260525-subscription-sync4';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -188,7 +188,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260525-subscription-sync3', 'business db')
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260525-subscription-sync4', 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -199,7 +199,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260525-subscription-sync3', 'business sync')
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260525-subscription-sync4', 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -227,7 +227,7 @@ async function loadCoreSchemaModules() {
 
 async function loadReactSettingsModule() {
   if (!reactSettingsModulePromise) {
-    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260525-subscription-sync3', 'react settings');
+    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260525-subscription-sync4', 'react settings');
   }
   return reactSettingsModulePromise;
 }
@@ -1529,6 +1529,8 @@ function hasRecoverableWebRtcFailure(snapshot) {
   const collections = Object.values(snapshot.collections || {});
   const hadEstablishedConnection = collections.some((collection) => collection?.connectedAt || collection?.initialReplicationAt);
   if (!hadEstablishedConnection && !state.advancedStatusEverHealthy) return false;
+  const hasDataPlaneError = collections.some((collection) => collection?.lastError);
+  if (!hasDataPlaneError) return false;
   if (snapshot.phase === 'reconnecting') return true;
   return collections.some((collection) => collection?.connectionStatus === 'reconnecting');
 }
@@ -1546,7 +1548,6 @@ async function repairRecoveringDataPlane() {
     await repairBusinessDataPlane(state.syncConfig);
     await startCriticalSyncCollections();
     if (state.activeModule) startModuleSync(state.activeModule);
-    window.setTimeout(() => startAllModuleSync(), 5000);
   } finally {
     syncRecoveryRepairRunning = false;
   }
@@ -2850,7 +2851,6 @@ function scheduleBackgroundModuleWork() {
   state.backgroundModuleWorkScheduled = true;
   const run = () => {
     preloadModuleScripts();
-    startAllModuleSync();
   };
   if ('requestIdleCallback' in window) {
     window.requestIdleCallback(run, { timeout: 3000 });
