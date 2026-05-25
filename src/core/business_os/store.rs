@@ -249,6 +249,8 @@ pub struct RuntimeSettingsRequest {
     #[serde(default)]
     pub chat_model: String,
     #[serde(default)]
+    pub preset: String,
+    #[serde(default)]
     pub context: String,
     #[serde(default)]
     pub max_run_secs: Option<u64>,
@@ -1135,6 +1137,17 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 .cloned()
                 .unwrap_or_else(|| "local".to_owned())
         });
+    let preset = runtime_settings_preset(runtime_state.as_ref(), &env_map);
+    let context =
+        runtime_settings_context(env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT").cloned().or_else(
+            || {
+                runtime_state.as_ref().and_then(|state| {
+                    state
+                        .configured_context_tokens
+                        .map(|value| value.to_string())
+                })
+            },
+        ));
     let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
     let key_configured = crate::secrets::get_credential(root, key_name).is_some();
     let configured_auth_mode = env_map
@@ -1215,10 +1228,8 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
                 .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
                 .unwrap_or_default(),
-            "context": env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT")
-                .cloned()
-                .or_else(|| runtime_state.as_ref().and_then(|state| state.configured_context_tokens.map(|value| value.to_string())))
-                .unwrap_or_else(|| "256k".to_owned()),
+            "preset": preset,
+            "context": context,
             "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(1800),
@@ -1520,6 +1531,7 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
     let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
         .unwrap_or_else(|_| BTreeMap::new());
     let chat_model = request.chat_model.trim();
+    let preset = request.preset.trim();
     let context = request.context.trim();
     if provider.eq_ignore_ascii_case("local") {
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
@@ -1539,6 +1551,9 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
     if !chat_model.is_empty() {
         env_map.insert("CTOX_CHAT_MODEL".to_owned(), chat_model.to_owned());
         env_map.insert("CTOX_CHAT_MODEL_BASE".to_owned(), chat_model.to_owned());
+    }
+    if let Some(preset) = normalize_runtime_preset(preset) {
+        env_map.insert("CTOX_CHAT_LOCAL_PRESET".to_owned(), preset.to_owned());
     }
     if !context.is_empty() {
         env_map.insert("CTOX_CHAT_MODEL_MAX_CONTEXT".to_owned(), context.to_owned());
@@ -1574,6 +1589,37 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         env_map.insert(key_name.to_owned(), api_key.to_owned());
     }
     crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
+}
+
+fn runtime_settings_preset(
+    runtime_state: Option<&crate::inference::runtime_state::InferenceRuntimeState>,
+    env_map: &BTreeMap<String, String>,
+) -> String {
+    runtime_state
+        .and_then(|state| state.local_preset.as_deref())
+        .or_else(|| env_map.get("CTOX_CHAT_LOCAL_PRESET").map(String::as_str))
+        .and_then(normalize_runtime_preset)
+        .unwrap_or("Quality")
+        .to_owned()
+}
+
+fn normalize_runtime_preset(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "quality" => Some("Quality"),
+        "performance" => Some("Performance"),
+        _ => None,
+    }
+}
+
+fn runtime_settings_context(value: Option<String>) -> String {
+    let Some(value) = value else {
+        return "256k".to_owned();
+    };
+    match value.trim().to_ascii_lowercase().as_str() {
+        "131072" | "128000" | "128k" => "128k".to_owned(),
+        "262144" | "256000" | "256k" => "256k".to_owned(),
+        _ => value,
+    }
 }
 
 fn chatgpt_subscription_auth_status(root: &Path) -> ChatgptSubscriptionAuthStatus {

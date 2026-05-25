@@ -539,9 +539,13 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
           </select></label>
         ` : ''}
         ${runtimeModelControl(provider, runtime.chat_model, canManage)}
+        <label><span>Preset</span><select data-runtime-preset ${canManage ? '' : 'disabled'}>
+          ${option('Quality', 'Quality', runtimePresetValue(runtime.preset))}
+          ${option('Performance', 'Performance', runtimePresetValue(runtime.preset))}
+        </select></label>
         <label><span>Context</span><select data-runtime-context ${canManage ? '' : 'disabled'}>
-          ${option('128k', '128k', runtime.context)}
-          ${option('256k', '256k', runtime.context)}
+          ${option('128k', '128k', runtimeContextValue(runtime.context))}
+          ${option('256k', '256k', runtimeContextValue(runtime.context))}
         </select></label>
         <label><span>Max Run</span><input data-runtime-timeout inputmode="numeric" value="${escapeAttr(runtime.max_run_secs || 1800)}" ${canManage ? '' : 'disabled'} /></label>
         ${usesApiKey ? `<label><span>${escapeHtml(auth.api_key_name || 'API Key')}</span><input data-runtime-api-key type="password" autocomplete="off" placeholder="${escapeAttr(auth.api_key_configured ? 'gespeichert - leer lassen' : 'API Key eingeben')}" ${canManage ? '' : 'disabled'} /></label>` : ''}
@@ -921,7 +925,8 @@ function runtimePayloadFromForm(root) {
     provider,
     auth_mode: authMode,
     chat_model: root.querySelector('[data-runtime-model]')?.value || '',
-    context: root.querySelector('[data-runtime-context]')?.value || '256k',
+    preset: runtimePresetValue(root.querySelector('[data-runtime-preset]')?.value),
+    context: runtimeContextValue(root.querySelector('[data-runtime-context]')?.value),
     max_run_secs: Number(root.querySelector('[data-runtime-timeout]')?.value || 1800),
     api_key: authMode === 'api_key' ? (root.querySelector('[data-runtime-api-key]')?.value || '') : '',
   };
@@ -937,7 +942,8 @@ function runtimeSettingsWithDraft(current, draft) {
       provider,
       source: provider === 'local' ? 'local' : 'api',
       chat_model: draft.chat_model,
-      context: draft.context,
+      preset: runtimePresetValue(draft.preset),
+      context: runtimeContextValue(draft.context),
       max_run_secs: draft.max_run_secs,
     },
     auth: {
@@ -1178,12 +1184,30 @@ function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 
   if (String(runtime.provider || '').toLowerCase() !== provider) return false;
   if (String(auth.mode || '').toLowerCase() !== authMode) return false;
   if (payload.chat_model && String(runtime.chat_model || '') !== String(payload.chat_model)) return false;
-  if (payload.context && String(runtime.context || '') !== String(payload.context)) return false;
+  if (payload.preset && runtimePresetValue(runtime.preset) !== runtimePresetValue(payload.preset)) {
+    return false;
+  }
+  if (payload.context && runtimeContextValue(runtime.context) !== runtimeContextValue(payload.context)) {
+    return false;
+  }
   if (Number(payload.max_run_secs || 0) > 0
     && Number(runtime.max_run_secs || 0) !== Number(payload.max_run_secs)) {
     return false;
   }
   return true;
+}
+
+function runtimePresetValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'performance') return 'Performance';
+  return 'Quality';
+}
+
+function runtimeContextValue(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['128k', '131072', '128000'].includes(normalized)) return '128k';
+  if (['256k', '262144', '256000'].includes(normalized)) return '256k';
+  return normalized || '256k';
 }
 
 function writeSubscriptionAuthWindow(authWindow, title, message, danger = false) {
