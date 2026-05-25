@@ -1,7 +1,7 @@
 import { createBusinessDb, resetBusinessDb } from './shared/db.js?v=20260522-rxdb-fork1';
 import { createSyncRuntime } from './shared/sync.js?v=20260522-replication-io1';
 import { createCommandBus } from './shared/command-bus.js?v=20260521-rxdb-db32';
-import { openReactSettings } from './shared/react-settings.js?v=20260525-runtime-auth-health1';
+import { openReactSettings } from './shared/react-settings.js?v=20260525-runtime-quality-preset1';
 import { dispatchBusinessReport, initBusinessReporter } from './shared/business-reporter.js?v=20260520-rxdb-reports1';
 import { initBusinessChat } from './shared/business-chat.js?v=20260520-chat-ux-theme1';
 import { createEventBus } from './shared/event-bus.js?v=20260519-shell-os1';
@@ -25,7 +25,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260525-runtime-auth-health1';
+const APP_BUILD = '20260525-runtime-quality-preset1';
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260521-rxdb-db13';
 const CTOX_HEALTH_POLL_MS = 10000;
