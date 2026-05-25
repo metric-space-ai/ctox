@@ -28,6 +28,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use tokio::sync::Mutex as AsyncMutex;
 use url::Url;
 use uuid::Uuid;
 
@@ -523,6 +524,7 @@ async fn run_native_peer(
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     let database = open_database(root.join("runtime/ctox.sqlite3")).await?;
+    let database_write_lock = Arc::new(AsyncMutex::new(()));
     let collections = database
         .add_collections(collection_creators())
         .await
@@ -548,6 +550,7 @@ async fn run_native_peer(
     let command_consumer = tokio::spawn(consume_business_commands_loop(
         root.clone(),
         Arc::clone(&database),
+        Arc::clone(&database_write_lock),
     ));
 
     let notes_sync = tokio::spawn(sync_notes_background_loop(root.clone()));
@@ -558,23 +561,28 @@ async fn run_native_peer(
             tokio::spawn(sync_desktop_file_index_background_loop(
                 root.clone(),
                 Arc::clone(&database),
+                Arc::clone(&database_write_lock),
             ))
         };
     let channel_state_sync = tokio::spawn(sync_channel_state_background_loop(
         root.clone(),
         Arc::clone(&database),
+        Arc::clone(&database_write_lock),
     ));
     let business_users_sync = tokio::spawn(sync_business_users_background_loop(
         root.clone(),
         Arc::clone(&database),
+        Arc::clone(&database_write_lock),
     ));
     let runtime_settings_sync = tokio::spawn(sync_runtime_settings_background_loop(
         root.clone(),
         Arc::clone(&database),
+        Arc::clone(&database_write_lock),
     ));
     let module_catalog_sync = tokio::spawn(sync_module_catalog_background_loop(
         root.clone(),
         Arc::clone(&database),
+        Arc::clone(&database_write_lock),
     ));
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
@@ -835,54 +843,102 @@ async fn sync_notes_background_loop(root: PathBuf) {
     }
 }
 
-async fn sync_desktop_file_index_background_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn sync_desktop_file_index_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = sync_desktop_file_index_with_database(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_desktop_file_index_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb desktop file index failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(DESKTOP_FILE_SCAN_INTERVAL_SECS)).await;
     }
 }
 
-async fn sync_channel_state_background_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn sync_channel_state_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = sync_channel_state_with_database(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_channel_state_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb channel state sync failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(CHANNEL_STATE_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn sync_business_users_background_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn sync_business_users_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = sync_business_users_with_database(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_business_users_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb business users sync failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(BUSINESS_USERS_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn sync_runtime_settings_background_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn sync_runtime_settings_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = sync_runtime_settings_with_database(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_runtime_settings_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb runtime settings sync failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(RUNTIME_SETTINGS_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn sync_module_catalog_background_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn sync_module_catalog_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = sync_module_catalog_with_database(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_module_catalog_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb module catalog sync failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(MODULE_CATALOG_SYNC_INTERVAL_SECS)).await;
     }
 }
 
-async fn consume_business_commands_loop(root: PathBuf, database: Arc<RxDatabase>) {
+async fn consume_business_commands_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
     loop {
-        if let Err(err) = consume_pending_business_commands(&root, &database).await {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            consume_pending_business_commands(&root, &database).await
+        };
+        if let Err(err) = result {
             eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
