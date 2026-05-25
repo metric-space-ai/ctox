@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260525-desktop-icon-conflict1';
+const APP_BUILD = '20260525-sync-ice-config1';
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
 const CTOX_HEALTH_POLL_MS = 10000;
@@ -5314,6 +5314,9 @@ async function normalizeBusinessOsLaunchConfig(config) {
   const syncRoom = explicitSyncRoom || await deriveSyncRoomFromPassword(instanceId, roomPassword);
   const urls = signalingUrls.map((url) => String(url || '').trim()).filter(Boolean);
   if (!syncRoom || !urls.length) return null;
+  const iceServers = Array.isArray(config.ice_servers)
+    ? config.ice_servers
+    : (Array.isArray(config.iceServers) ? config.iceServers : []);
   return {
     ok: config.ok !== false,
     app_hosting: config.app_hosting || config.appHosting || 'web_deploy',
@@ -5324,6 +5327,8 @@ async function normalizeBusinessOsLaunchConfig(config) {
     sync_room: syncRoom,
     signaling_room_password: roomPassword,
     signaling_urls: urls,
+    ice_servers: iceServers,
+    iceServers,
     transport: 'webrtc',
     http_bridge_available: false,
     ctox_instance_required: config.ctox_instance_required !== false,
