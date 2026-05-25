@@ -1120,6 +1120,14 @@ async function loadRuntimeSettings({ db } = {}) {
 }
 
 async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {
+  try {
+    return await callInstanceBusinessOsApi('/api/business-os/ctox/runtime-settings', {
+      method: 'POST',
+      body: payload,
+    });
+  } catch (error) {
+    console.warn('[business-os-settings] direct runtime settings save failed; falling back to RxDB command', error);
+  }
   const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
   await dispatchModuleCommand({
     commandBus,
@@ -1161,6 +1169,13 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
 }
 
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
+  try {
+    return await callInstanceBusinessOsApi('/api/business-os/ctox/subscription-auth/start', {
+      method: 'POST',
+    });
+  } catch (error) {
+    console.warn('[business-os-settings] direct subscription auth start failed; falling back to RxDB command', error);
+  }
   const command = await dispatchModuleCommand({
     commandBus,
     db,
@@ -1173,6 +1188,30 @@ async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
     source: 'business-os-settings',
   });
   return command.result || command;
+}
+
+async function callInstanceBusinessOsApi(path, { method = 'GET', body } = {}) {
+  const response = await fetch(path, {
+    method,
+    credentials: 'same-origin',
+    headers: body === undefined ? {} : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    const message = payload?.error || payload?.message || text || `HTTP ${response.status}`;
+    throw new Error(message);
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('Business OS API hat keine JSON-Antwort geliefert.');
+  }
+  return payload;
 }
 
 function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {
