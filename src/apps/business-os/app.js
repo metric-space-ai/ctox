@@ -4116,10 +4116,7 @@ function scrubPairingConfigFromUrl() {
 
 function parsePackedConfig(value) {
   try {
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
-    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
-    return JSON.parse(new TextDecoder().decode(bytes));
+    return JSON.parse(decodeBase64UrlJson(value));
   } catch {
     try {
       return JSON.parse(value);
@@ -4127,6 +4124,54 @@ function parsePackedConfig(value) {
       return null;
     }
   }
+}
+
+function decodeBase64UrlJson(value) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const normalized = String(value || '').replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
+  let buffer = 0;
+  let bits = 0;
+  const bytes = [];
+  for (const char of normalized) {
+    if (char === '=') break;
+    const index = alphabet.indexOf(char);
+    if (index < 0) throw new Error('Invalid base64url config payload.');
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes.push((buffer >> bits) & 0xff);
+    }
+  }
+  return decodeUtf8Bytes(bytes);
+}
+
+function decodeUtf8Bytes(bytes) {
+  if (typeof TextDecoder !== 'undefined') {
+    return new TextDecoder().decode(new Uint8Array(bytes));
+  }
+  let output = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    const byte = bytes[i];
+    if (byte < 0x80) {
+      output += String.fromCharCode(byte);
+    } else if ((byte & 0xe0) === 0xc0) {
+      const next = bytes[++i] || 0;
+      output += String.fromCharCode(((byte & 0x1f) << 6) | (next & 0x3f));
+    } else if ((byte & 0xf0) === 0xe0) {
+      const next = bytes[++i] || 0;
+      const last = bytes[++i] || 0;
+      output += String.fromCharCode(((byte & 0x0f) << 12) | ((next & 0x3f) << 6) | (last & 0x3f));
+    } else {
+      const second = bytes[++i] || 0;
+      const third = bytes[++i] || 0;
+      const fourth = bytes[++i] || 0;
+      const codePoint = ((byte & 0x07) << 18) | ((second & 0x3f) << 12) | ((third & 0x3f) << 6) | (fourth & 0x3f);
+      const offset = codePoint - 0x10000;
+      output += String.fromCharCode(0xd800 + (offset >> 10), 0xdc00 + (offset & 0x3ff));
+    }
+  }
+  return output;
 }
 
 async function normalizeBusinessOsLaunchConfig(config) {
