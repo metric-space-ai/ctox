@@ -390,9 +390,7 @@ export async function mount(ctx) {
         sort_index: startIndex + offsetIndex,
         updated_at_ms: Date.now(),
       };
-      const existingDoc = await iconsCollection.findOne(seed.id).exec();
-      if (existingDoc) await existingDoc.incrementalPatch({ ...seed, hidden: false });
-      else await iconsCollection.insert(seed);
+      await upsertSeed(iconsCollection, seed.id, { ...seed, hidden: false });
     }
   }
 
@@ -462,11 +460,7 @@ export async function mount(ctx) {
       ...defaultLayout(launcherRef),
       updated_at_ms: Date.now(),
     };
-    try {
-      await collection.insert(seed);
-    } catch (error) {
-      if (!String(error?.message || '').toLowerCase().includes('already')) throw error;
-    }
+    await upsertSeed(collection, seed.id, seed);
     return seed;
   }
 
@@ -519,11 +513,7 @@ export async function mount(ctx) {
         if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
         continue;
       }
-      try {
-        await collection.insert({ ...seed, hidden: false });
-      } catch (error) {
-        if (!String(error?.message || '').toLowerCase().includes('already')) throw error;
-      }
+      await upsertSeed(collection, seed.id, { ...seed, hidden: false });
     }
     await normalizeIconLayoutIfNeeded(collection, launcherRef);
   }
@@ -598,6 +588,31 @@ export async function mount(ctx) {
         updated_at_ms: Date.now(),
       });
     }));
+  }
+
+  async function upsertSeed(collection, id, seed) {
+    const existing = await collection.findOne(id).exec();
+    if (existing) {
+      await existing.incrementalPatch(seed);
+      return;
+    }
+    try {
+      await collection.insert(seed);
+    } catch (error) {
+      if (!isConflictError(error)) throw error;
+      const conflicted = await collection.findOne(id).exec();
+      if (!conflicted) throw error;
+      await conflicted.incrementalPatch(seed);
+    }
+  }
+
+  function isConflictError(error) {
+    const status = error?.status || error?.parameters?.writeError?.status;
+    if (status === 409) return true;
+    const code = String(error?.code || error?.rxdb || '').toUpperCase();
+    if (code === 'CONFLICT') return true;
+    const message = String(error?.message || error || '').toLowerCase();
+    return message.includes('conflict') || message.includes('already');
   }
 }
 
