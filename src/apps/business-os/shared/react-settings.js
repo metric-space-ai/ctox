@@ -218,7 +218,7 @@ export async function openReactSettings({
       try {
         settingsState.runtimeSettings = await saveRuntimeSettings(
           runtimePayloadFromForm(body),
-          { commandBus, db, session },
+          { commandBus, db, session, sync },
         );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
       } catch (error) {
@@ -242,8 +242,8 @@ export async function openReactSettings({
           settingsState.runtimeSettings,
           runtimePayload,
         );
-        await saveRuntimeSettings(runtimePayload, { commandBus, db, session });
-        const payload = await startSubscriptionAuth({ commandBus, db, session });
+        await saveRuntimeSettings(runtimePayload, { commandBus, db, session, sync });
+        const payload = await startSubscriptionAuth({ commandBus, db, session, sync });
         if (!payload.auth_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (authWindow && !authWindow.closed) {
           authWindow.location.href = payload.auth_url;
@@ -1119,12 +1119,13 @@ async function loadRuntimeSettings({ db } = {}) {
   return data;
 }
 
-async function saveRuntimeSettings(payload, { commandBus, db, session } = {}) {
+async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {
   const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
   await dispatchModuleCommand({
     commandBus,
     db,
     session,
+    sync,
     commandType: 'ctox.runtime_settings.save',
     moduleId: 'ctox',
     recordId: 'runtime-settings',
@@ -1159,11 +1160,12 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
   throw lastError || new Error('Runtime-Status wurde nicht synchronisiert.');
 }
 
-async function startSubscriptionAuth({ commandBus, db, session } = {}) {
+async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
   const command = await dispatchModuleCommand({
     commandBus,
     db,
     session,
+    sync,
     commandType: 'ctox.subscription_auth.start',
     moduleId: 'ctox',
     recordId: 'subscription-auth',
@@ -1345,12 +1347,14 @@ async function dispatchModuleCommand({
   commandBus,
   db,
   session,
+  sync,
   commandType,
   moduleId,
   recordId,
   payload,
   source,
 }) {
+  await sync?.startCollection?.('business_commands');
   if (!commandBus?.dispatch || !db?.collection?.('business_commands')) {
     throw new Error('business_commands collection is required for module governance commands');
   }
