@@ -18,8 +18,7 @@
 //! - Per-peer fork `RxReplicationState`s are owned by `PeerState` so cancel
 //!   propagates on `remove_peer`.
 
-#[path = "protocol_contract_generated.rs"]
-mod protocol_contract_generated;
+use super::protocol_contract_generated;
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -57,7 +56,8 @@ use protocol_contract_generated::{
     CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
     CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
     CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
-    CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL,
+    CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
@@ -68,7 +68,19 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-schema-hash-v1",
     "ctox-peer-session-v1",
     "ctox-checkpoint-epoch-v1",
+    CTOX_QUERY_FETCH_CAPABILITY,
 ];
+
+pub fn remote_supports_query_fetch(remote_protocol: &Value) -> bool {
+    remote_protocol
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .map(|caps| {
+            caps.iter()
+                .any(|item| item.as_str() == Some(CTOX_QUERY_FETCH_CAPABILITY))
+        })
+        .unwrap_or(false)
+}
 
 pub type RxWebRTCReplicationState<H> = RxWebRTCReplicationPool<H>;
 
@@ -159,6 +171,8 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     pub master_replication_handler: Arc<dyn RxReplicationHandler>,
     pub canceled: std::sync::atomic::AtomicBool,
     pub error_subject: RxSubject<RxError>,
+    pub query_fetch_registry: Arc<super::query_fetch_handler::QueryFetchRegistry>,
+    pub file_fetch_registry: Arc<super::file_fetch_handler::FileFetchRegistry>,
     peer_states: Mutex<HashMap<H::Peer, PeerState<H>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
@@ -177,12 +191,24 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             collection.database.token.clone(),
             false, // keep_meta = false (upstream default)
         );
+        let registry = Arc::new(super::query_fetch_handler::QueryFetchRegistry::new(
+            protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
+        ));
+        // Auto-register the collection. The browser will only ask for
+        // collections it has been told about; this is a no-op for unknown
+        // collections.
+        registry.register(Arc::clone(&collection));
+        let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
+            protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
+        ));
         Arc::new(Self {
             collection,
             connection_handler,
             master_replication_handler,
             canceled: std::sync::atomic::AtomicBool::new(false),
             error_subject: RxSubject::new(),
+            query_fetch_registry: registry,
+            file_fetch_registry: file_registry,
             peer_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(Vec::new()),
         })
@@ -373,10 +399,70 @@ where
                 {
                     break;
                 }
+                if item.message.method == super::query_fetch_handler::query_fetch_method() {
+                    let registry = Arc::clone(&pool_clone.query_fetch_registry);
+                    let handler_clone = Arc::clone(&handler);
+                    let peer = item.peer.clone();
+                    let peer_identity = handler.peer_identity(&peer);
+                    let message = item.message.clone();
+                    tokio::spawn(async move {
+                        let _ = super::query_fetch_handler::run_query_fetch(
+                            registry,
+                            handler_clone,
+                            peer,
+                            peer_identity,
+                            message,
+                        )
+                        .await;
+                    });
+                    continue;
+                }
+                if item.message.method == super::query_fetch_handler::query_cancel_method() {
+                    if let Ok(request_id) =
+                        super::query_fetch_handler::parse_query_cancel_request(&item.message)
+                    {
+                        pool_clone.query_fetch_registry.cancel(&request_id);
+                    }
+                    continue;
+                }
+                if item.message.method == super::file_fetch_handler::file_fetch_method() {
+                    let registry = Arc::clone(&pool_clone.file_fetch_registry);
+                    let handler_clone = Arc::clone(&handler);
+                    let peer = item.peer.clone();
+                    let peer_identity = handler.peer_identity(&peer);
+                    let message = item.message.clone();
+                    tokio::spawn(async move {
+                        let _ = super::file_fetch_handler::run_file_fetch(
+                            registry,
+                            handler_clone,
+                            peer,
+                            peer_identity,
+                            message,
+                        )
+                        .await;
+                    });
+                    continue;
+                }
+                if item.message.method == super::file_fetch_handler::file_cancel_method() {
+                    if let Ok(request_id) =
+                        super::file_fetch_handler::parse_file_cancel_request(&item.message)
+                    {
+                        pool_clone.file_fetch_registry.cancel(&request_id);
+                    }
+                    continue;
+                }
                 let result = match item.message.method.as_str() {
                     "token" => Some(Value::String(storage_token.clone())),
                     "ctoxProtocol" => {
-                        Some(ctox_protocol_response(&collection, peer_session_id.as_deref()).await)
+                        let flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                        Some(
+                            ctox_protocol_response_with_flag(
+                                &collection,
+                                peer_session_id.as_deref(),
+                                flag,
+                            )
+                            .await,
+                        )
                     }
                     _ => None,
                 };
@@ -426,8 +512,14 @@ where
                     let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     format!("{}|{}|{}", collection.database.token, request_flag, n)
                 };
+                let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
                 let local_protocol =
-                    ctox_protocol_response(&collection, peer_session_id.as_deref()).await;
+                    ctox_protocol_response_with_flag(
+                        &collection,
+                        peer_session_id.as_deref(),
+                        local_flag,
+                    )
+                    .await;
                 let protocol_response = match send_message_and_await_answer(
                     Arc::clone(&handler),
                     peer.clone(),
@@ -596,6 +688,14 @@ async fn ctox_protocol_response(
     collection: &Arc<RxCollection>,
     peer_session_id: Option<&str>,
 ) -> Value {
+    ctox_protocol_response_with_flag(collection, peer_session_id, true).await
+}
+
+async fn ctox_protocol_response_with_flag(
+    collection: &Arc<RxCollection>,
+    peer_session_id: Option<&str>,
+    query_demand_loading_enabled: bool,
+) -> Value {
     let checkpoint = collection
         .storage_instance
         .replication_checkpoint_status()
@@ -610,21 +710,49 @@ async fn ctox_protocol_response(
         }),
         None => Value::Null,
     };
-    ctox_protocol_response_payload(collection_payload, peer_session_id)
+    ctox_protocol_response_payload_with_flag(
+        collection_payload,
+        peer_session_id,
+        query_demand_loading_enabled,
+    )
 }
 
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
+    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true)
+}
+
+fn ctox_protocol_response_payload_with_flag(
+    collection: Value,
+    peer_session_id: Option<&str>,
+    query_demand_loading_enabled: bool,
+) -> Value {
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
         .map(str::to_owned)
         .unwrap_or_else(|| format!("rxdb-rs-{}", random_token(Some(16))));
+    // V1.5 production hardening: the server advertises whether demand-loading
+    // is currently enabled. Browsers that see `queryDemandLoadingEnabled: false`
+    // MUST fall back to the V1 replication path even when they themselves
+    // carry the capability. This is the runtime feature-flag handshake.
+    let advertised_capabilities: Vec<&str> = CTOX_RXDB_NATIVE_CAPABILITIES
+        .iter()
+        .copied()
+        .filter(|cap| {
+            // Strip the query-fetch capability when the flag is off so a
+            // V1.5-aware browser also treats this peer as V1.
+            *cap != CTOX_QUERY_FETCH_CAPABILITY || query_demand_loading_enabled
+        })
+        .collect();
     serde_json::json!({
         "protocol": CTOX_RXDB_PROTOCOL,
-        "capabilities": CTOX_RXDB_NATIVE_CAPABILITIES,
+        "capabilities": advertised_capabilities,
         "collection": collection,
         "peerSession": {
             "role": "ctox_instance",
             "sessionId": peer_session_id,
+        },
+        "v1_5": {
+            "queryDemandLoadingEnabled": query_demand_loading_enabled,
         },
     })
 }

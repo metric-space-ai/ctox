@@ -1,0 +1,33 @@
+{
+  "input": {
+    "collection": "communication_messages",
+    "schemaVersion": 1,
+    "selector": {
+      "thread_id": {
+        "$in": [
+          "t-3",
+          "t-1",
+          "t-2",
+          "t-1"
+        ]
+      },
+      "is_deleted": false
+    },
+    "sort": [
+      {
+        "lwt": -1
+      },
+      {
+        "id": "asc"
+      }
+    ],
+    "skip": 0,
+    "limit": 100,
+    "window": {
+      "offset": 0,
+      "limit": 100
+    }
+  },
+  "canonicalJson": "{\"collection\":\"communication_messages\",\"limit\":100,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"is_deleted\":false,\"thread_id\":{\"$in\":[\"t-1\",\"t-2\",\"t-3\"]}},\"skip\":0,\"sort\":[{\"lwt\":\"desc\"},{\"id\":\"asc\"}],\"window\":{\"limit\":100,\"offset\":0}}",
+  "fingerprint": "3500f585ab7d3a169cdc194416a97b4302bd58400cd7f1ad7330bcb745d0d9a9"
+}

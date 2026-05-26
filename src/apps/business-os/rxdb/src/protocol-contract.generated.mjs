@@ -21,3 +21,22 @@ export const CTOX_SCHEMA_HASH_SOURCES = Object.freeze({
   canonicalJson: "canonical-json-schema-sha256-v1",
   rxdbRs: "rxdb-rs-schema-hash-v1"
 });
+export const CTOX_QUERY_FETCH_CAPABILITY = "ctox-rxdb-query-fetch-v1";
+export const CTOX_QUERY_RPC = Object.freeze({
+  fetch: "rxdb.query.fetch",
+  chunk: "rxdb.query.chunk",
+  error: "rxdb.query.error",
+  cancel: "rxdb.query.cancel",
+  maxDocumentsPerChunk: 200,
+  maxBytesPerChunk: 262144,
+  maxInFlightStreams: 4,
+  maxQueryRuntimeMs: 30000,
+  defaultWindowLimit: 200
+});
+export const CTOX_FILE_RPC = Object.freeze({
+  fetch: "rxdb.file.fetch",
+  chunk: "rxdb.file.chunk",
+  error: "rxdb.file.error",
+  cancel: "rxdb.file.cancel",
+  maxBytesPerChunk: 262144
+});

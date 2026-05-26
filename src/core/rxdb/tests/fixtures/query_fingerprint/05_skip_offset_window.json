@@ -1,0 +1,22 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {
+      "module": "outbound"
+    },
+    "sort": [
+      {
+        "created_at_ms": "asc"
+      }
+    ],
+    "skip": 200,
+    "limit": 100,
+    "window": {
+      "offset": 200,
+      "limit": 100
+    }
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":100,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"module\":\"outbound\"},\"skip\":200,\"sort\":[{\"created_at_ms\":\"asc\"}],\"window\":{\"limit\":100,\"offset\":200}}",
+  "fingerprint": "0cd4b0eac4ae0ed8a11fa174cb66fb735b6fe1b23f99ff93a93be2c7aedde6b6"
+}

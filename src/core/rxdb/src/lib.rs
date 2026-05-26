@@ -27,6 +27,7 @@ pub mod plugin_helpers;
 pub mod plugins;
 pub mod prelude;
 pub mod query_cache;
+pub mod query_fingerprint;
 pub mod query_planner;
 pub mod replication_protocol;
 pub mod rx_change_event;

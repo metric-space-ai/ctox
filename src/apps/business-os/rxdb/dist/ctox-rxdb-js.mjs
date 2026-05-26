@@ -1,4 +1,4 @@
-// src/apps/business-os/rxdb/src/protocol-contract.generated.mjs
+// ../../apps/business-os/rxdb/src/protocol-contract.generated.mjs
 var CTOX_RXDB_PROTOCOL = "ctox-rxdb-protocol-v1";
 var CTOX_PROTOCOL_PHASE = "rxdb-protocol-handshake";
 var CTOX_REQUIRED_PROTOCOL_CAPABILITIES = Object.freeze([
@@ -19,8 +19,27 @@ var CTOX_SCHEMA_HASH_SOURCES = Object.freeze({
   canonicalJson: "canonical-json-schema-sha256-v1",
   rxdbRs: "rxdb-rs-schema-hash-v1"
 });
+var CTOX_QUERY_FETCH_CAPABILITY = "ctox-rxdb-query-fetch-v1";
+var CTOX_QUERY_RPC = Object.freeze({
+  fetch: "rxdb.query.fetch",
+  chunk: "rxdb.query.chunk",
+  error: "rxdb.query.error",
+  cancel: "rxdb.query.cancel",
+  maxDocumentsPerChunk: 200,
+  maxBytesPerChunk: 262144,
+  maxInFlightStreams: 4,
+  maxQueryRuntimeMs: 3e4,
+  defaultWindowLimit: 200
+});
+var CTOX_FILE_RPC = Object.freeze({
+  fetch: "rxdb.file.fetch",
+  chunk: "rxdb.file.chunk",
+  error: "rxdb.file.error",
+  cancel: "rxdb.file.cancel",
+  maxBytesPerChunk: 262144
+});
 
-// src/apps/business-os/rxdb/src/schema.mjs
+// ../../apps/business-os/rxdb/src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
 var CTOX_PEER_SESSION_CAPABILITY = "ctox-peer-session-v1";
 var CTOX_CHECKPOINT_EPOCH_CAPABILITY = "ctox-checkpoint-epoch-v1";
@@ -269,7 +288,7 @@ function structuredCloneSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-// src/apps/business-os/rxdb/src/event-target.mjs
+// ../../apps/business-os/rxdb/src/event-target.mjs
 var CtoxEventEmitter = class {
   constructor() {
     this.target = new EventTarget();
@@ -302,7 +321,7 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
   });
 }
 
-// src/apps/business-os/rxdb/src/storage-indexeddb.mjs
+// ../../apps/business-os/rxdb/src/storage-indexeddb.mjs
 var DB_VERSION = 1;
 var DOCUMENT_STORE = "documents";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
@@ -698,7 +717,7 @@ var ctoxIndexedDbStorageTestInternals = {
   selectBestIndex
 };
 
-// src/apps/business-os/rxdb/src/frame-contract.generated.mjs
+// ../../apps/business-os/rxdb/src/frame-contract.generated.mjs
 var CTOX_FRAME_PROTOCOL = "ctox-rxdb-frame-v1";
 var MAX_INLINE_FRAME_BYTES = 14336;
 var MAX_CHUNK_CHARS = 10240;
@@ -706,7 +725,7 @@ var MAX_TRANSFER_BYTES = 8388608;
 var FRAME_ACK_WINDOW = 4;
 var MAX_FRAME_RETRIES = 2;
 
-// src/apps/business-os/rxdb/src/webrtc-native.mjs
+// ../../apps/business-os/rxdb/src/webrtc-native.mjs
 var SEND_BUFFER_HIGH_WATER = 512 * 1024;
 var SEND_BUFFER_LOW_WATER = 128 * 1024;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
@@ -1857,7 +1876,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// src/apps/business-os/rxdb/src/observable.mjs
+// ../../apps/business-os/rxdb/src/observable.mjs
 var CtoxSubject = class {
   constructor(initialValue) {
     this.value = initialValue;
@@ -1883,14 +1902,23 @@ var CtoxSubject = class {
   }
 };
 
-// src/apps/business-os/rxdb/src/replication-webrtc.mjs
+// ../../apps/business-os/rxdb/src/replication-webrtc.mjs
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
   "ctox-file-chunks-v1",
   "ctox-schema-hash-v1",
   "ctox-peer-session-v1",
-  "ctox-checkpoint-epoch-v1"
+  "ctox-checkpoint-epoch-v1",
+  CTOX_QUERY_FETCH_CAPABILITY
 ];
+function remoteSupportsQueryFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  if (!capabilities.includes(CTOX_QUERY_FETCH_CAPABILITY)) return false;
+  const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
+  if (flag === false) return false;
+  return true;
+}
 function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
   return {
     kind: "ctox-native-webrtc",
@@ -2022,11 +2050,18 @@ var CtoxWebRtcReplicationState = class {
     await this.peer.request(peerId, "token", []);
     await this.awaitRemoteMasterReady(peerId);
     this.pruneReplacedNativePeers(peerId, normalizedRemoteProtocol);
+    const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
+    this.ctox?.onPeerCapabilityNegotiated?.({
+      peerId,
+      queryFetchCapable,
+      capabilities: normalizedRemoteProtocol?.capabilities || []
+    });
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     peerStates.set(peerId, {
       peerId,
       replicationState: this,
-      remoteProtocol: normalizedRemoteProtocol
+      remoteProtocol: normalizedRemoteProtocol,
+      queryFetchCapable
     });
     this.peerStates$.next(this.retainOnlyNativePeer(peerId, normalizedRemoteProtocol, peerStates));
     this.active$.next(true);
@@ -2335,7 +2370,7 @@ function normalizeRemoteProtocol(payload) {
   };
 }
 
-// src/apps/business-os/rxdb/src/rx-database.mjs
+// ../../apps/business-os/rxdb/src/rx-database.mjs
 function getRxStorageDexie() {
   return { name: "ctox-indexeddb-native" };
 }
@@ -2434,6 +2469,10 @@ var CtoxRxCollection = class {
       hash: () => schemaHash(schema, name)
     };
     this.storageCollection = storageCollection;
+    this.demandLoader = null;
+  }
+  setDemandLoader(loader) {
+    this.demandLoader = loader || null;
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -2497,16 +2536,27 @@ var CtoxRxCollection = class {
     return {
       subscribe: (listener) => {
         let active = true;
-        const emit = async () => {
+        let pendingTimer = null;
+        const debounceMs = OBSERVABLE_DEBOUNCE_MS;
+        const flushEmit = async () => {
+          pendingTimer = null;
           if (!active) return;
           const documents = await this.find().exec();
           if (active) listener({ collectionName: this.name, documents });
         };
-        emit();
+        const emit = () => {
+          if (pendingTimer != null) return;
+          pendingTimer = setTimeout(flushEmit, debounceMs);
+        };
+        flushEmit();
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
             active = false;
+            if (pendingTimer != null) {
+              clearTimeout(pendingTimer);
+              pendingTimer = null;
+            }
             unsubscribe();
           }
         };
@@ -2514,6 +2564,7 @@ var CtoxRxCollection = class {
     };
   }
 };
+var OBSERVABLE_DEBOUNCE_MS = 50;
 var CtoxRxQuery = class _CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
@@ -2522,17 +2573,28 @@ var CtoxRxQuery = class _CtoxRxQuery {
     this.$ = {
       subscribe: (listener) => {
         let active = true;
-        const emit = () => {
+        let pendingTimer = null;
+        const flushEmit = () => {
+          pendingTimer = null;
+          if (!active) return;
           this.exec().then((value) => {
             if (active) listener(value);
           }).catch(() => {
           });
         };
-        emit();
+        const emit = () => {
+          if (pendingTimer != null) return;
+          pendingTimer = setTimeout(flushEmit, 50);
+        };
+        flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
           unsubscribe: () => {
             active = false;
+            if (pendingTimer != null) {
+              clearTimeout(pendingTimer);
+              pendingTimer = null;
+            }
             unsubscribe();
           }
         };
@@ -2575,7 +2637,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
   }
   async exec() {
     let docs;
-    if (typeof this.collection.storageCollection.queryDocuments === "function") {
+    if (this.collection.demandLoader) {
+      docs = await this.collection.demandLoader.resolveQuery(this.query);
+    } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
         sortDocuments
@@ -2807,6 +2871,1270 @@ var ctoxRxdbTestInternals = {
   normalizeSort,
   sortDocuments
 };
+
+// ../../apps/business-os/rxdb/src/v1_5_status.mjs
+var V1_5_QUERY_FETCH_CAPABILITY = CTOX_QUERY_FETCH_CAPABILITY;
+var V1_5_QUERY_RPC = CTOX_QUERY_RPC;
+var V1_5_STATUS_FIELDS = Object.freeze([
+  "rxdbRuntime",
+  "rxdbProtocolVersion",
+  "transport",
+  "peerConnected",
+  "peerCapabilityQueryFetchV1",
+  "queryDemandLoadingEnabled",
+  "queryDemandLoadingActive",
+  "queryFetchInFlight",
+  "queryFetchSuccessCount",
+  "queryFetchErrorCount",
+  "queryFetchDedupHitCount",
+  "indexedDbWorkingSetBytes",
+  "indexedDbEvictionCount",
+  "pinnedDocCount",
+  "pinnedBytes",
+  "lastQueryFetchMs",
+  "lastTransportBackpressureMs",
+  "lastReloadHydrationMs",
+  "activeFileStreams",
+  "fileBytesReceived",
+  "fileStreamErrors",
+  "fileStreamDedupHits",
+  "lastFileFetchMs"
+]);
+function createV1_5StatusState() {
+  return {
+    rxdbRuntime: "ctox-rxdb-js",
+    rxdbProtocolVersion: "1",
+    transport: "webrtc",
+    peerConnected: false,
+    peerCapabilityQueryFetchV1: false,
+    queryDemandLoadingEnabled: false,
+    queryDemandLoadingActive: false,
+    queryFetchInFlight: 0,
+    queryFetchSuccessCount: 0,
+    queryFetchErrorCount: 0,
+    queryFetchDedupHitCount: 0,
+    indexedDbWorkingSetBytes: 0,
+    indexedDbEvictionCount: 0,
+    pinnedDocCount: 0,
+    pinnedBytes: 0,
+    lastQueryFetchMs: null,
+    lastTransportBackpressureMs: null,
+    lastReloadHydrationMs: null,
+    activeFileStreams: 0,
+    fileBytesReceived: 0,
+    fileStreamErrors: 0,
+    fileStreamDedupHits: 0,
+    lastFileFetchMs: null
+  };
+}
+function projectStatusFromSidecar(state, sidecarStats, registry = null) {
+  const next = { ...state };
+  if (sidecarStats) {
+    next.indexedDbWorkingSetBytes = sidecarStats.estimatedBytes || 0;
+  }
+  if (registry?.pinnedDocCount !== void 0) next.pinnedDocCount = registry.pinnedDocCount;
+  if (registry?.pinnedBytes !== void 0) next.pinnedBytes = registry.pinnedBytes;
+  return next;
+}
+function snapshotV1_5Status(state) {
+  const snapshot = {};
+  for (const field of V1_5_STATUS_FIELDS) {
+    snapshot[field] = state?.[field] ?? null;
+  }
+  return snapshot;
+}
+
+// ../../apps/business-os/rxdb/src/query-fingerprint.mjs
+var PROTOCOL_VERSION = "1.5";
+function canonicalizeQueryInput(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("query input must be an object");
+  }
+  const collection = String(input.collection || "");
+  if (!collection) throw new Error("collection is required");
+  const schemaVersion = Number.isFinite(Number(input.schemaVersion)) ? Number(input.schemaVersion) : 0;
+  return {
+    collection,
+    schemaVersion,
+    protocolVersion: PROTOCOL_VERSION,
+    selector: canonicalizeSelector(input.selector),
+    sort: canonicalizeSort(input.sort),
+    limit: normalizeOptionalNumber(input.limit),
+    skip: normalizeOptionalNumber(input.skip),
+    window: canonicalizeWindow(input.window)
+  };
+}
+function canonicalQueryJson(input) {
+  return canonicalJson(canonicalizeQueryInput(input));
+}
+async function queryFingerprint(input) {
+  return sha256Hex(canonicalQueryJson(input));
+}
+function canonicalizeSelector(selector) {
+  if (selector === void 0 || selector === null) return {};
+  if (typeof selector !== "object" || Array.isArray(selector)) {
+    throw new TypeError("selector must be a plain object");
+  }
+  return canonicalizeSelectorValue(selector);
+}
+function canonicalizeSelectorValue(value) {
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeSelectorValue);
+  }
+  if (typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      const v = canonicalizeSelectorValue(value[key]);
+      if (key === "$in" || key === "$nin") {
+        out[key] = sortAndDedupeArray(v);
+      } else {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function sortAndDedupeArray(value) {
+  if (!Array.isArray(value)) return value;
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of value) {
+    const key = canonicalJson(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  out.sort((a, b) => {
+    const sa = canonicalJson(a);
+    const sb = canonicalJson(b);
+    return sa < sb ? -1 : sa > sb ? 1 : 0;
+  });
+  return out;
+}
+function canonicalizeSort(sort) {
+  if (sort === void 0 || sort === null) return [];
+  if (!Array.isArray(sort)) {
+    throw new TypeError("sort must be an array of single-key direction objects");
+  }
+  return sort.map((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new TypeError("sort entries must be single-key objects");
+    }
+    const keys = Object.keys(entry);
+    if (keys.length !== 1) {
+      throw new TypeError("sort entries must have exactly one key");
+    }
+    const key = keys[0];
+    const direction = normalizeSortDirection2(entry[key]);
+    return { [key]: direction };
+  });
+}
+function normalizeSortDirection2(direction) {
+  const raw = typeof direction === "string" ? direction.toLowerCase() : direction;
+  if (raw === "desc" || raw === -1 || raw === "-1") return "desc";
+  if (raw === "asc" || raw === 1 || raw === "1") return "asc";
+  throw new TypeError(`invalid sort direction: ${direction}`);
+}
+function normalizeOptionalNumber(value) {
+  if (value === void 0 || value === null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new TypeError("optional number must be a non-negative finite value");
+  }
+  return Math.floor(n);
+}
+function canonicalizeWindow(window) {
+  if (window === void 0 || window === null) return null;
+  if (typeof window !== "object") {
+    throw new TypeError("window must be an object");
+  }
+  return {
+    offset: normalizeOptionalNumber(window.offset) ?? 0,
+    limit: normalizeOptionalNumber(window.limit) ?? 200
+  };
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-backend-memory.mjs
+function createMemoryMetaBackend() {
+  const queryWindows = /* @__PURE__ */ new Map();
+  const documentAccess = /* @__PURE__ */ new Map();
+  const cacheStats = /* @__PURE__ */ new Map();
+  return {
+    name: "memory",
+    async putQueryWindow(record) {
+      const key = queryWindowKey(record);
+      queryWindows.set(key, { ...record });
+    },
+    async getQueryWindow(key) {
+      const entry = queryWindows.get(stringKey(key));
+      return entry ? { ...entry } : null;
+    },
+    async deleteQueryWindow(key) {
+      queryWindows.delete(stringKey(key));
+    },
+    async scanQueryWindows() {
+      return Array.from(queryWindows.values(), (record) => ({ ...record }));
+    },
+    async putDocumentAccess(record) {
+      documentAccess.set(documentAccessKey(record), { ...record });
+    },
+    async getDocumentAccess(collection, id) {
+      const entry = documentAccess.get(`${collection}|${id}`);
+      return entry ? { ...entry } : null;
+    },
+    async deleteDocumentAccess(collection, id) {
+      documentAccess.delete(`${collection}|${id}`);
+    },
+    async scanDocumentAccess() {
+      return Array.from(documentAccess.values(), (record) => ({ ...record }));
+    },
+    async putCacheStats(record) {
+      cacheStats.set(record.databaseName, { ...record });
+    },
+    async getCacheStats(databaseName) {
+      const entry = cacheStats.get(databaseName);
+      return entry ? { ...entry } : null;
+    },
+    async clear() {
+      queryWindows.clear();
+      documentAccess.clear();
+      cacheStats.clear();
+    },
+    async close() {
+    }
+  };
+}
+function queryWindowKey(record) {
+  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+}
+function documentAccessKey(record) {
+  return `${record.collection}|${record.id}`;
+}
+function stringKey(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-storage.mjs
+var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
+var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
+var PIN_RECENT_READ = "recently-read";
+var QueryMetaStorage = class {
+  constructor(backend, { databaseName, clock = Date.now } = {}) {
+    if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
+    if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
+    this.backend = backend;
+    this.databaseName = databaseName;
+    this.clock = clock;
+  }
+  async getQueryWindow(key) {
+    const record = await this.backend.getQueryWindow(stringKey2(key));
+    if (!record) return null;
+    record.lastAccessedAt = this.clock();
+    await this.backend.putQueryWindow(record);
+    return record;
+  }
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision }) {
+    const now = this.clock();
+    const existing = await this.backend.getQueryWindow(
+      [collection, queryFingerprint2, offset, limit].join("|")
+    );
+    const record = {
+      collection,
+      queryFingerprint: queryFingerprint2,
+      offset,
+      limit,
+      documentIds: [...documentIds],
+      complete: Boolean(complete),
+      authoritativeRevision: authoritativeRevision ?? null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastAccessedAt: now
+    };
+    await this.backend.putQueryWindow(record);
+    return record;
+  }
+  async invalidateQueryWindow(key) {
+    const stringified = stringKey2(key);
+    const existing = await this.backend.getQueryWindow(stringified);
+    if (!existing) return;
+    existing.complete = false;
+    existing.updatedAt = this.clock();
+    await this.backend.putQueryWindow(existing);
+  }
+  async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
+    const now = this.clock();
+    for (const id of ids) {
+      const previous = await this.backend.getDocumentAccess(collection, id) || {};
+      await this.backend.putDocumentAccess({
+        collection,
+        id,
+        lastAccessedAt: now,
+        pinReason: previous.dirty ? "dirty" : pinReason,
+        dirty: Boolean(previous.dirty),
+        estimatedBytes: estimatedBytes || previous.estimatedBytes || 0
+      });
+    }
+  }
+  async markDirty(collection, id, dirty) {
+    const previous = await this.backend.getDocumentAccess(collection, id) || {
+      collection,
+      id,
+      lastAccessedAt: this.clock(),
+      estimatedBytes: 0
+    };
+    await this.backend.putDocumentAccess({
+      ...previous,
+      dirty: Boolean(dirty),
+      pinReason: dirty ? "dirty" : previous.pinReason ?? null
+    });
+  }
+  async getDocumentAccess(collection, id) {
+    const record = await this.backend.getDocumentAccess(collection, id);
+    return record ? { ...record } : null;
+  }
+  async evictDocuments(ids) {
+    const now = this.clock();
+    let removed = 0;
+    for (const { collection, id } of ids) {
+      const record = await this.backend.getDocumentAccess(collection, id);
+      if (!record) continue;
+      if (record.dirty) continue;
+      if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
+        continue;
+      }
+      await this.backend.deleteDocumentAccess(collection, id);
+      removed += 1;
+    }
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
+    await this.backend.putCacheStats(stats);
+    return removed;
+  }
+  async estimateWorkingSetBytes() {
+    const docs = await this.backend.scanDocumentAccess();
+    return docs.reduce((sum, record) => sum + (record.estimatedBytes || 0), 0);
+  }
+  async setBudgetBytes(budgetBytes) {
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.budgetBytes = Number(budgetBytes) || 0;
+    await this.backend.putCacheStats(stats);
+  }
+  async getCacheStats() {
+    return await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+  }
+  async clear() {
+    await this.backend.clear();
+  }
+  async close() {
+    await this.backend.close();
+  }
+  /// Evicts LRU document access entries until the working set fits the budget.
+  /// Skips dirty docs and unexpired recently-read pins. Returns the number of
+  /// document records removed.
+  async runEvictionIfOverBudget() {
+    const stats = await this.getCacheStats();
+    if (!stats.budgetBytes || stats.estimatedBytes <= stats.budgetBytes) {
+      return 0;
+    }
+    const all = await this.backend.scanDocumentAccess();
+    const now = this.clock();
+    const candidates = all.filter((record) => !record.dirty).filter((record) => {
+      if (record.pinReason !== "recently-read") return true;
+      return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
+    }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+    let removed = 0;
+    let remainingBytes = stats.estimatedBytes;
+    for (const candidate of candidates) {
+      if (remainingBytes <= stats.budgetBytes) break;
+      await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
+      remainingBytes -= candidate.estimatedBytes || 0;
+      removed += 1;
+    }
+    if (removed > 0) {
+      const updated = { ...stats, estimatedBytes: remainingBytes, lastEvictionAt: now };
+      await this.backend.putCacheStats(updated);
+    }
+    return removed;
+  }
+  async recordEstimatedBytes(bytes) {
+    const stats = await this.getCacheStats();
+    stats.estimatedBytes = Math.max(0, Number(bytes) || 0);
+    await this.backend.putCacheStats(stats);
+  }
+  /// Wraps an IDB write attempt in a quota-recovery loop. On
+  /// `QuotaExceededError` we run eviction once and retry; on second failure
+  /// the error propagates. Use this from production paths that materialize
+  /// fetched chunks into the primary store.
+  async withQuotaRecovery(writeFn) {
+    try {
+      return await writeFn();
+    } catch (err) {
+      if (!isQuotaExceeded(err)) throw err;
+      const stats = await this.getCacheStats();
+      const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
+      await this.setBudgetBytes(tighten);
+      await this.runEvictionIfOverBudget();
+      try {
+        return await writeFn();
+      } catch (retryErr) {
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        throw retryErr;
+      }
+    }
+  }
+  /// Starts a periodic eviction scheduler. The handle returned has a
+  /// `stop()` method. Idempotent: calling twice with the same handle is
+  /// safe. Default interval: 30s.
+  startEvictionScheduler({ intervalMs = 3e4 } = {}) {
+    if (this._evictionTimer) return { stop: () => this.stopEvictionScheduler() };
+    this._evictionTimer = setInterval(() => {
+      this.runEvictionIfOverBudget().catch(() => {
+      });
+    }, intervalMs);
+    if (typeof this._evictionTimer.unref === "function") {
+      this._evictionTimer.unref();
+    }
+    return { stop: () => this.stopEvictionScheduler() };
+  }
+  stopEvictionScheduler() {
+    if (this._evictionTimer) {
+      clearInterval(this._evictionTimer);
+      this._evictionTimer = null;
+    }
+  }
+  /// Orphan-window GC: drop sidecar query-window entries that haven't been
+  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
+  /// by other windows remain. This keeps the sidecar from growing monotonically
+  /// as one-off queries accumulate.
+  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
+    const now = this.clock();
+    const all = await this.backend.scanQueryWindows();
+    let removed = 0;
+    for (const window of all) {
+      const age = now - (window.lastAccessedAt ?? window.updatedAt ?? window.createdAt ?? now);
+      if (age >= maxAgeMs) {
+        await this.backend.deleteQueryWindow([
+          window.collection,
+          window.queryFingerprint,
+          window.offset,
+          window.limit
+        ]);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+};
+function isQuotaExceeded(err) {
+  if (!err) return false;
+  if (err.name === "QuotaExceededError") return true;
+  if (typeof err.code === "number" && err.code === 22) return true;
+  const msg = String(err.message || "").toLowerCase();
+  return msg.includes("quota") || msg.includes("storage full");
+}
+function createSidecarWithMemoryBackend({ databaseName = SIDECAR_DATABASE_NAME, clock = Date.now } = {}) {
+  return new QueryMetaStorage(createMemoryMetaBackend(), { databaseName, clock });
+}
+function stringKey2(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
+var SIDECAR_DB_VERSION = 1;
+var STORE_QUERY_WINDOWS = "queryWindows";
+var STORE_DOCUMENT_ACCESS = "documentAccess";
+var STORE_CACHE_STATS = "cacheStats";
+var OPEN_TIMEOUT_MS = 4e3;
+function createIndexedDbMetaBackend({ databaseName }) {
+  if (!databaseName) throw new TypeError("createIndexedDbMetaBackend requires databaseName");
+  let dbPromise = null;
+  const open = () => {
+    if (!dbPromise) dbPromise = openSidecarDatabase(databaseName);
+    return dbPromise;
+  };
+  return {
+    name: "indexeddb",
+    async putQueryWindow(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
+      );
+    },
+    async getQueryWindow(key) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).get(parseQueryWindowKey(key))
+      );
+    },
+    async deleteQueryWindow(key) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
+      );
+    },
+    async scanQueryWindows() {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
+      );
+    },
+    async putDocumentAccess(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
+      );
+    },
+    async getDocumentAccess(collection, id) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).get([collection, id])
+      );
+    },
+    async deleteDocumentAccess(collection, id) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).delete([collection, id])
+      );
+    },
+    async scanDocumentAccess() {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).getAll()
+      );
+    },
+    async putCacheStats(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
+      );
+    },
+    async getCacheStats(databaseName2) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_CACHE_STATS, "readonly").objectStore(STORE_CACHE_STATS).get(databaseName2)
+      );
+    },
+    async clear() {
+      const db = await open();
+      for (const name of [STORE_QUERY_WINDOWS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
+        await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
+      }
+    },
+    async close() {
+      if (dbPromise) {
+        const db = await dbPromise;
+        db.close();
+        dbPromise = null;
+      }
+    }
+  };
+}
+function openSidecarDatabase(databaseName) {
+  if (!globalThis.indexedDB) {
+    throw new Error("indexedDB is required for sidecar metadata storage");
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
+    }, OPEN_TIMEOUT_MS);
+    const request = globalThis.indexedDB.open(databaseName, SIDECAR_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_QUERY_WINDOWS)) {
+        const store = db.createObjectStore(STORE_QUERY_WINDOWS, {
+          keyPath: ["collection", "queryFingerprint", "offset", "limit"]
+        });
+        store.createIndex("collection", "collection", { unique: false });
+        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
+          unique: false
+        });
+      }
+      if (!db.objectStoreNames.contains(STORE_DOCUMENT_ACCESS)) {
+        const store = db.createObjectStore(STORE_DOCUMENT_ACCESS, {
+          keyPath: ["collection", "id"]
+        });
+        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
+          unique: false
+        });
+      }
+      if (!db.objectStoreNames.contains(STORE_CACHE_STATS)) {
+        db.createObjectStore(STORE_CACHE_STATS, { keyPath: "databaseName" });
+      }
+    };
+    request.onsuccess = () => {
+      clearTimeout(timer);
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      clearTimeout(timer);
+      reject(request.error || new Error(`failed to open sidecar ${databaseName}`));
+    };
+    request.onblocked = () => {
+      clearTimeout(timer);
+      reject(new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
+    };
+  });
+}
+function parseQueryWindowKey(key) {
+  if (Array.isArray(key)) return key;
+  if (typeof key === "string") {
+    const parts = key.split("|");
+    if (parts.length !== 4) throw new TypeError(`invalid query window key: ${key}`);
+    const [collection, fingerprint, offset, limit] = parts;
+    return [collection, fingerprint, Number(offset), Number(limit)];
+  }
+  throw new TypeError("query window key must be array or string");
+}
+function runRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// ../../apps/business-os/rxdb/src/query-demand-loader.mjs
+var DEFAULT_WINDOW_LIMIT = 200;
+function createQueryDemandLoader({
+  storageCollection,
+  sidecar,
+  collectionName,
+  schemaVersion,
+  requestQueryFetch,
+  requestCancel = null,
+  multiTabBroker = null,
+  status = null,
+  clock = Date.now
+}) {
+  if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
+  if (!sidecar) throw new TypeError("demand loader requires sidecar");
+  if (!collectionName) throw new TypeError("demand loader requires collectionName");
+  if (typeof requestQueryFetch !== "function") {
+    throw new TypeError("demand loader requires requestQueryFetch");
+  }
+  const inflightByFingerprint = /* @__PURE__ */ new Map();
+  return {
+    async resolveQuery(query, { window } = {}) {
+      const normalizedWindow = normalizeWindow(window, query);
+      const fingerprintInput = {
+        collection: collectionName,
+        schemaVersion: schemaVersion ?? 0,
+        selector: query?.selector ?? {},
+        sort: normalizeSort2(query?.sort),
+        limit: query?.limit,
+        skip: query?.skip,
+        window: normalizedWindow
+      };
+      const fingerprint = await queryFingerprint(fingerprintInput);
+      const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
+      const cached = await sidecar.getQueryWindow(sidecarKey);
+      if (cached && cached.complete) {
+        if (query?.requireRevision && cached.authoritativeRevision !== query.requireRevision) {
+        } else {
+          await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        }
+      }
+      const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+      if (inflightByFingerprint.has(dedupKey)) {
+        bumpStatus(status, "queryFetchDedupHitCount");
+        return inflightByFingerprint.get(dedupKey);
+      }
+      bumpStatus(status, "queryFetchInFlight", 1);
+      v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+      const job = (async () => {
+        const startedAt = clock();
+        try {
+          const result = await requestQueryFetch({
+            requestId: `${dedupKey}|${startedAt}`,
+            databaseName: storageCollection?.databaseName ?? null,
+            collectionName,
+            schemaVersion: schemaVersion ?? 0,
+            queryFingerprint: fingerprint,
+            query: {
+              selector: query?.selector ?? {},
+              sort: normalizeSort2(query?.sort),
+              limit: query?.limit,
+              skip: query?.skip
+            },
+            window: normalizedWindow
+          });
+          await materializeChunks(storageCollection, result.documents || []);
+          const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+          await sidecar.upsertQueryWindow({
+            collection: collectionName,
+            queryFingerprint: fingerprint,
+            offset: normalizedWindow.offset,
+            limit: normalizedWindow.limit,
+            documentIds,
+            complete: true,
+            authoritativeRevision: result.authoritativeRevision ?? null
+          });
+          await sidecar.touchDocuments(collectionName, documentIds, {
+            estimatedBytes: estimateBytes(result.documents || [])
+          });
+          bumpStatus(status, "queryFetchSuccessCount");
+          if (status) status.lastQueryFetchMs = clock() - startedAt;
+          v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        } catch (error) {
+          bumpStatus(status, "queryFetchErrorCount");
+          v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+          throw error;
+        } finally {
+          bumpStatus(status, "queryFetchInFlight", -1);
+          inflightByFingerprint.delete(dedupKey);
+        }
+      })();
+      inflightByFingerprint.set(dedupKey, job);
+      return job;
+    },
+    inflightSize() {
+      return inflightByFingerprint.size;
+    },
+    // Wave 7: invalidation hook. When the replication layer reports that a
+    // document in `collectionName` was changed remotely, call this with the
+    // changed document ids — any cached query window that references those
+    // ids is marked incomplete so the next exec triggers a remote refresh.
+    async invalidateDocumentChange(changedDocumentIds = []) {
+      if (!changedDocumentIds.length) return 0;
+      const all = await sidecar.backend.scanQueryWindows();
+      const ids = new Set(changedDocumentIds);
+      let invalidated = 0;
+      for (const window of all) {
+        if (window.collection !== collectionName) continue;
+        if (window.documentIds.some((id) => ids.has(id))) {
+          await sidecar.invalidateQueryWindow([
+            window.collection,
+            window.queryFingerprint,
+            window.offset,
+            window.limit
+          ]);
+          invalidated += 1;
+        }
+      }
+      return invalidated;
+    },
+    // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
+    // fetches and removes any partially-materialized documents from the
+    // primary store so the next fetch starts from a clean slate (no orphans).
+    async abortAllInFlight(reason = "reconnect") {
+      const cancelled = [];
+      for (const [dedupKey, job] of inflightByFingerprint.entries()) {
+        const [, fingerprint] = dedupKey.split("|");
+        cancelled.push({ dedupKey, fingerprint });
+        if (typeof requestCancel === "function") {
+          try {
+            await requestCancel({ requestId: dedupKey, fingerprint, reason });
+          } catch {
+          }
+        }
+        try {
+          job.catch?.(() => {
+          });
+        } catch {
+        }
+      }
+      inflightByFingerprint.clear();
+      try {
+        const allWindows = await sidecar.backend.scanQueryWindows();
+        for (const { fingerprint } of cancelled) {
+          const partial = allWindows.filter(
+            (w) => w.queryFingerprint === fingerprint && !w.complete
+          );
+          for (const window of partial) {
+            const ids = window.documentIds || [];
+            if (ids.length && typeof storageCollection.bulkWrite === "function") {
+              const tombstones = ids.map((id) => ({ id, _deleted: true }));
+              try {
+                await storageCollection.bulkWrite(tombstones);
+              } catch {
+              }
+            }
+            await sidecar.backend.deleteQueryWindow([
+              window.collection,
+              window.queryFingerprint,
+              window.offset,
+              window.limit
+            ]);
+          }
+        }
+      } catch {
+      }
+    },
+    // Wave 7: multi-tab dedup. If a `multiTabBroker` is provided, it is
+    // consulted before kicking off a remote fetch; followers wait for the
+    // leader's materialization signal instead of fetching themselves.
+    async leaderClaim(windowKey) {
+      if (!multiTabBroker?.claim) return true;
+      return multiTabBroker.claim(windowKey);
+    },
+    async leaderRelease(windowKey) {
+      if (!multiTabBroker?.release) return;
+      await multiTabBroker.release(windowKey);
+    }
+  };
+}
+function normalizeWindow(window, query) {
+  if (window && typeof window === "object") {
+    return {
+      offset: Math.max(0, Math.floor(Number(window.offset) || 0)),
+      limit: Math.max(1, Math.floor(Number(window.limit) || DEFAULT_WINDOW_LIMIT))
+    };
+  }
+  return {
+    offset: Math.max(0, Math.floor(Number(query?.skip) || 0)),
+    limit: Math.max(1, Math.floor(Number(query?.limit) || DEFAULT_WINDOW_LIMIT))
+  };
+}
+function normalizeSort2(sort) {
+  if (!Array.isArray(sort)) return [];
+  return sort.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const keys = Object.keys(entry);
+    if (keys.length !== 1) return entry;
+    const key = keys[0];
+    const direction = entry[key];
+    return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
+  });
+}
+async function readLocalDocuments(storageCollection, query, window) {
+  if (typeof storageCollection.queryDocuments === "function") {
+    return storageCollection.queryDocuments(
+      { ...query, skip: window.offset, limit: window.limit },
+      {
+        matchesSelector: defaultMatcher,
+        sortDocuments: defaultSorter
+      }
+    );
+  }
+  const docs = await storageCollection.allDocuments();
+  return applyQueryToDocs(docs, query, window);
+}
+async function materializeChunks(storageCollection, documents) {
+  if (!documents.length) return;
+  await storageCollection.bulkWrite(documents);
+}
+async function touchSidecarAccess(sidecar, collectionName, documentIds) {
+  if (!documentIds?.length) return;
+  await sidecar.touchDocuments(collectionName, documentIds);
+}
+function extractId(doc) {
+  if (!doc || typeof doc !== "object") return null;
+  return doc.id || doc._id || null;
+}
+function estimateBytes(documents) {
+  try {
+    return JSON.stringify(documents).length;
+  } catch {
+    return documents.length * 256;
+  }
+}
+function bumpStatus(status, field, delta = 1) {
+  if (!status) return;
+  if (typeof status[field] !== "number") status[field] = 0;
+  status[field] += delta;
+}
+var v15LogSink = null;
+function setV15LogSink(fn) {
+  v15LogSink = typeof fn === "function" ? fn : null;
+}
+function v15Log(event, fields) {
+  if (v15LogSink) {
+    try {
+      v15LogSink(event, fields);
+    } catch {
+    }
+    return;
+  }
+  if (globalThis?.console?.debug) {
+    globalThis.console.debug("[V1.5]", event, fields);
+  }
+}
+function defaultMatcher(doc, selector = {}) {
+  for (const [key, expected] of Object.entries(selector)) {
+    if (key.startsWith("$")) return true;
+    const actual = doc?.[key];
+    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+      if ("$eq" in expected && actual !== expected.$eq) return false;
+      if ("$ne" in expected && actual === expected.$ne) return false;
+      if ("$in" in expected && !expected.$in.includes(actual)) return false;
+      if ("$gte" in expected && !(actual >= expected.$gte)) return false;
+      if ("$lte" in expected && !(actual <= expected.$lte)) return false;
+      continue;
+    }
+    if (actual !== expected) return false;
+  }
+  return true;
+}
+function defaultSorter(docs, sort = []) {
+  if (!sort?.length) return docs;
+  return docs.slice().sort((a, b) => {
+    for (const entry of sort) {
+      const [key, direction] = Object.entries(entry)[0] || [];
+      const factor = direction === "desc" ? -1 : 1;
+      const av = a?.[key];
+      const bv = b?.[key];
+      if (av < bv) return -1 * factor;
+      if (av > bv) return 1 * factor;
+    }
+    return 0;
+  });
+}
+function applyQueryToDocs(docs, query, window) {
+  let filtered = (docs || []).filter((doc) => defaultMatcher(doc, query?.selector || {}));
+  filtered = defaultSorter(filtered, normalizeSort2(query?.sort));
+  if (window.offset > 0) filtered = filtered.slice(window.offset);
+  if (Number.isFinite(window.limit)) filtered = filtered.slice(0, window.limit);
+  return filtered;
+}
+
+// ../../apps/business-os/rxdb/src/multi-tab-broker.mjs
+var CHANNEL_PREFIX = "ctox-rxdb-v1_5-broker-";
+var CLAIM_TTL_MS = 3e4;
+function createBroadcastChannelBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
+  if (!databaseName) throw new TypeError("broker requires databaseName");
+  if (typeof globalThis.BroadcastChannel !== "function") {
+    return createMemoryBroker({ databaseName, tabId, clock });
+  }
+  const channel = new globalThis.BroadcastChannel(`${CHANNEL_PREFIX}${databaseName}`);
+  const localClaims = /* @__PURE__ */ new Map();
+  const remoteClaims = /* @__PURE__ */ new Map();
+  const completions = /* @__PURE__ */ new Map();
+  channel.onmessage = (event) => {
+    const msg = event?.data;
+    if (!msg || typeof msg !== "object") return;
+    const now = clock();
+    if (msg.type === "claim") {
+      remoteClaims.set(msg.windowKey, { tabId: msg.tabId, expiresAt: now + CLAIM_TTL_MS });
+    } else if (msg.type === "release") {
+      remoteClaims.delete(msg.windowKey);
+    } else if (msg.type === "complete") {
+      remoteClaims.delete(msg.windowKey);
+      const waiter = completions.get(msg.windowKey);
+      if (waiter) {
+        completions.delete(msg.windowKey);
+        waiter.resolve(msg.result);
+      }
+    }
+  };
+  function expired(claim, now) {
+    return !claim || claim.expiresAt < now;
+  }
+  return {
+    kind: "broadcast-channel",
+    tabId,
+    async claim(windowKey) {
+      const now = clock();
+      const remote = remoteClaims.get(windowKey);
+      if (remote && expired(remote, now)) {
+        remoteClaims.delete(windowKey);
+      } else if (remote) {
+        return false;
+      }
+      const local = localClaims.get(windowKey);
+      if (local && !expired(local, now)) return false;
+      localClaims.set(windowKey, { expiresAt: now + CLAIM_TTL_MS });
+      channel.postMessage({ type: "claim", windowKey, tabId, at: now });
+      return true;
+    },
+    async release(windowKey, result = null) {
+      localClaims.delete(windowKey);
+      channel.postMessage({ type: "complete", windowKey, tabId, result, at: clock() });
+    },
+    async waitForRemote(windowKey, timeoutMs = 5e3) {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          completions.delete(windowKey);
+          resolve(null);
+        }, timeoutMs);
+        completions.set(windowKey, {
+          resolve: (val) => {
+            clearTimeout(timer);
+            resolve(val);
+          }
+        });
+      });
+    },
+    close() {
+      try {
+        channel.close();
+      } catch {
+      }
+    }
+  };
+}
+function createMemoryBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
+  const claims = /* @__PURE__ */ new Set();
+  return {
+    kind: "memory",
+    tabId,
+    async claim(windowKey) {
+      if (claims.has(windowKey)) return false;
+      claims.add(windowKey);
+      return true;
+    },
+    async release(windowKey) {
+      claims.delete(windowKey);
+    },
+    async waitForRemote() {
+      return null;
+    },
+    close() {
+    }
+  };
+}
+function randomTabId() {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `tab-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+// ../../apps/business-os/rxdb/src/file-demand-loader.mjs
+var FILE_CHUNK_PRESENCE_KEY = (collection, fileId) => `${collection}|${fileId}`;
+function createFileDemandLoader({
+  collectionName,
+  storageCollection,
+  sidecarBackend,
+  requestFileFetch,
+  status = null,
+  clock = Date.now
+}) {
+  if (!collectionName) throw new TypeError("file loader requires collectionName");
+  if (!storageCollection) throw new TypeError("file loader requires storageCollection");
+  if (!sidecarBackend) throw new TypeError("file loader requires sidecarBackend");
+  if (typeof requestFileFetch !== "function") {
+    throw new TypeError("file loader requires requestFileFetch");
+  }
+  const inflight = /* @__PURE__ */ new Map();
+  return {
+    async fetchFile(fileId, { range = null } = {}) {
+      if (inflight.has(fileId)) {
+        bump(status, "fileStreamDedupHits");
+        return inflight.get(fileId);
+      }
+      const job = (async () => {
+        const startedAt = clock();
+        bump(status, "activeFileStreams", 1);
+        try {
+          const presence = await getPresence(sidecarBackend, collectionName, fileId);
+          const chunks = await requestFileFetch({
+            requestId: `file-${fileId}-${startedAt}`,
+            collectionName,
+            fileId,
+            range,
+            knownSequences: presence?.presentSequences || []
+          });
+          if (!Array.isArray(chunks)) {
+            throw new TypeError("requestFileFetch must return an array of chunks");
+          }
+          for (const chunk of chunks) {
+            if (!chunk || typeof chunk !== "object") continue;
+            await storageCollection.bulkWrite([
+              {
+                id: `${fileId}-${chunk.sequence}`,
+                file_id: fileId,
+                sequence: chunk.sequence,
+                bytes_base64: chunk.bytesBase64,
+                hash: chunk.hash || null
+              }
+            ]);
+            bump(status, "fileBytesReceived", chunk.bytesBase64?.length || 0);
+          }
+          const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
+          const expectedTotal = Math.max(
+            ...sequences,
+            presence?.expectedChunkCount || 0
+          ) + 1;
+          await sidecarBackend.putDocumentAccess({
+            collection: collectionName,
+            id: `${fileId}-presence`,
+            lastAccessedAt: clock(),
+            pinReason: "file-chunks",
+            dirty: false,
+            estimatedBytes: 0
+          });
+          await putPresence(sidecarBackend, collectionName, fileId, {
+            collection: collectionName,
+            fileId,
+            expectedChunkCount: expectedTotal,
+            presentSequences: dedupeSorted([
+              ...presence?.presentSequences || [],
+              ...sequences
+            ]),
+            lastVerifiedAt: clock()
+          });
+          if (status) status.lastFileFetchMs = clock() - startedAt;
+          return chunks;
+        } catch (error) {
+          bump(status, "fileStreamErrors");
+          throw error;
+        } finally {
+          bump(status, "activeFileStreams", -1);
+          inflight.delete(fileId);
+        }
+      })();
+      inflight.set(fileId, job);
+      return job;
+    },
+    inflightSize() {
+      return inflight.size;
+    }
+  };
+}
+async function getPresence(backend, collection, fileId) {
+  const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);
+  if (!record || !record.fileChunkPresence) return null;
+  return record.fileChunkPresence;
+}
+async function putPresence(backend, collection, fileId, presence) {
+  await backend.putDocumentAccess({
+    collection,
+    id: `${fileId}-presence`,
+    lastAccessedAt: presence.lastVerifiedAt,
+    pinReason: "file-chunks",
+    dirty: false,
+    estimatedBytes: 0,
+    fileChunkPresence: presence
+  });
+}
+function bump(status, field, delta = 1) {
+  if (!status) return;
+  if (typeof status[field] !== "number") status[field] = 0;
+  status[field] += delta;
+}
+function dedupeSorted(values) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const out = [];
+  for (const v of sorted) {
+    if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
+  }
+  return out;
+}
+
+// ../../apps/business-os/rxdb/src/chunk-decoder.mjs
+async function decodeChunk(chunk) {
+  if (!chunk || typeof chunk !== "object") {
+    throw new TypeError("chunk must be an object");
+  }
+  if (!chunk.compressed) {
+    return chunk.documents || [];
+  }
+  if (chunk.compressed !== "deflate") {
+    throw new Error(`unsupported chunk compression: ${chunk.compressed}`);
+  }
+  if (typeof chunk.compressedBase64 !== "string") {
+    throw new Error("compressed chunk missing compressedBase64");
+  }
+  const bytes = base64ToBytes(chunk.compressedBase64);
+  const json = await deflateInflate(bytes);
+  return JSON.parse(json);
+}
+function base64ToBytes(b64) {
+  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+    const buf = Buffer.from(b64, "base64");
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  const bin = globalThis.atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function deflateInflate(bytes) {
+  if (typeof globalThis.DecompressionStream === "function") {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream("deflate-raw"));
+      const buf = await new Response(stream).arrayBuffer();
+      return new TextDecoder().decode(buf);
+    } catch (err) {
+    }
+  }
+  const zlib = await import("node:zlib");
+  const inflated = zlib.inflateRawSync(Buffer.from(bytes));
+  return inflated.toString("utf8");
+}
+
+// ../../apps/business-os/rxdb/src/advanced-status-bridge.mjs
+function buildBusinessOsAdvancedStatus({
+  v15Status,
+  peerSessions = [],
+  remoteProtocol = null,
+  feature = {}
+} = {}) {
+  const snapshot = snapshotV1_5Status(v15Status);
+  const remoteCapabilities = Array.isArray(remoteProtocol?.capabilities) ? remoteProtocol.capabilities : [];
+  const v15Negotiated = remoteCapabilities.includes(CTOX_QUERY_FETCH_CAPABILITY) && remoteProtocol?.v1_5?.queryDemandLoadingEnabled !== false;
+  const ok = snapshot.peerConnected === true && snapshot.queryFetchErrorCount < 5 && snapshot.fileStreamErrors < 5;
+  return {
+    version: "business-os-advanced-status-v1",
+    ok,
+    rxdbRuntime: {
+      name: "ctox-rxdb-js",
+      source: "app-local",
+      packageManager: "none",
+      protocolVersion: snapshot.rxdbProtocolVersion
+    },
+    checks: {
+      rxdbRuntimeAppLocal: true,
+      queryDemandLoadingEnabled: snapshot.queryDemandLoadingEnabled === true,
+      queryDemandLoadingActive: snapshot.queryDemandLoadingActive === true,
+      peerCapabilityQueryFetch: snapshot.peerCapabilityQueryFetchV1 === true
+    },
+    sync: {
+      mode: "webrtc",
+      protocol: "ctox-rxdb-protocol-v1",
+      capabilities: remoteCapabilities,
+      peerSessions,
+      featureFlag: feature.queryDemandLoadingEnabled ?? null,
+      v15Negotiated
+    },
+    v1_5: {
+      query: {
+        inFlight: snapshot.queryFetchInFlight,
+        success: snapshot.queryFetchSuccessCount,
+        errors: snapshot.queryFetchErrorCount,
+        dedupHits: snapshot.queryFetchDedupHitCount,
+        lastFetchMs: snapshot.lastQueryFetchMs
+      },
+      file: {
+        active: snapshot.activeFileStreams,
+        bytesReceived: snapshot.fileBytesReceived,
+        errors: snapshot.fileStreamErrors,
+        dedupHits: snapshot.fileStreamDedupHits,
+        lastFetchMs: snapshot.lastFileFetchMs
+      },
+      cache: {
+        workingSetBytes: snapshot.indexedDbWorkingSetBytes,
+        evictionCount: snapshot.indexedDbEvictionCount,
+        pinnedDocs: snapshot.pinnedDocCount,
+        pinnedBytes: snapshot.pinnedBytes
+      },
+      transport: {
+        lastBackpressureMs: snapshot.lastTransportBackpressureMs,
+        reloadHydrationMs: snapshot.lastReloadHydrationMs
+      }
+    }
+  };
+}
 export {
   CTOX_BUSINESS_OS_SCHEMA_HASHES,
   CTOX_CHECKPOINT_EPOCH_CAPABILITY,
@@ -2821,24 +4149,50 @@ export {
   CtoxIndexedDbStorage,
   CtoxSubject,
   CtoxWebRtcNativePeer,
+  DEFAULT_WINDOW_LIMIT,
+  FILE_CHUNK_PRESENCE_KEY,
+  OBSERVABLE_DEBOUNCE_MS,
+  QueryMetaStorage,
   RxDBMigrationSchemaPlugin,
+  SIDECAR_DATABASE_NAME,
+  SIDECAR_PIN_RECENT_READ_TTL_MS,
+  V1_5_QUERY_FETCH_CAPABILITY,
+  V1_5_QUERY_RPC,
+  V1_5_STATUS_FIELDS,
   addRxPlugin,
   assertCompatibleProtocol,
+  buildBusinessOsAdvancedStatus,
   buildProtocolPayload,
   canonicalJson,
+  canonicalQueryJson,
+  canonicalizeQueryInput,
+  createBroadcastChannelBroker,
   createCtoxWebRtcNativePeer,
+  createFileDemandLoader,
+  createIndexedDbMetaBackend,
+  createMemoryBroker,
+  createMemoryMetaBackend,
+  createQueryDemandLoader,
   createRxDatabase,
+  createSidecarWithMemoryBackend,
+  createV1_5StatusState,
   ctoxIndexedDbStorageTestInternals,
   ctoxRxdbTestInternals,
+  decodeChunk,
   getConnectionHandlerSimplePeer,
   getRxStorageDexie,
   normalizeSignalingControlPlaneError,
   openCtoxIndexedDbStorage,
+  projectStatusFromSidecar,
+  queryFingerprint,
+  remoteSupportsQueryFetch,
   removeRxDatabase,
   replicateWebRTC,
   rxdbCore,
   schemaHash,
   schemaHashSource,
+  setV15LogSink,
   sha256Hex,
+  snapshotV1_5Status,
   waitForEvent
 };

@@ -30,6 +30,11 @@ rand = "0.8"
 # Base64 — for attachment size accounting via base64 decode-length
 base64 = "0.22"
 
+# Compression — V1.5 per-chunk deflate. Browser side uses native
+# DecompressionStream (built-in to every modern browser). Cuts wire bytes
+# 5-10x on repetitive JSON.
+flate2 = "1"
+
 # Errors (anyhow is forbidden inside this crate per PORT_STYLE.md §2)
 thiserror = "1"
 

@@ -33,8 +33,12 @@ pub async fn create_storage_instance(
         let conn = connection.lock();
         ensure_collection_table(&conn, &table_name)?;
     }
+    let database_path = storage.settings.database_path.clone();
     Ok(Arc::new(RxStorageInstanceSqlite::new(
-        connection, params, table_name,
+        connection,
+        params,
+        table_name,
+        database_path,
     )))
 }
 
@@ -59,8 +63,12 @@ impl RxStorage for RxStorageSqlite {
             let conn = connection.lock();
             ensure_collection_table(&conn, &table_name)?;
         }
+        let database_path = self.settings.database_path.clone();
         Ok(Arc::new(RxStorageInstanceSqlite::new(
-            connection, params, table_name,
+            connection,
+            params,
+            table_name,
+            database_path,
         )))
     }
 }

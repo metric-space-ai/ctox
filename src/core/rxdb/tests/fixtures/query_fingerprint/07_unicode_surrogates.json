@@ -1,0 +1,21 @@
+{
+  "input": {
+    "collection": "communication_messages",
+    "schemaVersion": 1,
+    "selector": {
+      "subject": "Müllenschläder · 中文测试 · 🚀 emoji",
+      "tag": "ß"
+    },
+    "sort": [
+      {
+        "subject": "asc"
+      }
+    ],
+    "window": {
+      "offset": 0,
+      "limit": 50
+    }
+  },
+  "canonicalJson": "{\"collection\":\"communication_messages\",\"limit\":null,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"subject\":\"Müllenschläder · 中文测试 · 🚀 emoji\",\"tag\":\"ß\"},\"skip\":null,\"sort\":[{\"subject\":\"asc\"}],\"window\":{\"limit\":50,\"offset\":0}}",
+  "fingerprint": "11627dab0e50a1c159f138de6342f680ed4e82908374b722f5ea576121fc9539"
+}

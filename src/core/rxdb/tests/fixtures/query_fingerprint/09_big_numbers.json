@@ -1,0 +1,27 @@
+{
+  "input": {
+    "collection": "accounting_journal_entry_lines",
+    "schemaVersion": 1,
+    "selector": {
+      "amount_cents": {
+        "$gte": 0,
+        "$lte": 9007199254740991
+      },
+      "_meta.lwt": {
+        "$gt": 1779824504032
+      }
+    },
+    "sort": [
+      {
+        "_meta.lwt": "desc"
+      }
+    ],
+    "limit": 200,
+    "window": {
+      "offset": 0,
+      "limit": 200
+    }
+  },
+  "canonicalJson": "{\"collection\":\"accounting_journal_entry_lines\",\"limit\":200,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"_meta.lwt\":{\"$gt\":1779824504032},\"amount_cents\":{\"$gte\":0,\"$lte\":9007199254740991}},\"skip\":null,\"sort\":[{\"_meta.lwt\":\"desc\"}],\"window\":{\"limit\":200,\"offset\":0}}",
+  "fingerprint": "d6d69250fb9f4db8ee2a24f9640bd23d02cda16236d683e628f79995d533e671"
+}

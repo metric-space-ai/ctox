@@ -2647,6 +2647,7 @@ dependencies = [
  "bytes",
  "chrono",
  "dashmap",
+ "flate2",
  "futures",
  "parking_lot",
  "rand 0.8.5",

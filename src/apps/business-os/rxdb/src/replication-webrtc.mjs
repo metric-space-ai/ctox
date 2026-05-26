@@ -7,6 +7,7 @@ import {
   schemaHash,
   schemaHashSource,
 } from './schema.mjs';
+import { CTOX_QUERY_FETCH_CAPABILITY } from './protocol-contract.generated.mjs';
 
 const BROWSER_CAPABILITIES = [
   'ctox-rxdb-browser-v1',
@@ -14,7 +15,20 @@ const BROWSER_CAPABILITIES = [
   'ctox-schema-hash-v1',
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
+  CTOX_QUERY_FETCH_CAPABILITY,
 ];
+
+export function remoteSupportsQueryFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  if (!capabilities.includes(CTOX_QUERY_FETCH_CAPABILITY)) return false;
+  // V1.5 production hardening: even when the capability is advertised, the
+  // remote may have demand-loading toggled off at runtime. Treat that as
+  // V1-only — no remote query-fetch round-trips.
+  const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
+  if (flag === false) return false;
+  return true;
+}
 
 export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
   return {
@@ -153,11 +167,18 @@ class CtoxWebRtcReplicationState {
     await this.peer.request(peerId, 'token', []);
     await this.awaitRemoteMasterReady(peerId);
     this.pruneReplacedNativePeers(peerId, normalizedRemoteProtocol);
+    const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
+    this.ctox?.onPeerCapabilityNegotiated?.({
+      peerId,
+      queryFetchCapable,
+      capabilities: normalizedRemoteProtocol?.capabilities || [],
+    });
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     peerStates.set(peerId, {
       peerId,
       replicationState: this,
       remoteProtocol: normalizedRemoteProtocol,
+      queryFetchCapable,
     });
     this.peerStates$.next(this.retainOnlyNativePeer(peerId, normalizedRemoteProtocol, peerStates));
     this.active$.next(true);

@@ -274,6 +274,30 @@ pub trait RxStorageInstance: Send + Sync {
 
     async fn query(&self, prepared_query: &Value) -> Result<RxStorageQueryResult, RxError>;
 
+    /// V1.5 streaming query. Yields matching documents in batches sized by
+    /// `chunk_size`; the callback returns `true` to keep streaming or
+    /// `false` to stop early. The default implementation falls back to
+    /// `query()` + in-memory chunking — backends with native cursor support
+    /// (e.g. SQLite) override this with a bounded-memory iterator path.
+    async fn query_stream_into(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+    ) -> Result<(), RxError> {
+        let result = self.query(prepared_query).await?;
+        let mut buffer = result.documents;
+        let chunk = chunk_size.max(1);
+        while !buffer.is_empty() {
+            let take = buffer.len().min(chunk);
+            let batch: Vec<Value> = buffer.drain(..take).collect();
+            if !on_batch(batch)? {
+                return Ok(());
+            }
+        }
+        Ok(())
+    }
+
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError>;
 
     async fn get_changed_documents_since(

@@ -1,0 +1,25 @@
+{
+  "input": {
+    "collection": "communication_threads",
+    "schemaVersion": 1,
+    "selector": {
+      "updated_at_ms": {
+        "$gte": 1700000000000,
+        "$lt": 1800000000000
+      },
+      "is_archived": false
+    },
+    "sort": [
+      {
+        "updated_at_ms": "desc"
+      }
+    ],
+    "limit": 50,
+    "window": {
+      "offset": 0,
+      "limit": 50
+    }
+  },
+  "canonicalJson": "{\"collection\":\"communication_threads\",\"limit\":50,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"is_archived\":false,\"updated_at_ms\":{\"$gte\":1700000000000,\"$lt\":1800000000000}},\"skip\":null,\"sort\":[{\"updated_at_ms\":\"desc\"}],\"window\":{\"limit\":50,\"offset\":0}}",
+  "fingerprint": "1e925173ab3db751aa6578a713df431cd12de39f8d2c7748070de8f55391aa5f"
+}

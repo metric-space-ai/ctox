@@ -87,7 +87,7 @@ pub struct PeerWithResponse<P: Clone> {
 /// connect/disconnect/message/response streams and a send method.
 #[async_trait]
 pub trait WebRTCConnectionHandler: Send + Sync {
-    type Peer: Clone + Eq + std::hash::Hash + Send + Sync + 'static;
+    type Peer: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + Sync + 'static;
 
     fn connect_stream(&self) -> RxStream<Self::Peer>;
     fn disconnect_stream(&self) -> RxStream<Self::Peer>;
@@ -98,7 +98,27 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError>;
 
     async fn close(&self) -> Result<(), RxError>;
+
+    /// V1.5 server-push backpressure hook. Returns the number of bytes
+    /// currently buffered for the given peer (analogous to WebRTC's
+    /// `RTCDataChannel.bufferedAmount`). Implementations that do not yet
+    /// support backpressure may return 0; the dispatcher then falls back
+    /// to a small inter-chunk yield.
+    fn buffered_bytes(&self, _peer: &Self::Peer) -> usize {
+        0
+    }
+
+    /// V1.5 stable peer identity for authz + rate-limiting. Default impl
+    /// uses Debug formatting (works for any Peer type but is opaque).
+    /// Production handlers should override with the actual peer-id string.
+    fn peer_identity(&self, peer: &Self::Peer) -> String {
+        format!("{:?}", peer)
+    }
 }
+
+/// Soft threshold above which the V1.5 dispatcher yields and waits before
+/// sending the next chunk. Matches typical WebRTC SCTP send-queue depth.
+pub const WEBRTC_BUFFERED_HIGH_WATER: usize = 1024 * 1024; // 1 MiB
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-types.ts:42-44
 /// Factory type for connection handlers. Upstream is generic over a

@@ -1,0 +1,23 @@
+{
+  "input": {
+    "collection": "outbound_engagements",
+    "schemaVersion": 1,
+    "selector": {
+      "deleted_at": null,
+      "owner_id": {
+        "$ne": null
+      }
+    },
+    "sort": [
+      {
+        "created_at": "asc"
+      }
+    ],
+    "window": {
+      "offset": 0,
+      "limit": 100
+    }
+  },
+  "canonicalJson": "{\"collection\":\"outbound_engagements\",\"limit\":null,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"deleted_at\":null,\"owner_id\":{\"$ne\":null}},\"skip\":null,\"sort\":[{\"created_at\":\"asc\"}],\"window\":{\"limit\":100,\"offset\":0}}",
+  "fingerprint": "69e145ad0f48c3226a60d35f683a74e4d62320a3f6c9b87f024fbb79e23b44df"
+}

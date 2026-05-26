@@ -127,6 +127,11 @@ class CtoxRxCollection {
       hash: () => schemaHash(schema, name),
     };
     this.storageCollection = storageCollection;
+    this.demandLoader = null;
+  }
+
+  setDemandLoader(loader) {
+    this.demandLoader = loader || null;
   }
 
   async insert(doc) {
@@ -202,16 +207,31 @@ class CtoxRxCollection {
     return {
       subscribe: (listener) => {
         let active = true;
-        const emit = async () => {
+        // V1.5 production hardening: debounce change-bulks so a busy
+        // collection (1000 writes/sec) doesn't trigger 1000 subscription
+        // emissions per second. The 50 ms window collapses burst writes
+        // into one re-evaluation. See docs/rxdb_on-demand-load.md Wave 3.
+        let pendingTimer = null;
+        const debounceMs = OBSERVABLE_DEBOUNCE_MS;
+        const flushEmit = async () => {
+          pendingTimer = null;
           if (!active) return;
           const documents = await this.find().exec();
           if (active) listener({ collectionName: this.name, documents });
         };
-        emit();
+        const emit = () => {
+          if (pendingTimer != null) return;
+          pendingTimer = setTimeout(flushEmit, debounceMs);
+        };
+        flushEmit(); // initial emission is immediate, not debounced
         const unsubscribe = this.observe(emit);
         return {
           unsubscribe: () => {
             active = false;
+            if (pendingTimer != null) {
+              clearTimeout(pendingTimer);
+              pendingTimer = null;
+            }
             unsubscribe();
           },
         };
@@ -219,6 +239,8 @@ class CtoxRxCollection {
     };
   }
 }
+
+export const OBSERVABLE_DEBOUNCE_MS = 50;
 
 class CtoxRxQuery {
   constructor(collection, query, single) {
@@ -228,16 +250,27 @@ class CtoxRxQuery {
     this.$ = {
       subscribe: (listener) => {
         let active = true;
-        const emit = () => {
+        let pendingTimer = null;
+        const flushEmit = () => {
+          pendingTimer = null;
+          if (!active) return;
           this.exec()
             .then((value) => { if (active) listener(value); })
             .catch(() => {});
         };
-        emit();
+        const emit = () => {
+          if (pendingTimer != null) return;
+          pendingTimer = setTimeout(flushEmit, 50);
+        };
+        flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
           unsubscribe: () => {
             active = false;
+            if (pendingTimer != null) {
+              clearTimeout(pendingTimer);
+              pendingTimer = null;
+            }
             unsubscribe();
           },
         };
@@ -288,7 +321,9 @@ class CtoxRxQuery {
 
   async exec() {
     let docs;
-    if (typeof this.collection.storageCollection.queryDocuments === 'function') {
+    if (this.collection.demandLoader) {
+      docs = await this.collection.demandLoader.resolveQuery(this.query);
+    } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
         sortDocuments,

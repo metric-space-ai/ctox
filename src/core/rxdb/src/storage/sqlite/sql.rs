@@ -115,23 +115,39 @@ pub fn update_document(
 }
 
 pub fn all_documents(conn: &Connection, table: &str) -> RxResult<Vec<Value>> {
+    let mut ret = Vec::new();
+    for_each_document(conn, table, |doc| {
+        ret.push(doc);
+        Ok(true)
+    })?;
+    Ok(ret)
+}
+
+/// Walks every row of the table without first materializing the full Vec.
+/// The visitor returns `Ok(true)` to continue or `Ok(false)` to stop early.
+/// V1.5 query streaming relies on this for bounded-memory reads on large
+/// collections.
+pub fn for_each_document<F>(conn: &Connection, table: &str, mut visit: F) -> RxResult<()>
+where
+    F: FnMut(Value) -> RxResult<bool>,
+{
     let mut stmt = conn
         .prepare(&format!("SELECT data FROM {}", quote_identifier(table)))
         .map_err(sqlite_error)?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sqlite_error)?;
-    let mut ret = Vec::new();
-    for row in rows {
-        let data = row.map_err(sqlite_error)?;
-        ret.push(serde_json::from_str(&data).map_err(|err| {
+    let mut rows = stmt.query([]).map_err(sqlite_error)?;
+    while let Some(row) = rows.next().map_err(sqlite_error)? {
+        let data: String = row.get(0).map_err(sqlite_error)?;
+        let doc = serde_json::from_str(&data).map_err(|err| {
             new_rx_error(
                 "SQLITE_JSON",
                 Some(serde_json::json!({ "message": err.to_string() })),
             )
-        })?);
+        })?;
+        if !visit(doc)? {
+            break;
+        }
     }
-    Ok(ret)
+    Ok(())
 }
 
 pub fn document_by_id(conn: &Connection, table: &str, id: &str) -> RxResult<Option<Value>> {

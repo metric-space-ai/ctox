@@ -1,0 +1,17 @@
+{
+  "input": {
+    "collection": "notes",
+    "schemaVersion": 1,
+    "selector": {
+      "body_text": "Line1\nLine2\t\"quoted\"\\backslash",
+      "tag": "with-bell-007"
+    },
+    "sort": [],
+    "window": {
+      "offset": 0,
+      "limit": 50
+    }
+  },
+  "canonicalJson": "{\"collection\":\"notes\",\"limit\":null,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"body_text\":\"Line1\\nLine2\\t\\\"quoted\\\"\\\\backslash\",\"tag\":\"with-bell-007\"},\"skip\":null,\"sort\":[],\"window\":{\"limit\":50,\"offset\":0}}",
+  "fingerprint": "af3756e44722ce184d38983d58487691a02e973334f479872dae44b1b79d09a0"
+}

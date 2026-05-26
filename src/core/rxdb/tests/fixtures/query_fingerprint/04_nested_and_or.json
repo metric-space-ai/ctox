@@ -1,0 +1,39 @@
+{
+  "input": {
+    "collection": "outbound_pipeline_items",
+    "schemaVersion": 2,
+    "selector": {
+      "$and": [
+        {
+          "stage": {
+            "$in": [
+              "queued",
+              "running"
+            ]
+          }
+        },
+        {
+          "$or": [
+            {
+              "owner": "alice"
+            },
+            {
+              "owner": "bob"
+            }
+          ]
+        }
+      ]
+    },
+    "sort": [
+      {
+        "updated_at_ms": "desc"
+      }
+    ],
+    "window": {
+      "offset": 0,
+      "limit": 200
+    }
+  },
+  "canonicalJson": "{\"collection\":\"outbound_pipeline_items\",\"limit\":null,\"protocolVersion\":\"1.5\",\"schemaVersion\":2,\"selector\":{\"$and\":[{\"stage\":{\"$in\":[\"queued\",\"running\"]}},{\"$or\":[{\"owner\":\"alice\"},{\"owner\":\"bob\"}]}]},\"skip\":null,\"sort\":[{\"updated_at_ms\":\"desc\"}],\"window\":{\"limit\":200,\"offset\":0}}",
+  "fingerprint": "0d0d81ea540708cd06e000688dcc1ba06432ed5946d6e745d6dd546759d5c44c"
+}

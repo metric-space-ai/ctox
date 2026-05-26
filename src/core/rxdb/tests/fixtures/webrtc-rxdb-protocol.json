@@ -15,7 +15,8 @@
     "ctox-file-chunks-v1",
     "ctox-schema-hash-v1",
     "ctox-peer-session-v1",
-    "ctox-checkpoint-epoch-v1"
+    "ctox-checkpoint-epoch-v1",
+    "ctox-rxdb-query-fetch-v1"
   ],
   "nativeCapabilities": [
     "ctox-rxdb-native-v1",
@@ -23,8 +24,30 @@
     "ctox-replication-handshake-v1",
     "ctox-schema-hash-v1",
     "ctox-peer-session-v1",
-    "ctox-checkpoint-epoch-v1"
+    "ctox-checkpoint-epoch-v1",
+    "ctox-rxdb-query-fetch-v1"
   ],
+  "optionalCapabilities": {
+    "queryFetch": "ctox-rxdb-query-fetch-v1"
+  },
+  "queryRpc": {
+    "fetch": "rxdb.query.fetch",
+    "chunk": "rxdb.query.chunk",
+    "error": "rxdb.query.error",
+    "cancel": "rxdb.query.cancel",
+    "maxDocumentsPerChunk": 200,
+    "maxBytesPerChunk": 262144,
+    "maxInFlightStreams": 4,
+    "maxQueryRuntimeMs": 30000,
+    "defaultWindowLimit": 200
+  },
+  "fileRpc": {
+    "fetch": "rxdb.file.fetch",
+    "chunk": "rxdb.file.chunk",
+    "error": "rxdb.file.error",
+    "cancel": "rxdb.file.cancel",
+    "maxBytesPerChunk": 262144
+  },
   "errorCodes": {
     "protocolMissing": "ctox_rxdb_protocol_missing",
     "protocolMismatch": "ctox_rxdb_protocol_mismatch",

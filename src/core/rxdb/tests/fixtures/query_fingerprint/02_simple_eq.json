@@ -1,0 +1,22 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {
+      "status": "open",
+      "owner": "alice"
+    },
+    "sort": [
+      {
+        "updated_at_ms": "desc"
+      }
+    ],
+    "limit": 50,
+    "window": {
+      "offset": 0,
+      "limit": 50
+    }
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":50,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"owner\":\"alice\",\"status\":\"open\"},\"skip\":null,\"sort\":[{\"updated_at_ms\":\"desc\"}],\"window\":{\"limit\":50,\"offset\":0}}",
+  "fingerprint": "f30d31839a0667128ad017c5f0916fe24a380279f2100c09f43eb1fbd6131942"
+}

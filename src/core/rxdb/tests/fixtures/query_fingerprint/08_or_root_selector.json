@@ -1,0 +1,33 @@
+{
+  "input": {
+    "collection": "business_records",
+    "schemaVersion": 1,
+    "selector": {
+      "$or": [
+        {
+          "status": "open"
+        },
+        {
+          "status": "pending"
+        },
+        {
+          "$and": [
+            {
+              "owner": "alice"
+            },
+            {
+              "urgent": true
+            }
+          ]
+        }
+      ]
+    },
+    "sort": [],
+    "window": {
+      "offset": 0,
+      "limit": 100
+    }
+  },
+  "canonicalJson": "{\"collection\":\"business_records\",\"limit\":null,\"protocolVersion\":\"1.5\",\"schemaVersion\":1,\"selector\":{\"$or\":[{\"status\":\"open\"},{\"status\":\"pending\"},{\"$and\":[{\"owner\":\"alice\"},{\"urgent\":true}]}]},\"skip\":null,\"sort\":[],\"window\":{\"limit\":100,\"offset\":0}}",
+  "fingerprint": "b7b52cdba9a978762339810e0e14a2e3ecc4f763cac4c1405a063e55ae1efa85"
+}

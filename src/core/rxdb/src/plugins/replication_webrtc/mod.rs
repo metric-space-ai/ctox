@@ -6,9 +6,13 @@
 //! bundle.
 
 pub mod connection_handler_rs;
+pub mod file_fetch_handler;
 pub mod index_mod;
+pub(super) mod protocol_contract_generated;
+pub mod query_fetch_handler;
 pub mod signaling_client;
 pub mod signaling_protocol;
+pub mod v1_5_status;
 pub mod webrtc_helper;
 pub mod webrtc_types;
 
