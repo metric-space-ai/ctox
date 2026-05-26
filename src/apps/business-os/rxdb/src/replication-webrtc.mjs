@@ -8,6 +8,12 @@ import {
   schemaHashSource,
 } from './schema.mjs';
 import { CTOX_QUERY_FETCH_CAPABILITY } from './protocol-contract.generated.mjs';
+import { createDemandLoadingTransport } from './demand-loading-transport.mjs';
+import { createQueryDemandLoader } from './query-demand-loader.mjs';
+import { createFileDemandLoader } from './file-demand-loader.mjs';
+import { QueryMetaStorage } from './query-meta-storage.mjs';
+import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
+import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 
 const BROWSER_CAPABILITIES = [
   'ctox-rxdb-browser-v1',
@@ -79,6 +85,11 @@ class CtoxWebRtcReplicationState {
     this.pullInProgress = false;
     this.pushInProgress = false;
     this.peerOpenQueue = Promise.resolve();
+    this.activeRemotePeerId = null;
+    this.demandTransport = createDemandLoadingTransport({
+      getPeerId: () => this.activeRemotePeerId,
+    });
+    this.demandLoaderActive = false;
   }
 
   async start(connectionHandlerCreator) {
@@ -108,8 +119,10 @@ class CtoxWebRtcReplicationState {
       requestHandlers: {
         masterChangesSince: async ({ peerId, params }) => this.masterChangesSince(params, peerId),
         masterWrite: async ({ peerId, params }) => this.masterWrite(params, peerId),
+        ...this.demandTransport.requestHandlers,
       },
     });
+    this.demandTransport.attach(this.peer);
     this.peer.on('error', (event) => this.error$.next(event.detail || event));
     this.peer.on('transport-status', (event) => {
       this.transportStatus$.next(this.decorateTransportStatus(event.detail || event));
@@ -168,10 +181,19 @@ class CtoxWebRtcReplicationState {
     await this.awaitRemoteMasterReady(peerId);
     this.pruneReplacedNativePeers(peerId, normalizedRemoteProtocol);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
+    this.activeRemotePeerId = peerId;
+    if (queryFetchCapable && !this.demandLoaderActive) {
+      try {
+        await this.enableDemandLoading();
+      } catch (error) {
+        this.error$.next(error);
+      }
+    }
     this.ctox?.onPeerCapabilityNegotiated?.({
       peerId,
       queryFetchCapable,
       capabilities: normalizedRemoteProtocol?.capabilities || [],
+      demandLoaderActive: this.demandLoaderActive,
     });
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     peerStates.set(peerId, {
@@ -354,7 +376,67 @@ class CtoxWebRtcReplicationState {
       clearInterval(this.periodicPushTimer);
       this.periodicPushTimer = null;
     }
+    try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
+    try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
+    try { await this.demandSidecar?.close?.(); } catch {}
     this.peer?.close?.();
+  }
+
+  /// V1.5 production wiring: build the sidecar + query demand loader and
+  /// attach them to the underlying collection so that `find().exec()` and
+  /// observable queries flow through the on-demand pipeline. Idempotent.
+  async enableDemandLoading({
+    databaseName,
+    indexedDbAvailable = typeof globalThis.indexedDB === 'object' && globalThis.indexedDB,
+  } = {}) {
+    if (this.demandLoaderActive) return this.demandLoader;
+    const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
+    const backend = indexedDbAvailable
+      ? createIndexedDbMetaBackend({ databaseName: dbName })
+      : createMemoryMetaBackend();
+    const primaryDelete = async (collection, id) => {
+      if (collection !== this.collection.name) return;
+      if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
+        await this.collection.storageCollection.hardDeleteByIds([id]);
+      }
+    };
+    this.demandSidecar = new QueryMetaStorage(backend, {
+      databaseName: dbName,
+      primaryDelete,
+    });
+    // Run cache eviction periodically in production. 30 s is conservative
+    // for a peer-driven cache that grows from real-time replication.
+    try { this.demandSidecar.startEvictionScheduler({ intervalMs: 30_000 }); } catch {}
+
+    this.demandLoader = createQueryDemandLoader({
+      storageCollection: this.collection.storageCollection,
+      sidecar: this.demandSidecar,
+      collectionName: this.collection.name,
+      schemaVersion: this.collection.schema?.version || 0,
+      requestQueryFetch: (envelope) => this.demandTransport.requestQueryFetch(envelope),
+      requestCancel: ({ requestId }) => this.demandTransport.requestQueryCancel({ requestId }),
+      status: null,
+    });
+    if (typeof this.collection.setDemandLoader === 'function') {
+      this.collection.setDemandLoader(this.demandLoader);
+    }
+
+    this.demandFileLoader = createFileDemandLoader({
+      collectionName: this.collection.name,
+      storageCollection: this.collection.storageCollection,
+      sidecarBackend: backend,
+      requestFileFetch: ({ requestId, fileId, range, knownSequences }) =>
+        this.demandTransport.requestFileFetch({
+          requestId,
+          fileId,
+          range,
+          knownSequences,
+          collectionName: this.collection.name,
+        }),
+    });
+
+    this.demandLoaderActive = true;
+    return this.demandLoader;
   }
 
   resolveInitialReplication() {

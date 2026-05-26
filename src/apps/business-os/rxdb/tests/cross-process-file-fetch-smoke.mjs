@@ -121,6 +121,14 @@ console.log('ctox-rxdb-js cross-process file-fetch smoke OK', {
 });
 
 send({ kind: 'shutdown' });
-await new Promise((r) => child.on('exit', r));
+child.stdin.end();
+lines.close();
+await new Promise((resolveExit) => {
+  const killer = setTimeout(() => {
+    try { child.kill('SIGTERM'); } catch {}
+  }, 2000);
+  child.once('exit', () => { clearTimeout(killer); resolveExit(); });
+});
+process.exit(0);
 
 function assert(c, m) { if (!c) throw new Error(m); }

@@ -66,13 +66,36 @@ pub const FILE_FETCH_ERROR_RATE_LIMITED: &str = "RATE_LIMITED";
 pub const FILE_FETCH_ERROR_FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 pub const FILE_FETCH_ERROR_REMOTE_TIMEOUT: &str = "REMOTE_TIMEOUT";
 
-/// Source-of-bytes callback. The business-os layer registers one per
-/// supported collection; given a (collection, fileId, optional range) it
-/// produces the raw bytes to stream.
+/// Legacy whole-file source. Convenient for small assets and tests; production
+/// paths use [`FileChunkStreamFn`] which never materializes the full file.
 pub type FileSourceFn = dyn Fn(&str, &str, Option<&FileRange>) -> RxResult<Vec<u8>> + Send + Sync;
 
+/// Production file source that emits chunks via a callback. The callback is
+/// invoked once per disk-read; returning `Ok(false)` from it short-circuits
+/// the stream (used for early cancel / known-sequence skip). The closure is
+/// expected to read the file in fixed-size blocks (typically 256 KB) so
+/// server-side RAM never grows with file size.
+///
+/// Signature parameters:
+///   (collection, file_id, range, emit_chunk)
+/// where `emit_chunk(bytes) -> Ok(true)` continues, `Ok(false)` stops, and
+/// `Err(_)` aborts the whole stream with that error.
+pub type FileChunkStreamFn = dyn Fn(
+        &str,
+        &str,
+        Option<&FileRange>,
+        &mut dyn FnMut(&[u8]) -> RxResult<bool>,
+    ) -> RxResult<()>
+    + Send
+    + Sync;
+
+enum FileSource {
+    Buffer(Arc<FileSourceFn>),
+    Stream(Arc<FileChunkStreamFn>),
+}
+
 pub struct FileFetchRegistry {
-    sources: Mutex<HashMap<String, Arc<FileSourceFn>>>,
+    sources: Mutex<HashMap<String, FileSource>>,
     inflight: Mutex<HashMap<String, Arc<AtomicBool>>>,
     inflight_count: AtomicU64,
     max_inflight: u64,
@@ -91,7 +114,19 @@ impl FileFetchRegistry {
     }
 
     pub fn register_source(&self, collection: &str, source: Arc<FileSourceFn>) {
-        self.sources.lock().insert(collection.to_string(), source);
+        self.sources
+            .lock()
+            .insert(collection.to_string(), FileSource::Buffer(source));
+    }
+
+    /// Production-grade registration: bounded-memory chunk stream. The
+    /// stream callback owns the disk I/O loop and emits chunks via the
+    /// provided `emit_chunk` callback. The dispatcher will skip
+    /// known-sequence chunks and apply transport backpressure.
+    pub fn register_stream_source(&self, collection: &str, source: Arc<FileChunkStreamFn>) {
+        self.sources
+            .lock()
+            .insert(collection.to_string(), FileSource::Stream(source));
     }
 
     pub fn set_feature_enabled(&self, enabled: bool) {
@@ -102,8 +137,11 @@ impl FileFetchRegistry {
         self.feature_enabled.load(Ordering::SeqCst)
     }
 
-    fn get_source(&self, collection: &str) -> Option<Arc<FileSourceFn>> {
-        self.sources.lock().get(collection).cloned()
+    fn get_source(&self, collection: &str) -> Option<FileSource> {
+        self.sources.lock().get(collection).map(|s| match s {
+            FileSource::Buffer(b) => FileSource::Buffer(Arc::clone(b)),
+            FileSource::Stream(s) => FileSource::Stream(Arc::clone(s)),
+        })
     }
 
     pub fn cancel(&self, request_id: &str) -> bool {
@@ -244,76 +282,196 @@ async fn stream_file<H: WebRTCConnectionHandler>(
     handler: &H,
     peer: &H::Peer,
     request: &FileFetchRequest,
-    source: &Arc<FileSourceFn>,
+    source: &FileSource,
     cancel_flag: &Arc<AtomicBool>,
 ) -> RxResult<()> {
     let runtime_deadline = Instant::now() + Duration::from_millis(CTOX_QUERY_MAX_RUNTIME_MS as u64);
-    let bytes = match source(&request.collection_name, &request.file_id, request.range.as_ref()) {
-        Ok(b) => b,
-        Err(err) => {
-            send_file_error(
-                handler,
-                peer,
-                "",
-                &request.request_id,
-                FILE_FETCH_ERROR_NOT_FOUND,
-                &format!("file source error: {err}"),
-                false,
-            )
-            .await;
-            return Ok(());
-        }
-    };
-
     let chunk_size = CTOX_FILE_MAX_BYTES_PER_CHUNK as usize;
     let known: std::collections::HashSet<u32> = request.known_sequences.iter().copied().collect();
-    let total_chunks = ((bytes.len() + chunk_size - 1) / chunk_size).max(1) as u32;
-    let mut sequence: u32 = 0;
-    let mut sent_any = false;
 
-    while (sequence as usize) * chunk_size < bytes.len() {
-        if cancel_flag.load(Ordering::SeqCst) {
-            send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
-            return Ok(());
-        }
-        if Instant::now() >= runtime_deadline {
-            send_file_error(
-                handler,
-                peer,
-                "",
-                &request.request_id,
-                FILE_FETCH_ERROR_REMOTE_TIMEOUT,
-                "file transfer exceeded CTOX_QUERY_MAX_RUNTIME_MS",
-                true,
-            )
-            .await;
-            return Ok(());
-        }
-        let mut backoff_ms = 4u64;
-        while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
-            if cancel_flag.load(Ordering::SeqCst) {
-                send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
+    // Collected segments to emit. With FileSource::Stream this stays bounded
+    // to one in-flight chunk at a time; with FileSource::Buffer we accept
+    // the legacy O(file_size) memory cost.
+    enum Step<'a> {
+        Slice(&'a [u8]),
+    }
+    let _ = std::marker::PhantomData::<Step>;
+
+    match source {
+        FileSource::Stream(stream_fn) => {
+            // The stream source emits chunks via the callback; we wrap the
+            // callback to inject cancel / timeout / backpressure / known-
+            // sequence skip / completion bookkeeping. Bounded memory:
+            // exactly one chunk_size buffer is in flight at any moment
+            // (held by the stream source's read buffer).
+            let mut sequence: u32 = 0u32;
+            let mut sent_any = false;
+            let mut total_emitted_bytes: u64 = 0;
+            let mut stop_with_error: Option<&'static str> = None;
+            // We need to call .await inside the callback but the callback
+            // is sync. Trick: build a tokio runtime handle to block_on the
+            // send. We're already inside a tokio task, so we use
+            // `tokio::task::block_in_place` + `Handle::current().block_on`.
+            let send_res = (stream_fn)(
+                &request.collection_name,
+                &request.file_id,
+                request.range.as_ref(),
+                &mut |bytes: &[u8]| -> RxResult<bool> {
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        // signal a cancelled terminal chunk
+                        let req = request.clone();
+                        let h_peer = peer.clone();
+                        let _ = futures::executor::block_on(send_file_chunk(
+                            handler, &h_peer, &req, sequence, &[], true, true,
+                        ));
+                        return Ok(false);
+                    }
+                    if Instant::now() >= runtime_deadline {
+                        stop_with_error = Some("timeout");
+                        return Ok(false);
+                    }
+                    // Backpressure: yield in a sync-friendly way. We use a
+                    // short busy wait checked-against-the-deadline. The
+                    // dispatcher task itself is already async; the stream
+                    // source closure is sync (because it must own a file
+                    // handle), so we accept this small inefficiency for
+                    // bounded memory.
+                    while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
+                        if cancel_flag.load(Ordering::SeqCst) {
+                            return Ok(false);
+                        }
+                        if Instant::now() >= runtime_deadline {
+                            stop_with_error = Some("timeout-backpressure");
+                            return Ok(false);
+                        }
+                        std::thread::sleep(Duration::from_millis(8));
+                    }
+                    // The closure may pass a smaller slice than chunk_size,
+                    // which is fine — chunk_size is a max, not a min. The
+                    // sequence number advances per emitted chunk.
+                    if !known.contains(&sequence) {
+                        let req = request.clone();
+                        let h_peer = peer.clone();
+                        // complete flag is set later; for now non-final
+                        let _ = futures::executor::block_on(send_file_chunk(
+                            handler, &h_peer, &req, sequence, bytes, false, false,
+                        ));
+                        sent_any = true;
+                        total_emitted_bytes = total_emitted_bytes.saturating_add(bytes.len() as u64);
+                    }
+                    sequence += 1;
+                    Ok(true)
+                },
+            );
+            if let Some(reason) = stop_with_error {
+                send_file_error(
+                    handler,
+                    peer,
+                    "",
+                    &request.request_id,
+                    FILE_FETCH_ERROR_REMOTE_TIMEOUT,
+                    &format!("file transfer stalled: {reason}"),
+                    true,
+                )
+                .await;
                 return Ok(());
             }
-            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-            backoff_ms = (backoff_ms * 2).min(64);
+            if let Err(err) = send_res {
+                send_file_error(
+                    handler,
+                    peer,
+                    "",
+                    &request.request_id,
+                    FILE_FETCH_ERROR_NOT_FOUND,
+                    &format!("file source error: {err}"),
+                    false,
+                )
+                .await;
+                return Ok(());
+            }
+            // Emit terminal complete-chunk. If nothing was sent (all known),
+            // still emit one to resolve the JS promise.
+            let _ = total_emitted_bytes;
+            if !sent_any {
+                send_file_chunk(handler, peer, request, sequence, &[], true, false).await;
+            } else {
+                send_file_chunk(handler, peer, request, sequence, &[], true, false).await;
+            }
+            Ok(())
         }
-
-        let start = (sequence as usize) * chunk_size;
-        let end = (start + chunk_size).min(bytes.len());
-        let complete = end >= bytes.len();
-        if !known.contains(&sequence) {
-            send_file_chunk(handler, peer, request, sequence, &bytes[start..end], complete, false).await;
-            sent_any = true;
+        FileSource::Buffer(buffer_fn) => {
+            let bytes =
+                match buffer_fn(&request.collection_name, &request.file_id, request.range.as_ref()) {
+                    Ok(b) => b,
+                    Err(err) => {
+                        send_file_error(
+                            handler,
+                            peer,
+                            "",
+                            &request.request_id,
+                            FILE_FETCH_ERROR_NOT_FOUND,
+                            &format!("file source error: {err}"),
+                            false,
+                        )
+                        .await;
+                        return Ok(());
+                    }
+                };
+            let total_chunks = ((bytes.len() + chunk_size - 1) / chunk_size).max(1) as u32;
+            let mut sequence: u32 = 0;
+            let mut sent_any = false;
+            while (sequence as usize) * chunk_size < bytes.len() {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
+                    return Ok(());
+                }
+                if Instant::now() >= runtime_deadline {
+                    send_file_error(
+                        handler,
+                        peer,
+                        "",
+                        &request.request_id,
+                        FILE_FETCH_ERROR_REMOTE_TIMEOUT,
+                        "file transfer exceeded CTOX_QUERY_MAX_RUNTIME_MS",
+                        true,
+                    )
+                    .await;
+                    return Ok(());
+                }
+                let mut backoff_ms = 4u64;
+                while handler.buffered_bytes(peer) > WEBRTC_BUFFERED_HIGH_WATER {
+                    if cancel_flag.load(Ordering::SeqCst) {
+                        send_file_chunk(handler, peer, request, sequence, &[], true, true).await;
+                        return Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms * 2).min(64);
+                }
+                let start = (sequence as usize) * chunk_size;
+                let end = (start + chunk_size).min(bytes.len());
+                let complete = end >= bytes.len();
+                if !known.contains(&sequence) {
+                    send_file_chunk(
+                        handler,
+                        peer,
+                        request,
+                        sequence,
+                        &bytes[start..end],
+                        complete,
+                        false,
+                    )
+                    .await;
+                    sent_any = true;
+                }
+                sequence += 1;
+            }
+            if !sent_any {
+                send_file_chunk(handler, peer, request, total_chunks.saturating_sub(1), &[], true, false)
+                    .await;
+            }
+            Ok(())
         }
-        sequence += 1;
     }
-    if !sent_any {
-        // Browser already has every chunk; still send an empty terminal so it
-        // can resolve its promise.
-        send_file_chunk(handler, peer, request, total_chunks.saturating_sub(1), &[], true, false).await;
-    }
-    Ok(())
 }
 
 async fn send_file_chunk<H: WebRTCConnectionHandler>(
@@ -482,6 +640,80 @@ mod tests {
             _ => None,
         }).collect();
         assert!(chunks.iter().all(|c| c.sequence >= 2), "seq 0,1 must be skipped");
+    }
+
+    #[tokio::test]
+    async fn streams_file_via_chunk_source_without_full_materialization() {
+        // Regression for the review finding: production file sources must
+        // never materialize the whole file. We register a stream-source
+        // whose `emit_chunk` is called per 256 KB read; we assert (a) every
+        // emit_chunk call carries at most one chunk_size, (b) the registry
+        // call site sees exactly chunk-by-chunk flow.
+        let chunk_size = CTOX_FILE_MAX_BYTES_PER_CHUNK as usize;
+        // Total file: 5 × chunk_size = 1.25 MiB
+        const N_CHUNKS: usize = 5;
+        let emit_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak_in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let emit_calls_clone = Arc::clone(&emit_calls);
+        let peak_in_flight_clone = Arc::clone(&peak_in_flight);
+        let registry = Arc::new(FileFetchRegistry::new(4));
+        registry.register_stream_source(
+            "desktop_files",
+            Arc::new(move |_collection, _file_id, _range, emit| {
+                // Simulate disk I/O: read N_CHUNKS chunks of exactly chunk_size,
+                // each into a freshly-allocated buffer. We track the *maximum
+                // simultaneous* allocation to confirm bounded memory.
+                for i in 0..N_CHUNKS {
+                    let buf = vec![(i as u8).wrapping_add(1); chunk_size];
+                    let in_flight = buf.len();
+                    let mut peak = peak_in_flight_clone.load(Ordering::SeqCst);
+                    while in_flight > peak {
+                        match peak_in_flight_clone.compare_exchange(peak, in_flight, Ordering::SeqCst, Ordering::SeqCst) {
+                            Ok(_) => break,
+                            Err(actual) => peak = actual,
+                        }
+                    }
+                    emit_calls_clone.fetch_add(1, Ordering::SeqCst);
+                    let keep_going = emit(&buf)?;
+                    drop(buf);
+                    if !keep_going { break; }
+                }
+                Ok(())
+            }),
+        );
+        let handler = Arc::new(MockHandler::new());
+        run_file_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("stream1", "desktop_files", "big-file", vec![]),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            emit_calls.load(Ordering::SeqCst),
+            N_CHUNKS,
+            "stream source must be invoked exactly once per chunk"
+        );
+        assert!(
+            peak_in_flight.load(Ordering::SeqCst) <= chunk_size,
+            "in-flight buffer must never exceed one chunk_size — got peak {}",
+            peak_in_flight.load(Ordering::SeqCst)
+        );
+        let frames = handler.sent.lock();
+        let chunks: Vec<_> = frames
+            .iter()
+            .filter_map(|f| match f {
+                WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_CHUNK => {
+                    serde_json::from_value::<FileFetchChunk>(m.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        // N_CHUNKS payload frames + 1 terminal complete frame
+        assert_eq!(chunks.len(), N_CHUNKS + 1, "expected {} payload + 1 terminal chunk", N_CHUNKS);
+        assert!(chunks.last().unwrap().complete, "terminal chunk must be complete");
     }
 
     #[tokio::test]

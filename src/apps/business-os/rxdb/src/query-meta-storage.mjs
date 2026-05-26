@@ -12,12 +12,21 @@ export const SIDECAR_PIN_RECENT_READ_TTL_MS = 60_000;
 const PIN_RECENT_READ = 'recently-read';
 
 export class QueryMetaStorage {
-  constructor(backend, { databaseName, clock = Date.now } = {}) {
+  constructor(backend, { databaseName, clock = Date.now, primaryDelete = null } = {}) {
     if (!backend) throw new TypeError('QueryMetaStorage requires a backend');
     if (!databaseName) throw new TypeError('QueryMetaStorage requires a databaseName');
     this.backend = backend;
     this.databaseName = databaseName;
     this.clock = clock;
+    // V1.5 production hardening: primaryDelete(collection, id) actually
+    // removes the document from the primary IndexedDB `documents` store.
+    // Without it, evictDocuments only clears sidecar metadata and the
+    // primary cache grows unbounded — which is the bug the review caught.
+    this.primaryDelete = typeof primaryDelete === 'function' ? primaryDelete : null;
+  }
+
+  setPrimaryDelete(fn) {
+    this.primaryDelete = typeof fn === 'function' ? fn : null;
   }
 
   async getQueryWindow(key) {
@@ -102,6 +111,17 @@ export class QueryMetaStorage {
       if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
         continue;
       }
+      // Remove from the PRIMARY documents store first. If that fails the
+      // metadata stays so we don't lose track of the doc on the next pass.
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(collection, id);
+        } catch {
+          // Primary-store delete failed; skip this doc to avoid orphan
+          // metadata while the primary copy is still present.
+          continue;
+        }
+      }
       await this.backend.deleteDocumentAccess(collection, id);
       removed += 1;
     }
@@ -173,6 +193,13 @@ export class QueryMetaStorage {
     let remainingBytes = stats.estimatedBytes;
     for (const candidate of candidates) {
       if (remainingBytes <= stats.budgetBytes) break;
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(candidate.collection, candidate.id);
+        } catch {
+          continue;
+        }
+      }
       await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
       remainingBytes -= candidate.estimatedBytes || 0;
       removed += 1;

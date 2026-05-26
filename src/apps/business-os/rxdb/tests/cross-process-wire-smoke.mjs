@@ -144,8 +144,17 @@ console.log('ctox-rxdb-js cross-process wire smoke OK', {
   throughputDocsPerSec: Math.round(totalDocs / (dispatchMs / 1000)),
 });
 
-// 6. Shut the daemon down cleanly.
+// 6. Shut the daemon down cleanly. End stdin so the daemon's `for line in
+// stdin` loop terminates, then wait for exit with a short fallback kill.
 send({ kind: 'shutdown' });
-await new Promise((r) => child.on('exit', r));
+child.stdin.end();
+lines.close();
+await new Promise((resolveExit) => {
+  const killer = setTimeout(() => {
+    try { child.kill('SIGTERM'); } catch {}
+  }, 2000);
+  child.once('exit', () => { clearTimeout(killer); resolveExit(); });
+});
+process.exit(0);
 
 function assert(c, m) { if (!c) throw new Error(m); }

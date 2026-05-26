@@ -93,6 +93,23 @@ export class CtoxIndexedDbCollection {
     return { success, error };
   }
 
+  /// V1.5 eviction hook. Hard-deletes documents from the primary store
+  /// (does NOT soft-delete via _deleted=true — the cache layer wants the
+  /// row gone, not tombstoned). Caller is responsible for never invoking
+  /// this on dirty docs; the sidecar enforces that.
+  async hardDeleteByIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) return 0;
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readwrite');
+    const store = tx.objectStore(DOCUMENT_STORE);
+    let removed = 0;
+    for (const id of ids) {
+      await idbRequest(store.delete([this.name, String(id)]));
+      removed += 1;
+    }
+    await idbTransactionDone(tx);
+    return removed;
+  }
+
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
     const store = tx.objectStore(DOCUMENT_STORE);

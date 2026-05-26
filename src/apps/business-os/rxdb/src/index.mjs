@@ -92,3 +92,4 @@ export {
 
 export { decodeChunk } from './chunk-decoder.mjs';
 export { buildBusinessOsAdvancedStatus } from './advanced-status-bridge.mjs';
+export { createDemandLoadingTransport } from './demand-loading-transport.mjs';

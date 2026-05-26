@@ -403,6 +403,22 @@ var CtoxIndexedDbCollection = class {
     }
     return { success, error };
   }
+  /// V1.5 eviction hook. Hard-deletes documents from the primary store
+  /// (does NOT soft-delete via _deleted=true — the cache layer wants the
+  /// row gone, not tombstoned). Caller is responsible for never invoking
+  /// this on dirty docs; the sidecar enforces that.
+  async hardDeleteByIds(ids) {
+    if (!Array.isArray(ids) || !ids.length) return 0;
+    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
+    const store = tx.objectStore(DOCUMENT_STORE);
+    let removed = 0;
+    for (const id of ids) {
+      await idbRequest(store.delete([this.name, String(id)]));
+      removed += 1;
+    }
+    await idbTransactionDone(tx);
+    return removed;
+  }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const store = tx.objectStore(DOCUMENT_STORE);
@@ -1902,6 +1918,1196 @@ var CtoxSubject = class {
   }
 };
 
+// ../../apps/business-os/rxdb/src/chunk-decoder.mjs
+async function decodeChunk(chunk) {
+  if (!chunk || typeof chunk !== "object") {
+    throw new TypeError("chunk must be an object");
+  }
+  if (!chunk.compressed) {
+    return chunk.documents || [];
+  }
+  if (chunk.compressed !== "deflate") {
+    throw new Error(`unsupported chunk compression: ${chunk.compressed}`);
+  }
+  if (typeof chunk.compressedBase64 !== "string") {
+    throw new Error("compressed chunk missing compressedBase64");
+  }
+  const bytes = base64ToBytes(chunk.compressedBase64);
+  const json = await deflateInflate(bytes);
+  return JSON.parse(json);
+}
+function base64ToBytes(b64) {
+  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
+    const buf = Buffer.from(b64, "base64");
+    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+  }
+  const bin = globalThis.atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function deflateInflate(bytes) {
+  if (typeof globalThis.DecompressionStream === "function") {
+    try {
+      const stream = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream("deflate-raw"));
+      const buf = await new Response(stream).arrayBuffer();
+      return new TextDecoder().decode(buf);
+    } catch (err) {
+    }
+  }
+  const zlib = await import("node:zlib");
+  const inflated = zlib.inflateRawSync(Buffer.from(bytes));
+  return inflated.toString("utf8");
+}
+
+// ../../apps/business-os/rxdb/src/demand-loading-transport.mjs
+var ACK_RESPONSE = Object.freeze({ ack: true });
+function createDemandLoadingTransport({ getPeerId } = {}) {
+  if (typeof getPeerId !== "function") {
+    throw new TypeError("createDemandLoadingTransport requires getPeerId");
+  }
+  const queryCollectors = /* @__PURE__ */ new Map();
+  const fileCollectors = /* @__PURE__ */ new Map();
+  function routeQueryChunk(chunk) {
+    if (!chunk || !chunk.requestId) return;
+    const slot = queryCollectors.get(chunk.requestId);
+    if (!slot) return;
+    slot.chunks.push(chunk);
+    if (chunk.complete) {
+      queryCollectors.delete(chunk.requestId);
+      slot.resolve(slot.chunks);
+    }
+  }
+  function routeQueryError(err) {
+    if (!err || !err.requestId) return;
+    const slot = queryCollectors.get(err.requestId);
+    if (!slot) return;
+    queryCollectors.delete(err.requestId);
+    const e = new Error(`${err.code || "QUERY_ERROR"}: ${err.message || ""}`);
+    e.code = err.code;
+    e.retryable = Boolean(err.retryable);
+    slot.reject(e);
+  }
+  function routeFileChunk(chunk) {
+    if (!chunk || !chunk.requestId) return;
+    const slot = fileCollectors.get(chunk.requestId);
+    if (!slot) return;
+    slot.chunks.push(chunk);
+    if (chunk.complete) {
+      fileCollectors.delete(chunk.requestId);
+      slot.resolve(slot.chunks);
+    }
+  }
+  function routeFileError(err) {
+    if (!err || !err.requestId) return;
+    const slot = fileCollectors.get(err.requestId);
+    if (!slot) return;
+    fileCollectors.delete(err.requestId);
+    const e = new Error(`${err.code || "FILE_ERROR"}: ${err.message || ""}`);
+    e.code = err.code;
+    e.retryable = Boolean(err.retryable);
+    slot.reject(e);
+  }
+  const requestHandlers = {
+    "rxdb.query.chunk": async ({ params }) => {
+      routeQueryChunk(params?.[0]);
+      return ACK_RESPONSE;
+    },
+    "rxdb.query.error": async ({ params }) => {
+      routeQueryError(params?.[0]);
+      return ACK_RESPONSE;
+    },
+    "rxdb.file.chunk": async ({ params }) => {
+      routeFileChunk(params?.[0]);
+      return ACK_RESPONSE;
+    },
+    "rxdb.file.error": async ({ params }) => {
+      routeFileError(params?.[0]);
+      return ACK_RESPONSE;
+    }
+  };
+  let peer = null;
+  function attach(p) {
+    peer = p;
+  }
+  async function requestQueryFetch(envelope) {
+    if (!peer) throw new Error("demand transport has no peer attached");
+    const peerId = getPeerId();
+    if (!peerId) throw new Error("PEER_UNAVAILABLE");
+    const requestId = envelope.requestId;
+    const promise = new Promise((resolve, reject) => {
+      queryCollectors.set(requestId, { chunks: [], resolve, reject });
+    });
+    try {
+      await peer.request(peerId, CTOX_QUERY_RPC.fetch, [envelope]);
+    } catch (err) {
+      queryCollectors.delete(requestId);
+      throw err;
+    }
+    const chunks = await promise;
+    const documents = [];
+    let authoritativeRevision = null;
+    for (const c of chunks) {
+      const decoded = await decodeChunk(c);
+      for (const d of decoded) documents.push(d);
+      if (c.authoritativeRevision) authoritativeRevision = c.authoritativeRevision;
+    }
+    return { documents, authoritativeRevision };
+  }
+  async function requestQueryCancel({ requestId }) {
+    if (!peer || !requestId) return;
+    const peerId = getPeerId();
+    if (!peerId) return;
+    try {
+      await peer.request(peerId, CTOX_QUERY_RPC.cancel, [{ requestId, reason: "client-abort" }], 2e3);
+    } catch {
+    }
+    queryCollectors.delete(requestId);
+  }
+  async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
+    if (!peer) throw new Error("demand transport has no peer attached");
+    const peerId = getPeerId();
+    if (!peerId) throw new Error("PEER_UNAVAILABLE");
+    const promise = new Promise((resolve, reject) => {
+      fileCollectors.set(requestId, { chunks: [], resolve, reject });
+    });
+    try {
+      await peer.request(peerId, "rxdb.file.fetch", [{
+        requestId,
+        collectionName,
+        fileId,
+        range: range ?? null,
+        knownSequences: knownSequences ?? []
+      }]);
+    } catch (err) {
+      fileCollectors.delete(requestId);
+      throw err;
+    }
+    const chunks = await promise;
+    return chunks.map((c) => ({ sequence: c.sequence, bytesBase64: c.bytesBase64, hash: c.hash }));
+  }
+  function pendingQueryCount() {
+    return queryCollectors.size;
+  }
+  function pendingFileCount() {
+    return fileCollectors.size;
+  }
+  return {
+    requestHandlers,
+    attach,
+    requestQueryFetch,
+    requestQueryCancel,
+    requestFileFetch,
+    pendingQueryCount,
+    pendingFileCount
+  };
+}
+
+// ../../apps/business-os/rxdb/src/query-fingerprint.mjs
+var PROTOCOL_VERSION = "1.5";
+function canonicalizeQueryInput(input) {
+  if (!input || typeof input !== "object") {
+    throw new TypeError("query input must be an object");
+  }
+  const collection = String(input.collection || "");
+  if (!collection) throw new Error("collection is required");
+  const schemaVersion = Number.isFinite(Number(input.schemaVersion)) ? Number(input.schemaVersion) : 0;
+  return {
+    collection,
+    schemaVersion,
+    protocolVersion: PROTOCOL_VERSION,
+    selector: canonicalizeSelector(input.selector),
+    sort: canonicalizeSort(input.sort),
+    limit: normalizeOptionalNumber(input.limit),
+    skip: normalizeOptionalNumber(input.skip),
+    window: canonicalizeWindow(input.window)
+  };
+}
+function canonicalQueryJson(input) {
+  return canonicalJson(canonicalizeQueryInput(input));
+}
+async function queryFingerprint(input) {
+  return sha256Hex(canonicalQueryJson(input));
+}
+function canonicalizeSelector(selector) {
+  if (selector === void 0 || selector === null) return {};
+  if (typeof selector !== "object" || Array.isArray(selector)) {
+    throw new TypeError("selector must be a plain object");
+  }
+  return canonicalizeSelectorValue(selector);
+}
+function canonicalizeSelectorValue(value) {
+  if (value === null) return null;
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeSelectorValue);
+  }
+  if (typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) {
+      const v = canonicalizeSelectorValue(value[key]);
+      if (key === "$in" || key === "$nin") {
+        out[key] = sortAndDedupeArray(v);
+      } else {
+        out[key] = v;
+      }
+    }
+    return out;
+  }
+  return value;
+}
+function sortAndDedupeArray(value) {
+  if (!Array.isArray(value)) return value;
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const item of value) {
+    const key = canonicalJson(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  out.sort((a, b) => {
+    const sa = canonicalJson(a);
+    const sb = canonicalJson(b);
+    return sa < sb ? -1 : sa > sb ? 1 : 0;
+  });
+  return out;
+}
+function canonicalizeSort(sort) {
+  if (sort === void 0 || sort === null) return [];
+  if (!Array.isArray(sort)) {
+    throw new TypeError("sort must be an array of single-key direction objects");
+  }
+  return sort.map((entry) => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      throw new TypeError("sort entries must be single-key objects");
+    }
+    const keys = Object.keys(entry);
+    if (keys.length !== 1) {
+      throw new TypeError("sort entries must have exactly one key");
+    }
+    const key = keys[0];
+    const direction = normalizeSortDirection(entry[key]);
+    return { [key]: direction };
+  });
+}
+function normalizeSortDirection(direction) {
+  const raw = typeof direction === "string" ? direction.toLowerCase() : direction;
+  if (raw === "desc" || raw === -1 || raw === "-1") return "desc";
+  if (raw === "asc" || raw === 1 || raw === "1") return "asc";
+  throw new TypeError(`invalid sort direction: ${direction}`);
+}
+function normalizeOptionalNumber(value) {
+  if (value === void 0 || value === null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new TypeError("optional number must be a non-negative finite value");
+  }
+  return Math.floor(n);
+}
+function canonicalizeWindow(window) {
+  if (window === void 0 || window === null) return null;
+  if (typeof window !== "object") {
+    throw new TypeError("window must be an object");
+  }
+  return {
+    offset: normalizeOptionalNumber(window.offset) ?? 0,
+    limit: normalizeOptionalNumber(window.limit) ?? 200
+  };
+}
+
+// ../../apps/business-os/rxdb/src/query-demand-loader.mjs
+var DEFAULT_WINDOW_LIMIT = 200;
+function createQueryDemandLoader({
+  storageCollection,
+  sidecar,
+  collectionName,
+  schemaVersion,
+  requestQueryFetch,
+  requestCancel = null,
+  multiTabBroker = null,
+  status = null,
+  clock = Date.now
+}) {
+  if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
+  if (!sidecar) throw new TypeError("demand loader requires sidecar");
+  if (!collectionName) throw new TypeError("demand loader requires collectionName");
+  if (typeof requestQueryFetch !== "function") {
+    throw new TypeError("demand loader requires requestQueryFetch");
+  }
+  const inflightByFingerprint = /* @__PURE__ */ new Map();
+  return {
+    async resolveQuery(query, { window } = {}) {
+      const normalizedWindow = normalizeWindow(window, query);
+      const fingerprintInput = {
+        collection: collectionName,
+        schemaVersion: schemaVersion ?? 0,
+        selector: query?.selector ?? {},
+        sort: normalizeSort(query?.sort),
+        limit: query?.limit,
+        skip: query?.skip,
+        window: normalizedWindow
+      };
+      const fingerprint = await queryFingerprint(fingerprintInput);
+      const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
+      const cached = await sidecar.getQueryWindow(sidecarKey);
+      if (cached && cached.complete) {
+        if (query?.requireRevision && cached.authoritativeRevision !== query.requireRevision) {
+        } else {
+          await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        }
+      }
+      const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+      if (inflightByFingerprint.has(dedupKey)) {
+        bumpStatus(status, "queryFetchDedupHitCount");
+        return inflightByFingerprint.get(dedupKey);
+      }
+      bumpStatus(status, "queryFetchInFlight", 1);
+      v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+      const job = (async () => {
+        const startedAt = clock();
+        try {
+          const result = await requestQueryFetch({
+            requestId: `${dedupKey}|${startedAt}`,
+            databaseName: storageCollection?.databaseName ?? null,
+            collectionName,
+            schemaVersion: schemaVersion ?? 0,
+            queryFingerprint: fingerprint,
+            query: {
+              selector: query?.selector ?? {},
+              sort: normalizeSort(query?.sort),
+              limit: query?.limit,
+              skip: query?.skip
+            },
+            window: normalizedWindow
+          });
+          await materializeChunks(storageCollection, result.documents || []);
+          const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+          await sidecar.upsertQueryWindow({
+            collection: collectionName,
+            queryFingerprint: fingerprint,
+            offset: normalizedWindow.offset,
+            limit: normalizedWindow.limit,
+            documentIds,
+            complete: true,
+            authoritativeRevision: result.authoritativeRevision ?? null
+          });
+          await sidecar.touchDocuments(collectionName, documentIds, {
+            estimatedBytes: estimateBytes(result.documents || [])
+          });
+          bumpStatus(status, "queryFetchSuccessCount");
+          if (status) status.lastQueryFetchMs = clock() - startedAt;
+          v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
+          return readLocalDocuments(storageCollection, query, normalizedWindow);
+        } catch (error) {
+          bumpStatus(status, "queryFetchErrorCount");
+          v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+          throw error;
+        } finally {
+          bumpStatus(status, "queryFetchInFlight", -1);
+          inflightByFingerprint.delete(dedupKey);
+        }
+      })();
+      inflightByFingerprint.set(dedupKey, job);
+      return job;
+    },
+    inflightSize() {
+      return inflightByFingerprint.size;
+    },
+    // Wave 7: invalidation hook. When the replication layer reports that a
+    // document in `collectionName` was changed remotely, call this with the
+    // changed document ids — any cached query window that references those
+    // ids is marked incomplete so the next exec triggers a remote refresh.
+    async invalidateDocumentChange(changedDocumentIds = []) {
+      if (!changedDocumentIds.length) return 0;
+      const all = await sidecar.backend.scanQueryWindows();
+      const ids = new Set(changedDocumentIds);
+      let invalidated = 0;
+      for (const window of all) {
+        if (window.collection !== collectionName) continue;
+        if (window.documentIds.some((id) => ids.has(id))) {
+          await sidecar.invalidateQueryWindow([
+            window.collection,
+            window.queryFingerprint,
+            window.offset,
+            window.limit
+          ]);
+          invalidated += 1;
+        }
+      }
+      return invalidated;
+    },
+    // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
+    // fetches and removes any partially-materialized documents from the
+    // primary store so the next fetch starts from a clean slate (no orphans).
+    async abortAllInFlight(reason = "reconnect") {
+      const cancelled = [];
+      for (const [dedupKey, job] of inflightByFingerprint.entries()) {
+        const [, fingerprint] = dedupKey.split("|");
+        cancelled.push({ dedupKey, fingerprint });
+        if (typeof requestCancel === "function") {
+          try {
+            await requestCancel({ requestId: dedupKey, fingerprint, reason });
+          } catch {
+          }
+        }
+        try {
+          job.catch?.(() => {
+          });
+        } catch {
+        }
+      }
+      inflightByFingerprint.clear();
+      try {
+        const allWindows = await sidecar.backend.scanQueryWindows();
+        for (const { fingerprint } of cancelled) {
+          const partial = allWindows.filter(
+            (w) => w.queryFingerprint === fingerprint && !w.complete
+          );
+          for (const window of partial) {
+            const ids = window.documentIds || [];
+            if (ids.length && typeof storageCollection.bulkWrite === "function") {
+              const tombstones = ids.map((id) => ({ id, _deleted: true }));
+              try {
+                await storageCollection.bulkWrite(tombstones);
+              } catch {
+              }
+            }
+            await sidecar.backend.deleteQueryWindow([
+              window.collection,
+              window.queryFingerprint,
+              window.offset,
+              window.limit
+            ]);
+          }
+        }
+      } catch {
+      }
+    },
+    // Wave 7: multi-tab dedup. If a `multiTabBroker` is provided, it is
+    // consulted before kicking off a remote fetch; followers wait for the
+    // leader's materialization signal instead of fetching themselves.
+    async leaderClaim(windowKey) {
+      if (!multiTabBroker?.claim) return true;
+      return multiTabBroker.claim(windowKey);
+    },
+    async leaderRelease(windowKey) {
+      if (!multiTabBroker?.release) return;
+      await multiTabBroker.release(windowKey);
+    }
+  };
+}
+function normalizeWindow(window, query) {
+  if (window && typeof window === "object") {
+    return {
+      offset: Math.max(0, Math.floor(Number(window.offset) || 0)),
+      limit: Math.max(1, Math.floor(Number(window.limit) || DEFAULT_WINDOW_LIMIT))
+    };
+  }
+  return {
+    offset: Math.max(0, Math.floor(Number(query?.skip) || 0)),
+    limit: Math.max(1, Math.floor(Number(query?.limit) || DEFAULT_WINDOW_LIMIT))
+  };
+}
+function normalizeSort(sort) {
+  if (!Array.isArray(sort)) return [];
+  return sort.map((entry) => {
+    if (!entry || typeof entry !== "object") return entry;
+    const keys = Object.keys(entry);
+    if (keys.length !== 1) return entry;
+    const key = keys[0];
+    const direction = entry[key];
+    return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
+  });
+}
+async function readLocalDocuments(storageCollection, query, window) {
+  if (typeof storageCollection.queryDocuments === "function") {
+    return storageCollection.queryDocuments(
+      { ...query, skip: window.offset, limit: window.limit },
+      {
+        matchesSelector: defaultMatcher,
+        sortDocuments: defaultSorter
+      }
+    );
+  }
+  const docs = await storageCollection.allDocuments();
+  return applyQueryToDocs(docs, query, window);
+}
+async function materializeChunks(storageCollection, documents) {
+  if (!documents.length) return;
+  await storageCollection.bulkWrite(documents);
+}
+async function touchSidecarAccess(sidecar, collectionName, documentIds) {
+  if (!documentIds?.length) return;
+  await sidecar.touchDocuments(collectionName, documentIds);
+}
+function extractId(doc) {
+  if (!doc || typeof doc !== "object") return null;
+  return doc.id || doc._id || null;
+}
+function estimateBytes(documents) {
+  try {
+    return JSON.stringify(documents).length;
+  } catch {
+    return documents.length * 256;
+  }
+}
+function bumpStatus(status, field, delta = 1) {
+  if (!status) return;
+  if (typeof status[field] !== "number") status[field] = 0;
+  status[field] += delta;
+}
+var v15LogSink = null;
+function setV15LogSink(fn) {
+  v15LogSink = typeof fn === "function" ? fn : null;
+}
+function v15Log(event, fields) {
+  if (v15LogSink) {
+    try {
+      v15LogSink(event, fields);
+    } catch {
+    }
+    return;
+  }
+  if (globalThis?.console?.debug) {
+    globalThis.console.debug("[V1.5]", event, fields);
+  }
+}
+function defaultMatcher(doc, selector = {}) {
+  for (const [key, expected] of Object.entries(selector)) {
+    if (key.startsWith("$")) return true;
+    const actual = doc?.[key];
+    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
+      if ("$eq" in expected && actual !== expected.$eq) return false;
+      if ("$ne" in expected && actual === expected.$ne) return false;
+      if ("$in" in expected && !expected.$in.includes(actual)) return false;
+      if ("$gte" in expected && !(actual >= expected.$gte)) return false;
+      if ("$lte" in expected && !(actual <= expected.$lte)) return false;
+      continue;
+    }
+    if (actual !== expected) return false;
+  }
+  return true;
+}
+function defaultSorter(docs, sort = []) {
+  if (!sort?.length) return docs;
+  return docs.slice().sort((a, b) => {
+    for (const entry of sort) {
+      const [key, direction] = Object.entries(entry)[0] || [];
+      const factor = direction === "desc" ? -1 : 1;
+      const av = a?.[key];
+      const bv = b?.[key];
+      if (av < bv) return -1 * factor;
+      if (av > bv) return 1 * factor;
+    }
+    return 0;
+  });
+}
+function applyQueryToDocs(docs, query, window) {
+  let filtered = (docs || []).filter((doc) => defaultMatcher(doc, query?.selector || {}));
+  filtered = defaultSorter(filtered, normalizeSort(query?.sort));
+  if (window.offset > 0) filtered = filtered.slice(window.offset);
+  if (Number.isFinite(window.limit)) filtered = filtered.slice(0, window.limit);
+  return filtered;
+}
+
+// ../../apps/business-os/rxdb/src/file-demand-loader.mjs
+var FILE_CHUNK_PRESENCE_KEY = (collection, fileId) => `${collection}|${fileId}`;
+function createFileDemandLoader({
+  collectionName,
+  storageCollection,
+  sidecarBackend,
+  requestFileFetch,
+  status = null,
+  clock = Date.now
+}) {
+  if (!collectionName) throw new TypeError("file loader requires collectionName");
+  if (!storageCollection) throw new TypeError("file loader requires storageCollection");
+  if (!sidecarBackend) throw new TypeError("file loader requires sidecarBackend");
+  if (typeof requestFileFetch !== "function") {
+    throw new TypeError("file loader requires requestFileFetch");
+  }
+  const inflight = /* @__PURE__ */ new Map();
+  return {
+    async fetchFile(fileId, { range = null } = {}) {
+      if (inflight.has(fileId)) {
+        bump(status, "fileStreamDedupHits");
+        return inflight.get(fileId);
+      }
+      const job = (async () => {
+        const startedAt = clock();
+        bump(status, "activeFileStreams", 1);
+        try {
+          const presence = await getPresence(sidecarBackend, collectionName, fileId);
+          const chunks = await requestFileFetch({
+            requestId: `file-${fileId}-${startedAt}`,
+            collectionName,
+            fileId,
+            range,
+            knownSequences: presence?.presentSequences || []
+          });
+          if (!Array.isArray(chunks)) {
+            throw new TypeError("requestFileFetch must return an array of chunks");
+          }
+          for (const chunk of chunks) {
+            if (!chunk || typeof chunk !== "object") continue;
+            await storageCollection.bulkWrite([
+              {
+                id: `${fileId}-${chunk.sequence}`,
+                file_id: fileId,
+                sequence: chunk.sequence,
+                bytes_base64: chunk.bytesBase64,
+                hash: chunk.hash || null
+              }
+            ]);
+            bump(status, "fileBytesReceived", chunk.bytesBase64?.length || 0);
+          }
+          const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
+          const expectedTotal = Math.max(
+            ...sequences,
+            presence?.expectedChunkCount || 0
+          ) + 1;
+          await sidecarBackend.putDocumentAccess({
+            collection: collectionName,
+            id: `${fileId}-presence`,
+            lastAccessedAt: clock(),
+            pinReason: "file-chunks",
+            dirty: false,
+            estimatedBytes: 0
+          });
+          await putPresence(sidecarBackend, collectionName, fileId, {
+            collection: collectionName,
+            fileId,
+            expectedChunkCount: expectedTotal,
+            presentSequences: dedupeSorted([
+              ...presence?.presentSequences || [],
+              ...sequences
+            ]),
+            lastVerifiedAt: clock()
+          });
+          if (status) status.lastFileFetchMs = clock() - startedAt;
+          return chunks;
+        } catch (error) {
+          bump(status, "fileStreamErrors");
+          throw error;
+        } finally {
+          bump(status, "activeFileStreams", -1);
+          inflight.delete(fileId);
+        }
+      })();
+      inflight.set(fileId, job);
+      return job;
+    },
+    inflightSize() {
+      return inflight.size;
+    }
+  };
+}
+async function getPresence(backend, collection, fileId) {
+  const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);
+  if (!record || !record.fileChunkPresence) return null;
+  return record.fileChunkPresence;
+}
+async function putPresence(backend, collection, fileId, presence) {
+  await backend.putDocumentAccess({
+    collection,
+    id: `${fileId}-presence`,
+    lastAccessedAt: presence.lastVerifiedAt,
+    pinReason: "file-chunks",
+    dirty: false,
+    estimatedBytes: 0,
+    fileChunkPresence: presence
+  });
+}
+function bump(status, field, delta = 1) {
+  if (!status) return;
+  if (typeof status[field] !== "number") status[field] = 0;
+  status[field] += delta;
+}
+function dedupeSorted(values) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  const out = [];
+  for (const v of sorted) {
+    if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
+  }
+  return out;
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-backend-memory.mjs
+function createMemoryMetaBackend() {
+  const queryWindows = /* @__PURE__ */ new Map();
+  const documentAccess = /* @__PURE__ */ new Map();
+  const cacheStats = /* @__PURE__ */ new Map();
+  return {
+    name: "memory",
+    async putQueryWindow(record) {
+      const key = queryWindowKey(record);
+      queryWindows.set(key, { ...record });
+    },
+    async getQueryWindow(key) {
+      const entry = queryWindows.get(stringKey(key));
+      return entry ? { ...entry } : null;
+    },
+    async deleteQueryWindow(key) {
+      queryWindows.delete(stringKey(key));
+    },
+    async scanQueryWindows() {
+      return Array.from(queryWindows.values(), (record) => ({ ...record }));
+    },
+    async putDocumentAccess(record) {
+      documentAccess.set(documentAccessKey(record), { ...record });
+    },
+    async getDocumentAccess(collection, id) {
+      const entry = documentAccess.get(`${collection}|${id}`);
+      return entry ? { ...entry } : null;
+    },
+    async deleteDocumentAccess(collection, id) {
+      documentAccess.delete(`${collection}|${id}`);
+    },
+    async scanDocumentAccess() {
+      return Array.from(documentAccess.values(), (record) => ({ ...record }));
+    },
+    async putCacheStats(record) {
+      cacheStats.set(record.databaseName, { ...record });
+    },
+    async getCacheStats(databaseName) {
+      const entry = cacheStats.get(databaseName);
+      return entry ? { ...entry } : null;
+    },
+    async clear() {
+      queryWindows.clear();
+      documentAccess.clear();
+      cacheStats.clear();
+    },
+    async close() {
+    }
+  };
+}
+function queryWindowKey(record) {
+  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
+}
+function documentAccessKey(record) {
+  return `${record.collection}|${record.id}`;
+}
+function stringKey(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-storage.mjs
+var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
+var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
+var PIN_RECENT_READ = "recently-read";
+var QueryMetaStorage = class {
+  constructor(backend, { databaseName, clock = Date.now, primaryDelete = null } = {}) {
+    if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
+    if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
+    this.backend = backend;
+    this.databaseName = databaseName;
+    this.clock = clock;
+    this.primaryDelete = typeof primaryDelete === "function" ? primaryDelete : null;
+  }
+  setPrimaryDelete(fn) {
+    this.primaryDelete = typeof fn === "function" ? fn : null;
+  }
+  async getQueryWindow(key) {
+    const record = await this.backend.getQueryWindow(stringKey2(key));
+    if (!record) return null;
+    record.lastAccessedAt = this.clock();
+    await this.backend.putQueryWindow(record);
+    return record;
+  }
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision }) {
+    const now = this.clock();
+    const existing = await this.backend.getQueryWindow(
+      [collection, queryFingerprint2, offset, limit].join("|")
+    );
+    const record = {
+      collection,
+      queryFingerprint: queryFingerprint2,
+      offset,
+      limit,
+      documentIds: [...documentIds],
+      complete: Boolean(complete),
+      authoritativeRevision: authoritativeRevision ?? null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      lastAccessedAt: now
+    };
+    await this.backend.putQueryWindow(record);
+    return record;
+  }
+  async invalidateQueryWindow(key) {
+    const stringified = stringKey2(key);
+    const existing = await this.backend.getQueryWindow(stringified);
+    if (!existing) return;
+    existing.complete = false;
+    existing.updatedAt = this.clock();
+    await this.backend.putQueryWindow(existing);
+  }
+  async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
+    const now = this.clock();
+    for (const id of ids) {
+      const previous = await this.backend.getDocumentAccess(collection, id) || {};
+      await this.backend.putDocumentAccess({
+        collection,
+        id,
+        lastAccessedAt: now,
+        pinReason: previous.dirty ? "dirty" : pinReason,
+        dirty: Boolean(previous.dirty),
+        estimatedBytes: estimatedBytes || previous.estimatedBytes || 0
+      });
+    }
+  }
+  async markDirty(collection, id, dirty) {
+    const previous = await this.backend.getDocumentAccess(collection, id) || {
+      collection,
+      id,
+      lastAccessedAt: this.clock(),
+      estimatedBytes: 0
+    };
+    await this.backend.putDocumentAccess({
+      ...previous,
+      dirty: Boolean(dirty),
+      pinReason: dirty ? "dirty" : previous.pinReason ?? null
+    });
+  }
+  async getDocumentAccess(collection, id) {
+    const record = await this.backend.getDocumentAccess(collection, id);
+    return record ? { ...record } : null;
+  }
+  async evictDocuments(ids) {
+    const now = this.clock();
+    let removed = 0;
+    for (const { collection, id } of ids) {
+      const record = await this.backend.getDocumentAccess(collection, id);
+      if (!record) continue;
+      if (record.dirty) continue;
+      if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
+        continue;
+      }
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(collection, id);
+        } catch {
+          continue;
+        }
+      }
+      await this.backend.deleteDocumentAccess(collection, id);
+      removed += 1;
+    }
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
+    await this.backend.putCacheStats(stats);
+    return removed;
+  }
+  async estimateWorkingSetBytes() {
+    const docs = await this.backend.scanDocumentAccess();
+    return docs.reduce((sum, record) => sum + (record.estimatedBytes || 0), 0);
+  }
+  async setBudgetBytes(budgetBytes) {
+    const stats = await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+    stats.budgetBytes = Number(budgetBytes) || 0;
+    await this.backend.putCacheStats(stats);
+  }
+  async getCacheStats() {
+    return await this.backend.getCacheStats(this.databaseName) || {
+      databaseName: this.databaseName,
+      estimatedBytes: 0,
+      budgetBytes: 0,
+      lastEvictionAt: null
+    };
+  }
+  async clear() {
+    await this.backend.clear();
+  }
+  async close() {
+    await this.backend.close();
+  }
+  /// Evicts LRU document access entries until the working set fits the budget.
+  /// Skips dirty docs and unexpired recently-read pins. Returns the number of
+  /// document records removed.
+  async runEvictionIfOverBudget() {
+    const stats = await this.getCacheStats();
+    if (!stats.budgetBytes || stats.estimatedBytes <= stats.budgetBytes) {
+      return 0;
+    }
+    const all = await this.backend.scanDocumentAccess();
+    const now = this.clock();
+    const candidates = all.filter((record) => !record.dirty).filter((record) => {
+      if (record.pinReason !== "recently-read") return true;
+      return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
+    }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+    let removed = 0;
+    let remainingBytes = stats.estimatedBytes;
+    for (const candidate of candidates) {
+      if (remainingBytes <= stats.budgetBytes) break;
+      if (this.primaryDelete) {
+        try {
+          await this.primaryDelete(candidate.collection, candidate.id);
+        } catch {
+          continue;
+        }
+      }
+      await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
+      remainingBytes -= candidate.estimatedBytes || 0;
+      removed += 1;
+    }
+    if (removed > 0) {
+      const updated = { ...stats, estimatedBytes: remainingBytes, lastEvictionAt: now };
+      await this.backend.putCacheStats(updated);
+    }
+    return removed;
+  }
+  async recordEstimatedBytes(bytes) {
+    const stats = await this.getCacheStats();
+    stats.estimatedBytes = Math.max(0, Number(bytes) || 0);
+    await this.backend.putCacheStats(stats);
+  }
+  /// Wraps an IDB write attempt in a quota-recovery loop. On
+  /// `QuotaExceededError` we run eviction once and retry; on second failure
+  /// the error propagates. Use this from production paths that materialize
+  /// fetched chunks into the primary store.
+  async withQuotaRecovery(writeFn) {
+    try {
+      return await writeFn();
+    } catch (err) {
+      if (!isQuotaExceeded(err)) throw err;
+      const stats = await this.getCacheStats();
+      const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
+      await this.setBudgetBytes(tighten);
+      await this.runEvictionIfOverBudget();
+      try {
+        return await writeFn();
+      } catch (retryErr) {
+        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
+        throw retryErr;
+      }
+    }
+  }
+  /// Starts a periodic eviction scheduler. The handle returned has a
+  /// `stop()` method. Idempotent: calling twice with the same handle is
+  /// safe. Default interval: 30s.
+  startEvictionScheduler({ intervalMs = 3e4 } = {}) {
+    if (this._evictionTimer) return { stop: () => this.stopEvictionScheduler() };
+    this._evictionTimer = setInterval(() => {
+      this.runEvictionIfOverBudget().catch(() => {
+      });
+    }, intervalMs);
+    if (typeof this._evictionTimer.unref === "function") {
+      this._evictionTimer.unref();
+    }
+    return { stop: () => this.stopEvictionScheduler() };
+  }
+  stopEvictionScheduler() {
+    if (this._evictionTimer) {
+      clearInterval(this._evictionTimer);
+      this._evictionTimer = null;
+    }
+  }
+  /// Orphan-window GC: drop sidecar query-window entries that haven't been
+  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
+  /// by other windows remain. This keeps the sidecar from growing monotonically
+  /// as one-off queries accumulate.
+  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
+    const now = this.clock();
+    const all = await this.backend.scanQueryWindows();
+    let removed = 0;
+    for (const window of all) {
+      const age = now - (window.lastAccessedAt ?? window.updatedAt ?? window.createdAt ?? now);
+      if (age >= maxAgeMs) {
+        await this.backend.deleteQueryWindow([
+          window.collection,
+          window.queryFingerprint,
+          window.offset,
+          window.limit
+        ]);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+};
+function isQuotaExceeded(err) {
+  if (!err) return false;
+  if (err.name === "QuotaExceededError") return true;
+  if (typeof err.code === "number" && err.code === 22) return true;
+  const msg = String(err.message || "").toLowerCase();
+  return msg.includes("quota") || msg.includes("storage full");
+}
+function createSidecarWithMemoryBackend({ databaseName = SIDECAR_DATABASE_NAME, clock = Date.now } = {}) {
+  return new QueryMetaStorage(createMemoryMetaBackend(), { databaseName, clock });
+}
+function stringKey2(key) {
+  if (Array.isArray(key)) return key.join("|");
+  if (typeof key === "string") return key;
+  throw new TypeError("query window key must be array or string");
+}
+
+// ../../apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
+var SIDECAR_DB_VERSION = 1;
+var STORE_QUERY_WINDOWS = "queryWindows";
+var STORE_DOCUMENT_ACCESS = "documentAccess";
+var STORE_CACHE_STATS = "cacheStats";
+var OPEN_TIMEOUT_MS = 4e3;
+function createIndexedDbMetaBackend({ databaseName }) {
+  if (!databaseName) throw new TypeError("createIndexedDbMetaBackend requires databaseName");
+  let dbPromise = null;
+  const open = () => {
+    if (!dbPromise) dbPromise = openSidecarDatabase(databaseName);
+    return dbPromise;
+  };
+  return {
+    name: "indexeddb",
+    async putQueryWindow(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
+      );
+    },
+    async getQueryWindow(key) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).get(parseQueryWindowKey(key))
+      );
+    },
+    async deleteQueryWindow(key) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
+      );
+    },
+    async scanQueryWindows() {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
+      );
+    },
+    async putDocumentAccess(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
+      );
+    },
+    async getDocumentAccess(collection, id) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).get([collection, id])
+      );
+    },
+    async deleteDocumentAccess(collection, id) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).delete([collection, id])
+      );
+    },
+    async scanDocumentAccess() {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).getAll()
+      );
+    },
+    async putCacheStats(record) {
+      const db = await open();
+      await runRequest(
+        db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
+      );
+    },
+    async getCacheStats(databaseName2) {
+      const db = await open();
+      return runRequest(
+        db.transaction(STORE_CACHE_STATS, "readonly").objectStore(STORE_CACHE_STATS).get(databaseName2)
+      );
+    },
+    async clear() {
+      const db = await open();
+      for (const name of [STORE_QUERY_WINDOWS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
+        await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
+      }
+    },
+    async close() {
+      if (dbPromise) {
+        const db = await dbPromise;
+        db.close();
+        dbPromise = null;
+      }
+    }
+  };
+}
+function openSidecarDatabase(databaseName) {
+  if (!globalThis.indexedDB) {
+    throw new Error("indexedDB is required for sidecar metadata storage");
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
+    }, OPEN_TIMEOUT_MS);
+    const request = globalThis.indexedDB.open(databaseName, SIDECAR_DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STORE_QUERY_WINDOWS)) {
+        const store = db.createObjectStore(STORE_QUERY_WINDOWS, {
+          keyPath: ["collection", "queryFingerprint", "offset", "limit"]
+        });
+        store.createIndex("collection", "collection", { unique: false });
+        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
+          unique: false
+        });
+      }
+      if (!db.objectStoreNames.contains(STORE_DOCUMENT_ACCESS)) {
+        const store = db.createObjectStore(STORE_DOCUMENT_ACCESS, {
+          keyPath: ["collection", "id"]
+        });
+        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
+          unique: false
+        });
+      }
+      if (!db.objectStoreNames.contains(STORE_CACHE_STATS)) {
+        db.createObjectStore(STORE_CACHE_STATS, { keyPath: "databaseName" });
+      }
+    };
+    request.onsuccess = () => {
+      clearTimeout(timer);
+      resolve(request.result);
+    };
+    request.onerror = () => {
+      clearTimeout(timer);
+      reject(request.error || new Error(`failed to open sidecar ${databaseName}`));
+    };
+    request.onblocked = () => {
+      clearTimeout(timer);
+      reject(new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
+    };
+  });
+}
+function parseQueryWindowKey(key) {
+  if (Array.isArray(key)) return key;
+  if (typeof key === "string") {
+    const parts = key.split("|");
+    if (parts.length !== 4) throw new TypeError(`invalid query window key: ${key}`);
+    const [collection, fingerprint, offset, limit] = parts;
+    return [collection, fingerprint, Number(offset), Number(limit)];
+  }
+  throw new TypeError("query window key must be array or string");
+}
+function runRequest(request) {
+  return new Promise((resolve, reject) => {
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
 // ../../apps/business-os/rxdb/src/replication-webrtc.mjs
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
@@ -1966,6 +3172,11 @@ var CtoxWebRtcReplicationState = class {
     this.pullInProgress = false;
     this.pushInProgress = false;
     this.peerOpenQueue = Promise.resolve();
+    this.activeRemotePeerId = null;
+    this.demandTransport = createDemandLoadingTransport({
+      getPeerId: () => this.activeRemotePeerId
+    });
+    this.demandLoaderActive = false;
   }
   async start(connectionHandlerCreator) {
     const schemaHashValue = await this.collection.schema.hash();
@@ -1993,9 +3204,11 @@ var CtoxWebRtcReplicationState = class {
       },
       requestHandlers: {
         masterChangesSince: async ({ peerId, params }) => this.masterChangesSince(params, peerId),
-        masterWrite: async ({ peerId, params }) => this.masterWrite(params, peerId)
+        masterWrite: async ({ peerId, params }) => this.masterWrite(params, peerId),
+        ...this.demandTransport.requestHandlers
       }
     });
+    this.demandTransport.attach(this.peer);
     this.peer.on("error", (event) => this.error$.next(event.detail || event));
     this.peer.on("transport-status", (event) => {
       this.transportStatus$.next(this.decorateTransportStatus(event.detail || event));
@@ -2051,10 +3264,19 @@ var CtoxWebRtcReplicationState = class {
     await this.awaitRemoteMasterReady(peerId);
     this.pruneReplacedNativePeers(peerId, normalizedRemoteProtocol);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
+    this.activeRemotePeerId = peerId;
+    if (queryFetchCapable && !this.demandLoaderActive) {
+      try {
+        await this.enableDemandLoading();
+      } catch (error) {
+        this.error$.next(error);
+      }
+    }
     this.ctox?.onPeerCapabilityNegotiated?.({
       peerId,
       queryFetchCapable,
-      capabilities: normalizedRemoteProtocol?.capabilities || []
+      capabilities: normalizedRemoteProtocol?.capabilities || [],
+      demandLoaderActive: this.demandLoaderActive
     });
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     peerStates.set(peerId, {
@@ -2214,7 +3436,70 @@ var CtoxWebRtcReplicationState = class {
       clearInterval(this.periodicPushTimer);
       this.periodicPushTimer = null;
     }
+    try {
+      this.demandLoader?.abortAllInFlight?.("replication-cancel");
+    } catch {
+    }
+    try {
+      this.demandSidecar?.stopEvictionScheduler?.();
+    } catch {
+    }
+    try {
+      await this.demandSidecar?.close?.();
+    } catch {
+    }
     this.peer?.close?.();
+  }
+  /// V1.5 production wiring: build the sidecar + query demand loader and
+  /// attach them to the underlying collection so that `find().exec()` and
+  /// observable queries flow through the on-demand pipeline. Idempotent.
+  async enableDemandLoading({
+    databaseName,
+    indexedDbAvailable = typeof globalThis.indexedDB === "object" && globalThis.indexedDB
+  } = {}) {
+    if (this.demandLoaderActive) return this.demandLoader;
+    const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
+    const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
+    const primaryDelete = async (collection, id) => {
+      if (collection !== this.collection.name) return;
+      if (typeof this.collection.storageCollection.hardDeleteByIds === "function") {
+        await this.collection.storageCollection.hardDeleteByIds([id]);
+      }
+    };
+    this.demandSidecar = new QueryMetaStorage(backend, {
+      databaseName: dbName,
+      primaryDelete
+    });
+    try {
+      this.demandSidecar.startEvictionScheduler({ intervalMs: 3e4 });
+    } catch {
+    }
+    this.demandLoader = createQueryDemandLoader({
+      storageCollection: this.collection.storageCollection,
+      sidecar: this.demandSidecar,
+      collectionName: this.collection.name,
+      schemaVersion: this.collection.schema?.version || 0,
+      requestQueryFetch: (envelope) => this.demandTransport.requestQueryFetch(envelope),
+      requestCancel: ({ requestId }) => this.demandTransport.requestQueryCancel({ requestId }),
+      status: null
+    });
+    if (typeof this.collection.setDemandLoader === "function") {
+      this.collection.setDemandLoader(this.demandLoader);
+    }
+    this.demandFileLoader = createFileDemandLoader({
+      collectionName: this.collection.name,
+      storageCollection: this.collection.storageCollection,
+      sidecarBackend: backend,
+      requestFileFetch: ({ requestId, fileId, range, knownSequences }) => this.demandTransport.requestFileFetch({
+        requestId,
+        fileId,
+        range,
+        knownSequences,
+        collectionName: this.collection.name
+      })
+    });
+    this.demandLoaderActive = true;
+    return this.demandLoader;
   }
   resolveInitialReplication() {
     this.initialReplicationDeferred?.resolve?.(true);
@@ -2525,7 +3810,7 @@ var CtoxRxCollection = class {
       collection: this.name,
       indexed: false,
       selectorFields: Object.keys(normalized.selector || {}),
-      sortFields: normalizeSort(normalized.sort).map((entry) => Object.keys(entry)[0]).filter(Boolean),
+      sortFields: normalizeSort2(normalized.sort).map((entry) => Object.keys(entry)[0]).filter(Boolean),
       selectedIndex: null
     };
   }
@@ -2605,7 +3890,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
     return this._clone({ selector });
   }
   sort(sort = []) {
-    return this._clone({ sort: normalizeSort(sort) });
+    return this._clone({ sort: normalizeSort2(sort) });
   }
   limit(limit) {
     return this._clone({ limit: normalizePositiveInteger(limit, "limit") });
@@ -2729,7 +4014,7 @@ function normalizeQuery(query, primaryPath) {
   }
   return {
     selector: query?.selector || {},
-    sort: normalizeSort(query?.sort),
+    sort: normalizeSort2(query?.sort),
     limit: Number.isFinite(Number(query?.limit)) ? Number(query.limit) : void 0,
     skip: Number.isFinite(Number(query?.skip)) ? Math.max(0, Number(query.skip)) : void 0
   };
@@ -2782,7 +4067,7 @@ function sortDocuments(docs, sort = []) {
     return 0;
   });
 }
-function normalizeSort(sort = []) {
+function normalizeSort2(sort = []) {
   if (!sort) return [];
   if (typeof sort === "string") return [{ [sort]: "asc" }];
   if (!Array.isArray(sort)) return [];
@@ -2791,10 +4076,10 @@ function normalizeSort(sort = []) {
     if (!entry || typeof entry !== "object") return {};
     const [key, direction] = Object.entries(entry)[0] || [];
     if (!key) return {};
-    return { [key]: normalizeSortDirection(direction) };
+    return { [key]: normalizeSortDirection2(direction) };
   }).filter((entry) => Object.keys(entry).length);
 }
-function normalizeSortDirection(direction) {
+function normalizeSortDirection2(direction) {
   if (direction === -1 || direction === "desc" || direction === "DESC") return "desc";
   return "asc";
 }
@@ -2868,7 +4153,7 @@ var ctoxRxdbTestInternals = {
   matchesSelector,
   normalizeDoc,
   normalizeQuery,
-  normalizeSort,
+  normalizeSort: normalizeSort2,
   sortDocuments
 };
 
@@ -2942,871 +4227,6 @@ function snapshotV1_5Status(state) {
     snapshot[field] = state?.[field] ?? null;
   }
   return snapshot;
-}
-
-// ../../apps/business-os/rxdb/src/query-fingerprint.mjs
-var PROTOCOL_VERSION = "1.5";
-function canonicalizeQueryInput(input) {
-  if (!input || typeof input !== "object") {
-    throw new TypeError("query input must be an object");
-  }
-  const collection = String(input.collection || "");
-  if (!collection) throw new Error("collection is required");
-  const schemaVersion = Number.isFinite(Number(input.schemaVersion)) ? Number(input.schemaVersion) : 0;
-  return {
-    collection,
-    schemaVersion,
-    protocolVersion: PROTOCOL_VERSION,
-    selector: canonicalizeSelector(input.selector),
-    sort: canonicalizeSort(input.sort),
-    limit: normalizeOptionalNumber(input.limit),
-    skip: normalizeOptionalNumber(input.skip),
-    window: canonicalizeWindow(input.window)
-  };
-}
-function canonicalQueryJson(input) {
-  return canonicalJson(canonicalizeQueryInput(input));
-}
-async function queryFingerprint(input) {
-  return sha256Hex(canonicalQueryJson(input));
-}
-function canonicalizeSelector(selector) {
-  if (selector === void 0 || selector === null) return {};
-  if (typeof selector !== "object" || Array.isArray(selector)) {
-    throw new TypeError("selector must be a plain object");
-  }
-  return canonicalizeSelectorValue(selector);
-}
-function canonicalizeSelectorValue(value) {
-  if (value === null) return null;
-  if (Array.isArray(value)) {
-    return value.map(canonicalizeSelectorValue);
-  }
-  if (typeof value === "object") {
-    const out = {};
-    for (const key of Object.keys(value).sort()) {
-      const v = canonicalizeSelectorValue(value[key]);
-      if (key === "$in" || key === "$nin") {
-        out[key] = sortAndDedupeArray(v);
-      } else {
-        out[key] = v;
-      }
-    }
-    return out;
-  }
-  return value;
-}
-function sortAndDedupeArray(value) {
-  if (!Array.isArray(value)) return value;
-  const seen = /* @__PURE__ */ new Set();
-  const out = [];
-  for (const item of value) {
-    const key = canonicalJson(item);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-  out.sort((a, b) => {
-    const sa = canonicalJson(a);
-    const sb = canonicalJson(b);
-    return sa < sb ? -1 : sa > sb ? 1 : 0;
-  });
-  return out;
-}
-function canonicalizeSort(sort) {
-  if (sort === void 0 || sort === null) return [];
-  if (!Array.isArray(sort)) {
-    throw new TypeError("sort must be an array of single-key direction objects");
-  }
-  return sort.map((entry) => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      throw new TypeError("sort entries must be single-key objects");
-    }
-    const keys = Object.keys(entry);
-    if (keys.length !== 1) {
-      throw new TypeError("sort entries must have exactly one key");
-    }
-    const key = keys[0];
-    const direction = normalizeSortDirection2(entry[key]);
-    return { [key]: direction };
-  });
-}
-function normalizeSortDirection2(direction) {
-  const raw = typeof direction === "string" ? direction.toLowerCase() : direction;
-  if (raw === "desc" || raw === -1 || raw === "-1") return "desc";
-  if (raw === "asc" || raw === 1 || raw === "1") return "asc";
-  throw new TypeError(`invalid sort direction: ${direction}`);
-}
-function normalizeOptionalNumber(value) {
-  if (value === void 0 || value === null) return null;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) {
-    throw new TypeError("optional number must be a non-negative finite value");
-  }
-  return Math.floor(n);
-}
-function canonicalizeWindow(window) {
-  if (window === void 0 || window === null) return null;
-  if (typeof window !== "object") {
-    throw new TypeError("window must be an object");
-  }
-  return {
-    offset: normalizeOptionalNumber(window.offset) ?? 0,
-    limit: normalizeOptionalNumber(window.limit) ?? 200
-  };
-}
-
-// ../../apps/business-os/rxdb/src/query-meta-backend-memory.mjs
-function createMemoryMetaBackend() {
-  const queryWindows = /* @__PURE__ */ new Map();
-  const documentAccess = /* @__PURE__ */ new Map();
-  const cacheStats = /* @__PURE__ */ new Map();
-  return {
-    name: "memory",
-    async putQueryWindow(record) {
-      const key = queryWindowKey(record);
-      queryWindows.set(key, { ...record });
-    },
-    async getQueryWindow(key) {
-      const entry = queryWindows.get(stringKey(key));
-      return entry ? { ...entry } : null;
-    },
-    async deleteQueryWindow(key) {
-      queryWindows.delete(stringKey(key));
-    },
-    async scanQueryWindows() {
-      return Array.from(queryWindows.values(), (record) => ({ ...record }));
-    },
-    async putDocumentAccess(record) {
-      documentAccess.set(documentAccessKey(record), { ...record });
-    },
-    async getDocumentAccess(collection, id) {
-      const entry = documentAccess.get(`${collection}|${id}`);
-      return entry ? { ...entry } : null;
-    },
-    async deleteDocumentAccess(collection, id) {
-      documentAccess.delete(`${collection}|${id}`);
-    },
-    async scanDocumentAccess() {
-      return Array.from(documentAccess.values(), (record) => ({ ...record }));
-    },
-    async putCacheStats(record) {
-      cacheStats.set(record.databaseName, { ...record });
-    },
-    async getCacheStats(databaseName) {
-      const entry = cacheStats.get(databaseName);
-      return entry ? { ...entry } : null;
-    },
-    async clear() {
-      queryWindows.clear();
-      documentAccess.clear();
-      cacheStats.clear();
-    },
-    async close() {
-    }
-  };
-}
-function queryWindowKey(record) {
-  return [record.collection, record.queryFingerprint, record.offset, record.limit].join("|");
-}
-function documentAccessKey(record) {
-  return `${record.collection}|${record.id}`;
-}
-function stringKey(key) {
-  if (Array.isArray(key)) return key.join("|");
-  if (typeof key === "string") return key;
-  throw new TypeError("query window key must be array or string");
-}
-
-// ../../apps/business-os/rxdb/src/query-meta-storage.mjs
-var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
-var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
-var PIN_RECENT_READ = "recently-read";
-var QueryMetaStorage = class {
-  constructor(backend, { databaseName, clock = Date.now } = {}) {
-    if (!backend) throw new TypeError("QueryMetaStorage requires a backend");
-    if (!databaseName) throw new TypeError("QueryMetaStorage requires a databaseName");
-    this.backend = backend;
-    this.databaseName = databaseName;
-    this.clock = clock;
-  }
-  async getQueryWindow(key) {
-    const record = await this.backend.getQueryWindow(stringKey2(key));
-    if (!record) return null;
-    record.lastAccessedAt = this.clock();
-    await this.backend.putQueryWindow(record);
-    return record;
-  }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision }) {
-    const now = this.clock();
-    const existing = await this.backend.getQueryWindow(
-      [collection, queryFingerprint2, offset, limit].join("|")
-    );
-    const record = {
-      collection,
-      queryFingerprint: queryFingerprint2,
-      offset,
-      limit,
-      documentIds: [...documentIds],
-      complete: Boolean(complete),
-      authoritativeRevision: authoritativeRevision ?? null,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-      lastAccessedAt: now
-    };
-    await this.backend.putQueryWindow(record);
-    return record;
-  }
-  async invalidateQueryWindow(key) {
-    const stringified = stringKey2(key);
-    const existing = await this.backend.getQueryWindow(stringified);
-    if (!existing) return;
-    existing.complete = false;
-    existing.updatedAt = this.clock();
-    await this.backend.putQueryWindow(existing);
-  }
-  async touchDocuments(collection, ids, { estimatedBytes = 0, pinReason = PIN_RECENT_READ } = {}) {
-    const now = this.clock();
-    for (const id of ids) {
-      const previous = await this.backend.getDocumentAccess(collection, id) || {};
-      await this.backend.putDocumentAccess({
-        collection,
-        id,
-        lastAccessedAt: now,
-        pinReason: previous.dirty ? "dirty" : pinReason,
-        dirty: Boolean(previous.dirty),
-        estimatedBytes: estimatedBytes || previous.estimatedBytes || 0
-      });
-    }
-  }
-  async markDirty(collection, id, dirty) {
-    const previous = await this.backend.getDocumentAccess(collection, id) || {
-      collection,
-      id,
-      lastAccessedAt: this.clock(),
-      estimatedBytes: 0
-    };
-    await this.backend.putDocumentAccess({
-      ...previous,
-      dirty: Boolean(dirty),
-      pinReason: dirty ? "dirty" : previous.pinReason ?? null
-    });
-  }
-  async getDocumentAccess(collection, id) {
-    const record = await this.backend.getDocumentAccess(collection, id);
-    return record ? { ...record } : null;
-  }
-  async evictDocuments(ids) {
-    const now = this.clock();
-    let removed = 0;
-    for (const { collection, id } of ids) {
-      const record = await this.backend.getDocumentAccess(collection, id);
-      if (!record) continue;
-      if (record.dirty) continue;
-      if (record.pinReason === PIN_RECENT_READ && now - record.lastAccessedAt < SIDECAR_PIN_RECENT_READ_TTL_MS) {
-        continue;
-      }
-      await this.backend.deleteDocumentAccess(collection, id);
-      removed += 1;
-    }
-    const stats = await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-    stats.lastEvictionAt = removed > 0 ? now : stats.lastEvictionAt;
-    await this.backend.putCacheStats(stats);
-    return removed;
-  }
-  async estimateWorkingSetBytes() {
-    const docs = await this.backend.scanDocumentAccess();
-    return docs.reduce((sum, record) => sum + (record.estimatedBytes || 0), 0);
-  }
-  async setBudgetBytes(budgetBytes) {
-    const stats = await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-    stats.budgetBytes = Number(budgetBytes) || 0;
-    await this.backend.putCacheStats(stats);
-  }
-  async getCacheStats() {
-    return await this.backend.getCacheStats(this.databaseName) || {
-      databaseName: this.databaseName,
-      estimatedBytes: 0,
-      budgetBytes: 0,
-      lastEvictionAt: null
-    };
-  }
-  async clear() {
-    await this.backend.clear();
-  }
-  async close() {
-    await this.backend.close();
-  }
-  /// Evicts LRU document access entries until the working set fits the budget.
-  /// Skips dirty docs and unexpired recently-read pins. Returns the number of
-  /// document records removed.
-  async runEvictionIfOverBudget() {
-    const stats = await this.getCacheStats();
-    if (!stats.budgetBytes || stats.estimatedBytes <= stats.budgetBytes) {
-      return 0;
-    }
-    const all = await this.backend.scanDocumentAccess();
-    const now = this.clock();
-    const candidates = all.filter((record) => !record.dirty).filter((record) => {
-      if (record.pinReason !== "recently-read") return true;
-      return now - record.lastAccessedAt >= SIDECAR_PIN_RECENT_READ_TTL_MS;
-    }).sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
-    let removed = 0;
-    let remainingBytes = stats.estimatedBytes;
-    for (const candidate of candidates) {
-      if (remainingBytes <= stats.budgetBytes) break;
-      await this.backend.deleteDocumentAccess(candidate.collection, candidate.id);
-      remainingBytes -= candidate.estimatedBytes || 0;
-      removed += 1;
-    }
-    if (removed > 0) {
-      const updated = { ...stats, estimatedBytes: remainingBytes, lastEvictionAt: now };
-      await this.backend.putCacheStats(updated);
-    }
-    return removed;
-  }
-  async recordEstimatedBytes(bytes) {
-    const stats = await this.getCacheStats();
-    stats.estimatedBytes = Math.max(0, Number(bytes) || 0);
-    await this.backend.putCacheStats(stats);
-  }
-  /// Wraps an IDB write attempt in a quota-recovery loop. On
-  /// `QuotaExceededError` we run eviction once and retry; on second failure
-  /// the error propagates. Use this from production paths that materialize
-  /// fetched chunks into the primary store.
-  async withQuotaRecovery(writeFn) {
-    try {
-      return await writeFn();
-    } catch (err) {
-      if (!isQuotaExceeded(err)) throw err;
-      const stats = await this.getCacheStats();
-      const tighten = Math.max(1024, Math.floor((stats.budgetBytes || stats.estimatedBytes || 65536) / 2));
-      await this.setBudgetBytes(tighten);
-      await this.runEvictionIfOverBudget();
-      try {
-        return await writeFn();
-      } catch (retryErr) {
-        if (stats.budgetBytes) await this.setBudgetBytes(stats.budgetBytes);
-        throw retryErr;
-      }
-    }
-  }
-  /// Starts a periodic eviction scheduler. The handle returned has a
-  /// `stop()` method. Idempotent: calling twice with the same handle is
-  /// safe. Default interval: 30s.
-  startEvictionScheduler({ intervalMs = 3e4 } = {}) {
-    if (this._evictionTimer) return { stop: () => this.stopEvictionScheduler() };
-    this._evictionTimer = setInterval(() => {
-      this.runEvictionIfOverBudget().catch(() => {
-      });
-    }, intervalMs);
-    if (typeof this._evictionTimer.unref === "function") {
-      this._evictionTimer.unref();
-    }
-    return { stop: () => this.stopEvictionScheduler() };
-  }
-  stopEvictionScheduler() {
-    if (this._evictionTimer) {
-      clearInterval(this._evictionTimer);
-      this._evictionTimer = null;
-    }
-  }
-  /// Orphan-window GC: drop sidecar query-window entries that haven't been
-  /// read in `maxAgeMs` milliseconds (default 7 days). Documents referenced
-  /// by other windows remain. This keeps the sidecar from growing monotonically
-  /// as one-off queries accumulate.
-  async runWindowGc({ maxAgeMs = 7 * 24 * 60 * 60 * 1e3 } = {}) {
-    const now = this.clock();
-    const all = await this.backend.scanQueryWindows();
-    let removed = 0;
-    for (const window of all) {
-      const age = now - (window.lastAccessedAt ?? window.updatedAt ?? window.createdAt ?? now);
-      if (age >= maxAgeMs) {
-        await this.backend.deleteQueryWindow([
-          window.collection,
-          window.queryFingerprint,
-          window.offset,
-          window.limit
-        ]);
-        removed += 1;
-      }
-    }
-    return removed;
-  }
-};
-function isQuotaExceeded(err) {
-  if (!err) return false;
-  if (err.name === "QuotaExceededError") return true;
-  if (typeof err.code === "number" && err.code === 22) return true;
-  const msg = String(err.message || "").toLowerCase();
-  return msg.includes("quota") || msg.includes("storage full");
-}
-function createSidecarWithMemoryBackend({ databaseName = SIDECAR_DATABASE_NAME, clock = Date.now } = {}) {
-  return new QueryMetaStorage(createMemoryMetaBackend(), { databaseName, clock });
-}
-function stringKey2(key) {
-  if (Array.isArray(key)) return key.join("|");
-  if (typeof key === "string") return key;
-  throw new TypeError("query window key must be array or string");
-}
-
-// ../../apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
-var SIDECAR_DB_VERSION = 1;
-var STORE_QUERY_WINDOWS = "queryWindows";
-var STORE_DOCUMENT_ACCESS = "documentAccess";
-var STORE_CACHE_STATS = "cacheStats";
-var OPEN_TIMEOUT_MS = 4e3;
-function createIndexedDbMetaBackend({ databaseName }) {
-  if (!databaseName) throw new TypeError("createIndexedDbMetaBackend requires databaseName");
-  let dbPromise = null;
-  const open = () => {
-    if (!dbPromise) dbPromise = openSidecarDatabase(databaseName);
-    return dbPromise;
-  };
-  return {
-    name: "indexeddb",
-    async putQueryWindow(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).put(record)
-      );
-    },
-    async getQueryWindow(key) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).get(parseQueryWindowKey(key))
-      );
-    },
-    async deleteQueryWindow(key) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readwrite").objectStore(STORE_QUERY_WINDOWS).delete(parseQueryWindowKey(key))
-      );
-    },
-    async scanQueryWindows() {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_QUERY_WINDOWS, "readonly").objectStore(STORE_QUERY_WINDOWS).getAll()
-      );
-    },
-    async putDocumentAccess(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).put(record)
-      );
-    },
-    async getDocumentAccess(collection, id) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).get([collection, id])
-      );
-    },
-    async deleteDocumentAccess(collection, id) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readwrite").objectStore(STORE_DOCUMENT_ACCESS).delete([collection, id])
-      );
-    },
-    async scanDocumentAccess() {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_DOCUMENT_ACCESS, "readonly").objectStore(STORE_DOCUMENT_ACCESS).getAll()
-      );
-    },
-    async putCacheStats(record) {
-      const db = await open();
-      await runRequest(
-        db.transaction(STORE_CACHE_STATS, "readwrite").objectStore(STORE_CACHE_STATS).put(record)
-      );
-    },
-    async getCacheStats(databaseName2) {
-      const db = await open();
-      return runRequest(
-        db.transaction(STORE_CACHE_STATS, "readonly").objectStore(STORE_CACHE_STATS).get(databaseName2)
-      );
-    },
-    async clear() {
-      const db = await open();
-      for (const name of [STORE_QUERY_WINDOWS, STORE_DOCUMENT_ACCESS, STORE_CACHE_STATS]) {
-        await runRequest(db.transaction(name, "readwrite").objectStore(name).clear());
-      }
-    },
-    async close() {
-      if (dbPromise) {
-        const db = await dbPromise;
-        db.close();
-        dbPromise = null;
-      }
-    }
-  };
-}
-function openSidecarDatabase(databaseName) {
-  if (!globalThis.indexedDB) {
-    throw new Error("indexedDB is required for sidecar metadata storage");
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`IndexedDB open timed out for sidecar ${databaseName}`));
-    }, OPEN_TIMEOUT_MS);
-    const request = globalThis.indexedDB.open(databaseName, SIDECAR_DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_QUERY_WINDOWS)) {
-        const store = db.createObjectStore(STORE_QUERY_WINDOWS, {
-          keyPath: ["collection", "queryFingerprint", "offset", "limit"]
-        });
-        store.createIndex("collection", "collection", { unique: false });
-        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
-          unique: false
-        });
-      }
-      if (!db.objectStoreNames.contains(STORE_DOCUMENT_ACCESS)) {
-        const store = db.createObjectStore(STORE_DOCUMENT_ACCESS, {
-          keyPath: ["collection", "id"]
-        });
-        store.createIndex("collection_lastAccessedAt", ["collection", "lastAccessedAt"], {
-          unique: false
-        });
-      }
-      if (!db.objectStoreNames.contains(STORE_CACHE_STATS)) {
-        db.createObjectStore(STORE_CACHE_STATS, { keyPath: "databaseName" });
-      }
-    };
-    request.onsuccess = () => {
-      clearTimeout(timer);
-      resolve(request.result);
-    };
-    request.onerror = () => {
-      clearTimeout(timer);
-      reject(request.error || new Error(`failed to open sidecar ${databaseName}`));
-    };
-    request.onblocked = () => {
-      clearTimeout(timer);
-      reject(new Error(`IndexedDB open blocked for sidecar ${databaseName}`));
-    };
-  });
-}
-function parseQueryWindowKey(key) {
-  if (Array.isArray(key)) return key;
-  if (typeof key === "string") {
-    const parts = key.split("|");
-    if (parts.length !== 4) throw new TypeError(`invalid query window key: ${key}`);
-    const [collection, fingerprint, offset, limit] = parts;
-    return [collection, fingerprint, Number(offset), Number(limit)];
-  }
-  throw new TypeError("query window key must be array or string");
-}
-function runRequest(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-// ../../apps/business-os/rxdb/src/query-demand-loader.mjs
-var DEFAULT_WINDOW_LIMIT = 200;
-function createQueryDemandLoader({
-  storageCollection,
-  sidecar,
-  collectionName,
-  schemaVersion,
-  requestQueryFetch,
-  requestCancel = null,
-  multiTabBroker = null,
-  status = null,
-  clock = Date.now
-}) {
-  if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
-  if (!sidecar) throw new TypeError("demand loader requires sidecar");
-  if (!collectionName) throw new TypeError("demand loader requires collectionName");
-  if (typeof requestQueryFetch !== "function") {
-    throw new TypeError("demand loader requires requestQueryFetch");
-  }
-  const inflightByFingerprint = /* @__PURE__ */ new Map();
-  return {
-    async resolveQuery(query, { window } = {}) {
-      const normalizedWindow = normalizeWindow(window, query);
-      const fingerprintInput = {
-        collection: collectionName,
-        schemaVersion: schemaVersion ?? 0,
-        selector: query?.selector ?? {},
-        sort: normalizeSort2(query?.sort),
-        limit: query?.limit,
-        skip: query?.skip,
-        window: normalizedWindow
-      };
-      const fingerprint = await queryFingerprint(fingerprintInput);
-      const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
-      const cached = await sidecar.getQueryWindow(sidecarKey);
-      if (cached && cached.complete) {
-        if (query?.requireRevision && cached.authoritativeRevision !== query.requireRevision) {
-        } else {
-          await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-          return readLocalDocuments(storageCollection, query, normalizedWindow);
-        }
-      }
-      const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
-      if (inflightByFingerprint.has(dedupKey)) {
-        bumpStatus(status, "queryFetchDedupHitCount");
-        return inflightByFingerprint.get(dedupKey);
-      }
-      bumpStatus(status, "queryFetchInFlight", 1);
-      v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-      const job = (async () => {
-        const startedAt = clock();
-        try {
-          const result = await requestQueryFetch({
-            requestId: `${dedupKey}|${startedAt}`,
-            databaseName: storageCollection?.databaseName ?? null,
-            collectionName,
-            schemaVersion: schemaVersion ?? 0,
-            queryFingerprint: fingerprint,
-            query: {
-              selector: query?.selector ?? {},
-              sort: normalizeSort2(query?.sort),
-              limit: query?.limit,
-              skip: query?.skip
-            },
-            window: normalizedWindow
-          });
-          await materializeChunks(storageCollection, result.documents || []);
-          const documentIds = (result.documents || []).map(extractId).filter(Boolean);
-          await sidecar.upsertQueryWindow({
-            collection: collectionName,
-            queryFingerprint: fingerprint,
-            offset: normalizedWindow.offset,
-            limit: normalizedWindow.limit,
-            documentIds,
-            complete: true,
-            authoritativeRevision: result.authoritativeRevision ?? null
-          });
-          await sidecar.touchDocuments(collectionName, documentIds, {
-            estimatedBytes: estimateBytes(result.documents || [])
-          });
-          bumpStatus(status, "queryFetchSuccessCount");
-          if (status) status.lastQueryFetchMs = clock() - startedAt;
-          v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-          return readLocalDocuments(storageCollection, query, normalizedWindow);
-        } catch (error) {
-          bumpStatus(status, "queryFetchErrorCount");
-          v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
-          throw error;
-        } finally {
-          bumpStatus(status, "queryFetchInFlight", -1);
-          inflightByFingerprint.delete(dedupKey);
-        }
-      })();
-      inflightByFingerprint.set(dedupKey, job);
-      return job;
-    },
-    inflightSize() {
-      return inflightByFingerprint.size;
-    },
-    // Wave 7: invalidation hook. When the replication layer reports that a
-    // document in `collectionName` was changed remotely, call this with the
-    // changed document ids — any cached query window that references those
-    // ids is marked incomplete so the next exec triggers a remote refresh.
-    async invalidateDocumentChange(changedDocumentIds = []) {
-      if (!changedDocumentIds.length) return 0;
-      const all = await sidecar.backend.scanQueryWindows();
-      const ids = new Set(changedDocumentIds);
-      let invalidated = 0;
-      for (const window of all) {
-        if (window.collection !== collectionName) continue;
-        if (window.documentIds.some((id) => ids.has(id))) {
-          await sidecar.invalidateQueryWindow([
-            window.collection,
-            window.queryFingerprint,
-            window.offset,
-            window.limit
-          ]);
-          invalidated += 1;
-        }
-      }
-      return invalidated;
-    },
-    // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
-    // fetches and removes any partially-materialized documents from the
-    // primary store so the next fetch starts from a clean slate (no orphans).
-    async abortAllInFlight(reason = "reconnect") {
-      const cancelled = [];
-      for (const [dedupKey, job] of inflightByFingerprint.entries()) {
-        const [, fingerprint] = dedupKey.split("|");
-        cancelled.push({ dedupKey, fingerprint });
-        if (typeof requestCancel === "function") {
-          try {
-            await requestCancel({ requestId: dedupKey, fingerprint, reason });
-          } catch {
-          }
-        }
-        try {
-          job.catch?.(() => {
-          });
-        } catch {
-        }
-      }
-      inflightByFingerprint.clear();
-      try {
-        const allWindows = await sidecar.backend.scanQueryWindows();
-        for (const { fingerprint } of cancelled) {
-          const partial = allWindows.filter(
-            (w) => w.queryFingerprint === fingerprint && !w.complete
-          );
-          for (const window of partial) {
-            const ids = window.documentIds || [];
-            if (ids.length && typeof storageCollection.bulkWrite === "function") {
-              const tombstones = ids.map((id) => ({ id, _deleted: true }));
-              try {
-                await storageCollection.bulkWrite(tombstones);
-              } catch {
-              }
-            }
-            await sidecar.backend.deleteQueryWindow([
-              window.collection,
-              window.queryFingerprint,
-              window.offset,
-              window.limit
-            ]);
-          }
-        }
-      } catch {
-      }
-    },
-    // Wave 7: multi-tab dedup. If a `multiTabBroker` is provided, it is
-    // consulted before kicking off a remote fetch; followers wait for the
-    // leader's materialization signal instead of fetching themselves.
-    async leaderClaim(windowKey) {
-      if (!multiTabBroker?.claim) return true;
-      return multiTabBroker.claim(windowKey);
-    },
-    async leaderRelease(windowKey) {
-      if (!multiTabBroker?.release) return;
-      await multiTabBroker.release(windowKey);
-    }
-  };
-}
-function normalizeWindow(window, query) {
-  if (window && typeof window === "object") {
-    return {
-      offset: Math.max(0, Math.floor(Number(window.offset) || 0)),
-      limit: Math.max(1, Math.floor(Number(window.limit) || DEFAULT_WINDOW_LIMIT))
-    };
-  }
-  return {
-    offset: Math.max(0, Math.floor(Number(query?.skip) || 0)),
-    limit: Math.max(1, Math.floor(Number(query?.limit) || DEFAULT_WINDOW_LIMIT))
-  };
-}
-function normalizeSort2(sort) {
-  if (!Array.isArray(sort)) return [];
-  return sort.map((entry) => {
-    if (!entry || typeof entry !== "object") return entry;
-    const keys = Object.keys(entry);
-    if (keys.length !== 1) return entry;
-    const key = keys[0];
-    const direction = entry[key];
-    return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
-  });
-}
-async function readLocalDocuments(storageCollection, query, window) {
-  if (typeof storageCollection.queryDocuments === "function") {
-    return storageCollection.queryDocuments(
-      { ...query, skip: window.offset, limit: window.limit },
-      {
-        matchesSelector: defaultMatcher,
-        sortDocuments: defaultSorter
-      }
-    );
-  }
-  const docs = await storageCollection.allDocuments();
-  return applyQueryToDocs(docs, query, window);
-}
-async function materializeChunks(storageCollection, documents) {
-  if (!documents.length) return;
-  await storageCollection.bulkWrite(documents);
-}
-async function touchSidecarAccess(sidecar, collectionName, documentIds) {
-  if (!documentIds?.length) return;
-  await sidecar.touchDocuments(collectionName, documentIds);
-}
-function extractId(doc) {
-  if (!doc || typeof doc !== "object") return null;
-  return doc.id || doc._id || null;
-}
-function estimateBytes(documents) {
-  try {
-    return JSON.stringify(documents).length;
-  } catch {
-    return documents.length * 256;
-  }
-}
-function bumpStatus(status, field, delta = 1) {
-  if (!status) return;
-  if (typeof status[field] !== "number") status[field] = 0;
-  status[field] += delta;
-}
-var v15LogSink = null;
-function setV15LogSink(fn) {
-  v15LogSink = typeof fn === "function" ? fn : null;
-}
-function v15Log(event, fields) {
-  if (v15LogSink) {
-    try {
-      v15LogSink(event, fields);
-    } catch {
-    }
-    return;
-  }
-  if (globalThis?.console?.debug) {
-    globalThis.console.debug("[V1.5]", event, fields);
-  }
-}
-function defaultMatcher(doc, selector = {}) {
-  for (const [key, expected] of Object.entries(selector)) {
-    if (key.startsWith("$")) return true;
-    const actual = doc?.[key];
-    if (expected && typeof expected === "object" && !Array.isArray(expected)) {
-      if ("$eq" in expected && actual !== expected.$eq) return false;
-      if ("$ne" in expected && actual === expected.$ne) return false;
-      if ("$in" in expected && !expected.$in.includes(actual)) return false;
-      if ("$gte" in expected && !(actual >= expected.$gte)) return false;
-      if ("$lte" in expected && !(actual <= expected.$lte)) return false;
-      continue;
-    }
-    if (actual !== expected) return false;
-  }
-  return true;
-}
-function defaultSorter(docs, sort = []) {
-  if (!sort?.length) return docs;
-  return docs.slice().sort((a, b) => {
-    for (const entry of sort) {
-      const [key, direction] = Object.entries(entry)[0] || [];
-      const factor = direction === "desc" ? -1 : 1;
-      const av = a?.[key];
-      const bv = b?.[key];
-      if (av < bv) return -1 * factor;
-      if (av > bv) return 1 * factor;
-    }
-    return 0;
-  });
-}
-function applyQueryToDocs(docs, query, window) {
-  let filtered = (docs || []).filter((doc) => defaultMatcher(doc, query?.selector || {}));
-  filtered = defaultSorter(filtered, normalizeSort2(query?.sort));
-  if (window.offset > 0) filtered = filtered.slice(window.offset);
-  if (Number.isFinite(window.limit)) filtered = filtered.slice(0, window.limit);
-  return filtered;
 }
 
 // ../../apps/business-os/rxdb/src/multi-tab-broker.mjs
@@ -3909,170 +4329,6 @@ function randomTabId() {
   return `tab-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-// ../../apps/business-os/rxdb/src/file-demand-loader.mjs
-var FILE_CHUNK_PRESENCE_KEY = (collection, fileId) => `${collection}|${fileId}`;
-function createFileDemandLoader({
-  collectionName,
-  storageCollection,
-  sidecarBackend,
-  requestFileFetch,
-  status = null,
-  clock = Date.now
-}) {
-  if (!collectionName) throw new TypeError("file loader requires collectionName");
-  if (!storageCollection) throw new TypeError("file loader requires storageCollection");
-  if (!sidecarBackend) throw new TypeError("file loader requires sidecarBackend");
-  if (typeof requestFileFetch !== "function") {
-    throw new TypeError("file loader requires requestFileFetch");
-  }
-  const inflight = /* @__PURE__ */ new Map();
-  return {
-    async fetchFile(fileId, { range = null } = {}) {
-      if (inflight.has(fileId)) {
-        bump(status, "fileStreamDedupHits");
-        return inflight.get(fileId);
-      }
-      const job = (async () => {
-        const startedAt = clock();
-        bump(status, "activeFileStreams", 1);
-        try {
-          const presence = await getPresence(sidecarBackend, collectionName, fileId);
-          const chunks = await requestFileFetch({
-            requestId: `file-${fileId}-${startedAt}`,
-            collectionName,
-            fileId,
-            range,
-            knownSequences: presence?.presentSequences || []
-          });
-          if (!Array.isArray(chunks)) {
-            throw new TypeError("requestFileFetch must return an array of chunks");
-          }
-          for (const chunk of chunks) {
-            if (!chunk || typeof chunk !== "object") continue;
-            await storageCollection.bulkWrite([
-              {
-                id: `${fileId}-${chunk.sequence}`,
-                file_id: fileId,
-                sequence: chunk.sequence,
-                bytes_base64: chunk.bytesBase64,
-                hash: chunk.hash || null
-              }
-            ]);
-            bump(status, "fileBytesReceived", chunk.bytesBase64?.length || 0);
-          }
-          const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
-          const expectedTotal = Math.max(
-            ...sequences,
-            presence?.expectedChunkCount || 0
-          ) + 1;
-          await sidecarBackend.putDocumentAccess({
-            collection: collectionName,
-            id: `${fileId}-presence`,
-            lastAccessedAt: clock(),
-            pinReason: "file-chunks",
-            dirty: false,
-            estimatedBytes: 0
-          });
-          await putPresence(sidecarBackend, collectionName, fileId, {
-            collection: collectionName,
-            fileId,
-            expectedChunkCount: expectedTotal,
-            presentSequences: dedupeSorted([
-              ...presence?.presentSequences || [],
-              ...sequences
-            ]),
-            lastVerifiedAt: clock()
-          });
-          if (status) status.lastFileFetchMs = clock() - startedAt;
-          return chunks;
-        } catch (error) {
-          bump(status, "fileStreamErrors");
-          throw error;
-        } finally {
-          bump(status, "activeFileStreams", -1);
-          inflight.delete(fileId);
-        }
-      })();
-      inflight.set(fileId, job);
-      return job;
-    },
-    inflightSize() {
-      return inflight.size;
-    }
-  };
-}
-async function getPresence(backend, collection, fileId) {
-  const record = await backend.getDocumentAccess(collection, `${fileId}-presence`);
-  if (!record || !record.fileChunkPresence) return null;
-  return record.fileChunkPresence;
-}
-async function putPresence(backend, collection, fileId, presence) {
-  await backend.putDocumentAccess({
-    collection,
-    id: `${fileId}-presence`,
-    lastAccessedAt: presence.lastVerifiedAt,
-    pinReason: "file-chunks",
-    dirty: false,
-    estimatedBytes: 0,
-    fileChunkPresence: presence
-  });
-}
-function bump(status, field, delta = 1) {
-  if (!status) return;
-  if (typeof status[field] !== "number") status[field] = 0;
-  status[field] += delta;
-}
-function dedupeSorted(values) {
-  const sorted = values.slice().sort((a, b) => a - b);
-  const out = [];
-  for (const v of sorted) {
-    if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
-  }
-  return out;
-}
-
-// ../../apps/business-os/rxdb/src/chunk-decoder.mjs
-async function decodeChunk(chunk) {
-  if (!chunk || typeof chunk !== "object") {
-    throw new TypeError("chunk must be an object");
-  }
-  if (!chunk.compressed) {
-    return chunk.documents || [];
-  }
-  if (chunk.compressed !== "deflate") {
-    throw new Error(`unsupported chunk compression: ${chunk.compressed}`);
-  }
-  if (typeof chunk.compressedBase64 !== "string") {
-    throw new Error("compressed chunk missing compressedBase64");
-  }
-  const bytes = base64ToBytes(chunk.compressedBase64);
-  const json = await deflateInflate(bytes);
-  return JSON.parse(json);
-}
-function base64ToBytes(b64) {
-  if (typeof Buffer !== "undefined" && typeof Buffer.from === "function") {
-    const buf = Buffer.from(b64, "base64");
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  }
-  const bin = globalThis.atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i += 1) out[i] = bin.charCodeAt(i);
-  return out;
-}
-async function deflateInflate(bytes) {
-  if (typeof globalThis.DecompressionStream === "function") {
-    try {
-      const stream = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream("deflate-raw"));
-      const buf = await new Response(stream).arrayBuffer();
-      return new TextDecoder().decode(buf);
-    } catch (err) {
-    }
-  }
-  const zlib = await import("node:zlib");
-  const inflated = zlib.inflateRawSync(Buffer.from(bytes));
-  return inflated.toString("utf8");
-}
-
 // ../../apps/business-os/rxdb/src/advanced-status-bridge.mjs
 function buildBusinessOsAdvancedStatus({
   v15Status,
@@ -4168,6 +4424,7 @@ export {
   canonicalizeQueryInput,
   createBroadcastChannelBroker,
   createCtoxWebRtcNativePeer,
+  createDemandLoadingTransport,
   createFileDemandLoader,
   createIndexedDbMetaBackend,
   createMemoryBroker,

@@ -609,31 +609,37 @@ impl RxStorageInstanceSqlite {
         // `RxStorageSqlite::connection`) makes concurrent readers cheap.
         let read_conn = self.open_read_only_connection()?;
 
-        let mut matched: usize = 0;
-        let mut buffer: Vec<Value> = Vec::with_capacity(chunk_size.max(1));
-        let mut keep_going = true;
+        // Correctness: skip + global sort require us to know the order of
+        // ALL matches before deciding which N to emit. Per-chunk sorting
+        // would mis-page across batches. We collect matches in RAM (memory
+        // bound = O(matches), not O(table)), sort globally once, drop the
+        // first `skip` rows, then chunk the remainder for emission. The
+        // streaming benefit is preserved on the unsorted-or-large case
+        // because we still pull rows one at a time from SQLite — the
+        // bounded-memory invariant is over the *table*, not the matches.
+        let mut matches: Vec<Value> = Vec::new();
         for_each_document(&read_conn, &self.table_name, |doc| {
             if matcher(&doc) {
-                buffer.push(doc);
-                matched += 1;
-            }
-            if buffer.len() >= chunk_size.max(1) {
-                let mut batch = std::mem::take(&mut buffer);
-                batch.sort_by(|a, b| comparator(a, b));
-                keep_going = visit(batch)?;
-                buffer = Vec::with_capacity(chunk_size.max(1));
-            }
-            if !keep_going {
-                return Ok(false);
-            }
-            if matched.saturating_sub(skip) >= limit {
-                return Ok(false);
+                matches.push(doc);
             }
             Ok(true)
         })?;
-        if !buffer.is_empty() && keep_going {
-            buffer.sort_by(|a, b| comparator(a, b));
-            visit(buffer)?;
+        matches.sort_by(|a, b| comparator(a, b));
+        if skip >= matches.len() {
+            return Ok(());
+        }
+        let mut window = matches.split_off(skip);
+        drop(matches);
+        if window.len() > limit {
+            window.truncate(limit);
+        }
+        let chunk = chunk_size.max(1);
+        while !window.is_empty() {
+            let take = window.len().min(chunk);
+            let batch: Vec<Value> = window.drain(..take).collect();
+            if !visit(batch)? {
+                return Ok(());
+            }
         }
         Ok(())
     }
@@ -868,6 +874,68 @@ mod tests {
         assert_eq!(
             result.documents[0].get("id").and_then(Value::as_str),
             Some("c")
+        );
+    }
+
+    #[tokio::test]
+    async fn query_stream_applies_skip_and_global_sort() {
+        // Regression for the review finding: skip docs MUST be removed from
+        // the output and the sort MUST be global (not per-batch). We seed
+        // 60 docs with shuffled `age`, ask for skip=20 limit=20 sort=age asc
+        // chunk_size=5 — the result must be the 20 docs with age 20..40 in
+        // ascending order, not the 20th..40th rows of the insertion order.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        // Insertion order is shuffled — if sort is per-batch, output will
+        // be wrong. We pick a permutation that crosses chunk boundaries.
+        let ages: Vec<i64> = vec![
+            50, 30, 10, 40, 20, 5, 55, 35, 15, 45, 25, 0, 51, 31, 11, 41, 21, 1, 52, 32, 12, 42,
+            22, 2, 53, 33, 13, 43, 23, 3, 54, 34, 14, 44, 24, 4, 56, 36, 16, 46, 26, 6, 57, 37, 17,
+            47, 27, 7, 58, 38, 18, 48, 28, 8, 59, 39, 19, 49, 29, 9,
+        ];
+        let rows: Vec<BulkWriteRow> = ages
+            .iter()
+            .enumerate()
+            .map(|(i, age)| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{i:03}"), "1-a", *age, false, i as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({})),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: Some(20),
+                skip: Some(20),
+            },
+        );
+        let prepared = prepare_query(&schema, filled).unwrap();
+        let mut collected: Vec<i64> = Vec::new();
+        instance
+            .query_stream(&prepared, 5, |batch| {
+                for d in batch {
+                    collected.push(d.get("age").and_then(Value::as_i64).unwrap());
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let expected: Vec<i64> = (20..40).collect();
+        assert_eq!(
+            collected, expected,
+            "skip=20 limit=20 sort=age asc must yield ages 20..40 in order, got {:?}",
+            collected
         );
     }
 
