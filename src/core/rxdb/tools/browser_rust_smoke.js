@@ -3671,7 +3671,21 @@ function ensureCtoxSmokeBinary() {
             : '';
         };
         const expectedRequiredModules = ['ctox', 'documents', 'knowledge', 'research'];
-        const expectedSecondaryModules = ['matching', 'conversations', 'outbound', 'shiftflow', 'buchhaltung', 'coding-agents'];
+        const expectedSecondaryModules = [
+          'matching',
+          'conversations',
+          'outbound',
+          'shiftflow',
+          'buchhaltung',
+          'coding-agents',
+          'app-store',
+          'browser',
+          'calendar',
+          'creator',
+          'notes',
+          'reports',
+          'spreadsheets',
+        ];
         const moduleCatalog = await waitFor(() => {
           const moduleIds = Array.isArray(appState?.modules)
             ? appState.modules.map((mod) => mod?.id).filter(Boolean)
@@ -3788,6 +3802,34 @@ function ensureCtoxSmokeBinary() {
           'coding-agents': {
             selectors: ['[data-coding-agents-root]', '.coding-agents-left', '.coding-agents-center', '#workbench-chat-feed'],
             minTextLength: 80,
+          },
+          'app-store': {
+            selectors: ['[data-app-store-root]', '.store-left', '.store-center', '[data-apps-grid]'],
+            minTextLength: 80,
+          },
+          browser: {
+            selectors: ['[data-browser-root]', '.browser-sidebar', '.browser-workbench', '.browser-inspector'],
+            minTextLength: 70,
+          },
+          calendar: {
+            selectors: ['[data-calendar-root]', '#calendar-left', '#calendar-center', '#calendar-right'],
+            minTextLength: 80,
+          },
+          creator: {
+            selectors: ['[data-creator-root]', '.creator-left', '.creator-center', '#expert-accordion-btn'],
+            minTextLength: 120,
+          },
+          notes: {
+            selectors: ['[data-notes-root]', '.notes-sidebar-pane', '.notes-list-pane', '.notes-center'],
+            minTextLength: 120,
+          },
+          reports: {
+            selectors: ['[data-reports-root]', '.reports-rail', '[data-reports-list]', '[data-reports-detail]'],
+            minTextLength: 50,
+          },
+          spreadsheets: {
+            selectors: ['[data-spreadsheets-module]', '[data-spreadsheets-editor]', '.spreadsheets-workbench'],
+            minTextLength: 50,
           },
         };
         const collectModuleRenderEvidence = (moduleId) => {
@@ -3940,21 +3982,21 @@ function ensureCtoxSmokeBinary() {
             }), 5000, 'conversations all filter');
             evidence.actions.push('conversations-channel-filter');
           } else if (moduleId === 'outbound') {
-            const toggle = document.querySelector('[data-action="toggle-outreach"]');
-            if (!toggle) throw new Error('Outbound outreach toggle is missing');
-            const before = toggle.getAttribute('aria-pressed') || '';
+            const toggle = document.querySelector('#toggle-compact');
+            if (!toggle) throw new Error('Outbound compact view toggle is missing');
+            const before = Boolean(toggle.checked);
             toggle.click();
             await waitFor(() => {
-              const current = document.querySelector('[data-action="toggle-outreach"]');
-              const after = current?.getAttribute('aria-pressed') || '';
+              const current = document.querySelector('#toggle-compact');
+              const after = Boolean(current?.checked);
               return {
-                ok: after && after !== before,
+                ok: after !== before,
                 before,
                 after,
               };
-            }, 5000, 'outbound outreach toggle');
-            document.querySelector('[data-action="toggle-outreach"]')?.click();
-            evidence.actions.push('outbound-outreach-toggle');
+            }, 5000, 'outbound compact view toggle');
+            document.querySelector('#toggle-compact')?.click();
+            evidence.actions.push('outbound-compact-view-toggle');
           } else if (moduleId === 'shiftflow') {
             const scheduler = document.querySelector('#viewSchedulerTabBtn');
             const timesheets = document.querySelector('#viewTimesheetsTabBtn');
@@ -4022,6 +4064,116 @@ function ensureCtoxSmokeBinary() {
               hidden: document.querySelector('#settings-modal')?.hasAttribute('hidden') ?? null,
             }), 5000, 'coding agents settings close');
             evidence.actions.push('coding-agents-settings-modal');
+          } else if (moduleId === 'app-store') {
+            const listView = document.querySelector('[data-view="list"]');
+            const gridView = document.querySelector('[data-view="grid"]');
+            const installedScope = document.querySelector('[data-scope="installed"]');
+            const marketplaceScope = document.querySelector('[data-scope="marketplace"]');
+            if (!listView || !gridView || !installedScope || !marketplaceScope) {
+              throw new Error('App Store view or scope controls are missing');
+            }
+            listView.click();
+            await waitFor(() => ({
+              ok: listView.classList.contains('active') && !gridView.classList.contains('active'),
+              listActive: listView.classList.contains('active'),
+              gridActive: gridView.classList.contains('active'),
+            }), 5000, 'app-store list view');
+            installedScope.click();
+            await waitFor(() => ({
+              ok: installedScope.classList.contains('active') && !marketplaceScope.classList.contains('active'),
+              installedActive: installedScope.classList.contains('active'),
+              marketplaceActive: marketplaceScope.classList.contains('active'),
+            }), 5000, 'app-store installed scope');
+            gridView.click();
+            marketplaceScope.click();
+            evidence.actions.push('app-store-view-scope');
+          } else if (moduleId === 'browser') {
+            const address = document.querySelector('[data-browser-address]');
+            const refresh = document.querySelector('[data-browser-refresh]');
+            if (!address || !refresh) throw new Error('Browser address or refresh controls are missing');
+            address.value = 'https://example.com';
+            address.dispatchEvent(new Event('input', { bubbles: true }));
+            refresh.click();
+            await waitFor(() => ({
+              ok: document.querySelector('[data-browser-address]')?.value === 'https://example.com'
+                && Boolean(document.querySelector('[data-browser-status-chip]')?.textContent?.trim()),
+              address: document.querySelector('[data-browser-address]')?.value || '',
+              status: document.querySelector('[data-browser-status-chip]')?.textContent?.trim() || '',
+            }), 5000, 'browser address input');
+            evidence.actions.push('browser-address-refresh');
+          } else if (moduleId === 'calendar') {
+            const newEvent = document.querySelector('#btnNewEvent');
+            const closeDrawer = document.querySelector('#closeDrawerBtn');
+            if (!newEvent || !closeDrawer) throw new Error('Calendar new-event drawer controls are missing');
+            newEvent.click();
+            await waitFor(() => ({
+              ok: document.querySelector('#calendarInspectorDrawer')?.classList?.contains('open')
+                || document.querySelector('#calendarInspectorDrawer')?.classList?.contains('is-open')
+                || document.querySelector('#calendarInspectorDrawer')?.getAttribute('aria-hidden') === 'false'
+                || Boolean(document.querySelector('#calendarInspectorDrawer form')),
+              drawerClass: document.querySelector('#calendarInspectorDrawer')?.className || '',
+              hasForm: Boolean(document.querySelector('#calendarInspectorDrawer form')),
+            }), 5000, 'calendar new-event drawer');
+            document.querySelector('#closeDrawerBtn')?.click();
+            await delay(100);
+            evidence.actions.push('calendar-new-event-drawer');
+          } else if (moduleId === 'creator') {
+            const trigger = document.querySelector('#expert-accordion-btn');
+            const content = document.querySelector('#expert-accordion-content');
+            if (!trigger || !content) throw new Error('Creator expert accordion controls are missing');
+            const beforeCollapsed = content.classList.contains('is-collapsed');
+            trigger.click();
+            await waitFor(() => ({
+              ok: content.classList.contains('is-collapsed') !== beforeCollapsed,
+              beforeCollapsed,
+              afterCollapsed: content.classList.contains('is-collapsed'),
+            }), 5000, 'creator accordion toggle');
+            trigger.click();
+            evidence.actions.push('creator-expert-accordion');
+          } else if (moduleId === 'notes') {
+            const favorites = document.querySelector('[data-nav-category="favorites"]');
+            const notes = document.querySelector('[data-nav-category="notes"]');
+            const filter = document.querySelector('[data-action="toggle-filter"]');
+            if (!favorites || !notes || !filter) throw new Error('Notes navigation/filter controls are missing');
+            favorites.click();
+            await waitFor(() => ({
+              ok: favorites.classList.contains('active') && !notes.classList.contains('active'),
+              favoritesActive: favorites.classList.contains('active'),
+              notesActive: notes.classList.contains('active'),
+            }), 5000, 'notes favorites nav');
+            notes.click();
+            filter.click();
+            await delay(100);
+            evidence.actions.push('notes-nav-filter');
+          } else if (moduleId === 'reports') {
+            const kind = document.querySelector('[data-report-kind]');
+            const status = document.querySelector('[data-report-status]');
+            if (!kind || !status) throw new Error('Reports filter controls are missing');
+            kind.value = 'bug';
+            kind.dispatchEvent(new Event('change', { bubbles: true }));
+            await waitFor(() => ({
+              ok: document.querySelector('[data-report-kind]')?.value === 'bug',
+              kind: document.querySelector('[data-report-kind]')?.value || '',
+            }), 5000, 'reports kind filter');
+            status.value = 'open';
+            status.dispatchEvent(new Event('change', { bubbles: true }));
+            kind.value = 'all';
+            kind.dispatchEvent(new Event('change', { bubbles: true }));
+            status.value = 'all';
+            status.dispatchEvent(new Event('change', { bubbles: true }));
+            evidence.actions.push('reports-filter-controls');
+          } else if (moduleId === 'spreadsheets') {
+            const search = document.querySelector('[data-spreadsheets-search]');
+            if (!search) throw new Error('Spreadsheets search control is missing');
+            search.value = 'regression-smoke';
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+            await waitFor(() => ({
+              ok: document.querySelector('[data-spreadsheets-search]')?.value === 'regression-smoke',
+              value: document.querySelector('[data-spreadsheets-search]')?.value || '',
+            }), 5000, 'spreadsheets search input');
+            document.querySelector('[data-spreadsheets-search]').value = '';
+            document.querySelector('[data-spreadsheets-search]').dispatchEvent(new Event('input', { bubbles: true }));
+            evidence.actions.push('spreadsheets-search-filter');
           }
           return evidence.actions.length ? evidence : null;
         };

@@ -14,7 +14,13 @@ export function createCalendarView({
   onEventResize,
   resources = []
 }) {
-  if (!window.EventCalendar) {
+  const EventCalendarApi = window.EventCalendar;
+  const createCalendar = typeof EventCalendarApi === 'function'
+    ? (target, options) => new EventCalendarApi(target, options)
+    : EventCalendarApi?.create;
+  const destroyCalendar = EventCalendarApi?.destroy;
+
+  if (typeof createCalendar !== 'function') {
     console.error('EventCalendar is not loaded on window.');
     return null;
   }
@@ -28,7 +34,7 @@ export function createCalendarView({
   const formattedEvents = prepareEventsForCalendar(events, calendars, viewStart, viewEnd);
 
   // Initialize EventCalendar
-  const ec = new window.EventCalendar(root, {
+  const options = {
     view: view,
     headerToolbar: {
       start: 'prev,next today',
@@ -98,20 +104,46 @@ export function createCalendarView({
         });
       }
     }
-  });
+  };
+
+  let ec = createCalendar(root, options);
+  const recreate = () => {
+    if (typeof ec?.destroy === 'function') {
+      ec.destroy();
+    } else if (typeof destroyCalendar === 'function') {
+      destroyCalendar(ec);
+    }
+    ec = createCalendar(root, options);
+  };
 
   return {
-    destroy: () => ec.destroy(),
+    destroy: () => {
+      if (typeof ec?.destroy === 'function') {
+        ec.destroy();
+      } else if (typeof destroyCalendar === 'function') {
+        destroyCalendar(ec);
+      }
+    },
     setEvents: (newEvents, newCalendars) => {
       const formatted = prepareEventsForCalendar(newEvents, newCalendars, viewStart, viewEnd);
-      ec.setOption('events', formatted);
+      options.events = formatted;
+      if (typeof ec?.setOption === 'function') {
+        ec.setOption('events', formatted);
+      } else {
+        recreate();
+      }
     },
     setView: (newView) => {
-      ec.setOption('view', newView);
+      options.view = newView;
+      if (typeof ec?.setOption === 'function') {
+        ec.setOption('view', newView);
+      } else {
+        recreate();
+      }
     },
-    next: () => ec.next(),
-    prev: () => ec.prev(),
-    today: () => ec.today()
+    next: () => ec?.next?.(),
+    prev: () => ec?.prev?.(),
+    today: () => ec?.today?.()
   };
 }
 

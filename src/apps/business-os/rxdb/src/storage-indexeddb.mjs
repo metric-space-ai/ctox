@@ -129,6 +129,44 @@ export class CtoxIndexedDbCollection {
     return documents;
   }
 
+  async queryDocuments(query = {}, helpers = {}) {
+    if (canUseCollectionLwtQuery(query)) {
+      return this.queryDocumentsByLwt(query, helpers);
+    }
+    const docs = await this.allDocuments();
+    return applyQueryToDocuments(docs, query, helpers);
+  }
+
+  async queryDocumentsByLwt(query = {}, helpers = {}) {
+    const { matchesSelector = () => true, sortDocuments = (docs) => docs } = helpers || {};
+    const selector = query?.selector || {};
+    const skip = Number.isFinite(query?.skip) && query.skip > 0 ? query.skip : 0;
+    const limit = Number.isFinite(query?.limit) ? query.limit : Number.POSITIVE_INFINITY;
+    const maxMatches = Number.isFinite(limit) ? skip + limit : Number.POSITIVE_INFINITY;
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const index = tx.objectStore(DOCUMENT_STORE).index('collectionLwtId');
+    const range = IDBKeyRange.bound(
+      [this.name, 0, ''],
+      [this.name, Number.MAX_SAFE_INTEGER, '\uffff'],
+      false,
+      false,
+    );
+    const documents = [];
+    await iterateCursor(index.openCursor(range, 'prev'), (cursor) => {
+      if (!cursor) return false;
+      const record = cursor.value;
+      if (!record.deleted && matchesSelector(record.doc, selector)) {
+        documents.push(record.doc);
+      }
+      return documents.length < maxMatches;
+    });
+    await idbTransactionDone(tx);
+    let sorted = sortDocuments(documents, query?.sort || []);
+    if (skip > 0) sorted = sorted.slice(skip);
+    if (Number.isFinite(limit)) sorted = sorted.slice(0, limit);
+    return sorted;
+  }
+
   async getChangedDocumentsSince(checkpoint = null, limit = 100, options = {}) {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || '');
@@ -309,6 +347,32 @@ function selectBestIndex(indexes, selectorFields = [], sortFields = []) {
     }
   }
   return best ? { ...best, fields: [...best.fields], matchedFields: bestScore } : null;
+}
+
+function canUseCollectionLwtQuery(query = {}) {
+  if (!Number.isFinite(query?.limit)) return false;
+  const sortFields = normalizeSortFields(query?.sort);
+  if (!sortFields.length) return false;
+  const firstSort = sortFields[0];
+  if (!['updated_at_ms', 'updatedAtMs', '_meta.lwt'].includes(firstSort)) return false;
+  const firstSortEntry = Array.isArray(query?.sort) ? query.sort[0] : null;
+  const direction = typeof firstSortEntry === 'string'
+    ? 'asc'
+    : String(Object.values(firstSortEntry || {})[0] || '').toLowerCase();
+  return ['desc', '-1'].includes(direction);
+}
+
+function applyQueryToDocuments(docs = [], query = {}, helpers = {}) {
+  const { matchesSelector = () => true, sortDocuments = (items) => items } = helpers || {};
+  let filtered = docs.filter((doc) => matchesSelector(doc, query?.selector || {}));
+  filtered = sortDocuments(filtered, query?.sort || []);
+  if (Number.isFinite(query?.skip) && query.skip > 0) {
+    filtered = filtered.slice(query.skip);
+  }
+  if (Number.isFinite(query?.limit)) {
+    filtered = filtered.slice(0, query.limit);
+  }
+  return filtered;
 }
 
 function normalizeSortFields(sort = []) {

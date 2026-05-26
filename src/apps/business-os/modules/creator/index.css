@@ -1,5 +1,4 @@
-.creator-module[data-creator-root],
-.module-root[data-module-root="creator"] {
+.creator-module[data-creator-root] {
   display: grid;
   grid-template-columns: var(--creator-left-width, 320px) 12px minmax(0, 1fr);
   gap: 0;
@@ -96,8 +95,7 @@
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
 @media (max-width: 768px) {
-  .creator-module[data-creator-root],
-  .module-root[data-module-root="creator"] {
+  .creator-module[data-creator-root] {
     grid-template-columns: 1fr;
   }
   .creator-left,

@@ -399,6 +399,9 @@ function wireEvents() {
   els.root?.querySelectorAll('[data-toggle-nav]').forEach(el => {
     el.addEventListener('click', handleToggleNavClick);
   });
+  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
+    el.addEventListener('click', handleCategoryClick);
+  });
   els.root?.querySelector('[data-action="create-notebook"]')?.addEventListener('click', handleCreateNotebookClick);
   els.root?.querySelector('[data-action="create-tag"]')?.addEventListener('click', handleCreateTagClick);
   
@@ -454,6 +457,9 @@ function wireEvents() {
 function unbindEvents() {
   els.pinPad?.removeEventListener('click', handlePinPadClick);
   els.lockAppBtn?.removeEventListener('click', handleLockAppClick);
+  els.folderList?.querySelectorAll('[data-nav-category]').forEach(el => {
+    el.removeEventListener('click', handleCategoryClick);
+  });
   els.search?.removeEventListener('input', handleSearch);
   els.filterTrigger?.removeEventListener('click', handleFilterTriggerClick);
   els.notebookSelectBtn?.removeEventListener('click', handleNotebookSelectBtnClick);

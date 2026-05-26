@@ -287,14 +287,22 @@ class CtoxRxQuery {
   }
 
   async exec() {
-    let docs = await this.collection.storageCollection.allDocuments();
-    docs = docs.filter((doc) => matchesSelector(doc, this.query.selector));
-    docs = sortDocuments(docs, this.query.sort);
-    if (Number.isFinite(this.query.skip) && this.query.skip > 0) {
-      docs = docs.slice(this.query.skip);
-    }
-    if (Number.isFinite(this.query.limit)) {
-      docs = docs.slice(0, this.query.limit);
+    let docs;
+    if (typeof this.collection.storageCollection.queryDocuments === 'function') {
+      docs = await this.collection.storageCollection.queryDocuments(this.query, {
+        matchesSelector,
+        sortDocuments,
+      });
+    } else {
+      docs = await this.collection.storageCollection.allDocuments();
+      docs = docs.filter((doc) => matchesSelector(doc, this.query.selector));
+      docs = sortDocuments(docs, this.query.sort);
+      if (Number.isFinite(this.query.skip) && this.query.skip > 0) {
+        docs = docs.slice(this.query.skip);
+      }
+      if (Number.isFinite(this.query.limit)) {
+        docs = docs.slice(0, this.query.limit);
+      }
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;

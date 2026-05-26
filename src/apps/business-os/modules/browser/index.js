@@ -64,14 +64,12 @@ export async function mount(ctx) {
   };
 
   const cleanups = [];
-  const scheduleRefresh = debounce(loadAndRender, 80);
+  let mounted = true;
+  const scheduleRefresh = debounce(safeLoadAndRender, 80);
 
   for (const collectionName of ['business_commands', 'browser_sessions', 'browser_tabs', 'browser_frames', 'browser_input_events', 'ctox_queue_tasks']) {
-    try {
-      await ctx.sync?.startCollection?.(collectionName);
-    } catch (error) {
-      console.warn(`[browser] ${collectionName} sync start failed`, error);
-    }
+    ctx.sync?.startCollection?.(collectionName)
+      ?.catch?.((error) => console.warn(`[browser] ${collectionName} sync start failed`, error));
   }
 
   for (const collection of [
@@ -86,48 +84,48 @@ export async function mount(ctx) {
     if (sub?.unsubscribe) cleanups.push(() => sub.unsubscribe());
   }
 
-  refs.refresh?.addEventListener('click', loadAndRender);
+  refs.refresh?.addEventListener('click', safeLoadAndRender);
   refs.start?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.start', {
     url: refs.address?.value || 'https://example.com',
-  }).then(loadAndRender));
-  refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(loadAndRender));
+  }).then(safeLoadAndRender));
+  refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
   refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
     url: refs.address?.value || 'https://example.com',
-  }).then(loadAndRender));
-  refs.back?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.back').then(loadAndRender));
-  refs.forward?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.forward').then(loadAndRender));
-  refs.reload?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reload').then(loadAndRender));
-  refs.sendToCtox?.addEventListener('click', () => sendBrowserContextToCtox(ctx, state).then(loadAndRender));
+  }).then(safeLoadAndRender));
+  refs.back?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.back').then(safeLoadAndRender));
+  refs.forward?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.forward').then(safeLoadAndRender));
+  refs.reload?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reload').then(safeLoadAndRender));
+  refs.sendToCtox?.addEventListener('click', () => sendBrowserContextToCtox(ctx, state).then(safeLoadAndRender));
   refs.authAssist?.addEventListener('click', (event) => {
     const fillButton = event.target?.closest?.('[data-browser-credential-fill]');
     if (fillButton) {
-      fillWebStackCredential(ctx, state).then(loadAndRender);
+      fillWebStackCredential(ctx, state).then(safeLoadAndRender);
       return;
     }
     const completeButton = event.target?.closest?.('[data-browser-auth-complete]');
     if (completeButton) {
-      completeWebStackAuthAssist(ctx, state).then(loadAndRender);
+      completeWebStackAuthAssist(ctx, state).then(safeLoadAndRender);
       return;
     }
     const captureButton = event.target?.closest?.('[data-browser-web-stack-capture]');
-    if (captureButton) sendBrowserContextToCtox(ctx, state, { webStack: true }).then(loadAndRender);
+    if (captureButton) sendBrowserContextToCtox(ctx, state, { webStack: true }).then(safeLoadAndRender);
     const extractButton = event.target?.closest?.('[data-browser-web-stack-extract]');
-    if (extractButton) extractWebStackFields(ctx, state).then(loadAndRender);
+    if (extractButton) extractWebStackFields(ctx, state).then(safeLoadAndRender);
   });
-  refs.seed?.addEventListener('click', () => seedSyntheticFrame(ctx, refs.address?.value || 'https://example.com').then(loadAndRender));
-  refs.clear?.addEventListener('click', () => clearSyntheticFrames(ctx).then(loadAndRender));
+  refs.seed?.addEventListener('click', () => seedSyntheticFrame(ctx, refs.address?.value || 'https://example.com').then(safeLoadAndRender));
+  refs.clear?.addEventListener('click', () => clearSyntheticFrames(ctx).then(safeLoadAndRender));
   refs.sessionList?.addEventListener('click', (event) => {
     const item = event.target?.closest?.('[data-browser-session-id]');
     if (!item) return;
     state.selectedSessionId = item.dataset.browserSessionId || '';
-    loadAndRender();
+    safeLoadAndRender();
   });
   refs.form?.addEventListener('submit', (event) => {
     event.preventDefault();
     const commandType = state.latestSession?.id ? 'browser.navigate' : 'browser.session.start';
     dispatchBrowserCommand(ctx, state, commandType, {
       url: refs.address?.value || 'https://example.com',
-    }).then(loadAndRender);
+    }).then(safeLoadAndRender);
   });
   installInputHandlers(ctx, refs, state, scheduleRefresh);
   const viewerHeartbeat = setInterval(() => {
@@ -135,25 +133,36 @@ export async function mount(ctx) {
   }, VIEWER_HEARTBEAT_MS);
   cleanups.push(() => clearInterval(viewerHeartbeat));
 
-  await loadAndRender();
+  safeLoadAndRender();
 
   return () => {
+    mounted = false;
     for (const cleanup of cleanups) {
       try { cleanup(); } catch (error) { console.error('[browser] cleanup failed', error); }
     }
     ctx.host.replaceChildren();
   };
 
+  function safeLoadAndRender() {
+    loadAndRender().catch((error) => console.warn('[browser] refresh failed', error));
+  }
+
   async function loadAndRender() {
-    const [commands, sessions, tabs, frames, inputs, handoffTasks] = await Promise.all([
-      readCollection(ctx.db?.raw?.business_commands),
-      readCollection(ctx.db?.raw?.browser_sessions),
-      readCollection(ctx.db?.raw?.browser_tabs),
-      readCollection(ctx.db?.raw?.browser_frames),
-      readCollection(ctx.db?.raw?.browser_input_events),
-      readCollection(ctx.db?.raw?.ctox_queue_tasks),
+    if (!mounted) return;
+    const [commands, sessions, tabs, inputs, handoffTasks] = await Promise.all([
+      readCollection(ctx.db?.raw?.business_commands, { limit: 50 }),
+      readCollection(ctx.db?.raw?.browser_sessions, { limit: 20 }),
+      readCollection(ctx.db?.raw?.browser_tabs, { limit: 40 }),
+      readCollection(ctx.db?.raw?.browser_input_events, { limit: 80 }),
+      readCollection(ctx.db?.raw?.ctox_queue_tasks, { limit: 50 }),
     ]);
     const selectedSession = state.selectedSessionId ? latestSession(sessions, state.selectedSessionId) : null;
+    const frameSessionId = selectedSession?.id || state.selectedSessionId || '';
+    const frames = await readCollection(ctx.db?.raw?.browser_frames, {
+      limit: frameSessionId ? 20 : 30,
+      selector: frameSessionId ? { session_id: frameSessionId } : {},
+    });
+    if (!mounted) return;
     const newestFrame = latestFrame(frames);
     state.latestSession = selectedSession || latestSession(sessions, newestFrame?.session_id) || latestSession(sessions);
     state.selectedSessionId = state.latestSession?.id || '';
@@ -687,9 +696,12 @@ function pointerButton(button) {
   return 'left';
 }
 
-async function readCollection(collection) {
+async function readCollection(collection, options = {}) {
   if (!collection?.find) return [];
-  const docs = await collection.find().exec();
+  const limit = Number.isFinite(options.limit) ? options.limit : 100;
+  const selector = options.selector || {};
+  const sort = options.sort || [{ updated_at_ms: 'desc' }];
+  const docs = await collection.find({ selector, sort, limit }).exec();
   return docs
     .map((doc) => doc?.toJSON?.() || doc)
     .filter((doc) => doc && doc._deleted !== true);
