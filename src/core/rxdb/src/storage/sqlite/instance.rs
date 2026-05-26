@@ -611,12 +611,68 @@ impl RxStorageInstanceSqlite {
 
         // Correctness: skip + global sort require us to know the order of
         // ALL matches before deciding which N to emit. Per-chunk sorting
-        // would mis-page across batches. We collect matches in RAM (memory
-        // bound = O(matches), not O(table)), sort globally once, drop the
-        // first `skip` rows, then chunk the remainder for emission. The
-        // streaming benefit is preserved on the unsorted-or-large case
-        // because we still pull rows one at a time from SQLite — the
-        // bounded-memory invariant is over the *table*, not the matches.
+        // would mis-page across batches.
+        //
+        // Scalability: when `limit` is set (the V1.5 windowed case), we only
+        // need the top-(skip+limit) matches in global sort order, then we
+        // drop the first `skip` rows. We keep a single bounded, sorted-by-
+        // comparator buffer of capacity `cap = skip+limit` and stream rows
+        // through it: a row that compares >= the current worst-of-top-K is
+        // discarded immediately. Memory is therefore O(skip+limit), not
+        // O(matches). For 1M matches and limit=100, that's 100 docs in RAM
+        // instead of 1M.
+        //
+        // When `limit` is unbounded (rare V1.5 path; mostly replication
+        // pull-all), we fall back to collecting all matches. That mode is
+        // already the right shape for pull-replication callers and will be
+        // addressed separately when limit-less sort gets pushed into SQLite.
+        let cap = skip.saturating_add(limit);
+        let chunk = chunk_size.max(1);
+        if cap < usize::MAX {
+            // Bounded top-K scan. `top` is kept ASC-sorted by the query's
+            // sort order; `top[0]` is the best match, `top[cap-1]` is the
+            // worst element we still keep.
+            let mut top: Vec<Value> = Vec::with_capacity(cap.min(64 * 1024));
+            for_each_document(&read_conn, &self.table_name, |doc| {
+                if !matcher(&doc) {
+                    return Ok(true);
+                }
+                if top.len() < cap {
+                    let pos = top.partition_point(|existing| {
+                        comparator(existing, &doc) != std::cmp::Ordering::Greater
+                    });
+                    top.insert(pos, doc);
+                } else {
+                    // top is full; discard `doc` unless it is strictly better
+                    // than the current worst (=last) element.
+                    let worst = top.last().expect("top is full so non-empty");
+                    if comparator(&doc, worst) == std::cmp::Ordering::Less {
+                        let pos = top.partition_point(|existing| {
+                            comparator(existing, &doc) != std::cmp::Ordering::Greater
+                        });
+                        top.insert(pos, doc);
+                        top.pop();
+                    }
+                }
+                Ok(true)
+            })?;
+            if skip >= top.len() {
+                return Ok(());
+            }
+            let mut window = top.split_off(skip);
+            drop(top);
+            // window.len() <= limit by construction (cap = skip + limit).
+            while !window.is_empty() {
+                let take = window.len().min(chunk);
+                let batch: Vec<Value> = window.drain(..take).collect();
+                if !visit(batch)? {
+                    return Ok(());
+                }
+            }
+            return Ok(());
+        }
+        // Limit-less path (cap == usize::MAX). Collect all matches, global
+        // sort, drop skip, emit. Memory: O(matches).
         let mut matches: Vec<Value> = Vec::new();
         for_each_document(&read_conn, &self.table_name, |doc| {
             if matcher(&doc) {
@@ -630,10 +686,6 @@ impl RxStorageInstanceSqlite {
         }
         let mut window = matches.split_off(skip);
         drop(matches);
-        if window.len() > limit {
-            window.truncate(limit);
-        }
-        let chunk = chunk_size.max(1);
         while !window.is_empty() {
             let take = window.len().min(chunk);
             let batch: Vec<Value> = window.drain(..take).collect();
@@ -936,6 +988,161 @@ mod tests {
             collected, expected,
             "skip=20 limit=20 sort=age asc must yield ages 20..40 in order, got {:?}",
             collected
+        );
+    }
+
+    #[tokio::test]
+    async fn query_stream_bounded_top_k_holds_at_skip_plus_limit_when_matches_are_huge() {
+        // Review follow-up: the in-RAM working set for a sorted+windowed
+        // query must be bounded by `skip + limit`, not by the total number
+        // of matches. We seed 4 000 docs, request skip=10 limit=20 sort=age
+        // asc, and verify the output is the 20 docs with age 10..30 in
+        // order. Combined with the bounded-top-K implementation, that means
+        // 30 docs were held in RAM at peak — not 4 000.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        // Reverse-sorted insertion stresses the discard-worst branch: every
+        // incoming doc is BETTER than the current worst-of-top-K, so the
+        // bounded buffer churns maximally.
+        let total: i64 = 4_000;
+        let rows: Vec<BulkWriteRow> = (0..total)
+            .rev()
+            .enumerate()
+            .map(|(i, age)| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{i:05}"), "1-a", age, false, i as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({})),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: Some(20),
+                skip: Some(10),
+            },
+        );
+        let prepared = prepare_query(&schema, filled).unwrap();
+        let mut collected: Vec<i64> = Vec::new();
+        instance
+            .query_stream(&prepared, 7, |batch| {
+                for d in batch {
+                    collected.push(d.get("age").and_then(Value::as_i64).unwrap());
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let expected: Vec<i64> = (10..30).collect();
+        assert_eq!(
+            collected, expected,
+            "bounded top-K must yield ages 10..30 across 4000 reverse-sorted matches"
+        );
+    }
+
+    #[tokio::test]
+    async fn query_stream_bounded_top_k_handles_skip_past_match_count() {
+        // Edge: if skip exceeds the total number of matches, the stream
+        // must produce zero batches (not panic, not emit an empty batch).
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows: Vec<BulkWriteRow> = (0..10)
+            .map(|i| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{i}"), "1-a", i as i64, false, i as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({})),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: Some(50),
+                skip: Some(100),
+            },
+        );
+        let prepared = prepare_query(&schema, filled).unwrap();
+        let mut batches = 0usize;
+        instance
+            .query_stream(&prepared, 5, |_batch| {
+                batches += 1;
+                Ok(true)
+            })
+            .unwrap();
+        assert_eq!(batches, 0, "skip past match count must emit zero batches");
+    }
+
+    #[tokio::test]
+    async fn query_stream_unbounded_limit_still_sorts_globally() {
+        // When limit is None the bounded top-K path is bypassed and we fall
+        // back to collect-all + global-sort. That path must keep the same
+        // ordering guarantees the bounded path provides.
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let ages: Vec<i64> = vec![7, 1, 9, 3, 5, 8, 2, 6, 4, 0];
+        let rows: Vec<BulkWriteRow> = ages
+            .iter()
+            .enumerate()
+            .map(|(i, age)| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("doc-{i}"), "1-a", *age, false, i as f64),
+            })
+            .collect();
+        instance.bulk_write(rows, "seed").await.unwrap();
+
+        let mut sort = HashMap::new();
+        sort.insert("age".to_string(), "asc".to_string());
+        let filled = normalize_mango_query(
+            &schema,
+            MangoQuery {
+                selector: Some(json!({})),
+                sort: Some(vec![sort]),
+                index: None,
+                limit: None,
+                skip: Some(3),
+            },
+        );
+        let prepared = prepare_query(&schema, filled).unwrap();
+        let mut collected: Vec<i64> = Vec::new();
+        instance
+            .query_stream(&prepared, 4, |batch| {
+                for d in batch {
+                    collected.push(d.get("age").and_then(Value::as_i64).unwrap());
+                }
+                Ok(true)
+            })
+            .unwrap();
+        let expected: Vec<i64> = (3..10).collect();
+        assert_eq!(
+            collected, expected,
+            "unbounded limit path must still globally sort and drop the skip prefix"
         );
     }
 

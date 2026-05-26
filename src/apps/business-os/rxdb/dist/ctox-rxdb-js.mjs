@@ -1,4 +1,4 @@
-// ../../apps/business-os/rxdb/src/protocol-contract.generated.mjs
+// src/protocol-contract.generated.mjs
 var CTOX_RXDB_PROTOCOL = "ctox-rxdb-protocol-v1";
 var CTOX_PROTOCOL_PHASE = "rxdb-protocol-handshake";
 var CTOX_REQUIRED_PROTOCOL_CAPABILITIES = Object.freeze([
@@ -39,7 +39,7 @@ var CTOX_FILE_RPC = Object.freeze({
   maxBytesPerChunk: 262144
 });
 
-// ../../apps/business-os/rxdb/src/schema.mjs
+// src/schema.mjs
 var CTOX_SCHEMA_HASH_CAPABILITY = "ctox-schema-hash-v1";
 var CTOX_PEER_SESSION_CAPABILITY = "ctox-peer-session-v1";
 var CTOX_CHECKPOINT_EPOCH_CAPABILITY = "ctox-checkpoint-epoch-v1";
@@ -288,7 +288,7 @@ function structuredCloneSafe(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-// ../../apps/business-os/rxdb/src/event-target.mjs
+// src/event-target.mjs
 var CtoxEventEmitter = class {
   constructor() {
     this.target = new EventTarget();
@@ -321,7 +321,7 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
   });
 }
 
-// ../../apps/business-os/rxdb/src/storage-indexeddb.mjs
+// src/storage-indexeddb.mjs
 var DB_VERSION = 1;
 var DOCUMENT_STORE = "documents";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
@@ -733,7 +733,7 @@ var ctoxIndexedDbStorageTestInternals = {
   selectBestIndex
 };
 
-// ../../apps/business-os/rxdb/src/frame-contract.generated.mjs
+// src/frame-contract.generated.mjs
 var CTOX_FRAME_PROTOCOL = "ctox-rxdb-frame-v1";
 var MAX_INLINE_FRAME_BYTES = 14336;
 var MAX_CHUNK_CHARS = 10240;
@@ -741,7 +741,7 @@ var MAX_TRANSFER_BYTES = 8388608;
 var FRAME_ACK_WINDOW = 4;
 var MAX_FRAME_RETRIES = 2;
 
-// ../../apps/business-os/rxdb/src/webrtc-native.mjs
+// src/webrtc-native.mjs
 var SEND_BUFFER_HIGH_WATER = 512 * 1024;
 var SEND_BUFFER_LOW_WATER = 128 * 1024;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
@@ -1892,7 +1892,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ../../apps/business-os/rxdb/src/observable.mjs
+// src/observable.mjs
 var CtoxSubject = class {
   constructor(initialValue) {
     this.value = initialValue;
@@ -1918,7 +1918,7 @@ var CtoxSubject = class {
   }
 };
 
-// ../../apps/business-os/rxdb/src/chunk-decoder.mjs
+// src/chunk-decoder.mjs
 async function decodeChunk(chunk) {
   if (!chunk || typeof chunk !== "object") {
     throw new TypeError("chunk must be an object");
@@ -1960,7 +1960,7 @@ async function deflateInflate(bytes) {
   return inflated.toString("utf8");
 }
 
-// ../../apps/business-os/rxdb/src/demand-loading-transport.mjs
+// src/demand-loading-transport.mjs
 var ACK_RESPONSE = Object.freeze({ ack: true });
 function createDemandLoadingTransport({ getPeerId } = {}) {
   if (typeof getPeerId !== "function") {
@@ -2103,7 +2103,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   };
 }
 
-// ../../apps/business-os/rxdb/src/query-fingerprint.mjs
+// src/query-fingerprint.mjs
 var PROTOCOL_VERSION = "1.5";
 function canonicalizeQueryInput(input) {
   if (!input || typeof input !== "object") {
@@ -2215,7 +2215,7 @@ function canonicalizeWindow(window) {
   };
 }
 
-// ../../apps/business-os/rxdb/src/query-demand-loader.mjs
+// src/query-demand-loader.mjs
 var DEFAULT_WINDOW_LIMIT = 200;
 function createQueryDemandLoader({
   storageCollection,
@@ -2511,7 +2511,7 @@ function applyQueryToDocs(docs, query, window) {
   return filtered;
 }
 
-// ../../apps/business-os/rxdb/src/file-demand-loader.mjs
+// src/file-demand-loader.mjs
 var FILE_CHUNK_PRESENCE_KEY = (collection, fileId) => `${collection}|${fileId}`;
 function createFileDemandLoader({
   collectionName,
@@ -2633,7 +2633,7 @@ function dedupeSorted(values) {
   return out;
 }
 
-// ../../apps/business-os/rxdb/src/query-meta-backend-memory.mjs
+// src/query-meta-backend-memory.mjs
 function createMemoryMetaBackend() {
   const queryWindows = /* @__PURE__ */ new Map();
   const documentAccess = /* @__PURE__ */ new Map();
@@ -2695,7 +2695,7 @@ function stringKey(key) {
   throw new TypeError("query window key must be array or string");
 }
 
-// ../../apps/business-os/rxdb/src/query-meta-storage.mjs
+// src/query-meta-storage.mjs
 var SIDECAR_DATABASE_NAME = "ctox_business_os_v1_5_meta";
 var SIDECAR_PIN_RECENT_READ_TTL_MS = 6e4;
 var PIN_RECENT_READ = "recently-read";
@@ -2955,7 +2955,7 @@ function stringKey2(key) {
   throw new TypeError("query window key must be array or string");
 }
 
-// ../../apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
+// src/query-meta-backend-indexeddb.mjs
 var SIDECAR_DB_VERSION = 1;
 var STORE_QUERY_WINDOWS = "queryWindows";
 var STORE_DOCUMENT_ACCESS = "documentAccess";
@@ -3108,7 +3108,7 @@ function runRequest(request) {
   });
 }
 
-// ../../apps/business-os/rxdb/src/replication-webrtc.mjs
+// src/replication-webrtc.mjs
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
   "ctox-file-chunks-v1",
@@ -3655,7 +3655,7 @@ function normalizeRemoteProtocol(payload) {
   };
 }
 
-// ../../apps/business-os/rxdb/src/rx-database.mjs
+// src/rx-database.mjs
 function getRxStorageDexie() {
   return { name: "ctox-indexeddb-native" };
 }
@@ -4157,7 +4157,7 @@ var ctoxRxdbTestInternals = {
   sortDocuments
 };
 
-// ../../apps/business-os/rxdb/src/v1_5_status.mjs
+// src/v1_5_status.mjs
 var V1_5_QUERY_FETCH_CAPABILITY = CTOX_QUERY_FETCH_CAPABILITY;
 var V1_5_QUERY_RPC = CTOX_QUERY_RPC;
 var V1_5_STATUS_FIELDS = Object.freeze([
@@ -4229,7 +4229,7 @@ function snapshotV1_5Status(state) {
   return snapshot;
 }
 
-// ../../apps/business-os/rxdb/src/multi-tab-broker.mjs
+// src/multi-tab-broker.mjs
 var CHANNEL_PREFIX = "ctox-rxdb-v1_5-broker-";
 var CLAIM_TTL_MS = 3e4;
 function createBroadcastChannelBroker({ databaseName, tabId = randomTabId(), clock = Date.now } = {}) {
@@ -4329,7 +4329,7 @@ function randomTabId() {
   return `tab-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-// ../../apps/business-os/rxdb/src/advanced-status-bridge.mjs
+// src/advanced-status-bridge.mjs
 function buildBusinessOsAdvancedStatus({
   v15Status,
   peerSessions = [],
