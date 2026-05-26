@@ -897,6 +897,9 @@ stop_ctox_services() {
 kill_residual_processes() {
   command -v pkill >/dev/null 2>&1 || return 0
   pkill -x ctox >/dev/null 2>&1 || true
+  pkill -x ctox-real >/dev/null 2>&1 || true
+  pkill -f 'ctox business-os serve' >/dev/null 2>&1 || true
+  pkill -f 'ctox-real business-os serve' >/dev/null 2>&1 || true
 }
 
 sync_skills_to_codex_home() {
