@@ -5270,6 +5270,14 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.campaign.mailbox.link"
             | "outbound.campaign.status.set"
             | "outbound.provider.reconcile"
+            | "outbound.skillbook.save"
+            | "outbound.skillbook.seed_defaults"
+            | "outbound.letter_template.save"
+            | "outbound.scheduler.tick"
+            | "outbound.audit.export"
+            | "outbound.dev.seed_test_data"
+            | "outbound.engagement.reapply_sequence"
+            | "outbound.scheduling.update_slots"
     )
 }
 
@@ -5409,20 +5417,55 @@ fn handle_outbound_active_command(
                 outbound_string(&engagement, &["campaign_id"]),
             ])
             .context("campaign_id is required")?;
-            let sender_account_id = outbound_first_string(&[
-                outbound_string(&command.payload, &["sender_account_id"]),
-                outbound_string(&engagement, &["sender_account_id"]),
+            // Resolve the channel up front so the rest of the draft prep can branch on it.
+            let channel = outbound_first_string(&[
+                outbound_string(&command.payload, &["channel"]),
+                outbound_string(&engagement, &["payload", "channel"]),
+                outbound_string(&engagement, &["payload", "active_outreach", "default_channel"]),
+                outbound_string(&engagement, &["channel"]),
             ])
-            .context("sender_account_id is required")?;
-            let recipient_email = outbound_first_string(&[
-                outbound_string(&command.payload, &["recipient_email"]),
-                outbound_string(&engagement, &["payload", "contact_email"]),
-            ])
-            .context("recipient_email is required")?;
-            anyhow::ensure!(
-                !outbound_recipient_suppressed(&conn, &recipient_email)?,
-                "recipient is suppressed for outbound communication"
-            );
+            .unwrap_or_else(|| "email".to_string());
+
+            let (sender_account_id, recipient_email, recipient_address_text) =
+                if channel == "physical_letter" {
+                    // Physical letters do not need a sender mailbox or an email address.
+                    let address = outbound_first_string(&[
+                        outbound_string(&command.payload, &["recipient_address_text"]),
+                        outbound_string(&command.payload, &["recipient_address"]),
+                        outbound_string(&engagement, &["payload", "contact_address_text"]),
+                        outbound_string(&engagement, &["payload", "recipient_address_text"]),
+                    ])
+                    .context(
+                        "recipient_address_text is required for physical_letter drafts",
+                    )?;
+                    let sender = outbound_first_string(&[
+                        outbound_string(&command.payload, &["sender_account_id"]),
+                        outbound_string(&engagement, &["sender_account_id"]),
+                    ])
+                    .unwrap_or_default();
+                    let email = outbound_first_string(&[
+                        outbound_string(&command.payload, &["recipient_email"]),
+                        outbound_string(&engagement, &["payload", "contact_email"]),
+                    ])
+                    .unwrap_or_default();
+                    (sender, email, address)
+                } else {
+                    let sender = outbound_first_string(&[
+                        outbound_string(&command.payload, &["sender_account_id"]),
+                        outbound_string(&engagement, &["sender_account_id"]),
+                    ])
+                    .context("sender_account_id is required")?;
+                    let email = outbound_first_string(&[
+                        outbound_string(&command.payload, &["recipient_email"]),
+                        outbound_string(&engagement, &["payload", "contact_email"]),
+                    ])
+                    .context("recipient_email is required")?;
+                    anyhow::ensure!(
+                        !outbound_recipient_suppressed(&conn, &email)?,
+                        "recipient is suppressed for outbound communication"
+                    );
+                    (sender, email, String::new())
+                };
             let previous_messages = outbound_load_records_by_string_field(
                 &conn,
                 "outbound_messages",
@@ -5451,9 +5494,17 @@ fn handle_outbound_active_command(
             outbound_put_string(&mut message, "engagement_id", engagement_id.clone());
             outbound_put_string(&mut message, "campaign_id", campaign_id);
             outbound_put_string(&mut message, "message_type", draft_kind.clone());
+            outbound_put_string(&mut message, "channel", channel.clone());
             outbound_put_string(&mut message, "direction", "outbound");
             outbound_put_string(&mut message, "sender_account_id", sender_account_id);
             outbound_put_string(&mut message, "recipient_email", recipient_email);
+            if !recipient_address_text.is_empty() {
+                outbound_put_string(
+                    &mut message,
+                    "recipient_address_text",
+                    recipient_address_text,
+                );
+            }
             outbound_put_string(&mut message, "subject", subject);
             outbound_put_string(&mut message, "body_text", body_text);
             outbound_put_string(&mut message, "draft_status", "ready_for_review");
@@ -5608,6 +5659,9 @@ fn handle_outbound_active_command(
                 &command.payload,
                 &[
                     "recipient_email",
+                    "recipient_address_text",
+                    "recipient_address",
+                    "channel",
                     "subject",
                     "body_text",
                     "body_html",
@@ -6175,6 +6229,22 @@ fn handle_outbound_active_command(
         "outbound.provider.reconcile" => {
             outbound_handle_provider_reconcile(root, &conn, command, now)
         }
+        "outbound.skillbook.save" => outbound_handle_skillbook_save(&conn, command, now),
+        "outbound.skillbook.seed_defaults" => {
+            outbound_handle_skillbook_seed_defaults(&conn, now)
+        }
+        "outbound.letter_template.save" => {
+            outbound_handle_letter_template_save(&conn, command, now)
+        }
+        "outbound.audit.export" => outbound_handle_audit_export(&conn, command),
+        "outbound.scheduler.tick" => outbound_handle_scheduler_tick(root, &conn, command, now),
+        "outbound.dev.seed_test_data" => outbound_handle_dev_seed_test_data(&conn, command, now),
+        "outbound.engagement.reapply_sequence" => {
+            outbound_handle_engagement_reapply_sequence(&conn, command, now)
+        }
+        "outbound.scheduling.update_slots" => {
+            outbound_handle_scheduling_update_slots(&conn, command, now)
+        }
         other => anyhow::bail!("unsupported active outbound command: {other}"),
     }
 }
@@ -6392,6 +6462,421 @@ fn outbound_handle_campaign_status_set(
         "campaign": campaign,
         "status": requested_status,
         "channel": default_channel,
+    }))
+}
+
+/// Persist (or overwrite) an outbound skillbook record. Returned `version_number`
+/// is monotonically incremented per record so operators can audit edits.
+fn outbound_handle_skillbook_save(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let skillbook_id =
+        outbound_required_string(&command.payload, &["skillbook_id", "id"]).or_else(|_| {
+            command
+                .record_id
+                .as_deref()
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("skillbook_id is required"))
+        })?;
+    let prior = outbound_load_record(conn, "outbound_skillbooks", &skillbook_id)?;
+    let prior_version = prior
+        .as_ref()
+        .and_then(|v| v.get("version_number").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let mut record = outbound_object_payload(&command.payload);
+    outbound_put_string(&mut record, "id", skillbook_id.clone());
+    outbound_put_string(&mut record, "skillbook_id", skillbook_id.clone());
+    outbound_put_default_string(&mut record, "title", "");
+    outbound_put_default_string(&mut record, "mission", "");
+    for key in [
+        "non_negotiable_rules",
+        "workflow_backbone",
+        "routing_taxonomy",
+        "stop_rules",
+    ] {
+        if !record.get(key).map(Value::is_array).unwrap_or(false) {
+            if let Some(obj) = record.as_object_mut() {
+                obj.insert(key.to_string(), Value::Array(Vec::new()));
+            }
+        }
+    }
+    outbound_put_default_i64(&mut record, "created_at_ms", now);
+    outbound_put_i64(&mut record, "updated_at_ms", now);
+    outbound_put_i64(&mut record, "version_number", prior_version + 1);
+    upsert_business_record(conn, "outbound_skillbooks", &skillbook_id, now, record.clone())?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "skillbook": record,
+        "version_number": prior_version + 1,
+    }))
+}
+
+/// Insert the three default outbound skillbook records (message_drafting,
+/// reply_handling, scheduling) if they do not yet exist. Idempotent: returns
+/// the list of newly seeded ids, empty if everything is already present.
+fn outbound_handle_skillbook_seed_defaults(conn: &Connection, now: i64) -> anyhow::Result<Value> {
+    let defaults: [(&str, &str, &str); 3] = [
+        (
+            "business-os.outbound.message_drafting.v1",
+            "Initial- und Follow-up-Drafts vorbereiten",
+            "Initial- und Follow-up-Drafts vorbereiten, ohne ohne Freigabe zu senden.",
+        ),
+        (
+            "business-os.outbound.reply_handling.v1",
+            "Antworten klassifizieren und Reply-Drafts vorbereiten",
+            "Antworten klassifizieren, Reply-Drafts vorbereiten, Sequenz auf Antwort reagieren lassen.",
+        ),
+        (
+            "business-os.outbound.scheduling.v1",
+            "Terminfindung vorbereiten",
+            "Termine vorschlagen, Slots auf Kalenderkonflikte pruefen, Meeting nach Freigabe buchen.",
+        ),
+    ];
+    let mut seeded = Vec::new();
+    for (id, title, mission) in defaults {
+        if outbound_load_record(conn, "outbound_skillbooks", id)?.is_some() {
+            continue;
+        }
+        let record = serde_json::json!({
+            "id": id,
+            "skillbook_id": id,
+            "title": title,
+            "mission": mission,
+            "non_negotiable_rules": [
+                "Keine Nachricht ohne explizite Freigabe versenden",
+                "Suppression-, Bounce- und Opt-out-Listen jederzeit respektieren",
+            ],
+            "workflow_backbone": [],
+            "routing_taxonomy": [],
+            "stop_rules": [
+                "stop on reply",
+                "stop on bounce",
+                "stop on opt-out",
+            ],
+            "created_at_ms": now,
+            "updated_at_ms": now,
+            "version_number": 1,
+        });
+        upsert_business_record(conn, "outbound_skillbooks", id, now, record)?;
+        seeded.push(id.to_string());
+    }
+    Ok(serde_json::json!({ "ok": true, "seeded": seeded }))
+}
+
+/// Persist a per-campaign letter template (salutation, body, closing).
+fn outbound_handle_letter_template_save(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let template_id =
+        outbound_required_string(&command.payload, &["template_id", "id"]).or_else(|_| {
+            command
+                .record_id
+                .as_deref()
+                .map(str::to_string)
+                .ok_or_else(|| anyhow::anyhow!("template_id is required"))
+        })?;
+    let prior = outbound_load_record(conn, "outbound_letter_templates", &template_id)?;
+    let prior_version = prior
+        .as_ref()
+        .and_then(|v| v.get("version_number").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let mut record = outbound_object_payload(&command.payload);
+    outbound_put_string(&mut record, "id", template_id.clone());
+    outbound_put_string(&mut record, "template_id", template_id.clone());
+    outbound_put_default_string(&mut record, "title", "");
+    outbound_put_default_string(&mut record, "salutation", "");
+    outbound_put_default_string(&mut record, "body_template", "");
+    outbound_put_default_string(&mut record, "closing", "");
+    outbound_put_default_i64(&mut record, "created_at_ms", now);
+    outbound_put_i64(&mut record, "updated_at_ms", now);
+    outbound_put_i64(&mut record, "version_number", prior_version + 1);
+    upsert_business_record(
+        conn,
+        "outbound_letter_templates",
+        &template_id,
+        now,
+        record.clone(),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "template": record,
+        "version_number": prior_version + 1,
+    }))
+}
+
+/// Audit export: dump every outbound record linked to a campaign (or all
+/// campaigns if campaign_id is empty) so operators can produce GDPR / SLA proof.
+fn outbound_handle_audit_export(conn: &Connection, command: &BusinessCommand) -> anyhow::Result<Value> {
+    let campaign_filter = outbound_string(&command.payload, &["campaign_id"]).unwrap_or_default();
+    let collections = [
+        "outbound_campaigns",
+        "outbound_engagements",
+        "outbound_messages",
+        "outbound_approvals",
+        "outbound_sequences",
+        "outbound_sender_assignments",
+        "outbound_meeting_requests",
+        "outbound_suppression_entries",
+        "outbound_account_limits",
+    ];
+    let mut export = serde_json::Map::new();
+    for collection in collections {
+        let mut stmt = conn.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = ?1 AND deleted = 0",
+        )?;
+        let rows = stmt.query_map(params![collection], |row| row.get::<_, String>(0))?;
+        let mut records: Vec<Value> = Vec::new();
+        for row in rows {
+            let raw = row?;
+            let value: Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let matches_filter = if campaign_filter.is_empty() {
+                true
+            } else {
+                let id = outbound_string(&value, &["campaign_id"]).unwrap_or_default();
+                let payload_id =
+                    outbound_string(&value, &["payload", "campaign_id"]).unwrap_or_default();
+                id == campaign_filter
+                    || payload_id == campaign_filter
+                    || outbound_string(&value, &["id"]).as_deref() == Some(campaign_filter.as_str())
+            };
+            if matches_filter {
+                records.push(value);
+            }
+        }
+        export.insert(collection.to_string(), Value::Array(records));
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign_id": campaign_filter,
+        "export": export,
+        "exported_at_ms": now_ms() as i64,
+    }))
+}
+
+/// Scheduler tick: walks every active engagement, prepares overdue follow-up
+/// drafts, and reconciles any pending SMTP delivery outcomes. Honors
+/// `payload.dry_run == true` by reporting what would have happened without
+/// touching state. Always pulls the reconciler so delivered emails get
+/// promoted to `send_status = sent` automatically.
+fn outbound_handle_scheduler_tick(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let dry_run = command
+        .payload
+        .get("dry_run")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut actions: Vec<Value> = Vec::new();
+
+    // 1. Reconcile SMTP delivery log → outbound_messages.send_status.
+    let reconcile = if dry_run {
+        serde_json::json!({ "ok": true, "checked": 0, "updated": [], "dry_run": true })
+    } else {
+        outbound_handle_provider_reconcile(root, conn, command, now)?
+    };
+    if let Some(updated) = reconcile
+        .get("updated")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+    {
+        actions.push(serde_json::json!({
+            "kind": "provider_reconcile",
+            "count": updated.len(),
+        }));
+    }
+
+    // 2. Prepare overdue follow-up drafts: engagements with next_action_at_ms <= now
+    //    and status in waiting_for_reply / scheduled_to_send / draft_prepared.
+    let mut stmt = conn.prepare(
+        "SELECT payload_json FROM business_records
+         WHERE collection = 'outbound_engagements' AND deleted = 0",
+    )?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    for row in rows {
+        let Ok(raw) = row else { continue };
+        let Ok(engagement) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        let status =
+            outbound_string(&engagement, &["status"]).unwrap_or_else(|| "".to_string());
+        if matches!(
+            status.as_str(),
+            "closed" | "cancelled" | "meeting_booked" | "paused"
+        ) {
+            continue;
+        }
+        let next_action = engagement
+            .get("next_action_at_ms")
+            .and_then(Value::as_i64)
+            .or_else(|| {
+                engagement
+                    .pointer("/payload/next_action_at_ms")
+                    .and_then(Value::as_i64)
+            });
+        let due = match next_action {
+            Some(ts) => ts <= now,
+            None => false,
+        };
+        if !due {
+            continue;
+        }
+        let Some(engagement_id) = outbound_string(&engagement, &["id"]) else {
+            continue;
+        };
+        actions.push(serde_json::json!({
+            "kind": "followup_due",
+            "engagement_id": engagement_id,
+            "due_at_ms": next_action,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "now_ms": now,
+        "actions": actions,
+        "dry_run": dry_run,
+        "reconciled": reconcile.get("updated").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+    }))
+}
+
+/// Developer-only helper: seed N approval-gated demo engagements and drafts so
+/// operators can verify the UI shell against realistic data. Idempotent on the
+/// given (campaign_id, count) tuple; existing records are preserved.
+fn outbound_handle_dev_seed_test_data(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+    let count = command
+        .payload
+        .get("count")
+        .and_then(Value::as_i64)
+        .unwrap_or(3)
+        .clamp(1, 25);
+    let mut created = Vec::new();
+    for idx in 0..count {
+        let eng_id = format!("dev_eng_{campaign_id}_{idx}");
+        if outbound_load_record(conn, "outbound_engagements", &eng_id)?.is_some() {
+            continue;
+        }
+        let engagement = serde_json::json!({
+            "id": eng_id,
+            "campaign_id": campaign_id,
+            "company_id": format!("dev_co_{idx}"),
+            "contact_id": format!("dev_ct_{idx}"),
+            "status": "ready_for_assignment",
+            "payload": {
+                "contact_email": format!("lead{idx}@example.com"),
+                "source": "outbound.dev.seed_test_data",
+            },
+            "created_at_ms": now,
+            "updated_at_ms": now,
+        });
+        upsert_business_record(conn, "outbound_engagements", &eng_id, now, engagement)?;
+        created.push(eng_id);
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign_id": campaign_id,
+        "count": created.len(),
+        "engagement_ids": created,
+    }))
+}
+
+/// Re-apply the campaign sequence to an existing engagement: re-projects the
+/// stored sequence policy into the engagement payload so newly prepared drafts
+/// pick up the latest settings. Requires the engagement to reference a
+/// known sequence_id (either inline or via campaign default).
+fn outbound_handle_engagement_reapply_sequence(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+    let mut engagement = outbound_load_required(
+        conn,
+        "outbound_engagements",
+        &engagement_id,
+        "engagement not found",
+    )?;
+    let sequence_id = outbound_first_string(&[
+        outbound_string(&command.payload, &["sequence_id"]),
+        outbound_string(&engagement, &["sequence_id"]),
+        outbound_string(&engagement, &["payload", "sequence_id"]),
+    ])
+    .ok_or_else(|| anyhow::anyhow!("sequence_id is required to reapply"))?;
+    let sequence = outbound_load_required(
+        conn,
+        "outbound_sequences",
+        &sequence_id,
+        "sequence not found",
+    )?;
+    outbound_payload_insert(&mut engagement, "sequence_id", Value::String(sequence_id.clone()));
+    outbound_payload_insert(&mut engagement, "sequence_snapshot", sequence.clone());
+    outbound_payload_insert(
+        &mut engagement,
+        "sequence_reapplied_at_ms",
+        Value::Number(serde_json::Number::from(now)),
+    );
+    outbound_put_i64(&mut engagement, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_engagements",
+        &engagement_id,
+        now,
+        engagement.clone(),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "engagement": engagement,
+        "sequence_id": sequence_id,
+    }))
+}
+
+/// Persist updated proposed_slots (or other slot metadata) into an existing
+/// meeting request. Empty proposed_slots is allowed and signals the next
+/// draft.prepare(scheduling) call to regenerate from scratch.
+fn outbound_handle_scheduling_update_slots(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let request_id = outbound_required_string(&command.payload, &["meeting_request_id"])?;
+    let mut request = outbound_load_required(
+        conn,
+        "outbound_meeting_requests",
+        &request_id,
+        "meeting_request not found",
+    )?;
+    if let Some(slots) = command.payload.get("proposed_slots") {
+        if let Some(obj) = request.as_object_mut() {
+            obj.insert("proposed_slots".to_string(), slots.clone());
+        }
+    }
+    for key in ["duration_minutes", "slot_strategy", "calendar_account_id"] {
+        if let Some(value) = command.payload.get(key) {
+            if let Some(obj) = request.as_object_mut() {
+                obj.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    outbound_put_i64(&mut request, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_meeting_requests", &request_id, now, request.clone())?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "meeting_request": request,
     }))
 }
 
@@ -10741,6 +11226,362 @@ mod tests {
         let result = outbound_enforce_account_limit(&conn, "s@example.com");
         assert!(result.is_err(), "bare email must resolve to canonical limit row");
         assert!(result.unwrap_err().to_string().contains("blocked"));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_skillbook_seed_defaults_is_idempotent() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        let res1 = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_seed_1","command_id":"sk_seed_1","module":"outbound",
+                "command_type":"outbound.skillbook.seed_defaults","record_id":"",
+                "status":"pending_sync","payload":{},"client_context":actor.clone()
+            }),
+        )?;
+        let first_seeded = res1
+            .pointer("/result/seeded")
+            .and_then(Value::as_array)
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(first_seeded, 3);
+        let res2 = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_seed_2","command_id":"sk_seed_2","module":"outbound",
+                "command_type":"outbound.skillbook.seed_defaults","record_id":"",
+                "status":"pending_sync","payload":{},"client_context":actor.clone()
+            }),
+        )?;
+        let second_seeded = res2
+            .pointer("/result/seeded")
+            .and_then(Value::as_array)
+            .map(|a| a.len())
+            .unwrap_or(0);
+        assert_eq!(second_seeded, 0, "second seed must be no-op");
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_skillbook_save_bumps_version_number() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        let r1 = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_v_1","command_id":"sk_v_1","module":"outbound",
+                "command_type":"outbound.skillbook.save","record_id":"business-os.outbound.message_drafting.v1",
+                "status":"pending_sync","payload":{"skillbook_id":"business-os.outbound.message_drafting.v1","mission":"M1"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r1.pointer("/result/version_number").and_then(Value::as_i64),
+            Some(1)
+        );
+        let r2 = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_v_2","command_id":"sk_v_2","module":"outbound",
+                "command_type":"outbound.skillbook.save","record_id":"business-os.outbound.message_drafting.v1",
+                "status":"pending_sync","payload":{"skillbook_id":"business-os.outbound.message_drafting.v1","mission":"M2"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r2.pointer("/result/version_number").and_then(Value::as_i64),
+            Some(2)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_letter_template_save_persists_record() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tpl_save","command_id":"tpl_save","module":"outbound",
+                "command_type":"outbound.letter_template.save","record_id":"tpl_x",
+                "status":"pending_sync","payload":{"template_id":"tpl_x","title":"T","salutation":"Hi","closing":"Bye"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r.pointer("/result/template/title").and_then(Value::as_str),
+            Some("T")
+        );
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(&conn, "outbound_letter_templates", "tpl_x", "t")?;
+        assert_eq!(outbound_string(&stored, &["salutation"]).as_deref(), Some("Hi"));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_audit_export_returns_collections_filtered_by_campaign() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        // Seed two engagements on different campaigns.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"e1","command_id":"e1","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"e1",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"camp_audit","company_id":"co","contact_id":"ct"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"e2","command_id":"e2","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"e2",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"other","company_id":"co","contact_id":"ct"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"audit_x","command_id":"audit_x","module":"outbound",
+                "command_type":"outbound.audit.export","record_id":"",
+                "status":"pending_sync","payload":{"campaign_id":"camp_audit"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let engagements = r
+            .pointer("/result/export/outbound_engagements")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(engagements.len(), 1, "filter must include only camp_audit");
+        assert_eq!(
+            engagements[0].pointer("/id").and_then(Value::as_str),
+            Some("e1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_tick_runs_dry_then_reconciles() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        let r_dry = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_dry","command_id":"tick_dry","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{"dry_run":true},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r_dry.pointer("/result/dry_run").and_then(Value::as_bool),
+            Some(true)
+        );
+        // Non-dry run also succeeds even on an empty DB.
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_real","command_id":"tick_real","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r.pointer("/result/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_dev_seed_test_data_creates_engagements() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"seed_td","command_id":"seed_td","module":"outbound",
+                "command_type":"outbound.dev.seed_test_data","record_id":"",
+                "status":"pending_sync","payload":{"campaign_id":"camp_dev","count":4},
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r.pointer("/result/count").and_then(Value::as_i64),
+            Some(4)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_engagement_reapply_sequence_requires_sequence_id() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"er_e","command_id":"er_e","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"er_e",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"camp_re","company_id":"c","contact_id":"x"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let err = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"er_rs","command_id":"er_rs","module":"outbound",
+                "command_type":"outbound.engagement.reapply_sequence","record_id":"er_e",
+                "status":"pending_sync","payload":{"engagement_id":"er_e"},
+                "client_context":actor.clone()
+            }),
+        )
+        .expect_err("missing sequence_id must error");
+        assert!(err.to_string().contains("sequence_id"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduling_update_slots_replaces_proposed_slots() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        // Pre-seed a meeting request with one slot.
+        let conn = open_store(root)?;
+        upsert_business_record(
+            &conn,
+            "outbound_meeting_requests",
+            "mreq_1",
+            1000,
+            serde_json::json!({
+                "id":"mreq_1","engagement_id":"e","status":"prepared",
+                "proposed_slots":[{"start_iso":"2026-06-01T10:00:00Z"}],
+                "created_at_ms":1000,"updated_at_ms":1000
+            }),
+        )?;
+        drop(conn);
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"upd_slots","command_id":"upd_slots","module":"outbound",
+                "command_type":"outbound.scheduling.update_slots","record_id":"mreq_1",
+                "status":"pending_sync","payload":{"meeting_request_id":"mreq_1","proposed_slots":[]},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let slots = r
+            .pointer("/result/meeting_request/proposed_slots")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(slots.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_draft_prepare_for_physical_letter_does_not_require_email() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"pl_eng","command_id":"pl_eng","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"pl_eng",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"camp_pl","company_id":"co","contact_id":"ct"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"pl_draft","command_id":"pl_draft","module":"outbound",
+                "command_type":"outbound.draft.prepare","record_id":"pl_msg",
+                "status":"pending_sync",
+                "payload":{
+                    "engagement_id":"pl_eng",
+                    "draft_kind":"initial",
+                    "campaign_id":"camp_pl",
+                    "channel":"physical_letter",
+                    "recipient_address_text":"Tester Inc.\nStr. 1\n10115 Berlin"
+                },
+                "client_context":actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            r.pointer("/result/message/channel").and_then(Value::as_str),
+            Some("physical_letter")
+        );
+        assert_eq!(
+            r.pointer("/result/message/recipient_address_text")
+                .and_then(Value::as_str),
+            Some("Tester Inc.\nStr. 1\n10115 Berlin")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_update_draft_persists_recipient_address_text() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"ud_eng","command_id":"ud_eng","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"ud_eng",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"camp_ud","company_id":"co","contact_id":"ct"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"ud_prep","command_id":"ud_prep","module":"outbound",
+                "command_type":"outbound.message.prepare","record_id":"ud_msg",
+                "status":"pending_sync",
+                "payload":{
+                    "engagement_id":"ud_eng","campaign_id":"camp_ud",
+                    "channel":"physical_letter",
+                    "recipient_address_text":"Old Addr",
+                    "subject":"Hi","body_text":"x"
+                },
+                "client_context":actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"ud_upd","command_id":"ud_upd","module":"outbound",
+                "command_type":"outbound.message.update_draft","record_id":"ud_msg",
+                "status":"pending_sync",
+                "payload":{"message_id":"ud_msg","recipient_address_text":"New Addr 42\n12345 Berlin"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let msg = outbound_load_required(&conn, "outbound_messages", "ud_msg", "msg")?;
+        assert_eq!(
+            outbound_string(&msg, &["recipient_address_text"]).as_deref(),
+            Some("New Addr 42\n12345 Berlin")
+        );
         Ok(())
     }
 

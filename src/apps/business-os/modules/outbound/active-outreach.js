@@ -557,7 +557,11 @@ function renderApprovalCard(msg) {
   const isPhysical = channel === 'physical_letter';
   const recipientAddress = msg.recipient_address_text || msg.payload?.recipient_address_text || '';
   const busy = stateRef.activeOutreach.busyMessageIds.has(msg.id);
-  const dirty = edits.subject !== undefined || edits.body_text !== undefined;
+  const dirty =
+    edits.subject !== undefined ||
+    edits.body_text !== undefined ||
+    edits.recipient_address_text !== undefined ||
+    edits.recipient_email !== undefined;
   const messageType = msg.message_type || msg.payload?.message_type || '';
   const replyContext = (messageType === 'reply' || messageType === 'scheduling')
     ? renderReplyContextForMessage(msg)
@@ -1345,19 +1349,34 @@ async function startEngagementFromLead(leadId, campaign, { autoDraft }) {
       company_name: lead.company_name || lead.payload?.company_name || '',
       lead_name: lead.lead_name || lead.payload?.lead_name || '',
     });
+    const channel = campaign.payload?.active_outreach?.default_channel
+      || campaign.channel
+      || 'email';
     const mailboxKey = campaign.communication_account_key || campaign.payload?.communication_account_key || '';
-    if (mailboxKey) {
+    if (channel !== 'physical_letter' && mailboxKey) {
       await dispatchOutboundCommand('outbound.engagement.assign_sender', engagementId, {
         engagement_id: engagementId,
         sender_account_id: mailboxKey,
       });
     }
     if (autoDraft) {
-      await dispatchOutboundCommand('outbound.draft.prepare', engagementId, {
+      const draftPayload = {
         engagement_id: engagementId,
         draft_kind: 'initial',
         campaign_id: campaign.id,
-      });
+        channel,
+      };
+      if (channel === 'physical_letter') {
+        draftPayload.recipient_address_text = lead.contact_address_text
+          || lead.payload?.contact_address_text
+          || lead.address_text
+          || lead.payload?.address_text
+          || '';
+      } else {
+        draftPayload.sender_account_id = mailboxKey;
+        draftPayload.recipient_email = lead.contact_email || lead.payload?.contact_email || '';
+      }
+      await dispatchOutboundCommand('outbound.draft.prepare', engagementId, draftPayload);
     }
     await loadActiveOutreachData();
     stateRef.activeOutreach.view = autoDraft ? 'approval_inbox' : 'engagements';
@@ -1372,14 +1391,27 @@ async function prepareDraft(engagementId, draftKind) {
   if (!engagementId || !DRAFT_KINDS.includes(draftKind)) return;
   const engagement = stateRef.engagements.find((e) => e.id === engagementId);
   if (!engagement) return;
+  const campaign = stateRef.campaigns.find((c) => c.id === engagement.campaign_id);
+  const channel = engagement.payload?.channel
+    || campaign?.payload?.active_outreach?.default_channel
+    || campaign?.channel
+    || 'email';
   return withBusyEngagement(engagementId, async () => {
-    await dispatchOutboundCommand('outbound.draft.prepare', engagementId, {
+    const payload = {
       engagement_id: engagementId,
       draft_kind: draftKind,
       campaign_id: engagement.campaign_id,
-      sender_account_id: engagement.sender_account_id,
-      recipient_email: engagement.payload?.contact_email || '',
-    });
+      channel,
+    };
+    if (channel === 'physical_letter') {
+      payload.recipient_address_text = engagement.payload?.contact_address_text
+        || engagement.payload?.recipient_address_text
+        || '';
+    } else {
+      payload.sender_account_id = engagement.sender_account_id;
+      payload.recipient_email = engagement.payload?.contact_email || '';
+    }
+    await dispatchOutboundCommand('outbound.draft.prepare', engagementId, payload);
     await loadActiveOutreachData();
     stateRef.activeOutreach.view = 'approval_inbox';
     triggerRender();
