@@ -3742,6 +3742,64 @@ function ensureCtoxSmokeBinary() {
               && Number(style.opacity || 1) > 0,
           };
         };
+        const moduleRenderContracts = {
+          ctox: {
+            selectors: ['[data-ctox-harness]', '[data-ctox-left]', '[data-ctox-main]', '.ctox-task-board'],
+            minTextLength: 40,
+          },
+          documents: {
+            selectors: ['[data-documents-module]', '.documents-explorer', '[data-documents-list]', '[data-documents-editor]'],
+            minTextLength: 40,
+          },
+          knowledge: {
+            selectors: ['[data-knowledge-root]', '[data-knowledge-list]', '[data-markdown-view]'],
+            minTextLength: 40,
+          },
+          research: {
+            selectors: ['[data-research-root]', '.research-left', '.research-center', '.research-right'],
+            minTextLength: 60,
+          },
+        };
+        const collectModuleRenderEvidence = (moduleId) => {
+          const contract = moduleRenderContracts[moduleId];
+          if (!contract) return { moduleId, ok: true, selectors: [], textLength: 0 };
+          const text = document.body?.innerText || '';
+          const selectorEvidence = contract.selectors.map((selector) => rectEvidence(selector));
+          const missing = selectorEvidence
+            .filter((entry) => !entry?.visible || entry.width < 24 || entry.height < 16)
+            .map((entry, index) => entry || { selector: contract.selectors[index], missing: true });
+          const errorText = failureText();
+          const moduleTextLength = contract.selectors
+            .map((selector) => document.querySelector(selector)?.innerText || document.querySelector(selector)?.textContent || '')
+            .join('\n')
+            .trim()
+            .length;
+          const loadingTextVisible = /Workspace wird geladen|Loading CTOX runtime|Loading tasks|Documents\s+Workspace wird geladen/i.test(text);
+          const ok = missing.length === 0
+            && !errorText
+            && !loadingTextVisible
+            && moduleTextLength >= contract.minTextLength;
+          return {
+            moduleId,
+            ok,
+            selectors: selectorEvidence,
+            textLength: moduleTextLength,
+            missing,
+            errorText,
+            loadingTextVisible,
+          };
+        };
+        const waitForModuleRendered = (moduleId) => waitFor(() => collectModuleRenderEvidence(moduleId), 10000, `render module ${moduleId}`);
+        const openAndVerifyModule = async (moduleId, opener, label) => {
+          const opened = await opener();
+          const renderEvidence = await waitForModuleRendered(moduleId);
+          return {
+            ...opened,
+            expectedModuleId: moduleId,
+            renderEvidence,
+            label,
+          };
+        };
         const collectVisualEvidence = () => {
           const workspace = rectEvidence('.workspace-frame');
           const moduleHost = rectEvidence('[data-module-host]');
@@ -3791,10 +3849,18 @@ function ensureCtoxSmokeBinary() {
         }
         const openedModules = [];
         document.querySelector('.shell-start-menu-panel .start-menu-item')?.click();
-        openedModules.push(await waitForOpenedModule('ctox', 'open first start menu item'));
+        openedModules.push(await openAndVerifyModule(
+          'ctox',
+          () => waitForOpenedModule('ctox', 'open first start menu item'),
+          'start-menu',
+        ));
         for (const moduleId of requiredModules) {
           if (moduleId === 'ctox') continue;
-          openedModules.push(await openModuleByHash(moduleId));
+          openedModules.push(await openAndVerifyModule(
+            moduleId,
+            () => openModuleByHash(moduleId),
+            'hash',
+          ));
         }
         await openStartMenu();
         document.querySelector('.shell-start-menu-panel .show-desktop-btn')?.click();
@@ -5264,6 +5330,8 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_ui_module_count=${result.moduleCount}`);
       console.log(`business_os_ui_start_menu_items=${result.startMenuItemCount}`);
       console.log(`business_os_ui_opened_modules=${result.openedModules.map((entry) => entry.activeModule).join(',')}`);
+      console.log(`business_os_ui_rendered_modules=${result.openedModules.map((entry) => entry.renderEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_min_module_text_length=${Math.min(...result.openedModules.map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
       console.log(`business_os_ui_desktop_opened=${result.desktopOpened ? 1 : 0}`);
       console.log(`business_os_ui_active_module=${result.activeModule || ''}`);
       console.log(`business_os_visual_workspace_visible=${result.visualEvidence?.workspace?.visible ? 1 : 0}`);

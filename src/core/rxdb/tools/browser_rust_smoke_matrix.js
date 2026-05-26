@@ -94,6 +94,8 @@ const modeEvidenceRequirements = {
       'business_os_ui_module_count',
       'business_os_ui_start_menu_items',
       'business_os_ui_opened_modules',
+      'business_os_ui_rendered_modules',
+      'business_os_ui_min_module_text_length',
       'business_os_ui_desktop_opened',
       'business_os_visual_workspace_visible',
       'business_os_visual_desktop_icon_count',
@@ -103,11 +105,13 @@ const modeEvidenceRequirements = {
     minimums: {
       business_os_ui_module_count: 8,
       business_os_ui_start_menu_items: 8,
+      business_os_ui_min_module_text_length: 40,
       business_os_visual_desktop_icon_count: 6,
       business_os_visual_screenshot_unique_colors: 48,
       business_os_visual_screenshot_luma_stddev: 8,
     },
     values: {
+      business_os_ui_rendered_modules: 'ctox,documents,knowledge,research',
       business_os_ui_desktop_opened: 1,
       business_os_visual_workspace_visible: 1,
     },
