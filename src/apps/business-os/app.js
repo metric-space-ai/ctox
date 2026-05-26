@@ -125,7 +125,7 @@ installAdvancedStatusInterface();
 
 if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
   const smokeRoot = typeof globalThis === 'undefined' ? window : globalThis;
-  const smokeApi = { state, reportFileIntegrityError };
+  const smokeApi = { state, openDesktopApp, reportFileIntegrityError };
   smokeRoot.ctoxBusinessOsSmoke = smokeApi;
   window.ctoxBusinessOsSmoke = smokeApi;
 }

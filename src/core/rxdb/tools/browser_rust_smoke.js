@@ -3630,6 +3630,54 @@ function ensureCtoxSmokeBinary() {
         };
       }
 
+      async function openDesktopFileViewerAndWait(fileArgs, expectedPayload) {
+        const smoke = globalThis.ctoxBusinessOsSmoke;
+        if (typeof smoke?.openDesktopApp !== 'function') {
+          throw new Error('Business OS smoke API does not expose openDesktopApp for File Viewer UI regression');
+        }
+        const beforeWindows = document.querySelectorAll('.shell-window').length;
+        const windowId = await smoke.openDesktopApp('file-viewer', {
+          title: fileArgs.name || 'File Viewer',
+          args: fileArgs,
+        });
+        const deadline = Date.now() + 60000;
+        let last = null;
+        while (Date.now() < deadline) {
+          const windows = [...document.querySelectorAll('.shell-window')];
+          const viewerWindows = windows
+            .map((win) => {
+              const text = win.querySelector('[data-file-text]')?.textContent || '';
+              const errorText = win.querySelector('.file-viewer .is-error')?.textContent || '';
+              const title = win.querySelector('[data-window-title]')?.textContent?.trim() || '';
+              return { win, text, errorText, title };
+            })
+            .filter((entry) => entry.text || entry.errorText || /File Viewer|brief\.md|smoke/i.test(entry.title));
+          last = {
+            windowId,
+            beforeWindows,
+            windowCount: windows.length,
+            viewerWindowCount: viewerWindows.length,
+            titles: viewerWindows.map((entry) => entry.title).slice(0, 4),
+            textLength: Math.max(0, ...viewerWindows.map((entry) => entry.text.length)),
+            errorText: viewerWindows.find((entry) => entry.errorText)?.errorText || '',
+          };
+          if (last.errorText) {
+            throw new Error(`Business OS File Viewer desktop app rendered an error: ${JSON.stringify(last)}`);
+          }
+          if (viewerWindows.some((entry) => entry.text === expectedPayload)) {
+            return {
+              windowId,
+              beforeWindows,
+              windowCount: windows.length,
+              viewerWindowCount: viewerWindows.length,
+              renderedLength: expectedPayload.length,
+            };
+          }
+          await delay(500);
+        }
+        throw new Error(`Business OS File Viewer desktop app did not render the expected payload: ${JSON.stringify(last)}`);
+      }
+
       async function waitForFileMetadata(id, ms = 30000) {
         const deadline = Date.now() + ms;
         while (Date.now() < deadline) {
@@ -4629,6 +4677,19 @@ function ensureCtoxSmokeBinary() {
         const waitForFileStartedAt = mark();
         const materialized = await waitForFile(rustSeed.id, 30000, rustSeed.content);
         phaseTimings.waitForFileMs = Math.round(mark() - waitForFileStartedAt);
+        const desktopViewerStartedAt = mark();
+        const desktopViewer = await openDesktopFileViewerAndWait({
+          fileId: rustSeed.id,
+          name: rustSeed.name || 'brief.md',
+          mimeType: materialized.file?.mime_type || received.file?.mime_type || 'text/markdown',
+          sizeBytes: materialized.file?.size_bytes || received.file?.size_bytes || rustSeed.content.length,
+          path: materialized.file?.local_path || materialized.file?.path || received.file?.local_path || received.file?.path || rustSeed.path,
+          contentState: materialized.file?.content_state || 'available',
+          contentGenerationId: materialized.file?.content_generation_id || materialized.generationId || '',
+          contentHash: materialized.file?.content_hash || '',
+          contentHashScheme: materialized.file?.content_hash_scheme || '',
+        }, rustSeed.content);
+        phaseTimings.desktopViewerRenderMs = Math.round(mark() - desktopViewerStartedAt);
         const advancedStatusStartedAt = mark();
         const advancedStatus = smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser'
           ? await globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
@@ -4654,6 +4715,7 @@ function ensureCtoxSmokeBinary() {
           generationId: materialized.generationId || '',
           virtualPath: materialized.file?.virtual_path || materialized.file?.path || '',
           restarted: smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser',
+          desktopViewer,
           advancedStatus,
           phaseTimings,
         };
@@ -4970,6 +5032,10 @@ function ensureCtoxSmokeBinary() {
       console.log(`generation=${result.generationId}`);
       console.log(`chunk_count=${result.chunkCount}`);
       console.log(`payload_length=${result.payloadLength}`);
+      if (result.desktopViewer) {
+        console.log(`file_viewer_desktop_window_count=${result.desktopViewer.viewerWindowCount || 0}`);
+        console.log(`file_viewer_desktop_rendered_length=${result.desktopViewer.renderedLength || 0}`);
+      }
       if (result.phaseTimings) console.log(`phase_timings=${JSON.stringify(result.phaseTimings)}`);
     } else if (result.mode === 'file-chunk-metadata-error-browser-status'
       || result.mode === 'file-chunk-tombstone-error-browser-status'
