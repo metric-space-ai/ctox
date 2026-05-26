@@ -134,6 +134,18 @@ impl SmtpOutboundQueue {
                 match self.deliver_on_connection(&mut client, &from, &to, &body).await {
                     Ok(_) => {
                         info!("Successfully delivered email {} to {}", id, to);
+                        let completed_at = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        let _ = self.store.record_delivery_outcome(
+                            &id,
+                            &from,
+                            &to,
+                            "delivered",
+                            None,
+                            completed_at,
+                        );
                         let _ = self.store.delete_email(&id);
 
                         // Reset session via RSET to reuse the connection
@@ -145,7 +157,25 @@ impl SmtpOutboundQueue {
                     }
                     Err(e) => {
                         error!("Failed to deliver email {} over pooled connection: {:?}", id, e);
+                        let err_text = format!("{:?}", e);
+                        let next_retry = retry_count + 1;
                         let _ = self.handle_failure(&id, retry_count, e);
+                        if next_retry >= 5 {
+                            // Terminal: log the failure outcome so the outbound
+                            // reconciler can mark the message as failed.
+                            let completed_at = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let _ = self.store.record_delivery_outcome(
+                                &id,
+                                &from,
+                                &to,
+                                "failed",
+                                Some(&err_text),
+                                completed_at,
+                            );
+                        }
                         connected = false;
                         let _ = client.quit().await;
                     }

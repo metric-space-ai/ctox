@@ -5269,6 +5269,7 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.scheduling.mark_booked"
             | "outbound.campaign.mailbox.link"
             | "outbound.campaign.status.set"
+            | "outbound.provider.reconcile"
     )
 }
 
@@ -5743,6 +5744,62 @@ fn handle_outbound_active_command(
                 "message not found",
             )?;
             outbound_enforce_send_gate(&conn, &message)?;
+            let channel =
+                outbound_string(&message, &["channel"]).unwrap_or_else(|| "email".to_string());
+
+            // Physical letter path: no provider queueing, mark as manually dispatched.
+            if channel == "physical_letter" {
+                let existing_dispatch =
+                    outbound_string(&message, &["payload", "provider_dispatch_status"])
+                        .unwrap_or_default();
+                if existing_dispatch == "manual_physical_letter_marked_sent" {
+                    return Ok(serde_json::json!({
+                        "ok": true,
+                        "message": message,
+                        "channel": "physical_letter",
+                        "provider_dispatch_status": "manual_physical_letter_marked_sent",
+                        "idempotent": true,
+                    }));
+                }
+                outbound_put_string(&mut message, "send_status", "sent");
+                outbound_payload_insert(
+                    &mut message,
+                    "provider_dispatch_status",
+                    Value::String("manual_physical_letter_marked_sent".to_string()),
+                );
+                outbound_payload_insert(&mut message, "provider_send_executed", Value::Bool(true));
+                outbound_payload_insert(
+                    &mut message,
+                    "physical_sent_at_ms",
+                    Value::Number(serde_json::Number::from(now)),
+                );
+                outbound_put_i64(&mut message, "sent_at_ms", now);
+                outbound_put_i64(&mut message, "updated_at_ms", now);
+                upsert_business_record(
+                    &conn,
+                    "outbound_messages",
+                    &message_id,
+                    now,
+                    message.clone(),
+                )?;
+                if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                    outbound_update_engagement_status(
+                        &conn,
+                        &engagement_id,
+                        "sent",
+                        now,
+                    )?;
+                }
+                return Ok(serde_json::json!({
+                    "ok": true,
+                    "message": message,
+                    "channel": "physical_letter",
+                    "provider_dispatch_status": "manual_physical_letter_marked_sent",
+                    "provider_send_executed": true,
+                    "physical_sent_at_ms": now,
+                }));
+            }
+
             let existing_provider_queue_id = outbound_first_string(&[
                 outbound_string(&message, &["provider_message_id"]),
                 outbound_string(&message, &["payload", "provider_queue_id"]),
@@ -6115,6 +6172,9 @@ fn handle_outbound_active_command(
             outbound_handle_campaign_status_set(&conn, command, now)
         }
         "outbound.reply.match" => outbound_handle_reply_match(root, &conn, command, now),
+        "outbound.provider.reconcile" => {
+            outbound_handle_provider_reconcile(root, &conn, command, now)
+        }
         other => anyhow::bail!("unsupported active outbound command: {other}"),
     }
 }
@@ -6332,6 +6392,125 @@ fn outbound_handle_campaign_status_set(
         "campaign": campaign,
         "status": requested_status,
         "channel": default_channel,
+    }))
+}
+
+/// Reconcile outbound_messages.send_status with terminal SMTP delivery outcomes
+/// recorded by the mailserver runner in `stalwart_smtp_delivery_log`.
+/// For every outbound_message with `send_status = queued_for_provider` and a
+/// known `provider_message_id`, this looks up the latest delivery log row and
+/// promotes the message to `sent` (delivered) or `failed` accordingly. Runs are
+/// idempotent: already-final messages are skipped.
+fn outbound_handle_provider_reconcile(
+    root: &Path,
+    conn: &Connection,
+    _command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let core_db = crate::paths::core_db(root);
+    let mut updated = Vec::new();
+    let mut checked: i64 = 0;
+    let messages = {
+        let mut stmt = conn.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'outbound_messages' AND deleted = 0",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out: Vec<Value> = Vec::new();
+        for row in rows {
+            let raw = row?;
+            if let Ok(value) = serde_json::from_str::<Value>(&raw) {
+                out.push(value);
+            }
+        }
+        out
+    };
+
+    let log_conn = if core_db.exists() {
+        Some(Connection::open(&core_db)?)
+    } else {
+        None
+    };
+
+    for mut message in messages {
+        let send_status =
+            outbound_string(&message, &["send_status"]).unwrap_or_else(|| "draft".to_string());
+        if !matches!(
+            send_status.as_str(),
+            "queued_for_provider" | "queued" | "approved_not_sent"
+        ) {
+            continue;
+        }
+        let provider_id = outbound_first_string(&[
+            outbound_string(&message, &["provider_message_id"]),
+            outbound_string(&message, &["payload", "provider_queue_id"]),
+            outbound_string(&message, &["payload", "provider_message_id"]),
+        ]);
+        let Some(provider_id) = provider_id else { continue };
+        let Some(message_id) = outbound_string(&message, &["id"]) else {
+            continue;
+        };
+        checked += 1;
+        let Some(ref log_conn) = log_conn else { continue };
+        let outcome: Option<(String, Option<String>, i64)> = log_conn
+            .query_row(
+                "SELECT outcome, error_text, completed_at
+                 FROM stalwart_smtp_delivery_log
+                 WHERE id = ?1
+                 ORDER BY completed_at DESC LIMIT 1",
+                rusqlite::params![provider_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .unwrap_or(None);
+        let Some((outcome, error_text, completed_at)) = outcome else {
+            continue;
+        };
+        let new_status = match outcome.as_str() {
+            "delivered" => "sent",
+            "failed" => "failed",
+            other => other,
+        };
+        outbound_put_string(&mut message, "send_status", new_status);
+        outbound_payload_insert(
+            &mut message,
+            "provider_dispatch_status",
+            Value::String(outcome.clone()),
+        );
+        outbound_payload_insert(
+            &mut message,
+            "provider_completed_at_ms",
+            Value::Number(serde_json::Number::from(completed_at)),
+        );
+        if let Some(text) = error_text.as_ref() {
+            outbound_payload_insert(
+                &mut message,
+                "provider_error_text",
+                Value::String(text.clone()),
+            );
+        }
+        if new_status == "sent" {
+            outbound_put_i64(&mut message, "sent_at_ms", completed_at);
+        }
+        outbound_put_i64(&mut message, "updated_at_ms", now);
+        upsert_business_record(conn, "outbound_messages", &message_id, now, message.clone())?;
+        if new_status == "sent" {
+            if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
+                outbound_update_engagement_status(conn, &engagement_id, "sent", now)?;
+            }
+        }
+        updated.push(serde_json::json!({
+            "message_id": message_id,
+            "outcome": outcome,
+            "send_status": new_status,
+        }));
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "checked": checked,
+        "updated": updated,
+        "log_available": log_conn.is_some(),
     }))
 }
 
@@ -6783,28 +6962,76 @@ fn outbound_queue_email_delivery(root: &Path, message: &Value) -> anyhow::Result
     let from = outbound_email_address_from_account_key(&sender_account_id);
     let to = outbound_required_string(message, &["recipient_email"])?;
     let subject = outbound_string(message, &["subject"]).unwrap_or_default();
-    let body = outbound_string(message, &["body_text"]).unwrap_or_default();
+    let body_text = outbound_string(message, &["body_text"]).unwrap_or_default();
+    let body_html = outbound_string(message, &["body_html"]).unwrap_or_default();
+    anyhow::ensure!(
+        !body_text.trim().is_empty() || !body_html.trim().is_empty(),
+        "outbound email body is empty (body_text and body_html both blank)"
+    );
     let sender_domain = from.split('@').nth(1).unwrap_or("ctox.local");
     let msg_id = format!("<{}@{}>", Uuid::new_v4(), sender_domain);
     let date = chrono::Utc::now().to_rfc2822();
-    let rfc822_body = format!(
+
+    let header = format!(
         "From: {from}\r\n\
          To: {to}\r\n\
          Subject: {subject}\r\n\
          Message-ID: {msg_id}\r\n\
          Date: {date}\r\n\
-         MIME-Version: 1.0\r\n\
-         Content-Type: text/plain; charset=utf-8\r\n\
-         Content-Transfer-Encoding: 8bit\r\n\
-         \r\n\
-         {body}\r\n",
+         MIME-Version: 1.0\r\n",
         from = outbound_header_value(&from),
         to = outbound_header_value(&to),
         subject = outbound_header_value(&subject),
         msg_id = outbound_header_value(&msg_id),
         date = outbound_header_value(&date),
-        body = body.replace("\r\n", "\n").replace('\r', "\n")
     );
+
+    let normalize = |body: &str| body.replace("\r\n", "\n").replace('\r', "\n");
+
+    let rfc822_body = if !body_html.trim().is_empty() && !body_text.trim().is_empty() {
+        // Send a proper multipart/alternative with both representations.
+        let boundary = format!("ctox-{}", Uuid::new_v4().simple());
+        format!(
+            "{header}Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n\
+             --{boundary}\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             Content-Transfer-Encoding: 8bit\r\n\r\n\
+             {text}\r\n\
+             --{boundary}\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             Content-Transfer-Encoding: 8bit\r\n\r\n\
+             {html}\r\n\
+             --{boundary}--\r\n",
+            text = normalize(&body_text),
+            html = normalize(&body_html),
+        )
+    } else if !body_html.trim().is_empty() {
+        // HTML-only body — also include a plain-text fallback derived from the HTML.
+        let fallback_text = outbound_html_to_plain_text(&body_html);
+        let boundary = format!("ctox-{}", Uuid::new_v4().simple());
+        format!(
+            "{header}Content-Type: multipart/alternative; boundary=\"{boundary}\"\r\n\r\n\
+             --{boundary}\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             Content-Transfer-Encoding: 8bit\r\n\r\n\
+             {text}\r\n\
+             --{boundary}\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             Content-Transfer-Encoding: 8bit\r\n\r\n\
+             {html}\r\n\
+             --{boundary}--\r\n",
+            text = fallback_text,
+            html = normalize(&body_html),
+        )
+    } else {
+        format!(
+            "{header}Content-Type: text/plain; charset=utf-8\r\n\
+             Content-Transfer-Encoding: 8bit\r\n\r\n\
+             {body}\r\n",
+            body = normalize(&body_text),
+        )
+    };
+
     let db_path = root
         .join("runtime/ctox.sqlite3")
         .to_string_lossy()
@@ -6814,6 +7041,52 @@ fn outbound_queue_email_delivery(root: &Path, message: &Value) -> anyhow::Result
     store
         .queue_email(&from, &to, &rfc822_body)
         .map_err(Into::into)
+}
+
+/// Minimal HTML → plain-text fallback for outbound mails that only carry body_html.
+/// Strips tags and decodes a handful of common entities; intentionally simple — for
+/// rich rendering, operators should also fill body_text in the draft pipeline.
+fn outbound_html_to_plain_text(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    let mut last_was_space = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            _ if in_tag => {}
+            '\r' | '\n' | '\t' => {
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            ' ' => {
+                if !last_was_space {
+                    out.push(' ');
+                    last_was_space = true;
+                }
+            }
+            other => {
+                out.push(other);
+                last_was_space = false;
+            }
+        }
+    }
+    let collapsed = out
+        .replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    collapsed.trim().to_string()
 }
 
 fn outbound_header_value(value: &str) -> String {
@@ -6829,8 +7102,11 @@ fn outbound_increment_account_send_count(
     sender_account_id: &str,
     now: i64,
 ) -> anyhow::Result<()> {
-    let Some(mut limit) = outbound_load_record(conn, "outbound_account_limits", sender_account_id)?
-    else {
+    let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
+        .unwrap_or_else(|| sender_account_id.to_string());
+    let existing = outbound_load_record(conn, "outbound_account_limits", &canonical)?
+        .or(outbound_load_record(conn, "outbound_account_limits", sender_account_id)?);
+    let Some(mut limit) = existing else {
         return Ok(());
     };
     let sent_today = limit
@@ -6842,20 +7118,16 @@ fn outbound_increment_account_send_count(
     outbound_put_i64(&mut limit, "sent_today", sent_today);
     outbound_put_i64(&mut limit, "daily_sent_count", sent_today);
     if let Some(limit_value) = limit.get("daily_limit").and_then(Value::as_i64) {
-        outbound_put_i64(
-            &mut limit,
-            "remaining_today",
-            limit_value.saturating_sub(sent_today),
-        );
+        if limit_value > 0 {
+            outbound_put_i64(
+                &mut limit,
+                "remaining_today",
+                limit_value.saturating_sub(sent_today).max(0),
+            );
+        }
     }
     outbound_put_i64(&mut limit, "updated_at_ms", now);
-    upsert_business_record(
-        conn,
-        "outbound_account_limits",
-        sender_account_id,
-        now,
-        limit,
-    )
+    upsert_business_record(conn, "outbound_account_limits", &canonical, now, limit)
 }
 
 fn outbound_load_record(
@@ -7160,14 +7432,32 @@ fn outbound_enforce_send_gate(conn: &Connection, message: &Value) -> anyhow::Res
         outbound_has_matching_approval(conn, &message_id, &revision_id)?,
         "approved outbound message has no matching approval for current revision"
     );
-    let sender_account_id = outbound_required_string(message, &["sender_account_id"])?;
-    let recipient_email = outbound_required_string(message, &["recipient_email"])?;
+    let channel = outbound_string(message, &["channel"]).unwrap_or_else(|| "email".to_string());
     outbound_require_message_content(message)?;
-    anyhow::ensure!(
-        !outbound_recipient_suppressed(conn, &recipient_email)?,
-        "recipient is suppressed for outbound communication"
-    );
-    outbound_enforce_account_limit(conn, &sender_account_id)?;
+    match channel.as_str() {
+        "physical_letter" => {
+            // Physical letters need a postal address, NOT a sender_account or email.
+            let address =
+                outbound_required_string(message, &["recipient_address_text"]).map_err(|_| {
+                    anyhow::anyhow!(
+                        "physical_letter messages require recipient_address_text before send"
+                    )
+                })?;
+            anyhow::ensure!(
+                !address.trim().is_empty(),
+                "physical_letter recipient_address_text must not be blank"
+            );
+        }
+        _ => {
+            let sender_account_id = outbound_required_string(message, &["sender_account_id"])?;
+            let recipient_email = outbound_required_string(message, &["recipient_email"])?;
+            anyhow::ensure!(
+                !outbound_recipient_suppressed(conn, &recipient_email)?,
+                "recipient is suppressed for outbound communication"
+            );
+            outbound_enforce_account_limit(conn, &sender_account_id)?;
+        }
+    }
     Ok(())
 }
 
@@ -7232,8 +7522,14 @@ fn outbound_enforce_account_limit(
     conn: &Connection,
     sender_account_id: &str,
 ) -> anyhow::Result<()> {
-    let Some(limit) = outbound_load_record(conn, "outbound_account_limits", sender_account_id)?
-    else {
+    // Normalize the lookup key so bare email values like "user@example.com" still resolve
+    // to the canonical `email:user@example.com` limit record instead of silently
+    // bypassing the gate.
+    let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
+        .unwrap_or_else(|| sender_account_id.to_string());
+    let limit = outbound_load_record(conn, "outbound_account_limits", &canonical)?
+        .or(outbound_load_record(conn, "outbound_account_limits", sender_account_id)?);
+    let Some(limit) = limit else {
         return Ok(());
     };
     let blocked = limit
@@ -7244,14 +7540,28 @@ fn outbound_enforce_account_limit(
         !blocked,
         "sender account is blocked for outbound communication"
     );
+    let status =
+        outbound_string(&limit, &["status"]).unwrap_or_else(|| "active".to_string());
+    anyhow::ensure!(
+        !matches!(
+            status.as_str(),
+            "blocked" | "locked" | "suspended" | "disabled"
+        ),
+        "sender account status `{status}` is not eligible to send"
+    );
     if let Some(remaining) = limit.get("remaining_today").and_then(Value::as_i64) {
         anyhow::ensure!(remaining > 0, "sender account daily limit exhausted");
     }
+    // daily_limit semantics: <= 0 means "no daily cap configured" (sane default for
+    // newly linked mailboxes that have not yet been calibrated). Only enforce when an
+    // operator has set a positive value.
     if let (Some(sent), Some(limit_value)) = (
         limit.get("daily_sent_count").and_then(Value::as_i64),
         limit.get("daily_limit").and_then(Value::as_i64),
     ) {
-        anyhow::ensure!(sent < limit_value, "sender account daily limit exhausted");
+        if limit_value > 0 {
+            anyhow::ensure!(sent < limit_value, "sender account daily limit exhausted");
+        }
     }
     Ok(())
 }
@@ -10096,6 +10406,544 @@ mod tests {
         assert!(
             reloaded.is_some(),
             "re-upserted record must replace the tombstone"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_email_html_only_body_uses_multipart_alternative() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_html",
+                "command_id": "cmd_eng_html",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_html",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_html","company_id":"co_html","contact_id":"ct_html"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        // HTML-only message — body_text is empty, body_html has content.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_html",
+                "command_id": "cmd_msg_html",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_html",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_html",
+                    "campaign_id": "camp_html",
+                    "sender_account_id": "email:sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "HTML only",
+                    "body_html": "<p>Hello <strong>world</strong></p>"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_html",
+                "command_id": "cmd_req_html",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_html",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_html"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_html",
+                "command_id": "cmd_apv_html",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_html",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_html"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_html",
+                "command_id": "cmd_send_html",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_html",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_html"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        // Inspect the queued SMTP body and confirm it has the HTML part.
+        let queue_conn = Connection::open(crate::paths::core_db(root))?;
+        let body: String = queue_conn.query_row(
+            "SELECT msg_body FROM stalwart_smtp_queue WHERE to_addr = 'lead@example.com' LIMIT 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            body.contains("multipart/alternative"),
+            "expected multipart/alternative, got: {body}"
+        );
+        assert!(
+            body.contains("text/html"),
+            "expected text/html part, got: {body}"
+        );
+        assert!(
+            body.contains("<p>Hello <strong>world</strong></p>"),
+            "expected raw HTML in body, got: {body}"
+        );
+        // And the text/plain fallback must not be empty.
+        assert!(
+            body.contains("Hello") && !body.contains("text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\r\n"),
+            "expected non-empty text/plain fallback, got: {body}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_email_send_blocked_when_body_completely_empty() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_empty",
+                "command_id": "cmd_eng_empty",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_empty",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_empty","company_id":"co_e","contact_id":"ct_e"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        // Both body fields empty
+        let prep = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_empty",
+                "command_id": "cmd_msg_empty",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_empty",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_empty",
+                    "campaign_id": "camp_empty",
+                    "sender_account_id": "email:sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Empty",
+                    "body_text": "",
+                    "body_html": ""
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        // request_approval should block because content is empty.
+        let req = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_empty",
+                "command_id": "cmd_req_empty",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_empty",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_empty"},
+                "client_context": actor.clone()
+            }),
+        );
+        // Either request_approval already errors or send_approved later does.
+        if req.is_ok() {
+            let _ = accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": "cmd_apv_empty",
+                    "command_id": "cmd_apv_empty",
+                    "module": "outbound",
+                    "command_type": "outbound.message.approve",
+                    "record_id": "msg_empty",
+                    "status": "pending_sync",
+                    "payload": {"message_id":"msg_empty"},
+                    "client_context": actor.clone()
+                }),
+            );
+            let send = accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": "cmd_send_empty",
+                    "command_id": "cmd_send_empty",
+                    "module": "outbound",
+                    "command_type": "outbound.message.send_approved",
+                    "record_id": "msg_empty",
+                    "status": "pending_sync",
+                    "payload": {"message_id":"msg_empty"},
+                    "client_context": actor.clone()
+                }),
+            )
+            .expect_err("empty body must block send");
+            assert!(
+                send.to_string().contains("content")
+                    || send.to_string().contains("body")
+                    || send.to_string().contains("empty"),
+                "{send}"
+            );
+        }
+        let _ = prep;
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_daily_limit_zero_is_treated_as_unlimited() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        // Use mailbox.link to create the campaign+account_limits with daily_limit=0
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mbx_dlz",
+                "command_id": "cmd_mbx_dlz",
+                "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link",
+                "record_id": "camp_dlz",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_dlz","mailbox_address":"dlz@example.com","mailbox_status":"ready"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_dlz",
+                "command_id": "cmd_eng_dlz",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_dlz",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_dlz","company_id":"co_d","contact_id":"ct_d"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_dlz",
+                "command_id": "cmd_msg_dlz",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_dlz",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_dlz",
+                    "campaign_id": "camp_dlz",
+                    "sender_account_id": "email:dlz@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "DLZ",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_dlz",
+                "command_id": "cmd_req_dlz",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_dlz",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_dlz"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_dlz",
+                "command_id": "cmd_apv_dlz",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_dlz",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_dlz"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        // daily_limit=0 must be treated as unlimited — send must succeed.
+        let send = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_dlz",
+                "command_id": "cmd_send_dlz",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_dlz",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_dlz"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            send.pointer("/result/provider_dispatch_status")
+                .and_then(Value::as_str),
+            Some("queued_in_mailserver")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_bare_email_sender_normalizes_to_email_prefix_for_limit_lookup() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        // Pre-seed an account_limits row with canonical key.
+        let conn = open_store(root)?;
+        upsert_business_record(
+            &conn,
+            "outbound_account_limits",
+            "email:s@example.com",
+            1000,
+            serde_json::json!({
+                "id": "email:s@example.com",
+                "sender_account_id": "email:s@example.com",
+                "status": "blocked",
+                "blocked": true,
+                "daily_limit": 100,
+                "daily_sent_count": 0,
+                "created_at_ms": 1000,
+                "updated_at_ms": 1000,
+            }),
+        )?;
+        // Now run the limit check against a bare email — should hit the canonical row.
+        let result = outbound_enforce_account_limit(&conn, "s@example.com");
+        assert!(result.is_err(), "bare email must resolve to canonical limit row");
+        assert!(result.unwrap_err().to_string().contains("blocked"));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_physical_letter_marks_manual_send_without_mail_account() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_letter",
+                "command_id": "cmd_eng_letter",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_letter",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_letter",
+                    "company_id": "co_letter",
+                    "contact_id": "ct_letter"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        // Prepare a physical_letter message — NO sender_account_id, NO recipient_email.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_prepare",
+                "command_id": "cmd_letter_prepare",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_letter",
+                    "campaign_id": "camp_letter",
+                    "channel": "physical_letter",
+                    "recipient_address_text": "Tester Inc.\nMusterstrasse 1\n10115 Berlin",
+                    "subject": "Letter Intro",
+                    "body_text": "Sehr geehrter Herr Tester,\n\nbitte beachten Sie unser Angebot.\n\nFreundliche Gruesse"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        // The send_gate should refuse before approval.
+        let before_apv = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_send_pre",
+                "command_id": "cmd_letter_send_pre",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("send must be blocked before approval even for letters");
+        assert!(
+            before_apv.to_string().contains("must be approved"),
+            "{before_apv}"
+        );
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_req",
+                "command_id": "cmd_letter_req",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_apv",
+                "command_id": "cmd_letter_apv",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let send = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_send",
+                "command_id": "cmd_letter_send",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            send.pointer("/result/channel").and_then(Value::as_str),
+            Some("physical_letter")
+        );
+        assert_eq!(
+            send.pointer("/result/provider_dispatch_status")
+                .and_then(Value::as_str),
+            Some("manual_physical_letter_marked_sent")
+        );
+        assert!(send
+            .pointer("/result/physical_sent_at_ms")
+            .and_then(Value::as_i64)
+            .is_some());
+        // Idempotency: replaying send_approved must not re-mark.
+        let send_again = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter_send2",
+                "command_id": "cmd_letter_send2",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_letter",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            send_again
+                .pointer("/result/idempotent")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        // Negative: a physical_letter without recipient_address_text must be blocked.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter2_prepare",
+                "command_id": "cmd_letter2_prepare",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_letter2",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_letter",
+                    "campaign_id": "camp_letter",
+                    "channel": "physical_letter",
+                    "subject": "Letter2",
+                    "body_text": "No address provided"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter2_req",
+                "command_id": "cmd_letter2_req",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_letter2",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter2" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter2_apv",
+                "command_id": "cmd_letter2_apv",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_letter2",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter2" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let blocked = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_letter2_send",
+                "command_id": "cmd_letter2_send",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_letter2",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_letter2" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("missing recipient_address_text must block letter send");
+        assert!(
+            blocked.to_string().contains("recipient_address_text"),
+            "{blocked}"
         );
         Ok(())
     }

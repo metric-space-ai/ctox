@@ -324,6 +324,49 @@ const outboundAccountLimitSchema = {
   additionalProperties: true,
 };
 
+const outboundSkillbookSchema = {
+  title: 'outbound_skillbooks',
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 100 },
+    skillbook_id: { type: 'string', maxLength: 100 },
+    title: { type: 'string' },
+    version: { type: 'string' },
+    version_number: { type: 'number' },
+    mission: { type: 'string' },
+    non_negotiable_rules: { type: 'array', items: { type: 'string' } },
+    workflow_backbone: { type: 'array', items: { type: 'string' } },
+    routing_taxonomy: { type: 'array', items: { type: 'string' } },
+    stop_rules: { type: 'array', items: { type: 'string' } },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'skillbook_id', 'title', 'version', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundLetterTemplateSchema = {
+  title: 'outbound_letter_templates',
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 100 },
+    campaign_id: { type: 'string', maxLength: 100 },
+    title: { type: 'string' },
+    salutation: { type: 'string' },
+    closing: { type: 'string' },
+    body_template: { type: 'string' },
+    version_number: { type: 'number' },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'title', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
 export const collections = {
   business_commands: commandSchema,
   outbound_campaigns: outboundCampaignSchema,
@@ -339,6 +382,8 @@ export const collections = {
   outbound_meeting_requests: outboundMeetingRequestSchema,
   outbound_suppression_entries: outboundSuppressionEntrySchema,
   outbound_account_limits: outboundAccountLimitSchema,
+  outbound_skillbooks: outboundSkillbookSchema,
+  outbound_letter_templates: outboundLetterTemplateSchema,
 };
 
 export const migrationStrategies = {

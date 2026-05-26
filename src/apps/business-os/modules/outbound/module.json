@@ -17,7 +17,9 @@
     "outbound_sender_assignments",
     "outbound_meeting_requests",
     "outbound_suppression_entries",
-    "outbound_account_limits"
+    "outbound_account_limits",
+    "outbound_skillbooks",
+    "outbound_letter_templates"
   ],
   "source": "local",
   "core": false,

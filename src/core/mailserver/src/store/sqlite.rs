@@ -123,6 +123,28 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Record a terminal SMTP delivery outcome (success or permanent failure) so the
+    /// outbound module can reconcile send_status without polling the queue table that
+    /// has already been deleted from.
+    pub fn record_delivery_outcome(
+        &self,
+        id: &str,
+        from_addr: &str,
+        to_addr: &str,
+        outcome: &str,
+        error_text: Option<&str>,
+        completed_at: i64,
+    ) -> StalwartResult<()> {
+        let conn = self.connect()?;
+        conn.execute(
+            "INSERT OR IGNORE INTO stalwart_smtp_delivery_log
+                (id, from_addr, to_addr, outcome, error_text, completed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, from_addr, to_addr, outcome, error_text, completed_at],
+        )?;
+        Ok(())
+    }
+
     // --- CalDAV Operations ---
 
     pub fn create_calendar(&self, id: &str, owner: &str, display_name: &str) -> StalwartResult<()> {

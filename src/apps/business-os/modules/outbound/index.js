@@ -7,8 +7,16 @@ import {
 } from '../../shared/universal-importer.js';
 import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import {
+  configureActiveOutreach,
+  loadActiveOutreachData,
+  renderActiveOutreachShell,
+  handleActiveOutreachAction,
+  handleActiveOutreachInput,
+  activeOutreachCounts,
+} from './active-outreach.js';
 
-const BUILD = '20260519-outbound-actions6';
+const BUILD = '20260526-outbound-active-outreach1';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {
@@ -472,6 +480,7 @@ const state = {
   tagFilter: '',
   lastTbodyHtml: '',
   lastActiveColsKey: '',
+  outreachView: false,
 };
 
 export async function mount(ctx) {
@@ -505,7 +514,9 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   await ensureDefaultCampaign();
+  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render(true) });
   await loadAll({ hydrateKnowledge: false });
+  await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
   wireEvents(ctx.host);
   wireRealtime();
 
@@ -1254,6 +1265,16 @@ function wireRealtime() {
     raw.outbound_research_runs,
     raw.business_commands,
     raw.ctox_queue_tasks,
+    raw.outbound_engagements,
+    raw.outbound_messages,
+    raw.outbound_approvals,
+    raw.outbound_sequences,
+    raw.outbound_sender_assignments,
+    raw.outbound_meeting_requests,
+    raw.outbound_suppression_entries,
+    raw.outbound_account_limits,
+    raw.outbound_skillbooks,
+    raw.outbound_letter_templates,
   ].filter(Boolean);
   for (const collection of collections) {
     const subscription = collection.$?.subscribe?.(() => scheduleDataRefresh(20));
@@ -1267,6 +1288,7 @@ function scheduleDataRefresh(delay = 80) {
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
     await loadAll({ hydrateKnowledge: false });
+    await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach refresh failed', error));
     render();
   }, delay);
 }
@@ -1329,6 +1351,25 @@ function wireEvents(root) {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const view = event.target.closest('[data-view]')?.dataset.view;
     const filter = event.target.closest('[data-filter]')?.dataset.filter;
+
+    if (action === 'toggle-outreach') {
+      event.preventDefault();
+      state.outreachView = !state.outreachView;
+      render(true);
+      return;
+    }
+    if (action && action.startsWith('ao-')) {
+      event.preventDefault();
+      const target = event.target.closest('[data-action]');
+      if (target) {
+        try {
+          await handleActiveOutreachAction(action, target);
+        } catch (error) {
+          console.warn('[outbound] active outreach action failed', error);
+        }
+      }
+      return;
+    }
 
     // Copy to clipboard helper
     const copyBtn = event.target.closest('[data-copy-text]');
@@ -2022,6 +2063,10 @@ function wireEvents(root) {
       ensureSelectedCompanyInFilter();
       scheduleCenterRenderPreservingInput(event.target);
     }
+    const aoAction = event.target.dataset?.action;
+    if (aoAction && aoAction.startsWith('ao-edit-')) {
+      handleActiveOutreachInput(aoAction, event.target);
+    }
   });
 
   root.addEventListener('change', (event) => {
@@ -2031,6 +2076,12 @@ function wireEvents(root) {
     } else if (event.target.id === 'tag-filter') {
       state.tagFilter = event.target.value;
       render(true);
+    }
+    const aoAction = event.target.dataset?.action;
+    if (aoAction && aoAction.startsWith('ao-')) {
+      handleActiveOutreachAction(aoAction, event.target).catch((error) =>
+        console.warn('[outbound] active outreach change failed', error),
+      );
     }
   });
 }
@@ -2050,11 +2101,18 @@ function render(force = false) {
 
 function renderLeft() {
   const root = state.ctx.host.querySelector('.outbound-left');
+  if (!root) return;
   const campaigns = visibleCampaigns();
+  const outreachActive = !!state.outreachView;
+  const outreachCounts = state.selectedCampaignId
+    ? activeOutreachCounts(state.selectedCampaignId)
+    : { leadQueue: 0, engagements: 0, approvalInbox: 0, readyToSend: 0, replies: 0, done: 0 };
+  const outreachPending = outreachCounts.leadQueue + outreachCounts.approvalInbox + outreachCounts.readyToSend + outreachCounts.replies;
   root.innerHTML = `
     <header class="outbound-pane-header">
       <div><span>${escapeHtml(t('outbound', 'Outbound'))}</span><h2>${escapeHtml(t('campaigns', 'Campaigns'))}</h2></div>
       <div class="outbound-actions">
+        <button class="outbound-icon-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
         <button class="outbound-icon-button" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">+</button>
       </div>
     </header>
@@ -2237,11 +2295,16 @@ function renderSourceItem(source) {
 
 function renderCenter(force = false) {
   const root = state.ctx.host.querySelector('.outbound-center');
+  if (!root) return;
   state.centerResizeCleanup?.();
   state.centerResizeCleanup = null;
   const campaign = selectedCampaign();
   if (!campaign) {
     root.innerHTML = `<div class="outbound-empty">${escapeHtml(t('noCampaignSelected', 'Keine Campaign ausgewählt.'))}</div>`;
+    return;
+  }
+  if (state.outreachView) {
+    root.innerHTML = renderActiveOutreachShell(campaign);
     return;
   }
 

@@ -20,6 +20,21 @@ CREATE TABLE IF NOT EXISTS stalwart_smtp_queue (
     status TEXT NOT NULL
 );
 
+-- Append-only delivery log so the outbound module can reconcile real send
+-- outcomes back into outbound_messages.send_status after the SMTP queue row is
+-- gone. One row per terminal delivery attempt (success or permanent failure).
+CREATE TABLE IF NOT EXISTS stalwart_smtp_delivery_log (
+    id TEXT NOT NULL,
+    from_addr TEXT NOT NULL,
+    to_addr TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    error_text TEXT,
+    completed_at INTEGER NOT NULL,
+    PRIMARY KEY (id, completed_at)
+);
+CREATE INDEX IF NOT EXISTS stalwart_smtp_delivery_log_id_idx
+    ON stalwart_smtp_delivery_log (id);
+
 CREATE TABLE IF NOT EXISTS stalwart_caldav_calendars (
     id TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
