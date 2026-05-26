@@ -79,6 +79,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
+const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../../../..');
@@ -230,6 +231,144 @@ function token(len = 12) {
   let out = '';
   for (let i = 0; i < len; i++) out += alphabet[Math.floor(Math.random() * alphabet.length)];
   return out;
+}
+
+function paethPredictor(left, up, upLeft) {
+  const estimate = left + up - upLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const upDistance = Math.abs(estimate - up);
+  const upLeftDistance = Math.abs(estimate - upLeft);
+  if (leftDistance <= upDistance && leftDistance <= upLeftDistance) return left;
+  if (upDistance <= upLeftDistance) return up;
+  return upLeft;
+}
+
+function analyzePngScreenshot(buffer) {
+  const signature = '89504e470d0a1a0a';
+  if (!Buffer.isBuffer(buffer) || buffer.subarray(0, 8).toString('hex') !== signature) {
+    throw new Error('Business OS visual evidence screenshot is not a PNG');
+  }
+  let offset = 8;
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const idatChunks = [];
+  while (offset + 12 <= buffer.length) {
+    const length = buffer.readUInt32BE(offset);
+    const type = buffer.subarray(offset + 4, offset + 8).toString('ascii');
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + length;
+    if (dataEnd + 4 > buffer.length) break;
+    const data = buffer.subarray(dataStart, dataEnd);
+    if (type === 'IHDR') {
+      width = data.readUInt32BE(0);
+      height = data.readUInt32BE(4);
+      bitDepth = data[8];
+      colorType = data[9];
+    } else if (type === 'IDAT') {
+      idatChunks.push(data);
+    } else if (type === 'IEND') {
+      break;
+    }
+    offset = dataEnd + 4;
+  }
+  const channels = colorType === 6 ? 4 : colorType === 2 ? 3 : 0;
+  if (!width || !height || bitDepth !== 8 || !channels || idatChunks.length === 0) {
+    throw new Error(`Unsupported PNG screenshot format: ${JSON.stringify({ width, height, bitDepth, colorType, idatChunks: idatChunks.length })}`);
+  }
+  const inflated = zlib.inflateSync(Buffer.concat(idatChunks));
+  const stride = width * channels;
+  const raw = Buffer.alloc(width * height * channels);
+  let sourceOffset = 0;
+  for (let y = 0; y < height; y++) {
+    const filter = inflated[sourceOffset++];
+    const rowOffset = y * stride;
+    const prevRowOffset = (y - 1) * stride;
+    for (let x = 0; x < stride; x++) {
+      const value = inflated[sourceOffset++];
+      const left = x >= channels ? raw[rowOffset + x - channels] : 0;
+      const up = y > 0 ? raw[prevRowOffset + x] : 0;
+      const upLeft = y > 0 && x >= channels ? raw[prevRowOffset + x - channels] : 0;
+      if (filter === 0) {
+        raw[rowOffset + x] = value;
+      } else if (filter === 1) {
+        raw[rowOffset + x] = (value + left) & 255;
+      } else if (filter === 2) {
+        raw[rowOffset + x] = (value + up) & 255;
+      } else if (filter === 3) {
+        raw[rowOffset + x] = (value + Math.floor((left + up) / 2)) & 255;
+      } else if (filter === 4) {
+        raw[rowOffset + x] = (value + paethPredictor(left, up, upLeft)) & 255;
+      } else {
+        throw new Error(`Unsupported PNG filter type ${filter}`);
+      }
+    }
+  }
+
+  const stepX = Math.max(1, Math.floor(width / 96));
+  const stepY = Math.max(1, Math.floor(height / 54));
+  const colors = new Map();
+  let sampleCount = 0;
+  let visibleSamples = 0;
+  let lumaSum = 0;
+  let lumaSquaredSum = 0;
+  for (let y = 0; y < height; y += stepY) {
+    for (let x = 0; x < width; x += stepX) {
+      const index = (y * width + x) * channels;
+      const red = raw[index];
+      const green = raw[index + 1];
+      const blue = raw[index + 2];
+      const alpha = channels === 4 ? raw[index + 3] : 255;
+      if (alpha > 8) visibleSamples++;
+      const luma = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      lumaSum += luma;
+      lumaSquaredSum += luma * luma;
+      const bucket = `${red >> 3},${green >> 3},${blue >> 3}`;
+      colors.set(bucket, (colors.get(bucket) || 0) + 1);
+      sampleCount++;
+    }
+  }
+  const mean = sampleCount ? lumaSum / sampleCount : 0;
+  const variance = sampleCount ? Math.max(0, (lumaSquaredSum / sampleCount) - (mean * mean)) : 0;
+  const dominantCount = Math.max(0, ...colors.values());
+  return {
+    width,
+    height,
+    sampleCount,
+    visibleSamples,
+    uniqueSampledColors: colors.size,
+    luminanceStdDev: Math.round(Math.sqrt(variance) * 10) / 10,
+    dominantColorRatioPct: sampleCount ? Math.round((dominantCount / sampleCount) * 1000) / 10 : 100,
+  };
+}
+
+async function captureBusinessOsVisualScreenshotEvidence(page) {
+  const buffer = await page.screenshot({ fullPage: false });
+  if (process.env.SMOKE_VISUAL_SCREENSHOT_PATH) {
+    fs.writeFileSync(process.env.SMOKE_VISUAL_SCREENSHOT_PATH, buffer);
+  }
+  const evidence = analyzePngScreenshot(buffer);
+  const problems = [];
+  if (evidence.width < 900 || evidence.height < 600) {
+    problems.push(`viewport too small: ${evidence.width}x${evidence.height}`);
+  }
+  if (evidence.uniqueSampledColors < 48) {
+    problems.push(`too few sampled colors: ${evidence.uniqueSampledColors}`);
+  }
+  if (evidence.luminanceStdDev < 8) {
+    problems.push(`low luminance variation: ${evidence.luminanceStdDev}`);
+  }
+  if (evidence.dominantColorRatioPct > 92) {
+    problems.push(`dominant color ratio too high: ${evidence.dominantColorRatioPct}%`);
+  }
+  if (evidence.visibleSamples < Math.floor(evidence.sampleCount * 0.98)) {
+    problems.push(`transparent sample ratio too high: ${evidence.visibleSamples}/${evidence.sampleCount}`);
+  }
+  if (problems.length) {
+    throw new Error(`Business OS visual screenshot evidence failed: ${problems.join('; ')} ${JSON.stringify(evidence)}`);
+  }
+  return evidence;
 }
 
 function trackSmokeChild(child) {
@@ -3585,6 +3724,66 @@ function ensureCtoxSmokeBinary() {
           window.dispatchEvent(new HashChangeEvent('hashchange'));
           return waitForOpenedModule(expectedModuleId, `open module ${expectedModuleId}`);
         };
+        const rectEvidence = (selector) => {
+          const element = document.querySelector(selector);
+          if (!element) return null;
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            selector,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+            top: Math.round(rect.top),
+            left: Math.round(rect.left),
+            visible: rect.width > 0
+              && rect.height > 0
+              && style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && Number(style.opacity || 1) > 0,
+          };
+        };
+        const collectVisualEvidence = () => {
+          const workspace = rectEvidence('.workspace-frame');
+          const moduleHost = rectEvidence('[data-module-host]');
+          const startButton = rectEvidence('[data-shell-start]');
+          const desktopIconCount = document.querySelectorAll('.desktop-icon').length;
+          const desktopSurface = rectEvidence('[data-module-root], .desktop-root, [data-desktop-icons]');
+          const bodyText = document.body?.innerText || '';
+          const loadingTextVisible = /Loading workspace|waiting for module manifests|App-Start fehlgeschlagen|Module startup failed|System-Start fehlgeschlagen/i.test(bodyText);
+          const evidence = {
+            workspace,
+            moduleHost,
+            startButton,
+            desktopSurface,
+            desktopIconCount,
+            bodyLoading: Boolean(document.body?.dataset?.moduleLoading),
+            activeModule: document.body?.dataset?.activeModule || appState?.activeModule?.id || '',
+            loadingTextVisible,
+          };
+          const problems = [];
+          if (!workspace?.visible || workspace.width < 700 || workspace.height < 450) {
+            problems.push(`workspace frame not visible enough: ${JSON.stringify(workspace)}`);
+          }
+          if (!moduleHost?.visible || moduleHost.width < 500 || moduleHost.height < 350) {
+            problems.push(`module host not visible enough: ${JSON.stringify(moduleHost)}`);
+          }
+          if (!startButton?.visible) {
+            problems.push(`start button not visible: ${JSON.stringify(startButton)}`);
+          }
+          if (!desktopSurface?.visible || desktopSurface.width < 400 || desktopSurface.height < 300) {
+            problems.push(`desktop surface not visible enough: ${JSON.stringify(desktopSurface)}`);
+          }
+          if (desktopIconCount < 6) {
+            problems.push(`desktop icon count too low: ${desktopIconCount}`);
+          }
+          if (evidence.bodyLoading || loadingTextVisible) {
+            problems.push(`Business OS still shows loading or failure state: ${JSON.stringify({ bodyLoading: evidence.bodyLoading, loadingTextVisible })}`);
+          }
+          if (problems.length) {
+            throw new Error(`Business OS visual layout evidence failed: ${problems.join('; ')}`);
+          }
+          return evidence;
+        };
 
         const startMenu = await openStartMenu();
         if (startMenu.itemCount < 8) {
@@ -3610,6 +3809,7 @@ function ensureCtoxSmokeBinary() {
             errorText,
           };
         }, 10000, 'show desktop');
+        const visualEvidence = collectVisualEvidence();
         const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
           includeCounts: false,
           requiredCollections: ['business_module_catalog', 'ctox_runtime_settings', 'desktop_files', 'desktop_file_chunks'],
@@ -3625,6 +3825,7 @@ function ensureCtoxSmokeBinary() {
           openedModules,
           desktopOpened: desktop.activeModule === 'desktop',
           activeModule: desktop.activeModule,
+          visualEvidence,
           advancedStatusVersion: status.version || '',
           advancedStatusRuntime: status.rxdbRuntime || null,
         };
@@ -4960,6 +5161,10 @@ function ensureCtoxSmokeBinary() {
     }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
+    if (result.mode === 'business-os-ui-regression') {
+      result.screenshotEvidence = await captureBusinessOsVisualScreenshotEvidence(page);
+    }
+
     if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-stress-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-churn-rust-to-browser'
@@ -5061,6 +5266,11 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_ui_opened_modules=${result.openedModules.map((entry) => entry.activeModule).join(',')}`);
       console.log(`business_os_ui_desktop_opened=${result.desktopOpened ? 1 : 0}`);
       console.log(`business_os_ui_active_module=${result.activeModule || ''}`);
+      console.log(`business_os_visual_workspace_visible=${result.visualEvidence?.workspace?.visible ? 1 : 0}`);
+      console.log(`business_os_visual_desktop_icon_count=${result.visualEvidence?.desktopIconCount || 0}`);
+      console.log(`business_os_visual_screenshot_unique_colors=${result.screenshotEvidence?.uniqueSampledColors || 0}`);
+      console.log(`business_os_visual_screenshot_luma_stddev=${result.screenshotEvidence?.luminanceStdDev || 0}`);
+      console.log(`business_os_visual_screenshot_dominant_ratio_pct=${result.screenshotEvidence?.dominantColorRatioPct || 0}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
     } else if (result.mode === 'command-burst-browser-to-rust') {
