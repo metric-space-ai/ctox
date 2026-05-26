@@ -3671,20 +3671,26 @@ function ensureCtoxSmokeBinary() {
             : '';
         };
         const expectedRequiredModules = ['ctox', 'documents', 'knowledge', 'research'];
+        const expectedSecondaryModules = ['matching', 'conversations', 'outbound', 'shiftflow', 'buchhaltung', 'coding-agents'];
         const moduleCatalog = await waitFor(() => {
           const moduleIds = Array.isArray(appState?.modules)
             ? appState.modules.map((mod) => mod?.id).filter(Boolean)
             : [];
           const requiredModules = expectedRequiredModules.filter((id) => moduleIds.includes(id));
+          const secondaryModules = expectedSecondaryModules.filter((id) => moduleIds.includes(id));
+          const expectedCatalogModules = [...expectedRequiredModules, ...expectedSecondaryModules];
           return {
-            ok: requiredModules.length === expectedRequiredModules.length,
+            ok: requiredModules.length === expectedRequiredModules.length
+              && secondaryModules.length === expectedSecondaryModules.length,
             moduleIds,
             requiredModules,
-            missingModules: expectedRequiredModules.filter((id) => !moduleIds.includes(id)),
+            secondaryModules,
+            missingModules: expectedCatalogModules.filter((id) => !moduleIds.includes(id)),
           };
         }, 15000, 'required Business OS module catalog');
         const moduleIds = moduleCatalog.moduleIds;
         const requiredModules = moduleCatalog.requiredModules;
+        const secondaryModules = moduleCatalog.secondaryModules;
         const openStartMenu = async () => {
           const startButton = document.querySelector('[data-shell-start]');
           if (!startButton) throw new Error('Business OS start menu button is missing');
@@ -3758,6 +3764,30 @@ function ensureCtoxSmokeBinary() {
           research: {
             selectors: ['[data-research-root]', '.research-left', '.research-center', '.research-right'],
             minTextLength: 60,
+          },
+          matching: {
+            selectors: ['.app', '#left', '#center', '#right'],
+            minTextLength: 60,
+          },
+          conversations: {
+            selectors: ['[data-conv-root]', '.conv-left', '.conv-center', '.conv-right'],
+            minTextLength: 60,
+          },
+          outbound: {
+            selectors: ['[data-outbound-root]', '.outbound-left', '.outbound-center'],
+            minTextLength: 30,
+          },
+          shiftflow: {
+            selectors: ['[data-shiftflow-root]', '#shiftflow-left', '#shiftflow-center', '#schedulerView'],
+            minTextLength: 80,
+          },
+          buchhaltung: {
+            selectors: ['[data-fibu-root]', '.fibu-left', '.fibu-center', '[data-fibu-nav]'],
+            minTextLength: 80,
+          },
+          'coding-agents': {
+            selectors: ['[data-coding-agents-root]', '.coding-agents-left', '.coding-agents-center', '#workbench-chat-feed'],
+            minTextLength: 80,
           },
         };
         const collectModuleRenderEvidence = (moduleId) => {
@@ -3858,7 +3888,7 @@ function ensureCtoxSmokeBinary() {
             await waitForAbsent('[data-research-task-form]', 'research modal close');
             evidence.actions.push('research-new-task-modal');
           }
-          return evidence;
+          return evidence.actions.length ? evidence : null;
         };
         const openAndVerifyModule = async (moduleId, opener, label) => {
           const opened = await opener();
@@ -3934,6 +3964,14 @@ function ensureCtoxSmokeBinary() {
             'hash',
           ));
         }
+        const secondaryOpenedModules = [];
+        for (const moduleId of secondaryModules) {
+          secondaryOpenedModules.push(await openAndVerifyModule(
+            moduleId,
+            () => openModuleByHash(moduleId),
+            'secondary-hash',
+          ));
+        }
         await openStartMenu();
         document.querySelector('.shell-start-menu-panel .show-desktop-btn')?.click();
         const desktop = await waitFor(() => {
@@ -3961,6 +3999,7 @@ function ensureCtoxSmokeBinary() {
           moduleIds,
           startMenuItemCount: startMenu.itemCount,
           openedModules,
+          secondaryOpenedModules,
           desktopOpened: desktop.activeModule === 'desktop',
           activeModule: desktop.activeModule,
           visualEvidence,
@@ -5407,6 +5446,9 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_ui_interaction_names=${result.openedModules.flatMap((entry) => (entry.interactionEvidence?.actions || []).map((action) => String(action).replace(/:.+$/, ''))).join(',')}`);
       console.log(`business_os_ui_interaction_actions=${result.openedModules.flatMap((entry) => entry.interactionEvidence?.actions || []).join(',')}`);
       console.log(`business_os_ui_min_module_text_length=${Math.min(...result.openedModules.map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
+      console.log(`business_os_ui_secondary_opened_modules=${(result.secondaryOpenedModules || []).map((entry) => entry.activeModule).join(',')}`);
+      console.log(`business_os_ui_secondary_rendered_modules=${(result.secondaryOpenedModules || []).map((entry) => entry.renderEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_min_secondary_text_length=${Math.min(...(result.secondaryOpenedModules || []).map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
       console.log(`business_os_ui_desktop_opened=${result.desktopOpened ? 1 : 0}`);
       console.log(`business_os_ui_active_module=${result.activeModule || ''}`);
       console.log(`business_os_visual_workspace_visible=${result.visualEvidence?.workspace?.visible ? 1 : 0}`);
