@@ -95,6 +95,9 @@ const modeEvidenceRequirements = {
       'business_os_ui_start_menu_items',
       'business_os_ui_opened_modules',
       'business_os_ui_rendered_modules',
+      'business_os_ui_interacted_modules',
+      'business_os_ui_interaction_names',
+      'business_os_ui_interaction_actions',
       'business_os_ui_min_module_text_length',
       'business_os_ui_desktop_opened',
       'business_os_visual_workspace_visible',
@@ -112,6 +115,8 @@ const modeEvidenceRequirements = {
     },
     values: {
       business_os_ui_rendered_modules: 'ctox,documents,knowledge,research',
+      business_os_ui_interacted_modules: 'ctox,documents,knowledge,research',
+      business_os_ui_interaction_names: 'ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
       business_os_ui_desktop_opened: 1,
       business_os_visual_workspace_visible: 1,
     },

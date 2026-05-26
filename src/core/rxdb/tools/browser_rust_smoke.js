@@ -3790,13 +3790,85 @@ function ensureCtoxSmokeBinary() {
           };
         };
         const waitForModuleRendered = (moduleId) => waitFor(() => collectModuleRenderEvidence(moduleId), 10000, `render module ${moduleId}`);
+        const waitForElement = async (selector, label, ms = 5000) => waitFor(() => {
+          const entry = rectEvidence(selector);
+          return {
+            ok: Boolean(entry?.visible),
+            selector,
+            entry,
+          };
+        }, ms, label || selector);
+        const waitForAbsent = async (selector, label, ms = 5000) => waitFor(() => ({
+          ok: !document.querySelector(selector),
+          selector,
+          exists: Boolean(document.querySelector(selector)),
+        }), ms, label || `${selector} absent`);
+        const runModuleInteraction = async (moduleId) => {
+          const evidence = { moduleId, actions: [] };
+          if (moduleId === 'ctox') {
+            const zoomLabel = document.querySelector('[data-flow-control] span');
+            const zoomIn = document.querySelector('[data-flow-control] [data-zoom="+"]');
+            const zoomReset = document.querySelector('[data-flow-control] [data-zoom="reset"]');
+            if (!zoomLabel || !zoomIn || !zoomReset) {
+              throw new Error(`CTOX zoom controls missing: ${JSON.stringify({
+                zoomLabel: Boolean(zoomLabel),
+                zoomIn: Boolean(zoomIn),
+                zoomReset: Boolean(zoomReset),
+              })}`);
+            }
+            const before = zoomLabel.textContent?.trim() || '';
+            zoomIn.click();
+            const changed = await waitFor(() => {
+              const after = document.querySelector('[data-flow-control] span')?.textContent?.trim() || '';
+              return { ok: after && after !== before, before, after };
+            }, 5000, 'ctox zoom interaction');
+            document.querySelector('[data-flow-control] [data-zoom="reset"]')?.click();
+            evidence.actions.push(`ctox-zoom:${before}->${changed.after}`);
+          } else if (moduleId === 'documents') {
+            const newButton = document.querySelector('[data-documents-new-markdown]');
+            if (!newButton) throw new Error('Documents new-document action is missing');
+            newButton.click();
+            await waitForElement('[data-documents-new-form]', 'documents new-document drawer');
+            document.querySelector('[data-documents-drawer-close], [data-documents-drawer-cancel]')?.click();
+            await waitForAbsent('[data-documents-new-form]', 'documents drawer close');
+            evidence.actions.push('documents-new-drawer');
+          } else if (moduleId === 'knowledge') {
+            for (const tab of ['runbooks', 'data', 'skill']) {
+              const button = document.querySelector(`[data-tab="${tab}"]`);
+              if (!button) throw new Error(`Knowledge tab button missing: ${tab}`);
+              button.click();
+              await waitFor(() => {
+                const panel = document.querySelector(`[data-panel="${tab}"]`);
+                const pressed = document.querySelector(`[data-tab="${tab}"]`)?.getAttribute('aria-pressed') === 'true';
+                return {
+                  ok: Boolean(panel && !panel.hidden && pressed),
+                  tab,
+                  panelHidden: panel?.hidden ?? null,
+                  pressed,
+                };
+              }, 5000, `knowledge tab ${tab}`);
+              evidence.actions.push(`knowledge-tab-${tab}`);
+            }
+          } else if (moduleId === 'research') {
+            const newTask = document.querySelector('[data-action="new-task"]');
+            if (!newTask) throw new Error('Research new-task action is missing');
+            newTask.click();
+            await waitForElement('[data-research-task-form]', 'research new-task modal');
+            document.querySelector('.research-modal [data-close]')?.click();
+            await waitForAbsent('[data-research-task-form]', 'research modal close');
+            evidence.actions.push('research-new-task-modal');
+          }
+          return evidence;
+        };
         const openAndVerifyModule = async (moduleId, opener, label) => {
           const opened = await opener();
           const renderEvidence = await waitForModuleRendered(moduleId);
+          const interactionEvidence = await runModuleInteraction(moduleId);
           return {
             ...opened,
             expectedModuleId: moduleId,
             renderEvidence,
+            interactionEvidence,
             label,
           };
         };
@@ -5331,6 +5403,9 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_ui_start_menu_items=${result.startMenuItemCount}`);
       console.log(`business_os_ui_opened_modules=${result.openedModules.map((entry) => entry.activeModule).join(',')}`);
       console.log(`business_os_ui_rendered_modules=${result.openedModules.map((entry) => entry.renderEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_interacted_modules=${result.openedModules.map((entry) => entry.interactionEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_interaction_names=${result.openedModules.flatMap((entry) => (entry.interactionEvidence?.actions || []).map((action) => String(action).replace(/:.+$/, ''))).join(',')}`);
+      console.log(`business_os_ui_interaction_actions=${result.openedModules.flatMap((entry) => entry.interactionEvidence?.actions || []).join(',')}`);
       console.log(`business_os_ui_min_module_text_length=${Math.min(...result.openedModules.map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
       console.log(`business_os_ui_desktop_opened=${result.desktopOpened ? 1 : 0}`);
       console.log(`business_os_ui_active_module=${result.activeModule || ''}`);
