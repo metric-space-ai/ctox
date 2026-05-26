@@ -188,7 +188,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260525-subscription-sync5', 'business db')
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260525-subscription-sync6', 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -199,7 +199,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260525-subscription-sync5', 'business sync')
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260525-subscription-sync6', 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -227,7 +227,7 @@ async function loadCoreSchemaModules() {
 
 async function loadReactSettingsModule() {
   if (!reactSettingsModulePromise) {
-    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260525-subscription-sync5', 'react settings');
+    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260525-subscription-sync6', 'react settings');
   }
   return reactSettingsModulePromise;
 }
