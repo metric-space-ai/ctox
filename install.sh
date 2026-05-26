@@ -15,6 +15,7 @@ CACHE_ROOT="${CTOX_CACHE_ROOT:-$HOME/.cache/ctox}"
 BIN_DIR="${CTOX_BIN_DIR:-$HOME/.local/bin}"
 TOOLS_ROOT="${CTOX_TOOLS_ROOT:-$STATE_ROOT/tools}"
 DEPENDENCIES_ROOT="${CTOX_DEPENDENCIES_ROOT:-$STATE_ROOT/dependencies}"
+CTOX_RELEASE_RETENTION="${CTOX_RELEASE_RETENTION:-2}"
 TOOLS_ROOT_EXPLICIT=0
 DEPENDENCIES_ROOT_EXPLICIT=0
 [[ -n "${CTOX_TOOLS_ROOT:-}" ]] && TOOLS_ROOT_EXPLICIT=1
@@ -238,6 +239,75 @@ prepare_cargo_target_cache() {
 
   printf '  %b%breusing local cargo target at %s; cache link skipped because it already exists%b\n' \
     "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
+}
+
+cleanup_source_build_artifacts() {
+  local source_root="$1"
+  local path
+  for path in \
+    "$source_root/runtime/build/cargo-target" \
+    "$source_root/runtime/build/core-rxdb-integration-target" \
+    "$source_root/runtime/build/rxdb-wave128-target"
+  do
+    [[ -d "$path" && ! -L "$path" ]] || continue
+    printf '  %b%bremoving legacy build artifact %s%b\n' "$C_BOLD" "$C_GREY" "$path" "$C_RESET" >&2
+    rm -rf "$path"
+  done
+}
+
+cleanup_path_is_kept() {
+  local candidate="$1"
+  shift
+  local kept
+  for kept in "$@"; do
+    [[ "$candidate" == "$kept" ]] && return 0
+  done
+  return 1
+}
+
+cleanup_managed_releases() {
+  local active_release_dir="$1"
+  local releases_root="$INSTALL_ROOT/releases"
+  [[ -d "$releases_root" ]] || return 0
+
+  local retention="$CTOX_RELEASE_RETENTION"
+  if ! [[ "$retention" =~ ^[0-9]+$ ]]; then
+    retention=2
+  fi
+  [[ "$retention" -ge 1 ]] || retention=1
+
+  local -a keep_dirs=()
+  local dir real_dir
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] || continue
+    real_dir="$(readlink -f "$dir" 2>/dev/null || printf '%s\n' "$dir")"
+    keep_dirs+=("$real_dir")
+    [[ "${#keep_dirs[@]}" -ge "$retention" ]] && break
+  done < <(ls -1dt "$releases_root"/*/ 2>/dev/null || true)
+
+  local active_real current_real
+  active_real="$(readlink -f "$active_release_dir" 2>/dev/null || printf '%s\n' "$active_release_dir")"
+  current_real="$(readlink -f "$INSTALL_ROOT/current" 2>/dev/null || true)"
+  cleanup_path_is_kept "$active_real" "${keep_dirs[@]}" || keep_dirs+=("$active_real")
+  if [[ -n "$current_real" ]]; then
+    cleanup_path_is_kept "$current_real" "${keep_dirs[@]}" || keep_dirs+=("$current_real")
+  fi
+
+  local removed=0
+  while IFS= read -r dir; do
+    [[ -d "$dir" ]] || continue
+    real_dir="$(readlink -f "$dir" 2>/dev/null || printf '%s\n' "$dir")"
+    if cleanup_path_is_kept "$real_dir" "${keep_dirs[@]}"; then
+      continue
+    fi
+    printf '  %b%bremoving old release %s%b\n' "$C_BOLD" "$C_GREY" "$dir" "$C_RESET" >&2
+    rm -rf "$dir"
+    removed=$((removed + 1))
+  done < <(ls -1dt "$releases_root"/*/ 2>/dev/null || true)
+
+  if [[ "$removed" -gt 0 ]]; then
+    printf '  %b%bkept latest %s managed releases%b\n' "$C_BOLD" "$C_GREY" "$retention" "$C_RESET" >&2
+  fi
 }
 
 clean_stale_cmake_cache_dirs() {
@@ -1515,6 +1585,12 @@ setup_managed_install() {
   version="${version#v}"
   local release_name="v${version}"
   local release_dir="$INSTALL_ROOT/releases/$release_name"
+  local previous_release=""
+  if [[ -e "$INSTALL_ROOT/current" || -L "$INSTALL_ROOT/current" ]]; then
+    local previous_real
+    previous_real="$(readlink -f "$INSTALL_ROOT/current" 2>/dev/null || true)"
+    [[ -n "$previous_real" ]] && previous_release="$(basename "$previous_real")"
+  fi
 
   [[ -d "$release_dir" ]] && rm -rf "$release_dir"
   mkdir -p "$release_dir"
@@ -1538,13 +1614,15 @@ setup_managed_install() {
   ln -sfn "$release_dir" "$INSTALL_ROOT/current"
   [[ ! -e "$release_dir/runtime" ]] && ln -sfn "$STATE_ROOT" "$release_dir/runtime"
 
+  local previous_release_json="null"
+  [[ -n "$previous_release" ]] && previous_release_json="\"$previous_release\""
   cat > "$INSTALL_ROOT/install_manifest.json" <<MANIFEST
 {
   "schema_version": 1,
   "install_root": "$INSTALL_ROOT",
   "state_root": "$STATE_ROOT",
   "current_release": "$release_name",
-  "previous_release": null,
+  "previous_release": $previous_release_json,
   "release_channel": {
     "kind": "github",
     "repo": "metric-space-ai/ctox",
@@ -1556,6 +1634,8 @@ setup_managed_install() {
 MANIFEST
 
   printf '%s\n' "$ENGINE_FEATURES" > "$STATE_ROOT/engine_features"
+  cleanup_managed_releases "$release_dir"
+  cleanup_source_build_artifacts "$source_root"
 }
 
 # ── Jami DBus env file ────────────────────────────────────────────────────────
@@ -1770,6 +1850,7 @@ run_rebuild() {
   configure_cuda_env
   build_ctox "$root"
   populate_rebuild_release_layout "$root"
+  cleanup_source_build_artifacts "$root"
 
   STATE_ROOT="${CTOX_STATE_ROOT:-$root/runtime}"
   TOOLS_ROOT="${CTOX_TOOLS_ROOT:-$STATE_ROOT/tools}"
@@ -1948,6 +2029,7 @@ parse_args() {
         printf '  CTOX_BIN_DIR                Same as --bin-dir\n'
         printf '  CTOX_TOOLS_ROOT             Canonical install root for CTOX-managed helper tools\n'
         printf '  CTOX_DEPENDENCIES_ROOT      Canonical install root for downloaded dependencies/assets\n'
+        printf '  CTOX_RELEASE_RETENTION      Managed releases to keep after upgrade (default: 2)\n'
         printf '  CTOX_DISABLE_CARGO_TARGET_CACHE=1 Disable persistent upgrade build cache\n'
         printf '  CTOX_REPO                   Same as --repo\n'
         printf '  CTOX_BRANCH                 Same as --branch\n\n'

@@ -21,6 +21,8 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::thread;
+use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tiny_http::Header;
@@ -953,10 +955,12 @@ fn subscription_auth_start_payload(
     let login = start_chatgpt_subscription_login(root, callback_url)?;
     Ok(serde_json::json!({
         "ok": true,
-        "status": "auth_url",
+        "status": if login.device_user_code.is_some() { "device_code" } else { "auth_url" },
         "login_id": login.login_id,
         "auth_url": login.auth_url,
         "redirect_uri": login.redirect_uri,
+        "verification_url": login.verification_url,
+        "user_code": login.device_user_code,
         "message": "ChatGPT Subscription Autorisierung gestartet."
     }))
 }
@@ -965,6 +969,8 @@ struct StartedChatgptSubscriptionLogin {
     login_id: String,
     auth_url: String,
     redirect_uri: String,
+    device_user_code: Option<String>,
+    verification_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -986,17 +992,35 @@ fn start_chatgpt_subscription_login(
         .map(|value| value.trim().to_owned())
         .filter(|value| !value.is_empty())
     {
-        let redirect_uri = external_chatgpt_callback_url(&callback_url, &login_id)?;
-        let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
-        remember_pending_chatgpt_login(PendingChatgptSubscriptionLogin {
-            redirect_uri: redirect_uri.clone(),
-            pkce,
-            state,
-        })?;
+        let _ = external_chatgpt_callback_url(&callback_url, &login_id)?;
+        let device = request_chatgpt_device_code()?;
+        let verification_url = format!("{CHATGPT_AUTH_ISSUER}/codex/device");
+        let redirect_uri = format!("{CHATGPT_AUTH_ISSUER}/deviceauth/callback");
+        let auth_url = verification_url.clone();
+        let device_auth_id = device.device_auth_id.clone();
+        let device_user_code = device.user_code.clone();
+        let device_interval_secs = device.interval_secs;
+        let worker_login_id = login_id.clone();
+        let worker_redirect_uri = redirect_uri.clone();
+        let worker_root = root.to_path_buf();
+        thread::spawn(move || {
+            if let Err(err) = complete_chatgpt_device_code_login(
+                &worker_root,
+                &codex_home,
+                device_auth_id,
+                device_user_code,
+                device_interval_secs,
+                worker_redirect_uri,
+            ) {
+                eprintln!("CTOX ChatGPT subscription device login {worker_login_id} failed: {err}");
+            }
+        });
         return Ok(StartedChatgptSubscriptionLogin {
             login_id,
             auth_url,
             redirect_uri,
+            device_user_code: Some(device.user_code),
+            verification_url: Some(verification_url),
         });
     }
     let (server, port) = bind_chatgpt_login_server()
@@ -1022,6 +1046,8 @@ fn start_chatgpt_subscription_login(
         login_id,
         auth_url,
         redirect_uri,
+        device_user_code: None,
+        verification_url: None,
     })
 }
 
@@ -1036,6 +1062,115 @@ fn external_chatgpt_callback_url(callback_url: &str, login_id: &str) -> anyhow::
     parsed.set_fragment(None);
     parsed.query_pairs_mut().append_pair("login_id", login_id);
     Ok(parsed.to_string())
+}
+
+struct ChatgptDeviceCode {
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatgptDeviceTokenResponse {
+    authorization_code: String,
+    code_verifier: String,
+}
+
+fn request_chatgpt_device_code() -> anyhow::Result<ChatgptDeviceCode> {
+    let response = ureq::post(&format!(
+        "{CHATGPT_AUTH_ISSUER}/api/accounts/deviceauth/usercode"
+    ))
+    .set("Content-Type", "application/json")
+    .send_json(serde_json::json!({
+        "client_id": ctox_core::auth::CLIENT_ID,
+    }));
+    let body: Value = match response {
+        Ok(response) => response.into_json().map_err(anyhow::Error::from)?,
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow::bail!("Device-Code-Anforderung fehlgeschlagen ({status}): {body}")
+        }
+        Err(err) => return Err(anyhow::Error::from(err)),
+    };
+    let device_auth_id = body
+        .get("device_auth_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("Device-Code-Antwort enthält keine device_auth_id")?;
+    let user_code = body
+        .get("user_code")
+        .or_else(|| body.get("usercode"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("Device-Code-Antwort enthält keinen user_code")?;
+    let interval_secs = body
+        .get("interval")
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.trim().parse::<u64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(5)
+        .max(1);
+    Ok(ChatgptDeviceCode {
+        device_auth_id,
+        user_code,
+        interval_secs,
+    })
+}
+
+fn complete_chatgpt_device_code_login(
+    root: &Path,
+    codex_home: &Path,
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+    redirect_uri: String,
+) -> anyhow::Result<()> {
+    let token = poll_chatgpt_device_token(device_auth_id, user_code, interval_secs)?;
+    let tokens = exchange_chatgpt_authorization_code(
+        &token.authorization_code,
+        &redirect_uri,
+        &token.code_verifier,
+    )?;
+    persist_chatgpt_subscription_auth(root, codex_home, tokens)
+}
+
+fn poll_chatgpt_device_token(
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+) -> anyhow::Result<ChatgptDeviceTokenResponse> {
+    let started = Instant::now();
+    let max_wait = Duration::from_secs(15 * 60);
+    let sleep_for = Duration::from_secs(interval_secs).min(Duration::from_secs(15));
+    loop {
+        let response = ureq::post(&format!(
+            "{CHATGPT_AUTH_ISSUER}/api/accounts/deviceauth/token"
+        ))
+        .set("Content-Type", "application/json")
+        .send_json(serde_json::json!({
+            "device_auth_id": &device_auth_id,
+            "user_code": &user_code,
+        }));
+        match response {
+            Ok(response) => return response.into_json().map_err(anyhow::Error::from),
+            Err(ureq::Error::Status(status, response)) if status == 403 || status == 404 => {
+                if started.elapsed() >= max_wait {
+                    anyhow::bail!("Device-Code-Login ist nach 15 Minuten abgelaufen");
+                }
+                let _ = response.into_string();
+                thread::sleep(sleep_for);
+            }
+            Err(ureq::Error::Status(status, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                anyhow::bail!("Device-Code-Token-Abfrage fehlgeschlagen ({status}): {body}")
+            }
+            Err(err) => return Err(anyhow::Error::from(err)),
+        }
+    }
 }
 
 fn pending_chatgpt_logins() -> &'static Mutex<HashMap<String, PendingChatgptSubscriptionLogin>> {

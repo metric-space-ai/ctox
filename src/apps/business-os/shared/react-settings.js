@@ -244,15 +244,29 @@ export async function openReactSettings({
         );
         await saveRuntimeSettings(runtimePayload, { commandBus, db, session, sync });
         const payload = await startSubscriptionAuth({ commandBus, db, session, sync });
-        if (!payload.auth_url) throw new Error('CTOX hat keine Login-URL geliefert.');
-        if (authWindow && !authWindow.closed) {
-          authWindow.location.href = payload.auth_url;
-        } else {
-          window.location.href = payload.auth_url;
+        if (!payload.auth_url && !payload.verification_url) throw new Error('CTOX hat keine Login-URL geliefert.');
+        if (payload.status === 'device_code' && payload.user_code) {
+          settingsState.commandStatus = `ChatGPT Geräte-Code: ${payload.user_code}. Code im OpenAI-Fenster eingeben.`;
+          render();
+          writeSubscriptionAuthWindow(
+            authWindow,
+            'ChatGPT Geräte-Code',
+            `Code ${payload.user_code} im nächsten OpenAI-Fenster eingeben.`,
+          );
         }
-        settingsState.commandStatus = 'ChatGPT Login geöffnet. Danach Status neu laden.';
+        const authUrl = payload.auth_url || payload.verification_url;
+        if (authWindow && !authWindow.closed) {
+          authWindow.location.href = authUrl;
+        } else {
+          window.location.href = authUrl;
+        }
+        settingsState.commandStatus = payload.user_code
+          ? `ChatGPT Geräte-Code: ${payload.user_code}. Danach Status neu laden.`
+          : 'ChatGPT Login geöffnet. Danach Status neu laden.';
         setTimeout(refreshRuntimeSettings, 3000);
         setTimeout(refreshRuntimeSettings, 9000);
+        setTimeout(refreshRuntimeSettings, 30000);
+        setTimeout(refreshRuntimeSettings, 90000);
       } catch (error) {
         writeSubscriptionAuthWindow(
           authWindow,

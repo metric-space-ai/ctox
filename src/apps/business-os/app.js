@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260525-subscription-sync6';
+const APP_BUILD = '20260526-subscription-device1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -188,7 +188,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260525-subscription-sync6', 'business db')
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260526-subscription-device1', 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -199,7 +199,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260525-subscription-sync6', 'business sync')
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260526-subscription-device1', 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -227,7 +227,7 @@ async function loadCoreSchemaModules() {
 
 async function loadReactSettingsModule() {
   if (!reactSettingsModulePromise) {
-    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260525-subscription-sync6', 'react settings');
+    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260526-subscription-device1', 'react settings');
   }
   return reactSettingsModulePromise;
 }
