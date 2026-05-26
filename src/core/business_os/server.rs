@@ -18,6 +18,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -45,6 +47,13 @@ struct ChatgptSubscriptionAuthStatus {
     configured: bool,
     account_email: Option<String>,
     plan: Option<String>,
+}
+
+#[derive(Clone)]
+struct PendingChatgptSubscriptionLogin {
+    redirect_uri: String,
+    pkce: ChatgptLoginPkce,
+    state: String,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +169,12 @@ struct RuntimeSettingsRequest {
     api_key: String,
 }
 
+#[derive(Debug, Default, Clone, Deserialize)]
+struct SubscriptionAuthStartRequest {
+    #[serde(default)]
+    callback_url: Option<String>,
+}
+
 pub fn serve_business_os(root: &Path, options: BusinessOsServeOptions) -> anyhow::Result<()> {
     let app_root = resolve_business_os_app_root(root);
     if !app_root.join("index.html").is_file() {
@@ -240,8 +255,17 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             } else if !store::session_can_manage_all(&session) {
                 respond_status(request, 403, "chef or admin role required")?;
             } else {
-                respond_json_value(request, subscription_auth_start_payload(root)?)?;
+                let body = read_json(&mut request)?;
+                let options: SubscriptionAuthStartRequest = serde_json::from_value(body)?;
+                respond_json_value(
+                    request,
+                    subscription_auth_start_payload(root, options.callback_url)?,
+                )?;
             }
+        }
+        (Method::Get, "/api/business-os/ctox/subscription-auth/callback") => {
+            let url_raw = request.url().to_owned();
+            handle_subscription_auth_callback(request, root, &url_raw)?;
         }
         (Method::Post, "/api/business-os/ctox/tasks/update") => {
             let session = request_session(&request);
@@ -922,13 +946,17 @@ fn runtime_auth_message(
     }
 }
 
-fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
-    let login = start_chatgpt_subscription_login(root)?;
+fn subscription_auth_start_payload(
+    root: &Path,
+    callback_url: Option<String>,
+) -> anyhow::Result<Value> {
+    let login = start_chatgpt_subscription_login(root, callback_url)?;
     Ok(serde_json::json!({
         "ok": true,
         "status": "auth_url",
         "login_id": login.login_id,
         "auth_url": login.auth_url,
+        "redirect_uri": login.redirect_uri,
         "message": "ChatGPT Subscription Autorisierung gestartet."
     }))
 }
@@ -936,6 +964,7 @@ fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
 struct StartedChatgptSubscriptionLogin {
     login_id: String,
     auth_url: String,
+    redirect_uri: String,
 }
 
 #[derive(Clone)]
@@ -946,26 +975,90 @@ struct ChatgptLoginPkce {
 
 fn start_chatgpt_subscription_login(
     root: &Path,
+    callback_url: Option<String>,
 ) -> anyhow::Result<StartedChatgptSubscriptionLogin> {
     let codex_home = ctox_core::config::find_codex_home()
         .context("Codex/CTOX Auth-Store konnte nicht aufgelöst werden")?;
     let pkce = chatgpt_login_pkce();
     let state = chatgpt_login_state();
+    let login_id = Uuid::new_v4().to_string();
+    if let Some(callback_url) = callback_url
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+    {
+        let redirect_uri = external_chatgpt_callback_url(&callback_url, &login_id)?;
+        let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
+        remember_pending_chatgpt_login(PendingChatgptSubscriptionLogin {
+            redirect_uri: redirect_uri.clone(),
+            pkce,
+            state,
+        })?;
+        return Ok(StartedChatgptSubscriptionLogin {
+            login_id,
+            auth_url,
+            redirect_uri,
+        });
+    }
     let (server, port) = bind_chatgpt_login_server()
         .context("Lokaler ChatGPT-Login-Callback konnte nicht gestartet werden")?;
     let redirect_uri = format!("http://localhost:{port}/auth/callback");
     let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
-    let login_id = Uuid::new_v4().to_string();
     let worker_login_id = login_id.clone();
+    let worker_redirect_uri = redirect_uri.clone();
     let root = root.to_path_buf();
     thread::spawn(move || {
-        if let Err(err) =
-            run_chatgpt_login_callback_server(server, root, codex_home, redirect_uri, pkce, state)
-        {
+        if let Err(err) = run_chatgpt_login_callback_server(
+            server,
+            root,
+            codex_home,
+            worker_redirect_uri,
+            pkce,
+            state,
+        ) {
             eprintln!("CTOX ChatGPT subscription login {worker_login_id} failed: {err}");
         }
     });
-    Ok(StartedChatgptSubscriptionLogin { login_id, auth_url })
+    Ok(StartedChatgptSubscriptionLogin {
+        login_id,
+        auth_url,
+        redirect_uri,
+    })
+}
+
+fn external_chatgpt_callback_url(callback_url: &str, login_id: &str) -> anyhow::Result<String> {
+    let mut parsed = Url::parse(callback_url)
+        .with_context(|| format!("Ungültige ChatGPT Callback-URL: {callback_url}"))?;
+    match parsed.scheme() {
+        "https" => {}
+        "http" if matches!(parsed.host_str(), Some("localhost" | "127.0.0.1")) => {}
+        _ => anyhow::bail!("ChatGPT Callback-URL muss HTTPS verwenden"),
+    }
+    parsed.set_fragment(None);
+    parsed.query_pairs_mut().append_pair("login_id", login_id);
+    Ok(parsed.to_string())
+}
+
+fn pending_chatgpt_logins() -> &'static Mutex<HashMap<String, PendingChatgptSubscriptionLogin>> {
+    static LOGINS: OnceLock<Mutex<HashMap<String, PendingChatgptSubscriptionLogin>>> =
+        OnceLock::new();
+    LOGINS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_pending_chatgpt_login(login: PendingChatgptSubscriptionLogin) -> anyhow::Result<()> {
+    let mut logins = pending_chatgpt_logins()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("ChatGPT Login-State konnte nicht gespeichert werden"))?;
+    logins.insert(login.state.clone(), login);
+    Ok(())
+}
+
+fn take_pending_chatgpt_login(
+    state: &str,
+) -> anyhow::Result<Option<PendingChatgptSubscriptionLogin>> {
+    let mut logins = pending_chatgpt_logins()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("ChatGPT Login-State konnte nicht gelesen werden"))?;
+    Ok(logins.remove(state))
 }
 
 fn chatgpt_login_pkce() -> ChatgptLoginPkce {
@@ -1115,6 +1208,80 @@ fn handle_chatgpt_login_callback_request(
             Ok(true)
         }
     }
+}
+
+fn handle_subscription_auth_callback(
+    request: Request,
+    root: &Path,
+    url_raw: &str,
+) -> anyhow::Result<()> {
+    let parsed = Url::parse(&format!("http://localhost{url_raw}"))?;
+    if parsed.path() != "/api/business-os/ctox/subscription-auth/callback" {
+        respond_html(request, 404, "Not Found")?;
+        return Ok(());
+    }
+    let params: HashMap<String, String> = parsed.query_pairs().into_owned().collect();
+    let Some(state) = params.get("state").filter(|value| !value.trim().is_empty()) else {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: state fehlt.",
+        )?;
+        return Ok(());
+    };
+    let Some(login) = take_pending_chatgpt_login(state)? else {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: unbekannter oder abgelaufener state.",
+        )?;
+        return Ok(());
+    };
+    if state.as_str() != login.state.as_str() {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: state mismatch.",
+        )?;
+        return Ok(());
+    }
+    if let Some(error) = params.get("error") {
+        let description = params
+            .get("error_description")
+            .map(String::as_str)
+            .unwrap_or(error);
+        respond_html(
+            request,
+            400,
+            &format!("CTOX Login wurde von ChatGPT abgelehnt: {description}"),
+        )?;
+        return Ok(());
+    }
+    let Some(code) = params.get("code").filter(|value| !value.trim().is_empty()) else {
+        respond_html(
+            request,
+            400,
+            "CTOX Login konnte nicht abgeschlossen werden: code fehlt.",
+        )?;
+        return Ok(());
+    };
+    let codex_home = ctox_core::config::find_codex_home()
+        .context("Codex/CTOX Auth-Store konnte nicht aufgelöst werden")?;
+    match exchange_chatgpt_authorization_code(code, &login.redirect_uri, &login.pkce.verifier)
+        .and_then(|tokens| persist_chatgpt_subscription_auth(root, &codex_home, tokens))
+    {
+        Ok(()) => respond_html(
+            request,
+            200,
+            "CTOX ChatGPT Subscription ist autorisiert. Dieses Fenster kann geschlossen werden.",
+        )?,
+        Err(err) => respond_html(
+            request,
+            500,
+            &format!("CTOX konnte die ChatGPT Subscription nicht speichern: {err}"),
+        )?,
+    }
+    Ok(())
 }
 
 fn respond_html(request: Request, status: u16, body: &str) -> anyhow::Result<()> {

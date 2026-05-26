@@ -1111,6 +1111,11 @@ async function saveUser(payload, { commandBus, db, session } = {}) {
 }
 
 async function loadRuntimeSettings({ db } = {}) {
+  try {
+    return await callInstanceBusinessOsApi('/api/business-os/ctox/runtime-settings');
+  } catch (error) {
+    console.warn('[business-os-settings] direct runtime settings load failed; falling back to RxDB projection', error);
+  }
   const coll = db?.collection?.('ctox_runtime_settings');
   if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
   const doc = await coll.findOne('runtime-settings').exec();
