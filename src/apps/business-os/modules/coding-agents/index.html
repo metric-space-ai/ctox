@@ -1,0 +1,201 @@
+<main class="coding-agents-module theme-antigravity" data-coding-agents-root>
+
+  <!-- Column 1: Left Pane (Workspace Sidebar) -->
+  <section class="coding-agents-pane coding-agents-left" aria-label="Coding Agents Sidebar">
+    <div class="coding-agents-sidebar">
+
+      <header class="ctox-pane-header">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker">CTOX</span>
+            <h2 class="ctox-pane-title">Workspaces</h2>
+          </div>
+          <div class="ctox-pane-actions">
+            <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace">+</button>
+          </div>
+        </div>
+      </header>
+
+      <!-- Workspaces List -->
+      <div class="coding-agents-scroll-pane" id="workspaces-list-box" style="padding: 12px 14px; display:flex; flex-direction:column; gap:8px;">
+        <div class="empty-list-placeholder">Loading workspaces...</div>
+      </div>
+
+      <!-- Left Sidebar Footer -->
+      <div class="sidebar-footer" style="padding: 12px; border-top: 1px solid var(--line); flex-shrink: 0;">
+        <button type="button" class="fibu-btn fibu-btn-secondary" id="open-settings-btn" style="width: 100%; justify-content: center; gap: 8px;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="svg-inline" style="width:14px; height:14px;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          System Settings
+        </button>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- Left Resizer Handle -->
+  <div class="coding-agents-col-resizer" data-resizer="left" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+
+  <!-- Column 2: Center Pane (Workbench - Multi-turn Session View) -->
+  <section class="coding-agents-pane coding-agents-center" aria-label="Coding Agents Workbench">
+
+    <header class="ctox-pane-header workbench-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" id="active-app-desc">Select a Workspace</span>
+          <h2 class="ctox-pane-title" id="active-app-title">Coding Agent Workbench</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <div class="connection-status-pill" id="workbench-status-badge" style="display:none;">
+            <span class="status-dot online" id="workbench-status-dot"></span>
+            <span id="workbench-status-text">Connected</span>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="coding-agents-workbench-body flex-fill" style="display:flex; flex-direction:column; padding: 0; gap: 0; height: 100%;">
+      <!-- Session Bar -->
+      <div class="workbench-sessions-bar" style="padding: 10px 16px; border-bottom: 1px solid var(--line); display:flex; align-items:center; justify-content:space-between; background: var(--surface-2); flex-shrink:0;">
+        <div style="display:flex; align-items:center; gap: 8px;">
+          <label for="workbench-session-select" style="font-size:11.5px; font-weight:600; color:var(--text-muted);">Active Session:</label>
+          <select id="workbench-session-select" class="fibu-select" style="padding: 3px 8px; font-size:11px; height:24px; min-width:200px;" disabled>
+            <option value="">No Active Sessions</option>
+          </select>
+        </div>
+        <button type="button" class="fibu-btn fibu-btn-primary" id="new-session-btn" style="padding: 4px 10px; font-size:11px; height:24px;" disabled>+ New Session</button>
+      </div>
+
+      <!-- Dynamic Chat History Logs -->
+      <div class="session-chat-feed flex-fill" id="workbench-chat-feed" style="overflow-y:auto; padding: 20px; display:flex; flex-direction:column; gap: 16px;">
+        <div class="empty-list-placeholder">Please select a workspace on the left to start coding.</div>
+      </div>
+
+      <!-- Bottom Form Prompt Input -->
+      <div class="workbench-chat-input-bar" style="padding: 14px 18px; border-top: 1px solid var(--line); background: var(--surface-2); flex-shrink:0;">
+        <form id="workbench-prompt-form" style="display: flex; gap: 10px; width: 100%;">
+          <input type="text" id="workbench-prompt-input" class="fibu-input" placeholder="Type instruction for active coding agent session..." required disabled>
+          <button type="submit" class="fibu-btn fibu-btn-primary" id="workbench-prompt-submit" disabled>Send Instruction</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <!-- Overlay Modal: System Settings & Subscription -->
+  <div class="settings-modal-overlay" id="settings-modal" hidden>
+    <div class="settings-container glass-panel">
+      <header class="settings-header">
+        <h3>System Settings & Subscriptions</h3>
+        <button type="button" class="btn-close-settings" id="close-settings-btn">&times;</button>
+      </header>
+
+      <div class="settings-body" style="padding: 20px; overflow-y:auto; display:flex; flex-direction:column; gap: 24px;">
+
+        <!-- Lifecycle & Port selection -->
+        <div class="settings-section">
+          <h4>Lifecycle & Service Control</h4>
+          <p class="section-desc">Manage the local background Electron GUI and headless daemon service.</p>
+          <div class="lifecycle-controls-row" style="display:flex; flex-wrap:wrap; gap: 12px; align-items:center; justify-content:space-between; margin-top:8px;">
+            <div style="display:flex; gap:8px;">
+              <button type="button" class="fibu-btn fibu-btn-primary" data-action="start-app">Launch GUI App</button>
+              <button type="button" class="fibu-btn fibu-btn-secondary" data-action="start-headless">Spawn Headless</button>
+              <button type="button" class="fibu-btn fibu-btn-danger" data-action="stop-app">Terminate App</button>
+            </div>
+            <div style="display:flex; align-items:center; gap:8px; font-size:12px;">
+              <label for="daemon-port-input">Headless Port:</label>
+              <input type="number" id="daemon-port-input" value="8083" class="fibu-input" style="width: 80px; padding: 4px 8px;" placeholder="8083">
+            </div>
+          </div>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding: 8px 12px; background:var(--surface-2); border-radius:8px; font-size:11.5px;">
+            <span>Current Service Uptime: <strong id="diag-uptime">N/A</strong></span>
+            <span>Resources: <strong id="diag-resources">N/A</strong></span>
+            <span>Electron App: <strong id="diag-installed">Checking...</strong> (PID: <span id="diag-electron-pid">N/A</span>)</span>
+          </div>
+        </div>
+
+        <!-- Permissions Bypass manager -->
+        <div class="settings-section">
+          <h4>Permissions Bypass Policy</h4>
+          <p class="section-desc">Automatically confirm read/write and script executions in workspaces without interactive dialog popups.</p>
+          <div class="permission-toggle-row" style="display:flex; justify-content:space-between; align-items:center; margin-top:10px;">
+            <div class="toggle-info" style="display:flex; flex-direction:column; gap:2px;">
+              <span class="toggle-title" style="font-weight:600; font-size:13px;">Bypass All Permission Confirmation Dialogs</span>
+              <span class="toggle-subtitle" style="font-size:11px; color:var(--text-muted);">Trust all actions inside active workspaces</span>
+            </div>
+            <label class="switch-toggle">
+              <input type="checkbox" id="bypass-permissions-toggle">
+              <span class="slider-round"></span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Account Subscription portal -->
+        <div class="settings-section">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <h4>Account Subscription Registration</h4>
+            <span class="card-status-indicator" id="auth-status">UNAUTHORIZED</span>
+          </div>
+          <p class="section-desc">Verify your subscription license via automated headful browser login.</p>
+          <form class="subscription-auth-form" id="sub-login-form" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
+            <div class="form-group">
+              <label for="sub-email">Google/Gmail Account Email:</label>
+              <input type="email" id="sub-email" class="fibu-input" placeholder="user@gmail.com" required>
+            </div>
+            <div class="form-group">
+              <label for="sub-password">Google Password:</label>
+              <input type="password" id="sub-password" class="fibu-input" placeholder="••••••••••••" required>
+            </div>
+            <button type="submit" class="fibu-btn fibu-btn-primary btn-glow" id="btn-trigger-signup" style="justify-content:center; margin-top:4px;">
+              Trigger Headful Google Signup Verification
+            </button>
+          </form>
+
+          <div class="browser-log-card" style="margin-top: 14px;">
+            <div class="browser-log-title" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Stealth Browser Automation Output Logs</div>
+            <div class="terminal-container small-terminal">
+              <div class="terminal-body" id="browser-log-box" style="height:120px; overflow-y:auto; padding:10px; background:#000; border-radius:6px; font-family:monospace; font-size:10.5px; color:#fff; display:flex; flex-direction:column;">
+                <span class="terminal-line dim">Awaiting subscription login trigger...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- Overlay Modal: Add Workspace Path -->
+  <div class="settings-modal-overlay" id="add-workspace-modal" hidden>
+    <div class="settings-container glass-panel" style="max-width: 450px; min-height: 200px;">
+      <header class="settings-header">
+        <h3>Add Workspace</h3>
+        <button type="button" class="btn-close-settings" id="close-add-workspace-btn">&times;</button>
+      </header>
+      <div class="settings-body" style="padding: 16px 20px;">
+        <form id="add-workspace-form" style="display:flex; flex-direction:column; gap: 14px;">
+          <p class="section-desc">Enter the absolute directory path to authorize as a clean Coding Workspace.</p>
+          <input type="text" id="add-workspace-input" class="fibu-input" placeholder="e.g. /Users/michaelwelsch/Documents/my-project" required>
+          <button type="submit" class="fibu-btn fibu-btn-primary" style="justify-content:center;">Authorize & Add Workspace</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden elements for E2E backwards compatibility -->
+  <div style="position: absolute; left: 0; top: 0; width: 20px; height: 20px; opacity: 0.01; z-index: 1;" aria-hidden="true">
+    <button type="button" class="app-switch-btn" data-app="antigravity" id="diag-dot-antigravity" style="position: absolute; left: 0px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="app-switch-btn" data-app="claude" id="diag-dot-claude" style="position: absolute; left: 2px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <button type="button" class="app-switch-btn" data-app="codex" id="diag-dot-codex" style="position: absolute; left: 4px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <span id="diag-badge-antigravity">OFFLINE</span>
+    <span id="diag-badge-claude">OFFLINE</span>
+    <span id="diag-badge-codex">OFFLINE</span>
+    <button type="button" class="right-tab-btn" data-right-tab="subscription" style="position: absolute; left: 6px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
+    <div id="diag-ls-pid">N/A</div>
+    <div id="diag-active-port">8083</div>
+    <form id="path-auth-form">
+      <input type="text" id="new-path-input">
+    </form>
+    <div id="trusted-paths-box"></div>
+    <div id="sessions-list-box"></div>
+  </div>
+
+</main>

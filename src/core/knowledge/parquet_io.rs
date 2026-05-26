@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Shared Polars helpers for Level 3 operational verbs on
 // record-shape knowledge tables.

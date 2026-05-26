@@ -15,6 +15,7 @@
 //! automatically inside `run_ctox_web_read_tool` (Phase 3), so this file
 //! only has to aggregate the resulting evidence per field.
 
+use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::fs;
@@ -27,6 +28,9 @@ use std::time::UNIX_EPOCH;
 
 use anyhow::Context;
 use anyhow::Result;
+use rusqlite::Connection;
+use rusqlite::OpenFlags;
+use rusqlite::OptionalExtension;
 use serde_json::json;
 use serde_json::Value;
 
@@ -113,6 +117,8 @@ pub fn run_ctox_person_research_tool(
     let mut search_runs: Vec<Value> = Vec::with_capacity(plans.len());
     let mut read_runs: Vec<Value> = Vec::new();
     let mut scrape_runs: Vec<Value> = Vec::new();
+    let mut browser_extract_runs: Vec<Value> = Vec::new();
+    let mut browser_assist_tasks: Vec<Value> = Vec::new();
     let mut visited_urls: BTreeSet<String> = BTreeSet::new();
     let ctox_bin = scrape_bridge::default_ctox_bin();
 
@@ -222,7 +228,12 @@ pub fn run_ctox_person_research_tool(
             "ok": ok,
             "hit_count": hits.len(),
             "provider": search_payload.get("provider").cloned().unwrap_or(Value::Null),
+            "source_failures": search_payload.get("source_failures").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
         }));
+        browser_assist_tasks.extend(browser_assist_tasks_from_source_failures(
+            plan,
+            search_payload.get("source_failures"),
+        ));
         if !ok {
             continue;
         }
@@ -339,6 +350,22 @@ pub fn run_ctox_person_research_tool(
         }
     }
 
+    match collect_browser_extract_evidence(root, &company, plans.as_slice(), &request.fields) {
+        Ok((browser_evidence, runs)) => {
+            browser_extract_runs = runs;
+            for (field, candidates) in browser_evidence {
+                field_evidence.entry(field).or_default().extend(candidates);
+            }
+        }
+        Err(err) => {
+            browser_extract_runs.push(json!({
+                "ok": false,
+                "via": "browser_extract",
+                "error": err.to_string(),
+            }));
+        }
+    }
+
     let aggregated = aggregate_fields(&request.fields, plans.as_slice(), field_evidence);
 
     let payload = json!({
@@ -365,6 +392,9 @@ pub fn run_ctox_person_research_tool(
         "search_runs": search_runs,
         "read_runs": read_runs,
         "scrape_runs": scrape_runs,
+        "browser_extract_runs": browser_extract_runs,
+        "browser_assist_tasks": browser_assist_tasks,
+        "browser_assist_recommendations": browser_assist_recommendations(plans.as_slice()),
     });
 
     if request.persist_workspace {
@@ -481,6 +511,76 @@ fn probe_api_path(module: &'static dyn SourceModule) -> bool {
     module.fetch_direct(&ctx, "probe").is_some()
 }
 
+fn browser_assist_recommendations(plans: &[PersonResearchPlan]) -> Vec<Value> {
+    plans
+        .iter()
+        .filter_map(|plan| {
+            let module = sources::find(plan.source_id)?;
+            let recipe = module.browser_recipe()?;
+            Some(json!({
+                "source_id": recipe.source_id,
+                "target_fields": plan.target_fields.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
+                "reason": "credentialed_source_browser_assist_available",
+                "stream": "rxdb",
+                "target_url": recipe.login_url,
+                "allowed_domains": recipe.allowed_domains,
+                "required_secret_name": recipe.required_secret_name,
+                "verify_selector": recipe.verify_selector,
+                "credential_selector": recipe.credential_selector,
+                "capture_script": recipe.capture_script,
+                "secret_value_in_payload": false,
+            }))
+        })
+        .collect()
+}
+
+fn browser_assist_tasks_from_source_failures(
+    plan: &PersonResearchPlan,
+    failures: Option<&Value>,
+) -> Vec<Value> {
+    let Some(items) = failures.and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    let mut tasks = Vec::new();
+    for failure in items {
+        let source_matches = failure.get("source_id").and_then(Value::as_str) == Some(plan.source_id)
+            || failure.get("requested_source").and_then(Value::as_str) == Some(plan.source_id)
+            || failure
+                .get("requested_source")
+                .and_then(Value::as_str)
+                .is_some_and(|requested| {
+                    plan.aliases
+                        .iter()
+                        .any(|alias| alias.eq_ignore_ascii_case(requested))
+                });
+        if !source_matches {
+            continue;
+        }
+        let kind = failure.get("kind").and_then(Value::as_str).unwrap_or_default();
+        if !matches!(kind, "credential_missing" | "blocked") {
+            continue;
+        }
+        let Some(browser_assist) = failure.get("browser_assist").filter(|value| value.is_object())
+        else {
+            continue;
+        };
+        tasks.push(json!({
+            "source_id": plan.source_id,
+            "target_fields": plan.target_fields.iter().map(|field| field.as_str()).collect::<Vec<_>>(),
+            "reason": kind,
+            "error": failure.get("error").cloned().unwrap_or(Value::Null),
+            "secret_name": failure.get("secret_name").cloned().unwrap_or(Value::Null),
+            "status": "auth_assist_required",
+            "stream": "rxdb",
+            "browser_assist": browser_assist,
+            "next_command": format!("ctox business-os web-stack auth-assist-request --source-id {}", plan.source_id),
+            "secret_value_in_payload": false,
+            "frame_data_in_payload": false,
+        }));
+    }
+    tasks
+}
+
 // ---------------------------------------------------------------------------
 // Aggregation
 // ---------------------------------------------------------------------------
@@ -549,6 +649,293 @@ fn confidence_rank(raw: Option<&str>) -> u8 {
 }
 
 // ---------------------------------------------------------------------------
+// Browser extract evidence
+// ---------------------------------------------------------------------------
+
+fn collect_browser_extract_evidence(
+    root: &Path,
+    company: &str,
+    plans: &[PersonResearchPlan],
+    requested: &[FieldKey],
+) -> Result<(BTreeMap<FieldKey, Vec<Value>>, Vec<Value>)> {
+    let db_path = root.join("runtime").join("ctox.sqlite3");
+    if !db_path.is_file() {
+        return Ok((BTreeMap::new(), Vec::new()));
+    }
+
+    let conn = Connection::open_with_flags(
+        &db_path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("failed to open Business-OS RxDB store {}", db_path.display()))?;
+
+    let table_name: Option<String> = conn
+        .query_row(
+            "SELECT name
+             FROM sqlite_master
+             WHERE type = 'table'
+               AND (name = 'ctox_business_os__business_commands__v1'
+                    OR name LIKE '%__business_commands__v1')
+             ORDER BY CASE WHEN name = 'ctox_business_os__business_commands__v1' THEN 0 ELSE 1 END,
+                      name
+             LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(table_name) = table_name else {
+        return Ok((BTreeMap::new(), Vec::new()));
+    };
+
+    let mut stmt = conn.prepare(&format!(
+        "SELECT data FROM {}",
+        quote_sql_identifier(&table_name)
+    ))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut docs: Vec<Value> = Vec::new();
+    for row in rows {
+        let Ok(raw) = row else {
+            continue;
+        };
+        let Ok(doc) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if doc.get("command_type").and_then(Value::as_str) != Some("browser.capture.extract")
+            && doc.get("type").and_then(Value::as_str) != Some("browser.capture.extract")
+        {
+            continue;
+        }
+        if doc.get("status").and_then(Value::as_str) != Some("completed") {
+            continue;
+        }
+        if !doc
+            .pointer("/result/ok")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        docs.push(doc);
+    }
+    docs.sort_by_key(|doc| Reverse(doc.get("updated_at_ms").and_then(Value::as_u64).unwrap_or(0)));
+    docs.truncate(64);
+
+    let mut evidence: BTreeMap<FieldKey, Vec<Value>> = BTreeMap::new();
+    let mut runs: Vec<Value> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+
+    for doc in docs {
+        let result = doc.get("result").unwrap_or(&Value::Null);
+        let extract = result.get("extract").unwrap_or(&Value::Null);
+        let payload = doc.get("payload").unwrap_or(&Value::Null);
+        let Some(source_id) = first_json_string(&[extract, result, payload, &doc], "source_id")
+            .or_else(|| first_json_string(&[extract, result], "sourceId"))
+        else {
+            continue;
+        };
+        let Some(plan) = plans.iter().find(|plan| {
+            plan.source_id.eq_ignore_ascii_case(&source_id)
+                || plan
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(&source_id))
+        }) else {
+            continue;
+        };
+        let Some(fields) = extract.get("fields").and_then(Value::as_object) else {
+            runs.push(browser_extract_run_summary(&doc, result, extract, payload, plan, 0));
+            continue;
+        };
+        if !browser_extract_matches_company(company, extract, payload, fields) {
+            continue;
+        }
+
+        let mut added = 0_usize;
+        for (field_name, raw_value) in fields {
+            if forbidden_browser_extract_key(field_name) {
+                continue;
+            }
+            let Some(field) = FieldKey::from_str(field_name) else {
+                continue;
+            };
+            if !requested.is_empty() && !requested.contains(&field) {
+                continue;
+            }
+            if !plan.target_fields.contains(&field) {
+                continue;
+            }
+            let Some(value) = browser_extract_scalar(raw_value) else {
+                continue;
+            };
+            let source_url = first_json_string(&[extract, payload], "url")
+                .or_else(|| {
+                    payload
+                        .pointer("/browser_context_artifact/browser_context/url")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            let command_id = first_json_string(&[&doc], "command_id")
+                .or_else(|| first_json_string(&[&doc], "id"))
+                .unwrap_or_default();
+            let dedupe = format!("{}:{}:{}:{}", plan.source_id, field.as_str(), source_url, value);
+            if !seen.insert(dedupe) {
+                continue;
+            }
+            evidence.entry(field).or_default().push(json!({
+                "value": value,
+                "confidence": "high",
+                "source_id": plan.source_id,
+                "source_url": source_url,
+                "tier": tier_label(plan.tier),
+                "via": "browser_extract",
+                "note": format!(
+                    "capture_script={}; command_id={}",
+                    first_json_string(&[result, payload], "capture_script").unwrap_or_default(),
+                    command_id
+                ),
+            }));
+            added += 1;
+        }
+        runs.push(browser_extract_run_summary(
+            &doc, result, extract, payload, plan, added,
+        ));
+    }
+
+    Ok((evidence, runs))
+}
+
+fn browser_extract_run_summary(
+    doc: &Value,
+    result: &Value,
+    extract: &Value,
+    payload: &Value,
+    plan: &PersonResearchPlan,
+    field_count: usize,
+) -> Value {
+    json!({
+        "ok": true,
+        "via": "browser_extract",
+        "source_id": plan.source_id,
+        "command_id": first_json_string(&[doc], "command_id").or_else(|| first_json_string(&[doc], "id")).unwrap_or_default(),
+        "capture_script": first_json_string(&[result, payload], "capture_script").unwrap_or_default(),
+        "url": first_json_string(&[extract, payload], "url").unwrap_or_default(),
+        "field_count": field_count,
+        "stream": "rxdb",
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false,
+    })
+}
+
+fn browser_extract_scalar(value: &Value) -> Option<String> {
+    match value {
+        Value::String(raw) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.chars().take(500).collect())
+            }
+        }
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn browser_extract_matches_company(
+    company: &str,
+    extract: &Value,
+    payload: &Value,
+    fields: &serde_json::Map<String, Value>,
+) -> bool {
+    let tokens = company_match_tokens(company);
+    if tokens.is_empty() {
+        return false;
+    }
+    let mut haystack = String::new();
+    for value in [
+        first_json_string(&[extract, payload], "url"),
+        first_json_string(&[extract, payload], "title"),
+        payload
+            .pointer("/browser_context_artifact/browser_context/url")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        payload
+            .pointer("/browser_context_artifact/browser_context/title")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        haystack.push(' ');
+        haystack.push_str(&value.to_ascii_lowercase());
+    }
+    for (field_name, raw_value) in fields {
+        if forbidden_browser_extract_key(field_name) {
+            continue;
+        }
+        if FieldKey::from_str(field_name).is_none() {
+            continue;
+        }
+        if let Some(value) = browser_extract_scalar(raw_value) {
+            haystack.push(' ');
+            haystack.push_str(&value.to_ascii_lowercase());
+        }
+    }
+    tokens.iter().any(|token| haystack.contains(token))
+}
+
+fn company_match_tokens(company: &str) -> Vec<String> {
+    let legal_suffixes = [
+        "ag", "at", "ch", "co", "de", "gmbh", "kg", "mbh", "se", "the", "und",
+    ];
+    company
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .map(str::trim)
+        .filter(|token| token.len() >= 3)
+        .map(str::to_ascii_lowercase)
+        .filter(|token| !legal_suffixes.contains(&token.as_str()))
+        .collect()
+}
+
+fn first_json_string(values: &[&Value], key: &str) -> Option<String> {
+    values.iter().find_map(|value| {
+        value
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn forbidden_browser_extract_key(key: &str) -> bool {
+    matches!(
+        key.trim().to_ascii_lowercase().as_str(),
+        "secret"
+            | "secret_value"
+            | "password"
+            | "token"
+            | "access_token"
+            | "refresh_token"
+            | "cookie"
+            | "cookies"
+            | "frame"
+            | "frame_data"
+            | "data"
+            | "raw"
+            | "raw_html"
+            | "html"
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Helpers shared with deep_research
 // ---------------------------------------------------------------------------
 
@@ -572,6 +959,8 @@ fn empty_plan_response(company: &str, request: &PersonResearchRequest, reason: &
         "search_runs": [],
         "read_runs": [],
         "scrape_runs": [],
+        "browser_extract_runs": [],
+        "browser_assist_tasks": [],
         "skipped_reason": reason,
     })
 }
@@ -723,6 +1112,14 @@ fn persist_person_workspace(
         &workspace.join("scrape_runs.jsonl"),
         payload.get("scrape_runs"),
     )?;
+    write_jsonl(
+        &workspace.join("browser_extract_runs.jsonl"),
+        payload.get("browser_extract_runs"),
+    )?;
+    write_jsonl(
+        &workspace.join("browser_assist_tasks.jsonl"),
+        payload.get("browser_assist_tasks"),
+    )?;
     write_json_pretty(&workspace.join("envelope.json"), payload)?;
 
     fs::write(
@@ -740,6 +1137,8 @@ fn persist_person_workspace(
             "plan": "plan.json",
             "search_runs": "search_runs.jsonl",
             "read_runs": "read_runs.jsonl",
+            "browser_extract_runs": "browser_extract_runs.jsonl",
+            "browser_assist_tasks": "browser_assist_tasks.jsonl",
             "envelope": "envelope.json",
             "continuation": "CONTINUE.md",
         }
@@ -983,6 +1382,216 @@ mod tests {
             "linkedin.com",
             &["linkedin"],
             &["api.linkedin.com"],
+        ));
+    }
+
+    #[test]
+    fn browser_assist_recommendations_expose_recipe_without_secret_value() {
+        let request = PersonResearchRequest {
+            company: "ACME".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::PersonLinkedin],
+            include_private: vec!["linkedin".into()],
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_person_research_plan(&request);
+        let recommendations = browser_assist_recommendations(&plans);
+        let linkedin = recommendations
+            .iter()
+            .find(|entry| entry.get("source_id").and_then(Value::as_str) == Some("linkedin.com"))
+            .expect("linkedin recommendation");
+        assert_eq!(
+            linkedin.get("stream").and_then(Value::as_str),
+            Some("rxdb")
+        );
+        assert_eq!(
+            linkedin.get("required_secret_name").and_then(Value::as_str),
+            Some("LINKEDIN_SALES_NAV_TOKEN")
+        );
+        assert_eq!(
+            linkedin.get("secret_value_in_payload").and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(linkedin.get("credential_selector").and_then(Value::as_str).is_some());
+        assert!(linkedin.get("capture_script").and_then(Value::as_str).is_some());
+        assert!(!serde_json::to_string(linkedin)
+            .expect("serialize recommendation")
+            .contains("secret_value\""));
+    }
+
+    #[test]
+    fn browser_assist_tasks_materialize_from_source_failures() {
+        let request = PersonResearchRequest {
+            company: "ACME".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::PersonLinkedin],
+            include_private: vec!["linkedin".into()],
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_person_research_plan(&request);
+        let plan = plans
+            .iter()
+            .find(|plan| plan.source_id == "linkedin.com")
+            .expect("linkedin plan");
+        let tasks = browser_assist_tasks_from_source_failures(
+            plan,
+            Some(&json!([{
+                "requested_source": "linkedin.com",
+                "source_id": "linkedin.com",
+                "kind": "credential_missing",
+                "error": "credential_missing: LINKEDIN_SALES_NAV_TOKEN",
+                "secret_name": "LINKEDIN_SALES_NAV_TOKEN",
+                "browser_assist": {
+                    "stream": "rxdb",
+                    "target_url": "https://www.linkedin.com/login",
+                    "required_secret_name": "LINKEDIN_SALES_NAV_TOKEN",
+                    "credential_selector": "input[name=\"session_password\"]",
+                    "capture_script": "linkedin.profile_capture.v1",
+                    "secret_value_in_payload": false,
+                    "frame_data_in_payload": false
+                }
+            }])),
+        );
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["status"], "auth_assist_required");
+        assert_eq!(tasks[0]["stream"], "rxdb");
+        assert_eq!(
+            tasks[0]["next_command"],
+            "ctox business-os web-stack auth-assist-request --source-id linkedin.com"
+        );
+        let serialized = serde_json::to_string(&tasks).unwrap();
+        assert!(!serialized.contains("secret_value\":\""));
+        assert!(serialized.contains("LINKEDIN_SALES_NAV_TOKEN"));
+    }
+
+    #[test]
+    fn browser_extract_evidence_imports_only_typed_redacted_fields() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-web-stack-browser-extract-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let runtime = root.join("runtime");
+        fs::create_dir_all(&runtime).unwrap();
+        let db_path = runtime.join("ctox.sqlite3");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )
+        .unwrap();
+        let doc = json!({
+            "id": "browser_extract_test",
+            "command_id": "browser_extract_test",
+            "command_type": "browser.capture.extract",
+            "type": "browser.capture.extract",
+            "status": "completed",
+            "updated_at_ms": 42_u64,
+            "payload": {
+                "source_id": "linkedin.com",
+                "capture_script": "linkedin.profile_capture.v1",
+                "secret_value": "bad-secret",
+                "browser_context_artifact": {
+                    "browser_context": {
+                        "url": "https://www.linkedin.com/in/alice",
+                        "title": "Alice Example - CEO - ACME | LinkedIn",
+                        "frame_data": "bad-frame"
+                    }
+                }
+            },
+            "result": {
+                "ok": true,
+                "stream": "rxdb",
+                "secret_value_in_payload": false,
+                "frame_data_in_payload": false,
+                "capture_script": "linkedin.profile_capture.v1",
+                "extract": {
+                    "sourceId": "linkedin.com",
+                    "url": "https://www.linkedin.com/in/alice",
+                    "fields": {
+                        "person_linkedin": "https://www.linkedin.com/in/alice",
+                        "person_funktion": "CEO",
+                        "secret_value": "bad-secret",
+                        "data": "bad-frame"
+                    }
+                }
+            }
+        });
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES (?1, ?2)",
+            (&"browser_extract_test", &serde_json::to_string(&doc).unwrap()),
+        )
+        .unwrap();
+
+        let request = PersonResearchRequest {
+            company: "ACME".into(),
+            country: Country::De,
+            mode: ResearchMode::NewRecord,
+            fields: vec![FieldKey::PersonLinkedin, FieldKey::PersonFunktion],
+            include_private: vec!["linkedin".into()],
+            workspace: None,
+            persist_workspace: false,
+        };
+        let plans = build_person_research_plan(&request);
+        let (evidence, runs) =
+            collect_browser_extract_evidence(&root, "ACME", &plans, &request.fields).unwrap();
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0]["field_count"], 2);
+        assert_eq!(
+            evidence[&FieldKey::PersonLinkedin][0]["value"],
+            "https://www.linkedin.com/in/alice"
+        );
+        assert_eq!(evidence[&FieldKey::PersonFunktion][0]["value"], "CEO");
+        let serialized = format!("{evidence:?}{runs:?}");
+        assert!(!serialized.contains("bad-secret"));
+        assert!(!serialized.contains("bad-frame"));
+
+        drop(conn);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn browser_extract_evidence_skips_wrong_company_scope() {
+        let fields = serde_json::Map::from_iter([
+            (
+                "person_funktion".to_string(),
+                Value::String("CEO at Globex".to_string()),
+            ),
+            (
+                "person_linkedin".to_string(),
+                Value::String("https://www.linkedin.com/in/alice".to_string()),
+            ),
+        ]);
+        assert!(!browser_extract_matches_company(
+            "ACME GmbH",
+            &json!({"url": "https://www.linkedin.com/in/alice"}),
+            &json!({
+                "browser_context_artifact": {
+                    "browser_context": {
+                        "title": "Alice Example - CEO - Globex | LinkedIn"
+                    }
+                }
+            }),
+            &fields,
+        ));
+        assert!(browser_extract_matches_company(
+            "ACME GmbH",
+            &json!({"url": "https://www.linkedin.com/in/alice"}),
+            &json!({
+                "browser_context_artifact": {
+                    "browser_context": {
+                        "title": "Alice Example - CEO - ACME | LinkedIn"
+                    }
+                }
+            }),
+            &fields,
         ));
     }
 

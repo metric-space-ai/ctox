@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // `ctox knowledge` namespace — single entry point for the four durable
 // knowledge forms CTOX carries across turns. Each form has its own catalog

@@ -1,6 +1,6 @@
 // Origin: CTOX
 // Modified for CTOX from local inference runtime contract work.
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 use anyhow::Result;
 use serde::Deserialize;

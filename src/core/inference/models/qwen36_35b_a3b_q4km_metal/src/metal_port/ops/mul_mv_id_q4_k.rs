@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Rust dispatcher for the vendored `kernel_mul_mv_id_q4_K_f32` —
 //! the indexed Q4_K matvec that powers the MoE expert dispatch on

@@ -4,7 +4,7 @@ import {
   base64ToBytes,
   readStoredFileFromChunks,
   sha256Hex,
-} from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity4';
+} from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity5';
 
 export const manifest = {
   id: 'explorer',

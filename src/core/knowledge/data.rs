@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Level 2 — management CLI for record-shape knowledge tables.
 // Verbs operate on the catalog (`knowledge_data_tables`) and the

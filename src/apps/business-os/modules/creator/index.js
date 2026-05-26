@@ -1,3 +1,5 @@
+import { CtoxResizer } from '../../shared/resizer.js';
+
 const PRESETS = {
   'standard-mgmt': {
     id: 'lagerverwaltung',
@@ -63,7 +65,11 @@ const state = {
   appCategory: 'Management',
   appLayout: 'full-workspace',
   appCollections: ['inventory_records', 'inventory_transactions'],
-  generatedFiles: {}
+  appVersion: 'v1',
+  generatedFiles: {},
+  contextMenu: null,
+  contextMenuCleanup: null,
+  resizerCleanup: null
 };
 
 export async function mount(ctx) {
@@ -82,7 +88,17 @@ export async function mount(ctx) {
   // 4. Generate starting files
   generateAllFiles();
 
+  // 5. Initialize CTOX unified context menu
+  state.contextMenuCleanup = initCreatorContextMenu(state);
+
+  // 6. Setup column resizer
+  state.resizerCleanup = setupResizers(ctx.host);
+
   return () => {
+    state.contextMenuCleanup?.();
+    state.resizerCleanup?.();
+    state.contextMenu?.remove();
+    state.contextMenu = null;
     console.log('[creator] Module unmounted and cleaned up.');
   };
 }
@@ -94,6 +110,37 @@ async function ensureStyles() {
   link.href = new URL('./index.css', import.meta.url).href;
   link.dataset.moduleStyles = 'creator';
   document.head.append(link);
+}
+
+function setupResizers(host) {
+  const containerEl = host.querySelector('[data-creator-root]') || host;
+  const resizerEl = host.querySelector('[data-resizer="left"]');
+  if (!resizerEl) return () => {};
+
+  const cssVar = '--creator-left-width';
+  const storageKey = 'ctox.creator.layout.leftWidth';
+
+  // Read saved width
+  const savedWidth = localStorage.getItem(storageKey);
+  if (savedWidth) {
+    containerEl.style.setProperty(cssVar, `${savedWidth}px`);
+  }
+
+  const resizer = new CtoxResizer({
+    resizerEl,
+    containerEl,
+    cssVar,
+    side: 'left',
+    minWidth: 260,
+    maxWidth: 550,
+    onResize: (width) => {
+      localStorage.setItem(storageKey, width);
+    }
+  });
+
+  return () => {
+    resizer.destroy();
+  };
 }
 
 function wireUi(host) {
@@ -317,9 +364,8 @@ function wireUi(host) {
   // Install / Deploy Button
   btnDeploy.addEventListener('click', async () => {
     try {
-      // Run NLP simulation one last time just in case they adjusted prompt without clicking "apply"
       const currentPrompt = inputPrompt.value.trim();
-      if (currentPrompt && (state.appTitle === 'Lagerverwaltung' && state.appId === 'lagerverwaltung')) {
+      if (currentPrompt && !currentPrompt.startsWith('Upgrade für') && (state.appTitle === 'Lagerverwaltung' && state.appId === 'lagerverwaltung')) {
         // Run a quick silent sync
         const lowerPrompt = currentPrompt.toLowerCase();
         if (lowerPrompt.includes('pflanze') || lowerPrompt.includes('blume') || lowerPrompt.includes('garten')) {
@@ -337,6 +383,7 @@ function wireUi(host) {
       await triggerAppDeployment(host);
     } catch (e) {
       console.error('[ERROR] triggerAppDeployment failed:', e);
+    }
   });
 
   // Intercept and parse hash parameters for Upgrade preloading
@@ -364,7 +411,18 @@ function wireUi(host) {
           inputPrompt.value = `Upgrade für ${manifest.title || upgradeAppId}: ${manifest.description || ''}`;
         }
 
-        state.appCollections = Array.isArray(manifest.collections) ? [...manifest.collections] : ['records'];
+        // Increment version
+        const currentVer = manifest.version || 'v1';
+        const verNum = parseInt(currentVer.replace('v', ''), 10) || 1;
+        const nextVer = `v${verNum + 1}`;
+        state.appVersion = nextVer;
+
+        // Clean collection names of version suffixes
+        const baseCollections = (Array.isArray(manifest.collections) ? manifest.collections : ['records'])
+          .map(coll => coll.replace(/_v\d+$/, ''));
+        state.appCollections = baseCollections;
+
+        addConsoleLog(`[INFO] Upgrade-Version erkannt: ${currentVer} -> ${nextVer}. Suffixe aus Collections entfernt.`, 'info');
 
         renderCollectionsList(host);
         syncStateFromInputs();
@@ -466,6 +524,8 @@ function generateAllFiles() {
   const appLayout = state.appLayout || 'full-workspace';
   const collections = state.appCollections.length > 0 ? state.appCollections : ['items'];
   const primaryColl = collections[0];
+  const appVersion = state.appVersion || 'v1';
+  const versionedCollections = collections.map(coll => `${coll}_${appVersion}`);
 
   const iconSvg = generateSvgLogo(appId, appCategory);
   state.generatedFiles['icon.svg'] = iconSvg;
@@ -476,7 +536,7 @@ function generateAllFiles() {
     title: appTitle,
     description: appDesc,
     entry: `installed-modules/${appId}/index.html`,
-    collections: collections,
+    collections: versionedCollections,
     layout: {
       shell: appLayout,
       left: `${appTitle} Navigation`,
@@ -485,16 +545,17 @@ function generateAllFiles() {
       icon_svg: iconSvg
     },
     category: appCategory,
-    version: 'v1',
+    version: appVersion,
     developer: 'CTOX Developer App',
-    license: 'Apache-2.0',
+    license: 'AGPL-3.0-only',
     tags: [appId, 'installed-module', appCategory.toLowerCase()]
   }, null, 2);
 
   // 2. schema.js
   let colSchemaProps = '';
   collections.forEach(coll => {
-    colSchemaProps += `  ${coll}: {\n    schema: {\n      title: '${coll} schema',\n      version: 0,\n      primaryKey: 'id',\n      type: 'object',\n      properties: {\n        id: { type: 'string', maxLength: 100 },\n        title: { type: 'string' },\n        status: { type: 'string' },\n        updated_at_ms: { type: 'number' },\n        data: { type: 'object', additionalProperties: true }\n      },\n      required: ['id', 'title', 'status', 'updated_at_ms']\n    }\n  },\n`;
+    const versionedColl = `${coll}_${appVersion}`;
+    colSchemaProps += `  ${versionedColl}: {\n    schema: {\n      title: '${versionedColl} schema',\n      version: 0,\n      primaryKey: 'id',\n      type: 'object',\n      properties: {\n        id: { type: 'string', maxLength: 100 },\n        title: { type: 'string' },\n        status: { type: 'string' },\n        updated_at_ms: { type: 'number' },\n        data: { type: 'object', additionalProperties: true }\n      },\n      required: ['id', 'title', 'status', 'updated_at_ms']\n    }\n  },\n`;
   });
 
   state.generatedFiles['schema.js'] = `export const collections = {\n${colSchemaProps.trim().substring(0, colSchemaProps.trim().length - 1)}\n};\n`;
@@ -507,10 +568,416 @@ function generateAllFiles() {
   }
 
   // 4. index.css
-  state.generatedFiles['index.css'] = `.module-root[data-module-root="${appId}"] {\n  display: flex;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n  background: var(--bg);\n  color: var(--text);\n}\n\n.${appId}-layout {\n  display: flex;\n  width: 100%;\n  height: 100%;\n  overflow: hidden;\n}\n\n.${appId}-left {\n  width: 300px;\n  flex: 0 0 300px;\n  background: color-mix(in srgb, var(--surface) 35%, transparent);\n  backdrop-filter: blur(20px) saturate(180%);\n  -webkit-backdrop-filter: blur(20px) saturate(180%);\n  border-right: 1px solid var(--line);\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  overflow: hidden;\n}\n\n.${appId}-center {\n  flex: 1;\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  overflow: hidden;\n}\n\n.${appId}-scrollable {\n  flex: 1;\n  overflow-y: auto;\n  padding: 16px;\n}\n\n.pane-header {\n  padding: 16px;\n  border-bottom: 1px solid var(--line);\n  flex-shrink: 0;\n}\n\n.os-kicker {\n  display: block;\n  color: var(--muted);\n  font-size: 11px;\n  font-weight: 780;\n  line-height: 1.1;\n  text-transform: uppercase;\n  letter-spacing: 0.05em;\n}\n\n.os-title {\n  margin: 3px 0 0;\n  font-size: 15px;\n  font-weight: 820;\n  line-height: 1.12;\n  font-family: var(--font-outfit);\n}\n\n.form-group {\n  margin-bottom: 16px;\n}\n\n.form-label {\n  display: block;\n  font-size: 11px;\n  font-weight: 600;\n  color: var(--muted);\n  text-transform: uppercase;\n  margin-bottom: 6px;\n}\n\n.os-input, .os-select {\n  width: 100%;\n  background: color-mix(in srgb, var(--surface-2) 60%, transparent);\n  border: 1px solid var(--line);\n  color: var(--text);\n  border-radius: var(--control-radius);\n  padding: 8px 12px;\n  font-size: 13px;\n}\n\n.os-btn {\n  display: inline-flex;\n  align-items: center;\n  justify-content: center;\n  font-weight: 600;\n  padding: 8px 16px;\n  border-radius: var(--control-radius);\n  border: 1px solid var(--line);\n  background: var(--surface-2);\n  color: var(--text);\n  cursor: pointer;\n  transition: var(--transition-bounce);\n}\n\n.os-btn:hover {\n  border-color: var(--accent);\n}\n\n.os-btn.is-primary {\n  background: var(--accent-gradient);\n  color: #ffffff;\n}\n\n.os-btn.is-accent {\n  background: var(--accent-soft);\n  border-color: var(--accent);\n  color: var(--text);\n}\n\n.record-item-card {\n  background: var(--surface);\n  border: 1px solid var(--line);\n  border-radius: var(--panel-radius);\n  padding: 12px;\n  margin-bottom: 8px;\n  cursor: pointer;\n  transition: var(--transition-bounce);\n}\n\n.record-item-card:hover {\n  transform: translateY(-1px);\n  border-color: var(--accent-soft);\n  box-shadow: var(--shadow-hover);\n}\n\n.record-item-card.is-active {\n  border-color: var(--accent);\n  background: var(--accent-soft);\n}\n\n.is-hidden {\n  display: none !important;\n}\n`;
+  state.generatedFiles['index.css'] = `/* Stylesheet dynamic generator for module: ${appId} */
+.module-root {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-1);
+  color: var(--text-main);
+  font-family: var(--font-sans);
+}
+
+.${appId}-layout {
+  display: flex;
+  width: 100%;
+  height: 100%;
+}
+
+.${appId}-left {
+  width: 300px;
+  flex: 0 0 300px;
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-2);
+}
+
+.${appId}-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+}
+
+.${appId}-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.record-item-card {
+  padding: 12px 14px;
+  border-radius: var(--panel-radius);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.record-item-card:hover {
+  background: var(--surface-2);
+  border-color: var(--line-active);
+}
+
+.record-item-card.is-active {
+  background: var(--surface-active);
+  border-color: var(--accent);
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+  font-weight: 500;
+}
+
+.is-hidden {
+  display: none !important;
+}
+
+/* Column resizer styling handled by global [data-resizer] in app.css */
+
+@media (max-width: 768px) {
+  .${appId}-layout {
+    flex-direction: column;
+  }
+  .${appId}-left {
+    display: none !important;
+  }
+  [data-resizer] {
+    display: none !important;
+  }
+}
+`;
 
   // 5. index.js
-  state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';\n\nconst labels = {\n  de: {\n    backlog: 'Datenkatalog',\n    itemsTitle: 'Einträge',\n    selectPrompt: 'Wähle ein Element aus, um Details anzuzeigen.'\n  },\n  en: {\n    backlog: 'Data Catalog',\n    itemsTitle: 'Items',\n    selectPrompt: 'Select an item to view details.'\n  }\n};\n\nconst state = {\n  ctx: null,\n  t: (key, fallback) => fallback ?? key,\n  records: [],\n  selectedId: null,\n  dbSubscription: null\n};\n\nexport async function mount(ctx) {\n  state.ctx = ctx;\n  \n  // 1. Inject stylesheet dynamically\n  await ensureStyles();\n\n  // 2. Fetch and render localization messages\n  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);\n  state.t = (key, fallback) => messages[key] ?? fallback ?? key;\n\n  // 3. Mount HTML template structure\n  const html = await fetch(new URL('./index.html', import.meta.url)).then(res => res.text());\n  ctx.host.innerHTML = html;\n\n  // 4. Translate static tags\n  applyTranslations(ctx.host, state.t);\n\n  // 5. Wire Resizers if in full-workspace\n  const cleanupResizers = setupResizers(ctx.host);\n\n  // 6. Setup dynamic db observation and sync\n  await loadInitialData();\n  state.dbSubscription = wireReactiveSync();\n\n  // 7. Bind interactive clicks\n  wireUi(ctx.host);\n\n  return () => {\n    state.dbSubscription?.unsubscribe?.();\n    state.dbSubscription?.();\n    cleanupResizers();\n    console.log('[${appId}] Unmounted successfully.');\n  };\n}\n\nasync function ensureStyles() {\n  if (document.querySelector('link[data-module-styles="${appId} text"]')) return;\n  const link = document.createElement('link');\n  link.rel = 'stylesheet';\n  link.href = new URL('./index.css', import.meta.url).href;\n  link.dataset.moduleStyles = '${appId}';\n  document.head.append(link);\n}\n\nfunction applyTranslations(root, t) {\n  root.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));\n}\n\nfunction setupResizers(host) {\n  const leftPane = host.querySelector('.${appId}-left');\n  const resizer = host.querySelector('[data-resizer="left"]');\n  if (!leftPane || !resizer) return () => {};\n\n  let leftWidth = parseInt(localStorage.getItem('ctox.${appId}.leftWidth') || '300', 10);\n  const applyWidth = () => {\n    leftPane.style.width = \`\${leftWidth}px\`;\n    leftPane.style.flex = \`0 0 \${leftWidth}px\`;\n  };\n  applyWidth();\n\n  let activeDrag = false;\n  let startX = 0;\n  let startWidth = 0;\n\n  const onPointerDown = (e) => {\n    activeDrag = true;\n    startX = e.clientX;\n    startWidth = leftWidth;\n    resizer.classList.add('is-dragging');\n    document.body.style.cursor = 'col-resize';\n    document.body.style.userSelect = 'none';\n    e.preventDefault();\n  };\n\n  const onPointerMove = (e) => {\n    if (!activeDrag) return;\n    const deltaX = e.clientX - startX;\n    leftWidth = Math.min(550, Math.max(220, startWidth + deltaX));\n    applyWidth();\n  };\n\n  const onPointerUp = () => {\n    if (!activeDrag) return;\n    activeDrag = false;\n    resizer.classList.remove('is-dragging');\n    document.body.style.cursor = '';\n    document.body.style.userSelect = '';\n    localStorage.setItem('ctox.${appId}.leftWidth', leftWidth);\n  };\n\n  resizer.addEventListener('pointerdown', onPointerDown);\n  window.addEventListener('pointermove', onPointerMove);\n  window.addEventListener('pointerup', onPointerUp);\n\n  return () => {\n    resizer.removeEventListener('pointerdown', onPointerDown);\n    window.removeEventListener('pointermove', onPointerMove);\n    window.removeEventListener('pointerup', onPointerUp);\n  };\n}\n\nasync function loadInitialData() {\n  if (!state.ctx.db?.raw?.${primaryColl}) return;\n  const items = await state.ctx.db.raw.${primaryColl}.find().exec();\n  state.records = items.map(item => item.toJSON());\n  renderList();\n}\n\nfunction wireReactiveSync() {\n  if (!state.ctx.db?.raw?.${primaryColl}) return () => {};\n  const sub = state.ctx.db.raw.${primaryColl}.find().$.subscribe(items => {\n    state.records = items.map(item => item.toJSON());\n    renderList();\n    if (state.selectedId) {\n      const activeItem = state.records.find(r => r.id === state.selectedId);\n      if (activeItem) showDetail(activeItem);\n    }\n  });\n  return sub;\n}\n\nfunction renderList() {\n  const container = state.ctx.host.querySelector('[data-list-container]') || state.ctx.left?.querySelector('[data-list-container]');\n  if (!container) return;\n  container.innerHTML = '';\n  \n  if (state.records.length === 0) {\n    container.innerHTML = '<div style=\"color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px;\">Keine Einträge vorhanden</div>';\n    return;\n  }\n\n  state.records.forEach(record => {\n    const card = document.createElement('div');\n    card.className = \`record-item-card \${state.selectedId === record.id ? 'is-active' : ''}\`;\n    card.dataset.id = record.id;\n    \n    card.setAttribute('data-context-module', '${appId}');\n    card.setAttribute('data-context-record-type', '${primaryColl}');\n    card.setAttribute('data-context-record-id', record.id);\n    card.setAttribute('data-context-label', record.title);\n\n    card.innerHTML = \`\n      <div style=\"font-weight: 600; font-size: 13px;\">\${record.title}</div>\n      <div style=\"font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; justify-content: space-between;\">\n        <span>Status: \${record.status}</span>\n        <span>\${new Date(record.updated_at_ms).toLocaleTimeString()}</span>\n      </div>\n    \`;\n    card.addEventListener('click', () => selectRecord(record.id));\n    container.appendChild(card);\n  });\n}\n\nfunction selectRecord(id) {\n  state.selectedId = id;\n  const record = state.records.find(r => r.id === id);\n  if (record) {\n    showDetail(record);\n    renderList();\n  }\n}\n\nfunction showDetail(record) {\n  const emptyState = state.ctx.host.querySelector('#empty-state');\n  const detailCard = state.ctx.host.querySelector('#detail-card');\n  const titleHeader = state.ctx.host.querySelector('#selected-item-title');\n  \n  if (emptyState) emptyState.classList.add('is-hidden');\n  if (detailCard) detailCard.classList.remove('is-hidden');\n  if (titleHeader) titleHeader.textContent = record.title;\n\n  const inputTitle = state.ctx.host.querySelector('#record-detail-title');\n  const selectStatus = state.ctx.host.querySelector('#record-detail-status');\n  \n  if (inputTitle) inputTitle.value = record.title;\n  if (selectStatus) selectStatus.value = record.status;\n}\n\nfunction wireUi(host) {\n  const btnCreate = host.querySelector('#btn-create-record') || state.ctx.left?.querySelector('#btn-create-record');\n  const btnSave = host.querySelector('#btn-save-record');\n  \n  if (btnCreate) {\n    btnCreate.addEventListener('click', async () => {\n      if (!state.ctx.db?.raw?.${primaryColl}) return;\n      const newId = \`rec-\${Date.now()}\`;\n      await state.ctx.db.raw.${primaryColl}.insert({\n        id: newId,\n        title: 'Neuer Eintrag',\n        status: 'Entwurf',\n        updated_at_ms: Date.now(),\n        data: {}\n      });\n      selectRecord(newId);\n      state.ctx.notifications.show({\n        title: 'Eintrag erstellt',\n        message: 'Ein neuer Datensatz wurde erfolgreich angelegt.',\n        type: 'success'\n      });\n    });\n  }\n\n  if (btnSave) {\n    btnSave.addEventListener('click', async () => {\n      if (!state.selectedId || !state.ctx.db?.raw?.${primaryColl}) return;\n      const inputTitle = host.querySelector('#record-detail-title');\n      const selectStatus = host.querySelector('#record-detail-status');\n      \n      const doc = await state.ctx.db.raw.${primaryColl}.findOne(state.selectedId).exec();\n      if (doc) {\n        await doc.patch({\n          title: inputTitle.value || 'Unbenannt',\n          status: selectStatus.value,\n          updated_at_ms: Date.now()\n        });\n        state.ctx.notifications.show({\n          title: 'Gespeichert',\n          message: 'Die Änderungen wurden erfolgreich synchronisiert.',\n          type: 'success'\n        });\n      }\n    });\n  }\n}\n`;
+  state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';
+
+const labels = {
+  de: {
+    backlog: 'Datenkatalog',
+    itemsTitle: 'Einträge',
+    selectPrompt: 'Wähle ein Element aus, um Details anzuzeigen.'
+  },
+  en: {
+    backlog: 'Data Catalog',
+    itemsTitle: 'Items',
+    selectPrompt: 'Select an item to view details.'
+  }
+};
+
+const APP_METADATA = {
+  version: '${appVersion}',
+  collections: ${JSON.stringify(collections)}
+};
+
+const PRIMARY_COLL = \`${primaryColl}_\${APP_METADATA.version}\`;
+
+const state = {
+  ctx: null,
+  t: (key, fallback) => fallback ?? key,
+  records: [],
+  selectedId: null,
+  dbSubscription: null
+};
+
+export async function mount(ctx) {
+  state.ctx = ctx;
+
+  // 1. Inject stylesheet dynamically
+  await ensureStyles();
+
+  // 2. Fetch and render localization messages
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
+  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
+
+  // 3. Mount HTML template structure
+  const html = await fetch(new URL('./index.html', import.meta.url)).then(res => res.text());
+  ctx.host.innerHTML = html;
+
+  // 4. Translate static tags
+  applyTranslations(ctx.host, state.t);
+
+  // 5. Wire Resizers if in full-workspace
+  const cleanupResizers = setupResizers(ctx.host);
+
+  // 6. Run client-side auto-migration
+  try {
+    await autoMigrate(ctx);
+  } catch (err) {
+    console.error('[Migration] Auto-migration failed:', err);
+  }
+
+  // 7. Setup dynamic db observation and sync
+  await loadInitialData();
+  state.dbSubscription = wireReactiveSync();
+
+  // 8. Bind interactive clicks
+  wireUi(ctx.host);
+
+  return () => {
+    if (typeof state.dbSubscription === 'function') {
+      state.dbSubscription();
+    } else if (state.dbSubscription && typeof state.dbSubscription.unsubscribe === 'function') {
+      state.dbSubscription.unsubscribe();
+    }
+    cleanupResizers();
+    console.log('[${appId}] Unmounted successfully.');
+  };
+}
+
+async function autoMigrate(ctx) {
+  const version = APP_METADATA.version;
+  const versionNum = parseInt(version.replace('v', ''), 10) || 1;
+  if (versionNum <= 1) return;
+
+  console.log(\`[Migration] [\${APP_METADATA.version}] Auto-Migration wird initialisiert...\\n\`);
+  for (const baseColl of APP_METADATA.collections) {
+    const currentColl = \`\${baseColl}_\${version}\\n\`.trim();
+    if (!ctx.db?.raw || !ctx.db.raw[currentColl]) continue;
+
+    const currentCount = await ctx.db.raw[currentColl].find().exec().then(docs => docs.length).catch(() => 0);
+    if (currentCount > 0) {
+      console.log(\`[Migration] [\${currentColl}] Hat bereits Daten, keine Migration erforderlich.\\n\`);
+      continue;
+    }
+
+    for (let i = versionNum - 1; i >= 1; i--) {
+      const prevColl = \`\${baseColl}_v\${i}\\n\`.trim();
+      console.log(\`[Migration] Überprüfe historische Tabelle \${prevColl}...\\n\`);
+
+      if (!ctx.db.raw[prevColl]) {
+        try {
+          const currentSchema = ctx.db.raw[currentColl].schema.jsonSchema;
+          const prevSchema = {
+            ...currentSchema,
+            title: \`\${prevColl} schema\`
+          };
+          await ctx.db.raw.addCollections({
+            [prevColl]: { schema: prevSchema }
+          });
+        } catch (e) {
+          console.error(\`[Migration] Fehler bei Registrierung von \${prevColl}:\\n\`, e);
+          continue;
+        }
+      }
+
+      const prevCount = await ctx.db.raw[prevColl].find().exec().then(docs => docs.length).catch(() => 0);
+      if (prevCount > 0) {
+        console.log(\`[Migration] Daten in \${prevColl} gefunden (\${prevCount} Einträge). Starte Migration...\\n\`);
+        const oldItems = await ctx.db.raw[prevColl].find().exec();
+        const docs = oldItems.map(item => {
+          const json = item.toJSON();
+          delete json._meta;
+          delete json._deleted;
+          return json;
+        });
+
+        await ctx.db.raw[currentColl].bulkInsert(docs);
+        console.log(\`[Migration] Migration von \${prevColl} nach \${currentColl} erfolgreich beendet!\\n\`);
+        break;
+      }
+    }
+  }
+}
+
+async function ensureStyles() {
+  if (document.querySelector('link[data-module-styles="${appId}"]')) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = new URL('./index.css', import.meta.url).href;
+  link.dataset.moduleStyles = '${appId}';
+  document.head.append(link);
+}
+
+function applyTranslations(root, t) {
+  root.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
+}
+
+function setupResizers(host) {
+  const leftPane = host.querySelector('.${appId}-left');
+  const resizer = host.querySelector('[data-resizer="left"]');
+  if (!leftPane || !resizer) return () => {};
+
+  let leftWidth = parseInt(localStorage.getItem('ctox.${appId}.leftWidth') || '300', 10);
+  const applyWidth = () => {
+    leftPane.style.width = \`\${leftWidth}px\`;
+    leftPane.style.flex = \`0 0 \${leftWidth}px\`;
+  };
+  applyWidth();
+
+  let activeDrag = false;
+  let startX = 0;
+  let startWidth = 0;
+
+  const onPointerDown = (e) => {
+    activeDrag = true;
+    startX = e.clientX;
+    startWidth = leftWidth;
+    resizer.classList.add('is-dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  };
+
+  const onPointerMove = (e) => {
+    if (!activeDrag) return;
+    const deltaX = e.clientX - startX;
+    leftWidth = Math.min(550, Math.max(220, startWidth + deltaX));
+    applyWidth();
+  };
+
+  const onPointerUp = () => {
+    if (!activeDrag) return;
+    activeDrag = false;
+    resizer.classList.remove('is-dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem('ctox.${appId}.leftWidth', leftWidth);
+  };
+
+  resizer.addEventListener('pointerdown', onPointerDown);
+  window.addEventListener('pointermove', onPointerMove);
+  window.addEventListener('pointerup', onPointerUp);
+
+  return () => {
+    resizer.removeEventListener('pointerdown', onPointerDown);
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+  };
+}
+
+async function loadInitialData() {
+  if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return;
+  const items = await state.ctx.db.raw[PRIMARY_COLL].find().exec();
+  state.records = items.map(item => item.toJSON());
+  renderList();
+}
+
+function wireReactiveSync() {
+  if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return () => {};
+  const sub = state.ctx.db.raw[PRIMARY_COLL].find().$.subscribe(items => {
+    state.records = items.map(item => item.toJSON());
+    renderList();
+    if (state.selectedId) {
+      const activeItem = state.records.find(r => r.id === state.selectedId);
+      if (activeItem) showDetail(activeItem);
+    }
+  });
+  return sub;
+}
+
+function renderList() {
+  const container = state.ctx.host.querySelector('[data-list-container]') || state.ctx.left?.querySelector('[data-list-container]');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (state.records.length === 0) {
+    container.innerHTML = '<div style="color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px;">Keine Einträge vorhanden</div>';
+    return;
+  }
+
+  state.records.forEach(record => {
+    const card = document.createElement('div');
+    card.className = \`record-item-card \${state.selectedId === record.id ? 'is-active' : ''}\`;
+    card.dataset.id = record.id;
+
+    card.setAttribute('data-context-module', '${appId}');
+    card.setAttribute('data-context-record-type', PRIMARY_COLL);
+    card.setAttribute('data-context-record-id', record.id);
+    card.setAttribute('data-context-label', record.title);
+
+    card.innerHTML = \`
+      <div style="font-weight: 600; font-size: 13px;">\${record.title}</div>
+      <div style="font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; justify-content: space-between;">
+        <span>Status: \${record.status}</span>
+        <span>\${new Date(record.updated_at_ms).toLocaleTimeString()}</span>
+      </div>
+    \`;
+    card.addEventListener('click', () => selectRecord(record.id));
+    container.appendChild(card);
+  });
+}
+
+function selectRecord(id) {
+  state.selectedId = id;
+  const record = state.records.find(r => r.id === id);
+  if (record) {
+    showDetail(record);
+    renderList();
+  }
+}
+
+function showDetail(record) {
+  const emptyState = state.ctx.host.querySelector('#empty-state');
+  const detailCard = state.ctx.host.querySelector('#detail-card');
+  const titleHeader = state.ctx.host.querySelector('#selected-item-title');
+
+  if (emptyState) emptyState.classList.add('is-hidden');
+  if (detailCard) detailCard.classList.remove('is-hidden');
+  if (titleHeader) titleHeader.textContent = record.title;
+
+  const inputTitle = state.ctx.host.querySelector('#record-detail-title');
+  const selectStatus = state.ctx.host.querySelector('#record-detail-status');
+
+  if (inputTitle) inputTitle.value = record.title;
+  if (selectStatus) selectStatus.value = record.status;
+}
+
+function wireUi(host) {
+  const btnCreate = host.querySelector('#btn-create-record') || state.ctx.left?.querySelector('#btn-create-record');
+  const btnSave = host.querySelector('#btn-save-record');
+
+  if (btnCreate) {
+    btnCreate.addEventListener('click', async () => {
+      if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return;
+      const newId = \`rec-\${Date.now()}\`;
+      await state.ctx.db.raw[PRIMARY_COLL].insert({
+        id: newId,
+        title: 'Neuer Eintrag',
+        status: 'Entwurf',
+        updated_at_ms: Date.now(),
+        data: {}
+      });
+      selectRecord(newId);
+      state.ctx.notifications.show({
+        title: 'Eintrag erstellt',
+        message: 'Ein neuer Datensatz wurde erfolgreich angelegt.',
+        type: 'success'
+      });
+    });
+  }
+
+  if (btnSave) {
+    btnSave.addEventListener('click', async () => {
+      if (!state.selectedId || !state.ctx.db?.raw?.[PRIMARY_COLL]) return;
+      const inputTitle = host.querySelector('#record-detail-title');
+      const selectStatus = host.querySelector('#record-detail-status');
+
+      const doc = await state.ctx.db.raw[PRIMARY_COLL].findOne(state.selectedId).exec();
+      if (doc) {
+        await doc.patch({
+          title: inputTitle.value || 'Unbenannt',
+          status: selectStatus.value,
+          updated_at_ms: Date.now()
+        });
+        state.ctx.notifications.show({
+          title: 'Gespeichert',
+          message: 'Die Änderungen wurden erfolgreich synchronisiert.',
+          type: 'success'
+        });
+      }
+    });
+  }
+}
+`;
 }
 
 async function triggerAppDeployment(host) {
@@ -523,6 +990,8 @@ async function triggerAppDeployment(host) {
   const appDesc = state.appDesc;
   const collections = state.appCollections;
   const appLayout = state.appLayout;
+  const appVersion = state.appVersion || 'v1';
+  const versionedCollections = collections.map(coll => `${coll}_${appVersion}`);
 
   if (!appId || !appTitle || !appDesc) {
     state.ctx.notifications.show({
@@ -547,7 +1016,7 @@ async function triggerAppDeployment(host) {
   addConsoleLog(`[1/3] Generiere module.json manifest für layout.shell: '${appLayout}'...`, 'info');
 
   await new Promise(r => setTimeout(r, 300));
-  addConsoleLog(`[2/3] Bereite RxDB Schema Definition für [${collections.join(', ')}] vor...`, 'info');
+  addConsoleLog(`[2/3] Bereite RxDB Schema Definition für [${versionedCollections.join(', ')}] vor...`, 'info');
 
   await new Promise(r => setTimeout(r, 300));
   addConsoleLog(`[3/3] Kompiliere native ESM Modul-Controller index.js und index.css...`, 'info');
@@ -580,7 +1049,7 @@ async function triggerAppDeployment(host) {
         title: appTitle,
         description: appDesc,
         entry: `installed-modules/${appId}/index.html`,
-        collections: collections,
+        collections: versionedCollections,
         layout: {
           shell: appLayout,
           left: `${appTitle} Navigation`,
@@ -647,4 +1116,293 @@ async function triggerAppDeployment(host) {
     syncText.textContent = 'Fehler beim Speichern';
     btnDeploy.disabled = false;
   }
+}
+
+function initCreatorContextMenu(state) {
+  state.contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu creator-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== 'creator') return;
+    const context = creatorCommandContextFromElement(state, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderCreatorContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideCreatorContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideCreatorContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideCreatorContextMenu(state);
+  };
+}
+
+function hideCreatorContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function canModifyCreatorApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function creatorCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+
+  return {
+    module: 'creator',
+    column: 'workspace',
+    record_type: 'app-spec',
+    record_id: state.appId || 'creator',
+    label: state.appTitle || 'Creator App Spec',
+    app_id: state.appId || '',
+    app_title: state.appTitle || '',
+    app_desc: state.appDesc || '',
+    app_category: state.appCategory || '',
+    app_layout: state.appLayout || '',
+    app_collections: state.appCollections || [],
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderCreatorContextMenu(state, context, x, y) {
+  ensureCtoxContextMenuStyles();
+  const canModifyApp = canModifyCreatorApp(state);
+  state.contextMenu.innerHTML = `
+    <form class="creator-context-chat" data-creator-context-chat-form>
+      <header>
+        <div>
+          <strong>Chat to CTOX</strong>
+          <span>${escapeHtml(context.label || 'Creator')}</span>
+        </div>
+        <button type="button" data-creator-context-close aria-label="Schließen">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        </div>
+      ` : ''}
+      <textarea data-creator-context-message placeholder="Was soll CTOX mit dieser App-Spezifikation tun?"></textarea>
+      <footer>
+        <span data-creator-context-status></span>
+        <button type="submit">Senden</button>
+      </footer>
+    </form>
+  `;
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-creator-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-creator-context-message]');
+  state.contextMenu.querySelector('[data-creator-context-close]')?.addEventListener('click', () => hideCreatorContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchCreatorContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+async function dispatchCreatorContextChat(state, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-creator-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = 'Nachricht fehlt.';
+    return;
+  }
+
+  const safeMode = mode === 'app' && canModifyCreatorApp(state) ? 'app' : 'data';
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    return;
+  }
+  if (status) status.textContent = 'Oeffne Chat...';
+  const title = `${safeMode === 'app' ? 'Creator App modifizieren' : 'App-Spezifikation anpassen'} · ${context.label || 'Creator'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die App-Creator-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Spezifikationen selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: 'creator',
+      source_title: 'App Creator',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'creator' : (context.record_id || 'creator'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        context,
+        thread_key: 'business-os/creator',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        app_id: context.app_id,
+        app_title: context.app_title,
+      },
+    },
+  }));
+  hideCreatorContextMenu(state);
+}
+
+function ensureCtoxContextMenuStyles() {
+  if (document.getElementById('ctox-unified-context-menu-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ctox-unified-context-menu-style';
+  style.textContent = `
+    .ctox-context-menu {
+      position: absolute;
+      z-index: 2400;
+      width: min(560px, calc(100vw - 24px));
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-panel, 12px);
+      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      padding: 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+      animation: ctox-menu-fade-in 0.15s ease-out;
+    }
+    @keyframes ctox-menu-fade-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .ctox-context-menu form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      padding: 12px;
+    }
+    .ctox-context-menu header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--bo-border, var(--border, #e5e5ea));
+      padding-bottom: 10px;
+    }
+    .ctox-context-menu header strong {
+      font-size: 14px;
+      color: var(--bo-text, var(--text, #1c1c1e));
+    }
+    .ctox-context-menu header span {
+      display: block;
+      font-size: 11px;
+      color: var(--bo-text-muted, var(--text-muted, #8e8e93));
+      margin-top: 2px;
+    }
+    .ctox-context-menu button[type="button"] {
+      border: none;
+      background: transparent;
+      color: var(--bo-text-muted, var(--text-muted, #8e8e93));
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      padding: 4px 8px;
+    }
+    .ctox-context-menu .ctox-context-mode {
+      display: flex;
+      gap: 16px;
+      background: var(--bo-surface-2, var(--surface-2, #f2f2f7));
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+    .ctox-context-menu .ctox-context-mode label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--bo-text, var(--text, #1c1c1e));
+      cursor: pointer;
+    }
+    .ctox-context-menu textarea {
+      width: 100%;
+      height: 90px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: 8px;
+      background: var(--bo-surface-3, var(--surface-3, #fff));
+      color: var(--bo-text, var(--text, #000));
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: inherit;
+      resize: vertical;
+    }
+    .ctox-context-menu textarea:focus {
+      outline: none;
+      border-color: var(--bo-accent, var(--accent, #e5a93c));
+    }
+    .ctox-context-menu footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-top: 1px solid var(--bo-border, var(--border, #e5e5ea));
+      padding-top: 10px;
+    }
+    .ctox-context-menu footer span {
+      font-size: 12px;
+      color: var(--bo-accent, var(--accent, #e5a93c));
+    }
+    .ctox-context-menu footer button[type="submit"] {
+      border: none;
+      border-radius: 6px;
+      background: var(--bo-accent-gradient, var(--accent-gradient, #e5a93c));
+      color: #fff;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 6px 16px;
+      cursor: pointer;
+    }
+  `;
+  document.head.append(style);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }

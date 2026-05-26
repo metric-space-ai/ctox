@@ -22,6 +22,21 @@ const iconMap = {
       <rect x="5" y="12" width="6" height="2" rx="0.5" fill="url(#grad-desktop)" fill-opacity="0.2" stroke="url(#grad-desktop)" stroke-width="1"></rect>
     </svg>
   `,
+  browser: (size, stroke) => `
+    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-browser">
+      <defs>
+        <linearGradient id="grad-browser" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#0ea5e9" />
+          <stop offset="100%" stop-color="#22c55e" />
+        </linearGradient>
+      </defs>
+      <rect x="3" y="4" width="18" height="16" rx="3" fill="url(#grad-browser)" fill-opacity="0.12" stroke="url(#grad-browser)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></rect>
+      <path d="M3 9h18" stroke="url(#grad-browser)" stroke-width="${stroke}" stroke-linecap="round"></path>
+      <circle cx="7" cy="6.5" r="0.8" fill="url(#grad-browser)"></circle>
+      <circle cx="10" cy="6.5" r="0.8" fill="url(#grad-browser)"></circle>
+      <path d="M8 15h8M12 11v8" stroke="url(#grad-browser)" stroke-width="1.7" stroke-linecap="round"></path>
+    </svg>
+  `,
   ctox: (size, stroke) => `
     <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-ctox">
       <defs>

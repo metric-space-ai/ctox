@@ -3,7 +3,7 @@ name = "ctox-voxtral-mini-4b-realtime-2602"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Bare-metal CTOX native port scaffold for engineai/Voxtral-Mini-4B-Realtime-2602 STT."
 build = "build.rs"
 

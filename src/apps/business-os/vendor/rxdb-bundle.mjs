@@ -40466,6 +40466,7 @@ async function replicateWebRTC(options) {
       }
     }
     let remotePeerSessionId = "no-session";
+    let remotePeerRole = "unknown";
     try {
       const protocolResponse = await sendMessageAndAwaitAnswer(
         pool.connectionHandler,
@@ -40478,6 +40479,7 @@ async function replicateWebRTC(options) {
       );
       await ensureCtoxProtocolCompatible(protocolResponse.result, collection);
       remotePeerSessionId = peerSessionIdentifier(protocolResponse.result);
+      remotePeerRole = peerSessionRole(protocolResponse.result);
       options.ctox?.onPeerProtocol?.({
         collection: collection.name,
         protocol: String(protocolResponse.result?.protocol || ""),
@@ -40509,7 +40511,8 @@ async function replicateWebRTC(options) {
       }));
       return;
     }
-    const isMaster = await isMasterInWebRTCReplication(collection.database.hashFunction, storageToken, peerToken);
+    const electedMaster = await isMasterInWebRTCReplication(collection.database.hashFunction, storageToken, peerToken);
+    const isMaster = remotePeerRole === "ctox_instance" ? false : electedMaster;
     let replicationState;
     if (isMaster) {
       const masterHandler = pool.masterReplicationHandler;
@@ -40680,6 +40683,10 @@ function peerSessionIdentifier(payload) {
   const sessionId = session && typeof session.sessionId === "string" ? session.sessionId : "no-session";
   return [role, sessionId].join(":");
 }
+function peerSessionRole(payload) {
+  const session = payload && typeof payload === "object" ? payload.peerSession : null;
+  return session && typeof session.role === "string" ? session.role : "unknown";
+}
 var RxWebRTCReplicationPool = class {
   constructor(collection, options, connectionHandler) {
     this.collection = collection;
@@ -40756,6 +40763,20 @@ var RxWebRTCReplicationPool = class {
       return true;
     }));
     return true;
+  }
+  reSync() {
+    Array.from(this.peerStates$.getValue().values()).forEach((peerState) => {
+      if (peerState.replicationState && typeof peerState.replicationState.reSync === "function") {
+        peerState.replicationState.reSync();
+        return;
+      }
+      this.connectionHandler.send(peerState.peer, {
+        id: "masterChangeStream$",
+        result: "RESYNC"
+      }).catch((error) => {
+        this.error$.next(newRxError("RC_WEBRTC_PEER", { error }));
+      });
+    });
   }
   async awaitPeerReplicationStates() {
     const peerStates = await this.awaitFirstPeer();

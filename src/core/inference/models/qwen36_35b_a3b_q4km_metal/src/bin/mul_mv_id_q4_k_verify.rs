@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! End-to-end MoE-decode verifier.  Builds a synthetic mini-MoE
 //! (n_experts=16, top-k=4, m=128, k=256) — much smaller than the

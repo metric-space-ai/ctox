@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Minimal Metal runtime: pick the system default `MTLDevice`, hand
 //! out a `MTLCommandQueue`, and load the vendored kernel

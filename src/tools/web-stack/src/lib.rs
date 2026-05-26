@@ -15,6 +15,7 @@ pub mod unlock;
 pub mod web_search;
 
 pub use browser::handle_browser_command;
+pub use browser::browser_doctor_report;
 pub use browser::prepare_browser_environment;
 pub use browser::run_browser_automation;
 pub use browser::BrowserAutomationRequest;

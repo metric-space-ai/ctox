@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Rust dispatcher for the vendored `kernel_mul_mm_q4_K_f32` MSL kernel
 //! — the prefill batched matmul for Qwen3.6-35B-A3B Q4_K_M.

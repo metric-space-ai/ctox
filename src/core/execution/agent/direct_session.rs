@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Direct session: in-process ctox-core integration via InProcessAppServerClient.
 // One persistent client per CTOX mission-turn-loop. Multiple sequential turns

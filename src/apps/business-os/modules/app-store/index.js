@@ -1,9 +1,12 @@
+import { CtoxResizer } from '../../shared/resizer.js';
+
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';
 const CTOX_APP_ROOT = 'src/apps/business-os';
 const CTOX_TREE_URL = `https://api.github.com/repos/${CTOX_REPO}/git/trees/${CTOX_BRANCH}?recursive=1`;
 const CTOX_RAW_ROOT = `https://raw.githubusercontent.com/${CTOX_REPO}/${CTOX_BRANCH}/${CTOX_APP_ROOT}`;
 const CTOX_DOWNLOAD_URL = `https://github.com/${CTOX_REPO}/archive/refs/heads/${CTOX_BRANCH}.zip`;
+
 
 const state = {
   ctx: null,
@@ -19,6 +22,8 @@ const state = {
   unsubscribe: null,
   viewMode: 'grid',
   drawerOpen: false,
+  contextMenu: null,
+  contextMenuCleanup: null,
 };
 
 const els = {};
@@ -46,8 +51,35 @@ export async function mount(ctx) {
     }) || null;
   render();
   refreshMarketplace();
+
+  // 5. Initialize CTOX unified context menu
+  state.contextMenuCleanup = initAppStoreContextMenu(state);
+
+  // Setup resizer
+  const containerEl = ctx.host.querySelector('[data-app-store-root]') || ctx.host;
+  const resizerEl = ctx.host.querySelector('.app-store-col-resizer');
+  let resizerCleanup = null;
+  if (resizerEl) {
+    const resizer = new CtoxResizer({
+      resizerEl,
+      containerEl,
+      cssVar: '--app-store-left-width',
+      side: 'left',
+      minWidth: 240,
+      maxWidth: 500,
+      onResize: (width) => localStorage.setItem('ctox.app-store.leftWidth', width)
+    });
+    resizerCleanup = () => resizer.destroy();
+  }
+  const leftWidth = localStorage.getItem('ctox.app-store.leftWidth') || '320';
+  containerEl.style.setProperty('--app-store-left-width', `${leftWidth}px`);
+
   return () => {
     try { state.unsubscribe?.unsubscribe?.(); } catch {}
+    state.contextMenuCleanup?.();
+    state.contextMenu?.remove();
+    state.contextMenu = null;
+    resizerCleanup?.();
   };
 }
 
@@ -220,7 +252,7 @@ async function manifestPathToMarketplaceItem(path) {
     category: manifest.category || 'CTOX',
     version: manifest.version || CTOX_BRANCH,
     developer: manifest.developer || 'CTOX',
-    license: manifest.license || 'Apache-2.0',
+    license: manifest.license || 'AGPL-3.0-only',
     repo: CTOX_REPO,
     source: 'ctox-github',
     source_path: relativePath,
@@ -245,7 +277,7 @@ function catalogItems() {
     category: 'Templates',
     version: 'v1',
     developer: 'KI Generator',
-    license: 'Apache-2.0',
+    license: 'AGPL-3.0-only',
     source: 'creator',
     default_title: 'App von Scratch erstellen',
     collections: [],
@@ -262,6 +294,8 @@ function catalogItems() {
 
 function moduleKind(item) {
   if (item?.core) return 'system';
+  if (item?.install_scope === 'internal') return 'system';
+  if (item?.install_scope === 'starter' || item?.source === 'starter') return 'starter';
   if (item?.source === 'installed') return 'installed';
   return 'local';
 }
@@ -289,6 +323,7 @@ function normalizeMarketplaceItem(item) {
     source_path: item.source_path || '',
     manifest_url: item.manifest_url || '',
     homepage: item.homepage || item.html_url || '',
+    install_scope: item.install_scope || item.store?.install_scope || '',
     permissions: Array.isArray(item.permissions) ? item.permissions : (Array.isArray(item.collections) ? item.collections : []),
     installable: item.installable !== false && item.store?.installable !== false,
     raw: item,
@@ -307,13 +342,14 @@ function normalizeItem(item, kind) {
     category: String(item.category || item.source || (item.core ? 'System' : 'Local')),
     version: item.version || item.release || 'v1',
     developer: item.developer || item.publisher || 'CTOX',
-    license: item.license || 'Apache-2.0',
+    license: item.license || 'AGPL-3.0-only',
     source: sourceLabel(item, kind),
     repo: item.repo || item.repository || '',
     download_url: item.download_url || '',
     source_path: item.source_path || '',
     manifest_url: item.manifest_url || '',
     homepage: item.homepage || '',
+    install_scope: item.install_scope || item.raw?.install_scope || '',
     permissions: item.permissions || item.collections || [],
     installable: item.installable !== false && item.store?.installable !== false,
     raw: item,
@@ -327,6 +363,7 @@ function statusForItem(item, kind) {
   }
   if (kind === 'template') return 'template';
   if (kind === 'system') return 'system';
+  if (kind === 'starter') return 'starter';
   if (kind === 'installed') return 'installed';
   return 'local';
 }
@@ -397,6 +434,8 @@ function renderCard(item) {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Erstellen</button>`;
   } else if (item.kind === 'system') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>`;
+  } else if (item.kind === 'starter') {
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>`;
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
@@ -433,10 +472,10 @@ function renderCard(item) {
 function renderDetails() {
   const item = catalogItems().find((candidate) => candidate.id === state.selectedId);
   if (!item || !state.drawerOpen) {
-    if (els.detail) els.detail.classList.remove('visible');
+    if (els.detail) els.detail.classList.remove('is-open');
     return;
   }
-  if (els.detail) els.detail.classList.add('visible');
+  if (els.detail) els.detail.classList.add('is-open');
   if (els.detailIcon) els.detailIcon.textContent = iconForItem(item);
   if (els.detailTitle) els.detailTitle.textContent = item.title;
   if (els.detailVersion) els.detailVersion.textContent = item.version;
@@ -588,6 +627,7 @@ function countsByScope() {
     marketplace: items.filter((item) => item.kind === 'marketplace').length,
     template: items.filter((item) => item.kind === 'template').length,
     installed: items.filter((item) => item.kind === 'installed').length,
+    starter: items.filter((item) => item.kind === 'starter').length,
     system: items.filter((item) => item.kind === 'system').length,
     local: items.filter((item) => item.kind === 'local').length,
   };
@@ -631,7 +671,7 @@ function mergeMarketplace(primary, fallback) {
 }
 
 function sortItems(left, right) {
-  const rank = { marketplace: 0, template: 1, installed: 2, local: 3, system: 4 };
+  const rank = { marketplace: 0, template: 1, installed: 2, starter: 3, local: 4, system: 5 };
   return (rank[left.kind] ?? 9) - (rank[right.kind] ?? 9)
     || left.title.localeCompare(right.title);
 }
@@ -642,6 +682,7 @@ function scopeTitle(scope) {
     marketplace: 'GitHub Marketplace',
     template: 'Templates',
     installed: 'Installed Apps',
+    starter: 'Starter Apps',
     system: 'System Apps',
     local: 'Local Modules',
   }[scope] || 'Applications';
@@ -651,6 +692,7 @@ function iconForItem(item) {
   if (item.kind === 'marketplace') return item.status === 'installed' ? '✓' : 'GH';
   if (item.kind === 'template') return '+';
   if (item.kind === 'installed') return '✓';
+  if (item.kind === 'starter') return '★';
   if (item.kind === 'system') return '◆';
   return '*';
 }
@@ -659,6 +701,7 @@ function statusLabel(status) {
   return {
     available: 'Available',
     installed: 'Installed',
+    starter: 'Starter',
     template: 'Template',
     system: 'System',
     local: 'Local',
@@ -703,4 +746,341 @@ function escapeHtml(value) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function initAppStoreContextMenu(state) {
+  state.contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu app-store-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== 'app-store') return;
+    const context = appStoreCommandContextFromElement(state, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderAppStoreContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideAppStoreContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideAppStoreContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideAppStoreContextMenu(state);
+    state.contextMenu?.remove();
+    state.contextMenu = null;
+  };
+}
+
+function hideAppStoreContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function canModifyAppStoreApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function appStoreCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+
+  const card = element?.closest('[data-app-id]');
+  const appId = card?.dataset?.appId || '';
+  const item = appId ? catalogItems().find((candidate) => candidate.id === appId) : null;
+
+  return {
+    module: 'app-store',
+    column: state.drawerOpen ? 'detail' : 'grid',
+    record_type: item ? 'app' : 'store',
+    record_id: item?.id || '',
+    label: item?.title || state.query || 'App Store',
+    app_id: item?.id || '',
+    app_title: item?.title || '',
+    app_description: item?.description || '',
+    app_developer: item?.developer || '',
+    app_version: item?.version || '',
+    app_status: item?.status || '',
+    app_category: item?.category || '',
+    app_source: item?.source || '',
+    active_search: state.query || '',
+    active_scope: state.scope || 'marketplace',
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderAppStoreContextMenu(state, context, x, y) {
+  ensureCtoxContextMenuStyles();
+  const canModifyApp = canModifyAppStoreApp(state);
+  state.contextMenu.innerHTML = `
+    <form class="app-store-context-chat" data-app-store-context-chat-form>
+      <header>
+        <div>
+          <strong>Chat to CTOX</strong>
+          <span>${escapeHtml(context.label || 'App Store')}</span>
+        </div>
+        <button type="button" data-app-store-context-close aria-label="Schließen">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        </div>
+      ` : ''}
+      <textarea data-app-store-context-message placeholder="Was soll CTOX im App Store tun oder anpassen?"></textarea>
+      <footer>
+        <span data-app-store-context-status></span>
+        <button type="submit">Senden</button>
+      </footer>
+    </form>
+  `;
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-app-store-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-app-store-context-message]');
+  state.contextMenu.querySelector('[data-app-store-context-close]')?.addEventListener('click', () => hideAppStoreContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchAppStoreContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+async function dispatchAppStoreContextChat(state, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-app-store-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = 'Nachricht fehlt.';
+    return;
+  }
+
+  const safeMode = mode === 'app' && canModifyAppStoreApp(state) ? 'app' : 'data';
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    return;
+  }
+  if (status) status.textContent = 'Oeffne Chat...';
+  const title = `${safeMode === 'app' ? 'App Store App modifizieren' : 'Store durchsuchen'} · ${context.label || 'App Store'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die App-Store-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Store-Daten/Katalog selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: 'app-store',
+      source_title: 'App Store',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'app-store' : (context.record_id || 'app-store'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        context,
+        thread_key: 'business-os/app-store',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        app_id: context.app_id || '',
+        active_search: context.active_search || '',
+        active_scope: context.active_scope || '',
+      },
+    },
+  }));
+  hideAppStoreContextMenu(state);
+}
+
+function ensureCtoxContextMenuStyles() {
+  if (document.getElementById('ctox-unified-context-menu-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ctox-unified-context-menu-style';
+  style.textContent = `
+    .ctox-context-menu {
+      position: absolute;
+      z-index: 2400;
+      width: min(560px, calc(100vw - 24px));
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-panel, 12px);
+      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      padding: 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+      animation: ctox-menu-fade-in 0.15s ease-out;
+    }
+    @keyframes ctox-menu-fade-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .ctox-context-menu form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      padding: 12px;
+      margin: 0;
+    }
+    .ctox-context-menu form header,
+    .ctox-context-menu form footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11.5px;
+      font-weight: 760;
+      padding: 0 8px;
+      cursor: pointer;
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      margin: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label:hover {
+      border-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu .ctox-context-mode input {
+      margin: 0;
+      accent-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form header div {
+      min-width: 0;
+    }
+    .ctox-context-menu form strong,
+    .ctox-context-menu form span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-context-menu form strong {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 12.5px;
+      font-weight: 820;
+    }
+    .ctox-context-menu form span {
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .ctox-context-menu form footer > span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      white-space: normal;
+      font-size: 11px;
+      color: var(--bo-muted, var(--muted, #64747c));
+    }
+    .ctox-context-menu form textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 92px;
+      max-height: 180px;
+      min-width: 0;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 9px;
+      resize: vertical;
+    }
+    .ctox-context-menu form textarea:focus {
+      outline: none;
+      border-color: var(--bo-accent, #23665f);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bo-accent, #23665f) 25%, transparent);
+    }
+    .ctox-context-menu form button {
+      flex: 0 0 auto;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .ctox-context-menu form button:hover {
+      background: color-mix(in srgb, var(--bo-text, #18222d) 8%, var(--bo-surface-muted, #eef3f7));
+    }
+    .ctox-context-menu form button[type="submit"] {
+      border-color: var(--bo-accent, #23665f);
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 14%, var(--bo-surface, #fff));
+      color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form button[type="submit"]:hover {
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 22%, var(--bo-surface, #fff));
+    }
+    .ctox-context-menu form button[type="button"][aria-label="Schließen"],
+    .ctox-context-menu form [data-creator-context-close],
+    .ctox-context-menu form [data-reports-context-close],
+    .ctox-context-menu form [data-shiftflow-context-close],
+    .ctox-context-menu form [data-app-store-context-close],
+    .ctox-context-menu form [data-context-close] {
+      width: 30px;
+      min-width: 30px;
+      padding: 0;
+      text-align: center;
+      font-size: 18px;
+      border: none;
+      background: none;
+      color: var(--bo-muted, var(--muted, #64747c));
+      cursor: pointer;
+    }
+  `;
+  document.head.append(style);
 }

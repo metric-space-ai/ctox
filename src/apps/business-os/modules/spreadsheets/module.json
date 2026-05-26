@@ -24,7 +24,7 @@
   "category": "Analytics",
   "version": "v1",
   "developer": "CTOX",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "tags": [
     "spreadsheets",
     "xlsx",
@@ -35,8 +35,10 @@
     "summary": "XLSX spreadsheet workspace with explorer, JSpreadsheet editor, versions, and automation runbooks.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/spreadsheets",
-    "installable": true,
+    "installable": false,
     "editable_after_install": true,
-    "distribution": "ctox-repo-module"
-  }
+    "distribution": "starter-module"
+  },
+  "install_scope": "starter",
+  "default_installed": true
 }

@@ -258,6 +258,19 @@ pub struct ShapedQuery {
     pub domains: Vec<String>,
 }
 
+/// Browser-assisted path metadata for sources that benefit from a
+/// CTOX-owned remote browser session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrowserSourceRecipe {
+    pub source_id: &'static str,
+    pub login_url: String,
+    pub allowed_domains: Vec<String>,
+    pub required_secret_name: Option<&'static str>,
+    pub verify_selector: Option<&'static str>,
+    pub credential_selector: Option<&'static str>,
+    pub capture_script: Option<&'static str>,
+}
+
 /// A single search-result row as returned by either a search-engine cascade
 /// or a source's own `fetch_direct` API.
 #[derive(Debug, Clone)]
@@ -438,6 +451,26 @@ pub trait SourceModule: Sync {
         None
     }
 
+    /// Metadata for Business-OS/Harness browser assist.
+    ///
+    /// The default recipe is intentionally conservative: it exists only for
+    /// credentialed sources, starts at the canonical source host, and allows
+    /// the canonical host plus explicit host suffixes. Modules can override
+    /// this when their login URL or verification selector is known.
+    fn browser_recipe(&self) -> Option<BrowserSourceRecipe> {
+        let required_secret_name = self.requires_credential()?;
+        let allowed_domains = source_allowed_domains(self.id(), self.host_suffixes());
+        Some(BrowserSourceRecipe {
+            source_id: self.id(),
+            login_url: format!("https://{}", self.id()),
+            allowed_domains,
+            required_secret_name: Some(required_secret_name),
+            verify_selector: None,
+            credential_selector: None,
+            capture_script: None,
+        })
+    }
+
     /// Rewrite the agent's query for this source and pin its domain.
     ///
     /// Returning `None` means: this source is irrelevant for this context
@@ -534,6 +567,24 @@ pub fn find(id_or_alias: &str) -> Option<&'static dyn SourceModule> {
     None
 }
 
+fn source_allowed_domains(id: &str, host_suffixes: &[&str]) -> Vec<String> {
+    let mut domains = Vec::new();
+    for value in std::iter::once(id).chain(host_suffixes.iter().copied()) {
+        let trimmed = value
+            .trim()
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+            .trim_matches('/');
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !domains.iter().any(|existing| existing == trimmed) {
+            domains.push(trimmed.to_string());
+        }
+    }
+    domains
+}
+
 /// Sources whose `authoritative_for` includes the given field, in tier order.
 pub fn sources_for_field(field: FieldKey) -> Vec<&'static dyn SourceModule> {
     let mut out: Vec<_> = list()
@@ -588,6 +639,29 @@ mod tests {
     fn find_resolves_by_id_and_alias() {
         let by_id = find("bundesanzeiger.de").expect("by id");
         assert_eq!(by_id.id(), "bundesanzeiger.de");
+    }
+
+    #[test]
+    fn credentialed_sources_expose_browser_recipes_without_secrets() {
+        let linkedin = find("linkedin.com").expect("linkedin source");
+        let recipe = linkedin.browser_recipe().expect("linkedin browser recipe");
+        assert_eq!(recipe.source_id, "linkedin.com");
+        assert_eq!(
+            recipe.required_secret_name,
+            Some("LINKEDIN_SALES_NAV_TOKEN")
+        );
+        assert!(recipe.allowed_domains.iter().any(|d| d == "linkedin.com"));
+        assert!(recipe.allowed_domains.iter().any(|d| d == "api.linkedin.com"));
+        assert!(recipe.login_url.starts_with("https://"));
+        assert!(recipe.credential_selector.is_some());
+        assert!(recipe.verify_selector.is_some());
+        assert!(recipe.capture_script.is_some());
+    }
+
+    #[test]
+    fn public_sources_do_not_default_to_browser_recipes() {
+        let bundesanzeiger = find("bundesanzeiger.de").expect("bundesanzeiger source");
+        assert!(bundesanzeiger.browser_recipe().is_none());
     }
 
     #[test]

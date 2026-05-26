@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Full-attention block smoke-test in ONE chained MTLCommandBuffer.
 //!

@@ -1,43 +1,46 @@
-<div class="module-root" data-module-root="creator">
-  <div class="creator-single-pane">
-    <div class="creator-card">
-      <header class="creator-card-header">
-        <span class="os-kicker">KI App Generator</span>
-        <h2 class="os-title">Neue App beschreiben & installieren</h2>
-        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert die Datenmodelle, Benutzeroberflächen und das SQLite-Schema vollautomatisch.</p>
+<main class="creator-module" data-creator-root>
+  <!-- Linke Spalte: Sidebar mit Glassmorphic Design -->
+  <section class="creator-pane creator-left" aria-label="Configuration & Prompts">
+    <div class="creator-sidebar-content">
+      <header class="ctox-pane-header">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker">AI Engine</span>
+            <h2 class="ctox-pane-title">Generator</h2>
+          </div>
+        </div>
       </header>
 
-      <div class="creator-card-body">
+      <div class="creator-sidebar-body">
         <!-- 1. Quickstart presets dropdown -->
         <div class="form-group">
-          <label class="form-label" for="select-preset-prompt">Schnellstart-Vorlage laden (Exemplarische Prompts)</label>
+          <label class="form-label" for="select-preset-prompt">Schnellstart-Vorlage laden</label>
           <select id="select-preset-prompt" class="os-select">
-            <option value="" selected disabled>-- Wähle eine Beispiel-App-Vorlage --</option>
-            <option value="standard-mgmt">📦 Lagerverwaltung (Tabelle & Artikeldetails)</option>
-            <option value="notes-style">📝 Notizbuch (Markdown-Editor & Aufzeichnungen)</option>
-            <option value="kanban-style">📋 Taskboard (Kanban-Spalten & Tickets)</option>
-            <option value="support-style">🎫 Support Desk (Helpdesk & Kundentickets)</option>
-            <option value="time-style">⏱️ Zeiterfassung (Arbeitszeit-Log & Projektstunden)</option>
-            <option value="plant-style">🌱 Pflanzen-Tracker (Bürobotanik & Gieß-Logs)</option>
+            <option value="" selected disabled>-- Wähle eine App-Vorlage --</option>
+            <option value="standard-mgmt">📦 Lagerverwaltung</option>
+            <option value="notes-style">📝 Notizbuch</option>
+            <option value="kanban-style">📋 Taskboard</option>
+            <option value="support-style">🎫 Support Desk</option>
+            <option value="time-style">⏱️ Zeiterfassung</option>
+            <option value="plant-style">🌱 Pflanzen-Tracker</option>
           </select>
         </div>
 
         <!-- 2. AI Prompt Textarea -->
         <div class="form-group">
-          <label class="form-label" for="ai-prompt-input">Wunsch-App per KI generieren (Prompt)</label>
-          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer und verantwortlicher Person...'"></textarea>
-
-          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 12px; display: flex; align-items: center; justify-content: center; gap: 6px;">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+          <label class="form-label" for="ai-prompt-input">Wunsch-App Prompt</label>
+          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'"></textarea>
+          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             Spezifikation optimieren & anwenden
           </button>
         </div>
 
-        <!-- 3. Advanced Settings Accordion (Collapsible & Zero-config by default) -->
+        <!-- 3. Advanced Settings Accordion -->
         <div class="expert-accordion">
           <button type="button" class="accordion-trigger" id="expert-accordion-btn">
             <span>⚙️ Erweiterte Einstellungen (Optional)</span>
-            <svg class="accordion-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+            <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
 
           <div class="accordion-content is-collapsed" id="expert-accordion-content">
@@ -86,18 +89,33 @@
                   <!-- Dynamically populated collection rows -->
                 </div>
                 <div class="collection-row" style="margin-top: 8px;">
-                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Collection Name..." style="flex: 1; padding: 6px 10px; font-size: 12px;">
+                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Collection..." style="flex: 1; padding: 6px 10px; font-size: 11px;">
                   <button type="button" id="btn-add-collection" class="os-icon-btn" title="Collection hinzufügen">+</button>
                 </div>
               </div>
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </section>
 
-        <!-- 4. Deployment Action -->
+  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Spaltenbreite anpassen"></button>
+
+  <!-- Mittlere Spalte: Workbench / Editor & Live Terminal -->
+  <section class="creator-pane creator-center" aria-label="Build & Deployment Workbench">
+    <div class="creator-card">
+      <header class="creator-card-header">
+        <span class="os-kicker">KI App Generator</span>
+        <h2 class="os-title">Neue App beschreiben & installieren</h2>
+        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert die Datenmodelle, Benutzeroberflächen und das SQLite-Schema vollautomatisch.</p>
+      </header>
+
+      <div class="creator-card-body">
+        <!-- Deployment Action -->
         <div class="deploy-action-section">
           <button type="button" id="btn-deploy-app" class="os-btn is-primary">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             App jetzt generieren & installieren
           </button>
 
@@ -108,7 +126,7 @@
         </div>
       </div>
 
-      <!-- 5. Integrated High-Tech Build Terminal -->
+      <!-- Integrated High-Tech Build Terminal -->
       <footer class="creator-card-footer">
         <div class="terminal-header">
           <div class="terminal-dots">
@@ -123,5 +141,5 @@
         </div>
       </footer>
     </div>
-  </div>
-</div>
+  </section>
+</main>

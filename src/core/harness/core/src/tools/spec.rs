@@ -1523,6 +1523,177 @@ JS_SOURCE: /(?:\s*)(?:[^\s{\"`]|`[^`]|``[^`])[\s\S]*/
     })
 }
 
+fn create_ctox_web_auth_assist_request_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "source_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Canonical CTOX web-stack source id or alias, for example linkedin.com."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "target_url".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional login/start URL override. Omit this to use the source browser recipe."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "requesting_task_id".to_string(),
+            JsonSchema::String {
+                description: Some("Optional task/run id to correlate the auth assist.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_web_auth_assist_request".to_string(),
+        description: "Requests a Business-OS remote browser auth assist for a CTOX web-stack source. This only enqueues an existing RxDB business command; it does not expose Playwright/CDP sockets, raw browser streams, or credential values."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["source_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_ctox_web_auth_assist_status_tool() -> ToolSpec {
+    let properties = BTreeMap::from([(
+        "session_id".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Business-OS browser session id returned by ctox_web_auth_assist_request."
+                    .to_string(),
+            ),
+        },
+    )]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_web_auth_assist_status".to_string(),
+        description: "Reads redacted status for a Business-OS remote browser auth-assist session from the existing RxDB browser session document. The response never includes screenshots, stream frames, or secret values."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_ctox_browser_context_capture_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Business-OS browser session id to capture context from.".to_string(),
+                ),
+            },
+        ),
+        (
+            "source_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional web-stack source id to attach to the handoff metadata.".to_string(),
+                ),
+            },
+        ),
+        (
+            "requesting_task_id".to_string(),
+            JsonSchema::String {
+                description: Some("Optional task/run id to correlate the capture.".to_string()),
+            },
+        ),
+        (
+            "enqueue_handoff".to_string(),
+            JsonSchema::Boolean {
+                description: Some(
+                    "When true or omitted, enqueue a Business-OS ctox.browser_context.capture handoff command. When false, return only the redacted RxDB context reference."
+                        .to_string(),
+                ),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_browser_context_capture".to_string(),
+        description: "Captures redacted context references for an existing Business-OS remote browser session. It reads the current RxDB browser session/tab/frame metadata and may enqueue the existing ctox.browser_context.capture Business-OS handoff; it never returns frame bytes, screenshots, Playwright/CDP endpoints, or credential values."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
+fn create_ctox_browser_context_extract_tool() -> ToolSpec {
+    let properties = BTreeMap::from([
+        (
+            "session_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Business-OS browser session id to run the source capture script against."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "source_id".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional web-stack source id. Omit to use the source_id stored on the browser session."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "capture_script".to_string(),
+            JsonSchema::String {
+                description: Some(
+                    "Optional allowlisted capture script id, for example linkedin.profile_capture.v1. Omit to use the source browser recipe."
+                        .to_string(),
+                ),
+            },
+        ),
+        (
+            "requesting_task_id".to_string(),
+            JsonSchema::String {
+                description: Some("Optional task/run id to correlate the extract.".to_string()),
+            },
+        ),
+    ]);
+
+    ToolSpec::Function(ResponsesApiTool {
+        name: "ctox_browser_context_extract".to_string(),
+        description: "Requests a source-specific Browser Extract for an existing Business-OS remote browser session. It enqueues the existing browser.capture.extract RxDB command; the local CTOX browser runtime executes the allowlisted script and returns structured fields without screenshots, frame bytes, Playwright/CDP endpoints, cookies, or credential values."
+            .to_string(),
+        strict: false,
+        defer_loading: None,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["session_id".to_string()]),
+            additional_properties: Some(false.into()),
+        },
+        output_schema: None,
+    })
+}
+
 fn create_meeting_status_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: "meeting_status".to_string(),
@@ -4017,11 +4188,39 @@ pub(crate) fn build_specs_with_discoverable_tools(
             /*supports_parallel_tool_calls*/ false,
             config.code_mode_enabled,
         );
+        push_tool_spec(
+            &mut builder,
+            create_ctox_web_auth_assist_request_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_ctox_web_auth_assist_status_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_ctox_browser_context_capture_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
+        push_tool_spec(
+            &mut builder,
+            create_ctox_browser_context_extract_tool(),
+            /*supports_parallel_tool_calls*/ false,
+            config.code_mode_enabled,
+        );
         builder.register_handler("ctox_web_search", ctox_web_handler.clone());
         builder.register_handler("ctox_web_read", ctox_web_handler.clone());
         builder.register_handler("ctox_scholarly_search", ctox_web_handler.clone());
         builder.register_handler("ctox_deep_research", ctox_web_handler.clone());
         builder.register_handler("ctox_web_scrape", ctox_web_handler.clone());
+        builder.register_handler("ctox_web_auth_assist_request", ctox_web_handler.clone());
+        builder.register_handler("ctox_web_auth_assist_status", ctox_web_handler.clone());
+        builder.register_handler("ctox_browser_context_capture", ctox_web_handler.clone());
+        builder.register_handler("ctox_browser_context_extract", ctox_web_handler.clone());
         push_tool_spec(
             &mut builder,
             create_ctox_browser_automation_tool(),

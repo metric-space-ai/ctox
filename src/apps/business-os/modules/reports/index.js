@@ -1,4 +1,5 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const REPORTS_REFRESH_DEBOUNCE_MS = 80;
 
@@ -14,6 +15,8 @@ const state = {
   kind: 'all',
   status: 'all',
   cleanup: null,
+  contextMenu: null,
+  contextMenuCleanup: null,
   renderTimer: null,
   renderKey: '',
   renderedDetailId: '',
@@ -41,7 +44,7 @@ export async function mount(ctx) {
 
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
-  
+
   applyStaticLabels(ctx.host, state.t);
 
   ctx.left.replaceChildren();
@@ -49,11 +52,47 @@ export async function mount(ctx) {
   wireUi();
   await refreshReports();
   state.cleanup = wireRealtime();
+
+  const resizeCleanup = setupResizers(ctx.host);
+
   window.addEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
+  state.contextMenuCleanup = initReportsContextMenu(state);
   return () => {
     state.cleanup?.();
+    state.contextMenuCleanup?.();
+    state.contextMenu?.remove();
+    state.contextMenu = null;
+    resizeCleanup?.();
     window.removeEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
     if (state.renderTimer) window.clearTimeout(state.renderTimer);
+  };
+}
+
+function setupResizers(host) {
+  const leftResizer = host.querySelector('[data-resizer="left"]');
+  const containerEl = host.querySelector('[data-reports-root]') || host;
+
+  const cleanups = [];
+
+  if (leftResizer) {
+    const resizerL = new CtoxResizer({
+      resizerEl: leftResizer,
+      containerEl,
+      cssVar: '--reports-left-width',
+      side: 'left',
+      minWidth: 260,
+      maxWidth: 500,
+      onResize: (width) => localStorage.setItem('ctox.reports.layout.leftWidth', width)
+    });
+    cleanups.push(() => resizerL.destroy());
+  }
+
+  // Set initial width from localStorage
+  const leftWidth = localStorage.getItem('ctox.reports.layout.leftWidth') || '320';
+  containerEl.style.setProperty('--reports-left-width', `${leftWidth}px`);
+
+  return () => {
+    cleanups.forEach(c => c());
   };
 }
 
@@ -69,15 +108,15 @@ async function ensureStyles() {
 function applyStaticLabels(host, t) {
   const root = host.querySelector('[data-reports-root]');
   if (!root) return;
-  
+
   // Refresh button
   const refreshBtn = root.querySelector('[data-refresh-reports]');
   if (refreshBtn) refreshBtn.textContent = t('refresh', 'Aktualisieren');
-  
+
   // Search input placeholder
   const searchInput = root.querySelector('[data-report-search]');
   if (searchInput) searchInput.placeholder = t('searchPlaceholder', 'Suchen...');
-  
+
   // Kind select options
   const kindSelect = root.querySelector('[data-report-kind]');
   if (kindSelect) {
@@ -87,7 +126,7 @@ function applyStaticLabels(host, t) {
       <option value="feature">${escapeHtml(t('features', 'Features'))}</option>
     `;
   }
-  
+
   // Status select options
   const statusSelect = root.querySelector('[data-report-status]');
   if (statusSelect) {
@@ -535,4 +574,324 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function initReportsContextMenu(state) {
+  state.contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu reports-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  state.contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (state.ctx.module?.id !== 'reports') return;
+    const context = reportsCommandContextFromElement(state, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderReportsContextMenu(state, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (state.contextMenu?.contains(event.target)) return;
+    hideReportsContextMenu(state);
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideReportsContextMenu(state);
+  };
+
+  state.ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    state.ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideReportsContextMenu(state);
+    state.contextMenu?.remove();
+    state.contextMenu = null;
+  };
+}
+
+function hideReportsContextMenu(state) {
+  if (state.contextMenu) state.contextMenu.hidden = true;
+}
+
+function canModifyReportsApp(state) {
+  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
+  const user = state.ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function reportsCommandContextFromElement(state, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+  const activeReport = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0] || null;
+
+  return {
+    module: 'reports',
+    column: state.selectedId ? 'detail' : 'list',
+    record_type: activeReport ? 'report' : 'module',
+    record_id: activeReport?.id || '',
+    label: activeReport?.title || '',
+    body_snippet: activeReport?.summary?.slice(0, 500) || '',
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderReportsContextMenu(state, context, x, y) {
+  ensureCtoxContextMenuStyles();
+  const canModifyApp = canModifyReportsApp(state);
+  state.contextMenu.innerHTML = `
+    <form class="reports-context-chat" data-reports-context-chat-form>
+      <header>
+        <div>
+          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
+          <span>${escapeHtml(context.label || 'Reports')}</span>
+        </div>
+        <button type="button" data-reports-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
+        </div>
+      ` : ''}
+      <textarea data-reports-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
+      <footer>
+        <span data-reports-context-status></span>
+        <button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button>
+      </footer>
+    </form>
+  `;
+  state.contextMenu.hidden = false;
+  state.contextMenu.style.left = '0px';
+  state.contextMenu.style.top = '0px';
+  const rect = state.contextMenu.getBoundingClientRect();
+  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = state.contextMenu.querySelector('[data-reports-context-chat-form]');
+  const textarea = state.contextMenu.querySelector('[data-reports-context-message]');
+  state.contextMenu.querySelector('[data-reports-context-close]')?.addEventListener('click', () => hideReportsContextMenu(state));
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchReportsContextChat(state, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+async function dispatchReportsContextChat(state, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = state.contextMenu?.querySelector('[data-reports-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = state.t('chatMissingMessage', 'Nachricht fehlt.');
+    return;
+  }
+
+  const safeMode = mode === 'app' && canModifyReportsApp(state) ? 'app' : 'data';
+  const activeReport = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0] || null;
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
+    return;
+  }
+  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
+  const title = `${safeMode === 'app' ? 'Reports App modifizieren' : 'Report bearbeiten'} · ${context.label || 'Reports'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die Reports-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Reportdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: 'reports',
+      source_title: 'Reports',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'reports' : (activeReport?.id || 'reports'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        selected_report: activeReport,
+        context,
+        thread_key: 'business-os/reports',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        report_id: activeReport?.id || '',
+      },
+    },
+  }));
+  hideReportsContextMenu(state);
+}
+
+function ensureCtoxContextMenuStyles() {
+  if (document.getElementById('ctox-unified-context-menu-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ctox-unified-context-menu-style';
+  style.textContent = `
+    .ctox-context-menu {
+      position: absolute;
+      z-index: 2400;
+      width: min(560px, calc(100vw - 24px));
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-panel, 12px);
+      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      padding: 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+      animation: ctox-menu-fade-in 0.15s ease-out;
+    }
+    @keyframes ctox-menu-fade-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .ctox-context-menu form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      padding: 12px;
+      margin: 0;
+    }
+    .ctox-context-menu form header,
+    .ctox-context-menu form footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11.5px;
+      font-weight: 760;
+      padding: 0 8px;
+      cursor: pointer;
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      margin: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label:hover {
+      border-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu .ctox-context-mode input {
+      margin: 0;
+      accent-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form header div {
+      min-width: 0;
+    }
+    .ctox-context-menu form strong,
+    .ctox-context-menu form span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-context-menu form strong {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 12.5px;
+      font-weight: 820;
+    }
+    .ctox-context-menu form span {
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .ctox-context-menu form footer > span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      white-space: normal;
+      font-size: 11px;
+      color: var(--bo-muted, var(--muted, #64747c));
+    }
+    .ctox-context-menu form textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 92px;
+      max-height: 180px;
+      min-width: 0;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 9px;
+      resize: vertical;
+    }
+    .ctox-context-menu form textarea:focus {
+      outline: none;
+      border-color: var(--bo-accent, #23665f);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bo-accent, #23665f) 25%, transparent);
+    }
+    .ctox-context-menu form button {
+      flex: 0 0 auto;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .ctox-context-menu form button:hover {
+      background: color-mix(in srgb, var(--bo-text, #18222d) 8%, var(--bo-surface-muted, #eef3f7));
+    }
+    .ctox-context-menu form button[type="submit"] {
+      border-color: var(--bo-accent, #23665f);
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 14%, var(--bo-surface, #fff));
+      color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form button[type="submit"]:hover {
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 22%, var(--bo-surface, #fff));
+    }
+    .ctox-context-menu form [data-reports-context-close] {
+      width: 30px;
+      min-width: 30px;
+      padding: 0;
+      text-align: center;
+      font-size: 18px;
+      border: none;
+      background: none;
+      color: var(--bo-muted, var(--muted, #64747c));
+      cursor: pointer;
+    }
+  `;
+  document.head.append(style);
 }

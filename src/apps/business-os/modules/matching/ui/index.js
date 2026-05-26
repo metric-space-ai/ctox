@@ -3,6 +3,7 @@
 // Datenquellen & Zustand
 // ---------------------------
 
+import { CtoxResizer } from '../../../shared/resizer.js';
 import {
   computeRequirementMatch,
   computeTotalMatchScoreFromItems,
@@ -2698,6 +2699,7 @@ function setupMatchingColumnResizing() {
   leftHandle.setAttribute('role', 'separator');
   leftHandle.setAttribute('aria-orientation', 'vertical');
   leftHandle.setAttribute('aria-label', 'Spaltenbreite links/mittig anpassen');
+  leftHandle.dataset.resizer = 'left';
 
   const rightHandle = document.createElement('div');
   rightHandle.className = 'col-resizer col-resizer-right';
@@ -2705,161 +2707,38 @@ function setupMatchingColumnResizing() {
   rightHandle.setAttribute('role', 'separator');
   rightHandle.setAttribute('aria-orientation', 'vertical');
   rightHandle.setAttribute('aria-label', 'Spaltenbreite mittig/rechts anpassen');
+  rightHandle.dataset.resizer = 'right';
 
   appEl.appendChild(leftHandle);
   appEl.appendChild(rightHandle);
 
-  let activeWidths = null;
-  let persistedRatios = _sanitizeColumnLayoutRatios(matchingViewState.columnLayout);
-  let dragState = null;
-  let resizeRaf = 0;
-
-  function applyWidths(widths) {
-    if (!widths) return;
-    appEl.style.gridTemplateColumns = `${widths.left}px ${widths.center}px ${widths.right}px`;
-  }
-
-  function hideHandles() {
-    leftHandle.style.display = 'none';
-    rightHandle.style.display = 'none';
-  }
-
-  function showHandles() {
-    leftHandle.style.display = 'flex';
-    rightHandle.style.display = 'flex';
-  }
-
-  function placeHandles(metrics, widths) {
-    if (!metrics || !widths) return;
-    leftHandle.style.left = `${Math.round(widths.left + (metrics.gap / 2))}px`;
-    rightHandle.style.left = `${Math.round(widths.left + metrics.gap + widths.center + (metrics.gap / 2))}px`;
-  }
-
-  function persistCurrentLayout() {
-    const ratios = _columnPixelsToRatios(activeWidths);
-    if (!ratios) return;
-    persistedRatios = ratios;
-    persistMatchingViewState({ columnLayout: ratios });
-  }
-
-  function syncLayout() {
-    if (!_isDesktopThreeColumnLayout(appEl)) {
-      appEl.style.removeProperty('grid-template-columns');
-      hideHandles();
-      return;
-    }
-
-    const metrics = _getAppGridMetrics(appEl);
-    if (!metrics || metrics.trackTotal <= 0) return;
-
-    let nextWidths = persistedRatios
-      ? _columnRatiosToPixels(persistedRatios, metrics.trackTotal)
-      : null;
-
-    if (!nextWidths) {
-      const fromDom = _readGridTrackPixels(appEl);
-      nextWidths = _clampMatchingColumns(fromDom, metrics.trackTotal);
-    }
-
-    if (!nextWidths) return;
-
-    activeWidths = nextWidths;
-    applyWidths(activeWidths);
-    placeHandles(metrics, activeWidths);
-    showHandles();
-  }
-
-  function stopDrag() {
-    if (!dragState) return;
-    dragState = null;
-    leftHandle.classList.remove('is-active');
-    rightHandle.classList.remove('is-active');
-    document.body.classList.remove('is-col-resizing');
-    persistCurrentLayout();
-  }
-
-  function startDrag(which, event) {
-    if (!_isDesktopThreeColumnLayout(appEl)) return;
-
-    const metrics = _getAppGridMetrics(appEl);
-    if (!metrics || metrics.trackTotal <= 0) return;
-
-    const initial = activeWidths || _clampMatchingColumns(_readGridTrackPixels(appEl), metrics.trackTotal);
-    if (!initial) return;
-
-    activeWidths = initial;
-    dragState = {
-      which,
-      appRect: appEl.getBoundingClientRect(),
-      metrics,
-      widths: { ...initial }
-    };
-
-    if (which === 'left') leftHandle.classList.add('is-active');
-    if (which === 'right') rightHandle.classList.add('is-active');
-    document.body.classList.add('is-col-resizing');
-
-    event.preventDefault();
-  }
-
-  function handleDragMove(event) {
-    if (!dragState) return;
-
-    const { which, appRect, metrics, widths } = dragState;
-    const pointerX = event.clientX - appRect.left - metrics.padLeft;
-    const boundedX = _clampNumber(pointerX, 0, metrics.contentWidth);
-
-    if (which === 'left') {
-      const right = widths.right;
-      const maxLeft = Math.max(
-        MATCHING_COL_MIN.left,
-        Math.min(MATCHING_COL_SIDE_MAX, metrics.trackTotal - right - MATCHING_COL_MIN.center)
-      );
-      const rawLeft = boundedX - (metrics.gap / 2);
-      const left = _clampNumber(rawLeft, MATCHING_COL_MIN.left, maxLeft);
-      const center = metrics.trackTotal - left - right;
-      activeWidths = _clampMatchingColumns({ left, center, right }, metrics.trackTotal);
-    } else if (which === 'right') {
-      const left = widths.left;
-      const maxRight = Math.max(
-        MATCHING_COL_MIN.right,
-        Math.min(MATCHING_COL_SIDE_MAX, metrics.trackTotal - left - MATCHING_COL_MIN.center)
-      );
-      const rawRight = metrics.contentWidth - boundedX - (metrics.gap / 2);
-      const right = _clampNumber(rawRight, MATCHING_COL_MIN.right, maxRight);
-      const center = metrics.trackTotal - left - right;
-      activeWidths = _clampMatchingColumns({ left, center, right }, metrics.trackTotal);
-    }
-
-    if (!activeWidths) return;
-
-    applyWidths(activeWidths);
-    placeHandles(metrics, activeWidths);
-  }
-
-  function handleResize() {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0;
-      syncLayout();
-    });
-  }
-
-  leftHandle.addEventListener('pointerdown', (event) => {
-    startDrag('left', event);
+  const resizerL = new CtoxResizer({
+    resizerEl: leftHandle,
+    containerEl: appEl,
+    cssVar: '--matching-left-width',
+    side: 'left',
+    minWidth: 260,
+    maxWidth: 560,
+    onResize: (width) => localStorage.setItem('ctox.matching.layout.leftWidth', width)
   });
 
-  rightHandle.addEventListener('pointerdown', (event) => {
-    startDrag('right', event);
+  const resizerR = new CtoxResizer({
+    resizerEl: rightHandle,
+    containerEl: appEl,
+    cssVar: '--matching-right-width',
+    side: 'right',
+    minWidth: 260,
+    maxWidth: 560,
+    onResize: (width) => localStorage.setItem('ctox.matching.layout.rightWidth', width)
   });
 
-  window.addEventListener('pointermove', handleDragMove);
-  window.addEventListener('pointerup', stopDrag);
-  window.addEventListener('pointercancel', stopDrag);
-  window.addEventListener('blur', stopDrag);
-  window.addEventListener('resize', handleResize);
+  const leftWidth = localStorage.getItem('ctox.matching.layout.leftWidth') || '280';
+  const rightWidth = localStorage.getItem('ctox.matching.layout.rightWidth') || '280';
+  appEl.style.setProperty('--matching-left-width', `${leftWidth}px`);
+  appEl.style.setProperty('--matching-right-width', `${rightWidth}px`);
 
-  syncLayout();
+  leftHandle.style.display = 'flex';
+  rightHandle.style.display = 'flex';
 }
 
 function reconcilePersistedMatchingSelection() {
@@ -4561,7 +4440,7 @@ async function removeMatchesHiddenByFilter(requirementId, settings = getMatchFil
 
 /**
  * Fügt für einen Requirement automatisch N passende Objekte hinzu.
- * 
+ *
  * Ablauf:
  *  - Nimmt alle aktiven Objekte, die noch KEIN Match mit diesem Requirement haben.
  *  - Ruft shortlistObjectsForRequirement (LLM) auf, um Top-N IDs zu bekommen.

@@ -121,6 +121,12 @@ pub fn handle_browser_command(root: &Path, args: &[String]) -> Result<()> {
     }
 }
 
+pub fn browser_doctor_report(root: &Path, dir: Option<PathBuf>) -> Result<Value> {
+    let reference_dir = dir.unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR));
+    let report = build_doctor_report(&reference_dir)?;
+    Ok(serde_json::to_value(report)?)
+}
+
 pub fn prepare_browser_environment(
     root: &Path,
     options: &BrowserPrepareOptions,
@@ -1602,6 +1608,7 @@ fn unix_ts() -> u64 {
 mod tests {
     use super::build_browser_capture_runner_script;
     use super::build_browser_runner_script;
+    use super::browser_doctor_report;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
     use super::find_playwright_chromium_executable_in;
@@ -1648,6 +1655,28 @@ mod tests {
             Some("^1.55.0")
         );
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn browser_doctor_report_uses_explicit_reference_dir() {
+        let root = temp_path("doctor-root");
+        let reference_dir = root.join("custom-reference");
+        fs::create_dir_all(&reference_dir).unwrap();
+        let report = browser_doctor_report(&root, Some(reference_dir.clone())).unwrap();
+        assert_eq!(
+            report
+                .get("reference_dir")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            Some(reference_dir.display().to_string())
+        );
+        assert_eq!(
+            report
+                .get("automation_ready")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

@@ -31,6 +31,8 @@ use super::sql::{
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
+const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
+
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
 static UPDATE_REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<Notify>>>> = OnceLock::new();
@@ -201,7 +203,7 @@ fn start_external_write_poll(
                 let checkpoint = checkpoint.lock().clone();
                 let conn = connection.lock();
                 let poll_limit = if table_name.contains("desktop_file_chunks") {
-                    1
+                    SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT
                 } else {
                     50
                 };
@@ -781,6 +783,139 @@ mod tests {
             .collect();
         assert_eq!(ids, vec!["b", "c"]);
         assert_eq!(changed.checkpoint, json!({ "id": "c", "lwt": 2.0 }));
+    }
+
+    #[tokio::test]
+    async fn replication_checkpoint_epoch_tracks_persisted_checkpoint_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let schema = test_schema();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+
+        let empty_status = instance.replication_checkpoint_status().await;
+        assert_eq!(empty_status["source"], "rxdb-rs-sqlite");
+        assert_eq!(empty_status["state"], "advertised");
+        assert_eq!(empty_status["collection"], "docs");
+        assert_eq!(empty_status["latestLwt"], 0.0);
+        assert_eq!(empty_status["latestIdHash"], "");
+        assert!(empty_status.get("latestId").is_none());
+
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("a", "1-a", 1, false, 1.0),
+                }],
+                "insert-a",
+            )
+            .await
+            .unwrap();
+        let after_a = instance.replication_checkpoint_status().await;
+        assert_eq!(after_a["latestLwt"], 1.0);
+        assert_eq!(after_a["latestIdHash"], sha256_hex(b"a"));
+        assert_ne!(after_a["epoch"], empty_status["epoch"]);
+
+        instance.close().await.unwrap();
+        let reopened = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path,
+        });
+        let reopened_instance = create_storage_instance(&reopened, params(schema))
+            .await
+            .unwrap();
+        let reopened_status = reopened_instance.replication_checkpoint_status().await;
+        assert_eq!(reopened_status["epoch"], after_a["epoch"]);
+        assert_eq!(reopened_status["latestIdHash"], after_a["latestIdHash"]);
+
+        reopened_instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("b", "1-b", 1, false, 2.0),
+                }],
+                "insert-b",
+            )
+            .await
+            .unwrap();
+        let after_b = reopened_instance.replication_checkpoint_status().await;
+        assert_eq!(after_b["latestLwt"], 2.0);
+        assert_eq!(after_b["latestIdHash"], sha256_hex(b"b"));
+        assert_ne!(after_b["epoch"], after_a["epoch"]);
+        assert_eq!(after_b["schemaHash"], after_a["schemaHash"]);
+    }
+
+    #[tokio::test]
+    async fn replication_checkpoint_epoch_isolated_across_schema_version_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let schema_v0 = test_schema();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        let instance_v0 = create_storage_instance(&storage, params(schema_v0.clone()))
+            .await
+            .unwrap();
+        instance_v0
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("v0", "1-v0", 1, false, 1.0),
+                }],
+                "insert-v0",
+            )
+            .await
+            .unwrap();
+        let v0_status = instance_v0.replication_checkpoint_status().await;
+        assert_eq!(v0_status["latestLwt"], 1.0);
+        assert_eq!(v0_status["latestIdHash"], sha256_hex(b"v0"));
+        instance_v0.close().await.unwrap();
+
+        let mut schema_v1 = test_schema();
+        schema_v1.version = 1;
+        schema_v1.required.push("age".to_string());
+        let reopened = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        let instance_v1 = create_storage_instance(&reopened, params(schema_v1.clone()))
+            .await
+            .unwrap();
+        let empty_v1_status = instance_v1.replication_checkpoint_status().await;
+        assert_eq!(empty_v1_status["latestLwt"], 0.0);
+        assert_eq!(empty_v1_status["latestIdHash"], "");
+        assert_ne!(empty_v1_status["schemaHash"], v0_status["schemaHash"]);
+        assert_ne!(empty_v1_status["epoch"], v0_status["epoch"]);
+
+        instance_v1
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("v1", "1-v1", 1, false, 2.0),
+                }],
+                "insert-v1",
+            )
+            .await
+            .unwrap();
+        let v1_status = instance_v1.replication_checkpoint_status().await;
+        assert_eq!(v1_status["latestLwt"], 2.0);
+        assert_eq!(v1_status["latestIdHash"], sha256_hex(b"v1"));
+        assert_ne!(v1_status["schemaHash"], v0_status["schemaHash"]);
+        assert_ne!(v1_status["epoch"], v0_status["epoch"]);
+        instance_v1.close().await.unwrap();
+
+        let reopened_v0 = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path,
+        });
+        let instance_v0_again = create_storage_instance(&reopened_v0, params(schema_v0))
+            .await
+            .unwrap();
+        let v0_again_status = instance_v0_again.replication_checkpoint_status().await;
+        assert_eq!(v0_again_status["epoch"], v0_status["epoch"]);
+        assert_eq!(v0_again_status["latestIdHash"], v0_status["latestIdHash"]);
+        assert_eq!(v0_again_status["schemaHash"], v0_status["schemaHash"]);
     }
 
     #[tokio::test]

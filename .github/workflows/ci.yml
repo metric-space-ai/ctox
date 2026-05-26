@@ -103,12 +103,20 @@ jobs:
           node --check src/core/rxdb/tools/print_soak_summary.js
           node --check src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js
+          node --check src/core/rxdb/tools/assert_js_no_package_manager.js
           node --check src/core/rxdb/tools/business_os_connection_modes_smoke.js
+          node --check src/apps/business-os/scripts/assert-sync-error-classification.mjs
           node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/assert-sync-error-classification.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node src/core/rxdb/tools/assert_js_fork_release_evidence.js
+          node src/core/rxdb/tools/assert_js_no_package_manager.js
+          node src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs
+          node src/apps/business-os/rxdb/tests/query-api-smoke.mjs
+          node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
+          node src/core/rxdb/tools/build_business_os_schema_contract.mjs
 
       - name: ctox-rxdb-js bundle provenance
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -131,11 +139,29 @@ jobs:
             src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json
             src/core/rxdb/js-fork/source/package.json
             src/core/rxdb/js-fork/source/package-lock.json
+            src/apps/business-os/rxdb/manifest.json
+            src/apps/business-os/rxdb/README.md
+            src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs
+            src/apps/business-os/rxdb/src/event-target.mjs
+            src/apps/business-os/rxdb/src/index.mjs
+            src/apps/business-os/rxdb/src/observable.mjs
+            src/apps/business-os/rxdb/src/replication-webrtc.mjs
+            src/apps/business-os/rxdb/src/rx-database.mjs
+            src/apps/business-os/rxdb/src/schema.mjs
+            src/apps/business-os/rxdb/src/storage-indexeddb.mjs
+            src/apps/business-os/rxdb/src/webrtc-native.mjs
+            src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs
+            src/apps/business-os/rxdb/tests/query-api-smoke.mjs
+            src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
           if-no-files-found: error
 
       - name: Business OS command idempotency
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
+
+      - name: Business OS schema hash parity
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox native_all_schema_hashes_match_browser_contract_fixture
 
       - name: Business OS file sync policy
         if: matrix.target == 'x86_64-unknown-linux-gnu'

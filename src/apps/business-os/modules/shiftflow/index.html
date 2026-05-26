@@ -1,30 +1,30 @@
 <div class="shiftflow-app" data-shiftflow-root>
   <!-- LEFT PANEL: Team, Status & Projects -->
   <aside class="shiftflow-panel shiftflow-left-pane" id="shiftflow-left">
-    <div class="shiftflow-pane-header">
-      <div>
-        <span class="shiftflow-kicker" data-t="overview">Übersicht</span>
-        <h2 class="shiftflow-title" data-t="teamAndStatus">Team & Status</h2>
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="overview">Übersicht</span>
+          <h2 class="ctox-pane-title" data-t="teamAndStatus">Team & Status</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon icon-button" id="addEmployeeBtn" data-icon="add" data-t-title="addEmployee" data-t-aria="addEmployee" title="Mitarbeiter hinzufügen" aria-label="Mitarbeiter hinzufügen"></button>
+        </div>
       </div>
-      <div class="shiftflow-header-actions">
-        <button class="icon-button" id="addEmployeeBtn" data-icon="add" data-t-title="addEmployee" data-t-aria="addEmployee" title="Mitarbeiter hinzufügen" aria-label="Mitarbeiter hinzufügen"></button>
+      <div class="ctox-pane-tools">
+        <input type="search" id="employeeSearchInput" class="ctox-pane-search" data-t-placeholder="searchEmployees" data-t-aria="searchEmployeesAria" placeholder="Mitarbeiter suchen..." aria-label="Mitarbeiter suchen" />
+        <select id="departmentFilterSelect" class="ctox-pane-filter" data-t-aria="filterDepartment" aria-label="Abteilung filtern">
+          <option value="all" data-t="allDepartments">Alle Abteilungen</option>
+          <option value="Service" data-t="deptService">Service</option>
+          <option value="Küche" data-t="deptKitchen">Küche</option>
+          <option value="Bar" data-t="deptBar">Bar</option>
+          <option value="Verwaltung" data-t="deptAdmin">Verwaltung</option>
+        </select>
       </div>
-    </div>
+    </header>
 
     <!-- Search and dynamic lists nested inside a flex row-2 container to respect panel architecture -->
     <div class="shiftflow-left-content">
-      <div class="shiftflow-pane-search">
-        <input type="search" id="employeeSearchInput" class="os-input" data-t-placeholder="searchEmployees" data-t-aria="searchEmployeesAria" placeholder="Mitarbeiter suchen..." aria-label="Mitarbeiter suchen" />
-        <div class="shiftflow-pane-filters">
-          <select id="departmentFilterSelect" class="os-select" data-t-aria="filterDepartment" aria-label="Abteilung filtern">
-            <option value="all" data-t="allDepartments">Alle Abteilungen</option>
-            <option value="Service" data-t="deptService">Service</option>
-            <option value="Küche" data-t="deptKitchen">Küche</option>
-            <option value="Bar" data-t="deptBar">Bar</option>
-            <option value="Verwaltung" data-t="deptAdmin">Verwaltung</option>
-          </select>
-        </div>
-      </div>
 
       <!-- Live Active Employee Status & List + Project List in scrollable area -->
       <div class="shiftflow-sidebar-scrollable os-scrollbar">
@@ -66,21 +66,23 @@
 
   <!-- CENTER PANEL: Main Scheduler, Timesheets & Billing -->
   <main class="shiftflow-panel shiftflow-center-pane" id="shiftflow-center">
-    <div class="shiftflow-pane-header">
-      <div class="shiftflow-title-group">
-        <span class="shiftflow-kicker" id="schedulerWeekRange">KW --: --. --. ---- – --. --. ----</span>
-        <h2 class="shiftflow-title" id="centerPaneTitle" data-t="schedulePlanning">Einsatzplanung</h2>
-      </div>
-      <div class="shiftflow-header-actions">
-        <div class="shiftflow-tabs">
-          <button class="shiftflow-tab-btn active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
-          <button class="shiftflow-tab-btn" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
-          <button class="shiftflow-tab-btn" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" id="schedulerWeekRange">KW --: --. --. ---- – --. --. ----</span>
+          <h2 class="ctox-pane-title" id="centerPaneTitle" data-t="schedulePlanning">Einsatzplanung</h2>
         </div>
-        <button class="icon-button" id="prevWeekBtn" data-icon="prev" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"></button>
-        <button class="icon-button" id="nextWeekBtn" data-icon="next" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"></button>
+        <div class="ctox-pane-actions">
+          <div class="ctox-pane-tabs shiftflow-tabs">
+            <button class="ctox-pane-tab shiftflow-tab-btn active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
+            <button class="ctox-pane-tab shiftflow-tab-btn" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
+            <button class="ctox-pane-tab shiftflow-tab-btn" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
+          </div>
+          <button class="ctox-pane-icon icon-button" id="prevWeekBtn" data-icon="prev" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"></button>
+          <button class="ctox-pane-icon icon-button" id="nextWeekBtn" data-icon="next" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"></button>
+        </div>
       </div>
-    </div>
+    </header>
 
     <!-- VIEW 1: SCHEDULER TIMELINE (Calendar Grid) -->
     <div class="shiftflow-view-content" id="schedulerView">
@@ -184,12 +186,14 @@
   <aside class="shiftflow-panel shiftflow-right-pane" id="shiftflow-right">
     <!-- Tab 1: AI Planner Context -->
     <div class="shiftflow-right-pane-section" id="aiPlannerSection">
-      <div class="shiftflow-pane-header">
-        <div class="shiftflow-title-group" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
-          <span class="shiftflow-icon-mask" data-icon="spark" style="color:var(--shiftflow-accent);"></span>
-          <h2 class="shiftflow-title" style="margin:0;" data-t="aiAssistantTitle">CTOX Planungs-Assistent</h2>
+      <header class="ctox-pane-header">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles" style="display:flex; flex-direction:row; align-items:center; gap:8px;">
+            <span class="shiftflow-icon-mask" data-icon="spark" style="color:var(--shiftflow-accent);"></span>
+            <h2 class="ctox-pane-title" style="margin:0;" data-t="aiAssistantTitle">CTOX Planungs-Assistent</h2>
+          </div>
         </div>
-      </div>
+      </header>
       <div class="shiftflow-ai-chat-card">
         <div class="shiftflow-ai-chat-body" id="aiPlannerChatBody">
           <div class="shiftflow-ai-msg bot">
@@ -210,20 +214,21 @@
         <div class="shiftflow-conflicts-list" id="conflictsList">
           <div class="shiftflow-conflict-empty-state" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div>
         </div>
-      </div>
-    </div>
-
-    <!-- Tab 2: Detail Inspector (Shown when shift or record is selected) -->
-    <div class="shiftflow-right-pane-section hidden" id="detailInspectorSection">
-      <div class="shiftflow-pane-header">
-        <h2 class="shiftflow-title" id="inspectorTitle" data-t="shiftDetails">Schicht-Details</h2>
-        <div class="shiftflow-header-actions">
-          <button class="icon-button" id="closeInspectorBtn" data-icon="close" data-t-title="close" data-t-aria="close" title="Schließen" aria-label="Schließen"></button>
-        </div>
-      </div>
-      <div class="shiftflow-inspector-content os-scrollbar" id="inspectorContent">
-        <!-- Form or detail view will be loaded here -->
-      </div>
     </div>
   </aside>
+
+  <!-- Shift Details Bottom Drawer -->
+  <div class="ctox-bottom-drawer" id="detailInspectorSection" data-detail-drawer>
+    <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
+    <header class="ctox-drawer-header">
+      <div class="ctox-drawer-header-left">
+        <span class="ctox-drawer-kicker" data-t="shiftDetails">Schicht-Details</span>
+        <h3 class="ctox-drawer-title" id="inspectorTitle">Details</h3>
+      </div>
+      <button type="button" class="ctox-drawer-close" id="closeInspectorBtn" aria-label="Schließen">&times;</button>
+    </header>
+    <div class="ctox-drawer-body os-scrollbar" id="inspectorContent">
+      <!-- Form or detail view will be loaded here -->
+    </div>
+  </div>
 </div>

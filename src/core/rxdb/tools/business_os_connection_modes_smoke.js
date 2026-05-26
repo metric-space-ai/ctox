@@ -46,6 +46,9 @@ const expectedSignalingUrl = process.env.CTOX_BUSINESS_OS_SIGNALING_URLS || 'ws:
 const expectedModule = process.env.BUSINESS_OS_EXPECT_MODULE || 'ctox';
 const expectedText = process.env.BUSINESS_OS_EXPECT_TEXT || (expectedModule === 'ctox' ? 'Rxdb Webrtc' : '');
 const resultPath = process.env.BUSINESS_OS_CONNECTION_SMOKE_RESULT_PATH || '';
+const shellVisibleBudgetMs = Number(process.env.BUSINESS_OS_SHELL_VISIBLE_BUDGET_MS || '3000');
+const readinessPollMs = Number(process.env.BUSINESS_OS_CONNECTION_SMOKE_POLL_MS || '250');
+const requiredAdvancedStatusVersion = 'business-os-advanced-status-v1';
 const defaultConnectionModes = ['direct', 'web-deploy-local', 'web-deploy-packed'];
 const requestedModes = (process.env.BUSINESS_OS_CONNECTION_SMOKE_MODES || defaultConnectionModes.join(','))
   .split(',')
@@ -56,6 +59,8 @@ const summary = {
   ok: false,
   requestedModes,
   expectedSignalingUrl,
+  shellVisibleBudgetMs,
+  readinessPollMs,
   startedAt: new Date().toISOString(),
   endedAt: null,
   results: [],
@@ -195,6 +200,10 @@ async function checkMode(browser, mode, url) {
       appHosting: state.config.app_hosting || '',
       activeModule: state.activeModule || '',
       moduleCount: state.moduleCount,
+      timings: state.timings || null,
+      advancedStatusVersion: state.advancedStatus?.version || '',
+      advancedStatusBootTimings: state.advancedStatus?.shell?.bootTimings || null,
+      advancedStatusChecks: state.advancedStatus?.checks || null,
       signalingUrls: state.config.signaling_urls,
       signalingSource: state.config.signaling_urls_source || serverStatus?.sync?.signaling_urls_source || '',
       moduleCatalog: serverStatus?.module_catalog || null,
@@ -208,6 +217,9 @@ async function checkMode(browser, mode, url) {
 
 async function waitForReady(page, mode) {
   const deadline = Date.now() + 70000;
+  const startedAt = Date.now();
+  let firstShellVisibleMs = null;
+  let firstWebRtcConnectedMs = null;
   let lastState = null;
   while (Date.now() < deadline) {
     lastState = await page.evaluate(async ({ expectedText }) => {
@@ -261,11 +273,44 @@ async function waitForReady(page, mode) {
     }, { expectedText });
     const moduleOk = expectedModule ? lastState.activeModule === expectedModule : Boolean(lastState.activeModule);
     const connectionOk = expectedModule === 'ctox' ? lastState.connected : true;
-    const advancedOk = lastState.advancedStatus?.ok !== false;
-    if (!lastState.loading && lastState.moduleCount > 0 && moduleOk && connectionOk && lastState.expectedTextFound && advancedOk) {
+    let statusEvidenceOk = false;
+
+    if (firstShellVisibleMs === null && !lastState.loading && moduleOk && lastState.moduleCount > 0) {
+      firstShellVisibleMs = Date.now() - startedAt;
+    }
+    if (firstWebRtcConnectedMs === null && lastState.connected) {
+      firstWebRtcConnectedMs = Date.now() - startedAt;
+    }
+    lastState.timings = {
+      firstShellVisibleMs,
+      firstWebRtcConnectedMs,
+      elapsedMs: Date.now() - startedAt,
+      shellVisibleBudgetMs,
+    };
+    if (firstShellVisibleMs === null && Date.now() - startedAt > shellVisibleBudgetMs) {
+      throw new Error(`${mode}: Business OS shell did not become visible within ${shellVisibleBudgetMs}ms: ${JSON.stringify(lastState, null, 2)}`);
+    }
+    if (firstShellVisibleMs !== null && firstShellVisibleMs > shellVisibleBudgetMs) {
+      throw new Error(`${mode}: Business OS shell became visible after ${firstShellVisibleMs}ms, exceeding ${shellVisibleBudgetMs}ms budget: ${JSON.stringify(lastState, null, 2)}`);
+    }
+    if (firstShellVisibleMs !== null) {
+      const statusBootTimings = lastState.advancedStatus?.shell?.bootTimings || null;
+      const statusShellVisibleMs = Number(statusBootTimings?.shellVisibleMs);
+      if (!lastState.advancedStatus || lastState.advancedStatus.version !== requiredAdvancedStatusVersion) {
+        throw new Error(`${mode}: missing ${requiredAdvancedStatusVersion} evidence: ${JSON.stringify(lastState, null, 2)}`);
+      }
+      if (!Number.isFinite(statusShellVisibleMs)) {
+        throw new Error(`${mode}: advanced status missing shellVisibleMs boot timing: ${JSON.stringify(lastState, null, 2)}`);
+      }
+      if (statusShellVisibleMs > shellVisibleBudgetMs) {
+        throw new Error(`${mode}: advanced status shellVisibleMs exceeded budget: shellVisibleMs=${statusShellVisibleMs}, budget=${shellVisibleBudgetMs}, state=${JSON.stringify(lastState, null, 2)}`);
+      }
+      statusEvidenceOk = true;
+    }
+    if (!lastState.loading && lastState.moduleCount > 0 && moduleOk && connectionOk && lastState.expectedTextFound && statusEvidenceOk) {
       return lastState;
     }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await new Promise((resolve) => setTimeout(resolve, readinessPollMs));
   }
   throw new Error(`${mode}: Business OS did not become ready: ${JSON.stringify(lastState, null, 2)}`);
 }

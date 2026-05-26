@@ -1,0 +1,1235 @@
+import { CtoxEventEmitter } from './event-target.mjs';
+import { buildProtocolPayload, CTOX_RXDB_PROTOCOL } from './schema.mjs';
+import {
+  CTOX_FRAME_PROTOCOL,
+  FRAME_ACK_WINDOW,
+  MAX_CHUNK_CHARS,
+  MAX_FRAME_RETRIES,
+  MAX_INLINE_FRAME_BYTES,
+  MAX_TRANSFER_BYTES,
+} from './frame-contract.generated.mjs';
+
+const SEND_BUFFER_HIGH_WATER = 512 * 1024;
+const SEND_BUFFER_LOW_WATER = 128 * 1024;
+const FRAME_ACK_TIMEOUT_MS = 30_000;
+const FRAME_RESUME_TIMEOUT_MS = 1_000;
+const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
+const SEND_PRIORITIES = ['high', 'normal', 'low'];
+
+export function createCtoxWebRtcNativePeer(options = {}) {
+  return new CtoxWebRtcNativePeer(options);
+}
+
+export class CtoxWebRtcNativePeer {
+  constructor({
+    signalingUrl,
+    room,
+    roomPassword = '',
+    token = '',
+    tokenIssuedAt = null,
+    tokenExpiresAt = null,
+    clientId = randomId('browser'),
+    role = 'browser',
+    instanceId = '',
+    capabilities = [],
+    iceServers = [],
+    storageToken = randomId('storage'),
+    protocolPayload = null,
+    requestHandlers = {},
+  } = {}) {
+    if (!signalingUrl) {
+      throw new Error('signalingUrl is required');
+    }
+    if (!room) {
+      throw new Error('room is required');
+    }
+    this.options = {
+      signalingUrl,
+      room,
+      roomPassword,
+      token,
+      tokenIssuedAt,
+      tokenExpiresAt,
+      clientId,
+      role,
+      instanceId,
+      capabilities,
+      iceServers,
+      storageToken,
+      protocolPayload,
+      requestHandlers,
+    };
+    this.events = new CtoxEventEmitter();
+    this.socket = null;
+    this.connections = new Map();
+    this.peerMetadata = new Map();
+    this.pending = new Map();
+    this.pendingFrameAcks = new Map();
+    this.incomingFrames = new Map();
+    this.completedFrameAcks = new Map();
+    this.observedRequests = new Map();
+    this.requestWaiters = new Map();
+    this.requestCounter = 0;
+    this.frameCounter = 0;
+    this.transportStats = {
+      protocol: CTOX_FRAME_PROTOCOL,
+      maxInlineFrameBytes: MAX_INLINE_FRAME_BYTES,
+      maxChunkChars: MAX_CHUNK_CHARS,
+      maxTransferBytes: MAX_TRANSFER_BYTES,
+      ackWindow: FRAME_ACK_WINDOW,
+      sendBufferHighWater: SEND_BUFFER_HIGH_WATER,
+      sendBufferLowWater: SEND_BUFFER_LOW_WATER,
+      activeTransfers: 0,
+      pendingAcks: 0,
+      incomingTransfers: 0,
+      completedAckCacheSize: 0,
+      sentFrames: 0,
+      sentBytes: 0,
+      receivedFrames: 0,
+      receivedBytes: 0,
+      retryCount: 0,
+      resumeRequestCount: 0,
+      resumeAckCount: 0,
+      backpressureWaitCount: 0,
+      queuedFrames: 0,
+      sentScheduledFrames: 0,
+      priorityQueueDepth: 0,
+      highPriorityQueueDepth: 0,
+      normalPriorityQueueDepth: 0,
+      lowPriorityQueueDepth: 0,
+      lastSendPriority: 'normal',
+      lastAckLagMs: 0,
+      lastBufferedAmount: 0,
+      updatedAtMs: Date.now(),
+    };
+    this.lastControlPlaneError = null;
+    this.closed = false;
+  }
+
+  on(type, listener) {
+    return this.events.on(type, listener);
+  }
+
+  connect() {
+    this.closed = false;
+    const url = buildSignalingUrl(this.options);
+    const socket = new WebSocket(url);
+    this.socket = socket;
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ type: 'join', room: this.options.room }));
+      this.events.emit('signaling-open', { url: redactUrl(url) });
+    };
+    socket.onmessage = (event) => this.handleSignalingMessage(event.data);
+    socket.onerror = () => this.events.emit('error', this.lastControlPlaneError || { code: 'ctox_signaling_socket_error' });
+    socket.onclose = () => this.events.emit('signaling-close', {});
+    return this;
+  }
+
+  close() {
+    this.closed = true;
+    for (const peerId of [...this.connections.keys()]) {
+      this.removeConnection(peerId, 'peer-close');
+    }
+    if (this.socket && this.socket.readyState <= WebSocket.OPEN) {
+      this.socket.close();
+    }
+    this.rejectAllPending(createPeerClosedError(this.options.clientId, 'peer-close'));
+    this.incomingFrames.clear();
+  }
+
+  send(remotePeerId, payload) {
+    const connection = this.connections.get(remotePeerId);
+    if (!connection?.channel || connection.channel.readyState !== 'open') {
+      return false;
+    }
+    const text = JSON.stringify(payload);
+    this.enqueueSendFrame(connection, {
+      payload,
+      text,
+      inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
+      priority: classifySendPriority(payload, text),
+    });
+    return true;
+  }
+
+  enqueueSendFrame(connection, item) {
+    if (!connection.sendQueue) {
+      connection.sendQueue = createSendQueue();
+    }
+    connection.sendQueue[item.priority].push({
+      ...item,
+      queuedAtMs: Date.now(),
+      sequence: connection.sendQueue.nextSequence++,
+    });
+    this.recordTransportStatus({
+      queuedFrames: this.transportStats.queuedFrames + 1,
+      lastSendPriority: item.priority,
+    });
+    this.refreshSendQueueStatus(connection);
+    this.drainSendQueue(connection).catch((error) => {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_send_queue_failed',
+        peerId: connection.remotePeerId,
+        message: error?.message || String(error),
+      });
+    });
+  }
+
+  async drainSendQueue(connection) {
+    if (connection.sendQueue?.draining) return;
+    connection.sendQueue.draining = true;
+    try {
+      await Promise.resolve();
+      while (!this.closed && connection.channel?.readyState === 'open') {
+        const item = nextQueuedSend(connection.sendQueue);
+        if (!item) break;
+        this.refreshSendQueueStatus(connection);
+        this.recordTransportStatus({
+          sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
+          lastSendPriority: item.priority,
+        });
+        if (item.inline) {
+          await this.waitForSendBuffer(connection.channel);
+          connection.channel.send(item.text);
+          continue;
+        }
+        try {
+          await this.sendFramed(connection, item.text);
+        } catch (error) {
+          this.events.emit('error', {
+            code: 'ctox_webrtc_frame_send_failed',
+            peerId: connection.remotePeerId,
+            priority: item.priority,
+            message: error?.message || String(error),
+          });
+        }
+      }
+    } finally {
+      connection.sendQueue.draining = false;
+      this.refreshSendQueueStatus(connection);
+    }
+  }
+
+  async sendFramed(connection, text) {
+    const channel = connection.channel;
+    const transferId = `${this.options.clientId}|frame|${Date.now()}|${this.frameCounter++}`;
+    const totalFrames = Math.ceil(text.length / MAX_CHUNK_CHARS);
+    const totalBytes = encodedSize(text);
+    if (totalBytes > MAX_TRANSFER_BYTES) {
+      throw new Error(`WebRTC frame transfer exceeds ${MAX_TRANSFER_BYTES} bytes`);
+    }
+    this.recordTransportStatus({ activeTransfers: this.transportStats.activeTransfers + 1 });
+    let lastError = null;
+    for (let attempt = 0; attempt <= MAX_FRAME_RETRIES; attempt += 1) {
+      const startFrame = {
+        ctoxFrame: CTOX_FRAME_PROTOCOL,
+        kind: 'start',
+        transferId,
+        windowSize: FRAME_ACK_WINDOW,
+        attempt,
+        totalFrames,
+        totalBytes,
+      };
+      channel.send(JSON.stringify(startFrame));
+      this.recordSentTransportFrame(startFrame, channel);
+      try {
+        for (let windowStart = 0; windowStart < totalFrames; windowStart += FRAME_ACK_WINDOW) {
+          await this.drainHighPriorityInlineFrames(connection);
+          const windowEnd = Math.min(windowStart + FRAME_ACK_WINDOW, totalFrames) - 1;
+          const ack = this.awaitFrameAck(transferId, connection.remotePeerId, windowEnd);
+          for (let seq = windowStart; seq <= windowEnd; seq += 1) {
+            await this.waitForSendBuffer(channel);
+            const chunkFrame = {
+              ctoxFrame: CTOX_FRAME_PROTOCOL,
+              kind: 'chunk',
+              transferId,
+              attempt,
+              seq,
+              data: text.slice(seq * MAX_CHUNK_CHARS, (seq + 1) * MAX_CHUNK_CHARS),
+            };
+            channel.send(JSON.stringify(chunkFrame));
+            this.recordSentTransportFrame(chunkFrame, channel);
+          }
+          try {
+            await ack;
+          } catch (error) {
+            const resumed = await this.requestFrameResume(connection, transferId, attempt, windowEnd);
+            if (!resumed) throw error;
+          }
+        }
+        this.recordTransportStatus({ activeTransfers: Math.max(0, this.transportStats.activeTransfers - 1) });
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt >= MAX_FRAME_RETRIES) break;
+        this.recordTransportStatus({ retryCount: this.transportStats.retryCount + 1 });
+        this.events.emit('transport-retry', {
+          peerId: connection.remotePeerId,
+          transferId,
+          attempt: attempt + 1,
+        });
+        await delay(Math.min(250 * (attempt + 1), 1000));
+      }
+    }
+    this.recordTransportStatus({ activeTransfers: Math.max(0, this.transportStats.activeTransfers - 1) });
+    throw lastError || new Error(`WebRTC frame transfer failed ${transferId}`);
+  }
+
+  async drainHighPriorityInlineFrames(connection) {
+    const queue = connection.sendQueue;
+    if (!queue) return;
+    while (queue.high.length && queue.high[0]?.inline && connection.channel?.readyState === 'open') {
+      const item = queue.high.shift();
+      this.refreshSendQueueStatus(connection);
+      await this.waitForSendBuffer(connection.channel);
+      connection.channel.send(item.text);
+      this.recordTransportStatus({
+        sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
+        lastSendPriority: item.priority,
+      });
+    }
+  }
+
+  awaitFrameAck(transferId, peerId, ackSeq = null) {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingFrameAcks.delete(frameAckKey(transferId, ackSeq));
+        reject(new Error(`Timed out waiting for WebRTC frame ack ${transferId}:${ackSeq ?? 'final'}`));
+      }, FRAME_ACK_TIMEOUT_MS);
+      this.pendingFrameAcks.set(frameAckKey(transferId, ackSeq), { resolve, reject, timer, peerId, transferId, ackSeq, sentAtMs: Date.now() });
+      this.recordTransportStatus({ pendingAcks: this.pendingFrameAcks.size });
+    });
+  }
+
+  requestFrameResume(connection, transferId, attempt, ackSeq) {
+    const channel = connection.channel;
+    return new Promise((resolve, reject) => {
+      const key = frameAckKey(transferId, ackSeq);
+      const timer = setTimeout(() => {
+        this.pendingFrameAcks.delete(key);
+        this.recordTransportStatus({ pendingAcks: this.pendingFrameAcks.size });
+        resolve(false);
+      }, FRAME_RESUME_TIMEOUT_MS);
+      this.pendingFrameAcks.set(key, {
+        resolve: (payload) => resolve(payload || true),
+        reject,
+        timer,
+        peerId: connection.remotePeerId,
+        transferId,
+        ackSeq,
+        sentAtMs: Date.now(),
+      });
+      const resumeFrame = {
+        ctoxFrame: CTOX_FRAME_PROTOCOL,
+        kind: 'resume',
+        transferId,
+        attempt,
+        ackSeq,
+      };
+      channel.send(JSON.stringify(resumeFrame));
+      this.recordSentTransportFrame(resumeFrame, channel);
+      this.recordTransportStatus({ resumeRequestCount: this.transportStats.resumeRequestCount + 1 });
+    });
+  }
+
+  waitForSendBuffer(channel) {
+    if (Number(channel.bufferedAmount || 0) <= SEND_BUFFER_HIGH_WATER) {
+      return Promise.resolve();
+    }
+    this.recordTransportStatus({
+      backpressureWaitCount: this.transportStats.backpressureWaitCount + 1,
+      lastBufferedAmount: Number(channel.bufferedAmount || 0),
+    });
+    return new Promise((resolve) => {
+      const previousThreshold = channel.bufferedAmountLowThreshold;
+      channel.bufferedAmountLowThreshold = SEND_BUFFER_LOW_WATER;
+      const done = () => {
+        channel.removeEventListener?.('bufferedamountlow', done);
+        channel.bufferedAmountLowThreshold = previousThreshold || 0;
+        resolve();
+      };
+      channel.addEventListener?.('bufferedamountlow', done, { once: true });
+      setTimeout(done, 250);
+    });
+  }
+
+  request(remotePeerId, method, params = [], timeoutMs = 15000) {
+    const id = `${this.options.clientId}|${Date.now()}|${this.requestCounter++}`;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Timed out waiting for WebRTC response ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
+      const sent = this.send(remotePeerId, { id, method, params });
+      if (!sent) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
+      }
+    });
+  }
+
+  handleSignalingMessage(raw) {
+    let message;
+    try {
+      message = JSON.parse(raw);
+    } catch (error) {
+      this.events.emit('error', { code: 'ctox_signaling_invalid_json', message: error.message });
+      return;
+    }
+    if (message.type === 'init' || message.type === 'joined') {
+      const ownPeerId = message.yourPeerId || message.peerId || this.options.clientId;
+      if (ownPeerId && ownPeerId !== this.options.clientId) {
+        this.options.clientId = String(ownPeerId);
+      }
+      for (const descriptor of signalingPeerDescriptors(message)) {
+        const remotePeerId = descriptor.peerId;
+        if (!remotePeerId) continue;
+        this.rememberPeerMetadata(remotePeerId, descriptor);
+        if (message.type === 'joined' && remotePeerId !== this.options.clientId && this.connections.has(remotePeerId)) {
+          this.removeConnection(remotePeerId, 'signaling-peer-rejoined');
+        }
+        if (!this.shouldConnectToRemotePeer(remotePeerId)) {
+          this.removeConnection(remotePeerId, 'signaling-non-native-peer');
+          continue;
+        }
+        this.ensureConnection(remotePeerId);
+      }
+      this.events.emit('joined', message);
+      return;
+    }
+    if (message.type === 'ctoxError') {
+      const error = normalizeSignalingControlPlaneError(message);
+      if (error.name === 'CtoxSignalingControlPlaneError') {
+        this.lastControlPlaneError = error;
+      }
+      this.events.emit('error', error);
+      return;
+    }
+    if (message.type === 'signal' || message.signal || message.data) {
+      const remotePeerId = String(message.senderPeerId || message.sender || message.from || message.peerId || '');
+      if (!remotePeerId) {
+        this.events.emit('error', { code: 'ctox_signaling_missing_sender' });
+        return;
+      }
+      if (!this.shouldConnectToRemotePeer(remotePeerId)) {
+        return;
+      }
+      this.handlePeerSignal(remotePeerId, message.signal || message.data).catch((error) => {
+        const normalized = normalizePeerSignalError(error, remotePeerId);
+        if (normalized?.ignored) return;
+        this.events.emit('error', normalized);
+      });
+    }
+  }
+
+  ensureConnection(remotePeerId) {
+    if (remotePeerId === this.options.clientId) {
+      return this.connections.get(remotePeerId);
+    }
+    if (!this.shouldConnectToRemotePeer(remotePeerId)) {
+      return undefined;
+    }
+    let connection = this.connections.get(remotePeerId);
+    if (connection) {
+      return connection;
+    }
+    const peer = new RTCPeerConnection({ iceServers: this.options.iceServers });
+    connection = { peer, channel: null, remotePeerId, pendingCandidates: [] };
+    this.connections.set(remotePeerId, connection);
+
+    peer.onicecandidate = (event) => {
+      if (event.candidate) {
+        this.sendSignal(remotePeerId, { type: 'candidate', candidate: event.candidate.toJSON() });
+      }
+    };
+    peer.onconnectionstatechange = () => {
+      const state = peer.connectionState;
+      this.events.emit('peer-state', { peerId: remotePeerId, state });
+      if (['closed', 'failed', 'disconnected'].includes(state)) {
+        this.removeConnection(remotePeerId, `peer-${state}`);
+      }
+    };
+    peer.ondatachannel = (event) => this.attachChannel(connection, event.channel);
+
+    if (this.shouldInitiate(remotePeerId)) {
+      this.attachChannel(connection, peer.createDataChannel('ctox-rxdb'));
+      this.createOffer(remotePeerId, peer).catch((error) => {
+        this.events.emit('error', normalizePeerSignalError(error, remotePeerId));
+      });
+    }
+    return connection;
+  }
+
+  shouldInitiate(remotePeerId) {
+    return String(this.options.clientId) < String(remotePeerId);
+  }
+
+  async createOffer(remotePeerId, peer) {
+    if (this.closed || peer.signalingState === 'closed') return;
+    const offer = await peer.createOffer();
+    if (this.closed || peer.signalingState === 'closed') return;
+    await peer.setLocalDescription(offer);
+    this.sendSignal(remotePeerId, { type: offer.type, sdp: offer.sdp });
+  }
+
+  async handlePeerSignal(remotePeerId, signal) {
+    const connection = this.ensureConnection(remotePeerId);
+    if (!connection) return;
+    const peer = connection.peer;
+    const data = typeof signal === 'string' ? JSON.parse(signal) : signal;
+    if (data.type === 'candidate') {
+      await this.addIceCandidateWhenReady(connection, data.candidate);
+      return;
+    }
+    if (data.type === 'offer') {
+      if (peer.signalingState !== 'stable') {
+        if (this.shouldInitiate(remotePeerId)) {
+          return;
+        }
+        await rollbackLocalDescription(peer);
+      }
+      await peer.setRemoteDescription(data);
+      await this.flushPendingIceCandidates(connection);
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      this.sendSignal(remotePeerId, { type: answer.type, sdp: answer.sdp });
+      return;
+    }
+    if (data.type === 'answer') {
+      if (peer.signalingState !== 'have-local-offer') {
+        return;
+      }
+      await peer.setRemoteDescription(data);
+      await this.flushPendingIceCandidates(connection);
+    }
+  }
+
+  async addIceCandidateWhenReady(connection, candidate) {
+    if (!candidate) return;
+    const peer = connection?.peer;
+    if (!peer || peer.signalingState === 'closed') return;
+    if (!peer.remoteDescription) {
+      connection.pendingCandidates.push(candidate);
+      return;
+    }
+    try {
+      await peer.addIceCandidate(candidate);
+    } catch (error) {
+      if (!peer.remoteDescription && isMissingRemoteDescriptionIceError(error)) {
+        connection.pendingCandidates.push(candidate);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  async flushPendingIceCandidates(connection) {
+    const peer = connection?.peer;
+    if (!peer || peer.signalingState === 'closed' || !peer.remoteDescription) return;
+    const candidates = connection.pendingCandidates.splice(0);
+    for (const candidate of candidates) {
+      try {
+        await peer.addIceCandidate(candidate);
+      } catch (error) {
+        this.events.emit('error', normalizePeerSignalError(error, connection.remotePeerId));
+      }
+    }
+  }
+
+  attachChannel(connection, channel) {
+    connection.channel = channel;
+    channel.onopen = () => {
+      this.events.emit('peer-open', { peerId: connection.remotePeerId });
+    };
+    channel.onmessage = (event) => {
+      let payload = event.data;
+      try {
+        payload = JSON.parse(event.data);
+      } catch {
+        // Binary and text payloads are valid for future chunk streaming.
+      }
+      this.handleDataChannelFrame(connection.remotePeerId, payload);
+    };
+    channel.onerror = () => this.events.emit('error', { code: 'ctox_data_channel_error', peerId: connection.remotePeerId });
+    channel.onclose = () => this.removeConnection(connection.remotePeerId, 'channel-close');
+  }
+
+  async handleDataChannelFrame(peerId, payload) {
+    if (this.closed) return;
+    if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
+      await this.handleTransportFrame(peerId, payload);
+      return;
+    }
+    this.events.emit('message', { peerId, payload });
+    if (payload?.id === 'masterChangeStream$') {
+      this.events.emit('master-change', { peerId, result: payload.result });
+      return;
+    }
+    if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
+      const pending = this.pending.get(payload.id);
+      if (!pending) return;
+      this.pending.delete(payload.id);
+      clearTimeout(pending.timer);
+      if (payload.error) {
+        pending.reject(payload.error);
+      } else {
+        pending.resolve(payload.result);
+      }
+      return;
+    }
+    if (payload?.id && payload.method) {
+      try {
+        const result = await this.handleRequest(peerId, payload.method, payload.params || []);
+        this.send(peerId, { id: payload.id, result, error: null });
+      } catch (error) {
+        const normalized = serializeFrameError(error, payload.method);
+        this.events.emit('error', normalized);
+        this.send(peerId, { id: payload.id, result: null, error: normalized });
+      }
+    }
+  }
+
+  async handleTransportFrame(peerId, payload) {
+    this.recordReceivedTransportFrame(payload);
+    if (payload.kind === 'ack') {
+      const transferId = String(payload.transferId || '');
+      const ackSeq = Number(payload.ackSeq ?? -1);
+      for (const [key, pending] of [...this.pendingFrameAcks.entries()]) {
+        if (pending.transferId !== transferId || pending.peerId !== peerId) continue;
+        if (!(payload.final || pending.ackSeq == null || ackSeq >= pending.ackSeq)) continue;
+        this.pendingFrameAcks.delete(key);
+        clearTimeout(pending.timer);
+        this.recordTransportStatus({
+          pendingAcks: this.pendingFrameAcks.size,
+          lastAckLagMs: pending.sentAtMs ? Date.now() - pending.sentAtMs : this.transportStats.lastAckLagMs,
+          resumeAckCount: payload.resume ? this.transportStats.resumeAckCount + 1 : this.transportStats.resumeAckCount,
+        });
+        pending.resolve(payload);
+      }
+      return;
+    }
+
+    if (payload.kind === 'start') {
+      const transferId = String(payload.transferId || '');
+      const totalFrames = Number(payload.totalFrames || 0);
+      const totalBytes = Number(payload.totalBytes || 0);
+      if (!transferId || totalFrames < 1 || totalFrames > 100_000 || totalBytes > MAX_TRANSFER_BYTES) {
+        this.events.emit('error', {
+          code: 'ctox_webrtc_frame_start_invalid',
+          peerId,
+          transferId,
+          totalBytes,
+        });
+        return;
+      }
+      this.incomingFrames.set(transferId, {
+        peerId,
+        totalFrames,
+        totalBytes,
+        received: new Map(),
+        createdAt: Date.now(),
+        attempt: Number(payload.attempt || 0),
+        nextAckSeq: Math.min(FRAME_ACK_WINDOW - 1, totalFrames - 1),
+      });
+      this.completedFrameAcks.delete(transferId);
+      this.cleanupCompletedFrameAcks();
+      this.recordTransportStatus({
+        incomingTransfers: this.incomingFrames.size,
+        completedAckCacheSize: this.completedFrameAcks.size,
+      });
+      return;
+    }
+
+    if (payload.kind === 'resume') {
+      const transferId = String(payload.transferId || '');
+      const completed = this.completedFrameAcks.get(transferId);
+      if (completed && completed.peerId === peerId) {
+        this.send(peerId, {
+          ctoxFrame: CTOX_FRAME_PROTOCOL,
+          kind: 'ack',
+          transferId,
+          ackSeq: completed.ackSeq,
+          receivedFrames: completed.receivedFrames,
+          final: true,
+          resume: true,
+        });
+        return;
+      }
+      const entry = this.incomingFrames.get(transferId);
+      if (entry && entry.peerId === peerId) {
+        const ackSeq = highestContiguousSeq(entry.received, entry.totalFrames);
+        this.send(peerId, {
+          ctoxFrame: CTOX_FRAME_PROTOCOL,
+          kind: 'ack',
+          transferId,
+          ackSeq,
+          receivedFrames: entry.received.size,
+          final: false,
+          resume: true,
+        });
+      }
+      return;
+    }
+
+    if (payload.kind !== 'chunk') return;
+    const transferId = String(payload.transferId || '');
+    const entry = this.incomingFrames.get(transferId);
+    if (!entry || entry.peerId !== peerId) {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_frame_chunk_without_start',
+        peerId,
+        transferId,
+      });
+      return;
+    }
+    const seq = Number(payload.seq);
+    if (!Number.isInteger(seq) || seq < 0 || seq >= entry.totalFrames) {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_frame_chunk_invalid',
+        peerId,
+        transferId,
+        seq,
+      });
+      return;
+    }
+    const attempt = Number(payload.attempt || 0);
+    if (attempt !== Number(entry.attempt || 0)) {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_frame_chunk_stale_attempt',
+        peerId,
+        transferId,
+        seq,
+        attempt,
+        expectedAttempt: entry.attempt,
+      });
+      return;
+    }
+    entry.received.set(seq, String(payload.data || ''));
+    const contiguousSeq = highestContiguousSeq(entry.received, entry.totalFrames);
+    if (entry.received.size !== entry.totalFrames) {
+      if (contiguousSeq >= entry.nextAckSeq && contiguousSeq < entry.totalFrames - 1) {
+        this.send(peerId, {
+          ctoxFrame: CTOX_FRAME_PROTOCOL,
+          kind: 'ack',
+          transferId,
+          ackSeq: contiguousSeq,
+          receivedFrames: entry.received.size,
+          final: false,
+        });
+        entry.nextAckSeq = Math.min(contiguousSeq + FRAME_ACK_WINDOW, entry.totalFrames - 1);
+      }
+      return;
+    }
+
+    this.incomingFrames.delete(transferId);
+    let text = '';
+    for (let index = 0; index < entry.totalFrames; index += 1) {
+      text += entry.received.get(index) || '';
+    }
+    if (entry.totalBytes && encodedSize(text) !== entry.totalBytes) {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_frame_size_mismatch',
+        peerId,
+        transferId,
+        expectedBytes: entry.totalBytes,
+        actualBytes: encodedSize(text),
+      });
+      return;
+    }
+    this.send(peerId, {
+      ctoxFrame: CTOX_FRAME_PROTOCOL,
+      kind: 'ack',
+      transferId,
+      ackSeq: entry.totalFrames - 1,
+      receivedFrames: entry.received.size,
+      final: true,
+    });
+    this.completedFrameAcks.set(transferId, {
+      peerId,
+      ackSeq: entry.totalFrames - 1,
+      receivedFrames: entry.received.size,
+      expiresAt: Date.now() + COMPLETED_FRAME_ACK_TTL_MS,
+    });
+    this.cleanupCompletedFrameAcks();
+    this.recordTransportStatus({
+      incomingTransfers: this.incomingFrames.size,
+      completedAckCacheSize: this.completedFrameAcks.size,
+    });
+    try {
+      await this.handleDataChannelFrame(peerId, JSON.parse(text));
+    } catch (error) {
+      this.events.emit('error', {
+        code: 'ctox_webrtc_frame_decode_failed',
+        peerId,
+        transferId,
+        message: error?.message || String(error),
+      });
+    }
+  }
+
+  async handleRequest(peerId, method, params) {
+    this.recordObservedRequest(peerId, method);
+    if (method === 'token') {
+      return this.options.storageToken;
+    }
+    if (method === 'ctoxProtocol') {
+      return this.protocolPayload(peerId, params);
+    }
+    const handler = this.options.requestHandlers?.[method];
+    if (typeof handler === 'function') {
+      return handler({ peerId, params, peer: this });
+    }
+    return {
+      code: 'ctox_unknown_webrtc_method',
+      phase: 'replication-io',
+      direction: 'unknown',
+      method,
+    };
+  }
+
+  recordObservedRequest(peerId, method) {
+    const key = requestObservationKey(peerId, method);
+    this.observedRequests.set(key, Date.now());
+    const waiters = this.requestWaiters.get(key) || [];
+    this.requestWaiters.delete(key);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    this.events.emit('request-observed', { peerId, method });
+  }
+
+  hasObservedRequest(peerId, method) {
+    return this.observedRequests.has(requestObservationKey(peerId, method));
+  }
+
+  waitForRequest(peerId, method, timeoutMs = 2000) {
+    if (this.hasObservedRequest(peerId, method)) {
+      return Promise.resolve();
+    }
+    const key = requestObservationKey(peerId, method);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const waiters = (this.requestWaiters.get(key) || []).filter((item) => item.resolve !== resolve);
+        if (waiters.length) this.requestWaiters.set(key, waiters);
+        else this.requestWaiters.delete(key);
+        reject(new Error(`Timed out waiting for remote WebRTC request ${method}`));
+      }, timeoutMs);
+      const waiters = this.requestWaiters.get(key) || [];
+      waiters.push({ resolve, reject, timer });
+      this.requestWaiters.set(key, waiters);
+    });
+  }
+
+  async protocolPayload(peerId, params = []) {
+    if (typeof this.options.protocolPayload === 'function') {
+      return this.options.protocolPayload({ peerId, params, peer: this });
+    }
+    return buildProtocolPayload({
+      role: this.options.role,
+      peerSessionId: `${this.options.role}:${this.options.clientId}`,
+      peerGeneration: 1,
+      capabilities: this.options.capabilities,
+    });
+  }
+
+  sendSignal(remotePeerId, signal) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      this.events.emit('error', { code: 'ctox_signaling_socket_not_open', peerId: remotePeerId });
+      return false;
+    }
+    this.socket.send(JSON.stringify({
+      type: 'signal',
+      room: this.options.room,
+      senderPeerId: this.options.clientId,
+      receiverPeerId: remotePeerId,
+      receiver: remotePeerId,
+      target: remotePeerId,
+      data: signal,
+    }));
+    return true;
+  }
+
+  removeConnection(remotePeerId, reason = 'closed') {
+    const peerId = String(remotePeerId || '');
+    const connection = this.connections.get(peerId);
+    if (!connection) return;
+    this.connections.delete(peerId);
+    try { connection.channel?.close?.(); } catch {}
+    try { connection.peer?.close?.(); } catch {}
+    this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
+    this.events.emit('peer-close', { peerId, reason });
+  }
+
+  rememberPeerMetadata(peerId, metadata = {}) {
+    const normalized = normalizePeerMetadata({ ...metadata, peerId });
+    if (!normalized.peerId || normalized.peerId === this.options.clientId) return;
+    this.peerMetadata.set(normalized.peerId, {
+      ...(this.peerMetadata.get(normalized.peerId) || {}),
+      ...normalized,
+    });
+  }
+
+  shouldConnectToRemotePeer(remotePeerId) {
+    const peerId = String(remotePeerId || '');
+    if (!peerId || peerId === this.options.clientId) return false;
+    const metadata = this.peerMetadata.get(peerId);
+    if (!metadata?.role) return true;
+    return metadata.role === 'ctox_instance';
+  }
+
+  rejectPendingForPeer(peerId, error) {
+    for (const [id, pending] of [...this.pending.entries()]) {
+      if (pending.peerId !== peerId) continue;
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    for (const [transferId, pending] of [...this.pendingFrameAcks.entries()]) {
+      if (pending.peerId !== peerId) continue;
+      this.pendingFrameAcks.delete(transferId);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    for (const [transferId, entry] of [...this.incomingFrames.entries()]) {
+      if (entry.peerId === peerId) this.incomingFrames.delete(transferId);
+    }
+  }
+
+  rejectAllPending(error) {
+    for (const [id, pending] of [...this.pending.entries()]) {
+      this.pending.delete(id);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    for (const [key, waiters] of [...this.requestWaiters.entries()]) {
+      this.requestWaiters.delete(key);
+      for (const waiter of waiters) {
+        clearTimeout(waiter.timer);
+        waiter.reject(error);
+      }
+    }
+    for (const [transferId, pending] of [...this.pendingFrameAcks.entries()]) {
+      this.pendingFrameAcks.delete(transferId);
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.incomingFrames.clear();
+    this.completedFrameAcks.clear();
+    for (const connection of this.connections.values()) {
+      if (connection.sendQueue) {
+        connection.sendQueue.high = [];
+        connection.sendQueue.normal = [];
+        connection.sendQueue.low = [];
+      }
+    }
+    this.recordTransportStatus({
+      pendingAcks: 0,
+      incomingTransfers: 0,
+      completedAckCacheSize: 0,
+      priorityQueueDepth: 0,
+      highPriorityQueueDepth: 0,
+      normalPriorityQueueDepth: 0,
+      lowPriorityQueueDepth: 0,
+    });
+  }
+
+  getTransportStatus() {
+    return {
+      ...this.transportStats,
+      pendingAcks: this.pendingFrameAcks.size,
+      incomingTransfers: this.incomingFrames.size,
+      completedAckCacheSize: this.completedFrameAcks.size,
+    };
+  }
+
+  recordSentTransportFrame(payload, channel) {
+    this.recordTransportStatus({
+      sentFrames: this.transportStats.sentFrames + 1,
+      sentBytes: this.transportStats.sentBytes + encodedSize(JSON.stringify(payload)),
+      lastBufferedAmount: Number(channel?.bufferedAmount || 0),
+    });
+  }
+
+  recordReceivedTransportFrame(payload) {
+    this.recordTransportStatus({
+      receivedFrames: this.transportStats.receivedFrames + 1,
+      receivedBytes: this.transportStats.receivedBytes + encodedSize(JSON.stringify(payload)),
+    });
+  }
+
+  recordTransportStatus(patch = {}) {
+    Object.assign(this.transportStats, patch, { updatedAtMs: Date.now() });
+    this.events.emit('transport-status', this.getTransportStatus());
+  }
+
+  refreshSendQueueStatus(connection = null) {
+    let high = 0;
+    let normal = 0;
+    let low = 0;
+    const connections = connection ? [connection] : this.connections.values();
+    for (const entry of connections) {
+      const queue = entry?.sendQueue;
+      if (!queue) continue;
+      high += queue.high.length;
+      normal += queue.normal.length;
+      low += queue.low.length;
+    }
+    this.recordTransportStatus({
+      priorityQueueDepth: high + normal + low,
+      highPriorityQueueDepth: high,
+      normalPriorityQueueDepth: normal,
+      lowPriorityQueueDepth: low,
+    });
+  }
+
+  cleanupCompletedFrameAcks() {
+    const now = Date.now();
+    for (const [transferId, completed] of [...this.completedFrameAcks.entries()]) {
+      if (completed.expiresAt <= now || this.completedFrameAcks.size > 512) {
+        this.completedFrameAcks.delete(transferId);
+      }
+    }
+  }
+}
+
+export function normalizeSignalingControlPlaneError(payload = {}) {
+  if (!payload || typeof payload !== 'object') {
+    return {
+      name: 'Error',
+      code: 'ctox_signaling_unknown_error',
+      message: 'Unknown WebRTC signaling error.',
+    };
+  }
+  const code = typeof payload.code === 'string' && payload.code.trim()
+    ? payload.code.trim()
+    : 'control_plane_rejected';
+  const reason = typeof payload.reason === 'string' && payload.reason.trim()
+    ? payload.reason.trim()
+    : typeof payload.message === 'string' && payload.message.trim()
+      ? payload.message.trim()
+      : code;
+  if (payload.type === 'ctoxError' && payload.scope === 'control-plane') {
+    return {
+      name: 'CtoxSignalingControlPlaneError',
+      type: payload.type,
+      scope: payload.scope,
+      code,
+      phase: 'signaling-control-plane',
+      severity: 'error',
+      retryable: false,
+      message: reason,
+    };
+  }
+  return {
+    ...payload,
+    code,
+    message: reason,
+  };
+}
+
+function createPeerClosedError(peerId, reason) {
+  const error = new Error(`WebRTC peer ${peerId} closed: ${reason}`);
+  error.code = 'ERR_CONNECTION_FAILURE';
+  error.peerId = peerId;
+  error.reason = reason;
+  error.lifecycle = true;
+  return error;
+}
+
+async function rollbackLocalDescription(peer) {
+  if (!peer || peer.signalingState === 'stable' || peer.signalingState === 'closed') return;
+  try {
+    await peer.setLocalDescription({ type: 'rollback' });
+  } catch {
+    // Browsers that cannot rollback will continue with the deterministic
+    // initiator rule above; the next signaling cycle replaces stale peers.
+  }
+}
+
+function normalizePeerSignalError(error, peerId) {
+  const message = String(error?.message || error || '');
+  const name = typeof error?.name === 'string' ? error.name : 'Error';
+  if (
+    message.includes("Called in wrong state: stable")
+    || message.includes('remote description was null')
+    || message.includes('The remote description was null')
+  ) {
+    return {
+      name: 'CtoxWebRtcPeerLifecycleEvent',
+      code: 'peer_signal_stale',
+      phase: 'peer-reconnect',
+      severity: 'recoverable',
+      retryable: true,
+      lifecycle: true,
+      peerId,
+      message: 'Stale WebRTC signaling arrived after peer state changed; reconnect repair will keep the RxDB data channel authoritative.',
+    };
+  }
+  return {
+    name,
+    code: error?.code || (isMissingRemoteDescriptionIceError(error) ? 'ERR_ADD_ICE_CANDIDATE' : 'ERR_SET_REMOTE_DESCRIPTION'),
+    phase: 'peer-signaling',
+    severity: 'error',
+    retryable: true,
+    peerId,
+    message,
+  };
+}
+
+function isMissingRemoteDescriptionIceError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('remote description was null') || message.includes('The remote description was null');
+}
+
+function serializeFrameError(error, method = '') {
+  if (error && typeof error === 'object') {
+    return {
+      name: error.name || 'Error',
+      code: error.code || 'ctox_webrtc_request_failed',
+      method,
+      message: error.message || String(error),
+      retryable: Boolean(error.retryable),
+      lifecycle: Boolean(error.lifecycle),
+    };
+  }
+  return {
+    name: 'Error',
+    code: 'ctox_webrtc_request_failed',
+    method,
+    message: String(error || 'Unknown WebRTC request failure'),
+    retryable: false,
+    lifecycle: false,
+  };
+}
+
+function signalingPeerDescriptors(message = {}) {
+  const descriptors = [];
+  const append = (entry) => {
+    if (typeof entry === 'string') {
+      descriptors.push({ peerId: entry });
+      return;
+    }
+    if (!entry || typeof entry !== 'object') return;
+    const peerId = entry.peerId || entry.id || entry.clientId || entry.client;
+    if (!peerId) return;
+    descriptors.push(normalizePeerMetadata({ ...entry, peerId }));
+  };
+  for (const entry of Array.isArray(message.peers) ? message.peers : []) append(entry);
+  for (const entry of Array.isArray(message.otherPeerIds) ? message.otherPeerIds : []) append(entry);
+  const seen = new Set();
+  return descriptors.filter((descriptor) => {
+    if (!descriptor.peerId || seen.has(descriptor.peerId)) return false;
+    seen.add(descriptor.peerId);
+    return true;
+  });
+}
+
+function normalizePeerMetadata(entry = {}) {
+  const capabilities = Array.isArray(entry.capabilities)
+    ? entry.capabilities.filter((capability) => typeof capability === 'string' && capability.trim()).map((capability) => capability.trim())
+    : [];
+  return {
+    peerId: typeof entry.peerId === 'string' ? entry.peerId : String(entry.peerId || ''),
+    role: typeof entry.role === 'string' ? entry.role.trim() : '',
+    protocol: typeof entry.protocol === 'string' ? entry.protocol.trim() : '',
+    instanceId: typeof entry.instanceId === 'string' ? entry.instanceId.trim() : '',
+    client: typeof entry.client === 'string' ? entry.client.trim() : '',
+    capabilities,
+  };
+}
+
+function buildSignalingUrl(options) {
+  const url = new URL(options.signalingUrl);
+  url.searchParams.set('room', options.room);
+  url.searchParams.set('peerId', options.clientId);
+  url.searchParams.set('client', options.clientId);
+  url.searchParams.set('role', options.role);
+  url.searchParams.set('protocol', CTOX_RXDB_PROTOCOL);
+  if (options.instanceId) url.searchParams.set('instance_id', options.instanceId);
+  if (options.roomPassword) url.searchParams.set('room_password', options.roomPassword);
+  if (options.token) url.searchParams.set('token', options.token);
+  if (options.tokenIssuedAt) url.searchParams.set('token_iat', String(options.tokenIssuedAt));
+  if (options.tokenExpiresAt) url.searchParams.set('token_exp', String(options.tokenExpiresAt));
+  for (const capability of options.capabilities || []) {
+    url.searchParams.append('cap', capability);
+  }
+  return url.toString();
+}
+
+function redactUrl(value) {
+  const url = new URL(value);
+  for (const key of ['room_password', 'token']) {
+    if (url.searchParams.has(key)) {
+      url.searchParams.set(key, '[redacted]');
+    }
+  }
+  return url.toString();
+}
+
+function randomId(prefix) {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const suffix = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${prefix}-${suffix}`;
+}
+
+function requestObservationKey(peerId, method) {
+  return `${peerId || ''}|${method || ''}`;
+}
+
+function encodedSize(value) {
+  return new TextEncoder().encode(String(value || '')).byteLength;
+}
+
+function highestContiguousSeq(received, totalFrames) {
+  let seq = -1;
+  for (let index = 0; index < totalFrames; index += 1) {
+    if (!received.has(index)) break;
+    seq = index;
+  }
+  return seq;
+}
+
+function createSendQueue() {
+  return {
+    high: [],
+    normal: [],
+    low: [],
+    draining: false,
+    nextSequence: 0,
+  };
+}
+
+function nextQueuedSend(queue) {
+  for (const priority of SEND_PRIORITIES) {
+    if (queue[priority].length) {
+      return queue[priority].shift();
+    }
+  }
+  return null;
+}
+
+function classifySendPriority(payload = {}, text = '') {
+  if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
+    return ['ack', 'resume', 'start'].includes(payload.kind) ? 'high' : 'normal';
+  }
+  const method = String(payload?.method || '');
+  if (['ctoxProtocol', 'token'].includes(method)) return 'high';
+  if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
+  if (method === 'masterChangesSince') return 'normal';
+  if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
+    return 'high';
+  }
+  return 'normal';
+}
+
+function frameAckKey(transferId, ackSeq) {
+  return `${transferId}|${ackSeq == null ? 'final' : ackSeq}`;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}

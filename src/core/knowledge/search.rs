@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // `ctox knowledge search --query "<text>"` — union search across all four
 // durable-knowledge forms in CTOX.

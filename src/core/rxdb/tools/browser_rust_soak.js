@@ -8,21 +8,27 @@
  *
  * Examples:
  *   node src/core/rxdb/tools/browser_rust_soak.js
- *   SOAK_CYCLES=12 SOAK_MODES=browser-to-rust,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,command-burst-browser-to-rust,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,checkpoint-error-browser-status,schema-error-browser-status node src/core/rxdb/tools/browser_rust_soak.js
+ *   SOAK_CYCLES=12 SOAK_MODES=browser-to-rust,workspace-agent-artifacts-rust-to-browser,workspace-agent-artifacts-stress-rust-to-browser,workspace-agent-artifacts-churn-rust-to-browser,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,migration-version-browser-to-rust,command-burst-browser-to-rust,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,peer-lifecycle-browser-status,checkpoint-error-browser-status,schema-error-browser-status,replication-error-browser-status,replication-push-contract-error-browser-status,file-chunk-metadata-error-browser-status,file-chunk-tombstone-error-browser-status,file-chunk-stale-generation-error-browser-status node src/core/rxdb/tools/browser_rust_soak.js
  *   SOAK_FAIL_ON_RETRY=1 SOAK_RESULT_PATH=/tmp/rxdb-soak.json node src/core/rxdb/tools/browser_rust_soak.js
  */
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawnSync } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 
 const root = path.resolve(__dirname, '../../../..');
 const matrixPath = path.join(__dirname, 'browser_rust_smoke_matrix.js');
 const defaultSoakModes = [
   'browser-to-rust',
   'command-browser-to-rust',
+  'migration-version-browser-to-rust',
   'command-burst-browser-to-rust',
+  'command-reload-browser-to-rust',
   'workspace-rust-to-browser',
+  'workspace-agent-artifacts-rust-to-browser',
+  'workspace-agent-artifacts-stress-rust-to-browser',
+  'workspace-agent-artifacts-churn-rust-to-browser',
+  'workspace-agent-artifacts-background-rust-to-browser',
   'workspace-update-rust-to-browser',
   'workspace-large-materialize-rust-to-browser',
   'workspace-large-file-viewer-rust-to-browser',
@@ -34,8 +40,15 @@ const defaultSoakModes = [
   'network-flap-browser-to-rust',
   'command-midflight-restart-browser-to-rust',
   'signaling-error-browser-status',
+  'peer-lifecycle-browser-status',
   'checkpoint-error-browser-status',
+  'rxdb-protocol-error-browser-status',
   'schema-error-browser-status',
+  'replication-error-browser-status',
+  'replication-push-contract-error-browser-status',
+  'file-chunk-metadata-error-browser-status',
+  'file-chunk-tombstone-error-browser-status',
+  'file-chunk-stale-generation-error-browser-status',
 ];
 const cyclesInput = process.env.SOAK_CYCLES || '3';
 const minCyclesInput = process.env.SOAK_MIN_CYCLES || '';
@@ -60,6 +73,7 @@ const runSummary = {
   ok: false,
   cycleResults: [],
 };
+let runnerLock = null;
 const cycles = parsePositiveIntegerConfig('SOAK_CYCLES', cyclesInput, { max: 100 });
 const minCycles = minCyclesInput
   ? parsePositiveIntegerConfig('SOAK_MIN_CYCLES', minCyclesInput, { max: 100 })
@@ -88,55 +102,202 @@ if (signalingPortBase + maxPortOffset > 65535) {
   failConfiguration(`SIGNALING_PORT plus soak port range exceeds 65535: ${signalingPortBase}+${maxPortOffset}`);
 }
 
-const startedAt = Date.now();
-for (let cycle = 0; cycle < cycles; cycle++) {
-  const matrixResultPath = path.join(os.tmpdir(), `ctox-rxdb-smoke-matrix-${process.pid}-${cycle}.json`);
-  const env = {
-    ...process.env,
-    SMOKE_PAGE_PATH: pagePath,
-    SMOKE_MODES: modes,
-    SMOKE_REQUIRE_EVIDENCE: requiredModeList.length ? '1' : process.env.SMOKE_REQUIRE_EVIDENCE,
-    BUSINESS_PORT: String(businessPortBase + cycle * portStride),
-    SIGNALING_PORT: String(signalingPortBase + cycle * portStride),
-    SMOKE_MATRIX_RESULT_PATH: matrixResultPath,
-  };
-  console.log(`\n=== rxdb soak cycle ${cycle + 1}/${cycles}: ${modes} ===`);
-  const result = spawnSync(process.execPath, [matrixPath], {
-    cwd: root,
-    env,
-    stdio: 'inherit',
-  });
-  const cycleResult = readJsonFile(matrixResultPath) || {
-    ok: false,
-    modes: [],
-    error: 'matrix result was not written',
-  };
-  cycleResult.cycle = cycle + 1;
-  runSummary.cycleResults.push(cycleResult);
-  if (result.signal) {
-    console.error(`rxdb soak cycle ${cycle + 1} terminated by signal ${result.signal}`);
+runnerLock = acquireRunnerLock('soak');
+let activeMatrixChild = null;
+let terminationSignal = null;
+let forceExitTimer = null;
+
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, () => handleTerminationSignal(signal));
+}
+
+main().catch((error) => {
+  runSummary.error = error?.stack || String(error);
+  console.error(runSummary.error);
+  writeRunSummary(false);
+  process.exit(1);
+});
+
+async function main() {
+  const startedAt = Date.now();
+  for (let cycle = 0; cycle < cycles; cycle++) {
+    const matrixResultPath = path.join(os.tmpdir(), `ctox-rxdb-smoke-matrix-${process.pid}-${cycle}.json`);
+    const env = {
+      ...process.env,
+      SMOKE_PAGE_PATH: pagePath,
+      SMOKE_MODES: modes,
+      SMOKE_REQUIRE_EVIDENCE: requiredModeList.length ? '1' : process.env.SMOKE_REQUIRE_EVIDENCE,
+      BUSINESS_PORT: String(businessPortBase + cycle * portStride),
+      SIGNALING_PORT: String(signalingPortBase + cycle * portStride),
+      SMOKE_MATRIX_RESULT_PATH: matrixResultPath,
+    };
+    console.log(`\n=== rxdb soak cycle ${cycle + 1}/${cycles}: ${modes} ===`);
+    console.log(`matrix_result_path=${matrixResultPath}`);
+    const result = await runMatrixCycle(env);
+    const cycleResult = readJsonFile(matrixResultPath) || {
+      ok: false,
+      modes: [],
+      error: 'matrix result was not written',
+    };
+    cycleResult.matrixResultPath = matrixResultPath;
+    if (result.status !== 0 || result.signal) {
+      cycleResult.process = {
+        status: result.status,
+        signal: result.signal,
+        stdoutTail: 'streamed to parent stdout',
+        stderrTail: 'streamed to parent stderr',
+      };
+    }
+    cycleResult.cycle = cycle + 1;
+    runSummary.cycleResults.push(cycleResult);
+    if (result.signal || terminationSignal) {
+      const signal = result.signal || terminationSignal;
+      runSummary.terminationSignal = signal;
+      console.error(`rxdb soak cycle ${cycle + 1} terminated by signal ${signal}`);
+      writeRunSummary(false);
+      process.exit(1);
+    }
+    if (result.status !== 0) {
+      console.error(`rxdb soak cycle ${cycle + 1} failed with status ${result.status}`);
+      writeRunSummary(false);
+      process.exit(result.status || 1);
+    }
+  }
+
+  const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+  const retryCount = runSummary.cycleResults
+    .flatMap((cycle) => cycle.modes || [])
+    .reduce((total, mode) => total + Math.max(0, (mode.attempts?.length || 1) - 1), 0);
+  runSummary.retryCount = retryCount;
+  if (failOnRetry && retryCount > 0) {
+    console.error(`\nrxdb soak had ${retryCount} retried mode attempt(s); failing because SOAK_FAIL_ON_RETRY=1`);
     writeRunSummary(false);
     process.exit(1);
   }
-  if (result.status !== 0) {
-    console.error(`rxdb soak cycle ${cycle + 1} failed with status ${result.status}`);
+  writeRunSummary(true);
+  console.log(`\nrxdb soak OK: cycles=${cycles} modes=${modes} retries=${retryCount} elapsed=${elapsedSeconds}s`);
+}
+
+function runMatrixCycle(env) {
+  activeMatrixChild = spawn(process.execPath, [matrixPath], {
+    cwd: root,
+    env,
+    detached: true,
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+  return new Promise((resolve, reject) => {
+    activeMatrixChild.once('error', reject);
+    activeMatrixChild.once('close', (status, signal) => {
+      if (forceExitTimer) {
+        clearTimeout(forceExitTimer);
+        forceExitTimer = null;
+      }
+      activeMatrixChild = null;
+      resolve({ status, signal });
+    });
+  });
+}
+
+function handleTerminationSignal(signal) {
+  terminationSignal = signal;
+  runSummary.terminationSignal = signal;
+  console.error(`rxdb soak received ${signal}; forwarding to active matrix child`);
+  if (!activeMatrixChild?.pid) {
+    terminateKnownSmokeProcesses(signal);
     writeRunSummary(false);
-    process.exit(result.status || 1);
+    process.exit(1);
+  }
+  terminateProcessTree(activeMatrixChild.pid, signal);
+  terminateKnownSmokeProcesses(signal);
+  forceExitTimer = setTimeout(() => {
+    if (activeMatrixChild?.pid) {
+      terminateProcessTree(activeMatrixChild.pid, 'SIGKILL');
+    }
+    terminateKnownSmokeProcesses('SIGKILL');
+    writeRunSummary(false);
+    process.exit(1);
+  }, 30_000);
+  forceExitTimer.unref();
+}
+
+function terminateProcessTree(pid, signal) {
+  const descendants = collectDescendantPids(pid);
+  try {
+    process.kill(-pid, signal);
+  } catch {}
+  for (const childPid of descendants.reverse()) {
+    try {
+      process.kill(childPid, signal);
+    } catch {}
+  }
+  try {
+    process.kill(pid, signal);
+  } catch {}
+}
+
+function collectDescendantPids(rootPid) {
+  let rows = [];
+  try {
+    rows = execFileSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' })
+      .split(/\r?\n/)
+      .map((line) => line.trim().split(/\s+/).map(Number))
+      .filter(([pid, ppid]) => Number.isFinite(pid) && Number.isFinite(ppid));
+  } catch {
+    return [];
+  }
+  const childrenByParent = new Map();
+  for (const [pid, ppid] of rows) {
+    if (!childrenByParent.has(ppid)) childrenByParent.set(ppid, []);
+    childrenByParent.get(ppid).push(pid);
+  }
+  const result = [];
+  const stack = [...(childrenByParent.get(rootPid) || [])];
+  while (stack.length) {
+    const pid = stack.pop();
+    result.push(pid);
+    stack.push(...(childrenByParent.get(pid) || []));
+  }
+  return result;
+}
+
+function terminateKnownSmokeProcesses(signal) {
+  const ownPid = process.pid;
+  for (const pid of findKnownSmokePids()) {
+    if (pid === ownPid) continue;
+    try {
+      process.kill(pid, signal);
+    } catch {}
   }
 }
 
-const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
-const retryCount = runSummary.cycleResults
-  .flatMap((cycle) => cycle.modes || [])
-  .reduce((total, mode) => total + Math.max(0, (mode.attempts?.length || 1) - 1), 0);
-runSummary.retryCount = retryCount;
-if (failOnRetry && retryCount > 0) {
-  console.error(`\nrxdb soak had ${retryCount} retried mode attempt(s); failing because SOAK_FAIL_ON_RETRY=1`);
-  writeRunSummary(false);
-  process.exit(1);
+function findKnownSmokePids() {
+  let lines = [];
+  try {
+    lines = execFileSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' }).split(/\r?\n/);
+  } catch {
+    return [];
+  }
+  const rootFragment = root.replace(/\\/g, '/');
+  return lines
+    .map((line) => {
+      const match = line.trim().match(/^(\d+)\s+(.*)$/);
+      return match ? { pid: Number(match[1]), command: match[2] } : null;
+    })
+    .filter(Boolean)
+    .filter(({ command }) => {
+      const normalized = command.replace(/\\/g, '/');
+      if (normalized.includes('src/core/rxdb/tools/browser_rust_smoke_matrix.js')) return true;
+      if (normalized.includes('src/core/rxdb/tools/browser_rust_smoke.js')) return true;
+      if (normalized.includes('src/core/rxdb/tools/local_signaling_server.js')) return true;
+      if (normalized.includes('runtime/build/core-rxdb-integration-target/debug/ctox')) return true;
+      if (normalized.includes('ctox-rxdb-smoke') && normalized.includes('Google Chrome for Testing')) return true;
+      if (normalized.includes('ctox-rxdb-smoke') && normalized.includes('chrome_crashpad_handler')) return true;
+      return false;
+    })
+    .filter(({ command }) => command.replace(/\\/g, '/').includes(rootFragment) || command.includes('ctox-rxdb-smoke'))
+    .map(({ pid }) => pid)
+    .filter((pid) => Number.isFinite(pid));
 }
-writeRunSummary(true);
-console.log(`\nrxdb soak OK: cycles=${cycles} modes=${modes} retries=${retryCount} elapsed=${elapsedSeconds}s`);
 
 function readJsonFile(file) {
   try {
@@ -146,6 +307,13 @@ function readJsonFile(file) {
   }
 }
 
+function tailLines(text, maxLines) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .slice(-maxLines)
+    .join('\n');
+}
+
 function parseModeList(value) {
   return String(value || '')
     .split(/[,\s]+/)
@@ -153,7 +321,49 @@ function parseModeList(value) {
     .filter(Boolean);
 }
 
+function acquireRunnerLock(owner) {
+  if (process.env.CTOX_RXDB_RUNNER_LOCK === '0') {
+    return { release() {} };
+  }
+  const lockDir = process.env.CTOX_RXDB_RUNNER_LOCK_DIR || path.join(os.tmpdir(), 'ctox-rxdb-runner.lock');
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(path.join(lockDir, 'owner.json'), `${JSON.stringify({
+        owner,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+        cwd: process.cwd(),
+      }, null, 2)}\n`);
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch {}
+      };
+      process.once('exit', release);
+      return { release };
+    } catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      const ownerPath = path.join(lockDir, 'owner.json');
+      let current = null;
+      try { current = JSON.parse(fs.readFileSync(ownerPath, 'utf8')); } catch {}
+      const pid = Number(current?.pid || 0);
+      if (pid > 0) {
+        try {
+          process.kill(pid, 0);
+          failConfiguration(`another CTOX RxDB runner is active: pid=${pid} owner=${current?.owner || 'unknown'} lock=${lockDir}`);
+        } catch (killError) {
+          if (killError?.code !== 'ESRCH') throw killError;
+        }
+      }
+      try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch {}
+    }
+  }
+}
+
 function failConfiguration(message) {
+  runnerLock?.release?.();
   runSummary.configurationError = message;
   console.error(`rxdb soak configuration error: ${message}`);
   writeRunSummary(false);

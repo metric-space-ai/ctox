@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Autonomy level — a single persistent operator preference that
 // controls how eagerly CTOX asks the owner for approval before acting.

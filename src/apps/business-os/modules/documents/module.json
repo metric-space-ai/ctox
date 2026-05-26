@@ -11,6 +11,7 @@
     "document_runbooks"
   ],
   "layout": {
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-documents\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-documents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z\" fill=\"url(#grad-documents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 2v4a2 2 0 0 0 2 2h4\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"16\" x2=\"16\" y2=\"16\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"8\" x2=\"10\" y2=\"8\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line></svg>",
     "left": "document navigation and explorer",
     "center": "DOCX viewer/editor workbench",
     "right": "document runbooks and automation prompts",
@@ -23,7 +24,7 @@
   "category": "Knowledge",
   "version": "v1",
   "developer": "CTOX",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "tags": [
     "documents",
     "docx",
@@ -34,8 +35,10 @@
     "summary": "DOCX and Markdown document workspace with document versions, blob chunks, and automation runbooks.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/documents",
-    "installable": true,
+    "installable": false,
     "editable_after_install": true,
-    "distribution": "ctox-repo-module"
-  }
+    "distribution": "starter-module"
+  },
+  "install_scope": "starter",
+  "default_installed": true
 }

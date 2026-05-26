@@ -35,12 +35,18 @@ use serde_json::Value;
 use crate::runtime_config;
 
 use super::{
-    Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx, SourceError, SourceHit,
-    SourceModule, SourceReadResult, Tier,
+    BrowserSourceRecipe, Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx,
+    SourceError, SourceHit, SourceModule, SourceReadResult, Tier,
 };
 
 const API_BASE: &str = "https://api.xing.com/v1";
 const SECRET_NAME: &str = "XING_API_TOKEN";
+const LOGIN_URL: &str = "https://login.xing.com/";
+const VERIFY_SELECTOR: &str =
+    "a[href*=\"/profile/\"], [data-testid=\"user-menu\"], nav";
+const CREDENTIAL_SELECTOR: &str =
+    "input[name=\"password\"], input#password, input[type=\"password\"]";
+const CAPTURE_SCRIPT: &str = "xing.profile_capture.v1";
 const MAX_HITS: usize = 8;
 const TIMEOUT_MS: u64 = 12_000;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
@@ -74,6 +80,23 @@ impl SourceModule for Xing {
 
     fn requires_credential(&self) -> Option<&'static str> {
         Some(SECRET_NAME)
+    }
+
+    fn browser_recipe(&self) -> Option<BrowserSourceRecipe> {
+        Some(BrowserSourceRecipe {
+            source_id: self.id(),
+            login_url: LOGIN_URL.to_string(),
+            allowed_domains: vec![
+                "xing.com".to_string(),
+                "www.xing.com".to_string(),
+                "login.xing.com".to_string(),
+                "api.xing.com".to_string(),
+            ],
+            required_secret_name: Some(SECRET_NAME),
+            verify_selector: Some(VERIFY_SELECTOR),
+            credential_selector: Some(CREDENTIAL_SELECTOR),
+            capture_script: Some(CAPTURE_SCRIPT),
+        })
     }
 
     fn shape_query(&self, _query: &str, _ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {

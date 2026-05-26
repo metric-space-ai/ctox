@@ -16,6 +16,16 @@ const requiredEvidence = [
   'src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json',
   'src/core/rxdb/js-fork/source/package.json',
   'src/core/rxdb/js-fork/source/package-lock.json',
+  'src/apps/business-os/rxdb/manifest.json',
+  'src/apps/business-os/rxdb/README.md',
+  'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs',
+  'src/apps/business-os/rxdb/src/index.mjs',
+  'src/apps/business-os/rxdb/src/replication-webrtc.mjs',
+  'src/apps/business-os/rxdb/src/webrtc-native.mjs',
+  'src/apps/business-os/rxdb/src/storage-indexeddb.mjs',
+  'src/apps/business-os/rxdb/tests/no-package-manager-import-smoke.mjs',
+  'src/apps/business-os/rxdb/tests/query-api-smoke.mjs',
+  'src/apps/business-os/rxdb/tests/storage-index-smoke.mjs',
 ];
 
 const unixReleaseEvidence = [
@@ -25,6 +35,11 @@ const unixReleaseEvidence = [
   'src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json bundle/rxdb-js/',
   'src/core/rxdb/js-fork/source/package.json bundle/rxdb-js/source/',
   'src/core/rxdb/js-fork/source/package-lock.json bundle/rxdb-js/source/',
+  'src/apps/business-os/rxdb/manifest.json bundle/rxdb-js/app-local/',
+  'src/apps/business-os/rxdb/README.md bundle/rxdb-js/app-local/',
+  'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs bundle/rxdb-js/app-local/dist/',
+  'src/apps/business-os/rxdb/src/*.mjs bundle/rxdb-js/app-local/src/',
+  'src/apps/business-os/rxdb/tests/*.mjs bundle/rxdb-js/app-local/tests/',
 ];
 
 const windowsReleaseEvidence = [
@@ -34,6 +49,11 @@ const windowsReleaseEvidence = [
   '"src\\core\\rxdb\\js-fork\\ctox-rxdb-js.manifest.json" -Destination "bundle\\rxdb-js\\"',
   '"src\\core\\rxdb\\js-fork\\source\\package.json" -Destination "bundle\\rxdb-js\\source\\"',
   '"src\\core\\rxdb\\js-fork\\source\\package-lock.json" -Destination "bundle\\rxdb-js\\source\\"',
+  '"src\\apps\\business-os\\rxdb\\manifest.json" -Destination "bundle\\rxdb-js\\app-local\\"',
+  '"src\\apps\\business-os\\rxdb\\README.md" -Destination "bundle\\rxdb-js\\app-local\\"',
+  '"src\\apps\\business-os\\rxdb\\dist\\ctox-rxdb-js.mjs" -Destination "bundle\\rxdb-js\\app-local\\dist\\"',
+  '"src\\apps\\business-os\\rxdb\\src\\*.mjs" -Destination "bundle\\rxdb-js\\app-local\\src\\"',
+  '"src\\apps\\business-os\\rxdb\\tests\\*.mjs" -Destination "bundle\\rxdb-js\\app-local\\tests\\"',
 ];
 
 const ci = read(ciPath);
@@ -50,7 +70,13 @@ if (ci) {
 
 if (release) {
   assertContains(releasePath, release, 'Unix rxdb-js evidence directory', 'mkdir -p bundle/rxdb-js/source');
+  assertContains(releasePath, release, 'Unix app-local rxdb-js evidence directory', 'mkdir -p bundle/rxdb-js/app-local/dist');
+  assertContains(releasePath, release, 'Unix app-local rxdb-js source directory', 'mkdir -p bundle/rxdb-js/app-local/src');
+  assertContains(releasePath, release, 'Unix app-local rxdb-js test directory', 'mkdir -p bundle/rxdb-js/app-local/tests');
   assertContains(releasePath, release, 'Windows rxdb-js evidence directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\source');
+  assertContains(releasePath, release, 'Windows app-local rxdb-js evidence directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\dist');
+  assertContains(releasePath, release, 'Windows app-local rxdb-js source directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\src');
+  assertContains(releasePath, release, 'Windows app-local rxdb-js test directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\tests');
   for (const item of unixReleaseEvidence) {
     assertContains(releasePath, release, `Unix release evidence ${item}`, item);
   }

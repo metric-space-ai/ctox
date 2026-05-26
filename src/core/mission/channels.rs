@@ -7916,6 +7916,20 @@ pub(crate) fn refresh_thread(conn: &mut Connection, thread_key: &str) -> Result<
     Ok(())
 }
 
+pub(crate) fn upsert_communication_account(
+    conn: &mut Connection,
+    account_key: &str,
+    channel: &str,
+    address: &str,
+    provider: &str,
+    profile_json: Value,
+) -> Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    ensure_account_tx(&tx, account_key, channel, address, provider, profile_json)?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub(crate) fn record_communication_sync_run(
     conn: &mut Connection,
     run: CommunicationSyncRun<'_>,

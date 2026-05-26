@@ -23,6 +23,7 @@ const esbuild = await loadEsbuild();
 await buildDocumentFormat();
 await buildSuperdoc();
 await buildHyperFormula();
+await buildLexical();
 
 async function buildDocumentFormat() {
   const entry = path.join(businessOsRoot, 'modules', 'documents', 'document-format', 'src', 'index.ts');
@@ -84,6 +85,26 @@ async function buildHyperFormula() {
     sourcemap: false,
     minify: false,
     logLevel: 'info',
+  });
+  await report(outfile);
+}
+
+async function buildLexical() {
+  const entry = path.join(businessOsRoot, 'vendor', 'lexical-src', 'index.js');
+  const outfile = path.join(vendorRoot, 'lexical.mjs');
+  await esbuild.build({
+    entryPoints: [entry],
+    outfile,
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    target: 'es2022',
+    sourcemap: false,
+    minify: false,
+    logLevel: 'info',
+    mainFields: ['browser', 'module', 'main'],
+    conditions: ['browser', 'import', 'default'],
+    nodePaths: [archivedGeneratedNodeModules],
   });
   await report(outfile);
 }

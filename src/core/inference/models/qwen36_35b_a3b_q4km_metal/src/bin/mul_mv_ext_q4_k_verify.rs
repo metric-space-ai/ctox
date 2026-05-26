@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Verifier + N=8..32 sweep bench for the row-batched matvec ext family.
 //!

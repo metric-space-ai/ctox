@@ -33,8 +33,8 @@ use anyhow::anyhow;
 use serde_json::Value;
 
 use super::{
-    Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx, SourceError, SourceHit,
-    SourceModule, SourceReadResult, Tier,
+    BrowserSourceRecipe, Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx,
+    SourceError, SourceHit, SourceModule, SourceReadResult, Tier,
 };
 use crate::runtime_config;
 
@@ -42,6 +42,12 @@ const API_BASE: &str = "https://plus.dnb.com/v1";
 const TOKEN_ENDPOINT: &str = "https://plus.dnb.com/v3/token";
 const PROFILE_BASE: &str = "https://plus.dnb.com/data/duns";
 const SECRET_NAME: &str = "DNB_DIRECT_API_KEY";
+const LOGIN_URL: &str = "https://app.dnbhoovers.com/login";
+const VERIFY_SELECTOR: &str =
+    "[data-testid=\"global-search\"], input[type=\"search\"], nav";
+const CREDENTIAL_SELECTOR: &str =
+    "input[name=\"password\"], input#password, input[type=\"password\"]";
+const CAPTURE_SCRIPT: &str = "dnbhoovers.company_capture.v1";
 const MAX_HITS: usize = 8;
 const TIMEOUT_MS: u64 = 12_000;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
@@ -81,6 +87,22 @@ impl SourceModule for DnbHoovers {
 
     fn requires_credential(&self) -> Option<&'static str> {
         Some(SECRET_NAME)
+    }
+
+    fn browser_recipe(&self) -> Option<BrowserSourceRecipe> {
+        Some(BrowserSourceRecipe {
+            source_id: self.id(),
+            login_url: LOGIN_URL.to_string(),
+            allowed_domains: vec![
+                "dnbhoovers.com".to_string(),
+                "app.dnbhoovers.com".to_string(),
+                "plus.dnb.com".to_string(),
+            ],
+            required_secret_name: Some(SECRET_NAME),
+            verify_selector: Some(VERIFY_SELECTOR),
+            credential_selector: Some(CREDENTIAL_SELECTOR),
+            capture_script: Some(CAPTURE_SCRIPT),
+        })
     }
 
     fn shape_query(&self, _query: &str, _ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {

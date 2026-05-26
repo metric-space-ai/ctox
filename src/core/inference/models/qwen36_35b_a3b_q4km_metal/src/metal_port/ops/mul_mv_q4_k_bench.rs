@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Isolated microbench helper for `kernel_mul_mv_q4_K_f32`. Separate
 //! from the verifier dispatch path because here we **pre-allocate**

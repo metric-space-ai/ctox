@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Tier 2.2 — Causal / Conditional Mining on Violation Predecessors.
 //

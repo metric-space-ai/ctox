@@ -106,9 +106,14 @@ function roomKey(peer, roomId) {
 
 function notifyRoom(roomId) {
   const room = rooms.get(roomId) || new Set();
-  const otherPeerIds = Array.from(room);
-  if (debug) console.error(`[signaling] notify room=${redactRoom(roomId)} peers=${otherPeerIds.length}`);
-  for (const peerId of room) peers.get(peerId)?.send({ type: 'joined', otherPeerIds });
+  const peerIds = Array.from(room);
+  const peerDescriptors = peerIds
+    .map((peerId) => peerSummary(peers.get(peerId)))
+    .filter(Boolean);
+  if (debug) console.error(`[signaling] notify room=${redactRoom(roomId)} peers=${peerIds.length}`);
+  for (const peerId of room) {
+    peers.get(peerId)?.send({ type: 'joined', otherPeerIds: peerIds, peers: peerDescriptors });
+  }
 }
 
 function redactRoom(roomId) {
@@ -175,6 +180,18 @@ function validateControlPlaneJoin(peer, roomId) {
   return '';
 }
 
+function peerSummary(peer) {
+  if (!peer) return null;
+  return {
+    peerId: peer.id,
+    role: peer.role || 'unknown',
+    protocol: peer.protocol || '',
+    instanceId: peer.instanceId || '',
+    client: peer.client || '',
+    capabilities: Array.from(peer.capabilities || []),
+  };
+}
+
 const server = net.createServer((socket) => {
   let handshake = false;
   let buffer = Buffer.alloc(0);
@@ -225,7 +242,7 @@ const server = net.createServer((socket) => {
       if (debug) {
         console.error(`[signaling] open peer=${peer.id} role=${peer.role} instance=${peer.instanceId || '-'} protocol=${peer.protocol || '-'} token=${peer.signalingToken ? 'yes' : 'no'} caps=${Array.from(peer.capabilities || []).join(',') || '-'}`);
       }
-      send({ type: 'init', yourPeerId: peer.id });
+      send({ type: 'init', yourPeerId: peer.id, peer: peerSummary(peer) });
     }
 
     while (true) {

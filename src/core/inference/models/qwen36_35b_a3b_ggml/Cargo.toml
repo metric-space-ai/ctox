@@ -3,7 +3,7 @@ name = "ctox-qwen36-35b-a3b-ggml"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Qwen3.6-35B-A3B ggml/CUDA Unix-socket backend for CTOX local Responses IPC."
 
 [workspace]

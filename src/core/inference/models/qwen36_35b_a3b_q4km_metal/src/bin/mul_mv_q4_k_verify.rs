@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Per-op verifier for the `kernel_mul_mv_q4_K_f32` MSL port.
 //!

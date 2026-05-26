@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Hardware-fact probe for the Apple-Silicon host this engine targets.
 //!

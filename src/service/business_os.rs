@@ -23,6 +23,8 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
             Ok(())
         }
         Some("install") => install_business_os(root, &args[1..]),
+        Some("peer") => handle_business_os_peer_command(root, &args[1..]),
+        Some("rxdb") => handle_business_os_rxdb_command(root, &args[1..]),
         Some("help") | Some("--help") | Some("-h") => {
             print_business_os_help();
             Ok(())
@@ -104,6 +106,60 @@ fn install_business_os(root: &Path, args: &[String]) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn handle_business_os_peer_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        None | Some("status") => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::business_os::store::sync_config(root)?)?
+            );
+            Ok(())
+        }
+        Some("rotate") => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(
+                    &crate::business_os::store::rotate_sync_room_password(root)?
+                )?
+            );
+            Ok(())
+        }
+        Some("ensure") => {
+            crate::business_os::ensure_native_peer(root)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::business_os::store::sync_config(root)?)?
+            );
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os peer command `{other}`\n\n{}", business_os_usage()),
+    }
+}
+
+fn handle_business_os_rxdb_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("repair-optional-drift") => {
+            let collection = flag_value(args, "--collection")
+                .or_else(|| args.get(1).filter(|value| !value.starts_with("--")).map(String::as_str))
+                .context(
+                    "usage: ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]",
+                )?;
+            let dry_run = args.iter().any(|arg| arg == "--dry-run");
+            let force = args.iter().any(|arg| arg == "--force");
+            let result = crate::business_os::repair_optional_rxdb_collection_schema_drift(
+                root, collection, dry_run, force,
+            )?;
+            println!("{}", serde_json::to_string_pretty(&result)?);
+            Ok(())
+        }
+        Some("help") | Some("--help") | Some("-h") | None => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os rxdb command `{other}`\n\n{}", business_os_usage()),
+    }
+}
+
 fn print_business_os_help() {
     println!("{}", business_os_usage());
     println!();
@@ -111,7 +167,7 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]"
+    "usage:\n  ctox business-os status\n  ctox business-os peer status|rotate|ensure\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]"
 }
 
 fn exists_label(exists: bool) -> &'static str {

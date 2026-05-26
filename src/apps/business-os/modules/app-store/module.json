@@ -17,7 +17,7 @@
   "category": "Development",
   "version": "v1",
   "developer": "CTOX",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "tags": [
     "marketplace",
     "github",
@@ -31,5 +31,7 @@
     "installable": false,
     "editable_after_install": false,
     "distribution": "system-module"
-  }
+  },
+  "install_scope": "core",
+  "default_installed": true
 }

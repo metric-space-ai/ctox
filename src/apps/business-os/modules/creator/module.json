@@ -15,7 +15,7 @@
   "category": "Development",
   "version": "v1",
   "developer": "CTOX",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "tags": [
     "creator",
     "developer-tools",
@@ -27,8 +27,10 @@
     "summary": "Local-first visual workbench to configure and preview new Business-OS modules natively.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/creator",
-    "installable": true,
+    "installable": false,
     "editable_after_install": false,
-    "distribution": "ctox-repo-module"
-  }
+    "distribution": "internal-tool"
+  },
+  "install_scope": "internal",
+  "default_installed": true
 }

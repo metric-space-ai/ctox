@@ -1,5 +1,6 @@
 /* src/apps/business-os/modules/shiftflow/index.js */
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const MOD_BUILD = '20260520-shiftflow-v2';
 
@@ -11,6 +12,8 @@ let selectedEmployeeId = null;
 let currentDeptFilter = 'all';
 let lang = 'de';
 let t = (key, fallback) => fallback ?? key;
+let contextMenu = null;
+let contextMenuCleanup = null;
 
 export async function mount(ctx) {
   if (ctx.db && ctx.db.raw) {
@@ -30,7 +33,7 @@ export async function mount(ctx) {
   };
 
   await ensureStyles();
-  
+
   // Load markup
   ctx.host.innerHTML = await loadModuleMarkup();
   applyStaticLabels(ctx.host, t);
@@ -43,7 +46,7 @@ export async function mount(ctx) {
     inactiveEmployeeList: ctx.host.querySelector('#inactiveEmployeeList'),
     activeEmployeesCount: ctx.host.querySelector('#activeEmployeesCount'),
     inactiveEmployeesCount: ctx.host.querySelector('#inactiveEmployeesCount'),
-    
+
     // Project management elements
     projectList: ctx.host.querySelector('#projectList'),
     addProjectBtn: ctx.host.querySelector('#addProjectBtn'),
@@ -70,7 +73,7 @@ export async function mount(ctx) {
     departmentFilterSelect: ctx.host.querySelector('#departmentFilterSelect'),
     employeeSearchInput: ctx.host.querySelector('#employeeSearchInput'),
     addEmployeeBtn: ctx.host.querySelector('#addEmployeeBtn'),
-    
+
     // AI and Inspector
     aiPlannerChatBody: ctx.host.querySelector('#aiPlannerChatBody'),
     btnAutoGenerateSchedule: ctx.host.querySelector('#btnAutoGenerateSchedule'),
@@ -123,11 +126,17 @@ export async function mount(ctx) {
   updateWeekRangeDisplay(els);
   renderGridHeader(els);
 
+  // 5. Initialize CTOX unified context menu
+  contextMenuCleanup = initShiftflowContextMenu(els, ctx);
+
   // Return unmount function
   return () => {
     activeSubscriptions.forEach(sub => sub.unsubscribe?.());
     activeSubscriptions = [];
     resizeCleanup?.();
+    contextMenuCleanup?.();
+    contextMenu?.remove();
+    contextMenu = null;
     ctx.host.replaceChildren();
     delete ctx.host.dataset.shiftflowModule;
   };
@@ -165,7 +174,7 @@ function updateWeekRangeDisplay(els) {
   const monday = new Date(currentWeekStart);
   const sunday = new Date(monday);
   sunday.setDate(monday.getDate() + 6);
-  
+
   const options = { day: '2-digit', month: '2-digit', year: 'numeric' };
   const localeStr = lang === 'en' ? 'en-US' : 'de-DE';
   const prefix = lang === 'en' ? 'W' : 'KW';
@@ -190,22 +199,22 @@ function renderGridHeader(els) {
     t('daySaturday', 'Samstag'),
     t('daySunday', 'Sonntag')
   ];
-  
+
   if (currentTimelineFocus === 'employees') {
     els.schedulerCornerCell.textContent = t('employees', 'Mitarbeiter');
   } else {
     els.schedulerCornerCell.textContent = t('projects', 'Projekte');
   }
-  
+
   const baseHeader = `<div class="grid-corner-cell">${escapeHtml(els.schedulerCornerCell.textContent)}</div>`;
   const monday = new Date(currentWeekStart);
   const todayStr = new Date().toDateString();
-  
+
   const dayCells = days.map((day, index) => {
     const currentDay = new Date(monday);
     currentDay.setDate(monday.getDate() + index);
     const isToday = currentDay.toDateString() === todayStr;
-    
+
     return `
       <div class="grid-day-cell ${isToday ? 'today' : ''}">
         <div>${day}</div>
@@ -213,7 +222,7 @@ function renderGridHeader(els) {
       </div>
     `;
   }).join('');
-  
+
   els.schedulerGridHeader.innerHTML = baseHeader + dayCells;
 }
 
@@ -223,12 +232,12 @@ function renderGridHeader(els) {
 
 async function seedMockDataIfEmpty(db) {
   if (!db) return;
-  
+
   const empCount = await db.planning_employees.find().exec();
   if (empCount.length > 0) return; // already has data
 
   console.log('[shiftflow] Seeding advanced mock database records...');
-  
+
   // 1. Seed Projects
   const mockProjects = [
     {
@@ -343,7 +352,7 @@ async function seedMockDataIfEmpty(db) {
 
   // Seed standard planned shifts for the current week linked to projects
   const monday = getMondayOfCurrentWeek();
-  
+
   const getTimestamp = (dayOffset, hourStr) => {
     const d = new Date(monday);
     d.setDate(monday.getDate() + dayOffset);
@@ -457,14 +466,14 @@ async function seedMockDataIfEmpty(db) {
   // 1. Active clock-in (Michael is currently working at Intersolar)
   const activeRecordStart = new Date();
   activeRecordStart.setHours(activeRecordStart.getHours() - 3); // clocked in 3 hours ago
-  
+
   await db.planning_time_records.insert({
     id: 'tr_michael_active',
     kind: 'time_record',
     employee_id: 'emp_michael',
     project_id: 'proj_intersolar',
     start_time: activeRecordStart.getTime(),
-    end_time: null, 
+    end_time: null,
     breaks: [],
     notes: 'Kaffeebar Schicht gestartet',
     approval_status: 'pending',
@@ -478,7 +487,7 @@ async function seedMockDataIfEmpty(db) {
   completedRecordStart.setHours(8, 0, 0, 0);
   const completedRecordEnd = new Date(completedRecordStart);
   completedRecordEnd.setHours(16, 30, 0, 0); // 8.5 hours
-  
+
   await db.planning_time_records.insert({
     id: 'tr_lisa_approval',
     kind: 'time_record',
@@ -552,7 +561,7 @@ function setupSubscriptions(ctx, els) {
   const empSub = ctx.db.planning_employees.find().$.subscribe(async (employees) => {
     const timeRecords = await ctx.db.planning_time_records.find().exec();
     renderEmployeesList(employees, timeRecords, els, ctx);
-    
+
     const projects = await ctx.db.planning_projects.find().exec();
     const shifts = await ctx.db.planning_shifts.find().exec();
     renderSchedulerGrid(employees, projects, shifts, els, ctx);
@@ -566,7 +575,7 @@ function setupSubscriptions(ctx, els) {
   // 2. Reactive Projects Subscription
   const projSub = ctx.db.planning_projects.find().$.subscribe(async (projects) => {
     renderProjectsList(projects, els, ctx);
-    
+
     const employees = await ctx.db.planning_employees.find().exec();
     const shifts = await ctx.db.planning_shifts.find().exec();
     renderSchedulerGrid(employees, projects, shifts, els, ctx);
@@ -595,7 +604,7 @@ function setupSubscriptions(ctx, els) {
     const employees = await ctx.db.planning_employees.find().exec();
     const projects = await ctx.db.planning_projects.find().exec();
     const shifts = await ctx.db.planning_shifts.find().exec();
-    
+
     renderTimesheets(employees, projects, shifts, records, els);
     renderEmployeesList(employees, records, els, ctx);
     renderBillingAggregation(employees, projects, records, els);
@@ -613,7 +622,7 @@ function setupSubscriptions(ctx, els) {
 
 function renderEmployeesList(employees, timeRecords, els, ctx) {
   const searchQuery = els.employeeSearchInput.value.toLowerCase().trim();
-  
+
   // Filter by dept & search query
   let filtered = employees;
   if (currentDeptFilter !== 'all') {
@@ -635,7 +644,7 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
   filtered.forEach(emp => {
     const initials = emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
     const isActive = activeEmpIds.has(emp.id);
-    
+
     const cardHtml = `
       <div class="employee-card ${isActive ? 'active' : ''} ${selectedEmployeeId === emp.id ? 'selected' : ''}" data-emp-id="${emp.id}" draggable="true">
         <div class="emp-avatar" style="background: ${emp.avatar_color || '#6366f1'}">${initials}</div>
@@ -656,7 +665,7 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
 
   els.activeEmployeeList.innerHTML = activeSection.length ? activeSection.join('') : '<div class="pane-subtitle" style="padding: 4px 8px;">Niemand im Dienst</div>';
   els.inactiveEmployeeList.innerHTML = inactiveSection.length ? inactiveSection.join('') : '<div class="pane-subtitle" style="padding: 4px 8px;">Keine weiteren Mitarbeiter</div>';
-  
+
   els.activeEmployeesCount.textContent = activeSection.length;
   els.inactiveEmployeesCount.textContent = inactiveSection.length;
 
@@ -689,7 +698,7 @@ function renderEmployeesList(employees, timeRecords, els, ctx) {
 function renderProjectsList(projects, els, ctx) {
   const projectCards = projects.map(proj => {
     const activeBadge = proj.status === 'active' ? `<span class="project-card-badge" style="background:${proj.color || '#6366f1'};"></span>` : '';
-    
+
     return `
       <div class="project-card" data-proj-id="${proj.id}">
         <div class="project-card-info">
@@ -717,7 +726,7 @@ function renderProjectsList(projects, els, ctx) {
 
 function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
   const monday = new Date(currentWeekStart);
-  
+
   if (currentTimelineFocus === 'employees') {
     // 1. Classic Employee-Centric Timeline View
     let filteredEmployees = employees;
@@ -727,7 +736,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 
     const rows = filteredEmployees.map(emp => {
       const initials = emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
-      
+
       const rowHeader = `
         <div class="row-employee-cell">
           <div class="emp-avatar" style="background: ${emp.avatar_color || '#6366f1'}">${initials}</div>
@@ -742,15 +751,15 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
         const currentDay = new Date(monday);
         currentDay.setDate(monday.getDate() + index);
         const dayStart = currentDay.getTime();
-        
+
         const currentDayEnd = new Date(currentDay);
         currentDayEnd.setHours(23, 59, 59, 999);
         const dayEnd = currentDayEnd.getTime();
 
         // Find shifts for this employee and day
         const dayShifts = shifts.filter(shift => {
-          return shift.employee_id === emp.id && 
-                 shift.start_time >= dayStart && 
+          return shift.employee_id === emp.id &&
+                 shift.start_time >= dayStart &&
                  shift.start_time <= dayEnd;
         });
 
@@ -758,12 +767,12 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           const startStr = formatTime(new Date(shift.start_time));
           const endStr = formatTime(new Date(shift.end_time));
           const duration = ((shift.end_time - shift.start_time) / 3600000).toFixed(1);
-          
+
           // Resolve project details
           const proj = projects.find(p => p.id === shift.project_id);
           const projName = proj ? proj.name : (shift.location || 'Sonstiges');
           const projColor = proj ? proj.color : 'var(--shiftflow-accent)';
-          
+
           return `
             <div class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${shift.id}">
               <div class="shift-time">
@@ -819,15 +828,15 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
         const currentDay = new Date(monday);
         currentDay.setDate(monday.getDate() + index);
         const dayStart = currentDay.getTime();
-        
+
         const currentDayEnd = new Date(currentDay);
         currentDayEnd.setHours(23, 59, 59, 999);
         const dayEnd = currentDayEnd.getTime();
 
         // Find shifts for this project and day
         const dayShifts = shifts.filter(shift => {
-          return shift.project_id === proj.id && 
-                 shift.start_time >= dayStart && 
+          return shift.project_id === proj.id &&
+                 shift.start_time >= dayStart &&
                  shift.start_time <= dayEnd;
         });
 
@@ -835,13 +844,13 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
           const startStr = formatTime(new Date(shift.start_time));
           const endStr = formatTime(new Date(shift.end_time));
           const duration = ((shift.end_time - shift.start_time) / 3600000).toFixed(1);
-          
+
           // Resolve employee details
           const emp = employees.find(e => e.id === shift.employee_id);
           const empName = emp ? emp.name : 'Unbesetzt';
           const avatarColor = emp ? emp.avatar_color : '#94a3b8';
           const initials = emp ? emp.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() : '?';
-          
+
           return `
             <div class="shift-card dept-${shift.department?.toLowerCase() || 'service'} ${shift.status || 'published'}" data-shift-id="${shift.id}" style="display:flex; flex-direction:column;">
               <div style="display:flex; align-items:center; gap:6px; margin-bottom:4px;">
@@ -921,7 +930,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
     cell.addEventListener('drop', async (e) => {
       e.preventDefault();
       cell.classList.remove('drag-over');
-      
+
       const empId = e.dataTransfer.getData('text/plain');
       if (!empId) return;
 
@@ -949,7 +958,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 
       const proj = projects.find(p => p.id === finalProjId);
       const projName = proj ? proj.name : 'Einsatz';
-      
+
       const startStr = '08:00';
       const endStr = '16:00';
       const getTimestamp = (dStr, tStr) => {
@@ -985,7 +994,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 function renderTimesheets(employees, projects, shifts, records, els) {
   // Only show records with 'pending' status for approvals
   const pendingRecords = records.filter(rec => rec.approval_status === 'pending' && rec.end_time !== null);
-  
+
   if (pendingRecords.length === 0) {
     els.timesheetsList.innerHTML = `
       <div class="conflict-empty-state" style="padding: 40px;">
@@ -1005,7 +1014,7 @@ function renderTimesheets(employees, projects, shifts, records, els) {
     const dateStr = new Date(rec.start_time).toLocaleDateString(localeStr, { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
     const startStr = formatTime(new Date(rec.start_time));
     const endStr = formatTime(new Date(rec.end_time));
-    
+
     // Calculate breaks and duration
     let breakMin = 0;
     if (rec.breaks && rec.breaks.length) {
@@ -1021,9 +1030,9 @@ function renderTimesheets(employees, projects, shifts, records, els) {
     const dayStart = new Date(recDayStr).getTime();
     const dayEnd = dayStart + 24 * 3600000 - 1;
 
-    const dayShifts = shifts.filter(s => 
-      s.employee_id === rec.employee_id && 
-      s.start_time >= dayStart && 
+    const dayShifts = shifts.filter(s =>
+      s.employee_id === rec.employee_id &&
+      s.start_time >= dayStart &&
       s.start_time <= dayEnd
     );
 
@@ -1035,9 +1044,9 @@ function renderTimesheets(employees, projects, shifts, records, els) {
       const sStart = formatTime(new Date(s.start_time));
       const sEnd = formatTime(new Date(s.end_time));
       const sHours = ((s.end_time - s.start_time) / 3600000);
-      
+
       sollHtml = t('sollPlannedText', 'Geplant (Soll): <strong>{0} - {1}</strong> ({2} Std)', sStart, sEnd, sHours.toFixed(1));
-      
+
       const diff = workedHours - sHours;
       if (Math.abs(diff) >= 0.25) {
         const sign = diff > 0 ? '+' : '';
@@ -1050,7 +1059,7 @@ function renderTimesheets(employees, projects, shifts, records, els) {
     const proj = projects.find(p => p.id === rec.project_id);
     const projName = proj ? proj.name : t('noProject', 'Ohne Projekt');
     const projColor = proj ? proj.color : 'var(--shiftflow-line)';
-    
+
     return `
       <div class="timesheet-card" data-rec-id="${rec.id}">
         <div class="timesheet-card-main">
@@ -1108,7 +1117,7 @@ function renderBillingAggregation(employees, projects, records, els) {
 
   // 3. Group by Project
   const aggregation = {};
-  
+
   projects.forEach(p => {
     aggregation[p.id] = {
       project: p,
@@ -1133,7 +1142,7 @@ function renderBillingAggregation(employees, projects, records, els) {
 
   filtered.forEach(rec => {
     const projId = rec.project_id || fallbackId;
-    
+
     if (!aggregation[projId]) {
       aggregation[projId] = {
         project: { id: projId, name: 'Unbekanntes Projekt', client: 'Sonstige', hourly_rate: 85.0, color: '#94a3b8' },
@@ -1188,7 +1197,7 @@ function renderBillingAggregation(employees, projects, records, els) {
 
       const grossMargin = data.revenue - data.cost;
       const marginPercent = data.revenue > 0 ? (grossMargin / data.revenue) * 100 : 0.0;
-      
+
       let badgeClass = 'high';
       if (marginPercent < 30) badgeClass = 'low';
       else if (marginPercent < 55) badgeClass = 'mid';
@@ -1250,7 +1259,7 @@ function renderBillingAggregation(employees, projects, records, els) {
 function openBillingDetailsInspector(projId, projectData, els, ctx) {
   const body = document.createElement('div');
   body.className = 'drawer-body shiftflow-drawer-body';
-  
+
   const itemsHtml = projectData.details.map(item => {
     return `
       <div style="display:flex; justify-content:space-between; padding:12px 0; border-bottom:1px solid var(--shiftflow-line);">
@@ -1282,9 +1291,9 @@ function openBillingDetailsInspector(projId, projectData, els, ctx) {
           <div style="font-weight:700; font-size:13px; margin-top:2px; color:var(--shiftflow-text);">${escapeHtml(projectData.project.location || t('noInfo', 'Keine Angabe'))}</div>
         </div>
       </div>
-      
+
       <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:4px 0;" />
-      
+
       <div style="display:flex; flex-direction:column; gap:4px;">
         <span class="shiftflow-kicker">${t('employeeDistribution', 'Mitarbeiter Aufteilung')}</span>
         <div style="display:flex; flex-direction:column; max-height:400px; overflow-y:auto;" class="os-scrollbar">
@@ -1293,7 +1302,7 @@ function openBillingDetailsInspector(projId, projectData, els, ctx) {
       </div>
     </div>
   `;
-  
+
   body.querySelector('[data-drawer-close]').addEventListener('click', () => ctx.closeDrawers());
   ctx.openRightDrawer(body);
 }
@@ -1365,18 +1374,18 @@ async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
   const emp = employees.find(e => e.id === shift.employee_id);
   const db = globalThis.CTOX_ACTIVE_DB || els.activeEmployeeList.__ctx__db;
   let projName = shift.location || t('location', 'Einsatzort');
-  
+
   if (db && shift.project_id) {
     const proj = await db.planning_projects.findOne(shift.project_id).exec();
     if (proj) projName = proj.name;
   }
 
   els.inspectorTitle.textContent = t('shiftDetails', 'Schicht-Details');
-  
+
   const start = new Date(shift.start_time);
   const end = new Date(shift.end_time);
   const options = { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' };
-  
+
   els.inspectorContent.innerHTML = `
     <div style="padding: 12px; display:flex; flex-direction:column; gap:12px;">
       <div style="display:flex; align-items:center; gap:10px;">
@@ -1388,9 +1397,9 @@ async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
           <span style="font-size:11px; color:var(--shiftflow-muted);">${escapeHtml(emp ? emp.role : '')}</span>
         </div>
       </div>
-      
+
       <hr style="border:0; height:1px; background:var(--shiftflow-line); margin:4px 0;" />
-      
+
       <div>
         <span class="shiftflow-kicker">${t('dateTime', 'Datum & Zeit')}</span>
         <div style="font-weight:700; font-size:13px; margin-top:2px;">${start.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', options)}</div>
@@ -1423,7 +1432,7 @@ async function openShiftDetails(shiftId, shifts, employees, els, ctx) {
   `;
 
   els.aiPlannerSection.classList.add('hidden');
-  els.detailInspectorSection.classList.remove('hidden');
+  els.detailInspectorSection.classList.add('is-open');
 
   // Edit in inspector trigger
   els.inspectorContent.querySelector('#btnEditShiftInspector').addEventListener('click', () => {
@@ -1441,7 +1450,7 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
   const emp = employees.find(e => e.id === empId);
   if (!emp) {
     selectedEmployeeId = null;
-    els.detailInspectorSection.classList.add('hidden');
+    els.detailInspectorSection.classList.remove('is-open');
     els.aiPlannerSection.classList.remove('hidden');
     return;
   }
@@ -1532,12 +1541,12 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
               const targetDate = new Date(currentWeekStart);
               targetDate.setDate(targetDate.getDate() + idx);
               const dateStr = targetDate.toISOString().split('T')[0];
-              
+
               return `
-                <button 
-                  class="quick-assign-day-btn" 
-                  data-proj-id="${proj.id}" 
-                  data-emp-id="${emp.id}" 
+                <button
+                  class="quick-assign-day-btn"
+                  data-proj-id="${proj.id}"
+                  data-emp-id="${emp.id}"
                   data-date="${dateStr}"
                   style="padding:3px 5px; min-width:26px; font-size:10px; font-weight:700; border-radius:4px; border:1px solid var(--shiftflow-line); background:var(--shiftflow-surface-2); color:var(--shiftflow-text); cursor:pointer;"
                   title="${dayName}, ${targetDate.toLocaleDateString(lang === 'en' ? 'en-US' : 'de-DE', {day:'2-digit', month:'2-digit'})}"
@@ -1573,7 +1582,7 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
   `;
 
   els.aiPlannerSection.classList.add('hidden');
-  els.detailInspectorSection.classList.remove('hidden');
+  els.detailInspectorSection.classList.add('is-open');
 
   // Bind edit profile action inside Inspector
   els.inspectorContent.querySelector('#btnEditEmployeeInspector').addEventListener('click', () => {
@@ -1584,19 +1593,19 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
   els.inspectorContent.querySelector('#btnDeleteEmployeeInspector').addEventListener('click', async () => {
     const confirmDelete = confirm(t('confirmDeleteEmployee', 'Möchtest du den Mitarbeiter "{0}" wirklich löschen? Alle zugeordneten Schichten werden ebenfalls gelöscht.', emp.name));
     if (!confirmDelete) return;
-    
+
     const doc = await db.planning_employees.findOne(emp.id).exec();
     if (doc) {
       await doc.remove();
     }
-    
+
     const associatedShifts = await db.planning_shifts.find({ selector: { employee_id: emp.id } }).exec();
     for (const s of associatedShifts) {
       await s.remove();
     }
-    
+
     selectedEmployeeId = null;
-    els.detailInspectorSection.classList.add('hidden');
+    els.detailInspectorSection.classList.remove('is-open');
     els.aiPlannerSection.classList.remove('hidden');
   });
 
@@ -1607,13 +1616,13 @@ async function openEmployeeDetailsInspector(empId, employees, els, ctx) {
       const projId = btn.dataset.projId;
       const empId = btn.dataset.empId;
       const dateStr = btn.dataset.date;
-      
+
       const proj = activeProjects.find(p => p.id === projId);
       const projName = proj ? proj.name : 'Einsatz';
-      
+
       const startStr = '08:00';
       const endStr = '16:00';
-      
+
       const getTimestamp = (dStr, tStr) => {
         const d = new Date(dStr);
         const [h, m] = tStr.split(':').map(Number);
@@ -1648,18 +1657,18 @@ function openEmployeeDrawer(emp, els, ctx) {
   const isEdit = !!emp;
   const body = document.createElement('div');
   body.className = 'drawer-body shiftflow-drawer-body';
-  
+
   const title = isEdit ? t('employeeEdit', 'Mitarbeiter bearbeiten') : t('employeeCreate', 'Mitarbeiter anlegen');
   const kicker = isEdit ? t('employeeBasicsKicker', 'Stammdaten') : t('employeeNewKicker', 'Neuaufnahme');
   const submitText = isEdit ? t('save', 'Speichern') : t('create', 'Anlegen');
-  
+
   const nameVal = isEdit ? escapeHtml(emp.name) : '';
   const emailVal = isEdit ? escapeHtml(emp.email || '') : '';
   const rateVal = isEdit ? (emp.internal_hourly_rate || 25.00).toFixed(2) : '25.00';
   const roleVal = isEdit ? escapeHtml(emp.role || '') : '';
   const hoursVal = isEdit ? (emp.weekly_target_hours || 40) : '40';
   const depts = isEdit ? (emp.departments || []) : ['Service'];
-  
+
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
@@ -1707,32 +1716,32 @@ function openEmployeeDrawer(emp, els, ctx) {
       </div>
     </form>
   `;
-  
+
   body.querySelector('[data-drawer-close]').addEventListener('click', () => ctx.closeDrawers());
   body.querySelector('[data-drawer-cancel]').addEventListener('click', () => ctx.closeDrawers());
-  
+
   if (isEdit) {
     body.querySelector('[data-drawer-delete]').addEventListener('click', async () => {
       const confirmDelete = confirm(t('confirmDeleteEmployee', 'Möchtest du den Mitarbeiter "{0}" wirklich löschen? Alle zugeordneten Schichten werden ebenfalls gelöscht.', emp.name));
       if (!confirmDelete) return;
-      
+
       const doc = await ctx.db.planning_employees.findOne(emp.id).exec();
       if (doc) {
         await doc.remove();
       }
-      
+
       const associatedShifts = await ctx.db.planning_shifts.find({ selector: { employee_id: emp.id } }).exec();
       for (const s of associatedShifts) {
         await s.remove();
       }
-      
+
       ctx.closeDrawers();
       selectedEmployeeId = null;
-      els.detailInspectorSection.classList.add('hidden');
+      els.detailInspectorSection.classList.remove('is-open');
       els.aiPlannerSection.classList.remove('hidden');
     });
   }
-  
+
   body.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1741,12 +1750,12 @@ function openEmployeeDrawer(emp, els, ctx) {
     const rate = Number(form.internal_hourly_rate.value);
     const role = form.role.value;
     const hours = Number(form.weekly_target_hours.value);
-    
+
     const selectedDepts = [];
     form.querySelectorAll('input[name="departments"]:checked').forEach(cb => {
       selectedDepts.push(cb.value);
     });
-    
+
     if (isEdit) {
       const doc = await ctx.db.planning_employees.findOne(emp.id).exec();
       if (doc) {
@@ -1763,7 +1772,7 @@ function openEmployeeDrawer(emp, els, ctx) {
     } else {
       const colors = ['hsl(250, 70%, 50%)', 'hsl(168, 80%, 40%)', 'hsl(30, 90%, 50%)', 'hsl(200, 80%, 45%)', 'hsl(340, 75%, 50%)'];
       const randomColor = colors[Math.floor(Math.random() * colors.length)];
-      
+
       const id = 'emp_' + Date.now();
       await ctx.db.planning_employees.insert({
         id,
@@ -1783,7 +1792,7 @@ function openEmployeeDrawer(emp, els, ctx) {
     }
     ctx.closeDrawers();
   });
-  
+
   ctx.openLeftDrawer(body);
 }
 
@@ -1791,24 +1800,24 @@ function openProjectDrawer(proj, els, ctx) {
   const isEdit = !!proj;
   const body = document.createElement('div');
   body.className = 'drawer-body shiftflow-drawer-body';
-  
+
   const title = isEdit ? t('projectEdit', 'Projekt bearbeiten') : t('projectCreate', 'Projekt anlegen');
   const kicker = isEdit ? t('projectDetailsKicker', 'Projekt-Eckdaten') : t('projectNewKicker', 'Neues Projekt');
   const submitText = isEdit ? t('save', 'Speichern') : t('create', 'Anlegen');
-  
+
   const nameVal = isEdit ? escapeHtml(proj.name) : '';
   const clientVal = isEdit ? escapeHtml(proj.client) : '';
   const locationVal = isEdit ? escapeHtml(proj.location || '') : '';
   const rateVal = isEdit ? (proj.hourly_rate || 0.00).toFixed(2) : '85.00';
   const colorVal = isEdit ? proj.color : '#06b6d4';
-  
+
   const colors = ['#06b6d4', '#22c55e', '#6366f1', '#8b5cf6', '#f97316', '#f43f5e'];
   const colorPickerHtml = colors.map(c => `
     <label class="color-option-label" style="background: ${c};">
       <input type="radio" name="color" value="${c}" ${colorVal === c ? 'checked' : ''} />
     </label>
   `).join('');
-  
+
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
@@ -1847,10 +1856,10 @@ function openProjectDrawer(proj, els, ctx) {
       </div>
     </form>
   `;
-  
+
   body.querySelector('[data-drawer-close]').addEventListener('click', () => ctx.closeDrawers());
   body.querySelector('[data-drawer-cancel]').addEventListener('click', () => ctx.closeDrawers());
-  
+
   if (isEdit) {
     body.querySelector('[data-drawer-delete]').addEventListener('click', async () => {
       const shiftCount = await ctx.db.planning_shifts.find({ selector: { project_id: proj.id } }).exec();
@@ -1861,7 +1870,7 @@ function openProjectDrawer(proj, els, ctx) {
         const confirmDelete = confirm(t('confirmDeleteProject', 'Möchtest du das Projekt "{0}" wirklich löschen?', proj.name));
         if (!confirmDelete) return;
       }
-      
+
       const doc = await ctx.db.planning_projects.findOne(proj.id).exec();
       if (doc) {
         await doc.remove();
@@ -1869,7 +1878,7 @@ function openProjectDrawer(proj, els, ctx) {
       ctx.closeDrawers();
     });
   }
-  
+
   body.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -1878,7 +1887,7 @@ function openProjectDrawer(proj, els, ctx) {
     const location = form.location.value;
     const rate = Number(form.hourly_rate.value);
     const color = form.querySelector('input[name="color"]:checked').value;
-    
+
     const patch = {
       name,
       client,
@@ -1888,7 +1897,7 @@ function openProjectDrawer(proj, els, ctx) {
       status: 'active',
       updated_at_ms: Date.now()
     };
-    
+
     if (isEdit) {
       const doc = await ctx.db.planning_projects.findOne(proj.id).exec();
       if (doc) {
@@ -1905,7 +1914,7 @@ function openProjectDrawer(proj, els, ctx) {
     }
     ctx.closeDrawers();
   });
-  
+
   ctx.openLeftDrawer(body);
 }
 
@@ -1913,26 +1922,26 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
   const isEdit = !!shift;
   const body = document.createElement('div');
   body.className = 'drawer-body shiftflow-drawer-body';
-  
+
   const title = isEdit ? t('shiftEdit', 'Schicht bearbeiten') : t('shiftCreate', 'Schicht planen');
   const kicker = isEdit ? t('shiftDetailsKicker', 'Dienst-Details') : t('shiftNewKicker', 'Neue Einteilung');
   const submitText = isEdit ? t('save', 'Speichern') : t('tabScheduler', 'Planen');
-  
+
   const employees = await ctx.db.planning_employees.find().exec();
   const projects = await ctx.db.planning_projects.find().exec();
-  
+
   const activeProj = projects.filter(p => p.status === 'active');
-  
+
   const selectedEmpId = isEdit ? shift.employee_id : empId;
   const selectedProjId = isEdit ? (shift.project_id || 'proj_office') : (projId || (activeProj[0]?.id || ''));
-  
+
   const deptVal = isEdit ? (shift.department || 'Service') : 'Service';
-  
+
   let shiftDateStr = dateStr || '';
   let startVal = '08:00';
   let endVal = '16:00';
   let notesVal = '';
-  
+
   if (isEdit) {
     const start = new Date(shift.start_time);
     const end = new Date(shift.end_time);
@@ -1941,19 +1950,19 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
     endVal = end.toTimeString().slice(0, 5);
     notesVal = escapeHtml(shift.notes || '');
   }
-  
+
   const empOptions = employees.map(emp => `
     <option value="${emp.id}" ${selectedEmpId === emp.id ? 'selected' : ''}>
       ${escapeHtml(emp.name)} (${escapeHtml(emp.role)})
     </option>
   `).join('');
-  
+
   const projOptions = projects.map(p => `
     <option value="${p.id}" ${selectedProjId === p.id ? 'selected' : ''}>
       ${escapeHtml(p.name)} (${p.hourly_rate.toFixed(0)} €/h)
     </option>
   `).join('');
-  
+
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
@@ -2011,25 +2020,25 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
       </div>
     </form>
   `;
-  
+
   body.querySelector('[data-drawer-close]').addEventListener('click', () => ctx.closeDrawers());
   body.querySelector('[data-drawer-cancel]').addEventListener('click', () => ctx.closeDrawers());
-  
+
   if (isEdit) {
     body.querySelector('[data-drawer-delete]').addEventListener('click', async () => {
       const confirmDelete = confirm(t('confirmDeleteShift', 'Möchtest du diese Schicht wirklich löschen?'));
       if (!confirmDelete) return;
-      
+
       const doc = await ctx.db.planning_shifts.findOne(shift.id).exec();
       if (doc) {
         await doc.remove();
       }
       ctx.closeDrawers();
-      els.detailInspectorSection.classList.add('hidden');
+      els.detailInspectorSection.classList.remove('is-open');
       els.aiPlannerSection.classList.remove('hidden');
     });
   }
-  
+
   body.querySelector('form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = e.target;
@@ -2040,20 +2049,20 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
     const startStr = form.start_time.value;
     const endStr = form.end_time.value;
     const notes = form.notes.value;
-    
+
     const getTimestamp = (dStr, tStr) => {
       const d = new Date(dStr);
       const [h, m] = tStr.split(':').map(Number);
       d.setHours(h, m, 0, 0);
       return d.getTime();
     };
-    
+
     const startTime = getTimestamp(dateVal, startStr);
     const endTime = getTimestamp(dateVal, endStr);
-    
+
     const proj = await ctx.db.planning_projects.findOne(projId).exec();
     const projName = proj ? proj.name : t('shift', 'Dienst');
-    
+
     const patch = {
       employee_id: empId,
       project_id: projId,
@@ -2065,7 +2074,7 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
       notes,
       updated_at_ms: Date.now()
     };
-    
+
     if (isEdit) {
       const doc = await ctx.db.planning_shifts.findOne(shift.id).exec();
       if (doc) {
@@ -2082,10 +2091,10 @@ async function openShiftDrawer(shift, dateStr, empId, projId, els, ctx) {
       });
     }
     ctx.closeDrawers();
-    els.detailInspectorSection.classList.add('hidden');
+    els.detailInspectorSection.classList.remove('is-open');
     els.aiPlannerSection.classList.remove('hidden');
   });
-  
+
   ctx.openRightDrawer(body);
 }
 
@@ -2118,11 +2127,11 @@ function bindEventListeners(ctx, els) {
     els.viewSchedulerTabBtn.classList.add('active');
     els.viewTimesheetsTabBtn.classList.remove('active');
     els.viewBillingTabBtn.classList.remove('active');
-    
+
     els.schedulerView.classList.remove('hidden');
     els.timesheetsView.classList.add('hidden');
     els.billingView.classList.add('hidden');
-    
+
     els.centerPaneTitle.textContent = t('schedulePlanning', 'Einsatzplanung');
   });
 
@@ -2131,11 +2140,11 @@ function bindEventListeners(ctx, els) {
     els.viewSchedulerTabBtn.classList.remove('active');
     els.viewTimesheetsTabBtn.classList.add('active');
     els.viewBillingTabBtn.classList.remove('active');
-    
+
     els.schedulerView.classList.add('hidden');
     els.timesheetsView.classList.remove('hidden');
     els.billingView.classList.add('hidden');
-    
+
     els.centerPaneTitle.textContent = t('tabTimesheets', 'Zeiterfassung');
   });
 
@@ -2144,11 +2153,11 @@ function bindEventListeners(ctx, els) {
     els.viewSchedulerTabBtn.classList.remove('active');
     els.viewTimesheetsTabBtn.classList.remove('active');
     els.viewBillingTabBtn.classList.add('active');
-    
+
     els.schedulerView.classList.add('hidden');
     els.timesheetsView.classList.add('hidden');
     els.billingView.classList.remove('hidden');
-    
+
     els.centerPaneTitle.textContent = t('billingTitle', 'Leistungsabrechnung & Aggregation');
     triggerBillingAggregationUpdate(ctx, els);
   });
@@ -2206,7 +2215,7 @@ function bindEventListeners(ctx, els) {
 
   // Detail Inspector Drawer Closes
   els.closeInspectorBtn.addEventListener('click', () => {
-    els.detailInspectorSection.classList.add('hidden');
+    els.detailInspectorSection.classList.remove('is-open');
     els.aiPlannerSection.classList.remove('hidden');
   });
 
@@ -2215,7 +2224,7 @@ function bindEventListeners(ctx, els) {
     alert(t('aiGenerateAlert', 'Planungs-Assistent: Generiere optimierten Dienstplan für KW {0} basierend auf Mitarbeiter-Sollstunden & Projektbedarf...', getWeekNumber(currentWeekStart)));
     autoGenerateSchedule(ctx, els);
   });
-  
+
   els.btnCheckConflicts.addEventListener('click', () => {
     runConflictsAnalysis(ctx, els);
   });
@@ -2298,7 +2307,7 @@ async function autoGenerateSchedule(ctx, els) {
     employees.forEach((emp, empIdx) => {
       // Rotate projects among employees
       const proj = projects[ (empIdx + day) % projects.length ];
-      
+
       const startTime = getTimestamp(day, '08:00');
       const endTime = getTimestamp(day, '16:00');
 
@@ -2346,7 +2355,7 @@ async function runConflictsAnalysis(ctx, els) {
   const weekShifts = shifts.filter(s => s.start_time >= weekStartMs && s.start_time <= weekEndMs);
 
   const conflicts = [];
-  
+
   // Rule 1: Check maximum working hours (e.g. max 45 hours a week)
   employees.forEach(emp => {
     const empShifts = weekShifts.filter(s => s.employee_id === emp.id);
@@ -2368,7 +2377,7 @@ async function runConflictsAnalysis(ctx, els) {
     for (let j = i + 1; j < weekShifts.length; j++) {
       const s1 = weekShifts[i];
       const s2 = weekShifts[j];
-      
+
       if (s1.employee_id === s2.employee_id) {
         // Check overlap
         if (s1.start_time < s2.end_time && s2.start_time < s1.end_time) {
@@ -2389,7 +2398,7 @@ async function runConflictsAnalysis(ctx, els) {
         ${t('noConflictsDetected', 'Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.')}
       </div>
     `;
-    
+
     const botMsg = `
       <div class="shiftflow-ai-msg bot">
         <div class="shiftflow-ai-avatar">AI</div>
@@ -2450,7 +2459,7 @@ function exportInvoiceDraftPayload() {
         const revenue = pData.revenue;
         const cost = pData.cost;
         const margin = revenue - cost;
-        
+
         return {
           project_id: p.id,
           project_name: p.name,
@@ -2479,7 +2488,7 @@ function exportInvoiceDraftPayload() {
   a.download = `ctox_rechnungsentwurf_${data.dateRange.start}_zu_${data.dateRange.end}.json`;
   a.click();
   URL.revokeObjectURL(url);
-  
+
   alert(t('invoiceDraftDownloadSuccess', 'Rechnungsentwurf erfolgreich erstellt und heruntergeladen! 📝\n\nDu kannst diese Datei direkt im CTOX Rechnungs-Modul einlesen.'));
 }
 
@@ -2494,56 +2503,44 @@ function setupShiftflowColumnResizing(app) {
 
   if (!leftResizer || !rightResizer) return;
 
-  const leftPane = app.querySelector('#shiftflow-left');
-  const rightPane = app.querySelector('#shiftflow-right');
+  const leftWidth = localStorage.getItem('ctox.shiftflow.layout.leftWidth') || localStorage.getItem('shiftflow_left_w') || '300';
+  const rightWidth = localStorage.getItem('ctox.shiftflow.layout.rightWidth') || localStorage.getItem('shiftflow_right_w') || '360';
 
-  // Load saved positions
-  const savedLeft = localStorage.getItem('shiftflow_left_w');
-  const savedRight = localStorage.getItem('shiftflow_right_w');
+  app.style.setProperty('--shiftflow-left-width', `${leftWidth}px`);
+  app.style.setProperty('--shiftflow-right-width', `${rightWidth}px`);
 
-  if (savedLeft) {
-    app.style.setProperty('--shiftflow-left-width', `${savedLeft}px`);
-  }
-  if (savedRight) {
-    app.style.setProperty('--shiftflow-right-width', `${savedRight}px`);
-  }
+  const cleanups = [];
 
-  const bindResizer = (resizer, isRight) => {
-    resizer.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      document.body.classList.add('is-shiftflow-resizing');
-      resizer.classList.add('is-active');
+  const resizerL = new CtoxResizer({
+    resizerEl: leftResizer,
+    containerEl: app,
+    cssVar: '--shiftflow-left-width',
+    side: 'left',
+    minWidth: 220,
+    maxWidth: 480,
+    onResize: (width) => {
+      localStorage.setItem('ctox.shiftflow.layout.leftWidth', width);
+      localStorage.setItem('shiftflow_left_w', width);
+    }
+  });
+  cleanups.push(() => resizerL.destroy());
 
-      const onPointerMove = (moveEvent) => {
-        const rect = app.getBoundingClientRect();
-        if (!isRight) {
-          const w = Math.max(220, Math.min(480, moveEvent.clientX - rect.left));
-          app.style.setProperty('--shiftflow-left-width', `${w}px`);
-          localStorage.setItem('shiftflow_left_w', w);
-        } else {
-          const w = Math.max(280, Math.min(520, rect.right - moveEvent.clientX));
-          app.style.setProperty('--shiftflow-right-width', `${w}px`);
-          localStorage.setItem('shiftflow_right_w', w);
-        }
-      };
-
-      const onPointerUp = () => {
-        document.body.classList.remove('is-shiftflow-resizing');
-        resizer.classList.remove('is-active');
-        document.removeEventListener('pointermove', onPointerMove);
-        document.removeEventListener('pointerup', onPointerUp);
-      };
-
-      document.addEventListener('pointermove', onPointerMove);
-      document.addEventListener('pointerup', onPointerUp);
-    });
-  };
-
-  bindResizer(leftResizer, false);
-  bindResizer(rightResizer, true);
+  const resizerR = new CtoxResizer({
+    resizerEl: rightResizer,
+    containerEl: app,
+    cssVar: '--shiftflow-right-width',
+    side: 'right',
+    minWidth: 280,
+    maxWidth: 520,
+    onResize: (width) => {
+      localStorage.setItem('ctox.shiftflow.layout.rightWidth', width);
+      localStorage.setItem('shiftflow_right_w', width);
+    }
+  });
+  cleanups.push(() => resizerR.destroy());
 
   return () => {
-    // any cleanup if needed
+    cleanups.forEach(fn => fn());
   };
 }
 
@@ -2571,4 +2568,374 @@ function applyStaticLabels(root, t) {
   root.querySelectorAll('[data-t-title]').forEach(el => el.title = t(el.dataset.tTitle));
   root.querySelectorAll('[data-t-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.tAria)));
   root.querySelectorAll('[data-t-placeholder]').forEach(el => el.placeholder = t(el.dataset.tPlaceholder));
+}
+
+function initShiftflowContextMenu(els, ctx) {
+  contextMenu?.remove();
+  const menu = document.createElement('div');
+  menu.className = 'ctox-context-menu shiftflow-context-menu';
+  menu.hidden = true;
+  document.body.append(menu);
+  contextMenu = menu;
+
+  const handleContextMenu = (event) => {
+    if (ctx.module?.id !== 'shiftflow') return;
+    const context = shiftflowCommandContextFromElement(els, event.target);
+    event.preventDefault();
+    event.stopPropagation();
+    renderShiftflowContextMenu(els, ctx, context, event.clientX, event.clientY);
+  };
+  const handleOutsideClick = (event) => {
+    if (contextMenu?.contains(event.target)) return;
+    hideShiftflowContextMenu();
+  };
+  const handleEscape = (event) => {
+    if (event.key === 'Escape') hideShiftflowContextMenu();
+  };
+
+  ctx.host.addEventListener('contextmenu', handleContextMenu);
+  window.addEventListener('click', handleOutsideClick, { capture: true });
+  window.addEventListener('keydown', handleEscape);
+
+  return () => {
+    ctx.host.removeEventListener('contextmenu', handleContextMenu);
+    window.removeEventListener('click', handleOutsideClick, { capture: true });
+    window.removeEventListener('keydown', handleEscape);
+    hideShiftflowContextMenu();
+    contextMenu?.remove();
+    contextMenu = null;
+  };
+}
+
+function hideShiftflowContextMenu() {
+  if (contextMenu) contextMenu.hidden = true;
+}
+
+function canModifyShiftflowApp(ctx) {
+  if (typeof ctx.canModifyModule === 'function' && ctx.canModifyModule()) return true;
+  const user = ctx.session?.user || {};
+  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
+  return ['admin', 'chef'].includes(role);
+}
+
+function shiftflowCommandContextFromElement(els, target) {
+  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
+
+  const shiftCard = element?.closest('.shift-card');
+  const gridCell = element?.closest('.grid-shift-cell');
+  const employeeCard = element?.closest('.employee-card');
+  const projectCard = element?.closest('.project-card');
+
+  let employee_id = '';
+  let employee_name = '';
+  let project_id = '';
+  let project_name = '';
+  let shift_id = '';
+  let shift_title = '';
+  let date = '';
+
+  if (shiftCard) {
+    shift_id = shiftCard.dataset.shiftId || '';
+    const titleEl = shiftCard.querySelector('div[style*="font-weight:700"]');
+    if (titleEl) shift_title = titleEl.textContent;
+  }
+  if (gridCell) {
+    employee_id = gridCell.dataset.empId || '';
+    project_id = gridCell.dataset.projId || '';
+    date = gridCell.dataset.date || '';
+  }
+  if (employeeCard) {
+    employee_id = employeeCard.dataset.empId || '';
+    const nameEl = employeeCard.querySelector('.emp-name');
+    if (nameEl) employee_name = nameEl.textContent;
+  }
+  if (projectCard) {
+    project_id = projectCard.dataset.projId || '';
+    const nameEl = projectCard.querySelector('.project-card-name');
+    if (nameEl) project_name = nameEl.textContent;
+  }
+
+  const searchQuery = els.employeeSearchInput?.value || '';
+
+  return {
+    module: 'shiftflow',
+    column: currentView || 'scheduler',
+    record_type: shift_id ? 'shift' : (employee_id ? 'employee' : (project_id ? 'project' : 'schedule')),
+    record_id: shift_id || employee_id || project_id || '',
+    label: shift_title || employee_name || project_name || date || t('shiftflow', 'Einsatzplanung'),
+    employee_id,
+    employee_name,
+    project_id,
+    project_name,
+    shift_id,
+    shift_title,
+    date,
+    current_view: currentView,
+    timeline_focus: currentTimelineFocus,
+    dept_filter: currentDeptFilter,
+    search_query: searchQuery,
+    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
+    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+  };
+}
+
+function renderShiftflowContextMenu(els, ctx, context, x, y) {
+  ensureCtoxContextMenuStyles();
+  const canModifyApp = canModifyShiftflowApp(ctx);
+  contextMenu.innerHTML = `
+    <form class="shiftflow-context-chat" data-shiftflow-context-chat-form>
+      <header>
+        <div>
+          <strong>Chat to CTOX</strong>
+          <span>${escapeHtml(context.label || 'Einsatzplanung')}</span>
+        </div>
+        <button type="button" data-shiftflow-context-close aria-label="Schließen">×</button>
+      </header>
+      ${canModifyApp ? `
+        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        </div>
+      ` : ''}
+      <textarea data-shiftflow-context-message placeholder="Was soll CTOX im Dienstplan / der Einsatzplanung tun?"></textarea>
+      <footer>
+        <span data-shiftflow-context-status></span>
+        <button type="submit">Senden</button>
+      </footer>
+    </form>
+  `;
+  contextMenu.hidden = false;
+  contextMenu.style.left = '0px';
+  contextMenu.style.top = '0px';
+  const rect = contextMenu.getBoundingClientRect();
+  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
+  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
+  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
+  contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
+  contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
+
+  const form = contextMenu.querySelector('[data-shiftflow-context-chat-form]');
+  const textarea = contextMenu.querySelector('[data-shiftflow-context-message]');
+  contextMenu.querySelector('[data-shiftflow-context-close]')?.addEventListener('click', hideShiftflowContextMenu);
+  form?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    await dispatchShiftflowContextChat(els, ctx, context, textarea?.value || '', mode);
+  });
+  requestAnimationFrame(() => textarea?.focus());
+}
+
+async function dispatchShiftflowContextChat(els, ctx, context, message, mode = 'data') {
+  const trimmed = String(message || '').trim();
+  const status = contextMenu?.querySelector('[data-shiftflow-context-status]');
+  if (!trimmed) {
+    if (status) status.textContent = 'Nachricht fehlt.';
+    return;
+  }
+
+  const safeMode = mode === 'app' && canModifyShiftflowApp(ctx) ? 'app' : 'data';
+  if (!document.querySelector('[data-ctox-chat-root]')) {
+    if (status) status.textContent = 'Chat ist noch nicht bereit.';
+    return;
+  }
+  if (status) status.textContent = 'Oeffne Chat...';
+  const title = `${safeMode === 'app' ? 'Shiftflow App modifizieren' : 'Dienstplan anpassen'} · ${context.label || 'Einsatzplanung'}`;
+  const instruction = safeMode === 'app'
+    ? `Modifiziere die Einsatzplanung-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dienstplandaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
+    : trimmed;
+
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: trimmed,
+      module: 'shiftflow',
+      source_title: 'Einsatzplanung',
+      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+      record_id: safeMode === 'app' ? 'shiftflow' : (context.record_id || 'shiftflow'),
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: trimmed,
+        user_message: trimmed,
+        mode: safeMode,
+        target: safeMode === 'app' ? 'app' : 'data',
+        context,
+        thread_key: 'business-os/shiftflow',
+      },
+      client_context: {
+        action: 'context-chat',
+        mode: safeMode,
+        column: context.column,
+        record_type: context.record_type,
+        shift_id: context.shift_id || '',
+        employee_id: context.employee_id || '',
+        project_id: context.project_id || '',
+      },
+    },
+  }));
+  hideShiftflowContextMenu();
+}
+
+function ensureCtoxContextMenuStyles() {
+  if (document.getElementById('ctox-unified-context-menu-style')) return;
+  const style = document.createElement('style');
+  style.id = 'ctox-unified-context-menu-style';
+  style.textContent = `
+    .ctox-context-menu {
+      position: absolute;
+      z-index: 2400;
+      width: min(560px, calc(100vw - 24px));
+      max-width: calc(100% - 16px);
+      overflow: hidden;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-panel, 12px);
+      background: color-mix(in srgb, var(--bo-surface, var(--surface, #fff)) 75%, transparent);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+      padding: 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+      animation: ctox-menu-fade-in 0.15s ease-out;
+    }
+    @keyframes ctox-menu-fade-in {
+      from { opacity: 0; transform: scale(0.97); }
+      to { opacity: 1; transform: scale(1); }
+    }
+    .ctox-context-menu form {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 10px;
+      min-width: 0;
+      padding: 12px;
+      margin: 0;
+    }
+    .ctox-context-menu form header,
+    .ctox-context-menu form footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      min-width: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11.5px;
+      font-weight: 760;
+      padding: 0 8px;
+      cursor: pointer;
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      margin: 0;
+    }
+    .ctox-context-menu .ctox-context-mode label:hover {
+      border-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu .ctox-context-mode input {
+      margin: 0;
+      accent-color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form header div {
+      min-width: 0;
+    }
+    .ctox-context-menu form strong,
+    .ctox-context-menu form span {
+      display: block;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-context-menu form strong {
+      color: var(--bo-text, var(--text, #18222d));
+      font-size: 12.5px;
+      font-weight: 820;
+    }
+    .ctox-context-menu form span {
+      color: var(--bo-muted, var(--muted, #64747c));
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .ctox-context-menu form footer > span {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      white-space: normal;
+      font-size: 11px;
+      color: var(--bo-muted, var(--muted, #64747c));
+    }
+    .ctox-context-menu form textarea {
+      width: 100%;
+      box-sizing: border-box;
+      min-height: 92px;
+      max-height: 180px;
+      min-width: 0;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      padding: 9px;
+      resize: vertical;
+    }
+    .ctox-context-menu form textarea:focus {
+      outline: none;
+      border-color: var(--bo-accent, #23665f);
+      box-shadow: 0 0 0 2px color-mix(in srgb, var(--bo-accent, #23665f) 25%, transparent);
+    }
+    .ctox-context-menu form button {
+      flex: 0 0 auto;
+      min-height: 30px;
+      border: 1px solid var(--bo-border, var(--border, #d8e1e5));
+      border-radius: var(--radius-control, 6px);
+      background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
+      color: var(--bo-text, var(--text, #18222d));
+      font: inherit;
+      font-size: 12px;
+      font-weight: 760;
+      cursor: pointer;
+      padding: 0 10px;
+    }
+    .ctox-context-menu form button:hover {
+      background: color-mix(in srgb, var(--bo-text, #18222d) 8%, var(--bo-surface-muted, #eef3f7));
+    }
+    .ctox-context-menu form button[type="submit"] {
+      border-color: var(--bo-accent, #23665f);
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 14%, var(--bo-surface, #fff));
+      color: var(--bo-accent, #23665f);
+    }
+    .ctox-context-menu form button[type="submit"]:hover {
+      background: color-mix(in srgb, var(--bo-accent, #23665f) 22%, var(--bo-surface, #fff));
+    }
+    .ctox-context-menu form button[type="button"][aria-label="Schließen"],
+    .ctox-context-menu form [data-creator-context-close],
+    .ctox-context-menu form [data-reports-context-close],
+    .ctox-context-menu form [data-shiftflow-context-close],
+    .ctox-context-menu form [data-app-store-context-close],
+    .ctox-context-menu form [data-context-close] {
+      width: 30px;
+      min-width: 30px;
+      padding: 0;
+      text-align: center;
+      font-size: 18px;
+      border: none;
+      background: none;
+      color: var(--bo-muted, var(--muted, #64747c));
+      cursor: pointer;
+    }
+  `;
+  document.head.append(style);
 }

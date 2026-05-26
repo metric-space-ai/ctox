@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! `Session` — owns the `MetalRuntime`, the `BufferPool` of weights,
 //! the KV cache (full-attention layers), and the recurrent state cache

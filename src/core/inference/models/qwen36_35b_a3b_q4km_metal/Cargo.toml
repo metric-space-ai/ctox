@@ -3,7 +3,7 @@ name = "ctox-qwen36-35b-a3b-q4km-metal"
 version = "0.0.1"
 edition = "2021"
 rust-version = "1.93"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Self-contained Qwen3.6-35B-A3B Q4_K_M Metal-only Apple-Silicon inference engine for CTOX. Bare-metal Rust + vendored MSL kernels per the local-llm-inference-optimization skill. No code shared with other model crates."
 
 # Same rule as the other model crates: this tree sits under src/inference/

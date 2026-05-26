@@ -1910,6 +1910,8 @@ fn local_runtime_state_snapshot(
     let root = runtime_dir.parent()?;
     let db_path = root.join("runtime/ctox.sqlite3");
     let conn = Connection::open(&db_path).ok()?;
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+    let _ = conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;");
     let raw: Option<String> = conn
         .query_row(
             "SELECT state_json FROM runtime_state_store WHERE state_id = 1",

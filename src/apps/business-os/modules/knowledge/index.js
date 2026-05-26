@@ -1,4 +1,5 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
 const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
@@ -100,13 +101,21 @@ function documentTemplate() {
   return `
     <main class="knowledge-module" data-knowledge-root>
       <section class="knowledge-pane knowledge-left" aria-label="Knowledge">
-        <header class="knowledge-pane-head">
-          <div><span>Research</span><h2>Knowledge</h2></div>
-          <div class="knowledge-pane-actions">
-            <button class="icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
-            <button class="icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
-            <button class="icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
-            <button class="icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
+        <header class="ctox-pane-header">
+          <div class="ctox-pane-title-row">
+            <div class="ctox-pane-titles">
+              <span class="ctox-pane-kicker">Research</span>
+              <h2 class="ctox-pane-title">Knowledge</h2>
+            </div>
+            <div class="ctox-pane-actions">
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
+            </div>
+          </div>
+          <div class="ctox-pane-tools">
+            <input class="ctox-pane-search" data-search placeholder="Suchen..." />
           </div>
         </header>
         <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
@@ -114,20 +123,24 @@ function documentTemplate() {
           <button type="button" data-scope="system" aria-pressed="false">System</button>
           <button type="button" data-scope="all" aria-pressed="true">Alle</button>
         </div>
-        <div class="knowledge-tools">
-          <input data-search placeholder="Suchen..." />
-        </div>
         <div class="knowledge-scroll" data-knowledge-list>
           <div class="empty-state"><strong>${copy.loading}</strong></div>
         </div>
       </section>
       <section class="knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
-        <header class="knowledge-pane-head knowledge-center-head">
-          <div><span data-selected-kind>Knowledge</span><h2 data-selected-title>Knowledge</h2></div>
-          <div class="segmented" role="tablist" aria-label="Knowledge Ansicht">
-            <button type="button" data-tab="skill" aria-pressed="true">Skill</button>
-            <button type="button" data-tab="runbooks" aria-pressed="false">Runbooks</button>
-            <button type="button" data-tab="data" aria-pressed="false">Data</button>
+        <header class="ctox-pane-header knowledge-center-head">
+          <div class="ctox-pane-title-row">
+            <div class="ctox-pane-titles">
+              <span class="ctox-pane-kicker" data-selected-kind>Knowledge</span>
+              <h2 class="ctox-pane-title" data-selected-title>Knowledge</h2>
+            </div>
+            <div class="ctox-pane-actions">
+              <div class="ctox-pane-tabs segmented" role="tablist" aria-label="Knowledge Ansicht">
+                <button type="button" class="ctox-pane-tab" data-tab="skill" aria-pressed="true">Skill</button>
+                <button type="button" class="ctox-pane-tab" data-tab="runbooks" aria-pressed="false">Runbooks</button>
+                <button type="button" class="ctox-pane-tab" data-tab="data" aria-pressed="false">Data</button>
+              </div>
+            </div>
           </div>
         </header>
         <div class="knowledge-tab-panel" data-panel="skill">
@@ -551,130 +564,24 @@ function setupKnowledgeColumnResizing() {
   handle.setAttribute('role', 'separator');
   handle.setAttribute('aria-orientation', 'vertical');
   handle.setAttribute('aria-label', 'Spaltenbreite anpassen');
+  handle.dataset.resizer = 'left';
   root.append(handle);
 
-  let activeWidths = null;
-  let persistedRatios = readKnowledgeColumnLayout();
-  let dragState = null;
-  let resizeRaf = 0;
+  const resizer = new CtoxResizer({
+    resizerEl: handle,
+    containerEl: root,
+    cssVar: '--knowledge-left-width',
+    side: 'left',
+    minWidth: 300,
+    maxWidth: 720,
+    onResize: (width) => localStorage.setItem('ctox.knowledge.layout.leftWidth', width)
+  });
 
-  const applyWidths = (widths) => {
-    if (!widths) return;
-    root.style.gridTemplateColumns = `${widths.left}px ${widths.center}px`;
-  };
-
-  const hideHandle = () => {
-    handle.hidden = true;
-  };
-
-  const showHandle = () => {
-    handle.hidden = false;
-  };
-
-  const placeHandle = (metrics, widths) => {
-    if (!metrics || !widths) return;
-    handle.style.left = `${Math.round(widths.left + (metrics.gap / 2))}px`;
-  };
-
-  const persistCurrentLayout = () => {
-    const ratios = columnPixelsToRatios(activeWidths);
-    if (!ratios) return;
-    persistedRatios = ratios;
-    writeKnowledgeColumnLayout(ratios);
-  };
-
-  const syncLayout = () => {
-    const metrics = getKnowledgeGridMetrics(root);
-    if (!metrics || metrics.trackTotal < KNOWLEDGE_COL_MIN.left + KNOWLEDGE_COL_MIN.center) {
-      root.style.removeProperty('grid-template-columns');
-      hideHandle();
-      return;
-    }
-
-    let nextWidths = persistedRatios
-      ? columnRatiosToPixels(persistedRatios, metrics.trackTotal)
-      : null;
-
-    if (!nextWidths) {
-      nextWidths = clampKnowledgeColumns(readKnowledgeGridTrackPixels(root), metrics.trackTotal);
-    }
-
-    if (!nextWidths) return;
-
-    activeWidths = nextWidths;
-    applyWidths(activeWidths);
-    placeHandle(metrics, activeWidths);
-    showHandle();
-  };
-
-  const stopDrag = () => {
-    if (!dragState) return;
-    dragState = null;
-    handle.classList.remove('is-active');
-    document.body.classList.remove('is-knowledge-col-resizing');
-    persistCurrentLayout();
-  };
-
-  const startDrag = (event) => {
-    const metrics = getKnowledgeGridMetrics(root);
-    if (!metrics || metrics.trackTotal < KNOWLEDGE_COL_MIN.left + KNOWLEDGE_COL_MIN.center) return;
-
-    const initial = activeWidths || clampKnowledgeColumns(readKnowledgeGridTrackPixels(root), metrics.trackTotal);
-    if (!initial) return;
-
-    activeWidths = initial;
-    dragState = {
-      appRect: root.getBoundingClientRect(),
-      metrics,
-      widths: { ...initial },
-    };
-
-    handle.classList.add('is-active');
-    document.body.classList.add('is-knowledge-col-resizing');
-    event.preventDefault();
-  };
-
-  const handleDragMove = (event) => {
-    if (!dragState) return;
-
-    const { appRect, metrics } = dragState;
-    const pointerX = event.clientX - appRect.left - metrics.padLeft;
-    const rawLeft = clampNumber(pointerX - (metrics.gap / 2), KNOWLEDGE_COL_MIN.left, metrics.trackTotal - KNOWLEDGE_COL_MIN.center);
-    const left = clampNumber(rawLeft, KNOWLEDGE_COL_MIN.left, Math.min(KNOWLEDGE_COL_LEFT_MAX, metrics.trackTotal - KNOWLEDGE_COL_MIN.center));
-    const center = metrics.trackTotal - left;
-    activeWidths = clampKnowledgeColumns({ left, center }, metrics.trackTotal);
-
-    if (!activeWidths) return;
-
-    applyWidths(activeWidths);
-    placeHandle(metrics, activeWidths);
-  };
-
-  const handleResize = () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0;
-      syncLayout();
-    });
-  };
-
-  handle.addEventListener('pointerdown', startDrag);
-  window.addEventListener('pointermove', handleDragMove);
-  window.addEventListener('pointerup', stopDrag);
-  window.addEventListener('pointercancel', stopDrag);
-  window.addEventListener('blur', stopDrag);
-  window.addEventListener('resize', handleResize);
-
-  syncLayout();
+  const leftWidth = localStorage.getItem('ctox.knowledge.layout.leftWidth') || '390';
+  root.style.setProperty('--knowledge-left-width', `${leftWidth}px`);
 
   return () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    window.removeEventListener('pointermove', handleDragMove);
-    window.removeEventListener('pointerup', stopDrag);
-    window.removeEventListener('pointercancel', stopDrag);
-    window.removeEventListener('blur', stopDrag);
-    window.removeEventListener('resize', handleResize);
-    document.body.classList.remove('is-knowledge-col-resizing');
+    resizer.destroy();
     handle.remove();
   };
 }

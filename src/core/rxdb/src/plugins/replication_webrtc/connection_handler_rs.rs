@@ -8,9 +8,13 @@
 //! Wire format on the DataChannel: one JSON `WebRTCWireFrame` per message,
 //! matching upstream `JSON.stringify(messageOrResponse)` semantics.
 
-use std::collections::HashMap;
+#[path = "frame_contract_generated.rs"]
+mod frame_contract_generated;
+
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -31,6 +35,14 @@ use crate::plugins::replication_webrtc::webrtc_types::{
 };
 use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
+use frame_contract_generated::{
+    CTOX_FRAME_PROTOCOL, FRAME_ACK_WINDOW, MAX_CHUNK_BYTES, MAX_FRAME_RETRIES,
+    MAX_INLINE_FRAME_BYTES, MAX_TRANSFER_BYTES,
+};
+
+const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
+const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
+const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
 
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
@@ -65,6 +77,139 @@ struct PeerEntry {
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
+struct IncomingFrame {
+    peer: PeerId,
+    attempt: u64,
+    total_frames: usize,
+    total_bytes: usize,
+    next_ack_seq: usize,
+    received: Vec<Option<String>>,
+}
+
+struct CompletedFrameAck {
+    peer: PeerId,
+    ack_seq: usize,
+    received_frames: usize,
+}
+
+struct PendingFrameAck {
+    sender: tokio::sync::oneshot::Sender<()>,
+    sent_at_ms: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SendPriority {
+    High,
+    Normal,
+    Low,
+}
+
+impl SendPriority {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
+struct QueuedSend {
+    text: String,
+    priority: SendPriority,
+    result: tokio::sync::oneshot::Sender<Result<(), RxError>>,
+}
+
+#[derive(Default)]
+struct PeerSendQueue {
+    high: VecDeque<QueuedSend>,
+    normal: VecDeque<QueuedSend>,
+    low: VecDeque<QueuedSend>,
+    draining: bool,
+}
+
+impl PeerSendQueue {
+    fn push(&mut self, item: QueuedSend) {
+        match item.priority {
+            SendPriority::High => self.high.push_back(item),
+            SendPriority::Normal => self.normal.push_back(item),
+            SendPriority::Low => self.low.push_back(item),
+        }
+    }
+
+    fn pop_next(&mut self) -> Option<QueuedSend> {
+        self.high
+            .pop_front()
+            .or_else(|| self.normal.pop_front())
+            .or_else(|| self.low.pop_front())
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WebRtcFrameTransportStatus {
+    pub protocol: &'static str,
+    pub max_inline_frame_bytes: usize,
+    pub max_chunk_bytes: usize,
+    pub max_transfer_bytes: usize,
+    pub ack_window: usize,
+    pub active_transfers: usize,
+    pub pending_acks: usize,
+    pub incoming_transfers: usize,
+    pub completed_ack_cache_size: usize,
+    pub sent_frames: u64,
+    pub sent_bytes: u64,
+    pub received_frames: u64,
+    pub received_bytes: u64,
+    pub retry_count: u64,
+    pub resume_request_count: u64,
+    pub resume_ack_count: u64,
+    pub backpressure_wait_count: u64,
+    pub queued_frames: u64,
+    pub sent_scheduled_frames: u64,
+    pub priority_queue_depth: usize,
+    pub high_priority_queue_depth: usize,
+    pub normal_priority_queue_depth: usize,
+    pub low_priority_queue_depth: usize,
+    pub last_send_priority: &'static str,
+    pub last_ack_lag_ms: u64,
+    pub last_buffered_amount: u64,
+    pub updated_at_ms: u64,
+}
+
+impl Default for WebRtcFrameTransportStatus {
+    fn default() -> Self {
+        Self {
+            protocol: CTOX_FRAME_PROTOCOL,
+            max_inline_frame_bytes: MAX_INLINE_FRAME_BYTES,
+            max_chunk_bytes: MAX_CHUNK_BYTES,
+            max_transfer_bytes: MAX_TRANSFER_BYTES,
+            ack_window: FRAME_ACK_WINDOW,
+            active_transfers: 0,
+            pending_acks: 0,
+            incoming_transfers: 0,
+            completed_ack_cache_size: 0,
+            sent_frames: 0,
+            sent_bytes: 0,
+            received_frames: 0,
+            received_bytes: 0,
+            retry_count: 0,
+            resume_request_count: 0,
+            resume_ack_count: 0,
+            backpressure_wait_count: 0,
+            queued_frames: 0,
+            sent_scheduled_frames: 0,
+            priority_queue_depth: 0,
+            high_priority_queue_depth: 0,
+            normal_priority_queue_depth: 0,
+            low_priority_queue_depth: 0,
+            last_send_priority: "normal",
+            last_ack_lag_ms: 0,
+            last_buffered_amount: 0,
+            updated_at_ms: now_ms(),
+        }
+    }
+}
+
 /// WebRTC connection-handler implementation backed by `webrtc-rs`.
 pub struct WebRTCRsConnectionHandler {
     connect_subject: RxSubject<WebRTCRsPeer>,
@@ -77,6 +222,12 @@ pub struct WebRTCRsConnectionHandler {
     ice_servers: Vec<RTCIceServer>,
     data_channel_label: String,
     udp_bind_addr: String,
+    incoming_frames: Arc<Mutex<HashMap<String, IncomingFrame>>>,
+    completed_frame_acks: Arc<Mutex<HashMap<String, CompletedFrameAck>>>,
+    pending_frame_acks: Arc<Mutex<HashMap<String, PendingFrameAck>>>,
+    send_queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
+    transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
+    frame_counter: AtomicU64,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -116,6 +267,12 @@ impl WebRTCRsConnectionHandler {
             ice_servers,
             data_channel_label: data_channel_label.to_string(),
             udp_bind_addr: udp_bind_addr.to_string(),
+            incoming_frames: Arc::new(Mutex::new(HashMap::new())),
+            completed_frame_acks: Arc::new(Mutex::new(HashMap::new())),
+            pending_frame_acks: Arc::new(Mutex::new(HashMap::new())),
+            send_queues: Arc::new(Mutex::new(HashMap::new())),
+            transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
+            frame_counter: AtomicU64::new(0),
             tasks: Mutex::new(Vec::new()),
         }
     }
@@ -170,6 +327,59 @@ impl WebRTCRsConnectionHandler {
             }
         });
         self.tasks.lock().push(signal_task);
+    }
+
+    pub fn frame_transport_status(&self) -> WebRtcFrameTransportStatus {
+        let mut status = self.transport_status.lock().clone();
+        status.pending_acks = self.pending_frame_acks.lock().len();
+        status.incoming_transfers = self.incoming_frames.lock().len();
+        status.completed_ack_cache_size = self.completed_frame_acks.lock().len();
+        let mut high = 0usize;
+        let mut normal = 0usize;
+        let mut low = 0usize;
+        for queue in self.send_queues.lock().values() {
+            high += queue.high.len();
+            normal += queue.normal.len();
+            low += queue.low.len();
+        }
+        status.priority_queue_depth = high + normal + low;
+        status.high_priority_queue_depth = high;
+        status.normal_priority_queue_depth = normal;
+        status.low_priority_queue_depth = low;
+        status
+    }
+
+    pub fn frame_transport_status_json(&self) -> Value {
+        let status = self.frame_transport_status();
+        serde_json::json!({
+            "protocol": status.protocol,
+            "maxInlineFrameBytes": status.max_inline_frame_bytes,
+            "maxChunkBytes": status.max_chunk_bytes,
+            "maxTransferBytes": status.max_transfer_bytes,
+            "ackWindow": status.ack_window,
+            "activeTransfers": status.active_transfers,
+            "pendingAcks": status.pending_acks,
+            "incomingTransfers": status.incoming_transfers,
+            "completedAckCacheSize": status.completed_ack_cache_size,
+            "sentFrames": status.sent_frames,
+            "sentBytes": status.sent_bytes,
+            "receivedFrames": status.received_frames,
+            "receivedBytes": status.received_bytes,
+            "retryCount": status.retry_count,
+            "resumeRequestCount": status.resume_request_count,
+            "resumeAckCount": status.resume_ack_count,
+            "backpressureWaitCount": status.backpressure_wait_count,
+            "queuedFrames": status.queued_frames,
+            "sentScheduledFrames": status.sent_scheduled_frames,
+            "priorityQueueDepth": status.priority_queue_depth,
+            "highPriorityQueueDepth": status.high_priority_queue_depth,
+            "normalPriorityQueueDepth": status.normal_priority_queue_depth,
+            "lowPriorityQueueDepth": status.low_priority_queue_depth,
+            "lastSendPriority": status.last_send_priority,
+            "lastAckLagMs": status.last_ack_lag_ms,
+            "lastBufferedAmount": status.last_buffered_amount,
+            "updatedAtMs": status.updated_at_ms,
+        })
     }
 
     async fn ensure_peer_connection(
@@ -334,10 +544,9 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                 })),
             )
         })?;
-        data_channel
-            .send_text(&text)
+        let priority = classify_send_priority(&frame, &text);
+        self.send_queued_text(peer, data_channel, text, priority)
             .await
-            .map_err(|e| webrtc_error("send data channel frame", e))
     }
 
     async fn close(&self) -> Result<(), RxError> {
@@ -359,8 +568,708 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         if let Some(signaling) = &self.signaling {
             signaling.close().await;
         }
+        self.send_queues.lock().clear();
+        self.refresh_send_queue_status();
         Ok(())
     }
+}
+
+impl WebRTCRsConnectionHandler {
+    async fn send_queued_text(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        text: String,
+        priority: SendPriority,
+    ) -> Result<(), RxError> {
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let should_drain = {
+            let mut queues = self.send_queues.lock();
+            let queue = queues.entry(peer.clone()).or_default();
+            let should_drain = !queue.draining;
+            queue.push(QueuedSend {
+                text,
+                priority,
+                result: result_tx,
+            });
+            if should_drain {
+                queue.draining = true;
+            }
+            should_drain
+        };
+        self.record_status(|status| {
+            status.queued_frames = status.queued_frames.saturating_add(1);
+            status.last_send_priority = priority.as_str();
+        });
+        self.refresh_send_queue_status();
+        if should_drain {
+            tokio::task::yield_now().await;
+            self.drain_send_queue(peer, data_channel).await;
+        }
+        result_rx.await.map_err(|_| {
+            new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "WebRTC send queue result dropped",
+                    "peer": peer,
+                })),
+            )
+        })?
+    }
+
+    async fn drain_send_queue(&self, peer: &WebRTCRsPeer, data_channel: Arc<dyn DataChannel>) {
+        loop {
+            let item = {
+                let mut queues = self.send_queues.lock();
+                let Some(queue) = queues.get_mut(peer) else {
+                    return;
+                };
+                match queue.pop_next() {
+                    Some(item) => item,
+                    None => {
+                        queue.draining = false;
+                        break;
+                    }
+                }
+            };
+            self.refresh_send_queue_status();
+            self.record_status(|status| {
+                status.sent_scheduled_frames = status.sent_scheduled_frames.saturating_add(1);
+                status.last_send_priority = item.priority.as_str();
+            });
+            let result = if item.text.len() > MAX_INLINE_FRAME_BYTES {
+                self.send_framed_text(peer, Arc::clone(&data_channel), item.text)
+                    .await
+            } else {
+                data_channel
+                    .send_text(&item.text)
+                    .await
+                    .map_err(|e| webrtc_error("send data channel frame", e))
+            };
+            let _ = item.result.send(result);
+        }
+        self.refresh_send_queue_status();
+    }
+
+    async fn send_framed_text(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        text: String,
+    ) -> Result<(), RxError> {
+        let transfer_id = format!(
+            "{}|frame|{}",
+            peer,
+            self.frame_counter.fetch_add(1, Ordering::SeqCst)
+        );
+        if text.len() > MAX_TRANSFER_BYTES {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "WebRTC frame transfer exceeds max bytes",
+                    "transferId": transfer_id,
+                    "totalBytes": text.len(),
+                    "maxBytes": MAX_TRANSFER_BYTES,
+                    "peer": peer,
+                })),
+            ));
+        }
+        let chunks = split_utf8_chunks(&text, MAX_CHUNK_BYTES);
+        self.record_status(|status| {
+            status.active_transfers = status.active_transfers.saturating_add(1);
+        });
+
+        let start = transport_start_frame(&transfer_id, 0, chunks.len(), text.len());
+        if let Err(error) = send_json_text(&data_channel, &start).await {
+            self.record_status(|status| {
+                status.active_transfers = status.active_transfers.saturating_sub(1);
+            });
+            return Err(error);
+        }
+        self.record_sent_transport_frame(&start);
+
+        for window_start in (0..chunks.len()).step_by(FRAME_ACK_WINDOW) {
+            let window_end = usize::min(window_start + FRAME_ACK_WINDOW, chunks.len()) - 1;
+            let ack_key = transfer_ack_key(&transfer_id, window_end);
+            let mut attempt = 0usize;
+            loop {
+                let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                self.pending_frame_acks.lock().insert(
+                    ack_key.clone(),
+                    PendingFrameAck {
+                        sender: ack_tx,
+                        sent_at_ms: now_ms(),
+                    },
+                );
+                self.refresh_dynamic_transport_status();
+
+                for (seq, data) in chunks
+                    .iter()
+                    .enumerate()
+                    .take(window_end + 1)
+                    .skip(window_start)
+                {
+                    let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
+                    if let Err(error) = send_json_text(&data_channel, &chunk).await {
+                        self.pending_frame_acks.lock().remove(&ack_key);
+                        self.refresh_dynamic_transport_status();
+                        self.record_status(|status| {
+                            status.active_transfers = status.active_transfers.saturating_sub(1);
+                        });
+                        return Err(error);
+                    }
+                    self.record_sent_transport_frame(&chunk);
+                    tokio::time::sleep(SEND_FRAME_PAUSE).await;
+                }
+
+                match tokio::time::timeout(FRAME_ACK_TIMEOUT, ack_rx).await {
+                    Ok(Ok(())) => break,
+                    Ok(Err(_)) => {
+                        self.pending_frame_acks.lock().remove(&ack_key);
+                        self.refresh_dynamic_transport_status();
+                        self.record_status(|status| {
+                            status.active_transfers = status.active_transfers.saturating_sub(1);
+                        });
+                        return Err(new_rx_error(
+                            "RC_WEBRTC_PEER",
+                            Some(serde_json::json!({
+                                "message": "WebRTC frame ack sender dropped",
+                                "transferId": transfer_id,
+                                "ackSeq": window_end,
+                                "peer": peer,
+                            })),
+                        ));
+                    }
+                    Err(_) => {
+                        self.pending_frame_acks.lock().remove(&ack_key);
+                        self.refresh_dynamic_transport_status();
+                        if self
+                            .request_frame_resume(
+                                peer,
+                                Arc::clone(&data_channel),
+                                &transfer_id,
+                                window_end,
+                                attempt,
+                            )
+                            .await?
+                        {
+                            break;
+                        }
+                        if attempt >= MAX_FRAME_RETRIES {
+                            self.record_status(|status| {
+                                status.active_transfers = status.active_transfers.saturating_sub(1);
+                            });
+                            return Err(new_rx_error(
+                                "RC_WEBRTC_PEER",
+                                Some(serde_json::json!({
+                                    "message": "timed out waiting for WebRTC frame ack",
+                                    "transferId": transfer_id,
+                                    "ackSeq": window_end,
+                                    "attempt": attempt,
+                                    "peer": peer,
+                                })),
+                            ));
+                        }
+                        attempt += 1;
+                        self.record_status(|status| {
+                            status.retry_count = status.retry_count.saturating_add(1);
+                        });
+                        tokio::time::sleep(Duration::from_millis(
+                            u64::try_from(usize::min(250 * attempt, 1000)).unwrap_or(1000),
+                        ))
+                        .await;
+                    }
+                }
+            }
+        }
+        self.record_status(|status| {
+            status.active_transfers = status.active_transfers.saturating_sub(1);
+        });
+        Ok(())
+    }
+
+    async fn request_frame_resume(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        transfer_id: &str,
+        ack_seq: usize,
+        attempt: usize,
+    ) -> Result<bool, RxError> {
+        let ack_key = transfer_ack_key(transfer_id, ack_seq);
+        let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+        self.pending_frame_acks.lock().insert(
+            ack_key.clone(),
+            PendingFrameAck {
+                sender: ack_tx,
+                sent_at_ms: now_ms(),
+            },
+        );
+        self.refresh_dynamic_transport_status();
+        let resume = transport_resume_frame(transfer_id, attempt, ack_seq);
+        if let Err(error) = send_json_text(&data_channel, &resume).await {
+            self.pending_frame_acks.lock().remove(&ack_key);
+            self.refresh_dynamic_transport_status();
+            return Err(error);
+        }
+        self.record_sent_transport_frame(&resume);
+        self.record_status(|status| {
+            status.resume_request_count = status.resume_request_count.saturating_add(1);
+        });
+        match tokio::time::timeout(FRAME_RESUME_TIMEOUT, ack_rx).await {
+            Ok(Ok(())) => Ok(true),
+            Ok(Err(_)) => Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "WebRTC frame resume ack sender dropped",
+                    "transferId": transfer_id,
+                    "ackSeq": ack_seq,
+                    "peer": peer,
+                })),
+            )),
+            Err(_) => {
+                self.pending_frame_acks.lock().remove(&ack_key);
+                self.refresh_dynamic_transport_status();
+                Ok(false)
+            }
+        }
+    }
+
+    async fn handle_transport_frame(
+        &self,
+        peer: &WebRTCRsPeer,
+        data_channel: Arc<dyn DataChannel>,
+        frame: Value,
+    ) -> RxResult<Option<String>> {
+        self.record_received_transport_frame(&frame);
+        let kind = frame.get("kind").and_then(Value::as_str).unwrap_or("");
+        let transfer_id = frame
+            .get("transferId")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        if kind == "ack" {
+            let ack_seq_i64 = frame.get("ackSeq").and_then(Value::as_i64);
+            let ack_seq = ack_seq_i64.and_then(|v| usize::try_from(v).ok());
+            let key = ack_seq
+                .map(|seq| transfer_ack_key(&transfer_id, seq))
+                .unwrap_or_else(|| transfer_id.clone());
+            if let Some(pending) = self.pending_frame_acks.lock().remove(&key) {
+                self.record_ack_lag(pending.sent_at_ms);
+                if frame
+                    .get("resume")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    self.record_status(|status| {
+                        status.resume_ack_count = status.resume_ack_count.saturating_add(1);
+                    });
+                }
+                let _ = pending.sender.send(());
+            } else if ack_seq_i64.is_none() {
+                let keys: Vec<String> = self
+                    .pending_frame_acks
+                    .lock()
+                    .keys()
+                    .filter(|key| key.starts_with(&format!("{transfer_id}|")))
+                    .cloned()
+                    .collect();
+                for key in keys {
+                    if let Some(pending) = self.pending_frame_acks.lock().remove(&key) {
+                        self.record_ack_lag(pending.sent_at_ms);
+                        let _ = pending.sender.send(());
+                    }
+                }
+            }
+            self.refresh_dynamic_transport_status();
+            return Ok(None);
+        }
+
+        if transfer_id.is_empty() {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "WebRTC transport frame missing transferId",
+                    "peer": peer,
+                    "kind": kind,
+                })),
+            ));
+        }
+
+        if kind == "start" {
+            let total_frames = frame
+                .get("totalFrames")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
+            let total_bytes = frame.get("totalBytes").and_then(Value::as_u64).unwrap_or(0) as usize;
+            if total_frames == 0 || total_frames > 100_000 || total_bytes > MAX_TRANSFER_BYTES {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "invalid WebRTC transport frame count",
+                        "transferId": transfer_id,
+                        "totalFrames": total_frames,
+                        "totalBytes": total_bytes,
+                        "maxBytes": MAX_TRANSFER_BYTES,
+                        "peer": peer,
+                    })),
+                ));
+            }
+            self.incoming_frames.lock().insert(
+                transfer_id.clone(),
+                IncomingFrame {
+                    peer: peer.clone(),
+                    attempt: frame.get("attempt").and_then(Value::as_u64).unwrap_or(0),
+                    total_frames,
+                    total_bytes,
+                    next_ack_seq: usize::min(FRAME_ACK_WINDOW - 1, total_frames - 1),
+                    received: vec![None; total_frames],
+                },
+            );
+            self.completed_frame_acks.lock().remove(&transfer_id);
+            self.refresh_dynamic_transport_status();
+            return Ok(None);
+        }
+
+        if kind == "resume" {
+            let completed_ack =
+                self.completed_frame_acks
+                    .lock()
+                    .get(&transfer_id)
+                    .and_then(|completed| {
+                        if completed.peer != *peer {
+                            return None;
+                        }
+                        Some((completed.ack_seq as i64, completed.received_frames, true))
+                    });
+            if let Some((ack_seq, received_frames, final_ack)) = completed_ack {
+                send_transport_ack(
+                    &data_channel,
+                    &transfer_id,
+                    ack_seq,
+                    received_frames,
+                    final_ack,
+                    true,
+                )
+                .await?;
+                self.record_status(|status| {
+                    status.resume_ack_count = status.resume_ack_count.saturating_add(1);
+                });
+                return Ok(None);
+            }
+
+            let resume_ack = {
+                let incoming = self.incoming_frames.lock();
+                incoming.get(&transfer_id).and_then(|entry| {
+                    if entry.peer != *peer {
+                        return None;
+                    }
+                    Some((
+                        highest_contiguous_seq(&entry.received)
+                            .map(|seq| seq as i64)
+                            .unwrap_or(-1),
+                        entry
+                            .received
+                            .iter()
+                            .filter(|chunk| chunk.is_some())
+                            .count(),
+                    ))
+                })
+            };
+            if let Some((ack_seq, received_frames)) = resume_ack {
+                send_transport_ack(
+                    &data_channel,
+                    &transfer_id,
+                    ack_seq,
+                    received_frames,
+                    false,
+                    true,
+                )
+                .await?;
+                self.record_status(|status| {
+                    status.resume_ack_count = status.resume_ack_count.saturating_add(1);
+                });
+            }
+            return Ok(None);
+        }
+
+        if kind != "chunk" {
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "unknown WebRTC transport frame kind",
+                    "transferId": transfer_id,
+                    "kind": kind,
+                    "peer": peer,
+                })),
+            ));
+        }
+
+        let seq = frame.get("seq").and_then(Value::as_u64).ok_or_else(|| {
+            new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "message": "WebRTC transport chunk missing seq",
+                    "transferId": transfer_id,
+                    "peer": peer,
+                })),
+            )
+        })? as usize;
+        let data = frame
+            .get("data")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let attempt = frame.get("attempt").and_then(Value::as_u64).unwrap_or(0);
+
+        let frame_status = {
+            let mut incoming = self.incoming_frames.lock();
+            let entry = incoming.get_mut(&transfer_id).ok_or_else(|| {
+                new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "WebRTC transport chunk arrived without start",
+                        "transferId": transfer_id,
+                        "peer": peer,
+                    })),
+                )
+            })?;
+            if entry.attempt != attempt {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "stale WebRTC transport chunk attempt",
+                        "transferId": transfer_id,
+                        "seq": seq,
+                        "attempt": attempt,
+                        "expectedAttempt": entry.attempt,
+                        "peer": peer,
+                    })),
+                ));
+            }
+            if entry.peer != *peer || seq >= entry.total_frames {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "invalid WebRTC transport chunk",
+                        "transferId": transfer_id,
+                        "seq": seq,
+                        "peer": peer,
+                    })),
+                ));
+            }
+            entry.received[seq] = Some(data);
+            if entry.received.iter().any(Option::is_none) {
+                let contiguous_seq = highest_contiguous_seq(&entry.received);
+                if contiguous_seq
+                    .map(|seq| seq >= entry.next_ack_seq && seq < entry.total_frames - 1)
+                    .unwrap_or(false)
+                {
+                    let ack_seq = contiguous_seq.expect("checked above");
+                    entry.next_ack_seq =
+                        usize::min(ack_seq + FRAME_ACK_WINDOW, entry.total_frames - 1);
+                    FrameReceiveStatus::WindowAck { ack_seq }
+                } else {
+                    FrameReceiveStatus::Pending
+                }
+            } else {
+                let entry = incoming.remove(&transfer_id).expect("entry exists");
+                let mut text = String::new();
+                for chunk in entry.received {
+                    text.push_str(&chunk.unwrap_or_default());
+                }
+                if entry.total_bytes != 0 && text.len() != entry.total_bytes {
+                    return Err(new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(serde_json::json!({
+                            "message": "WebRTC transport frame size mismatch",
+                            "transferId": transfer_id,
+                            "expectedBytes": entry.total_bytes,
+                            "actualBytes": text.len(),
+                            "peer": peer,
+                        })),
+                    ));
+                }
+                FrameReceiveStatus::Complete {
+                    text,
+                    ack_seq: entry.total_frames - 1,
+                }
+            }
+        };
+
+        match frame_status {
+            FrameReceiveStatus::Pending => Ok(None),
+            FrameReceiveStatus::WindowAck { ack_seq } => {
+                send_transport_ack(
+                    &data_channel,
+                    &transfer_id,
+                    ack_seq as i64,
+                    ack_seq + 1,
+                    false,
+                    false,
+                )
+                .await?;
+                Ok(None)
+            }
+            FrameReceiveStatus::Complete { text, ack_seq } => {
+                self.completed_frame_acks.lock().insert(
+                    transfer_id.clone(),
+                    CompletedFrameAck {
+                        peer: peer.clone(),
+                        ack_seq,
+                        received_frames: ack_seq + 1,
+                    },
+                );
+                self.refresh_dynamic_transport_status();
+                send_transport_ack(
+                    &data_channel,
+                    &transfer_id,
+                    ack_seq as i64,
+                    ack_seq + 1,
+                    true,
+                    false,
+                )
+                .await?;
+                Ok(Some(text))
+            }
+        }
+    }
+
+    fn record_sent_transport_frame(&self, frame: &Value) {
+        let frame_bytes = serde_json::to_string(frame)
+            .map(|text| text.len() as u64)
+            .unwrap_or(0);
+        self.record_status(|status| {
+            status.sent_frames = status.sent_frames.saturating_add(1);
+            status.sent_bytes = status.sent_bytes.saturating_add(frame_bytes);
+        });
+    }
+
+    fn record_received_transport_frame(&self, frame: &Value) {
+        let frame_bytes = serde_json::to_string(frame)
+            .map(|text| text.len() as u64)
+            .unwrap_or(0);
+        self.record_status(|status| {
+            status.received_frames = status.received_frames.saturating_add(1);
+            status.received_bytes = status.received_bytes.saturating_add(frame_bytes);
+        });
+    }
+
+    fn record_ack_lag(&self, sent_at_ms: u64) {
+        let lag = now_ms().saturating_sub(sent_at_ms);
+        self.record_status(|status| {
+            status.last_ack_lag_ms = lag;
+        });
+    }
+
+    fn refresh_dynamic_transport_status(&self) {
+        let pending_acks = self.pending_frame_acks.lock().len();
+        let incoming_transfers = self.incoming_frames.lock().len();
+        let completed_ack_cache_size = self.completed_frame_acks.lock().len();
+        self.record_status(|status| {
+            status.pending_acks = pending_acks;
+            status.incoming_transfers = incoming_transfers;
+            status.completed_ack_cache_size = completed_ack_cache_size;
+        });
+    }
+
+    fn refresh_send_queue_status(&self) {
+        let mut high = 0usize;
+        let mut normal = 0usize;
+        let mut low = 0usize;
+        for queue in self.send_queues.lock().values() {
+            high += queue.high.len();
+            normal += queue.normal.len();
+            low += queue.low.len();
+        }
+        self.record_status(|status| {
+            status.priority_queue_depth = high + normal + low;
+            status.high_priority_queue_depth = high;
+            status.normal_priority_queue_depth = normal;
+            status.low_priority_queue_depth = low;
+        });
+    }
+
+    fn record_status(&self, update: impl FnOnce(&mut WebRtcFrameTransportStatus)) {
+        let mut status = self.transport_status.lock();
+        update(&mut status);
+        status.updated_at_ms = now_ms();
+    }
+}
+
+enum FrameReceiveStatus {
+    Pending,
+    WindowAck { ack_seq: usize },
+    Complete { text: String, ack_seq: usize },
+}
+
+async fn send_transport_ack(
+    data_channel: &Arc<dyn DataChannel>,
+    transfer_id: &str,
+    ack_seq: i64,
+    received_frames: usize,
+    final_ack: bool,
+    resume: bool,
+) -> RxResult<()> {
+    let ack = transport_ack_frame(transfer_id, ack_seq, received_frames, final_ack, resume);
+    send_json_text(data_channel, &ack).await
+}
+
+fn transport_start_frame(
+    transfer_id: &str,
+    attempt: usize,
+    total_frames: usize,
+    total_bytes: usize,
+) -> Value {
+    serde_json::json!({
+        "ctoxFrame": CTOX_FRAME_PROTOCOL,
+        "kind": "start",
+        "transferId": transfer_id,
+        "windowSize": FRAME_ACK_WINDOW,
+        "attempt": attempt,
+        "totalFrames": total_frames,
+        "totalBytes": total_bytes,
+    })
+}
+
+fn transport_chunk_frame(transfer_id: &str, attempt: usize, seq: usize, data: &str) -> Value {
+    serde_json::json!({
+        "ctoxFrame": CTOX_FRAME_PROTOCOL,
+        "kind": "chunk",
+        "transferId": transfer_id,
+        "attempt": attempt,
+        "seq": seq,
+        "data": data,
+    })
+}
+
+fn transport_ack_frame(
+    transfer_id: &str,
+    ack_seq: i64,
+    received_frames: usize,
+    final_ack: bool,
+    resume: bool,
+) -> Value {
+    serde_json::json!({
+        "ctoxFrame": CTOX_FRAME_PROTOCOL,
+        "kind": "ack",
+        "transferId": transfer_id,
+        "ackSeq": ack_seq,
+        "receivedFrames": received_frames,
+        "final": final_ack,
+        "resume": resume,
+    })
+}
+
+fn transport_resume_frame(transfer_id: &str, attempt: usize, ack_seq: usize) -> Value {
+    serde_json::json!({
+        "ctoxFrame": CTOX_FRAME_PROTOCOL,
+        "kind": "resume",
+        "transferId": transfer_id,
+        "attempt": attempt,
+        "ackSeq": ack_seq,
+    })
 }
 
 struct RsPeerConnectionEvents {
@@ -467,6 +1376,8 @@ fn install_data_channel(
     let connect_subject = handler.connect_subject.clone();
     let disconnect_subject = handler.disconnect_subject.clone();
     let error_subject = handler.error_subject.clone();
+    let handler_for_task = Arc::clone(&handler);
+    let data_channel_for_task = Arc::clone(&data_channel);
     let peer_for_task = remote_peer_id.clone();
     let task = tokio::spawn(async move {
         while let Some(event) = data_channel.poll().await {
@@ -474,28 +1385,60 @@ fn install_data_channel(
                 DataChannelEvent::OnOpen => connect_subject.next(peer_for_task.clone()),
                 DataChannelEvent::OnMessage(msg) => {
                     let text = String::from_utf8_lossy(&msg.data).to_string();
-                    match serde_json::from_str::<Value>(&text) {
-                        Ok(value)
-                            if value.get("result").is_some() || value.get("error").is_some() =>
+                    let value = match serde_json::from_str::<Value>(&text) {
+                        Ok(value) => value,
+                        Err(err) => {
+                            error_subject.next(decode_error("frame", err, &text));
+                            continue;
+                        }
+                    };
+                    let value = if is_ctox_transport_frame(&value) {
+                        match handler_for_task
+                            .handle_transport_frame(
+                                &peer_for_task,
+                                Arc::clone(&data_channel_for_task),
+                                value,
+                            )
+                            .await
                         {
-                            match serde_json::from_value::<WebRTCResponse>(value) {
-                                Ok(response) => response_subject.next(PeerWithResponse {
-                                    peer: peer_for_task.clone(),
-                                    response,
-                                }),
-                                Err(err) => {
-                                    error_subject.next(decode_error("response", err, &text))
+                            Ok(Some(reassembled)) => {
+                                match serde_json::from_str::<Value>(&reassembled) {
+                                    Ok(value) => value,
+                                    Err(err) => {
+                                        error_subject.next(decode_error(
+                                            "reassembled frame",
+                                            err,
+                                            &reassembled,
+                                        ));
+                                        continue;
+                                    }
                                 }
                             }
+                            Ok(None) => continue,
+                            Err(err) => {
+                                error_subject.next(err);
+                                continue;
+                            }
                         }
-                        Ok(value) => match serde_json::from_value(value) {
+                    } else {
+                        value
+                    };
+                    if value.get("result").is_some() || value.get("error").is_some() {
+                        match serde_json::from_value::<WebRTCResponse>(value) {
+                            Ok(response) => response_subject.next(PeerWithResponse {
+                                peer: peer_for_task.clone(),
+                                response,
+                            }),
+                            Err(err) => error_subject.next(decode_error("response", err, &text)),
+                        }
+                    } else {
+                        match serde_json::from_value(value) {
                             Ok(message) => message_subject.next(PeerWithMessage {
                                 peer: peer_for_task.clone(),
                                 message,
                             }),
                             Err(err) => error_subject.next(decode_error("message", err, &text)),
-                        },
-                        Err(err) => error_subject.next(decode_error("frame", err, &text)),
+                        }
                     }
                 }
                 DataChannelEvent::OnClose => {
@@ -587,6 +1530,82 @@ fn decode_simple_peer_ice_candidate(
     serde_json::from_value(candidate_value)
 }
 
+fn is_ctox_transport_frame(value: &Value) -> bool {
+    value.get("ctoxFrame").and_then(Value::as_str) == Some(CTOX_FRAME_PROTOCOL)
+}
+
+fn transfer_ack_key(transfer_id: &str, ack_seq: usize) -> String {
+    format!("{transfer_id}|{ack_seq}")
+}
+
+fn highest_contiguous_seq(received: &[Option<String>]) -> Option<usize> {
+    let mut highest = None;
+    for (index, value) in received.iter().enumerate() {
+        if value.is_none() {
+            return highest;
+        }
+        highest = Some(index);
+    }
+    highest
+}
+
+fn classify_send_priority(frame: &WebRTCWireFrame, text: &str) -> SendPriority {
+    match frame {
+        WebRTCWireFrame::Response(_) => SendPriority::High,
+        WebRTCWireFrame::Message(message) => match message.method.as_str() {
+            "ctoxProtocol" | "token" => SendPriority::High,
+            "masterWrite" if text.len() > MAX_INLINE_FRAME_BYTES => SendPriority::Low,
+            _ => SendPriority::Normal,
+        },
+    }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+async fn send_json_text(data_channel: &Arc<dyn DataChannel>, value: &Value) -> RxResult<()> {
+    let text = serde_json::to_string(value).map_err(|e| {
+        new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({
+                "message": format!("serialize WebRTC transport frame failed: {e}"),
+            })),
+        )
+    })?;
+    data_channel
+        .send_text(&text)
+        .await
+        .map_err(|e| webrtc_error("send WebRTC transport frame", e))
+}
+
+fn split_utf8_chunks(text: &str, max_bytes: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < text.len() {
+        let mut end = usize::min(start + max_bytes, text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            end = text[start..]
+                .char_indices()
+                .nth(1)
+                .map(|(offset, _)| start + offset)
+                .unwrap_or(text.len());
+        }
+        chunks.push(text[start..end].to_string());
+        start = end;
+    }
+    chunks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -658,5 +1677,226 @@ mod tests {
         assert_eq!(candidate.sdp_mid.as_deref(), Some("0"));
         assert_eq!(candidate.sdp_mline_index, Some(0));
         assert_eq!(candidate.username_fragment.as_deref(), Some("ufrag"));
+    }
+
+    #[test]
+    fn splits_transport_chunks_on_utf8_boundaries() {
+        let chunks = split_utf8_chunks("aaäbb🙂cc", 4);
+
+        assert_eq!(chunks.concat(), "aaäbb🙂cc");
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 4));
+    }
+
+    #[test]
+    fn detects_ctox_transport_frames() {
+        assert!(is_ctox_transport_frame(&serde_json::json!({
+            "ctoxFrame": CTOX_FRAME_PROTOCOL,
+            "kind": "start",
+            "transferId": "t1"
+        })));
+        assert!(!is_ctox_transport_frame(&serde_json::json!({
+            "id": "m1",
+            "method": "token"
+        })));
+    }
+
+    #[test]
+    fn frame_protocol_fixture_matches_rust_constants() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webrtc-frame-protocol.json"
+        ))
+        .unwrap();
+
+        assert_eq!(
+            fixture.get("protocol").and_then(Value::as_str),
+            Some(CTOX_FRAME_PROTOCOL)
+        );
+        assert_eq!(
+            fixture.get("maxInlineFrameBytes").and_then(Value::as_u64),
+            Some(MAX_INLINE_FRAME_BYTES as u64)
+        );
+        assert_eq!(
+            fixture.get("maxChunkBytes").and_then(Value::as_u64),
+            Some(MAX_CHUNK_BYTES as u64)
+        );
+        assert_eq!(
+            fixture.get("maxTransferBytes").and_then(Value::as_u64),
+            Some(MAX_TRANSFER_BYTES as u64)
+        );
+        assert_eq!(
+            fixture.get("ackWindow").and_then(Value::as_u64),
+            Some(FRAME_ACK_WINDOW as u64)
+        );
+        assert_eq!(
+            fixture.get("maxFrameRetries").and_then(Value::as_u64),
+            Some(MAX_FRAME_RETRIES as u64)
+        );
+        for kind in ["start", "chunk", "ack", "resume"] {
+            let frame = &fixture["frames"][kind];
+            assert_eq!(
+                frame.get("ctoxFrame").and_then(Value::as_str),
+                Some(CTOX_FRAME_PROTOCOL)
+            );
+            assert_eq!(frame.get("kind").and_then(Value::as_str), Some(kind));
+        }
+        assert_eq!(
+            fixture["frames"]["start"]
+                .get("windowSize")
+                .and_then(Value::as_u64),
+            Some(FRAME_ACK_WINDOW as u64)
+        );
+        assert_eq!(
+            fixture["frames"]["ack"]
+                .get("receivedFrames")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            fixture["frames"]["ack"]
+                .get("resume")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            fixture["frames"]["resume"]
+                .get("ackSeq")
+                .and_then(Value::as_u64),
+            fixture["frames"]["ack"]
+                .get("ackSeq")
+                .and_then(Value::as_u64)
+        );
+    }
+
+    #[test]
+    fn frame_transport_status_exposes_protocol_counters() {
+        let handler = WebRTCRsConnectionHandler::new();
+
+        handler.record_sent_transport_frame(&serde_json::json!({
+            "ctoxFrame": CTOX_FRAME_PROTOCOL,
+            "kind": "chunk",
+            "transferId": "t1",
+            "seq": 0,
+            "data": "abc"
+        }));
+        handler.record_received_transport_frame(&serde_json::json!({
+            "ctoxFrame": CTOX_FRAME_PROTOCOL,
+            "kind": "ack",
+            "transferId": "t1",
+            "ackSeq": 0
+        }));
+        let (ack_tx, _ack_rx) = tokio::sync::oneshot::channel();
+        handler.pending_frame_acks.lock().insert(
+            transfer_ack_key("t1", 0),
+            PendingFrameAck {
+                sender: ack_tx,
+                sent_at_ms: now_ms(),
+            },
+        );
+
+        let status = handler.frame_transport_status();
+        assert_eq!(status.protocol, CTOX_FRAME_PROTOCOL);
+        assert_eq!(status.max_transfer_bytes, MAX_TRANSFER_BYTES);
+        assert_eq!(status.ack_window, FRAME_ACK_WINDOW);
+        assert_eq!(status.pending_acks, 1);
+        assert_eq!(status.sent_frames, 1);
+        assert_eq!(status.received_frames, 1);
+        assert!(status.sent_bytes > 0);
+        assert!(status.received_bytes > 0);
+
+        let json = handler.frame_transport_status_json();
+        assert_eq!(
+            json.get("protocol").and_then(Value::as_str),
+            Some(CTOX_FRAME_PROTOCOL)
+        );
+        assert_eq!(json.get("pendingAcks").and_then(Value::as_u64), Some(1));
+        assert_eq!(json.get("sentFrames").and_then(Value::as_u64), Some(1));
+        assert_eq!(json.get("receivedFrames").and_then(Value::as_u64), Some(1));
+    }
+
+    #[test]
+    fn classifies_send_priority_for_scheduler() {
+        let token = WebRTCWireFrame::Message(WebRTCMessage {
+            id: "m1".to_string(),
+            method: "token".to_string(),
+            params: Vec::new(),
+        });
+        let response = WebRTCWireFrame::Response(WebRTCResponse {
+            id: "r1".to_string(),
+            result: Value::Null,
+            error: None,
+        });
+        let large_write = WebRTCWireFrame::Message(WebRTCMessage {
+            id: "m2".to_string(),
+            method: "masterWrite".to_string(),
+            params: Vec::new(),
+        });
+
+        assert_eq!(classify_send_priority(&token, "{}"), SendPriority::High);
+        assert_eq!(classify_send_priority(&response, "{}"), SendPriority::High);
+        assert_eq!(
+            classify_send_priority(&large_write, &"x".repeat(MAX_INLINE_FRAME_BYTES + 1)),
+            SendPriority::Low
+        );
+    }
+
+    #[test]
+    fn frame_transport_status_exposes_send_queue_depths() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let (high_tx, _high_rx) = tokio::sync::oneshot::channel();
+        let (low_tx, _low_rx) = tokio::sync::oneshot::channel();
+        let mut queue = PeerSendQueue::default();
+        queue.push(QueuedSend {
+            text: "{}".to_string(),
+            priority: SendPriority::High,
+            result: high_tx,
+        });
+        queue.push(QueuedSend {
+            text: "{}".to_string(),
+            priority: SendPriority::Low,
+            result: low_tx,
+        });
+        handler
+            .send_queues
+            .lock()
+            .insert("peer-1".to_string(), queue);
+
+        let status = handler.frame_transport_status();
+        assert_eq!(status.priority_queue_depth, 2);
+        assert_eq!(status.high_priority_queue_depth, 1);
+        assert_eq!(status.low_priority_queue_depth, 1);
+
+        let json = handler.frame_transport_status_json();
+        assert_eq!(
+            json.get("priorityQueueDepth").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            json.get("highPriorityQueueDepth").and_then(Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn rust_transport_frame_builders_match_shared_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webrtc-frame-protocol.json"
+        ))
+        .unwrap();
+        let transfer_id = fixture["frames"]["start"]
+            .get("transferId")
+            .and_then(Value::as_str)
+            .unwrap();
+
+        let start = transport_start_frame(transfer_id, 0, 3, 30000);
+        assert_eq!(start, fixture["frames"]["start"]);
+
+        let chunk = transport_chunk_frame(transfer_id, 0, 1, "payload-fragment");
+        assert_eq!(chunk, fixture["frames"]["chunk"]);
+
+        let ack = transport_ack_frame(transfer_id, 1, 2, false, false);
+        assert_eq!(ack, fixture["frames"]["ack"]);
+
+        let resume = transport_resume_frame(transfer_id, 0, 1);
+        assert_eq!(resume, fixture["frames"]["resume"]);
     }
 }

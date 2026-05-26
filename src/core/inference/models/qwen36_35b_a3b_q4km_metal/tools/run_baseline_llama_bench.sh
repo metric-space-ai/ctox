@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Origin: CTOX
-# License: Apache-2.0
+# License: AGPL-3.0-only
 #
 # Capture the GGML/llama.cpp Q4_K_M Metal **baseline** for
 # Qwen3.6-35B-A3B on this Apple-Silicon host.

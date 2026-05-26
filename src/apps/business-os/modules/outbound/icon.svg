@@ -1,0 +1,11 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="svg-icon svg-outbound" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad-outbound" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#f43f5e" />
+    </linearGradient>
+  </defs>
+  <line x1="22" y1="2" x2="11" y2="13" stroke="url(#grad-outbound)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></line>
+  <polygon points="22 2 15 22 11 13 2 9 22 2" fill="url(#grad-outbound)" fill-opacity="0.12" stroke="url(#grad-outbound)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polygon>
+  <path d="M6 19c3-1 6-1 9-3" stroke="url(#grad-outbound)" stroke-width="1.5" stroke-dasharray="2 2" stroke-linecap="round"></path>
+</svg>

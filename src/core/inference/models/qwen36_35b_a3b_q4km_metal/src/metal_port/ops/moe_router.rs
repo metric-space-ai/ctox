@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! MoE top-k router. Pure Rust because the routing logic itself is
 //! a softmax + top-k pick over a 256-wide vector — totally CPU-friendly

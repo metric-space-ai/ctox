@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! ARCHITECTURE VALIDATION — chain ALL 40 layer-blocks + LM head into
 //! ONE MTLCommandBuffer. Measures real per-token decode latency on

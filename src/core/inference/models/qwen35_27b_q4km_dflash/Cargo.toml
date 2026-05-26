@@ -3,7 +3,7 @@ name = "ctox-qwen35-27b-q4km-dflash"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Self-contained Qwen3.5-27B Q4_K_M target + DFlash speculative-decoding draft. Byte-exact Rust port of lucebox/dflash. All ggml + ggml-cuda CUDA kernels and the ggml C FFI are vendored inside this crate — no code shared with other models."
 
 # Keep this crate OUT of any parent workspace. The tree sits under

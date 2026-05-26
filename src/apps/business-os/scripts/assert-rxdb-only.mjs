@@ -36,6 +36,10 @@ const offenders = [];
 assertBusinessOsShellBuildKeyIsCurrent();
 assertAdvancedStatusInterfaceExists();
 assertFileChunkIntegrityContract();
+assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
+assertSyncWarmupDoesNotBlockBoot();
+assertConnectionSmokeRequiresAdvancedStatusBootBudget();
+assertLoginDoesNotDefaultToAdmin();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
@@ -67,11 +71,27 @@ function assertBusinessOsShellBuildKeyIsCurrent() {
   }
 }
 
+function assertLoginDoesNotDefaultToAdmin() {
+  const appPath = join(appRoot, 'app.js');
+  const appContent = readFileSync(appPath, 'utf8');
+  if (/loginUser\s*\|\|\s*['"]admin['"]/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: login form must not default username to admin');
+  }
+  if (/placeholder=["']admin["']/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: login form must not show admin placeholder');
+  }
+  if (!/const\s+pairedConfig\s*=\s*await\s+readBusinessOsLaunchConfig\(\)/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: loadSession must await pairing config before authenticating');
+  }
+}
+
 function assertAdvancedStatusInterfaceExists() {
   const appPath = join(appRoot, 'app.js');
   const syncPath = join(appRoot, 'shared/sync.js');
+  const dbPath = join(appRoot, 'shared/db.js');
   const appContent = readFileSync(appPath, 'utf8');
   const syncContent = readFileSync(syncPath, 'utf8');
+  const dbContent = readFileSync(dbPath, 'utf8');
   if (!/CTOX_BUSINESS_OS_STATUS/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: missing advanced Business OS status interface');
   }
@@ -81,14 +101,19 @@ function assertAdvancedStatusInterfaceExists() {
   for (const requiredCheck of [
     'workspaceNotLoading',
     'dataPlaneWebrtc',
+    'rxdbRuntimeAppLocal',
     'moduleCatalogAvailable',
     'requiredCollectionsConnected',
     'requiredCollectionsInitialSyncComplete',
+    'requiredCollectionsCheckpointEpochAdvertised',
     'noStalledReconnect',
   ]) {
     if (!appContent.includes(requiredCheck)) {
       offenders.push(`src/apps/business-os/app.js: advanced status missing ${requiredCheck}`);
     }
+  }
+  if (!/rxdbRuntime/.test(appContent) || !/ctox-rxdb-js/.test(dbContent) || !/packageManager:\s*'none'/.test(dbContent)) {
+    offenders.push('src/apps/business-os: advanced status missing app-local no-package-manager RxDB runtime evidence');
   }
   for (const criticalCollection of [
     'business_module_catalog',
@@ -126,20 +151,50 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/CtoxWebRtcPeerLifecycleEvent/.test(syncContent) || !/classifyPeerLifecycleEvent/.test(syncContent)) {
     offenders.push('src/apps/business-os/shared/sync.js: missing typed WebRTC peer lifecycle diagnostics');
   }
+  if (!/__ctoxSyncTestHooks[\s\S]{0,140}classifyPeerLifecycleEvent/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: peer lifecycle classifier is not exposed to executable guards');
+  }
+  if (!/ctox_data_channel_error/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: data-channel close is not classified as recoverable lifecycle');
+  }
+  if (!/lastLifecycleEvent:\s*null/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: successful reconnect paths do not clear stale lifecycle status');
+  }
   if (!/peerSessions/.test(appContent) || !/remotePeerSession/.test(syncContent) || !/peerSessionSeenAt/.test(syncContent)) {
     offenders.push('src/apps/business-os: advanced status missing peer-session diagnostics');
   }
   if (!/ctox-checkpoint-epoch-v1/.test(syncContent) || !/remoteCheckpoint/.test(syncContent) || !/sanitizeAdvancedStatusRemoteCheckpoint/.test(appContent)) {
     offenders.push('src/apps/business-os: advanced status missing remote checkpoint epoch diagnostics');
   }
+  if (!/hasAdvertisedCheckpointEpoch/.test(appContent) || !/missingCheckpointEpoch/.test(appContent) || !/checkpointEpochAdvertised/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status does not gate required collection readiness on checkpoint epoch evidence');
+  }
   if (!/CtoxCheckpointProtocolError/.test(syncContent) || !/ctox_checkpoint_epoch_missing/.test(syncContent) || !/checkpointErrors/.test(appContent)) {
     offenders.push('src/apps/business-os: advanced status missing typed checkpoint protocol errors');
   }
-  if (!/CtoxSchemaProtocolError/.test(syncContent) || !/ctox_schema_hash_mismatch/.test(syncContent) || !/schemaErrors/.test(appContent) || !/noSchemaProtocolErrors/.test(appContent)) {
+  if (!/CtoxSchemaProtocolError/.test(syncContent) || !/ctox_schema_hash_mismatch/.test(syncContent) || !/ctox_rxdb_protocol_mismatch/.test(syncContent) || !/schemaErrors/.test(appContent) || !/noSchemaProtocolErrors/.test(appContent)) {
     offenders.push('src/apps/business-os: advanced status missing typed schema protocol errors');
+  }
+  if (!/classifySchemaProtocolError\?\.\(item\.collection/.test(appContent) || !/__ctoxSyncTestHooks[\s\S]{0,180}classifySchemaProtocolError/.test(syncContent)) {
+    offenders.push('src/apps/business-os: advanced status does not normalize raw RxDB protocol incompatibility errors');
+  }
+  if (!/sanitizeAdvancedStatusNativePeerRecovery/.test(appContent) || !/ctox_optional_schema_drift/.test(repoBusinessOsContent()) || !/repair-optional-drift/.test(repoBusinessOsContent())) {
+    offenders.push('src/apps/business-os: advanced status missing optional native schema drift recovery metadata');
+  }
+  if (!/health:\s*\{[\s\S]{0,120}errorTotal/.test(appContent) || !/sanitizeAdvancedStatusTypedError/.test(appContent) || !/serializeAdvancedStatusServiceErrors/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status missing unified typed native peer/service health errors');
+  }
+  if (!/ctox-native-rxdb-peer-status-v1/.test(repoBusinessOsContent()) || !/CtoxNativePeerCollectionDegraded/.test(repoBusinessOsContent()) || !/ctox_native_peer_not_running/.test(repoBusinessOsContent())) {
+    offenders.push('src/core/business_os/rxdb_peer.rs: native peer status missing typed health errors');
   }
   if (!/CtoxReplicationIoError/.test(syncContent) || !/ctox_replication_pull_failed/.test(syncContent) || !/ctox_replication_push_failed/.test(syncContent) || !/replicationErrors/.test(appContent) || !/noReplicationIoErrors/.test(appContent)) {
     offenders.push('src/apps/business-os: advanced status missing typed replication I/O errors');
+  }
+  if (!/__ctoxSyncTestHooks/.test(syncContent) || !/explicitRowCount/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: missing executable replication error classifier hooks');
+  }
+  if (!/(classifyReplicationIoError,\s*createSyncRuntime|classifyReplicationIoError\?\.\()/.test(appContent) || !/normalizedError\s*=[\s\S]{0,220}classifyReplicationIoError\?\.\(item\.collection/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status does not normalize raw Rust replication envelopes');
   }
   if (!/peerGeneration/.test(syncContent) || !/generationChangedAt/.test(appContent)) {
     offenders.push('src/apps/business-os: advanced status missing peer-generation diagnostics');
@@ -156,6 +211,22 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/protocol/.test(syncContent) || !/ctox-rxdb-browser-v1/.test(syncContent) || !/ctox-file-chunks-v1/.test(syncContent)) {
     offenders.push('src/apps/business-os/shared/sync.js: missing protocol capability diagnostics');
   }
+  for (const marker of [
+    'bootTimings',
+    'shellVisibleMs',
+    'firstWebRtcConnectedMs',
+    'firstAdvancedStatusHealthyMs',
+    'serializeBootTimings',
+    'markBootTiming',
+  ]) {
+    if (!appContent.includes(marker)) {
+      offenders.push(`src/apps/business-os/app.js: advanced status missing boot timing marker ${marker}`);
+    }
+  }
+}
+
+function repoBusinessOsContent() {
+  return readFileSync(join(repoRoot, 'src/core/business_os/rxdb_peer.rs'), 'utf8');
 }
 
 function assertFileChunkIntegrityContract() {
@@ -193,6 +264,8 @@ function assertFileChunkIntegrityContract() {
     'ctox_file_chunk_integrity_mismatch',
     'file-chunk-reconstruct',
     'readStoredFileFromChunks',
+    'validateChunkMetadata',
+    'size_bytes',
     'validateGenerationContract',
     'validateChunkHashes',
     'validateContentHash',
@@ -203,7 +276,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/shared/file-integrity.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity4']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity5']) {
     if (!fileViewer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }
@@ -213,7 +286,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/desktop-apps/explorer/app.js: uploaded file chunk contract missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity4', 'contentHashScheme']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity5', 'contentHashScheme']) {
     if (!universalImporter.includes(marker)) {
       offenders.push(`src/apps/business-os/shared/universal-importer.js: imported virtual file integrity missing ${marker}`);
     }
@@ -221,6 +294,85 @@ function assertFileChunkIntegrityContract() {
   for (const marker of ['DESKTOP_FILE_CONTENT_HASH_SCHEME', 'DESKTOP_FILE_CHUNK_HASH_SCHEME', 'chunk_hash']) {
     if (!rustPeer.includes(marker)) {
       offenders.push(`src/core/business_os/rxdb_peer.rs: native desktop file chunk contract missing ${marker}`);
+    }
+  }
+}
+
+function assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild() {
+  const notesModulePath = join(appRoot, 'modules/notes/module.json');
+  const notesIndexPath = join(appRoot, 'modules/notes/index.html');
+  const notesScriptPath = join(appRoot, 'modules/notes/index.js');
+  const moduleJson = JSON.parse(readFileSync(notesModulePath, 'utf8'));
+  const indexContent = readFileSync(notesIndexPath, 'utf8');
+  const scriptContent = readFileSync(notesScriptPath, 'utf8');
+  if (moduleJson.entry !== 'modules/notes/index.html') {
+    offenders.push(`src/apps/business-os/modules/notes/module.json: active Notes entry must stay on CTOX RxDB-backed index.html, got ${JSON.stringify(moduleJson.entry)}`);
+  }
+  for (const forbiddenPath of ['build/', 'notesnook-src/']) {
+    if (indexContent.includes(forbiddenPath) || scriptContent.includes(forbiddenPath)) {
+      offenders.push(`src/apps/business-os/modules/notes: active Notes module references inactive legacy Notesnook path ${forbiddenPath}`);
+    }
+  }
+}
+
+function assertSyncWarmupDoesNotBlockBoot() {
+  const appPath = join(appRoot, 'app.js');
+  const appContent = readFileSync(appPath, 'utf8');
+  const bootstrapBody = appContent.match(/async function bootstrap\(\) \{([\s\S]*?)\n\}\n\nasync function resetBusinessDataPlaneForBuildIfNeeded/)?.[1] || '';
+  if (!bootstrapBody) {
+    offenders.push('src/apps/business-os/app.js: could not inspect bootstrap boot path');
+    return;
+  }
+  if (/await\s+startCriticalSyncCollections\s*\(/.test(bootstrapBody)) {
+    offenders.push('src/apps/business-os/app.js: critical RxDB sync warmup blocks Business OS boot');
+  }
+  const loadModulesAt = bootstrapBody.indexOf('modules = await loadModules');
+  const openModuleAt = bootstrapBody.indexOf('await openModule(');
+  const warmupAt = bootstrapBody.indexOf('scheduleCriticalSyncWarmup();');
+  if (warmupAt === -1) {
+    offenders.push('src/apps/business-os/app.js: missing post-boot critical sync warmup scheduling');
+  } else if (loadModulesAt !== -1 && warmupAt < loadModulesAt) {
+    offenders.push('src/apps/business-os/app.js: critical sync warmup starts before module manifests load');
+  } else if (openModuleAt !== -1 && warmupAt < openModuleAt) {
+    offenders.push('src/apps/business-os/app.js: critical sync warmup starts before the visible workspace opens');
+  }
+
+  const catalogBody = appContent.match(/async function loadModuleCatalog\([^)]*\) \{([\s\S]*?)\n\}\n\nasync function readModuleCatalogProjection/)?.[1] || '';
+  if (!catalogBody) {
+    offenders.push('src/apps/business-os/app.js: could not inspect module catalog loading path');
+    return;
+  }
+  const cachedReadAt = catalogBody.indexOf('const cachedCatalog = await readModuleCatalogProjection(coll);');
+  const awaitedSyncStartAt = catalogBody.indexOf("await state.sync?.startCollection?.('business_module_catalog')");
+  if (cachedReadAt === -1) {
+    offenders.push('src/apps/business-os/app.js: module catalog boot path does not read cached RxDB projection first');
+  } else if (awaitedSyncStartAt !== -1 && awaitedSyncStartAt < cachedReadAt) {
+    offenders.push('src/apps/business-os/app.js: module catalog boot path waits for WebRTC before reading local RxDB projection');
+  }
+  const shellSeedAt = catalogBody.indexOf('loadPackagedModuleCatalog()');
+  const awaitSyncStartAt = catalogBody.indexOf('await syncStart;');
+  if (shellSeedAt === -1 || !/async function loadPackagedModuleCatalog\(/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: missing packaged shell module catalog seed for cold Business OS startup');
+  } else if (awaitSyncStartAt !== -1 && awaitSyncStartAt < shellSeedAt) {
+    offenders.push('src/apps/business-os/app.js: cold module catalog boot waits for WebRTC before trying the packaged shell seed');
+  }
+  if (!/loadModules\(\{\s*timeoutMs:\s*20000,\s*allowShellSeed:\s*false\s*\}\)/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: background module refresh must wait for the RxDB projection instead of reusing the shell seed');
+  }
+}
+
+function assertConnectionSmokeRequiresAdvancedStatusBootBudget() {
+  const smokePath = join(repoRoot, 'src/core/rxdb/tools/business_os_connection_modes_smoke.js');
+  const smokeContent = readFileSync(smokePath, 'utf8');
+  for (const marker of [
+    'requiredAdvancedStatusVersion',
+    'business-os-advanced-status-v1',
+    'advancedStatusBootTimings',
+    'statusShellVisibleMs',
+    'advanced status shellVisibleMs exceeded budget',
+  ]) {
+    if (!smokeContent.includes(marker)) {
+      offenders.push(`src/core/rxdb/tools/business_os_connection_modes_smoke.js: startup smoke missing advanced-status boot budget marker ${marker}`);
     }
   }
 }
@@ -236,6 +388,7 @@ function expandFiles(paths) {
 function collect(path, files) {
   const stat = statSync(path, { throwIfNoEntry: false });
   if (!stat) return;
+  if (isInactiveLegacyNotesnookPath(path)) return;
   if (stat.isFile()) {
     if (/\.(js|mjs|html|json|rs)$/.test(path)) files.push(path);
     return;
@@ -244,6 +397,11 @@ function collect(path, files) {
   const name = path.split(/[\\/]/).pop();
   if (excludedSegments.has(name)) return;
   for (const entry of readdirSync(path)) collect(join(path, entry), files);
+}
+
+function isInactiveLegacyNotesnookPath(path) {
+  const rel = relative(appRoot, path);
+  return rel.startsWith(`modules/notes/build`) || rel.startsWith(`modules/notes/notesnook-src`);
 }
 
 function isFrontendFile(file) {

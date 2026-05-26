@@ -1,0 +1,44 @@
+{
+  "id": "calendar",
+  "title": "Kalender",
+  "description": "Mac/Outlook-style calendar with native booking links and availability scheduling.",
+  "entry": "modules/calendar/index.html",
+  "collections": [
+    "business_commands",
+    "calendar_sources",
+    "calendar_calendars",
+    "calendar_events",
+    "calendar_event_instances",
+    "calendar_availability_rules",
+    "calendar_booking_pages",
+    "calendar_booking_holds",
+    "calendar_bookings"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-calendar\"><defs><linearGradient id=\"grad-calendar\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" ry=\"3\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.12\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"9\" y1=\"9\" x2=\"9\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><line x1=\"15\" y1=\"9\" x2=\"15\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><path d=\"M8 2v3M16 2v3\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><rect x=\"5\" y=\"12\" width=\"3\" height=\"3\" rx=\"0.5\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect><rect x=\"10\" y=\"12\" width=\"4\" height=\"5\" rx=\"1\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect></svg>",
+    "left": "Mini-Calendar & Lists",
+    "center": "Calendar Grid",
+    "right": "Inspector & Booking Pages"
+  },
+  "category": "Productivity",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": [
+    "calendar",
+    "booking",
+    "local-first",
+    "scheduler"
+  ],
+  "store": {
+    "summary": "Local-first spatial calendar app with native booking pages, slot reservations, and recurrence rules.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/calendar",
+    "installable": false,
+    "editable_after_install": true,
+    "distribution": "starter-module"
+  },
+  "install_scope": "starter",
+  "default_installed": true
+}

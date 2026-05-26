@@ -67,7 +67,8 @@ flowchart LR
 The supported modes are intentionally delivery choices, not data-channel
 choices. A reachable host, managed ctox.dev entrypoint, or desktop launcher may
 serve the same Business OS shell, but browser business data still goes through
-the RxDB/WebRTC contract.
+the RxDB/WebRTC contract. There is no HTTP bridge for Business OS collections,
+commands, module manifests, files, or runtime state.
 
 For private desktop setups, keep the remote-control/TUI room separate from the
 Business OS sync room. The Business OS values come from:
@@ -364,6 +365,6 @@ checks both runtime task-spawn contracts and harness subagent liveness.
 
 ## License
 
-[Apache License 2.0](LICENSE)
+[GNU Affero General Public License v3.0](LICENSE)
 
 See [docs/legal/NOTICE](docs/legal/NOTICE) for attribution of integrated source trees.

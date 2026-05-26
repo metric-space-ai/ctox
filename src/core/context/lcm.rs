@@ -5417,6 +5417,7 @@ fn continuity_heads_revision_id(
 fn normalize_continuity_diff(kind: ContinuityKind, diff_text: &str) -> Result<String> {
     let mut normalized = Vec::new();
     let mut current_section: Option<String> = None;
+    let mut is_explicit_section = false;
     for raw_line in diff_text.lines() {
         let line = raw_line.trim_end();
         let syntax_line = line.trim_start();
@@ -5425,18 +5426,21 @@ fn normalize_continuity_diff(kind: ContinuityKind, diff_text: &str) -> Result<St
         }
         if syntax_line.starts_with("## ") {
             current_section = Some(syntax_line.trim().to_string());
+            is_explicit_section = true;
             normalized.push(syntax_line.trim().to_string());
             continue;
         }
-        if current_section.is_none() {
+        if !is_explicit_section {
             if let Some(stripped) = syntax_line
                 .strip_prefix('+')
                 .or_else(|| syntax_line.strip_prefix('-'))
                 .map(str::trim)
             {
                 if let Some(section) = infer_continuity_section(kind, stripped) {
-                    current_section = Some(section.to_string());
-                    normalized.push(section.to_string());
+                    if current_section.as_deref() != Some(section) {
+                        current_section = Some(section.to_string());
+                        normalized.push(section.to_string());
+                    }
                 }
             }
         }
@@ -6710,10 +6714,7 @@ mod tests {
             .contains("next_slice: record interrupt buffer and return to the main thread"));
 
         let mission = engine.mission_state(47)?;
-        assert_eq!(
-            mission.mission,
-            "Keep gateway intake hardening as the main mission."
-        );
+        assert_eq!(mission.mission, "keep gateway intake hardening primary");
         assert_eq!(mission.mission_status, "active");
         assert!(mission.is_open);
 
@@ -6741,10 +6742,7 @@ mod tests {
         ));
 
         let mission = engine.mission_state(48)?;
-        assert_eq!(
-            mission.mission,
-            "Keep gateway intake hardening as the main mission."
-        );
+        assert_eq!(mission.mission, "keep gateway intake hardening primary");
         assert_eq!(mission.mission_status, "active");
         assert!(mission.is_open);
 

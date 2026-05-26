@@ -1,12 +1,17 @@
 .conv-module {
   display: grid;
-  grid-template-columns: minmax(280px, 0.7fr) minmax(420px, 1.6fr) minmax(280px, 0.75fr);
+  grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(0, 1fr) 12px var(--conversations-right-width, 320px);
+  gap: 0;
+  padding: 12px;
   height: 100%;
   min-height: 0;
   overflow: hidden;
   color: var(--text);
   background: var(--bg);
+  box-sizing: border-box;
 }
+
+/* Column resizer styling handled by global [data-resizer] in app.css */
 
 /* The hidden attribute has user-agent specificity that loses to .conv-* { display: ... }
    rules. Re-assert it module-wide so toggling [hidden] in JS actually hides elements. */
@@ -22,18 +27,26 @@
   display: grid;
   grid-template-rows: auto auto auto auto minmax(0, 1fr);
   background: var(--surface);
-  border-right: 1px solid var(--hairline, var(--line));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-sizing: border-box;
+}
+
+.conv-pane.conv-left {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
 }
 
 .conv-pane.conv-center {
   grid-template-rows: auto auto minmax(0, 1fr);
-  background: var(--bg);
+  background: var(--surface);
 }
 
 .conv-pane.conv-right {
   grid-template-rows: minmax(0, 1fr);
-  border-right: none;
-  border-left: 1px solid var(--hairline, var(--line));
   background: var(--surface);
 }
 
@@ -488,6 +501,11 @@
   position: relative;
 }
 
+.conv-message.is-highlighted {
+  border-color: color-mix(in srgb, var(--accent) 76%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .conv-message[data-direction="outbound"] {
   justify-self: end;
   border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
@@ -918,6 +936,120 @@ details[open] > .conv-message-details-summary::before {
   font-size: 12px;
 }
 
+.conv-outbound-card {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.conv-outbound-summary {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.conv-outbound-summary strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.conv-outbound-summary span {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.conv-outbound-facts {
+  display: grid;
+  grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
+  gap: 5px 8px;
+  margin: 2px 0;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.conv-outbound-facts dt {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.conv-outbound-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-outbound-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.conv-outbound-reply-classifier {
+  display: grid;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.conv-outbound-reply-classifier label {
+  display: grid;
+  gap: 4px;
+}
+
+.conv-outbound-reply-classifier label span,
+.conv-outbound-reply-classifier small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.conv-outbound-reply-classifier select {
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.conv-action-button {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.conv-action-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--line));
+}
+
+.conv-action-button--primary {
+  border-color: color-mix(in srgb, var(--accent) 62%, var(--line));
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent);
+}
+
 .conv-channel-row {
   display: flex;
   align-items: center;
@@ -1100,10 +1232,11 @@ details[open] > .conv-message-details-summary::before {
 
 @media (max-width: 1080px) {
   .conv-module {
-    grid-template-columns: minmax(240px, 0.85fr) minmax(360px, 1.6fr);
+    grid-template-columns: minmax(240px, 0.85fr) 12px minmax(360px, 1.6fr);
   }
-  .conv-pane.conv-right {
-    display: none;
+  .conv-pane.conv-right,
+  [data-resizer="right"] {
+    display: none !important;
   }
 }
 
@@ -1111,7 +1244,8 @@ details[open] > .conv-message-details-summary::before {
   .conv-module {
     grid-template-columns: 1fr;
   }
-  .conv-pane.conv-left {
-    display: none;
+  .conv-pane.conv-left,
+  [data-resizer] {
+    display: none !important;
   }
 }

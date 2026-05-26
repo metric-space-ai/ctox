@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // ref: vendor/upstream-config/Qwen3.6-35B-A3B.config.json (2026-05-08)
 //

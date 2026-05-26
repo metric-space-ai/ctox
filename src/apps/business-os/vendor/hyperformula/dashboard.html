@@ -1,0 +1,1047 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>HyperFormula JS ESM Port Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0b0f19;
+      --bg-card: rgba(22, 28, 45, 0.6);
+      --bg-card-hover: rgba(30, 39, 62, 0.7);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-glow: rgba(99, 102, 241, 0.15);
+
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+
+      --color-t1: #a78bfa;
+      --color-t2: #38bdf8;
+      --color-t3: #34d399;
+
+      --status-pending: #64748b;
+      --status-wip: #0284c7;
+      --status-done: #10b981;
+
+      --glow-t1: rgba(167, 139, 250, 0.25);
+      --glow-t2: rgba(56, 189, 248, 0.25);
+      --glow-t3: rgba(52, 211, 153, 0.25);
+
+      --accent-grad: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--text-main);
+      background-color: var(--bg-dark);
+      background-image:
+        radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.1) 0px, transparent 50%),
+        radial-gradient(at 100% 0%, rgba(168, 85, 247, 0.08) 0px, transparent 50%),
+        radial-gradient(at 50% 100%, rgba(236, 72, 153, 0.05) 0px, transparent 50%);
+      background-attachment: fixed;
+      line-height: 1.5;
+      font-size: 14px;
+      padding-bottom: 80px;
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1240px;
+      margin: 0 auto;
+      padding: 40px 24px;
+    }
+
+    /* Header Styling */
+    header {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 32px;
+      margin-bottom: 32px;
+      backdrop-filter: blur(16px);
+      box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5);
+      position: relative;
+      overflow: hidden;
+    }
+
+    header::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: var(--accent-grad);
+    }
+
+    header h1 {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #ffffff 40%, #a5b4fc 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    header h1 .badge-version {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      padding: 4px 10px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #818cf8;
+      border-radius: 99px;
+      -webkit-text-fill-color: initial;
+      font-weight: 500;
+      vertical-align: middle;
+    }
+
+    header .meta {
+      color: var(--text-muted);
+      font-size: 13.5px;
+      display: flex;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+
+    header .meta span {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    header .meta span svg {
+      width: 16px;
+      height: 16px;
+      stroke: var(--text-muted);
+      fill: none;
+    }
+
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 12.5px;
+      color: #38bdf8;
+      background: rgba(56, 189, 248, 0.1);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid rgba(56, 189, 248, 0.2);
+    }
+
+    /* Glassmorphism Section Layout */
+    section {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 32px;
+      box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.4);
+      backdrop-filter: blur(16px);
+      transition: border-color 0.3s, box-shadow 0.3s;
+    }
+
+    section:hover {
+      border-color: rgba(99, 102, 241, 0.2);
+      box-shadow: 0 10px 35px -5px rgba(99, 102, 241, 0.05);
+    }
+
+    section h2 {
+      margin-bottom: 24px;
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      letter-spacing: -0.01em;
+    }
+
+    section h2 svg {
+      width: 20px;
+      height: 20px;
+      stroke: #a78bfa;
+      fill: none;
+    }
+
+    /* Grid layout for stats & progress */
+    .dashboard-grid {
+      display: grid;
+      grid-template-columns: 2fr 1fr;
+      gap: 28px;
+      margin-bottom: 32px;
+    }
+
+    @media (max-width: 900px) {
+      .dashboard-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Overall Progress Circle/Bar Card */
+    .progress-container {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    .progress-bar-container {
+      position: relative;
+      width: 100%;
+      background: rgba(255, 255, 255, 0.05);
+      height: 24px;
+      border-radius: 12px;
+      overflow: hidden;
+      margin: 12px 0 6px 0;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .progress-bar-fill {
+      background: linear-gradient(90deg, #6366f1 0%, #10b981 100%);
+      height: 100%;
+      width: 0%;
+      border-radius: 12px;
+      transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+    }
+
+    .progress-label-wrap {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    .progress-label-wrap .pct {
+      font-size: 28px;
+      font-weight: 700;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .progress-info-sub {
+      font-size: 12.5px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    /* Stat Grid cards */
+    .stat-cards {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+
+    .stat-card {
+      background: rgba(10, 15, 30, 0.4);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 20px;
+      transition: transform 0.2s, border-color 0.2s;
+      position: relative;
+    }
+
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(99, 102, 241, 0.25);
+    }
+
+    .stat-card .lbl {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .stat-card .num {
+      font-size: 32px;
+      font-weight: 700;
+      color: #fff;
+      font-family: 'JetBrains Mono', monospace;
+      line-height: 1.1;
+    }
+
+    .stat-card.done-card .num { color: #10b981; }
+    .stat-card.pending-card .num { color: #f59e0b; }
+
+    /* Interactive Filters */
+    .filter-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 24px;
+      background: rgba(10, 15, 30, 0.3);
+      padding: 16px;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+    }
+
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .filter-label {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+    }
+
+    .filter-pill {
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: 99px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .filter-pill:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #fff;
+    }
+
+    .filter-pill.active {
+      background: #6366f1;
+      border-color: #818cf8;
+      color: #fff;
+      box-shadow: 0 0 10px rgba(99, 102, 241, 0.4);
+    }
+
+    .search-input-wrap {
+      flex-grow: 1;
+      position: relative;
+      min-width: 200px;
+    }
+
+    .search-input {
+      width: 100%;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      color: #fff;
+      padding: 8px 12px 8px 36px;
+      font-size: 13.5px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .search-input:focus {
+      border-color: rgba(99, 102, 241, 0.5);
+      box-shadow: 0 0 8px rgba(99, 102, 241, 0.15);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 12px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      stroke: var(--text-muted);
+      fill: none;
+    }
+
+    /* Tier Progress Card Styles */
+    .tier-progress-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 768px) {
+      .tier-progress-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .tier-progress-card {
+      background: rgba(10, 15, 30, 0.3);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 16px;
+    }
+
+    .tier-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .tier-card-header .title {
+      font-size: 14px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .tier-card-header .fraction {
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+    }
+
+    .tier-bar {
+      height: 8px;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+
+    .tier-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .tier-bar-fill.t1 { background: linear-gradient(90deg, #8b5cf6, #a78bfa); box-shadow: 0 0 8px var(--glow-t1); }
+    .tier-bar-fill.t2 { background: linear-gradient(90deg, #0284c7, #38bdf8); box-shadow: 0 0 8px var(--glow-t2); }
+    .tier-bar-fill.t3 { background: linear-gradient(90deg, #059669, #34d399); box-shadow: 0 0 8px var(--glow-t3); }
+
+    .tier-desc {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.3;
+    }
+
+    /* Table Design */
+    .table-container {
+      overflow-x: auto;
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      background: rgba(5, 8, 16, 0.3);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13.5px;
+      text-align: left;
+    }
+
+    th {
+      background: rgba(10, 15, 30, 0.7);
+      font-weight: 600;
+      color: #fff;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    td {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border-color);
+      vertical-align: middle;
+      transition: background-color 0.2s;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    tr {
+      transition: opacity 0.2s, transform 0.2s;
+    }
+
+    tr.hidden {
+      display: none;
+    }
+
+    tr:hover td {
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    /* Badges & Indicators */
+    .tier-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .tier-badge.t1 { background: rgba(167, 139, 250, 0.12); color: #c084fc; border: 1px solid rgba(167, 139, 250, 0.25); }
+    .tier-badge.t2 { background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.25); }
+    .tier-badge.t3 { background: rgba(52, 211, 153, 0.12); color: #4ade80; border: 1px solid rgba(52, 211, 153, 0.25); }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 3px 10px;
+      border-radius: 99px;
+      font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+    }
+
+    .status-badge::before {
+      content: '';
+      display: inline-block;
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+    }
+
+    .status-badge.done {
+      background: rgba(16, 185, 129, 0.12);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.25);
+    }
+    .status-badge.done::before {
+      background-color: #10b981;
+      box-shadow: 0 0 6px #10b981;
+      animation: pulse 2s infinite;
+    }
+
+    .status-badge.wip {
+      background: rgba(2, 132, 199, 0.12);
+      color: #38bdf8;
+      border: 1px solid rgba(2, 132, 199, 0.25);
+    }
+    .status-badge.wip::before {
+      background-color: #0284c7;
+      box-shadow: 0 0 6px #0284c7;
+    }
+
+    .status-badge.pending {
+      background: rgba(100, 116, 139, 0.12);
+      color: #94a3b8;
+      border: 1px solid rgba(100, 116, 139, 0.25);
+    }
+    .status-badge.pending::before {
+      background-color: #64748b;
+    }
+
+    @keyframes pulse {
+      0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.5); }
+      70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+      100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+
+    .phase-indicator {
+      font-weight: 600;
+      color: #fff;
+    }
+
+    .file-path {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: #e2e8f0;
+      font-weight: 500;
+    }
+
+    .ref-file {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .owner-info {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #cbd5e1;
+    }
+
+    .notes-cell {
+      color: var(--text-muted);
+      font-size: 12.5px;
+      line-height: 1.4;
+      max-width: 320px;
+    }
+
+    .empty-state {
+      padding: 40px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    footer {
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border-color);
+      color: var(--text-muted);
+      font-size: 12px;
+      text-align: center;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    footer a {
+      color: #6366f1;
+      text-decoration: none;
+    }
+    footer a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- Header Block -->
+    <header>
+      <h1>
+        <svg style="width: 28px; height: 28px; fill: none; stroke: url(#accentGrad); stroke-width: 2.5;" viewBox="0 0 24 24">
+          <defs>
+            <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#6366f1" />
+              <stop offset="100%" stop-color="#ec4899" />
+            </linearGradient>
+          </defs>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 0 0 6 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0 1 18 16.5h-2.25m-7.5 0h7.5m-7.5 0-1 3m8.5-3 1 3m0 0h.5m-.5 0h-10.5m10.5 0-1-3m-8.5 3 1-3m1-3h7.5M21 3v9M3 3v9m15 0v3M6 12v3" />
+        </svg>
+        HyperFormula ESM Port Monitor
+        <span class="badge-version">v2.7.1 Upstream</span>
+      </h1>
+      <div class="meta">
+        <span>
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path><line x1="7" y1="7" x2="7.01" y2="7"></line></svg>
+          Substantive High-Fidelity translation
+        </span>
+        <span>
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          Last Updated: <span class="mono">2026-05-20 16:06:30</span>
+        </span>
+        <span>
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+          Registry source: <span class="mono">PORTING.md</span>
+        </span>
+      </div>
+    </header>
+
+    <!-- Main Statistics Panel -->
+    <div class="dashboard-grid">
+      <section class="progress-container">
+        <h2>
+          <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"></path><path d="M22 12A10 10 0 0 0 12 2v10z"></path></svg>
+          Overall Completion
+        </h2>
+        <div class="progress-label-wrap">
+          <span>Formula Engine Integrity</span>
+          <span class="pct" id="overall-pct">0%</span>
+        </div>
+        <div class="progress-bar-container">
+          <div class="progress-bar-fill" id="overall-progress-bar"></div>
+        </div>
+        <div class="progress-info-sub" id="overall-status-sub">
+          0 / 0 modules completed
+        </div>
+      </section>
+
+      <section class="stat-cards">
+        <div class="stat-card">
+          <div class="lbl">Core Files</div>
+          <div class="num" id="total-count">0</div>
+        </div>
+        <div class="stat-card done-card">
+          <div class="lbl">Ported (Done)</div>
+          <div class="num" id="done-count">0</div>
+        </div>
+        <div class="stat-card pending-card">
+          <div class="lbl">Pending / WIP</div>
+          <div class="num" id="pending-count">0</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Tier-specific stats card group -->
+    <section>
+      <h2>
+        <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+        Port Integrity by Target Tier
+      </h2>
+      <div class="tier-progress-grid">
+        <div class="tier-progress-card">
+          <div class="tier-card-header">
+            <span class="title"><span class="tier-badge t1">T1</span> Architectural</span>
+            <span class="fraction" id="t1-fraction">0/0</span>
+          </div>
+          <div class="tier-bar">
+            <div class="tier-bar-fill t1" id="t1-bar" style="width: 0%"></div>
+          </div>
+          <div class="tier-desc">Algorithmic core (AST parser, Kahn topological sorter, interpreter). Requires full verification.</div>
+        </div>
+
+        <div class="tier-progress-card">
+          <div class="tier-card-header">
+            <span class="title"><span class="tier-badge t2">T2</span> Substantive</span>
+            <span class="fraction" id="t2-fraction">0/0</span>
+          </div>
+          <div class="tier-bar">
+            <div class="tier-bar-fill t2" id="t2-bar" style="width: 0%"></div>
+          </div>
+          <div class="tier-desc">Substantial coordinate and grid translation. High ESM class syntax conformity.</div>
+        </div>
+
+        <div class="tier-progress-card">
+          <div class="tier-card-header">
+            <span class="title"><span class="tier-badge t3">T3</span> Syntax-Only</span>
+            <span class="fraction" id="t3-fraction">0/0</span>
+          </div>
+          <div class="tier-bar">
+            <div class="tier-bar-fill t3" id="t3-bar" style="width: 0%"></div>
+          </div>
+          <div class="tier-desc">Mechanical TypeScript transpilation. Removing static typing, keeping standard options/keys.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Implementation Tracking Matrix -->
+    <section>
+      <h2>
+        <svg viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="15" y1="3" x2="15" y2="21"></line><line x1="3" y1="9" x2="21" y2="9"></line><line x1="3" y1="15" x2="21" y2="15"></line></svg>
+        Implementation Tracking Matrix
+      </h2>
+
+      <!-- Search & Filters -->
+      <div class="filter-bar">
+        <div class="filter-group">
+          <span class="filter-label">Phase:</span>
+          <button class="filter-pill active" onclick="setPhaseFilter('all')">All</button>
+          <button class="filter-pill" onclick="setPhaseFilter('0')">P0</button>
+          <button class="filter-pill" onclick="setPhaseFilter('1')">P1</button>
+          <button class="filter-pill" onclick="setPhaseFilter('2')">P2</button>
+          <button class="filter-pill" onclick="setPhaseFilter('3')">P3</button>
+          <button class="filter-pill" onclick="setPhaseFilter('4')">P4</button>
+        </div>
+
+        <div class="filter-group">
+          <span class="filter-label">Tier:</span>
+          <button class="filter-pill active" onclick="setTierFilter('all')">All</button>
+          <button class="filter-pill" onclick="setTierFilter('T1')">T1</button>
+          <button class="filter-pill" onclick="setTierFilter('T2')">T2</button>
+          <button class="filter-pill" onclick="setTierFilter('T3')">T3</button>
+        </div>
+
+        <div class="filter-group">
+          <span class="filter-label">Status:</span>
+          <button class="filter-pill active" onclick="setStatusFilter('all')">All</button>
+          <button class="filter-pill" onclick="setStatusFilter('done')">Done</button>
+          <button class="filter-pill" onclick="setStatusFilter('pending')">Pending</button>
+        </div>
+
+        <div class="search-input-wrap">
+          <svg class="search-icon" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" class="search-input" id="search-box" placeholder="Search module name or reference..." oninput="handleSearch(this.value)">
+        </div>
+      </div>
+
+      <!-- File Matrix Table -->
+      <div class="table-container">
+        <table id="matrix-table">
+          <thead>
+            <tr>
+              <th style="width: 80px">Phase</th>
+              <th>Module File</th>
+              <th style="width: 90px">Tier</th>
+              <th style="width: 130px">Status</th>
+              <th>Upstream Reference</th>
+              <th style="width: 100px">Owner</th>
+              <th>Technical Scope / Implementation Notes</th>
+            </tr>
+          </thead>
+          <tbody id="matrix-body">
+            <!-- Rendered Dynamically -->
+          </tbody>
+        </table>
+        <div class="empty-state hidden" id="empty-state">
+          No modules match the active search and filter criteria.
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+      <p>CTOX Business OS · HyperFormula ESM License Isolation Port</p>
+      <p>Designed with HSL Dark Glassmorphism · Open <a href="PORTING.md">PORTING.md</a></p>
+    </footer>
+  </div>
+
+  <script>
+    // The source-of-truth dataset of ported files
+    const filesData = [
+      {
+        phase: 0,
+        path: "Config.js",
+        upstream: "src/Config.ts, src/ConfigParams.ts",
+        tier: "T3",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Syntax-only port of spreadsheet defaults and configuration options."
+      },
+      {
+        phase: 0,
+        path: "Sheet.js",
+        upstream: "src/Sheet.ts",
+        tier: "T2",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Two-dimensional matrix storage layer with grid cell getter, setter, and dimensions maps."
+      },
+      {
+        phase: 1,
+        path: "parser/Lexer.js",
+        upstream: "src/parser/LexerConfig.ts",
+        tier: "T3",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Regex formula string scanner and token generator for mathematical operands and Excel ranges."
+      },
+      {
+        phase: 1,
+        path: "parser/Ast.js",
+        upstream: "src/parser/Ast.ts",
+        tier: "T3",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Abstract Syntax Tree structures representing node instances like functions, cell arrays, or operations."
+      },
+      {
+        phase: 1,
+        path: "parser/Address.js",
+        upstream: "src/parser/Address.ts, CellAddress.ts",
+        tier: "T2",
+        status: "done",
+        owner: "Antigravity",
+        notes: "A1 & R1C1 notation parser, cell coordinate index and address translation layer."
+      },
+      {
+        phase: 1,
+        path: "parser/FormulaParser.js",
+        upstream: "src/parser/FormulaParser.ts",
+        tier: "T1",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Operator-precedence recursive-descent parser, converting tokens into robust AST nodes."
+      },
+      {
+        phase: 2,
+        path: "DependencyGraph/Graph.js",
+        upstream: "src/DependencyGraph/Graph.ts",
+        tier: "T2",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Topological graph containing cells/ranges, mapping edge links and cell dependencies."
+      },
+      {
+        phase: 2,
+        path: "DependencyGraph/TopSort.js",
+        upstream: "src/DependencyGraph/TopSort.ts",
+        tier: "T1",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Kahn's cycle-detection algorithm providing chronological grid recalculation order."
+      },
+      {
+        phase: 3,
+        path: "interpreter/FunctionRegistry.js",
+        upstream: "src/interpreter/FunctionRegistry.ts",
+        tier: "T3",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Global function dictionary linking formulas like SUM, AVERAGE, and IF to plugin logic."
+      },
+      {
+        phase: 3,
+        path: "interpreter/Interpreter.js",
+        upstream: "src/interpreter/Interpreter.ts",
+        tier: "T1",
+        status: "done",
+        owner: "Antigravity",
+        notes: "AST walking engine that computes expressions, handles sheet cell arrays, and evaluates formulas."
+      },
+      {
+        phase: 4,
+        path: "Evaluator.js",
+        upstream: "src/Evaluator.ts",
+        tier: "T2",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Recalculation coordinator orchestrating AST walk outputs with Kahn sorted cell updates."
+      },
+      {
+        phase: 4,
+        path: "HyperFormula.js",
+        upstream: "src/HyperFormula.ts",
+        tier: "T1",
+        status: "done",
+        owner: "Antigravity",
+        notes: "Engine facade exposing factory builder APIs, sheets CRUD bindings, and cell retrieval APIs."
+      }
+    ];
+
+    // Filter states
+    let activePhase = 'all';
+    let activeTier = 'all';
+    let activeStatus = 'all';
+    let searchQuery = '';
+
+    // Initialize Dashboard UI
+    document.addEventListener('DOMContentLoaded', () => {
+      calculateStats();
+      renderMatrix();
+      animateProgressBar();
+    });
+
+    function calculateStats() {
+      const total = filesData.length;
+      const done = filesData.filter(f => f.status === 'done').length;
+      const pending = filesData.filter(f => f.status !== 'done').length;
+      const percentage = total > 0 ? ((done / total) * 100).toFixed(1) : 0;
+
+      // Update basic counts
+      document.getElementById('total-count').textContent = total;
+      document.getElementById('done-count').textContent = done;
+      document.getElementById('pending-count').textContent = pending;
+      document.getElementById('overall-pct').textContent = percentage + '%';
+      document.getElementById('overall-status-sub').textContent = `${done} / ${total} modules completed & verified`;
+
+      // Update Tiers
+      const updateTier = (tierId, barId, fractionId) => {
+        const tierFiles = filesData.filter(f => f.tier === tierId);
+        const tierDone = tierFiles.filter(f => f.status === 'done').length;
+        const tierTotal = tierFiles.length;
+        const tierPct = tierTotal > 0 ? (tierDone / tierTotal) * 100 : 0;
+
+        document.getElementById(fractionId).textContent = `${tierDone} / ${tierTotal}`;
+        document.getElementById(barId).style.width = tierPct + '%';
+      };
+
+      updateTier('T1', 't1-bar', 't1-fraction');
+      updateTier('T2', 't2-bar', 't2-fraction');
+      updateTier('T3', 't3-bar', 't3-fraction');
+    }
+
+    function animateProgressBar() {
+      setTimeout(() => {
+        const total = filesData.length;
+        const done = filesData.filter(f => f.status === 'done').length;
+        const pct = total > 0 ? (done / total) * 100 : 0;
+        document.getElementById('overall-progress-bar').style.width = pct + '%';
+      }, 100);
+    }
+
+    // Dynamic Matrix Rendering
+    function renderMatrix() {
+      const tbody = document.getElementById('matrix-body');
+      tbody.innerHTML = '';
+
+      const filtered = filesData.filter(file => {
+        const phaseMatch = activePhase === 'all' || file.phase.toString() === activePhase;
+        const tierMatch = activeTier === 'all' || file.tier === activeTier;
+        const statusMatch = activeStatus === 'all' || file.status === activeStatus;
+        const searchMatch = searchQuery === '' ||
+                            file.path.toLowerCase().includes(searchQuery) ||
+                            file.notes.toLowerCase().includes(searchQuery) ||
+                            file.upstream.toLowerCase().includes(searchQuery);
+        return phaseMatch && tierMatch && statusMatch && searchMatch;
+      });
+
+      if (filtered.length === 0) {
+        document.getElementById('empty-state').classList.remove('hidden');
+        return;
+      }
+      document.getElementById('empty-state').classList.add('hidden');
+
+      filtered.forEach(file => {
+        const tr = document.createElement('tr');
+
+        // Status Badge Style
+        let statusClass = 'pending';
+        if (file.status === 'done') statusClass = 'done';
+        if (file.status === 'wip') statusClass = 'wip';
+
+        // Tier Badge Style
+        let tierClass = file.tier.toLowerCase();
+
+        tr.innerHTML = `
+          <td><span class="phase-indicator">P${file.phase}</span></td>
+          <td class="file-path">${file.path}</td>
+          <td><span class="tier-badge ${tierClass}">${file.tier}</span></td>
+          <td><span class="status-badge ${statusClass}">${file.status}</span></td>
+          <td class="ref-file">${file.upstream}</td>
+          <td class="owner-info">${file.owner}</td>
+          <td class="notes-cell">${file.notes}</td>
+        `;
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Filter Action handlers
+    function setPhaseFilter(phase) {
+      activePhase = phase;
+      updateFilterActiveState(0, phase);
+      renderMatrix();
+    }
+
+    function setTierFilter(tier) {
+      activeTier = tier;
+      updateFilterActiveState(1, tier);
+      renderMatrix();
+    }
+
+    function setStatusFilter(status) {
+      activeStatus = status;
+      updateFilterActiveState(2, status);
+      renderMatrix();
+    }
+
+    function handleSearch(val) {
+      searchQuery = val.trim().toLowerCase();
+      renderMatrix();
+    }
+
+    // Helper to keep pill UI active states aligned
+    function updateFilterActiveState(groupIndex, activeValue) {
+      const groups = document.querySelectorAll('.filter-group');
+      const targetGroup = groups[groupIndex];
+      if (!targetGroup) return;
+
+      const pills = targetGroup.querySelectorAll('.filter-pill');
+      pills.forEach(pill => {
+        const onClickStr = pill.getAttribute('onclick');
+        if (onClickStr && onClickStr.includes(`'${activeValue}'`)) {
+          pill.classList.add('active');
+        } else {
+          pill.classList.remove('active');
+        }
+      });
+    }
+  </script>
+</body>
+</html>

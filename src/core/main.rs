@@ -268,7 +268,16 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
                 if args.get(1).map(String::as_str) == Some("peer")
                     && matches!(
                         args.get(2).map(String::as_str),
-                        None | Some("status" | "ensure")
+                        None | Some("status" | "ensure" | "rotate")
+                    ) =>
+            {
+                return true
+            }
+            "business-os" | "business"
+                if args.get(1).map(String::as_str) == Some("rxdb")
+                    && matches!(
+                        args.get(2).map(String::as_str),
+                        None | Some("repair-optional-drift" | "help" | "--help" | "-h")
                     ) =>
             {
                 return true

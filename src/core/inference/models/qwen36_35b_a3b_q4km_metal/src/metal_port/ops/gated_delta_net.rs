@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Rust dispatcher for the vendored `kernel_gated_delta_net_f32_{1,2,4}`
 //! — the linear-attention "dflash" block of Qwen3.6's hybrid layers.

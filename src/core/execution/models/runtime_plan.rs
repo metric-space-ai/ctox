@@ -5070,7 +5070,7 @@ fn plan_qwen35_2b() -> ModelHarness {
             force_language_model_only: false,
             require_prebuilt_uqff_for_chat_start: false,
             disable_flash_attn: false,
-            isq_singlethread: false,
+            isq_singlethread: true,
             isq_cpu_threads: None,
             moe_experts_backend: None,
             small_uniform_device_layers_scale: None,
@@ -5100,7 +5100,7 @@ fn plan_qwen35_4b() -> ModelHarness {
             force_language_model_only: false,
             require_prebuilt_uqff_for_chat_start: false,
             disable_flash_attn: false,
-            isq_singlethread: false,
+            isq_singlethread: true,
             isq_cpu_threads: None,
             moe_experts_backend: None,
             small_uniform_device_layers_scale: None,
@@ -5130,7 +5130,7 @@ fn plan_qwen35_9b() -> ModelHarness {
             force_language_model_only: false,
             require_prebuilt_uqff_for_chat_start: false,
             disable_flash_attn: false,
-            isq_singlethread: false,
+            isq_singlethread: true,
             isq_cpu_threads: None,
             moe_experts_backend: None,
             small_uniform_device_layers_scale: None,
@@ -5141,7 +5141,7 @@ fn plan_qwen35_9b() -> ModelHarness {
 #[cfg(test)]
 fn plan_qwen35_27b() -> ModelHarness {
     ModelHarness {
-        model: "Qwen/Qwen3.5-35B-A3B",
+        model: "Qwen/Qwen3.5-27B",
         sizing: EmpiricalSizingProfile {
             non_repeating_weight_mb_q4: 1_660,
             repeating_layer_weight_mb_q4: 260,
@@ -5160,7 +5160,7 @@ fn plan_qwen35_27b() -> ModelHarness {
             force_language_model_only: false,
             require_prebuilt_uqff_for_chat_start: false,
             disable_flash_attn: false,
-            isq_singlethread: false,
+            isq_singlethread: true,
             isq_cpu_threads: None,
             moe_experts_backend: None,
             small_uniform_device_layers_scale: None,
@@ -6188,6 +6188,7 @@ fn default_runtime_manifest_for_model(model: &str) -> Option<model_manifest::Run
         "Qwen/Qwen3.5-2B" => default_qwen35_2b_manifest(),
         "Qwen/Qwen3.5-4B" => default_qwen35_4b_manifest(),
         "Qwen/Qwen3.5-9B" => default_qwen35_9b_manifest(),
+        "Qwen/Qwen3.5-27B" => default_qwen35_27b_manifest(),
         "Qwen/Qwen3.5-35B-A3B" => default_qwen35_35b_a3b_manifest(),
         "google/gemma-4-E2B-it" => default_gemma4_e2b_manifest(),
         "google/gemma-4-E4B-it" => default_gemma4_e4b_manifest(),
@@ -7545,7 +7546,7 @@ mod tests {
         let env_map = BTreeMap::new();
         let plan = build_qwen35_35b_a3b_bundle(ChatPreset::Quality, &hardware(3, 24_576), &env_map)
             .selected_plan;
-        assert_eq!(plan.quantization, "Q4K");
+        assert_eq!(plan.quantization, "Q6K");
         assert_eq!(plan.paged_attn, "auto");
         assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
         assert!(plan.device_layers.is_some(), "{plan:?}");
@@ -7553,10 +7554,10 @@ mod tests {
         assert_eq!(sum_device_layers(device_layers), 40);
         assert_eq!(plan.cuda_visible_devices, "0,1,2");
         assert!(device_layers.starts_with("0:"));
-        assert!(plan.force_no_mmap);
+        assert!(!plan.force_no_mmap);
         assert_eq!(plan.topology, None);
         assert!(!plan.allow_device_layers_with_topology);
-        assert!(plan.force_language_model_only);
+        assert!(!plan.force_language_model_only);
         assert!(!plan.disable_flash_attn);
         assert!(!plan.isq_singlethread);
     }
@@ -7603,13 +7604,13 @@ mod tests {
         let env_map = BTreeMap::new();
         let bundle = build_manifest_bundle_with_root(
             None,
-            "Qwen/Qwen3.5-35B-A3B",
+            "Qwen/Qwen3.5-27B",
             ChatPreset::Quality,
             &hardware(3, 24_576),
             &env_map,
         )
-        .expect("qwen3.5-35b-a3b manifest bundle should resolve")
-        .expect("qwen3.5-35b-a3b manifest bundle should exist");
+        .expect("qwen3.5-27b manifest bundle should resolve")
+        .expect("qwen3.5-27b manifest bundle should exist");
         let plan = bundle.selected_plan;
         assert!(plan_satisfies_context_policy(&plan), "{plan:?}");
         assert_eq!(plan.pa_cache_type.as_deref(), Some("turboquant3"));
@@ -7779,15 +7780,15 @@ mod tests {
             40
         );
         assert!(plan.device_layers.as_deref().unwrap().starts_with("0:"));
-        assert!(plan.force_no_mmap);
+        assert!(!plan.force_no_mmap);
         assert_eq!(plan.topology, None);
         assert!(!plan.allow_device_layers_with_topology);
         assert_eq!(plan.nm_device_ordinal, Some(0));
         assert_eq!(plan.base_device_ordinal, Some(0));
         assert_eq!(plan.moe_experts_backend, None);
-        assert!(plan.force_language_model_only);
+        assert!(!plan.force_language_model_only);
         assert!(!plan.disable_flash_attn);
-        assert!(plan.isq_singlethread);
+        assert!(!plan.isq_singlethread);
     }
 
     #[test]
@@ -7863,6 +7864,31 @@ mod tests {
         assert_eq!(plan.pa_context_len, Some(131_072));
         assert_eq!(plan.moe_experts_backend.as_deref(), Some("fast"));
         assert!(plan.isq_singlethread);
+    }
+
+    #[test]
+    fn dump_all_default_runtime_manifests_to_disk() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let dest_dir = root.join("contracts/models/runtime_manifests");
+        std::fs::create_dir_all(&dest_dir).unwrap();
+        let cases = [
+            ("gpt_oss_120b.json", default_gpt_oss_manifest()),
+            ("qwen3_5_2b.json", default_qwen35_2b_manifest()),
+            ("qwen3_5_4b.json", default_qwen35_4b_manifest()),
+            ("qwen3_5_9b.json", default_qwen35_9b_manifest()),
+            ("qwen3_5_27b.json", default_qwen35_27b_manifest()),
+            ("qwen3_5_35b_a3b.json", default_qwen35_35b_a3b_manifest()),
+            ("gemma_4_e2b_it.json", default_gemma4_e2b_manifest()),
+            ("gemma_4_e4b_it.json", default_gemma4_e4b_manifest()),
+            ("gemma_4_26b_a4b_it.json", default_gemma4_26b_a4b_manifest()),
+            ("gemma_4_31b_it.json", default_gemma4_31b_manifest()),
+            ("glm_4_7_flash.json", default_glm47_flash_manifest()),
+        ];
+        for (filename, manifest) in cases {
+            let path = dest_dir.join(filename);
+            let json = serde_json::to_string_pretty(&manifest).unwrap();
+            std::fs::write(&path, json).unwrap();
+        }
     }
 
     #[test]

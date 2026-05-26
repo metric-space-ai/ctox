@@ -1621,6 +1621,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     .filter((error) => error?.name === 'CtoxSchemaProtocolError');
   const replicationErrors = collectionErrors
     .filter((error) => error?.name === 'CtoxReplicationIoError');
+  const serviceErrors = serializeAdvancedStatusServiceErrors(diagnostics?.serviceErrors || diagnostics?.health?.errors || []);
   const lifecycleEvents = collectionValues
     .filter((item) => item?.lastLifecycleEvent)
     .map((item) => serializeAdvancedStatusLifecycleEvent(item))
@@ -1719,12 +1720,20 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       requiredReconnectingCollections,
       optionalReconnectingCollections,
       lifecycleEvents,
+      nativePeerRecovery: sanitizeAdvancedStatusNativePeerRecovery(diagnostics?.nativePeerRecovery || diagnostics?.recovery || null),
       requiredCollections,
       requiredCollectionEvidence,
       missingRequiredCollections,
       initialSync,
       lastError: diagnostics?.lastError || null,
       lastLifecycleEvent: diagnostics?.lastLifecycleEvent || null,
+    },
+    health: {
+      errorTotal: collectionErrors.length + fileIntegrityErrors.length + serviceErrors.length,
+      collectionErrors,
+      fileIntegrityErrors,
+      serviceErrors,
+      lastError: collectionErrors[0] || fileIntegrityErrors[0] || serviceErrors[0] || null,
     },
     fileIntegrity: {
       errorTotal: fileIntegrityErrors.length,
@@ -1738,7 +1747,9 @@ async function buildAdvancedStatusSnapshot(options = {}) {
 function serializeAdvancedStatusCollectionError(item) {
   const error = item?.lastError;
   if (!error) return null;
-  const normalizedError = syncModule?.classifyReplicationIoError?.(item.collection || null, error) || error;
+  const normalizedError = syncModule?.classifySchemaProtocolError?.(item.collection || null, error)
+    || syncModule?.classifyReplicationIoError?.(item.collection || null, error)
+    || error;
   const rawCode = typeof normalizedError.code === 'string' ? normalizedError.code.trim() : '';
   const rawName = typeof normalizedError.name === 'string' ? normalizedError.name.trim() : '';
   const rawMessage = typeof normalizedError.message === 'string' ? normalizedError.message.trim() : '';
@@ -1759,6 +1770,41 @@ function serializeAdvancedStatusCollectionError(item) {
     batchSize: normalizedError.batchSize !== null && Number.isFinite(Number(normalizedError.batchSize)) ? Number(normalizedError.batchSize) : null,
     rowCount: normalizedError.rowCount !== null && Number.isFinite(Number(normalizedError.rowCount)) ? Number(normalizedError.rowCount) : null,
     message: rawMessage.slice(0, 240),
+  };
+}
+
+function sanitizeAdvancedStatusTypedError(error) {
+  if (!error) return null;
+  const name = typeof error.name === 'string' && error.name.trim() ? error.name.trim() : 'Error';
+  const code = typeof error.code === 'string' && error.code.trim() ? error.code.trim() : null;
+  const message = typeof error.message === 'string' ? error.message : String(error);
+  return {
+    name,
+    code,
+    phase: typeof error.phase === 'string' ? error.phase.slice(0, 80) : null,
+    severity: typeof error.severity === 'string' ? error.severity.slice(0, 40) : null,
+    retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
+    message: message.slice(0, 240),
+  };
+}
+
+function serializeAdvancedStatusServiceErrors(errors) {
+  const list = Array.isArray(errors) ? errors : [errors].filter(Boolean);
+  return list
+    .map((error) => sanitizeAdvancedStatusTypedError(error))
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function sanitizeAdvancedStatusNativePeerRecovery(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    code: typeof value.code === 'string' ? value.code.slice(0, 80) : null,
+    action: typeof value.action === 'string' ? value.action.slice(0, 80) : null,
+    status: typeof value.status === 'string' ? value.status.slice(0, 80) : null,
+    collection: typeof value.collection === 'string' ? value.collection.slice(0, 120) : null,
+    message: typeof value.message === 'string' ? value.message.slice(0, 240) : null,
+    updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : null,
   };
 }
 

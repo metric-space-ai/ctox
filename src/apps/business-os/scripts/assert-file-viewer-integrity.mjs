@@ -52,6 +52,20 @@ await assertThrows(
   FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH
 );
 await assertThrows(
+  'chunk total mismatch',
+  validChunks().map((chunk, idx) => (idx === 1 ? { ...chunk, total: 3 } : chunk)),
+  'Dateiinhalt ist unvollständig oder beschädigt.',
+  defaultOptions(),
+  FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH
+);
+await assertThrows(
+  'chunk encoded size mismatch',
+  validChunks().map((chunk, idx) => (idx === 0 ? { ...chunk, size_bytes: chunk.size_bytes + 1 } : chunk)),
+  'Dateiinhalt ist unvollständig oder beschädigt.',
+  defaultOptions(),
+  FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH
+);
+await assertThrows(
   'decoded content hash mismatch',
   validChunks().map(({ content_hash, ...chunk }) => chunk),
   'Dateiinhalt ist unvollständig oder beschädigt.',

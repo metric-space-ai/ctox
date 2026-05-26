@@ -1,0 +1,126 @@
+<div class="calendar-app" data-calendar-root>
+  <!-- LEFT PANEL: Mini-Calendar, Calendars List & Booking Links -->
+  <aside class="calendar-panel calendar-left-pane" id="calendar-left">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="calendar">Kalender</span>
+          <h2 class="ctox-pane-title" data-t="myCalendars">Meine Kalender</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="ctox-pane-icon" id="addNewCalendarBtn" title="Kalender hinzufügen" aria-label="Kalender hinzufügen">+</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="calendar-left-content">
+      <!-- Calendar Sources and Calendars List -->
+      <div class="calendar-sidebar-scrollable os-scrollbar">
+        <div class="calendar-sidebar-section">
+          <div class="calendar-list" id="calendarListContainer">
+            <!-- Dynamic Calendars List -->
+          </div>
+        </div>
+
+        <hr class="calendar-separator" />
+
+        <!-- Booking Links / Pages section -->
+        <div class="calendar-sidebar-section">
+          <div class="calendar-section-title-bar">
+            <span class="calendar-section-title" data-t="bookingPages">Buchungsseiten</span>
+            <button class="os-btn" id="addBookingPageBtn" style="padding: 2px 8px; font-size: 11px;">+ Seite</button>
+          </div>
+          <div class="booking-pages-list" id="bookingPagesListContainer">
+            <!-- Dynamic Booking Links -->
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- LEFT RESIZER -->
+  <div class="calendar-col-resizer" role="separator" aria-label="Linke Spaltenbreite anpassen" data-calendar-col-resizer="left" data-resizer="left"></div>
+
+  <!-- CENTER PANEL: EventCalendar View -->
+  <main class="calendar-panel calendar-center-pane" id="calendar-center">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" id="calendarViewTitle">Heute</span>
+          <h2 class="ctox-pane-title" id="calendarRangeTitle">Kalenderansicht</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <button class="os-btn os-btn-primary" id="btnNewEvent" data-t="newEvent" style="height: 26px; font-size: 11px; padding: 0 10px;">Neuer Termin</button>
+          <div class="calendar-navigation" style="display: flex; align-items: center; gap: 4px; margin-left: 6px;">
+            <button class="ctox-pane-icon" id="prevPeriodBtn" title="Zurück">&lt;</button>
+            <button class="os-btn" id="todayPeriodBtn" data-t="today" style="height: 26px; font-size: 11px; padding: 0 10px;">Heute</button>
+            <button class="ctox-pane-icon" id="nextPeriodBtn" title="Vorwärts">&gt;</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- EventCalendar Mount Point -->
+    <div class="calendar-grid-container">
+      <div id="eventCalendarView" class="ec-theme-business-os"></div>
+    </div>
+  </main>
+
+  <!-- RIGHT RESIZER -->
+  <div class="calendar-col-resizer" role="separator" aria-label="Rechte Spaltenbreite anpassen" data-calendar-col-resizer="right" data-resizer="right"></div>
+
+  <!-- RIGHT PANEL: Bookings & Active Holds Auditing -->
+  <aside class="calendar-panel calendar-right-pane" id="calendar-right">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="bookingHolds">Reservierungen</span>
+          <h2 class="ctox-pane-title" data-t="bookings">Buchungen</h2>
+        </div>
+      </div>
+    </header>
+
+    <div class="calendar-right-content">
+      <div class="calendar-sidebar-scrollable os-scrollbar">
+        <!-- Active Holds -->
+        <div class="calendar-sidebar-section">
+          <div class="calendar-section-title-bar">
+            <span class="calendar-section-title">Temporäre Holds</span>
+          </div>
+          <div id="bookingHoldsList" class="auditing-list">
+            <!-- Dynamic Holds -->
+            <div class="auditing-empty-state">Keine aktiven Holds.</div>
+          </div>
+        </div>
+
+        <hr class="calendar-separator" />
+
+        <!-- Confirmed Bookings -->
+        <div class="calendar-sidebar-section">
+          <div class="calendar-section-title-bar">
+            <span class="calendar-section-title">Bestätigte Buchungen</span>
+          </div>
+          <div id="bookingsList" class="auditing-list">
+            <!-- Dynamic Bookings -->
+            <div class="auditing-empty-state">Keine bestätigten Buchungen.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Sliding Details Drawer (Inspector) for creating/editing events, calendars, and booking pages -->
+  <div class="ctox-bottom-drawer" id="calendarInspectorDrawer" data-detail-drawer>
+    <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
+    <header class="ctox-drawer-header">
+      <div class="ctox-drawer-header-left">
+        <span class="ctox-drawer-kicker" id="drawerKicker">Kalender</span>
+        <h3 class="ctox-drawer-title" id="drawerTitle">Details</h3>
+      </div>
+      <button type="button" class="ctox-drawer-close" id="closeDrawerBtn" aria-label="Schließen">&times;</button>
+    </header>
+    <div class="ctox-drawer-body os-scrollbar" id="drawerContent">
+      <!-- Forms loaded dynamically -->
+    </div>
+  </div>
+</div>

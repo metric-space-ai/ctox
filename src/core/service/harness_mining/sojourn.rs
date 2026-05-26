@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Tier 1.3 — Sojourn / State-Holding-Time-Distribution.
 //

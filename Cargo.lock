@@ -9122,8 +9122,6 @@ dependencies = [
 [[package]]
 name = "rtc-ice"
 version = "0.20.0-alpha.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9c90a85ecfc2b18ee7697342974afa55d36667d9ca7bec3a5eae63322da997c"
 dependencies = [
  "bytes",
  "crc",

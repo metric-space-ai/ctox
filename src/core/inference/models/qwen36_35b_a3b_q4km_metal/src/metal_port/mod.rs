@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Per-op Metal Shading Language kernel ports for Qwen3.6-35B-A3B Q4_K_M.
 //!

@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 use crate::service::core_state_machine as csm;
 use anyhow::Result;
@@ -747,6 +747,23 @@ fn core_spawner_contracts() -> &'static [CoreSpawnerContract] {
             effect: CoreSpawnEffect::QueueExecution,
             requires_budget: true,
             max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "browser-auth-assist",
+            parent_entity_types: &[
+                "ControlPlane",
+                "Message",
+                "QueueTask",
+                "Thread",
+                "WebStackTask",
+                "WorkItem",
+            ],
+            child_entity_type: "QueueTask",
+            effect: CoreSpawnEffect::QueueExecution,
+            requires_budget: true,
+            max_budget: 8,
             intervention_skill: "queue-cleanup",
             intervention_effects: BLOCK_OR_CONSOLIDATE,
         },

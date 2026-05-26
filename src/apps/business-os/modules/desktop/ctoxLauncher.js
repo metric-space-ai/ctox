@@ -57,8 +57,10 @@ export function createCtoxLauncher({ modules, apps, currentModuleId, openApp }) 
 const MODULE_GLYPHS = {
   ctox: '◆',
   documents: '📄',
+  browser: '🌐',
   knowledge: '📚',
   matching: '🔗',
   outbound: '📣',
   research: '🔬',
+  'coding-agents': '🤖',
 };

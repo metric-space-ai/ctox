@@ -135,6 +135,195 @@ const outboundResearchRunSchema = {
   additionalProperties: true,
 };
 
+const outboundEngagementSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    campaign_id: { type: 'string' },
+    company_id: { type: 'string' },
+    pipeline_id: { type: 'string' },
+    contact_id: { type: 'string' },
+    sender_account_id: { type: 'string' },
+    sequence_id: { type: 'string' },
+    status: { type: 'string' },
+    next_action_at_ms: { type: 'number' },
+    paused_reason: { type: 'string' },
+    closed_reason: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'campaign_id', 'status', 'payload', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundMessageSchema = {
+  version: 1,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    engagement_id: { type: 'string' },
+    campaign_id: { type: 'string' },
+    channel: { type: 'string' },
+    message_type: { type: 'string' },
+    direction: { type: 'string' },
+    sender_account_id: { type: 'string' },
+    recipient_email: { type: 'string' },
+    recipient_address_text: { type: 'string' },
+    subject: { type: 'string' },
+    body_text: { type: 'string' },
+    body_html: { type: 'string' },
+    document_id: { type: 'string' },
+    document_version_id: { type: 'string' },
+    document_pdf_url: { type: 'string' },
+    physical_sent_at_ms: { type: 'number' },
+    draft_status: { type: 'string' },
+    approval_status: { type: 'string' },
+    send_status: { type: 'string' },
+    scheduled_send_at_ms: { type: 'number' },
+    sent_at_ms: { type: 'number' },
+    provider_message_id: { type: 'string' },
+    communication_account_key: { type: 'string' },
+    communication_message_key: { type: 'string' },
+    thread_key: { type: 'string' },
+    reply_to_message_id: { type: 'string' },
+    revision_id: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'engagement_id', 'campaign_id', 'message_type', 'direction', 'draft_status', 'approval_status', 'send_status', 'payload', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundApprovalSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    message_id: { type: 'string' },
+    engagement_id: { type: 'string' },
+    revision_id: { type: 'string' },
+    actor_user_id: { type: 'string' },
+    decision: { type: 'string' },
+    comment: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'message_id', 'engagement_id', 'decision', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundSequenceSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    campaign_id: { type: 'string' },
+    name: { type: 'string' },
+    strategy_text: { type: 'string' },
+    sequence_policy_text: { type: 'string' },
+    send_window: { type: 'object', additionalProperties: true },
+    touchpoints: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    stop_rules: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    approval_policy: { type: 'object', additionalProperties: true },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'campaign_id', 'name', 'strategy_text', 'sequence_policy_text', 'approval_policy', 'payload', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundSenderAssignmentSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    campaign_id: { type: 'string' },
+    engagement_id: { type: 'string' },
+    company_id: { type: 'string' },
+    contact_id: { type: 'string' },
+    sender_account_id: { type: 'string' },
+    assignment_reason: { type: 'string' },
+    status: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'campaign_id', 'sender_account_id', 'status', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundMeetingRequestSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    engagement_id: { type: 'string' },
+    message_id: { type: 'string' },
+    calendar_account_id: { type: 'string' },
+    duration_minutes: { type: 'number' },
+    slot_strategy: { type: 'string' },
+    proposed_slots: { type: 'array', items: { type: 'object', additionalProperties: true } },
+    status: { type: 'string' },
+    meeting_url: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'engagement_id', 'status', 'payload', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundSuppressionEntrySchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    scope: { type: 'string' },
+    value: { type: 'string' },
+    reason: { type: 'string' },
+    source: { type: 'string' },
+    active: { type: 'number' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'scope', 'value', 'reason', 'active', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
+const outboundAccountLimitSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 180 },
+    sender_account_id: { type: 'string' },
+    campaign_id: { type: 'string' },
+    daily_limit: { type: 'number' },
+    sent_today: { type: 'number' },
+    send_window: { type: 'object', additionalProperties: true },
+    reset_at_ms: { type: 'number' },
+    status: { type: 'string' },
+    payload: { type: 'object', additionalProperties: true },
+    created_at_ms: { type: 'number' },
+    updated_at_ms: { type: 'number' },
+  },
+  required: ['id', 'sender_account_id', 'daily_limit', 'sent_today', 'status', 'created_at_ms', 'updated_at_ms'],
+  additionalProperties: true,
+};
+
 export const collections = {
   business_commands: commandSchema,
   outbound_campaigns: outboundCampaignSchema,
@@ -142,6 +331,14 @@ export const collections = {
   outbound_companies: outboundCompanySchema,
   outbound_pipeline_items: outboundPipelineSchema,
   outbound_research_runs: outboundResearchRunSchema,
+  outbound_engagements: outboundEngagementSchema,
+  outbound_messages: outboundMessageSchema,
+  outbound_approvals: outboundApprovalSchema,
+  outbound_sequences: outboundSequenceSchema,
+  outbound_sender_assignments: outboundSenderAssignmentSchema,
+  outbound_meeting_requests: outboundMeetingRequestSchema,
+  outbound_suppression_entries: outboundSuppressionEntrySchema,
+  outbound_account_limits: outboundAccountLimitSchema,
 };
 
 export const migrationStrategies = {
@@ -149,6 +346,17 @@ export const migrationStrategies = {
     1: (oldDoc) => ({
       ...oldDoc,
       inbound_channel: oldDoc.inbound_channel || oldDoc.module || '',
+    }),
+  },
+  outbound_messages: {
+    1: (oldDoc) => ({
+      ...oldDoc,
+      channel: oldDoc.channel || oldDoc.payload?.channel || oldDoc.payload?.default_channel || 'email',
+      recipient_address_text: oldDoc.recipient_address_text || oldDoc.payload?.recipient_address_text || '',
+      document_id: oldDoc.document_id || '',
+      document_version_id: oldDoc.document_version_id || '',
+      document_pdf_url: oldDoc.document_pdf_url || '',
+      physical_sent_at_ms: oldDoc.physical_sent_at_ms || 0,
     }),
   },
 };

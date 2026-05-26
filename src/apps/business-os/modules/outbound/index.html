@@ -1,4 +1,18 @@
 <main class="outbound-module" data-outbound-root>
   <section class="outbound-pane outbound-left" aria-label="Outbound Navigation"></section>
+  <button class="ctox-column-resizer" type="button" data-outbound-column-resizer data-resizer="left" aria-label="Spaltenbreite anpassen"></button>
   <section class="outbound-pane outbound-center" aria-label="Outbound Workbench"></section>
+
+  <!-- Sliding Bottom Details Drawer -->
+  <div class="ctox-bottom-drawer" data-detail-drawer>
+    <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
+    <header class="ctox-drawer-header">
+      <div class="ctox-drawer-header-left">
+        <span class="ctox-drawer-kicker">Research Details</span>
+        <h3 class="ctox-drawer-title" data-detail-title>Details</h3>
+      </div>
+      <button type="button" class="ctox-drawer-close" data-close-drawer title="Close Details">&times;</button>
+    </header>
+    <div class="ctox-drawer-body" data-detail-body></div>
+  </div>
 </main>

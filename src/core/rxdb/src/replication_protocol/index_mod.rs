@@ -23,6 +23,8 @@ use crate::types::{
     RxStorageInstanceReplicationState, StreamQueue,
 };
 
+const DESKTOP_FILE_CHUNKS_MASTER_RESPONSE_MAX_BYTES: usize = 96 * 1024;
+
 // ref: rxdb/src/replication-protocol/index.ts:119-132
 /// Resolves once both initial syncs (down + up) have completed.
 pub async fn await_rx_storage_replication_first_in_sync(
@@ -169,6 +171,10 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         &self,
     ) -> crate::rxjs_compat::RxStream<crate::types::RxReplicationMasterChange> {
         use crate::replication_protocol::helper::write_doc_to_doc_state;
+        if self.instance.collection_name() == "desktop_file_chunks" {
+            let stream = self.instance.change_stream();
+            return Box::pin(stream.map(|_| crate::types::RxReplicationMasterChange::Resync));
+        }
         let has_attachments = self.instance.schema().extra.get("attachments").is_some();
         let keep_meta = self.keep_meta;
         let stream = self.instance.change_stream();
@@ -202,8 +208,10 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         batch_size: u64,
     ) -> Result<crate::types::DocumentsWithCheckpoint, crate::rx_error::RxError> {
         use crate::replication_protocol::helper::write_doc_to_doc_state;
+        use crate::rx_schema_helper::get_primary_field_of_primary_key;
 
         let has_attachments = self.instance.schema().extra.get("attachments").is_some();
+        let is_file_chunks = self.instance.collection_name() == "desktop_file_chunks";
         let result = self
             .instance
             .get_changed_documents_since(batch_size, checkpoint.as_ref())
@@ -213,11 +221,28 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         } else {
             result.checkpoint
         };
-        let documents = result
-            .documents
-            .into_iter()
-            .map(|d| write_doc_to_doc_state(&d, has_attachments, self.keep_meta))
-            .collect();
+        let documents = if is_file_chunks {
+            let primary_path =
+                get_primary_field_of_primary_key(&self.instance.schema().primary_key);
+            let limited = limit_desktop_file_chunk_response(
+                result.documents,
+                &primary_path,
+                has_attachments,
+                self.keep_meta,
+                DESKTOP_FILE_CHUNKS_MASTER_RESPONSE_MAX_BYTES,
+                &next_checkpoint,
+            );
+            return Ok(crate::types::DocumentsWithCheckpoint {
+                documents: limited.documents,
+                checkpoint: limited.checkpoint,
+            });
+        } else {
+            result
+                .documents
+                .into_iter()
+                .map(|d| write_doc_to_doc_state(&d, has_attachments, self.keep_meta))
+                .collect()
+        };
         Ok(crate::types::DocumentsWithCheckpoint {
             documents,
             checkpoint: next_checkpoint,
@@ -343,5 +368,108 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
         }
 
         Ok(conflicts)
+    }
+}
+
+struct LimitedMasterResponse {
+    documents: Vec<serde_json::Value>,
+    checkpoint: serde_json::Value,
+}
+
+fn limit_desktop_file_chunk_response(
+    raw_documents: Vec<serde_json::Value>,
+    primary_path: &str,
+    has_attachments: bool,
+    keep_meta: bool,
+    max_bytes: usize,
+    fallback_checkpoint: &serde_json::Value,
+) -> LimitedMasterResponse {
+    use crate::replication_protocol::helper::write_doc_to_doc_state;
+
+    if raw_documents.is_empty() {
+        return LimitedMasterResponse {
+            documents: Vec::new(),
+            checkpoint: fallback_checkpoint.clone(),
+        };
+    }
+
+    let total_count = raw_documents.len();
+    let mut documents = Vec::with_capacity(total_count);
+    let mut checkpoint = fallback_checkpoint.clone();
+    let mut bytes = 2usize; // JSON array brackets.
+
+    for raw in raw_documents.into_iter() {
+        let document = write_doc_to_doc_state(&raw, has_attachments, keep_meta);
+        let document_bytes = serde_json::to_vec(&document)
+            .map(|encoded| encoded.len().saturating_add(1))
+            .unwrap_or(max_bytes.saturating_add(1));
+        if !documents.is_empty() && bytes.saturating_add(document_bytes) > max_bytes {
+            break;
+        }
+        bytes = bytes.saturating_add(document_bytes);
+        checkpoint = checkpoint_from_document(&raw, primary_path)
+            .unwrap_or_else(|| fallback_checkpoint.clone());
+        documents.push(document);
+    }
+
+    if documents.len() == total_count {
+        checkpoint = fallback_checkpoint.clone();
+    }
+
+    LimitedMasterResponse {
+        documents,
+        checkpoint,
+    }
+}
+
+fn checkpoint_from_document(
+    document: &serde_json::Value,
+    primary_path: &str,
+) -> Option<serde_json::Value> {
+    let id = document.get(primary_path)?.clone();
+    let lwt = document
+        .get("_meta")
+        .and_then(|meta| meta.get("lwt"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!(0));
+    Some(serde_json::json!({ "id": id, "lwt": lwt }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn desktop_file_chunk_response_limit_advances_checkpoint_to_last_sent_doc() {
+        let docs = vec![
+            json!({"id":"a","data":"x".repeat(48),"_meta":{"lwt":1.0}}),
+            json!({"id":"b","data":"y".repeat(48),"_meta":{"lwt":2.0}}),
+            json!({"id":"c","data":"z".repeat(48),"_meta":{"lwt":3.0}}),
+        ];
+        let limited = limit_desktop_file_chunk_response(
+            docs,
+            "id",
+            false,
+            true,
+            120,
+            &json!({"id":"c","lwt":3.0}),
+        );
+
+        assert_eq!(limited.documents.len(), 1);
+        assert_eq!(limited.checkpoint, json!({"id":"a","lwt":1.0}));
+    }
+
+    #[test]
+    fn desktop_file_chunk_response_limit_uses_fallback_checkpoint_when_all_fit() {
+        let docs = vec![
+            json!({"id":"a","data":"x","_meta":{"lwt":1.0}}),
+            json!({"id":"b","data":"y","_meta":{"lwt":2.0}}),
+        ];
+        let fallback = json!({"id":"b","lwt":2.0});
+        let limited = limit_desktop_file_chunk_response(docs, "id", false, true, 4096, &fallback);
+
+        assert_eq!(limited.documents.len(), 2);
+        assert_eq!(limited.checkpoint, fallback);
     }
 }

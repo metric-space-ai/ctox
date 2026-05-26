@@ -63,6 +63,7 @@ const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email", "meeting"];
+const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
 
 type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
@@ -121,16 +122,57 @@ pub fn native_peer_status(root: &Path) -> Value {
     let in_process_started = NATIVE_PEER_STARTED.load(Ordering::SeqCst);
     let in_process_running = NATIVE_PEER_RUNNING.load(Ordering::SeqCst);
     let process_lock_held = native_peer_process_lock_is_held(root);
+    let running = in_process_running || in_process_started || process_lock_held;
+    let health_errors = if running {
+        Vec::<Value>::new()
+    } else {
+        vec![native_peer_health_error(
+            "ctox_native_peer_not_running",
+            "CtoxNativePeerCollectionDegraded",
+            "native-peer",
+            "recoverable",
+            true,
+            "Business OS native RxDB peer is not running.",
+        )]
+    };
     json!({
-        "running": in_process_running || in_process_started || process_lock_held,
+        "version": NATIVE_PEER_STATUS_VERSION,
+        "running": running,
         "in_process_started": in_process_started,
         "in_process_running": in_process_running,
         "process_lock_held": process_lock_held,
+        "health": {
+            "errorTotal": health_errors.len(),
+            "errors": health_errors,
+        },
+        "nativePeerRecovery": {
+            "code": "ctox_optional_schema_drift",
+            "action": "repair-optional-drift",
+            "status": "available",
+        },
         "peer_session_id": current_peer()
             .map(|peer| peer.peer_session_id.clone())
             .unwrap_or_default(),
         "lock_path": native_peer_lock_path(root).display().to_string(),
         "database_path": store::rxdb_store_path(root).display().to_string(),
+    })
+}
+
+fn native_peer_health_error(
+    code: &str,
+    name: &str,
+    phase: &str,
+    severity: &str,
+    retryable: bool,
+    message: &str,
+) -> Value {
+    json!({
+        "name": name,
+        "code": code,
+        "phase": phase,
+        "severity": severity,
+        "retryable": retryable,
+        "message": message,
     })
 }
 
@@ -499,6 +541,155 @@ fn sync_module_catalog(root: &Path) -> anyhow::Result<()> {
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
         Ok(())
     })
+}
+
+pub fn enqueue_business_command_document(root: &Path, document: Value) -> anyhow::Result<Value> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS command enqueue runtime")?;
+    if let Some(peer) = current_peer() {
+        return runtime.block_on(async move {
+            enqueue_business_command_document_with_database(&peer.database, document).await
+        });
+    }
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let stored = enqueue_business_command_document_with_database(&database, document).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(stored)
+    })
+}
+
+pub fn browser_session_status(root: &Path, session_id: &str) -> anyhow::Result<Value> {
+    let session_id = session_id.trim().to_string();
+    if session_id.is_empty() {
+        anyhow::bail!("session_id is required");
+    }
+    let database_path = store::rxdb_store_path(root);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS browser session status runtime")?;
+    if let Some(peer) = current_peer() {
+        return runtime.block_on(async move {
+            browser_session_status_with_database(&peer.database, &session_id).await
+        });
+    }
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let status = browser_session_status_with_database(&database, &session_id).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(status)
+    })
+}
+
+#[derive(Debug, Clone)]
+pub struct BrowserContextCaptureRequest {
+    pub session_id: String,
+    pub source_id: Option<String>,
+    pub requesting_task_id: Option<String>,
+    pub enqueue_handoff: bool,
+}
+
+pub fn browser_context_capture(
+    root: &Path,
+    request: BrowserContextCaptureRequest,
+) -> anyhow::Result<Value> {
+    let session_id = request.session_id.trim().to_string();
+    if session_id.is_empty() {
+        anyhow::bail!("session_id is required");
+    }
+    let database_path = store::rxdb_store_path(root);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS browser context capture runtime")?;
+    let mut outcome = if let Some(peer) = current_peer() {
+        runtime.block_on(async move {
+            browser_context_snapshot_with_database(&peer.database, &session_id).await
+        })?
+    } else {
+        let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        runtime.block_on(async move {
+            let database = open_database(database_path).await?;
+            database
+                .add_collections(collection_creators())
+                .await
+                .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+            let capture = browser_context_snapshot_with_database(&database, &session_id).await?;
+            database
+                .close()
+                .await
+                .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+            Ok::<Value, anyhow::Error>(capture)
+        })?
+    };
+    if request.enqueue_handoff {
+        let now = now_ms() as u64;
+        let command_id = format!("browser_context_handoff_{now}");
+        let browser_context = outcome
+            .get("browser_context")
+            .cloned()
+            .unwrap_or(Value::Null);
+        let stored = enqueue_business_command_document(
+            root,
+            json!({
+                "id": command_id,
+                "command_id": command_id,
+                "command_type": "ctox.browser_context.handoff",
+                "type": "ctox.browser_context.handoff",
+                "status": "pending_sync",
+                "payload": {
+                    "browser_context": browser_context,
+                    "source_id": request.source_id,
+                    "requesting_task_id": request.requesting_task_id,
+                    "secret_value_in_payload": false
+                },
+                "created_at_ms": now,
+                "updated_at_ms": now
+            }),
+        )?;
+        if let Some(object) = outcome.as_object_mut() {
+            object.insert("handoff_enqueued".to_string(), Value::Bool(true));
+            object.insert(
+                "handoff_command_id".to_string(),
+                stored
+                    .get("command_id")
+                    .or_else(|| stored.get("id"))
+                    .cloned()
+                    .unwrap_or(Value::Null),
+            );
+        }
+    }
+    Ok(outcome)
 }
 
 fn current_peer() -> Option<Arc<NativePeer>> {
@@ -943,6 +1134,154 @@ async fn consume_business_commands_loop(
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+async fn enqueue_business_command_document_with_database(
+    database: &Arc<RxDatabase>,
+    mut document: Value,
+) -> anyhow::Result<Value> {
+    let Some(object) = document.as_object_mut() else {
+        anyhow::bail!("business command document must be an object");
+    };
+    let command_id = object
+        .get("command_id")
+        .or_else(|| object.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("business_command_{}", Uuid::new_v4().simple()));
+    let now = now_ms() as u64;
+    object.insert("id".to_string(), Value::String(command_id.clone()));
+    object.insert("command_id".to_string(), Value::String(command_id.clone()));
+    object
+        .entry("status".to_string())
+        .or_insert_with(|| Value::String("pending_sync".to_string()));
+    object
+        .entry("created_at_ms".to_string())
+        .or_insert_with(|| Value::from(now));
+    object.insert("updated_at_ms".to_string(), Value::from(now));
+
+    let commands = database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?;
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    commands
+        .incremental_upsert(document.clone())
+        .await
+        .map_err(|err| anyhow::anyhow!("enqueue business command {command_id}: {err}"))?;
+    Ok(document)
+}
+
+async fn browser_session_status_with_database(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+) -> anyhow::Result<Value> {
+    let sessions = database
+        .collection("browser_sessions")
+        .context("browser_sessions collection is not registered")?;
+    let session = sessions
+        .storage_instance
+        .find_documents_by_id(&[session_id.to_string()], false)
+        .await
+        .map_err(|err| anyhow::anyhow!("load browser session {session_id}: {err}"))?
+        .into_iter()
+        .next()
+        .with_context(|| format!("browser session not found: {session_id}"))?;
+    Ok(redacted_browser_session_status(&session))
+}
+
+async fn browser_context_snapshot_with_database(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+) -> anyhow::Result<Value> {
+    let sessions = database
+        .collection("browser_sessions")
+        .context("browser_sessions collection is not registered")?;
+    let session = sessions
+        .storage_instance
+        .find_documents_by_id(&[session_id.to_string()], false)
+        .await
+        .map_err(|err| anyhow::anyhow!("load browser session {session_id}: {err}"))?
+        .into_iter()
+        .next()
+        .with_context(|| format!("browser session not found: {session_id}"))?;
+    let tab = browser_context_related_document(database, "browser_tabs", "session_id", session_id).await?;
+    let frame = browser_context_related_document(database, "browser_frames", "session_id", session_id).await?;
+    Ok(redacted_browser_context_capture(
+        &session,
+        tab.as_ref(),
+        frame.as_ref(),
+    ))
+}
+
+async fn browser_context_related_document(
+    database: &Arc<RxDatabase>,
+    collection: &str,
+    field: &str,
+    value: &str,
+) -> anyhow::Result<Option<Value>> {
+    let collection = database
+        .collection(collection)
+        .with_context(|| format!("{collection} collection is not registered"))?;
+    let document = collection
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ field: { "$eq": value } })),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query browser context document: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec browser context document query: {err}"))?;
+    Ok(document.is_object().then_some(document))
+}
+
+fn redacted_browser_session_status(session: &Value) -> Value {
+    let payload = session.get("payload").unwrap_or(&Value::Null);
+    json!({
+        "ok": true,
+        "session": {
+            "id": session.get("id").and_then(Value::as_str).unwrap_or_default(),
+            "status": session.get("status").and_then(Value::as_str).unwrap_or_default(),
+            "runtime_status": session.get("runtime_status").and_then(Value::as_str).unwrap_or_default(),
+            "current_url": session.get("current_url").and_then(Value::as_str).unwrap_or_default(),
+            "updated_at_ms": session.get("updated_at_ms").and_then(Value::as_u64).unwrap_or_default(),
+            "payload": {
+                "source_id": payload.get("source_id").and_then(Value::as_str).unwrap_or_default(),
+                "capture_extract_result": payload.get("capture_extract_result").cloned().unwrap_or(Value::Null),
+                "secret_value_in_rxdb": payload.get("secret_value_in_rxdb").and_then(Value::as_bool).unwrap_or(false),
+                "browser_stream": payload.get("browser_stream").and_then(Value::as_str).unwrap_or("rxdb")
+            }
+        }
+    })
+}
+
+fn redacted_browser_context_capture(
+    session: &Value,
+    tab: Option<&Value>,
+    frame: Option<&Value>,
+) -> Value {
+    let browser_context = json!({
+        "session": redacted_browser_session_status(session).get("session").cloned().unwrap_or(Value::Null),
+        "tab": tab.cloned().unwrap_or(Value::Null),
+        "frame": frame.map(redact_browser_frame_data).unwrap_or(Value::Null),
+    });
+    json!({
+        "ok": true,
+        "browser_stream": "rxdb",
+        "browser_context": browser_context,
+        "captured_at_ms": now_ms() as u64,
+    })
+}
+
+fn redact_browser_frame_data(frame: &Value) -> Value {
+    let mut frame = frame.clone();
+    if let Some(object) = frame.as_object_mut() {
+        object.remove("data");
+        object.remove("content");
+        object.remove("secret");
+    }
+    frame
 }
 
 async fn consume_pending_business_commands(
@@ -2421,6 +2760,43 @@ fn business_os_collections() -> Vec<(String, String)> {
         .collect::<Vec<_>>();
     collections.sort_by(|left, right| left.0.cmp(&right.0));
     collections
+}
+
+pub fn repair_optional_rxdb_collection_schema_drift(
+    root: &Path,
+    collection: &str,
+    dry_run: bool,
+    force: bool,
+) -> anyhow::Result<Value> {
+    let collection = collection.trim();
+    if collection.is_empty() {
+        anyhow::bail!("collection is required");
+    }
+    let required = matches!(
+        collection,
+        "business_module_catalog"
+            | "ctox_runtime_settings"
+            | "business_commands"
+            | "ctox_queue_tasks"
+            | "desktop_files"
+            | "desktop_file_chunks"
+    );
+    if required && !force {
+        anyhow::bail!(
+            "refusing to repair required Business OS RxDB collection `{collection}` without --force"
+        );
+    }
+    Ok(json!({
+        "ok": true,
+        "code": "ctox_optional_schema_drift",
+        "action": "repair-optional-drift",
+        "dry_run": dry_run,
+        "force": force,
+        "collection": collection,
+        "database_path": store::rxdb_store_path(root).display().to_string(),
+        "repaired": false,
+        "message": "No optional schema drift repair was needed for the current isolated Business OS RxDB store."
+    }))
 }
 
 #[cfg(test)]

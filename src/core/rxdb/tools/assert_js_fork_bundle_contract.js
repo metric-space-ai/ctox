@@ -48,6 +48,12 @@ function assertContract(parsed) {
   if (parsed.version_discipline !== 'upstream-version-pinned-with-ctox-provenance') {
     offenders.push(`${relative(contractPath)}: version_discipline must pin upstream version with CTOX provenance`);
   }
+  if (parsed.active_runtime_import !== 'rxdb/dist/ctox-rxdb-js.mjs') {
+    offenders.push(`${relative(contractPath)}: active_runtime_import must point at the app-local no-package-manager runtime`);
+  }
+  if (parsed.legacy_bundle_status !== 'retained-provenance-not-active-business-os-runtime') {
+    offenders.push(`${relative(contractPath)}: legacy_bundle_status must document that vendor bundle is no longer active runtime`);
+  }
 
   if (sourcePackage) {
     if (sourcePackage.name !== parsed.fork_package) {
@@ -149,8 +155,11 @@ function assertContract(parsed) {
     const importerPath = path.join(repoRoot, importer);
     const importerSource = readText(importerPath, 'expected importer');
     if (!importerSource) continue;
-    if (!/vendor\/rxdb-bundle\.mjs/.test(importerSource)) {
-      offenders.push(`${relative(importerPath)}: does not import the guarded rxdb-bundle.mjs`);
+    if (!/rxdb\/dist\/ctox-rxdb-js\.mjs/.test(importerSource)) {
+      offenders.push(`${relative(importerPath)}: does not import the app-local ctox-rxdb-js runtime`);
+    }
+    if (/vendor\/rxdb-bundle\.mjs/.test(importerSource)) {
+      offenders.push(`${relative(importerPath)}: must not import the retained legacy vendor rxdb-bundle.mjs as active runtime`);
     }
   }
 }

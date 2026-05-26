@@ -1,0 +1,46 @@
+[package]
+name = "rtc-ice"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "RTC ICE in Rust"
+license.workspace = true
+documentation = "https://docs.rs/rtc-ice"
+homepage.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+shared = { workspace = true, default-features = false, features = [] }
+sansio.workspace = true
+stun.workspace = true
+mdns.workspace = true
+
+crc = "3.0.1"
+log.workspace = true
+rand.workspace = true
+serde.workspace = true
+url = "2.5.0"
+uuid = { version = "1", features = ["v4"] }
+bytes.workspace = true
+
+[dev-dependencies]
+regex = "1.10.3"
+env_logger.workspace = true
+chrono.workspace = true
+ipnet = "2.9.0"
+clap.workspace = true
+lazy_static = "1.4.0"
+hyper = { version = "0.14.28", features = ["full"] }
+sha1 = "0.10.6"
+waitgroup = "0.1.2"
+serde_json = "1.0.114"
+tokio.workspace = true
+futures = "0.3.30"
+ctrlc.workspace = true
+
+[[example]]
+name = "ping_pong"
+path = "examples/ping_pong.rs"
+bench = false

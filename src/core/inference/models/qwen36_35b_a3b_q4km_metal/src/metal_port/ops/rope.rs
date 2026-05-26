@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! M-RoPE dispatcher (`kernel_rope_multi_f32`) — applies multi-axis
 //! rotary embeddings to Q or K projections in the full-attention block.

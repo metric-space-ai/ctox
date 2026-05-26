@@ -1333,7 +1333,7 @@ function renderContextMenu(menu, context, x, y) {
   menu.querySelector('[data-context-close]')?.addEventListener('click', () => {
     menu.hidden = true;
   });
-  form?.addEventListener('submit', async (event) => {
+  form?.addEventListener('submit', (event) => {
     event.preventDefault();
     const instruction = String(textarea?.value || '').trim();
     if (!instruction) {
@@ -1341,26 +1341,38 @@ function renderContextMenu(menu, context, x, y) {
       return;
     }
     const mode = new FormData(form).get('contextMode') || 'data';
-    status.textContent = 'Sende...';
-    const result = await dispatchCtoxCommand({
-      module: 'matching',
-      type: mode === 'app' ? 'business_os.app.modify' : 'matching.ctox.chat',
-      record_id: context.fieldId || context.column || 'matching',
-      payload: {
+    status.textContent = 'Gesendet.';
+
+    const title = `${mode === 'app' ? 'Matching App modifizieren' : 'Matching bearbeiten'} · ${context.column || 'Matching'}`;
+    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+      detail: {
+        text: instruction,
+        module: 'matching',
+        source_title: 'Matching',
+        command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+        record_id: context.fieldId || context.column || 'matching',
+        title,
         instruction,
-        mode,
-        context
+        payload: {
+          title,
+          instruction,
+          prompt: instruction,
+          user_message: instruction,
+          mode,
+          target: mode === 'app' ? 'app' : 'data',
+          context,
+          thread_key: 'business-os/matching',
+        },
+        client_context: {
+          action: 'context-chat',
+          mode,
+          column: context.column,
+          entity_type: context.entityType,
+        },
       },
-      client_context: {
-        action: 'context-chat',
-        column: context.column,
-        entity_type: context.entityType
-      }
-    });
-    status.textContent = result?.ok === false ? 'Nicht angenommen.' : 'Gesendet.';
-    if (result?.ok !== false) {
-      setTimeout(() => { menu.hidden = true; }, 650);
-    }
+    }));
+
+    setTimeout(() => { menu.hidden = true; }, 650);
   });
   requestAnimationFrame(() => textarea?.focus());
 }

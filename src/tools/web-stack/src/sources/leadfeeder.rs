@@ -49,12 +49,19 @@ use anyhow::anyhow;
 use serde_json::Value;
 
 use super::{
-    Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx, SourceError, SourceHit,
-    SourceModule, SourceReadResult, Tier,
+    BrowserSourceRecipe, Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx,
+    SourceError, SourceHit, SourceModule, SourceReadResult, Tier,
 };
 use crate::runtime_config;
 
 const API_BASE: &str = "https://api.leadfeeder.com";
+const SECRET_NAME: &str = "LEADFEEDER_API_KEY";
+const LOGIN_URL: &str = "https://app.leadfeeder.com/login";
+const VERIFY_SELECTOR: &str =
+    "[data-testid=\"account-menu\"], nav, a[href*=\"/leads\"]";
+const CREDENTIAL_SELECTOR: &str =
+    "input[name=\"password\"], input#password, input[type=\"password\"]";
+const CAPTURE_SCRIPT: &str = "leadfeeder.lead_capture.v1";
 const ACCOUNT_DEFAULT: &str = "me";
 const TIMEOUT_MS: u64 = 12_000;
 const MAX_HITS: usize = 8;
@@ -92,7 +99,23 @@ impl SourceModule for Leadfeeder {
     }
 
     fn requires_credential(&self) -> Option<&'static str> {
-        Some("LEADFEEDER_API_KEY")
+        Some(SECRET_NAME)
+    }
+
+    fn browser_recipe(&self) -> Option<BrowserSourceRecipe> {
+        Some(BrowserSourceRecipe {
+            source_id: self.id(),
+            login_url: LOGIN_URL.to_string(),
+            allowed_domains: vec![
+                "leadfeeder.com".to_string(),
+                "app.leadfeeder.com".to_string(),
+                "api.leadfeeder.com".to_string(),
+            ],
+            required_secret_name: Some(SECRET_NAME),
+            verify_selector: Some(VERIFY_SELECTOR),
+            credential_selector: Some(CREDENTIAL_SELECTOR),
+            capture_script: Some(CAPTURE_SCRIPT),
+        })
     }
 
     fn shape_query(&self, _query: &str, _ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {
@@ -116,11 +139,11 @@ impl SourceModule for Leadfeeder {
             return Some(Err(SourceError::NoMatch));
         }
 
-        let token = match runtime_config::get(ctx.root, "LEADFEEDER_API_KEY") {
+        let token = match runtime_config::get(ctx.root, SECRET_NAME) {
             Some(t) => t,
             None => {
                 return Some(Err(SourceError::CredentialMissing {
-                    secret_name: "LEADFEEDER_API_KEY",
+                    secret_name: SECRET_NAME,
                 }));
             }
         };
@@ -242,7 +265,7 @@ fn classify_status(status: u16, resp: ureq::Response) -> SourceError {
             }
         }
         401 => SourceError::CredentialMissing {
-            secret_name: "LEADFEEDER_API_KEY",
+            secret_name: SECRET_NAME,
         },
         403 => SourceError::Blocked {
             reason: format!("http {status}"),

@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Engine driver — orchestrates loading, KV-cache layout, prefill,
 //! decode, and sampling. Stage-1 is a typed placeholder so the server

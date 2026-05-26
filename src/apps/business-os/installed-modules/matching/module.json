@@ -18,5 +18,11 @@
       "right": "Object pool configuration and selected record detail",
       "bottom": "Matching prompt, schema, task status, and evidence"
     }
+  },
+  "install_scope": "sample",
+  "default_installed": false,
+  "store": {
+    "installable": false,
+    "distribution": "sample-installed-module"
   }
 }

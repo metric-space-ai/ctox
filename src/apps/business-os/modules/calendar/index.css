@@ -1,0 +1,444 @@
+/* --- Business OS Calendar & Booking App Styling --- */
+
+.calendar-app[data-calendar-root] {
+  display: grid;
+  grid-template-columns: var(--calendar-left-width, 320px) 12px minmax(0, 1fr) 12px var(--calendar-right-width, 280px);
+  gap: 0;
+  padding: 12px;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Three Pane Resizing Layout */
+.calendar-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  background: var(--surface);
+  box-sizing: border-box;
+}
+
+/* Left Explorer Pane: Sidebar Calendars + Booking Links */
+.calendar-left-pane {
+  min-width: 0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle);
+  overflow: hidden;
+}
+
+.calendar-left-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 60px);
+}
+
+/* Center Calendar Pane */
+.calendar-center-pane {
+  min-width: 0;
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle);
+  overflow: hidden;
+}
+
+/* Right Panel */
+.calendar-right-pane {
+  min-width: 0;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle);
+  overflow: hidden;
+}
+
+.calendar-right-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: calc(100% - 60px);
+}
+
+/* Headers */
+.calendar-pane-header {
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 30%, transparent);
+  flex-shrink: 0;
+  height: 60px;
+  box-sizing: border-box;
+}
+
+.calendar-pane-header .calendar-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  font-weight: 700;
+  display: block;
+  margin-bottom: 4px;
+}
+
+.calendar-pane-header .calendar-title {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0;
+  color: var(--text-strong);
+}
+
+/* Sidebar lists styling */
+.calendar-sidebar-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.calendar-sidebar-section {
+  margin-bottom: 16px;
+}
+
+.calendar-section-title-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 0 4px;
+}
+
+.calendar-section-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.calendar-list, .booking-pages-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Items in Sidebar Lists */
+.calendar-item, .booking-page-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text);
+  transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+  background: transparent;
+  border: 1px solid transparent;
+  justify-content: space-between;
+}
+
+.calendar-item:hover, .booking-page-item:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+
+.calendar-item-left, .booking-page-item-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.calendar-item-checkbox {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.calendar-item-color-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.calendar-item-title, .booking-page-item-title {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.booking-page-item-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.calendar-item-actions, .booking-page-item-actions {
+  opacity: 0;
+  transition: opacity 0.2s;
+  display: flex;
+  gap: 4px;
+}
+
+.calendar-item:hover .calendar-item-actions,
+.booking-page-item:hover .booking-page-item-actions {
+  opacity: 1;
+}
+
+/* Separator line */
+.calendar-separator {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 20%, transparent);
+  margin: 12px 4px;
+}
+
+/* Navigations in Header */
+.calendar-navigation {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* EventCalendar custom styling */
+.calendar-grid-container {
+  flex: 1;
+  padding: 16px;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Override EventCalendar styles for Business OS Premium dark/glass design */
+.ec-theme-business-os.ec {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  color: inherit;
+  height: 100%;
+}
+
+.ec-theme-business-os .ec-header {
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+}
+
+.ec-theme-business-os .ec-day {
+  border-right: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.ec-theme-business-os .ec-event {
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid rgba(255, 255, 255, 0.15) !important;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 6px;
+}
+
+/* Auditing Lists (Holds & Bookings) */
+.auditing-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.auditing-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: transform 0.2s;
+}
+
+.auditing-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+
+.auditing-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.auditing-card-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.auditing-badge {
+  font-size: 9px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-hold {
+  background: color-mix(in srgb, #f59e0b 20%, transparent);
+  color: #d97706;
+}
+
+.badge-confirmed {
+  background: color-mix(in srgb, #10b981 20%, transparent);
+  color: #059669;
+}
+
+.badge-cancelled {
+  background: color-mix(in srgb, #ef4444 20%, transparent);
+  color: #dc2626;
+}
+
+.auditing-card-detail {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auditing-empty-state {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
+/* Forms and Inputs in Drawer */
+.calendar-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.calendar-form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
+.calendar-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+/* Buttons and Controls */
+.os-btn {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.os-btn:hover {
+  background: var(--surface-3);
+  color: var(--text-strong);
+}
+
+.os-btn-primary {
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+}
+
+.os-btn-primary:hover {
+  background: color-mix(in srgb, var(--accent) 80%, #000);
+  color: #ffffff;
+}
+
+.os-btn-danger {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+.os-btn-danger:hover {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+.os-input, .os-textarea, .os-select {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.25s, box-shadow 0.25s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.os-input:focus, .os-textarea:focus, .os-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Column resizer styling handled by global [data-resizer] in app.css */
+
+@media (max-width: 1024px) {
+  .calendar-app[data-calendar-root] {
+    grid-template-columns: var(--calendar-left-width, 320px) 12px minmax(0, 1fr);
+  }
+  .calendar-right-pane,
+  [data-resizer="right"] {
+    display: none !important;
+  }
+}
+
+@media (max-width: 768px) {
+  .calendar-app[data-calendar-root] {
+    grid-template-columns: 1fr;
+  }
+  .calendar-left-pane,
+  [data-resizer] {
+    display: none !important;
+  }
+}
+
+
+/* Custom Scrollbars */
+.os-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.os-scrollbar::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 10px;
+}
+
+.os-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}

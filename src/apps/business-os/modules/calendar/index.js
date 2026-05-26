@@ -1,0 +1,1182 @@
+import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
+import { createCalendarView } from './calendar-view-adapter.js';
+
+const RENDER_DEBOUNCE_MS = 50;
+
+const labels = {
+  de: {
+    calendar: 'Kalender',
+    today: 'Heute',
+    day: 'Tag',
+    week: 'Woche',
+    month: 'Monat',
+    list: 'Liste',
+    myCalendars: 'Meine Kalender',
+    bookingLinks: 'Buchungslinks',
+    externalSources: 'Externe Quellen',
+    newEvent: 'Neuer Termin',
+    editEvent: 'Termin bearbeiten',
+    save: 'Speichern',
+    delete: 'Löschen',
+    cancel: 'Abbrechen'
+  },
+  en: {
+    calendar: 'Calendar',
+    today: 'Today',
+    day: 'Day',
+    week: 'Week',
+    month: 'Month',
+    list: 'List',
+    myCalendars: 'My Calendars',
+    bookingLinks: 'Booking Links',
+    externalSources: 'External Sources',
+    newEvent: 'New Event',
+    editEvent: 'Edit Event',
+    save: 'Save',
+    delete: 'Delete',
+    cancel: 'Cancel'
+  }
+};
+
+const state = {
+  ctx: null,
+  lang: 'de',
+  t: (key, fallback) => fallback ?? key,
+
+  // Data lists
+  calendars: [],
+  events: [],
+  bookingPages: [],
+  holds: [],
+  bookings: [],
+
+  // Active calendar view state
+  activeView: 'timeGridWeek', // dayGridMonth, timeGridWeek, timeGridDay, listWeek
+  selectedCalendarIds: new Set(),
+
+  // Active editing item in Drawer
+  editingType: null, // 'event' | 'bookingPage' | 'calendar'
+  editingItem: null,
+
+  // Subscriptions & Cleanups
+  rxSubscriptions: [],
+  calendarViewInstance: null,
+  renderTimer: null
+};
+
+const els = {};
+
+export async function mount(ctx) {
+  state.ctx = ctx;
+  state.lang = ctx.locale === 'en' ? 'en' : 'de';
+
+  // Load locales
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
+  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
+
+  // Ensure EventCalendar & RRule assets are loaded
+  await ensureAssetsLoaded();
+
+  // Load markup
+  ctx.host.innerHTML = await loadModuleMarkup();
+
+  // Clear default left/right content slots
+  ctx.left.replaceChildren();
+  ctx.right.replaceChildren();
+
+  applyStaticLabels(ctx.host, state.t);
+  bindElements(ctx.host);
+  wireEvents();
+
+  // Setup Column Resizers
+  const resizerCleanup = setupResizers(ctx.host);
+
+  // Initialize EventCalendar View Instance
+  initCalendarView();
+
+  // Load Data & Setup Realtime Sync
+  await seedDefaultDataIfNeeded();
+  await loadDataFromDb();
+  wireRealtimeSync();
+
+  return () => {
+    if (state.renderTimer) clearTimeout(state.renderTimer);
+    state.rxSubscriptions.forEach(sub => sub.unsubscribe());
+    state.rxSubscriptions = [];
+    if (state.calendarViewInstance) {
+      state.calendarViewInstance.destroy();
+      state.calendarViewInstance = null;
+    }
+    resizerCleanup();
+    unbindEvents();
+  };
+}
+
+function ensureAssetsLoaded() {
+  return new Promise((resolve) => {
+    let loaded = 0;
+    const total = 4;
+    let resolved = false;
+
+    function check() {
+      if (resolved) return;
+      loaded++;
+      if (loaded === total) {
+        resolved = true;
+        resolve();
+      }
+    }
+
+    // Safety fallback timeout: 3 seconds to avoid infinite loading screens if script/stylesheet loads are blocked
+    const timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        console.warn('[calendar] ensureAssetsLoaded took too long, forcing resolution');
+        resolve();
+      }
+    }, 3000);
+
+    // 1. Check & Load App Stylesheet (index.css)
+    if (!document.querySelector('link[data-module-styles="calendar"]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = new URL('./index.css', import.meta.url).href;
+      link.dataset.moduleStyles = 'calendar';
+      link.onload = check;
+      link.onerror = check;
+      document.head.appendChild(link);
+    } else {
+      check();
+    }
+
+    // 2. Check & Load EventCalendar CSS
+    if (!document.querySelector('link[href*="event-calendar.min.css"]')) {
+      const link = document.createElement('link');
+      link.rel = 'stylesheet';
+      link.href = new URL('../../vendor/event-calendar/event-calendar.min.css', import.meta.url).href;
+      link.onload = check;
+      link.onerror = check;
+      document.head.appendChild(link);
+    } else {
+      check();
+    }
+
+    // 3. Check & Load EventCalendar JS
+    if (!window.EventCalendar) {
+      const script = document.createElement('script');
+      script.src = new URL('../../vendor/event-calendar/event-calendar.min.js', import.meta.url).href;
+      script.onload = check;
+      script.onerror = check;
+      document.head.appendChild(script);
+    } else {
+      check();
+    }
+
+    // 4. Check & Load RRule JS
+    if (!window.RRule && !(window.rrule && window.rrule.RRule)) {
+      const script = document.createElement('script');
+      script.src = new URL('../../vendor/rrule/rrule.min.js', import.meta.url).href;
+      script.onload = check;
+      script.onerror = check;
+      document.head.appendChild(script);
+    } else {
+      check();
+    }
+  });
+}
+
+function applyStaticLabels(root, t) {
+  root.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
+  root.querySelectorAll('[data-t-title]').forEach(el => el.title = t(el.dataset.tTitle));
+  root.querySelectorAll('[data-t-aria]').forEach(el => el.setAttribute('aria-label', t(el.dataset.tAria)));
+  root.querySelectorAll('[data-t-placeholder]').forEach(el => el.placeholder = t(el.dataset.tPlaceholder));
+}
+
+async function loadModuleMarkup() {
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
+  return doc.body.innerHTML;
+}
+
+function bindElements(host) {
+  els.root = host.querySelector('[data-calendar-root]');
+  els.calendarList = host.querySelector('#calendarListContainer');
+  els.bookingPagesList = host.querySelector('#bookingPagesListContainer');
+  els.calendarTitle = host.querySelector('#calendarViewTitle');
+  els.calendarRangeTitle = host.querySelector('#calendarRangeTitle');
+  els.eventCalendarMount = host.querySelector('#eventCalendarView');
+
+  els.bookingHoldsList = host.querySelector('#bookingHoldsList');
+  els.bookingsList = host.querySelector('#bookingsList');
+
+  // Buttons
+  els.btnNewEvent = host.querySelector('#btnNewEvent');
+  els.btnPrev = host.querySelector('#prevPeriodBtn');
+  els.btnNext = host.querySelector('#nextPeriodBtn');
+  els.btnToday = host.querySelector('#todayPeriodBtn');
+  els.btnAddNewCalendar = host.querySelector('#addNewCalendarBtn');
+  els.btnAddBookingPage = host.querySelector('#addBookingPageBtn');
+
+  // Drawer / Inspector
+  els.drawer = host.querySelector('#calendarInspectorDrawer');
+  els.drawerKicker = host.querySelector('#drawerKicker');
+  els.drawerTitle = host.querySelector('#drawerTitle');
+  els.drawerContent = host.querySelector('#drawerContent');
+  els.closeDrawerBtn = host.querySelector('#closeDrawerBtn');
+}
+
+function wireEvents() {
+  els.btnNewEvent?.addEventListener('click', () => openEventForm());
+  els.btnPrev?.addEventListener('click', () => state.calendarViewInstance?.prev());
+  els.btnNext?.addEventListener('click', () => state.calendarViewInstance?.next());
+  els.btnToday?.addEventListener('click', () => state.calendarViewInstance?.today());
+  els.btnAddNewCalendar?.addEventListener('click', () => openCalendarForm());
+  els.btnAddBookingPage?.addEventListener('click', () => openBookingPageForm());
+  els.closeDrawerBtn?.addEventListener('click', closeDrawer);
+}
+
+function unbindEvents() {
+  els.btnNewEvent?.removeEventListener('click', () => openEventForm());
+  els.btnPrev?.removeEventListener('click', () => state.calendarViewInstance?.prev());
+  els.btnNext?.removeEventListener('click', () => state.calendarViewInstance?.next());
+  els.btnToday?.removeEventListener('click', () => state.calendarViewInstance?.today());
+  els.btnAddNewCalendar?.removeEventListener('click', () => openCalendarForm());
+  els.btnAddBookingPage?.removeEventListener('click', () => openBookingPageForm());
+  els.closeDrawerBtn?.removeEventListener('click', closeDrawer);
+}
+
+function setupResizers(host) {
+  const leftResizer = host.querySelector('[data-calendar-col-resizer="left"]');
+  const rightResizer = host.querySelector('[data-calendar-col-resizer="right"]');
+  const containerEl = els.root || host;
+
+  const cleanups = [];
+
+  if (leftResizer) {
+    const resizerL = new CtoxResizer({
+      resizerEl: leftResizer,
+      containerEl,
+      cssVar: '--calendar-left-width',
+      side: 'left',
+      minWidth: 250,
+      maxWidth: 450,
+      onResize: (width) => localStorage.setItem('ctox.calendar.layout.leftWidth', width)
+    });
+    cleanups.push(() => resizerL.destroy());
+  }
+
+  if (rightResizer) {
+    const resizerR = new CtoxResizer({
+      resizerEl: rightResizer,
+      containerEl,
+      cssVar: '--calendar-right-width',
+      side: 'right',
+      minWidth: 200,
+      maxWidth: 400,
+      onResize: (width) => localStorage.setItem('ctox.calendar.layout.rightWidth', width)
+    });
+    cleanups.push(() => resizerR.destroy());
+  }
+
+  // Set initial widths
+  const leftWidth = localStorage.getItem('ctox.calendar.layout.leftWidth') || '320';
+  const rightWidth = localStorage.getItem('ctox.calendar.layout.rightWidth') || '280';
+  containerEl.style.setProperty('--calendar-left-width', `${leftWidth}px`);
+  containerEl.style.setProperty('--calendar-right-width', `${rightWidth}px`);
+
+  return () => {
+    cleanups.forEach(c => c());
+  };
+}
+
+// ----------------------------------------------------
+// SEED & DATABASE LOAD METHODS
+// ----------------------------------------------------
+
+async function seedDefaultDataIfNeeded() {
+  const db = state.ctx.db?.raw;
+  if (!db) return;
+
+  const calendarsCount = await db.calendar_calendars.count().exec();
+  if (calendarsCount > 0) return; // already seeded
+
+  // 1. Seed Local Source
+  const sourceId = 'source_local_' + generateUUID();
+  await db.calendar_sources.insert({
+    id: sourceId,
+    kind: 'local',
+    title: 'Lokale Kalender',
+    color: '#3b82f6',
+    sync_status: 'synced',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  // 2. Seed default calendars
+  const calPersonalId = 'cal_personal_' + generateUUID();
+  await db.calendar_calendars.insert({
+    id: calPersonalId,
+    source_id: sourceId,
+    title: 'Persönlich',
+    color: '#3b82f6',
+    visibility: true,
+    owner_user_id: 'default_user',
+    timezone: 'Europe/Berlin',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  const calWorkId = 'cal_work_' + generateUUID();
+  await db.calendar_calendars.insert({
+    id: calWorkId,
+    source_id: sourceId,
+    title: 'Arbeit',
+    color: '#a855f7',
+    visibility: true,
+    owner_user_id: 'default_user',
+    timezone: 'Europe/Berlin',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  // 3. Seed some initial events for the current week
+  const today = new Date();
+  const startOfTodayMs = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+
+  // Event 1: Daily Standup (work, recurring daily at 09:30)
+  await db.calendar_events.insert({
+    id: 'evt_standup_' + generateUUID(),
+    calendar_id: calWorkId,
+    title: 'Tägliches Standup',
+    description: 'Sync mit dem CTOX Team',
+    location: 'Meetingraum A / Jami Link',
+    start_time: startOfTodayMs + 9.5 * 60 * 60 * 1000, // 09:30
+    end_time: startOfTodayMs + 10 * 60 * 60 * 1000,    // 10:00
+    timezone: 'Europe/Berlin',
+    all_day: false,
+    recurrence_rule: 'FREQ=DAILY;INTERVAL=1;COUNT=30',
+    status: 'confirmed',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  // Event 2: Lunch with Michael (personal, tomorrow at 12:30)
+  await db.calendar_events.insert({
+    id: 'evt_lunch_' + generateUUID(),
+    calendar_id: calPersonalId,
+    title: 'Mittagessen mit Michael',
+    description: 'Neues Projekt besprechen',
+    location: 'Trattoria Bella',
+    start_time: startOfTodayMs + 24 * 60 * 60 * 1000 + 12.5 * 60 * 60 * 1000, // 12:30 tomorrow
+    end_time: startOfTodayMs + 24 * 60 * 60 * 1000 + 13.5 * 60 * 60 * 1000,  // 13:30 tomorrow
+    timezone: 'Europe/Berlin',
+    all_day: false,
+    status: 'confirmed',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  // 4. Seed a premium default Booking Page
+  const bookingPageId = 'bp_beratung_' + generateUUID();
+  await db.calendar_booking_pages.insert({
+    id: bookingPageId,
+    slug: 'beratungsgespraech',
+    title: '30 Min. Erstgespräch',
+    description: 'Kennenlernen und Anforderungsklärung für Ihr CTOX Custom Module.',
+    duration_minutes: 30,
+    buffer_before_minutes: 5,
+    buffer_after_minutes: 10,
+    min_notice_minutes: 120, // 2 hours
+    max_days_ahead: 30,
+    calendar_ids: [calWorkId],
+    host_user_ids: ['default_user'],
+    location_mode: 'link',
+    status: 'active',
+    created_at_ms: Date.now(),
+    updated_at_ms: Date.now()
+  });
+
+  // 5. Seed Availability Rules for the Booking Page (Mon-Fri, 9:00 - 17:00)
+  for (let weekday = 1; weekday <= 5; weekday++) {
+    await db.calendar_availability_rules.insert({
+      id: `rule_bp_${bookingPageId}_day_${weekday}`,
+      booking_page_id: bookingPageId,
+      weekday: weekday,
+      start_minute: 540,  // 09:00
+      end_minute: 1020,  // 17:00
+      timezone: 'Europe/Berlin',
+      status: 'active'
+    });
+  }
+}
+
+async function loadDataFromDb() {
+  const db = state.ctx.db?.raw;
+  if (!db) return;
+
+  try {
+    const [cals, evts, bps, hlds, bks] = await Promise.all([
+      db.calendar_calendars.find().exec(),
+      db.calendar_events.find().exec(),
+      db.calendar_booking_pages.find().exec(),
+      db.calendar_booking_holds.find().exec(),
+      db.calendar_bookings.find().exec()
+    ]);
+
+    state.calendars = cals.map(d => d.toJSON());
+    state.events = evts.map(d => d.toJSON());
+    state.bookingPages = bps.map(d => d.toJSON());
+    state.holds = hlds.map(d => d.toJSON());
+    state.bookings = bks.map(d => d.toJSON());
+
+    // Set default selected calendars if none selected yet
+    if (state.selectedCalendarIds.size === 0) {
+      state.calendars.forEach(c => {
+        if (c.visibility !== false) {
+          state.selectedCalendarIds.add(c.id);
+        }
+      });
+    }
+
+    scheduleRender();
+  } catch (error) {
+    console.error('Failed to load calendar data', error);
+  }
+}
+
+function wireRealtimeSync() {
+  const db = state.ctx.db?.raw;
+  if (!db) return;
+
+  const tables = [
+    db.calendar_calendars,
+    db.calendar_events,
+    db.calendar_booking_pages,
+    db.calendar_booking_holds,
+    db.calendar_bookings
+  ];
+
+  tables.forEach(col => {
+    const sub = col.$.subscribe(() => {
+      loadDataFromDb().catch(e => console.warn(e));
+    });
+    state.rxSubscriptions.push(sub);
+  });
+}
+
+function scheduleRender() {
+  if (state.renderTimer) return;
+  state.renderTimer = setTimeout(() => {
+    state.renderTimer = null;
+    renderAll();
+  }, RENDER_DEBOUNCE_MS);
+}
+
+function renderAll() {
+  renderCalendarsSidebar();
+  renderBookingPagesSidebar();
+  renderAuditingLists();
+
+  // Refresh Calendar adapter events
+  const filteredEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
+  state.calendarViewInstance?.setEvents(filteredEvents, state.calendars);
+}
+
+// ----------------------------------------------------
+// UI RENDERING METHODS
+// ----------------------------------------------------
+
+function renderCalendarsSidebar() {
+  if (!els.calendarList) return;
+
+  if (state.calendars.length === 0) {
+    els.calendarList.innerHTML = `<div class="auditing-empty-state">Keine Kalender.</div>`;
+    return;
+  }
+
+  let html = '';
+  state.calendars.forEach(cal => {
+    const checked = state.selectedCalendarIds.has(cal.id);
+    html += `
+      <div class="calendar-item" data-id="${cal.id}">
+        <div class="calendar-item-left">
+          <input type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${cal.id}" ${checked ? 'checked' : ''} />
+          <span class="calendar-item-color-indicator" style="background-color: ${cal.color || '#3b82f6'}"></span>
+          <span class="calendar-item-title">${escapeHtml(cal.title)}</span>
+        </div>
+        <div class="calendar-item-actions">
+          <button class="icon-button" data-action="edit-cal" data-id="${cal.id}" style="font-size:11px;">⚙️</button>
+        </div>
+      </div>
+    `;
+  });
+
+  els.calendarList.innerHTML = html;
+
+  // Bind listeners
+  els.calendarList.querySelectorAll('[data-action="toggle-cal"]').forEach(el => {
+    el.addEventListener('change', (e) => {
+      const id = el.dataset.id;
+      if (e.target.checked) {
+        state.selectedCalendarIds.add(id);
+      } else {
+        state.selectedCalendarIds.delete(id);
+      }
+      scheduleRender();
+    });
+  });
+
+  els.calendarList.querySelectorAll('[data-action="edit-cal"]').forEach(el => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openCalendarForm(el.dataset.id);
+    });
+  });
+}
+
+function renderBookingPagesSidebar() {
+  if (!els.bookingPagesList) return;
+
+  if (state.bookingPages.length === 0) {
+    els.bookingPagesList.innerHTML = `<div class="auditing-empty-state">Keine Buchungsseiten.</div>`;
+    return;
+  }
+
+  let html = '';
+  state.bookingPages.forEach(bp => {
+    const publicUrl = `${window.location.origin}/book/${bp.slug}`;
+    const isActive = bp.status === 'active';
+    html += `
+      <div class="booking-page-item" data-id="${bp.id}">
+        <div class="booking-page-item-left">
+          <div class="booking-page-item-title">
+            <span>${escapeHtml(bp.title)}</span>
+            <div class="booking-page-item-subtitle">${bp.duration_minutes} Min · /book/${bp.slug}</div>
+          </div>
+        </div>
+        <div class="booking-page-item-actions">
+          <a class="os-btn" href="${publicUrl}" target="_blank" title="Öffnen" style="padding: 4px 6px; font-size:11px;">🔗</a>
+          <button class="icon-button" data-action="edit-bp" data-id="${bp.id}" style="font-size:11px;">⚙️</button>
+        </div>
+      </div>
+    `;
+  });
+
+  els.bookingPagesList.innerHTML = html;
+
+  els.bookingPagesList.querySelectorAll('[data-action="edit-bp"]').forEach(el => {
+    el.addEventListener('click', () => {
+      openBookingPageForm(el.dataset.id);
+    });
+  });
+}
+
+function renderAuditingLists() {
+  // 1. Holds List
+  if (els.bookingHoldsList) {
+    const activeHolds = state.holds.filter(h => h.status === 'active' && h.expires_at_ms > Date.now());
+    if (activeHolds.length === 0) {
+      els.bookingHoldsList.innerHTML = `<div class="auditing-empty-state">Keine aktiven Holds.</div>`;
+    } else {
+      els.bookingHoldsList.innerHTML = activeHolds.map(hold => {
+        const bp = state.bookingPages.find(p => p.id === hold.booking_page_id);
+        const startStr = new Date(hold.slot_start_ms).toLocaleString();
+        const expiresStr = new Date(hold.expires_at_ms).toLocaleTimeString();
+        return `
+          <div class="auditing-card">
+            <div class="auditing-card-header">
+              <span class="auditing-card-title">${escapeHtml(bp?.title || 'Buchung hold')}</span>
+              <span class="auditing-badge badge-hold">Hold</span>
+            </div>
+            <div class="auditing-card-detail">Zeit: ${startStr}</div>
+            <div class="auditing-card-detail" style="font-size:10px; color: #f59e0b;">Läuft ab um ${expiresStr}</div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  // 2. Bookings List
+  if (els.bookingsList) {
+    const sortedBookings = [...state.bookings].sort((a, b) => b.slot_start_ms - a.slot_start_ms);
+    if (sortedBookings.length === 0) {
+      els.bookingsList.innerHTML = `<div class="auditing-empty-state">Keine bestätigten Buchungen.</div>`;
+    } else {
+      els.bookingsList.innerHTML = sortedBookings.map(bk => {
+        const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
+        const startStr = new Date(bk.slot_start_ms).toLocaleString();
+        const statusBadge = bk.status === 'confirmed' ? 'confirmed' : 'cancelled';
+        return `
+          <div class="auditing-card" data-action="view-booking" data-id="${bk.id}" style="cursor:pointer;">
+            <div class="auditing-card-header">
+              <span class="auditing-card-title">${escapeHtml(bk.attendee_name)}</span>
+              <span class="auditing-badge badge-${statusBadge}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
+            </div>
+            <div class="auditing-card-detail">Event: ${escapeHtml(bp?.title || 'Beratung')}</div>
+            <div class="auditing-card-detail">Zeit: ${startStr}</div>
+            <div class="auditing-card-detail">E-Mail: ${escapeHtml(bk.attendee_email)}</div>
+          </div>
+        `;
+      }).join('');
+
+      els.bookingsList.querySelectorAll('[data-action="view-booking"]').forEach(el => {
+        el.addEventListener('click', () => {
+          openBookingDetail(el.dataset.id);
+        });
+      });
+    }
+  }
+}
+
+// ----------------------------------------------------
+// EVENT CALENDAR UI SETUP
+// ----------------------------------------------------
+
+function initCalendarView() {
+  if (!els.eventCalendarMount) return;
+
+  state.calendarViewInstance = createCalendarView({
+    root: els.eventCalendarMount,
+    events: state.events,
+    calendars: state.calendars,
+    view: 'timeGridWeek',
+    onEventClick: ({ event, original }) => {
+      openEventForm(original.id);
+    },
+    onEventMove: async ({ id, start, end, allDay }) => {
+      const db = state.ctx.db?.raw;
+      if (!db) return;
+      const doc = await db.calendar_events.findOne(id).exec();
+      if (doc) {
+        await doc.patch({
+          start_time: start.getTime(),
+          end_time: end.getTime(),
+          all_day: !!allDay,
+          updated_at_ms: Date.now()
+        });
+      }
+    },
+    onEventResize: async ({ id, start, end }) => {
+      const db = state.ctx.db?.raw;
+      if (!db) return;
+      const doc = await db.calendar_events.findOne(id).exec();
+      if (doc) {
+        await doc.patch({
+          start_time: start.getTime(),
+          end_time: end.getTime(),
+          updated_at_ms: Date.now()
+        });
+      }
+    },
+    onRangeSelect: ({ start, end, allDay }) => {
+      openEventForm(null, {
+        start_time: start.getTime(),
+        end_time: end.getTime(),
+        all_day: !!allDay
+      });
+    }
+  });
+}
+
+// ----------------------------------------------------
+// DRAWER FORMS IMPLEMENTATIONS
+// ----------------------------------------------------
+
+function openDrawer(kicker, title, htmlContent) {
+  if (!els.drawer) return;
+  els.drawerKicker.textContent = kicker;
+  els.drawerTitle.textContent = title;
+  els.drawerContent.innerHTML = htmlContent;
+  els.drawer.classList.add('is-open');
+}
+
+function closeDrawer() {
+  els.drawer?.classList.remove('is-open');
+  state.editingType = null;
+  state.editingItem = null;
+}
+
+// 1. EVENT FORM
+
+function openEventForm(eventId = null, defaults = null) {
+  state.editingType = 'event';
+  const dbEvent = eventId ? state.events.find(e => e.id === eventId) : null;
+  state.editingItem = dbEvent;
+
+  const calsOptions = state.calendars.map(c => `
+    <option value="${c.id}" ${dbEvent?.calendar_id === c.id ? 'selected' : ''}>${escapeHtml(c.title)}</option>
+  `).join('');
+
+  const startVal = new Date(dbEvent?.start_time || defaults?.start_time || Date.now());
+  const endVal = new Date(dbEvent?.end_time || defaults?.end_time || (Date.now() + 60 * 60 * 1000));
+
+  // Format as YYYY-MM-DDTHH:MM
+  const formatDateTimeLocal = (date) => {
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  };
+
+  const html = `
+    <form id="drawerEventForm" style="padding: 16px;">
+      <div class="calendar-form-group">
+        <label>Titel</label>
+        <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" />
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Kalender</label>
+          <select class="os-select" name="calendar_id" required>
+            ${calsOptions}
+          </select>
+        </div>
+        <div class="calendar-form-group">
+          <label>Ort / Meeting URL</label>
+          <input type="text" class="os-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
+        </div>
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Startzeit</label>
+          <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required />
+        </div>
+        <div class="calendar-form-group">
+          <label>Endzeit</label>
+          <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required />
+        </div>
+      </div>
+
+      <div class="calendar-form-group">
+        <label>Wiederholung</label>
+        <select class="os-select" name="recurrence_rule">
+          <option value="" ${!dbEvent?.recurrence_rule ? 'selected' : ''}>Keine</option>
+          <option value="FREQ=DAILY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('DAILY') ? 'selected' : ''}>Täglich</option>
+          <option value="FREQ=WEEKLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('WEEKLY') ? 'selected' : ''}>Wöchentlich</option>
+          <option value="FREQ=MONTHLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('MONTHLY') ? 'selected' : ''}>Monatlich</option>
+        </select>
+      </div>
+
+      <div class="calendar-form-group">
+        <label>Beschreibung</label>
+        <textarea class="os-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
+      </div>
+
+      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+        <div>
+          ${dbEvent ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteEvent">Termin löschen</button>' : ''}
+        </div>
+        <div style="display:flex; gap: 8px;">
+          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+        </div>
+      </div>
+    </form>
+  `;
+
+  openDrawer('Termin', dbEvent ? 'Termin bearbeiten' : 'Neuer Termin', html);
+
+  // Form Events
+  const form = els.drawer.querySelector('#drawerEventForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const startMs = new Date(data.get('start_time')).getTime();
+    const endMs = new Date(data.get('end_time')).getTime();
+
+    const db = state.ctx.db?.raw;
+    if (!db) return;
+
+    const fields = {
+      calendar_id: data.get('calendar_id'),
+      title: data.get('title'),
+      location: data.get('location'),
+      start_time: startMs,
+      end_time: endMs,
+      recurrence_rule: data.get('recurrence_rule') || null,
+      description: data.get('description'),
+      updated_at_ms: Date.now()
+    };
+
+    if (dbEvent) {
+      const doc = await db.calendar_events.findOne(dbEvent.id).exec();
+      if (doc) {
+        await doc.patch(fields);
+      }
+    } else {
+      await db.calendar_events.insert({
+        id: 'evt_' + generateUUID(),
+        ...fields,
+        created_at_ms: Date.now()
+      });
+    }
+
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnDeleteEvent')?.addEventListener('click', async () => {
+    if (!confirm('Diesen Termin wirklich löschen?')) return;
+    const db = state.ctx.db?.raw;
+    if (!db || !dbEvent) return;
+    const doc = await db.calendar_events.findOne(dbEvent.id).exec();
+    if (doc) {
+      await doc.remove();
+    }
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnCancelDrawer')?.addEventListener('click', closeDrawer);
+}
+
+// 2. BOOKING PAGE FORM
+
+function openBookingPageForm(bpId = null) {
+  state.editingType = 'bookingPage';
+  const dbBp = bpId ? state.bookingPages.find(p => p.id === bpId) : null;
+  state.editingItem = dbBp;
+
+  const html = `
+    <form id="drawerBookingPageForm" style="padding: 16px;">
+      <div class="calendar-form-group">
+        <label>Titel des Buchungs-Links</label>
+        <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" />
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Link-Kürzel (Slug)</label>
+          <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" />
+        </div>
+        <div class="calendar-form-group">
+          <label>Dauer (Minuten)</label>
+          <input type="number" class="os-input" name="duration_minutes" value="${dbBp?.duration_minutes || 30}" required />
+        </div>
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Puffer Davor (Minuten)</label>
+          <input type="number" class="os-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
+        </div>
+        <div class="calendar-form-group">
+          <label>Puffer Danach (Minuten)</label>
+          <input type="number" class="os-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
+        </div>
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Mindestvorlauf (Minuten)</label>
+          <input type="number" class="os-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
+        </div>
+        <div class="calendar-form-group">
+          <label>Max. Tage im Voraus</label>
+          <input type="number" class="os-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
+        </div>
+      </div>
+
+      <div class="calendar-form-row">
+        <div class="calendar-form-group">
+          <label>Standort-Typ</label>
+          <select class="os-select" name="location_mode">
+            <option value="link" ${dbBp?.location_mode === 'link' ? 'selected' : ''}>Online-Meeting Link</option>
+            <option value="phone" ${dbBp?.location_mode === 'phone' ? 'selected' : ''}>Telefonnummer</option>
+            <option value="physical" ${dbBp?.location_mode === 'physical' ? 'selected' : ''}>Physischer Ort</option>
+          </select>
+        </div>
+        <div class="calendar-form-group">
+          <label>Status</label>
+          <select class="os-select" name="status">
+            <option value="active" ${dbBp?.status === 'active' ? 'selected' : ''}>Aktiv</option>
+            <option value="inactive" ${dbBp?.status === 'inactive' ? 'selected' : ''}>Inaktiv</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="calendar-form-group">
+        <label>Beschreibung</label>
+        <textarea class="os-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
+      </div>
+
+      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+        <div>
+          ${dbBp ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteBp">Löschen</button>' : ''}
+        </div>
+        <div style="display:flex; gap: 8px;">
+          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+        </div>
+      </div>
+    </form>
+  `;
+
+  openDrawer('Buchungsseite', dbBp ? 'Buchungsseite bearbeiten' : 'Neue Buchungsseite', html);
+
+  const form = els.drawer.querySelector('#drawerBookingPageForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const db = state.ctx.db?.raw;
+    if (!db) return;
+
+    // Slug clean up
+    const cleanSlug = data.get('slug').toLowerCase().replace(/[^a-z0-9-_]/g, '');
+
+    const fields = {
+      title: data.get('title'),
+      slug: cleanSlug,
+      duration_minutes: parseInt(data.get('duration_minutes'), 10),
+      buffer_before_minutes: parseInt(data.get('buffer_before_minutes') || 0, 10),
+      buffer_after_minutes: parseInt(data.get('buffer_after_minutes') || 0, 10),
+      min_notice_minutes: parseInt(data.get('min_notice_minutes') || 0, 10),
+      max_days_ahead: parseInt(data.get('max_days_ahead') || 30, 10),
+      location_mode: data.get('location_mode'),
+      status: data.get('status'),
+      description: data.get('description'),
+      updated_at_ms: Date.now()
+    };
+
+    if (dbBp) {
+      const doc = await db.calendar_booking_pages.findOne(dbBp.id).exec();
+      if (doc) {
+        await doc.patch(fields);
+      }
+    } else {
+      const newBpId = 'bp_' + generateUUID();
+      await db.calendar_booking_pages.insert({
+        id: newBpId,
+        calendar_ids: [state.calendars[0]?.id || 'default'],
+        host_user_ids: ['default_user'],
+        ...fields,
+        created_at_ms: Date.now()
+      });
+
+      // Also automatically seed availability rules for new booking pages
+      for (let weekday = 1; weekday <= 5; weekday++) {
+        await db.calendar_availability_rules.insert({
+          id: `rule_bp_${newBpId}_day_${weekday}`,
+          booking_page_id: newBpId,
+          weekday: weekday,
+          start_minute: 540,
+          end_minute: 1020,
+          timezone: 'Europe/Berlin',
+          status: 'active'
+        });
+      }
+    }
+
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnDeleteBp')?.addEventListener('click', async () => {
+    if (!confirm('Diese Buchungsseite wirklich löschen?')) return;
+    const db = state.ctx.db?.raw;
+    if (!db || !dbBp) return;
+    const doc = await db.calendar_booking_pages.findOne(dbBp.id).exec();
+    if (doc) {
+      await doc.remove();
+    }
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnCancelDrawer')?.addEventListener('click', closeDrawer);
+}
+
+// 3. CALENDAR FORM
+
+function openCalendarForm(calId = null) {
+  state.editingType = 'calendar';
+  const dbCal = calId ? state.calendars.find(c => c.id === calId) : null;
+  state.editingItem = dbCal;
+
+  const html = `
+    <form id="drawerCalendarForm" style="padding: 16px;">
+      <div class="calendar-form-group">
+        <label>Kalendertitel</label>
+        <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" />
+      </div>
+
+      <div class="calendar-form-group">
+        <label>Farbe</label>
+        <input type="color" class="os-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
+      </div>
+
+      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+        <div>
+          ${dbCal ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteCal">Kalender löschen</button>' : ''}
+        </div>
+        <div style="display:flex; gap: 8px;">
+          <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
+          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+        </div>
+      </div>
+    </form>
+  `;
+
+  openDrawer('Kalender', dbCal ? 'Kalender bearbeiten' : 'Neuer Kalender', html);
+
+  const form = els.drawer.querySelector('#drawerCalendarForm');
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const data = new FormData(form);
+    const db = state.ctx.db?.raw;
+    if (!db) return;
+
+    const fields = {
+      title: data.get('title'),
+      color: data.get('color'),
+      updated_at_ms: Date.now()
+    };
+
+    if (dbCal) {
+      const doc = await db.calendar_calendars.findOne(dbCal.id).exec();
+      if (doc) {
+        await doc.patch(fields);
+      }
+    } else {
+      const sources = await db.calendar_sources.find().exec();
+      const localSourceId = sources[0]?.id || 'default_source';
+
+      await db.calendar_calendars.insert({
+        id: 'cal_' + generateUUID(),
+        source_id: localSourceId,
+        visibility: true,
+        owner_user_id: 'default_user',
+        timezone: 'Europe/Berlin',
+        ...fields,
+        created_at_ms: Date.now()
+      });
+    }
+
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnDeleteCal')?.addEventListener('click', async () => {
+    if (!confirm('Diesen Kalender wirklich löschen? Alle zugehörigen Termine gehen verloren.')) return;
+    const db = state.ctx.db?.raw;
+    if (!db || !dbCal) return;
+
+    // Delete calendar events first
+    const events = await db.calendar_events.find({ selector: { calendar_id: dbCal.id } }).exec();
+    for (const evt of events) {
+      await evt.remove();
+    }
+
+    // Delete calendar itself
+    const doc = await db.calendar_calendars.findOne(dbCal.id).exec();
+    if (doc) {
+      await doc.remove();
+    }
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnCancelDrawer')?.addEventListener('click', closeDrawer);
+}
+
+// 4. BOOKING DETAIL MODAL
+
+function openBookingDetail(bkId) {
+  const bk = state.bookings.find(b => b.id === bkId);
+  if (!bk) return;
+
+  const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
+  const startStr = new Date(bk.slot_start_ms).toLocaleString();
+  const endStr = new Date(bk.slot_end_ms).toLocaleTimeString();
+
+  const html = `
+    <div style="padding: 16px; display:flex; flex-direction:column; gap: 12px;">
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Kunde</strong>
+        <div style="font-size:16px; font-weight:700; color: var(--text-strong);">${escapeHtml(bk.attendee_name)}</div>
+      </div>
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">E-Mail</strong>
+        <div>${escapeHtml(bk.attendee_email)}</div>
+      </div>
+      ${bk.attendee_phone ? `
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Telefonnummer</strong>
+        <div>${escapeHtml(bk.attendee_phone)}</div>
+      </div>` : ''}
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Terminart</strong>
+        <div>${escapeHtml(bp?.title || 'Beratung')}</div>
+      </div>
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Zeitfenster</strong>
+        <div>${startStr} - ${endStr}</div>
+      </div>
+      <div>
+        <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Status</strong>
+        <div style="display:flex; align-items:center; gap:6px; margin-top:4px;">
+          <span class="auditing-badge badge-${bk.status === 'confirmed' ? 'confirmed' : 'cancelled'}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
+        </div>
+      </div>
+
+      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+        <div>
+          ${bk.status === 'confirmed' ? '<button type="button" class="os-btn os-btn-danger" id="btnCancelBooking">Termin Stornieren</button>' : ''}
+        </div>
+        <div>
+          <button type="button" class="os-btn os-btn-primary" id="btnCancelDrawer">Schließen</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  openDrawer('Buchung', 'Buchungsdetails', html);
+
+  els.drawer.querySelector('#btnCancelBooking')?.addEventListener('click', async () => {
+    if (!confirm('Diesen Termin wirklich stornieren?')) return;
+    const db = state.ctx.db?.raw;
+    if (!db) return;
+
+    // Update booking status
+    const doc = await db.calendar_bookings.findOne(bk.id).exec();
+    if (doc) {
+      await doc.patch({
+        status: 'cancelled',
+        updated_at_ms: Date.now()
+      });
+    }
+
+    // Also delete associated calendar event if any exists
+    if (bk.event_id) {
+      const evtDoc = await db.calendar_events.findOne(bk.event_id).exec();
+      if (evtDoc) {
+        await evtDoc.remove();
+      }
+    }
+
+    closeDrawer();
+  });
+
+  els.drawer.querySelector('#btnCancelDrawer')?.addEventListener('click', closeDrawer);
+}
+
+// ----------------------------------------------------
+// UTILITIES
+// ----------------------------------------------------
+
+function generateUUID() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0;
+    const v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
+}

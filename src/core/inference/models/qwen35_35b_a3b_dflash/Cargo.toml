@@ -3,7 +3,7 @@ name = "ctox-qwen35-35b-a3b-dflash"
 version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Self-contained Qwen3.5-35B-A3B (MoE) DFlash speculative-decoding model. macOS+Metal path uses byte-exact vendored kernels from llama.cpp ggml-metal + dflash-mlx. Linux CUDA not yet implemented. All kernels are vendored in-tree; no code is shared with other model crates."
 
 # Keep this crate OUT of any parent workspace. The tree sits under

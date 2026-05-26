@@ -97,6 +97,46 @@ struct CtoxWebScrapeArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct CtoxWebAuthAssistRequestArgs {
+    source_id: String,
+    #[serde(default)]
+    target_url: Option<String>,
+    #[serde(default)]
+    requesting_task_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CtoxWebAuthAssistStatusArgs {
+    session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CtoxBrowserContextCaptureArgs {
+    session_id: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    requesting_task_id: Option<String>,
+    #[serde(default = "default_true")]
+    enqueue_handoff: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CtoxBrowserContextExtractArgs {
+    session_id: String,
+    #[serde(default)]
+    source_id: Option<String>,
+    #[serde(default)]
+    capture_script: Option<String>,
+    #[serde(default)]
+    requesting_task_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CtoxDocSearchArgs {
     query: String,
     #[serde(default)]
@@ -254,6 +294,66 @@ impl ToolHandler for CtoxWebHandler {
                     command.arg("--limit").arg(limit.to_string());
                 }
             }
+            "ctox_web_auth_assist_request" => {
+                let args: CtoxWebAuthAssistRequestArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("business-os")
+                    .arg("web-stack")
+                    .arg("auth-assist-request")
+                    .arg("--source-id")
+                    .arg(args.source_id);
+                if let Some(target_url) = args.target_url {
+                    command.arg("--target-url").arg(target_url);
+                }
+                if let Some(requesting_task_id) = args.requesting_task_id {
+                    command.arg("--task-id").arg(requesting_task_id);
+                }
+            }
+            "ctox_web_auth_assist_status" => {
+                let args: CtoxWebAuthAssistStatusArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("business-os")
+                    .arg("web-stack")
+                    .arg("auth-assist-status")
+                    .arg("--session-id")
+                    .arg(args.session_id);
+            }
+            "ctox_browser_context_capture" => {
+                let args: CtoxBrowserContextCaptureArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("business-os")
+                    .arg("web-stack")
+                    .arg("context-capture")
+                    .arg("--session-id")
+                    .arg(args.session_id);
+                if let Some(source_id) = args.source_id {
+                    command.arg("--source-id").arg(source_id);
+                }
+                if let Some(requesting_task_id) = args.requesting_task_id {
+                    command.arg("--task-id").arg(requesting_task_id);
+                }
+                if !args.enqueue_handoff {
+                    command.arg("--no-handoff");
+                }
+            }
+            "ctox_browser_context_extract" => {
+                let args: CtoxBrowserContextExtractArgs = parse_arguments(&arguments)?;
+                command
+                    .arg("business-os")
+                    .arg("web-stack")
+                    .arg("context-extract")
+                    .arg("--session-id")
+                    .arg(args.session_id);
+                if let Some(source_id) = args.source_id {
+                    command.arg("--source-id").arg(source_id);
+                }
+                if let Some(capture_script) = args.capture_script {
+                    command.arg("--capture-script").arg(capture_script);
+                }
+                if let Some(requesting_task_id) = args.requesting_task_id {
+                    command.arg("--task-id").arg(requesting_task_id);
+                }
+            }
             other => {
                 return Err(FunctionCallError::RespondToModel(format!(
                     "unsupported CTOX web tool: {other}"
@@ -283,6 +383,10 @@ impl ToolHandler for CtoxWebHandler {
             Some(true),
         ))
     }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[async_trait]

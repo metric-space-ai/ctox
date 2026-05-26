@@ -3,7 +3,7 @@ name = "ctox-qwen3-embedding-0-6b"
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 description = "Bare-metal CTOX native port scaffold for Qwen3-Embedding-0.6B. No external runtime, no Ollama, no llama.cpp process."
 build = "build.rs"
 

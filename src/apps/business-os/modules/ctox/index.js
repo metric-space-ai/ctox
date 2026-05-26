@@ -1,6 +1,7 @@
 import { collections } from './schema.js';
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -112,6 +113,24 @@ const labels = {
     ticketsOpen: 'Offene Tickets',
     runtimePolicy: 'Runtime / Policies',
     queued: 'Command angelegt',
+    webStack: 'Web Stack',
+    webStackSources: 'Quellen',
+    webStackCredentials: 'Credentials',
+    webStackMissing: 'fehlen',
+    webStackConfigured: 'konfiguriert',
+    webStackSecret: 'Secret',
+    webStackCredentialValue: 'Credential-Wert',
+    webStackSaveCredential: 'Speichern',
+    webStackVerifyCredential: 'Prüfen',
+    webStackAuthAssist: 'Login im Browser',
+    webStackRxdbOnly: 'Browser-Stream über RxDB, Secrets im CTOX Secret Store.',
+    webStackLoading: 'Web Stack wird geladen.',
+    webStackCredentialSaved: 'Credential gespeichert.',
+    webStackAuthQueued: 'Browser-Login angefordert.',
+    webStackRecentCaptures: 'Letzte Captures',
+    webStackNoCaptures: 'Noch keine Browser-Captures.',
+    webStackRecentExtracts: 'Letzte Extracts',
+    webStackNoExtracts: 'Noch keine Browser-Extracts.',
   },
   en: {
     now: 'Now',
@@ -210,6 +229,24 @@ const labels = {
     ticketsOpen: 'Open tickets',
     runtimePolicy: 'Runtime / policies',
     queued: 'Command queued',
+    webStack: 'Web Stack',
+    webStackSources: 'Sources',
+    webStackCredentials: 'Credentials',
+    webStackMissing: 'missing',
+    webStackConfigured: 'configured',
+    webStackSecret: 'Secret',
+    webStackCredentialValue: 'Credential value',
+    webStackSaveCredential: 'Save',
+    webStackVerifyCredential: 'Verify',
+    webStackAuthAssist: 'Login in Browser',
+    webStackRxdbOnly: 'Browser stream over RxDB, secrets in CTOX Secret Store.',
+    webStackLoading: 'Loading Web Stack.',
+    webStackCredentialSaved: 'Credential saved.',
+    webStackAuthQueued: 'Browser login requested.',
+    webStackRecentCaptures: 'Recent captures',
+    webStackNoCaptures: 'No browser captures yet.',
+    webStackRecentExtracts: 'Recent extracts',
+    webStackNoExtracts: 'No browser extracts yet.',
   },
 };
 
@@ -331,6 +368,12 @@ export async function mount(ctx) {
     layoutResizeCleanup: null,
     contextMenuCleanup: null,
     flowViewport: { left: 0, top: 0 },
+    webStack: {
+      loading: true,
+      error: '',
+      notice: '',
+      data: null,
+    },
   };
 
   applyHarnessColumnWidth(ctx.host, readStoredLeftColumnWidth());
@@ -362,11 +405,18 @@ async function loadCtoxMessages(lang) {
 }
 
 async function renderFromLocalCache(state) {
-  const [commands, queueTasks, bugReports] = await Promise.all([
+  const [commands, queueTasks, bugReports, webStack] = await Promise.all([
     loadLocalCommands(state.ctx).catch(() => []),
     loadLocalQueueTasks(state.ctx).catch(() => []),
     loadLocalBugReports(state.ctx).catch(() => []),
+    loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
   ]);
+  state.webStack = {
+    loading: false,
+    error: webStack?.ok ? '' : (webStack?.error || 'Web Stack status unavailable'),
+    notice: state.webStack?.notice || '',
+    data: webStack?.ok ? webStack : state.webStack?.data,
+  };
   state.flow = state.flow || emptyHarnessFlow();
   const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
   const metrics = aggregateFlowMetrics(state.flow);
@@ -379,7 +429,7 @@ async function renderFromLocalCache(state) {
 }
 
 function wireLocalRealtime(state) {
-  const collectionsToWatch = ['business_commands', 'ctox_queue_tasks', 'ctox_bug_reports'];
+  const collectionsToWatch = ['business_commands', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports'];
   let renderTimer = null;
   const scheduleRender = () => {
     if (renderTimer) return;
@@ -409,11 +459,18 @@ async function refresh(state) {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
   try {
-    const [commands, queueTasks, bugReports] = await Promise.all([
+    const [commands, queueTasks, bugReports, webStack] = await Promise.all([
       loadLocalCommands(state.ctx).catch(() => []),
       loadLocalQueueTasks(state.ctx).catch(() => []),
       loadLocalBugReports(state.ctx).catch(() => []),
+      loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
     ]);
+    state.webStack = {
+      loading: false,
+      error: webStack?.ok ? '' : (webStack?.error || 'Web Stack status unavailable'),
+      notice: state.webStack?.notice || '',
+      data: webStack?.ok ? webStack : state.webStack?.data,
+    };
     const nextFlow = emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
     state.flow = nextFlow;
@@ -479,38 +536,21 @@ function wireColumnResize(state) {
   const harness = state.ctx.host.querySelector('[data-ctox-harness]');
   const handle = state.ctx.host.querySelector('[data-ctox-column-resizer]');
   if (!harness || !handle) return () => {};
-  let drag = null;
-  const onPointerMove = (event) => {
-    if (!drag) return;
-    const nextWidth = clampMetric(drag.width + event.clientX - drag.x, LEFT_COLUMN_MIN, Math.min(LEFT_COLUMN_MAX, Math.max(LEFT_COLUMN_MIN, harness.clientWidth - 420)));
-    applyHarnessColumnWidth(state.ctx.host, nextWidth);
-    localStorage.setItem(LEFT_COLUMN_WIDTH_KEY, String(Math.round(nextWidth)));
-  };
-  const endDrag = () => {
-    if (!drag) return;
-    drag = null;
-    document.body.classList.remove('ctox-column-resizing');
-    handle.classList.remove('is-dragging');
-  };
-  const onPointerDown = (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    const left = state.ctx.host.querySelector('[data-ctox-left]');
-    drag = { x: event.clientX, width: left?.getBoundingClientRect().width || readStoredLeftColumnWidth() };
-    document.body.classList.add('ctox-column-resizing');
-    handle.classList.add('is-dragging');
-    handle.setPointerCapture?.(event.pointerId);
-  };
-  handle.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', endDrag);
-  window.addEventListener('pointercancel', endDrag);
+
+  const resizer = new CtoxResizer({
+    resizerEl: handle,
+    containerEl: harness,
+    cssVar: '--ctox-left-width',
+    side: 'left',
+    minWidth: LEFT_COLUMN_MIN,
+    maxWidth: LEFT_COLUMN_MAX,
+    onResize: (width) => {
+      localStorage.setItem(LEFT_COLUMN_WIDTH_KEY, String(Math.round(width)));
+    }
+  });
+
   return () => {
-    handle.removeEventListener('pointerdown', onPointerDown);
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', endDrag);
-    window.removeEventListener('pointercancel', endDrag);
-    document.body.classList.remove('ctox-column-resizing');
+    resizer.destroy();
   };
 }
 
@@ -532,6 +572,7 @@ function renderLeft(state) {
       <strong>${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</strong>
     </div>
     ${inboundChannelPanel(model.inboundChannels, state)}
+    ${webStackPanel(state)}
     <div class="ctox-task-board">
       ${taskSection('current', t.currentWork, groups.current, state)}
       ${taskSection('blocked', t.blockedWork, groups.blocked, state)}
@@ -555,6 +596,7 @@ function renderLeft(state) {
       selectTask(state, button.dataset.taskId, { drawer: true, center: true });
     });
   });
+  wireWebStackPanel(state, left);
 }
 
 function syncOpenTaskSections(state, groups) {
@@ -643,6 +685,150 @@ function inboundChannelPanel(channels, state) {
       </div>
     </section>
   `;
+}
+
+function webStackPanel(state) {
+  const t = labels[state.lang];
+  const webStack = state.webStack || {};
+  const data = webStack.data || {};
+  const summary = data.summary || {};
+  const sources = Array.isArray(data.sources) ? data.sources : [];
+  const credentialSources = sources
+    .filter((source) => source?.credential?.required)
+    .sort((left, right) => Number(left.credential.configured) - Number(right.credential.configured) || String(left.id).localeCompare(String(right.id)));
+  const firstMissing = credentialSources.find((source) => !source.credential.configured) || credentialSources[0];
+  const selectedSecret = firstMissing?.credential?.secret_name || '';
+  const sourceOptions = credentialSources.map((source) => `
+    <option value="${escapeAttr(source.id)}" ${source.id === firstMissing?.id ? 'selected' : ''}>
+      ${escapeHtml(source.id)} · ${escapeHtml(source.credential.secret_name || '')}
+    </option>
+  `).join('');
+  const rows = credentialSources.slice(0, 5).map((source) => {
+    const configured = Boolean(source.credential.configured);
+    return `
+      <article class="ctox-web-stack-source ${configured ? 'is-configured' : 'is-missing'}">
+        <span>
+          <strong>${escapeHtml(source.id)}</strong>
+          <small>${escapeHtml(source.credential.secret_name || '')}</small>
+        </span>
+        <button type="button" data-webstack-auth-source="${escapeAttr(source.id)}" data-webstack-auth-secret="${escapeAttr(source.credential.secret_name || '')}">
+          ${escapeHtml(configured ? t.webStackAuthAssist : t.webStackVerifyCredential)}
+        </button>
+      </article>
+    `;
+  }).join('');
+  const captures = recentWebStackBrowserCaptures(state).slice(0, 3);
+  const captureRows = captures.map((capture) => `
+    <article class="ctox-web-stack-capture" data-task-id="${escapeAttr(capture.taskId)}" data-context-label="${escapeAttr(capture.sourceId || capture.captureScript || capture.taskId)}">
+      <span>
+        <strong>${escapeHtml(capture.sourceId || capture.captureScript || capture.title)}</strong>
+        <small>${escapeHtml([capture.captureScript, capture.frameId].filter(Boolean).join(' · '))}</small>
+      </span>
+      <small>${escapeHtml(formatShortTimestamp(capture.timestamp))}</small>
+    </article>
+  `).join('');
+  const extracts = recentWebStackBrowserExtracts(state).slice(0, 3);
+  const extractRows = extracts.map((extract) => `
+    <article class="ctox-web-stack-capture is-extract" data-command-id="${escapeAttr(extract.commandId)}" data-context-label="${escapeAttr(extract.sourceId || extract.captureScript || extract.commandId)}">
+      <span>
+        <strong>${escapeHtml(extract.sourceId || extract.captureScript || extract.title)}</strong>
+        <small>${escapeHtml(extract.summary || extract.captureScript || extract.commandId)}</small>
+      </span>
+      <small>${escapeHtml(formatShortTimestamp(extract.timestamp))}</small>
+    </article>
+  `).join('');
+
+  return `
+    <section class="ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
+      <header>
+        <div>
+          <span>${escapeHtml(t.webStack)}</span>
+          <strong>${webStack.loading ? escapeHtml(t.webStackLoading) : escapeHtml(`${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`)}</strong>
+        </div>
+        <button type="button" data-webstack-refresh aria-label="${escapeAttr(t.webStack)} aktualisieren">↻</button>
+      </header>
+      <p>${escapeHtml(webStack.error || webStack.notice || t.webStackRxdbOnly)}</p>
+      ${sourceOptions ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
+      <div class="ctox-web-stack-source-list">
+        ${rows || `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}</small>`}
+      </div>
+      <div class="ctox-web-stack-capture-list">
+        <span>${escapeHtml(t.webStackRecentCaptures)}</span>
+        ${captureRows || `<small>${escapeHtml(t.webStackNoCaptures)}</small>`}
+      </div>
+      <div class="ctox-web-stack-capture-list">
+        <span>${escapeHtml(t.webStackRecentExtracts)}</span>
+        ${extractRows || `<small>${escapeHtml(t.webStackNoExtracts)}</small>`}
+      </div>
+    </section>
+  `;
+}
+
+function recentWebStackBrowserCaptures(state) {
+  const tasks = state.model?.tasks || [];
+  return tasks
+    .map((task) => {
+      const artifact = task.browserContextArtifact || task.browser_context_artifact || null;
+      if (artifact?.kind !== 'browser_context') return null;
+      const context = artifact.browser_context || {};
+      return {
+        taskId: task.taskId || task.id || '',
+        title: task.title || '',
+        sourceId: artifact.source_id || context.source_id || '',
+        captureScript: artifact.capture_script || context.capture_script || '',
+        frameId: context.frame_id || '',
+        timestamp: task.updatedAt || task.createdAt || task.timestamp || '',
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
+}
+
+function recentWebStackBrowserExtracts(state) {
+  const tasks = state.model?.tasks || [];
+  return tasks
+    .map((task) => {
+      const artifact = task.browserExtractArtifact || null;
+      if (artifact?.kind !== 'browser_extract') return null;
+      return {
+        commandId: task.commandId || artifact.command_id || task.id || '',
+        title: task.title || '',
+        sourceId: artifact.source_id || '',
+        captureScript: artifact.capture_script || '',
+        summary: browserExtractSummary(artifact.fields),
+        timestamp: task.updatedAt || task.createdAt || task.timestamp || '',
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
+}
+
+function browserExtractSummary(fields = {}) {
+  return Object.entries(fields || {})
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${String(value).trim()}`)
+    .join(' · ');
+}
+
+function wireWebStackPanel(state, root) {
+  root.querySelector('[data-webstack-refresh]')?.addEventListener('click', async () => {
+    state.webStack = { ...(state.webStack || {}), loading: true, notice: '' };
+    renderLeft(state);
+    await refreshWebStackPanel(state);
+  });
+  root.querySelectorAll('[data-webstack-auth-source]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const sourceId = button.dataset.webstackAuthSource || '';
+      const secretName = button.dataset.webstackAuthSecret || '';
+      const source = (state.webStack?.data?.sources || []).find((candidate) => candidate.id === sourceId);
+      if (source?.credential?.configured) {
+        await requestWebStackAuthAssist(state, source);
+      } else {
+        await verifyWebStackCredential(state, sourceId, secretName);
+      }
+    });
+  });
 }
 
 function taskSteps(task, state) {
@@ -2010,6 +2196,30 @@ function edgePath(from, to, route = 'normal') {
 }
 
 function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports = []) {
+  const commandQueue = commands
+    .filter((doc) => doc.command_type === 'browser.capture.extract' || doc.result?.extract)
+    .map((doc) => {
+      const extractArtifact = browserExtractArtifactFromCommand(doc);
+      return {
+        id: `command-${doc.command_id || doc.id}`,
+        taskId: doc.task_id || '',
+        commandId: doc.command_id || doc.id || '',
+        title: doc.payload?.title || `Browser Extract: ${extractArtifact.source_id || extractArtifact.capture_script || doc.command_id || doc.id}`,
+        prompt: doc.payload?.instruction || '',
+        source: doc.module || doc.payload?.source_module || 'browser',
+        channel: inferInboundChannel(doc),
+        priority: doc.payload?.priority || 'normal',
+        status: normalizeCommandStatus(doc.status),
+        routeStatus: doc.task_status || doc.status || '',
+        target: doc.command_type || 'browser.capture.extract',
+        browserExtractArtifact: extractArtifact,
+        result: doc.result || null,
+        resultSummary: browserExtractSummary(extractArtifact.fields) || resultSummary(doc.result),
+        createdAt: new Date(doc.created_at_ms || doc.updated_at_ms || Date.now()).toISOString(),
+        updatedAt: new Date(doc.updated_at_ms || Date.now()).toISOString(),
+      };
+    })
+    .filter((item) => item.id && item.browserExtractArtifact?.kind === 'browser_extract');
   const runtimeQueue = queueTasks.map((doc) => ({
     id: doc.id || doc.task_id || doc.command_id,
     taskId: doc.task_id || doc.id || '',
@@ -2022,6 +2232,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     status: normalizeCommandStatus(doc.route_status || doc.status),
     routeStatus: doc.route_status || '',
     target: doc.command_type || doc.thread_key || 'ctox queue',
+    browserContextArtifact: doc.browser_context_artifact || null,
     result: doc.result || null,
     resultSummary: resultSummary(doc.result),
     createdAt: new Date(doc.updated_at_ms || Date.now()).toISOString(),
@@ -2043,8 +2254,28 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
   })).filter((item) => item.id);
   return {
     ...bundle,
-    queue: mergeById(runtimeQueue, bundle.queue),
+    queue: mergeById([...runtimeQueue, ...commandQueue], bundle.queue),
     tickets: mergeById(tickets, bundle.tickets),
+  };
+}
+
+function browserExtractArtifactFromCommand(doc = {}) {
+  const result = doc.result && typeof doc.result === 'object' ? doc.result : {};
+  const extract = result.extract && typeof result.extract === 'object' ? result.extract : {};
+  const payload = doc.payload && typeof doc.payload === 'object' ? doc.payload : {};
+  return {
+    kind: 'browser_extract',
+    schema_version: 1,
+    stream: result.stream || 'rxdb',
+    command_id: doc.command_id || doc.id || '',
+    source_id: extract.sourceId || extract.source_id || payload.source_id || '',
+    capture_script: result.capture_script || extract.captureScript || extract.capture_script || payload.capture_script || '',
+    status: result.status || doc.status || '',
+    fields: extract.fields && typeof extract.fields === 'object' ? extract.fields : {},
+    url: extract.url || '',
+    title: extract.title || '',
+    secret_value_in_payload: false,
+    frame_data_in_payload: false,
   };
 }
 
@@ -2176,6 +2407,97 @@ async function loadLocalQueueTasks(ctx) {
 
 async function loadLocalBugReports(ctx) {
   return loadLocalCollection(ctx, 'ctox_bug_reports');
+}
+
+async function loadLocalWebStackOverview(ctx) {
+  const collection = ctx.db?.raw?.ctox_runtime_settings;
+  if (!collection) return { ok: false, error: 'ctox_runtime_settings collection is not available' };
+  const doc = await collection.findOne('runtime-settings').exec();
+  const runtimeSettings = doc?.toJSON?.() || null;
+  const webStack = runtimeSettings?.web_stack || null;
+  if (!webStack?.ok) return { ok: false, error: 'Web Stack projection is not available in RxDB' };
+  return webStack;
+}
+
+async function refreshWebStackPanel(state) {
+  try {
+    const data = await loadLocalWebStackOverview(state.ctx);
+    state.webStack = {
+      loading: false,
+      error: data.ok ? '' : 'Web Stack status unavailable',
+      notice: state.webStack?.notice || '',
+      data: data.ok ? data : state.webStack?.data,
+    };
+  } catch (error) {
+    state.webStack = {
+      ...(state.webStack || {}),
+      loading: false,
+      error: error.message || String(error),
+    };
+  }
+  renderLeft(state);
+}
+
+async function verifyWebStackCredential(state, sourceId, secretName) {
+  const source = (state.webStack?.data?.sources || []).find((candidate) => candidate.id === sourceId);
+  const configured = Boolean(source?.credential?.configured);
+  state.webStack = {
+    ...(state.webStack || {}),
+    loading: false,
+    error: '',
+    notice: configured
+      ? `${secretName || sourceId}: Credential ist im CTOX Secret Store vorhanden.`
+      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgruenden ausserhalb von RxDB.`,
+  };
+  renderLeft(state);
+}
+
+async function requestWebStackAuthAssist(state, source) {
+  const t = labels[state.lang];
+  if (!state.ctx?.commandBus?.dispatch) {
+    state.webStack = { ...(state.webStack || {}), error: 'RxDB command bus is not available' };
+    renderLeft(state);
+    return;
+  }
+  const now = Date.now();
+  const sourceId = source?.id || '';
+  const sourceSlug = sourceId.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'source';
+  const commandId = `web_stack_auth_assist_${now}_${Math.random().toString(36).slice(2, 10)}`;
+  const host = String(sourceId || '').replace(/^https?:\/\//, '').split('/')[0];
+  const browserAssist = source?.browser_assist || {};
+  const targetUrl = browserAssist.target_url || (host ? `https://${host}` : 'https://example.com');
+  const allowedDomains = Array.isArray(browserAssist.allowed_domains) && browserAssist.allowed_domains.length
+    ? browserAssist.allowed_domains
+    : [host, ...(source?.host_suffixes || [])].filter(Boolean);
+  await state.ctx.commandBus.dispatch({
+    id: commandId,
+    module: 'ctox',
+    type: 'web_stack.auth_assist.request',
+    record_id: sourceId,
+    inbound_channel: 'business_os.ctox.web_stack',
+    payload: {
+      session_id: `browser_session_web_stack_auth_${sourceSlug}`,
+      tab_id: `browser_tab_web_stack_auth_${sourceSlug}`,
+      source_id: sourceId,
+      secret_name: source?.credential?.secret_name || '',
+      target_url: targetUrl,
+      allowed_domains: allowedDomains,
+      verify_selector: browserAssist.verify_selector || '',
+      credential_selector: browserAssist.credential_selector || '',
+      capture_script: browserAssist.capture_script || '',
+      purpose: 'web_stack_auth',
+      expires_at_ms: now + 30 * 60 * 1000,
+      browser_stream: 'rxdb',
+      secret_value_in_rxdb: false,
+    },
+    client_context: {
+      source_module: 'ctox',
+      command_path: 'web_stack_auth_assist',
+      actor: state.ctx.session?.user || {},
+    },
+  });
+  state.webStack = { ...(state.webStack || {}), error: '', notice: t.webStackAuthQueued };
+  renderLeft(state);
 }
 
 async function loadLocalCollection(ctx, collectionName) {

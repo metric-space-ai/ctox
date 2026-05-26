@@ -178,7 +178,12 @@
         "business_commands",
         "communication_accounts",
         "communication_threads",
-        "communication_messages"
+        "communication_messages",
+        "outbound_campaigns",
+        "outbound_pipeline_items",
+        "outbound_engagements",
+        "outbound_messages",
+        "outbound_approvals"
       ],
       "source": "local",
       "core": false,

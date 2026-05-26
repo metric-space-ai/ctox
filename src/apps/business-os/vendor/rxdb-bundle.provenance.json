@@ -12,7 +12,7 @@
   "upstream_tag": "16.20.0",
   "upstream_commit": "c69c94bb107a4d36dbf989de0e5f17081dcf7718",
   "bundle_path": "src/apps/business-os/vendor/rxdb-bundle.mjs",
-  "bundle_sha256": "ea15a0644c1b30f5bbb479bba18559da0a8ccaf22f929c4b5031632a9a0d3c4e",
+  "bundle_sha256": "b1af7dca826ac693ab0fb725a2ea931bf814b1939bb86e35c6664ca4416bf7b2",
   "protocol": "ctox-rxdb-protocol-v1",
   "expected_exports": [
     "createRxDatabase",

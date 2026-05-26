@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Verifier + isolated bench for `kernel_mul_mm_q4_K_f32` (the
 //! prefill batched matmul that uses Apple's MetalPerformancePrimitives

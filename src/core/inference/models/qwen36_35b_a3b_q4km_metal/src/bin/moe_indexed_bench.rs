@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! MoE indexed-matmul re-bench with persistent buffers.
 //!

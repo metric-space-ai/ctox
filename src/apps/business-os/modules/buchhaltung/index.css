@@ -1,0 +1,1445 @@
+/* --- CTOX Business OS: Buchhaltung (Double-Entry German Accounting) Styling --- */
+
+.fibu-module[data-fibu-root] {
+  display: grid;
+  grid-template-columns: var(--fibu-left-width, 300px) 12px minmax(0, 1fr) 12px var(--fibu-right-width, 360px);
+  gap: 0;
+  padding: 12px;
+  height: 100%;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow: hidden;
+  position: relative;
+  box-sizing: border-box;
+
+  /* Theme Tokens and Color Palette mapped to host variables */
+  --fibu-primary: var(--accent, #0b8a6f);
+  --fibu-primary-hover: color-mix(in srgb, var(--accent) 85%, #000 15%);
+  --fibu-accent: var(--accent, #00b080);
+  --fibu-accent-rgb: 0, 176, 128;
+  --fibu-success: #10b981;
+  --fibu-warning: #f59e0b;
+  --fibu-danger: var(--danger, #d9534f);
+  --fibu-bg-glass: var(--glass-bg);
+  --fibu-border-glass: var(--line);
+  --fibu-glow-color: var(--accent-soft);
+  --fibu-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+/* Three Pane Layout with Gutters and Floating Cards */
+.fibu-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+  box-sizing: border-box;
+}
+
+.fibu-left {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+}
+
+.fibu-center {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  display: flex;
+  flex-direction: column;
+}
+
+.fibu-right {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  display: flex;
+  flex-direction: column;
+}
+
+/* Pane Headers (Fully Theme-Adaptive) */
+.fibu-pane-head {
+  padding: 16px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--hairline);
+  flex-shrink: 0;
+}
+
+.fibu-pane-head span {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-weight: 700;
+  display: block;
+  margin-bottom: 3px;
+}
+
+.fibu-pane-head h2 {
+  font-size: 14.5px;
+  font-weight: 720;
+  margin: 0;
+  color: var(--text-strong, var(--text));
+  letter-spacing: -0.01em;
+}
+
+.fibu-center-head {
+  /* Inherits transparent background to blend with center pane */
+}
+
+/* Left Sidebar Navigation */
+.fibu-sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.fibu-nav-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 12px;
+}
+
+.fibu-nav-section-title {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+  margin: 16px 12px 6px 12px;
+}
+
+.fibu-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  padding: 8px 14px;
+  border-radius: var(--control-radius, 10px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-bottom: 3px;
+}
+
+.fibu-nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+
+.fibu-nav-item.active {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}
+
+.fibu-nav-icon {
+  margin-right: 10px;
+  font-size: 14px;
+}
+
+.fibu-sidebar-footer {
+  padding: 16px;
+  border-top: 1px solid var(--line);
+  background: transparent;
+}
+
+.fibu-skr-selector-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fibu-skr-selector-wrap label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fibu-select {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius, 10px);
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.fibu-select:focus {
+  border-color: var(--fibu-primary);
+  box-shadow: 0 0 0 2px var(--fibu-glow-color);
+}
+
+/* Center Workbench Body */
+.fibu-workbench-body {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.fibu-view-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  animation: fadeIn 0.3s ease-out;
+}
+
+.fibu-view-panel[hidden] {
+  display: none !important;
+}
+
+/* Toolbars */
+.fibu-panel-toolbar {
+  padding: 16px 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 20%, transparent);
+  flex-shrink: 0;
+}
+
+.fibu-search-wrapper {
+  flex: 1;
+  max-width: 320px;
+  position: relative;
+}
+
+.fibu-search-input {
+  width: 100%;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--control-radius, 10px);
+  color: var(--text);
+  padding: 8px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.fibu-search-input:focus {
+  border-color: var(--fibu-primary);
+  box-shadow: 0 0 0 2px var(--fibu-glow-color);
+}
+
+/* Dropzones */
+.fibu-file-dropzone {
+  width: 100%;
+  border: 2px dashed var(--line);
+  border-radius: 12px;
+  padding: 20px 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--surface-2) 15%, transparent);
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: center;
+}
+
+.fibu-file-dropzone:hover, .fibu-file-dropzone.dragover {
+  border-color: var(--fibu-primary);
+  background: var(--fibu-glow-color);
+}
+
+.fibu-file-dropzone.compact {
+  padding: 10px 18px;
+  border-radius: var(--control-radius, 10px);
+  flex-direction: row;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.dropzone-icon {
+  font-size: 24px;
+}
+
+.dropzone-text {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Buttons */
+.fibu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: var(--control-radius, 10px);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: all 0.2s;
+  outline: none;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.fibu-btn-primary {
+  background: var(--accent-gradient, var(--fibu-primary));
+  color: #ffffff;
+  box-shadow: var(--shadow-sm);
+}
+
+.fibu-btn-primary:hover {
+  background: color-mix(in srgb, var(--fibu-primary) 90%, #fff 10%);
+  transform: translateY(-1px);
+}
+
+.fibu-btn-secondary {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+}
+
+.fibu-btn-secondary:hover {
+  background: color-mix(in srgb, var(--surface-2) 130%, #fff 5%);
+  transform: translateY(-1px);
+}
+
+.fibu-btn-danger {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+}
+
+.fibu-btn-danger:hover {
+  background: rgba(239, 68, 68, 0.22);
+  transform: translateY(-1px);
+}
+
+.fibu-btn-large {
+  padding: 12px 28px;
+  font-size: 14.5px;
+  border-radius: 12px;
+}
+
+/* Scrollable Tables Container */
+.fibu-scrollable-container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 24px;
+}
+
+/* Fibu Tables (Fully Theme-Adaptive) */
+.fibu-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  text-align: left;
+}
+
+.fibu-table th {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  font-weight: 700;
+  color: var(--text-strong);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.fibu-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: middle;
+  color: var(--text);
+}
+
+.fibu-table tr {
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.fibu-table tr:hover td {
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+}
+
+.fibu-table tr.selected td {
+  background: var(--fibu-glow-color);
+  border-bottom-color: var(--fibu-primary);
+}
+
+.fibu-table tr.group-row td {
+  font-weight: 700;
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--surface-2) 30%, transparent);
+}
+
+/* Table Helpers */
+.fibu-mono {
+  font-family: var(--fibu-font-mono);
+  font-size: 12px;
+  color: var(--fibu-primary);
+}
+
+.fibu-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-size: 10.5px;
+  font-weight: 600;
+  font-family: var(--fibu-font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.fibu-badge.status-posted {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.fibu-badge.status-draft {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.fibu-badge.status-storno {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.fibu-badge.status-matched {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.fibu-badge.status-proposed {
+  background: rgba(245, 158, 11, 0.12);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.fibu-badge.status-unmatched {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.fibu-badge.date-badge {
+  background: var(--accent-soft);
+  color: var(--text);
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
+.fibu-storno-indicator {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.fibu-posted-lock {
+  font-size: 11px;
+}
+
+/* Reports Styles (Tabs, Trees & Cards) */
+.fibu-report-tabs {
+  padding: 16px 24px 0 24px;
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.fibu-report-tab-btn {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.fibu-report-tab-btn:hover {
+  color: var(--text-strong);
+}
+
+.fibu-report-tab-btn.active {
+  color: var(--fibu-primary);
+  border-bottom-color: var(--fibu-primary);
+}
+
+.fibu-report-workspace-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+}
+
+.fibu-report-subpanel[hidden] {
+  display: none !important;
+}
+
+.fibu-report-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 12px;
+}
+
+.fibu-report-header h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.fibu-bilanz-tree-wrapper {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  gap: 24px;
+  min-height: 400px;
+}
+
+.fibu-bilanz-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.fibu-bilanz-side-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  letter-spacing: 0.1em;
+  margin-bottom: 16px;
+  padding: 6px 12px;
+  background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  border-radius: 6px;
+}
+
+.fibu-bilanz-divider {
+  background: var(--line);
+}
+
+/* Recursive Trees */
+.fibu-tree-item {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 2px;
+}
+
+.fibu-tree-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.fibu-tree-row:hover {
+  background: var(--surface-2);
+}
+
+.fibu-tree-label-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fibu-tree-toggle {
+  font-size: 10px;
+  width: 12px;
+  display: inline-block;
+  color: var(--muted);
+}
+
+.fibu-tree-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.fibu-tree-item.level-0 > .fibu-tree-row .fibu-tree-label { font-weight: 700; font-size: 14px; }
+.fibu-tree-item.level-1 > .fibu-tree-row .fibu-tree-label { font-weight: 600; }
+
+.fibu-tree-val {
+  font-family: var(--fibu-font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.fibu-tree-children {
+  padding-left: 18px;
+  border-left: 1px dashed var(--line);
+  margin-left: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
+.fibu-tree-children[hidden] {
+  display: none !important;
+}
+
+/* GuV Wrapper */
+.fibu-guv-wrapper {
+  max-width: 700px;
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--surface-2) 20%, transparent);
+  padding: 24px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+}
+
+/* UStVA Grid */
+.fibu-ustva-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  max-width: 800px;
+  margin: 0 auto;
+}
+
+.fibu-ustva-card {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ustva-card-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.ustva-card-value {
+  font-family: var(--fibu-font-mono);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.fibu-ustva-card.highlighted {
+  border-color: color-mix(in srgb, var(--fibu-primary) 40%, transparent);
+  background: var(--fibu-glow-color);
+}
+
+.fibu-ustva-card.total {
+  grid-column: span 2;
+  border-color: color-mix(in srgb, var(--fibu-accent) 50%, transparent);
+  background: rgba(var(--fibu-accent-rgb), 0.08);
+  box-shadow: var(--shadow-sm);
+}
+
+.fibu-ustva-card.total .ustva-card-value {
+  color: var(--fibu-accent);
+}
+
+/* DATEV Exporter Box */
+.fibu-datev-exporter-box {
+  background: color-mix(in srgb, var(--surface-2) 20%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 30px;
+  max-width: 600px;
+  margin: 0 auto;
+  text-align: center;
+}
+
+.fibu-datev-exporter-box p {
+  color: var(--muted);
+  line-height: 1.6;
+  margin-bottom: 20px;
+  font-size: 13.5px;
+}
+
+/* Form Styles */
+.fibu-form-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.fibu-form-row.inline {
+  justify-content: center;
+  align-items: center;
+}
+
+.fibu-form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  text-align: left;
+}
+
+.fibu-form-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.fibu-input {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.fibu-input:focus {
+  border-color: var(--fibu-primary);
+}
+
+/* Bottom Slide-up Drawer Modal */
+.fibu-bottom-drawer {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 380px;
+  background: var(--glass-bg);
+  border-top: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  transform: translateY(100%);
+  transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.fibu-bottom-drawer.open {
+  transform: translateY(0);
+}
+
+.fibu-drawer-handle {
+  padding: 12px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  cursor: pointer;
+  position: relative;
+}
+
+.fibu-drawer-handle-bar {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 40px;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+}
+
+.fibu-drawer-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-strong);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fibu-drawer-close-btn {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.fibu-drawer-close-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-strong);
+}
+
+.fibu-drawer-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 30px;
+}
+
+/* Edit split entry line item styles */
+.fibu-split-editor-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+.fibu-split-editor-table th {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.fibu-split-editor-table td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.fibu-split-action-btn {
+  background: transparent;
+  border: 0;
+  color: var(--fibu-danger);
+  cursor: pointer;
+  font-size: 14px;
+}
+
+/* Right Pane: OCR / Chat Companion */
+.fibu-right-tabs {
+  padding: 16px 20px 0 20px;
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+}
+
+.fibu-right-tab-btn {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.fibu-right-tab-btn:hover {
+  color: var(--text-strong);
+}
+
+.fibu-right-tab-btn.active {
+  color: var(--fibu-accent);
+  border-bottom-color: var(--fibu-accent);
+}
+
+.fibu-right-content-area {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+.fibu-right-subpanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.fibu-right-subpanel[hidden] {
+  display: none !important;
+}
+
+/* OCR Viewer */
+.fibu-document-preview-container {
+  padding: 20px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.fibu-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.empty-icon {
+  font-size: 40px;
+  opacity: 0.35;
+}
+
+.fibu-empty-state p {
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* Simulated OCR invoice layout */
+.fibu-simulated-ocr {
+  background: #ffffff;
+  color: #1e293b;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  line-height: 1.4;
+  margin-bottom: 20px;
+  font-family: 'Helvetica Neue', Arial, sans-serif;
+  animation: fadeIn 0.3s;
+}
+
+.ocr-invoice-header {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 2px solid #cbd5e1;
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+
+.ocr-invoice-title {
+  font-size: 16px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ocr-invoice-meta {
+  text-align: right;
+}
+
+.ocr-invoice-details {
+  margin-bottom: 16px;
+}
+
+.ocr-invoice-details table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ocr-invoice-details th {
+  border-bottom: 1px solid #94a3b8;
+  padding: 4px;
+  text-align: left;
+  font-weight: 700;
+}
+
+.ocr-invoice-details td {
+  padding: 6px 4px;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.ocr-invoice-total-row {
+  font-weight: 700;
+  background: #f1f5f9;
+}
+
+/* AI Agent Chat Companion */
+.fibu-agent-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.fibu-agent-chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-message {
+  display: flex;
+  gap: 10px;
+}
+
+.chat-message.user {
+  flex-direction: row-reverse;
+}
+
+.chat-message .avatar {
+  font-size: 20px;
+  background: var(--surface-2);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-message.user .avatar {
+  background: var(--fibu-glow-color);
+}
+
+.message-bubble {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text);
+  max-width: 80%;
+}
+
+.chat-message.user .message-bubble {
+  background: var(--fibu-glow-color);
+  border-color: var(--fibu-primary);
+  color: var(--text);
+}
+
+.chat-message.system .message-bubble {
+  border-left: 3px solid var(--fibu-primary);
+}
+
+.chat-message ul {
+  margin: 6px 0 0 16px;
+  padding: 0;
+}
+
+.chat-message li {
+  margin-bottom: 3px;
+}
+
+.fibu-agent-chat-input-wrap {
+  padding: 14px 20px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  display: flex;
+  gap: 8px;
+}
+
+.fibu-agent-chat-input {
+  flex: 1;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 8px 12px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.fibu-agent-chat-input:focus {
+  border-color: var(--fibu-accent);
+}
+
+.fibu-agent-chat-send {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.fibu-agent-chat-send:hover {
+  background: var(--accent-soft);
+  transform: scale(1.05);
+}
+
+/* Custom Scrollbars */
+.fibu-nav-list::-webkit-scrollbar,
+.fibu-scrollable-container::-webkit-scrollbar,
+.fibu-report-workspace-content::-webkit-scrollbar,
+.fibu-drawer-content::-webkit-scrollbar,
+.fibu-right-content-area::-webkit-scrollbar,
+.fibu-agent-chat-messages::-webkit-scrollbar {
+  width: 5px;
+}
+
+.fibu-nav-list::-webkit-scrollbar-thumb,
+.fibu-scrollable-container::-webkit-scrollbar-thumb,
+.fibu-report-workspace-content::-webkit-scrollbar-thumb,
+.fibu-drawer-content::-webkit-scrollbar-thumb,
+.fibu-right-content-area::-webkit-scrollbar-thumb,
+.fibu-agent-chat-messages::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 10px;
+}
+
+.fibu-nav-list::-webkit-scrollbar-track,
+.fibu-scrollable-container::-webkit-scrollbar-track,
+.fibu-report-workspace-content::-webkit-scrollbar-track,
+.fibu-drawer-content::-webkit-scrollbar-track,
+.fibu-right-content-area::-webkit-scrollbar-track,
+.fibu-agent-chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Fibu Column Resizers */
+/* Column resizer styling handled by global [data-resizer] in app.css. */
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* --- PREMIUM VISUAL HIERARCHY & STYLING POLISH --- */
+
+/* Collapsible Navigation Section details */
+.fibu-nav-details {
+  margin-top: 16px;
+  border-top: 1px solid var(--hairline);
+  padding-top: 12px;
+}
+
+.fibu-details-summary {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  outline: none;
+  user-select: none;
+  list-style: none;
+  margin: 0 12px 6px 12px !important;
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.15em !important;
+  color: var(--muted) !important;
+}
+
+.fibu-details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.fibu-details-summary::after {
+  content: "▾";
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  margin-left: auto;
+}
+
+.fibu-nav-details[open] .fibu-details-summary::after {
+  transform: rotate(180deg);
+  color: var(--text-strong);
+}
+
+.fibu-nav-details .fibu-nav-item {
+  margin-left: 6px;
+  width: calc(100% - 6px);
+}
+
+/* Glowing Debit & Credit Typography - High contrast in both light and dark modes */
+.fibu-text-debit {
+  color: #047857 !important; /* Deep emerald green for light mode readability */
+  font-weight: 600 !important;
+}
+
+.fibu-text-credit {
+  color: #b91c1c !important; /* Crimson red for light mode readability */
+  font-weight: 600 !important;
+}
+
+:root[data-theme="dark"] .fibu-text-debit {
+  color: #34d399 !important; /* Glowing mint emerald in dark mode */
+  text-shadow: 0 0 8px rgba(52, 211, 153, 0.25);
+}
+
+:root[data-theme="dark"] .fibu-text-credit {
+  color: #f87171 !important; /* Glowing light red in dark mode */
+  text-shadow: 0 0 8px rgba(248, 113, 113, 0.25);
+}
+
+/* Warnings and secondary alignment utilities */
+.fibu-text-warning {
+  color: #b45309 !important; /* Amber 700 - very readable in light mode */
+  font-weight: 600 !important;
+}
+
+:root[data-theme="dark"] .fibu-text-warning {
+  color: #fbbf24 !important; /* Bright amber for dark mode */
+}
+
+.fibu-btn-dashed-warning {
+  border: 1px dashed var(--accent, #0b8a6f) !important;
+  color: var(--accent, #0b8a6f) !important;
+  background: transparent !important;
+}
+
+.fibu-btn-dashed-warning:hover {
+  background: var(--accent-soft) !important;
+}
+
+/* Theme integrated terminal styling for E2E logs */
+.fibu-e2e-terminal {
+  background: var(--surface-2) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: var(--control-radius, 10px);
+  padding: 15px;
+  font-family: var(--fibu-font-mono);
+  font-size: 12px;
+  height: 180px;
+  overflow-y: auto;
+  color: var(--text) !important;
+  line-height: 1.6;
+}
+
+:root[data-theme="dark"] .fibu-e2e-terminal {
+  background: #05070f !important;
+  border: 1px solid rgba(255, 255, 255, 0.05) !important;
+  color: #a3e635 !important;
+}
+
+/* GoBD Elegant Security Badge Card */
+.fibu-security-badge-card {
+  margin-top: 20px;
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(52, 211, 153, 0.02) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 12px;
+  padding: 14px 20px;
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  box-shadow: var(--shadow-sm);
+  animation: fadeIn 0.35s ease-out;
+}
+
+.security-badge-icon {
+  font-size: 24px;
+  filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.3));
+  flex-shrink: 0;
+}
+
+.security-badge-text-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.security-badge-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #10b981;
+  letter-spacing: 0.02em;
+}
+
+.security-badge-desc {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* Premium Mileage Log Dashboard Layout */
+.mileage-dash-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  width: 100%;
+}
+
+.mileage-dash-metric.main-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.mileage-metric-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.mileage-metric-value {
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--text-strong);
+  font-family: var(--fibu-font-mono);
+}
+
+.mileage-metric-value .unit {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.mileage-dash-divider {
+  width: 1px;
+  height: 28px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+
+.mileage-dash-shares {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+}
+
+.mileage-share-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.share-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.share-color-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.mileage-share-item.business .share-color-dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
+.mileage-share-item.private .share-color-dot { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+.mileage-share-item.commute .share-color-dot { background: #3b82f6; box-shadow: 0 0 6px #3b82f6; }
+
+.share-val {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-strong);
+  font-family: var(--fibu-font-mono);
+}
+
+.share-sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+/* Premium OCR Metadata badge card */
+.ocr-raw-meta-badge {
+  background: linear-gradient(135deg, rgba(var(--fibu-accent-rgb), 0.05) 0%, rgba(var(--fibu-accent-rgb), 0.01) 100%) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+  padding: 16px !important;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+.ocr-meta-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ocr-meta-badge-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fibu-primary);
+}
+
+.ocr-confidence-badge {
+  font-size: 10px;
+  font-weight: 700;
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-family: var(--fibu-font-mono);
+}
+
+.ocr-meta-archive-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ocr-meta-archive-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.ocr-archive-path-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.ocr-archive-path {
+  font-family: var(--fibu-font-mono);
+  font-size: 10px;
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ocr-copy-btn {
+  background: transparent;
+  border: 0;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 2px;
+  transition: color 0.15s, transform 0.1s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ocr-copy-btn:hover {
+  color: var(--text-strong);
+  transform: scale(1.1);
+}
+
+.ocr-copy-btn:active {
+  transform: scale(0.95);
+}

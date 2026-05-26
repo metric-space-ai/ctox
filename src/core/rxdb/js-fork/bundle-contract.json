@@ -26,5 +26,7 @@
     "src/apps/business-os/shared/sync.js",
     "src/apps/business-os/modules/matching/ui/businessOsDataSource.js"
   ],
-  "next_required_step": "complete schema-hash parity, peer-generation reconnect, typed errors, file-chunk fixtures, and checkpoint readiness"
+  "active_runtime_import": "rxdb/dist/ctox-rxdb-js.mjs",
+  "legacy_bundle_status": "retained-provenance-not-active-business-os-runtime",
+  "next_required_step": "run live Browser/rxdb-rs smokes on the app-local no-package-manager runtime and retain startup-budget evidence"
 }

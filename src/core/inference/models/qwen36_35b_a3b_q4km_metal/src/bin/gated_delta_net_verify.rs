@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Stage-4 unblocker: verifier for the Qwen3.6 linear-attention
 // "dflash" block. Drives `kernel_gated_delta_net_f32_4` against an

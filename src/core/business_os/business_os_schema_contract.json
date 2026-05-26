@@ -1,4 +1,344 @@
 {
+  "browser_frames": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 220
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "tab_id": {
+        "type": "string"
+      },
+      "seq": {
+        "type": "number"
+      },
+      "mime_type": {
+        "type": "string"
+      },
+      "encoding": {
+        "type": "string"
+      },
+      "data": {
+        "type": "string"
+      },
+      "width": {
+        "type": "number"
+      },
+      "height": {
+        "type": "number"
+      },
+      "viewport_w": {
+        "type": "number"
+      },
+      "viewport_h": {
+        "type": "number"
+      },
+      "quality": {
+        "type": "number"
+      },
+      "size_bytes": {
+        "type": "number"
+      },
+      "frame_hash": {
+        "type": "string"
+      },
+      "captured_at_ms": {
+        "type": "number"
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "session_id",
+      "tab_id",
+      "seq",
+      "mime_type",
+      "encoding",
+      "data",
+      "width",
+      "height",
+      "captured_at_ms",
+      "expires_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "session_id",
+      [
+        "session_id",
+        "seq"
+      ],
+      [
+        "session_id",
+        "expires_at_ms"
+      ],
+      [
+        "tab_id",
+        "seq"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "browser_input_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 220
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "tab_id": {
+        "type": "string"
+      },
+      "seq": {
+        "type": "number"
+      },
+      "type": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "button": {
+        "type": "string"
+      },
+      "buttons": {
+        "type": "number"
+      },
+      "dx": {
+        "type": "number"
+      },
+      "dy": {
+        "type": "number"
+      },
+      "key": {
+        "type": "string"
+      },
+      "code": {
+        "type": "string"
+      },
+      "modifiers": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "text": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "consumed_at_ms": {
+        "type": "number"
+      },
+      "error": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "session_id",
+      "seq",
+      "type",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "session_id",
+      [
+        "session_id",
+        "seq"
+      ],
+      [
+        "status",
+        "created_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "browser_sessions": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 160
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "controller_user_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "runtime_status": {
+        "type": "string"
+      },
+      "current_tab_id": {
+        "type": "string"
+      },
+      "current_url": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "viewport_w": {
+        "type": "number"
+      },
+      "viewport_h": {
+        "type": "number"
+      },
+      "device_scale_factor": {
+        "type": "number"
+      },
+      "frame_rate_target": {
+        "type": "number"
+      },
+      "active_frame_id": {
+        "type": "string"
+      },
+      "last_frame_seq": {
+        "type": "number"
+      },
+      "last_input_seq": {
+        "type": "number"
+      },
+      "pending_input_count": {
+        "type": "number"
+      },
+      "error": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms",
+      [
+        "status",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
+  "browser_tabs": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "url": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "loading": {
+        "type": "boolean"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "can_go_back": {
+        "type": "boolean"
+      },
+      "can_go_forward": {
+        "type": "boolean"
+      },
+      "frame_seq": {
+        "type": "number"
+      },
+      "last_frame_id": {
+        "type": "string"
+      },
+      "last_frame_at_ms": {
+        "type": "number"
+      },
+      "error": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "session_id",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "session_id",
+      [
+        "session_id",
+        "updated_at_ms"
+      ]
+    ],
+    "additionalProperties": true
+  },
   "business_chats": {
     "version": 0,
     "primaryKey": "id",
@@ -1720,7 +2060,7 @@
     "additionalProperties": true
   },
   "notes": {
-    "version": 0,
+    "version": 1,
     "primaryKey": "id",
     "type": "object",
     "properties": {
@@ -1739,11 +2079,130 @@
       },
       "updated_at_ms": {
         "type": "number"
+      },
+      "notebook": {
+        "type": "string"
+      },
+      "tags": {
+        "type": "string"
+      },
+      "is_favorite": {
+        "type": "boolean"
+      },
+      "is_trashed": {
+        "type": "boolean"
+      },
+      "is_locked": {
+        "type": "boolean"
+      },
+      "lock_passcode": {
+        "type": "string"
       }
     },
     "required": [
       "id",
       "title",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_account_limits": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "daily_limit": {
+        "type": "number"
+      },
+      "sent_today": {
+        "type": "number"
+      },
+      "send_window": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "reset_at_ms": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "sender_account_id",
+      "daily_limit",
+      "sent_today",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_approvals": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "message_id": {
+        "type": "string"
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "revision_id": {
+        "type": "string"
+      },
+      "actor_user_id": {
+        "type": "string"
+      },
+      "decision": {
+        "type": "string"
+      },
+      "comment": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "message_id",
+      "engagement_id",
+      "decision",
+      "created_at_ms",
       "updated_at_ms"
     ],
     "additionalProperties": true
@@ -1888,6 +2347,237 @@
     ],
     "additionalProperties": true
   },
+  "outbound_engagements": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "company_id": {
+        "type": "string"
+      },
+      "pipeline_id": {
+        "type": "string"
+      },
+      "contact_id": {
+        "type": "string"
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "sequence_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "next_action_at_ms": {
+        "type": "number"
+      },
+      "paused_reason": {
+        "type": "string"
+      },
+      "closed_reason": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "campaign_id",
+      "status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_meeting_requests": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "message_id": {
+        "type": "string"
+      },
+      "calendar_account_id": {
+        "type": "string"
+      },
+      "duration_minutes": {
+        "type": "number"
+      },
+      "slot_strategy": {
+        "type": "string"
+      },
+      "proposed_slots": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "status": {
+        "type": "string"
+      },
+      "meeting_url": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "engagement_id",
+      "status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_messages": {
+    "version": 1,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "channel": {
+        "type": "string"
+      },
+      "message_type": {
+        "type": "string"
+      },
+      "direction": {
+        "type": "string"
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "recipient_email": {
+        "type": "string"
+      },
+      "recipient_address_text": {
+        "type": "string"
+      },
+      "subject": {
+        "type": "string"
+      },
+      "body_text": {
+        "type": "string"
+      },
+      "body_html": {
+        "type": "string"
+      },
+      "document_id": {
+        "type": "string"
+      },
+      "document_version_id": {
+        "type": "string"
+      },
+      "document_pdf_url": {
+        "type": "string"
+      },
+      "physical_sent_at_ms": {
+        "type": "number"
+      },
+      "draft_status": {
+        "type": "string"
+      },
+      "approval_status": {
+        "type": "string"
+      },
+      "send_status": {
+        "type": "string"
+      },
+      "scheduled_send_at_ms": {
+        "type": "number"
+      },
+      "sent_at_ms": {
+        "type": "number"
+      },
+      "provider_message_id": {
+        "type": "string"
+      },
+      "communication_account_key": {
+        "type": "string"
+      },
+      "communication_message_key": {
+        "type": "string"
+      },
+      "thread_key": {
+        "type": "string"
+      },
+      "reply_to_message_id": {
+        "type": "string"
+      },
+      "revision_id": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "engagement_id",
+      "campaign_id",
+      "message_type",
+      "direction",
+      "draft_status",
+      "approval_status",
+      "send_status",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "outbound_pipeline_items": {
     "version": 0,
     "primaryKey": "id",
@@ -2006,6 +2696,124 @@
     ],
     "additionalProperties": true
   },
+  "outbound_sender_assignments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "engagement_id": {
+        "type": "string"
+      },
+      "company_id": {
+        "type": "string"
+      },
+      "contact_id": {
+        "type": "string"
+      },
+      "sender_account_id": {
+        "type": "string"
+      },
+      "assignment_reason": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "campaign_id",
+      "sender_account_id",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_sequences": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "campaign_id": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "strategy_text": {
+        "type": "string"
+      },
+      "sequence_policy_text": {
+        "type": "string"
+      },
+      "send_window": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "touchpoints": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "stop_rules": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "approval_policy": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "campaign_id",
+      "name",
+      "strategy_text",
+      "sequence_policy_text",
+      "approval_policy",
+      "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "outbound_sources": {
     "version": 0,
     "primaryKey": "id",
@@ -2054,6 +2862,52 @@
       "source_type",
       "status",
       "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_suppression_entries": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "scope": {
+        "type": "string"
+      },
+      "value": {
+        "type": "string"
+      },
+      "reason": {
+        "type": "string"
+      },
+      "source": {
+        "type": "string"
+      },
+      "active": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "scope",
+      "value",
+      "reason",
+      "active",
       "created_at_ms",
       "updated_at_ms"
     ],

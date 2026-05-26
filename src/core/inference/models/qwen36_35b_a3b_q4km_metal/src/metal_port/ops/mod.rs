@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Per-operator Rust dispatchers over the vendored MSL kernels, plus
 //! pure-Rust quant block layouts and CPU correctness references.

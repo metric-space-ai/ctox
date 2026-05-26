@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Chained-command-buffer demo: prove that RMSNorm followed by Q-proj
 //! can run in ONE MTLCommandBuffer with shared persistent buffers, vs

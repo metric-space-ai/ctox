@@ -4,6 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 const MODULES = [
   'ctox',
   'desktop',
+  'browser',
   'documents',
   'conversations',
   'outbound',

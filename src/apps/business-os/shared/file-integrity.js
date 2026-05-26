@@ -33,6 +33,7 @@ export async function readStoredFileFromChunks(chunks, fileId, mimeType = 'appli
     throw fileChunkError(FILE_CHUNK_ERROR_CODES.MISSING, 'Dateiinhalt fehlt.', { fileId, total, available: ordered.length });
   }
 
+  validateChunkMetadata(ordered, total);
   validateGenerationContract(ordered, normalized.contentGenerationId, normalized.contentHash);
   await validateChunkHashes(ordered);
   const bytes = base64ToBytes(ordered.map((chunk) => chunk.data).join(''));
@@ -46,8 +47,23 @@ export function isDeletedChunk(chunk) {
 
 export function selectActiveChunkGeneration(chunks, contentGenerationId = '') {
   if (contentGenerationId) return chunks.filter((chunk) => chunk.generation_id === contentGenerationId);
-  const latestCreatedAt = Math.max(0, ...chunks.map((chunk) => Number(chunk.created_at_ms || 0)));
-  return chunks.filter((chunk) => Number(chunk.created_at_ms || 0) === latestCreatedAt);
+  const groups = new Map();
+  for (const chunk of chunks) {
+    const key = chunk.generation_id || '__ungrouped__';
+    const group = groups.get(key) || [];
+    group.push(chunk);
+    groups.set(key, group);
+  }
+  const ranked = [...groups.values()]
+    .map((group) => ({
+      group,
+      createdAt: Math.max(0, ...group.map((chunk) => Number(chunk.created_at_ms || 0))),
+      total: Number(group[0]?.total || group.length || 0),
+    }))
+    .sort((a, b) => b.createdAt - a.createdAt);
+  return ranked.find(({ group, total }) => total > 0 && group.length >= total)?.group
+    || ranked[0]?.group
+    || [];
 }
 
 export function base64ToBytes(base64) {
@@ -84,6 +100,29 @@ function validateGenerationContract(chunks, contentGenerationId, expectedContent
     throw fileChunkError(FILE_CHUNK_ERROR_CODES.GENERATION_MISMATCH, 'Dateiinhalt gehört zu einer falschen Generation.', {
       contentHash: expectedContentHash,
     });
+  }
+}
+
+function validateChunkMetadata(chunks, total) {
+  for (const chunk of chunks) {
+    const chunkTotal = Number(chunk.total);
+    if (Number.isFinite(chunkTotal) && chunkTotal !== total) {
+      throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
+        chunkId: chunk.id || '',
+        total,
+        actualTotal: chunkTotal,
+      });
+    }
+
+    const expectedSize = Number(chunk.size_bytes);
+    const actualSize = String(chunk.data || '').length;
+    if (Number.isFinite(expectedSize) && expectedSize !== actualSize) {
+      throw fileChunkError(FILE_CHUNK_ERROR_CODES.INTEGRITY_MISMATCH, 'Dateiinhalt ist unvollständig oder beschädigt.', {
+        chunkId: chunk.id || '',
+        sizeBytes: expectedSize,
+        actualSizeBytes: actualSize,
+      });
+    }
   }
 }
 

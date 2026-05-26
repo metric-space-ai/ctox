@@ -1,0 +1,43 @@
+{
+  "protocol": "ctox-rxdb-frame-v1",
+  "maxInlineFrameBytes": 14336,
+  "maxChunkBytes": 10240,
+  "maxTransferBytes": 8388608,
+  "ackWindow": 4,
+  "maxFrameRetries": 2,
+  "frames": {
+    "start": {
+      "ctoxFrame": "ctox-rxdb-frame-v1",
+      "kind": "start",
+      "transferId": "fixture-transfer",
+      "windowSize": 4,
+      "attempt": 0,
+      "totalFrames": 3,
+      "totalBytes": 30000
+    },
+    "chunk": {
+      "ctoxFrame": "ctox-rxdb-frame-v1",
+      "kind": "chunk",
+      "transferId": "fixture-transfer",
+      "attempt": 0,
+      "seq": 1,
+      "data": "payload-fragment"
+    },
+    "ack": {
+      "ctoxFrame": "ctox-rxdb-frame-v1",
+      "kind": "ack",
+      "transferId": "fixture-transfer",
+      "ackSeq": 1,
+      "receivedFrames": 2,
+      "resume": false,
+      "final": false
+    },
+    "resume": {
+      "ctoxFrame": "ctox-rxdb-frame-v1",
+      "kind": "resume",
+      "transferId": "fixture-transfer",
+      "attempt": 0,
+      "ackSeq": 1
+    }
+  }
+}

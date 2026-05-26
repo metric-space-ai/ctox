@@ -9,6 +9,8 @@ const CTOX_BROWSER_CAPABILITIES = [
   'ctox-peer-session-v1',
   'ctox-checkpoint-epoch-v1',
 ];
+const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
+const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
@@ -16,8 +18,10 @@ let signalingErrorObserverInstalled = false;
 export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
   const activeCollections = new Set();
+  const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let collectionStartQueue = Promise.resolve();
+  let suspensionReason = '';
   let stopped = false;
   const useWebrtc = nativeRxdbPeerReady(config, db);
   if (!useWebrtc) {
@@ -41,13 +45,17 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       updatedAt,
       ...update,
     };
-    const nextPeerSession = typeof update.remotePeerSession === 'string' && update.remotePeerSession
-      ? update.remotePeerSession
-      : '';
+    const nextStatus = update.connectionStatus || update.status || current.connectionStatus || current.status || '';
+    if (
+      update.lastError === undefined
+      && isHealthyCollectionStatus(nextStatus)
+      && isTransientSignalingSocketError(current.lastError)
+    ) {
+      next.lastError = null;
+    }
+    const nextPeerSession = peerSessionKey(update.remotePeerSession);
     if (nextPeerSession) {
-      const previousPeerSession = typeof current.remotePeerSession === 'string' && current.remotePeerSession
-        ? current.remotePeerSession
-        : '';
+      const previousPeerSession = peerSessionKey(current.remotePeerSession);
       const changed = Boolean(previousPeerSession && previousPeerSession !== nextPeerSession);
       const currentGeneration = Number.isFinite(Number(current.peerGeneration))
         ? Number(current.peerGeneration)
@@ -73,43 +81,59 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       }
     }
   };
-  const scheduleGlobalRestart = (triggerCollection, error) => {
+  const collectionNeedsRestart = (collection) => {
+    const current = diagnostics.collections[collection] || {};
+    const status = current.connectionStatus || current.status || '';
+    return ['reconnecting', 'failed', 'error', 'stopped'].includes(status);
+  };
+  const scheduleRestartOfUnhealthyCollections = (triggerCollection, delayMs = 5000) => {
     if (stopped) return;
     if (globalRestartTimer) return;
+    globalRestartTimer = setTimeout(async () => {
+      if (stopped) return;
+      globalRestartTimer = null;
+      const collections = [...activeCollections].filter(collectionNeedsRestart);
+      try {
+        for (const collection of collections) {
+          await syncRuntime.restartCollection(collection);
+          await delay(250);
+        }
+      } catch (restartError) {
+        const restartSerialized = serializeError(restartError);
+        if (triggerCollection) {
+          recordCollection(triggerCollection, { status: 'failed', connectionStatus: 'error', lastError: restartSerialized });
+        }
+        emitDiagnostic({ phase: 'failed', lastError: restartSerialized });
+      } finally {
+        if (!stopped && [...activeCollections].some(collectionNeedsRestart)) {
+          scheduleRestartOfUnhealthyCollections(triggerCollection, 5000);
+        }
+      }
+    }, delayMs);
+  };
+  const scheduleGlobalRestart = (triggerCollection, error) => {
+    if (stopped) return;
     const serialized = serializeError(error);
     const lifecycleEvent = isLifecycleEvent(error) ? serialized : null;
     const reconnectingSince = new Date().toISOString();
-    for (const collection of activeCollections) {
-      recordCollection(collection, {
-        status: 'reconnecting',
-        connectionStatus: 'reconnecting',
-        lastError: collection === triggerCollection && !lifecycleEvent ? serialized : diagnostics.collections[collection]?.lastError || null,
-        lastLifecycleEvent: collection === triggerCollection && lifecycleEvent ? lifecycleEvent : diagnostics.collections[collection]?.lastLifecycleEvent || null,
-        reconnectingSince,
-      });
-    }
+    recordCollection(triggerCollection, {
+      status: 'reconnecting',
+      connectionStatus: 'reconnecting',
+      lastError: !lifecycleEvent ? serialized : diagnostics.collections[triggerCollection]?.lastError || null,
+      lastLifecycleEvent: lifecycleEvent || diagnostics.collections[triggerCollection]?.lastLifecycleEvent || null,
+      reconnectingSince,
+    });
     emitDiagnostic({
       phase: 'reconnecting',
       lastError: lifecycleEvent ? null : serialized,
       lastLifecycleEvent: lifecycleEvent,
     });
-    stopAllBridges().catch(() => {});
-    globalRestartTimer = setTimeout(async () => {
-      if (stopped) return;
-      globalRestartTimer = null;
-      const collections = [...activeCollections];
-      try {
-        for (const collection of collections) {
-          await syncRuntime.startCollection(collection);
-          await delay(250);
-        }
-      } catch (restartError) {
-        const restartSerialized = serializeError(restartError);
-        recordCollection(triggerCollection, { status: 'failed', connectionStatus: 'error', lastError: restartSerialized });
-        emitDiagnostic({ phase: 'failed', lastError: restartSerialized });
-      }
-    }, 5000);
+    scheduleRestartOfUnhealthyCollections(triggerCollection, 5000);
   };
+  const onlineListener = () => scheduleRestartOfUnhealthyCollections(null, 250);
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('online', onlineListener);
+  }
   emitDiagnostic({ phase: 'ready' });
   const syncRuntime = {
     db,
@@ -133,9 +157,55 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
     async startCollection(collection) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       activeCollections.add(collection);
+      if (suspendedCollections.has(collection)) {
+        recordCollection(collection, {
+          status: 'paused',
+          connectionStatus: 'paused',
+          reason: suspensionReason || 'sync-suspended',
+          reconnectingSince: null,
+          lastError: null,
+          lastLifecycleEvent: null,
+        });
+        return {
+          mode: 'pending',
+          collection,
+          reason: suspensionReason || 'sync-suspended',
+          state: null,
+          stop: async () => {},
+        };
+      }
       if (bridges.has(collection)) {
-        recordCollection(collection, { status: 'reused' });
-        return bridges.get(collection);
+        const current = diagnostics.collections[collection] || {};
+        const currentBridgePromise = bridges.get(collection);
+        const currentBridge = await withTimeout(currentBridgePromise, 1000);
+        const currentStatus = current.connectionStatus || current.status || '';
+        const restartNeeded = ['reconnecting', 'failed', 'error', 'stopped'].includes(currentStatus);
+        const healthyReuse = Boolean(
+          currentBridge
+          && current.initialReplicationAt
+          && current.remoteCheckpoint?.epoch,
+        );
+        if (healthyReuse) {
+          recordCollection(collection, {
+            status: 'reused',
+            connectionStatus: 'connected',
+            reconnectingSince: null,
+            lastError: null,
+            lastLifecycleEvent: null,
+          });
+          return bridges.get(collection);
+        }
+        if (!restartNeeded) {
+          recordCollection(collection, {
+            status: current.status || 'starting',
+            connectionStatus: current.connectionStatus || 'connecting',
+            reconnectingSince: null,
+            lastError: null,
+            lastLifecycleEvent: null,
+          });
+          return currentBridgePromise;
+        }
+        await this.stopCollection(collection);
       }
       recordCollection(collection, { status: 'starting' });
       const bridgePromise = collectionStartQueue.then(() => {
@@ -199,25 +269,92 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
       const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      for (const collection of requested) suspendedCollections.delete(collection);
+      if (!suspendedCollections.size) suspensionReason = '';
       for (const collection of requested) activeCollections.add(collection);
-      await stopAllBridges();
+      for (const collection of requested) {
+        await this.stopCollection(collection);
+      }
       collectionStartQueue = Promise.resolve();
       const restarted = [];
       for (const collection of requested) {
         restarted.push(await this.startCollection(collection));
         await delay(250);
       }
+      for (let index = 0; index < requested.length; index += 1) {
+        const collection = requested[index];
+        try {
+          await waitForNativePeerOpenState(restarted[index]?.state, collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
+        } catch {
+          const lifecycleEvent = createNativePeerOpenTimeoutEvent(collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
+          recordCollection(collection, {
+            status: 'reconnecting',
+            connectionStatus: 'reconnecting',
+            lastError: null,
+            lastLifecycleEvent: lifecycleEvent,
+            reconnectingSince: new Date().toISOString(),
+          });
+          await this.stopCollection(collection);
+          restarted[index] = await this.startCollection(collection);
+          try {
+            await waitForNativePeerOpenState(restarted[index]?.state, collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
+          } catch (retryError) {
+            throw new Error(`Native peer did not open for ${collection} after restart retry: ${formatLifecycleError(retryError)}`);
+          }
+        }
+      }
       return restarted;
+    },
+    async suspendCollections(collections, reason = 'sync-suspended') {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      if (globalRestartTimer) clearTimeout(globalRestartTimer);
+      globalRestartTimer = null;
+      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      suspensionReason = reason || 'sync-suspended';
+      for (const collection of requested) {
+        activeCollections.add(collection);
+        suspendedCollections.add(collection);
+      }
+      for (const collection of requested) {
+        await this.stopCollection(collection);
+        recordCollection(collection, {
+          status: 'paused',
+          connectionStatus: 'paused',
+          reason: suspensionReason,
+          reconnectingSince: null,
+          lastError: null,
+          lastLifecycleEvent: null,
+        });
+      }
+      return requested;
+    },
+    async resumeCollections(collections) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const requested = [...new Set((collections || []).filter((collection) => typeof collection === 'string' && collection.trim()))];
+      for (const collection of requested) suspendedCollections.delete(collection);
+      if (!suspendedCollections.size) suspensionReason = '';
+      return this.restartCollections(requested);
     },
     async stop() {
       stopped = true;
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
+      if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+        window.removeEventListener('online', onlineListener);
+      }
       await stopAllBridges();
       emitDiagnostic({ phase: 'stopped' });
     },
   };
   return syncRuntime;
+}
+
+function peerSessionKey(value) {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const role = typeof value.role === 'string' && value.role ? value.role : 'unknown';
+  const sessionId = typeof value.sessionId === 'string' && value.sessionId ? value.sessionId : '';
+  return sessionId ? `${role}:${sessionId}` : '';
 }
 
 function delay(ms) {
@@ -229,6 +366,49 @@ function withTimeout(value, ms) {
     Promise.resolve(value),
     delay(ms),
   ]);
+}
+
+async function waitForNativePeerOpenState(state, collection, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasOpenNativePeerState(state)) return true;
+    await withTimeout(state?.awaitInitialReplication?.(), 2000);
+    await withTimeout(state?.awaitInSync?.(), 3000);
+    if (hasOpenNativePeerState(state)) return true;
+    await delay(500);
+  }
+  throw createNativePeerOpenTimeoutEvent(collection, timeoutMs);
+}
+
+function hasOpenNativePeerState(state) {
+  const peerStates = state?.peerStates$?.getValue?.();
+  const entries = peerStates && typeof peerStates.entries === 'function'
+    ? Array.from(peerStates.entries())
+    : [];
+  for (const [peerId, entry] of entries) {
+    if (entry?.remoteProtocol?.peerSession?.role !== 'ctox_instance') continue;
+    const connection = state?.peer?.connections?.get?.(peerId);
+    const channelState = connection?.channel?.readyState || '';
+    const pcState = connection?.peer?.connectionState || '';
+    if (channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(pcState)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function createNativePeerOpenTimeoutEvent(collection, timeoutMs) {
+  return {
+    name: 'CtoxWebRtcPeerLifecycleEvent',
+    code: 'peer_connect_timeout',
+    phase: 'peer-reconnect',
+    severity: 'recoverable',
+    retryable: true,
+    lifecycle: true,
+    collection,
+    timeoutMs,
+    message: `WebRTC native peer did not open for ${collection} within ${timeoutMs}ms; reconnect repair is scheduled.`,
+  };
 }
 
 function registerSignalingErrorHandler(signalingServerUrl, onError) {
@@ -282,6 +462,9 @@ function parseSignalingControlPlaneError(raw, url) {
     name: 'CtoxSignalingControlPlaneError',
     message: reason || code,
     code,
+    phase: 'signaling-control-plane',
+    severity: 'error',
+    retryable: false,
     url: redactUrlSecrets(url),
   };
 }
@@ -301,7 +484,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../vendor/rxdb-bundle.mjs?v=20260522-replication-io1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260522-app-local-rxdb1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -309,6 +492,8 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   ensureBrowserProcessNextTick();
   const signalingServerUrl = await signalingUrlWithBrowserMetadata(firstSignalingUrl(config), config);
   const iceServers = iceServersFromConfig(config);
+  const iceServersHaveTurn = iceServersContainTurn(iceServers);
+  const iceServersHaveCredentialedTurn = iceServersContainCredentialedTurn(iceServers);
   const topic = collectionTopic(config.sync_room, collection);
   const batchSize = batchSizeFor(collection);
   const initialReplicationStartedAt = new Date().toISOString();
@@ -318,6 +503,8 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     topic,
     signalingUrl: redactUrlSecrets(signalingServerUrl),
     iceServersConfigured: iceServers.length,
+    iceServersHaveTurn,
+    iceServersHaveCredentialedTurn,
     batchSize,
     initialReplicationState: 'pending',
     initialReplicationStartedAt,
@@ -370,16 +557,61 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
                 connectedAt: new Date().toISOString(),
                 reconnectingSince: null,
                 lastError: null,
+                lastLifecycleEvent: null,
               }),
         });
+        if (nativePeerProtocolReady && nativePeerOpenWatchdog) {
+          clearTimeout(nativePeerOpenWatchdog);
+          nativePeerOpenWatchdog = null;
+        }
         if (checkpointError) onFatalPeerError?.(checkpointError);
       },
+    },
+  });
+  const recordTransportStatus = (status) => {
+    if (stopped) return;
+    const frameTransport = sanitizeReplicationTransportStatus(status);
+    if (!frameTransport) return;
+    recordCollection?.(collection, {
+      frameTransport,
+    });
+  };
+  recordTransportStatus(replicationState.getTransportStatus?.());
+  const transportStatusSubscription = replicationState.transportStatus$?.subscribe?.(recordTransportStatus);
+  if (transportStatusSubscription) subscriptions.push(transportStatusSubscription);
+  let nativePeerOpenWatchdog = setTimeout(() => {
+    nativePeerOpenWatchdog = null;
+    if (stopped || hasOpenNativePeerState(replicationState)) return;
+    const lifecycleEvent = createNativePeerOpenTimeoutEvent(collection, NATIVE_PEER_OPEN_WATCHDOG_MS);
+    recordCollection?.(collection, {
+      status: 'reconnecting',
+      connectionStatus: 'reconnecting',
+      lastError: null,
+      lastLifecycleEvent: lifecycleEvent,
+      reconnectingSince: new Date().toISOString(),
+    });
+    onFatalPeerError?.(lifecycleEvent);
+  }, NATIVE_PEER_OPEN_WATCHDOG_MS);
+  subscriptions.push({
+    unsubscribe() {
+      if (nativePeerOpenWatchdog) clearTimeout(nativePeerOpenWatchdog);
+      nativePeerOpenWatchdog = null;
     },
   });
   let lastErrorLogAt = 0;
   const errorSubscription = replicationState.error$?.subscribe?.((error) => {
     if (stopped) return;
     const now = Date.now();
+    const signalingControlPlaneError = classifySignalingControlPlaneError(error);
+    if (signalingControlPlaneError) {
+      recordCollection?.(collection, {
+        status: 'error',
+        connectionStatus: 'error',
+        lastError: signalingControlPlaneError,
+      });
+      onFatalPeerError?.(signalingControlPlaneError);
+      return;
+    }
     const schemaProtocolError = classifySchemaProtocolError(collection, error);
     if (schemaProtocolError) {
       recordCollection?.(collection, {
@@ -399,8 +631,39 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       });
       return;
     }
+    const transientShutdownEvent = classifyTransientShutdownEvent(error);
+    if (transientShutdownEvent) {
+      if (hasOpenNativePeerState(replicationState)) {
+        recordCollection?.(collection, {
+          status: 'connected',
+          connectionStatus: 'connected',
+          reconnectingSince: null,
+          lastError: null,
+          lastLifecycleEvent: null,
+        });
+        return;
+      }
+      recordCollection?.(collection, {
+        status: 'reconnecting',
+        connectionStatus: 'reconnecting',
+        lastError: null,
+        lastLifecycleEvent: transientShutdownEvent,
+        reconnectingSince: new Date().toISOString(),
+      });
+      return;
+    }
     const lifecycleEvent = classifyPeerLifecycleEvent(error);
     if (lifecycleEvent) {
+      if (hasOpenNativePeerState(replicationState)) {
+        recordCollection?.(collection, {
+          status: 'connected',
+          connectionStatus: 'connected',
+          reconnectingSince: null,
+          lastError: null,
+          lastLifecycleEvent: null,
+        });
+        return;
+      }
       recordCollection?.(collection, {
         status: 'reconnecting',
         connectionStatus: 'reconnecting',
@@ -436,15 +699,18 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
         connectionStatus: 'connected',
         connectedAt: now,
         reconnectingSince: null,
+        lastLifecycleEvent: null,
       });
       return;
     }
+    const reconnectingSince = observedActive ? now : null;
     recordCollection?.(collection, {
       active: false,
       status: observedActive ? 'reconnecting' : 'connecting',
       connectionStatus: observedActive ? 'reconnecting' : 'connecting',
-      reconnectingSince: observedActive ? now : null,
+      reconnectingSince,
     });
+    if (observedActive) scheduleRestartOfUnhealthyCollections(collection, 750);
   });
   subscribeReplicationMetric(replicationState.canceled$, subscriptions, (canceled) => {
     if (stopped) return;
@@ -468,6 +734,8 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     flush: async () => {},
     async stop() {
       stopped = true;
+      if (nativePeerOpenWatchdog) clearTimeout(nativePeerOpenWatchdog);
+      nativePeerOpenWatchdog = null;
       for (const subscription of subscriptions) {
         try { subscription?.unsubscribe?.(); } catch {}
       }
@@ -476,7 +744,25 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   };
 }
 
-function watchInitialReplication({ replicationState, collection, recordCollection, isStopped, startedAt, canCompleteInitialReplication }) {
+function formatLifecycleError(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function watchInitialReplication({
+  replicationState,
+  collection,
+  recordCollection,
+  isStopped,
+  startedAt,
+  canCompleteInitialReplication,
+}) {
   const awaitInitialReplication = initialReplicationAwaiter(replicationState);
   if (!awaitInitialReplication) {
     recordCollection?.(collection, {
@@ -501,6 +787,7 @@ function watchInitialReplication({ replicationState, collection, recordCollectio
           initialReplicationState: 'waiting-for-peer',
           initialReplicationSource: awaitInitialReplication.source,
           initialReplicationAt: null,
+          lastError: null,
         });
         const ready = await waitForCondition(canCompleteInitialReplication, 30000, 250, isStopped);
         if (!ready || isStopped?.()) return;
@@ -513,6 +800,7 @@ function watchInitialReplication({ replicationState, collection, recordCollectio
         initialReplicationAt: new Date().toISOString(),
         reconnectingSince: null,
         lastError: null,
+        lastLifecycleEvent: null,
       });
     })
     .catch((error) => {
@@ -604,20 +892,19 @@ function waitForWebRtcPeerStates(pool, timeoutMs) {
   });
 }
 
-function hasOpenNativePeerState(replicationState) {
-  const peerStates = replicationState?.peerStates$?.getValue?.();
-  if (!peerStates || typeof peerStates.values !== 'function') return false;
-  for (const peerState of peerStates.values()) {
-    if (peerState?.peer && peerState.peer.destroyed !== true) return true;
-  }
-  return false;
-}
-
 function hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint) {
   const capabilities = Array.isArray(remoteCapabilities) ? remoteCapabilities : [];
+  const peerSession = info?.peerSession;
+  const peerSessionId = typeof peerSession === 'string'
+    ? peerSession
+    : typeof peerSession?.sessionId === 'string'
+      ? peerSession.sessionId
+      : '';
+  const peerRole = typeof peerSession === 'object' && peerSession
+    ? peerSession.role
+    : '';
   return info?.protocol === CTOX_RXDB_PROTOCOL &&
-    typeof info?.peerSession === 'string' &&
-    info.peerSession.length > 0 &&
+    (peerRole === 'ctox_instance' || String(peerSessionId).length > 0) &&
     capabilities.includes('ctox-peer-session-v1') &&
     capabilities.includes('ctox-checkpoint-epoch-v1') &&
     remoteCheckpoint?.state === 'advertised' &&
@@ -642,6 +929,7 @@ function isFatalPeerStormError(error) {
 }
 
 function createDiagnostics(config) {
+  const iceServers = iceServersFromConfig(config);
   return {
     mode: 'webrtc',
     phase: 'initializing',
@@ -649,7 +937,9 @@ function createDiagnostics(config) {
     updatedAt: new Date().toISOString(),
     syncRoom: typeof config?.sync_room === 'string' ? config.sync_room : null,
     signalingUrls: sanitizedSignalingUrls(config),
-    iceServersConfigured: iceServersFromConfig(config).length,
+    iceServersConfigured: iceServers.length,
+    iceServersHaveTurn: iceServersContainTurn(iceServers),
+    iceServersHaveCredentialedTurn: iceServersContainCredentialedTurn(iceServers),
     protocol: CTOX_RXDB_PROTOCOL,
     capabilities: CTOX_BROWSER_CAPABILITIES,
     collections: {},
@@ -690,6 +980,8 @@ function isSecretParam(key) {
 
 function serializeError(error) {
   if (!error) return null;
+  const signalingControlPlaneError = classifySignalingControlPlaneError(error);
+  if (signalingControlPlaneError) return signalingControlPlaneError;
   return {
     name: typeof error.name === 'string' ? error.name : 'Error',
     message: String(error.message || error),
@@ -697,6 +989,93 @@ function serializeError(error) {
     phase: error.phase || null,
     severity: error.severity || null,
     retryable: typeof error.retryable === 'boolean' ? error.retryable : null,
+  };
+}
+
+function sanitizeReplicationTransportStatus(status) {
+  if (!status || typeof status !== 'object') return null;
+  const hasTransportEvidence = status.protocol === 'ctox-rxdb-frame-v1'
+    || Number(status.maxInlineFrameBytes) > 0
+    || Number(status.maxChunkChars) > 0
+    || Number(status.maxTransferBytes) > 0;
+  if (!hasTransportEvidence) return null;
+  const numberField = (key) => Number.isFinite(Number(status[key])) ? Number(status[key]) : 0;
+  const stringField = (key, fallback = null, maxLength = 120) => {
+    const value = status[key];
+    return typeof value === 'string' && value.trim() ? value.slice(0, maxLength) : fallback;
+  };
+  return {
+    protocol: stringField('protocol', 'ctox-rxdb-frame-v1', 80),
+    collection: stringField('collection', null, 120),
+    topic: stringField('topic', null, 180),
+    maxInlineFrameBytes: numberField('maxInlineFrameBytes'),
+    maxChunkChars: numberField('maxChunkChars'),
+    maxTransferBytes: numberField('maxTransferBytes'),
+    ackWindow: numberField('ackWindow'),
+    sendBufferHighWater: numberField('sendBufferHighWater'),
+    sendBufferLowWater: numberField('sendBufferLowWater'),
+    activePeerCount: numberField('activePeerCount'),
+    activeTransfers: numberField('activeTransfers'),
+    pendingAcks: numberField('pendingAcks'),
+    incomingTransfers: numberField('incomingTransfers'),
+    completedAckCacheSize: numberField('completedAckCacheSize'),
+    sentFrames: numberField('sentFrames'),
+    sentBytes: numberField('sentBytes'),
+    receivedFrames: numberField('receivedFrames'),
+    receivedBytes: numberField('receivedBytes'),
+    retryCount: numberField('retryCount'),
+    resumeRequestCount: numberField('resumeRequestCount'),
+    resumeAckCount: numberField('resumeAckCount'),
+    backpressureWaitCount: numberField('backpressureWaitCount'),
+    queuedFrames: numberField('queuedFrames'),
+    sentScheduledFrames: numberField('sentScheduledFrames'),
+    priorityQueueDepth: numberField('priorityQueueDepth'),
+    highPriorityQueueDepth: numberField('highPriorityQueueDepth'),
+    normalPriorityQueueDepth: numberField('normalPriorityQueueDepth'),
+    lowPriorityQueueDepth: numberField('lowPriorityQueueDepth'),
+    lastSendPriority: stringField('lastSendPriority', 'normal', 20),
+    lastAckLagMs: numberField('lastAckLagMs'),
+    lastBufferedAmount: numberField('lastBufferedAmount'),
+    pullInProgress: status.pullInProgress === true,
+    pushInProgress: status.pushInProgress === true,
+    updatedAtMs: numberField('updatedAtMs'),
+    observedAt: new Date().toISOString(),
+  };
+}
+
+function isTransientSignalingSocketError(error) {
+  return String(error?.code || '').trim() === 'ctox_signaling_socket_error';
+}
+
+function isHealthyCollectionStatus(status) {
+  return ['connected', 'running', 'reused'].includes(String(status || '').trim());
+}
+
+function classifySignalingControlPlaneError(error) {
+  if (!error || typeof error !== 'object') return null;
+  const source = error?.detail && typeof error.detail === 'object' ? error.detail : error;
+  const scope = typeof source.scope === 'string' ? source.scope : '';
+  const type = typeof source.type === 'string' ? source.type : '';
+  const phase = typeof source.phase === 'string' ? source.phase : '';
+  const isControlPlane = source.name === 'CtoxSignalingControlPlaneError'
+    || phase === 'signaling-control-plane'
+    || (type === 'ctoxError' && scope === 'control-plane');
+  if (!isControlPlane) return null;
+  const code = typeof source.code === 'string' && source.code.trim()
+    ? source.code.trim()
+    : 'control_plane_rejected';
+  const message = typeof source.message === 'string' && source.message.trim()
+    ? source.message.trim()
+    : typeof source.reason === 'string' && source.reason.trim()
+      ? source.reason.trim()
+      : code;
+  return {
+    name: 'CtoxSignalingControlPlaneError',
+    code,
+    phase: 'signaling-control-plane',
+    severity: 'error',
+    retryable: false,
+    message,
   };
 }
 
@@ -744,10 +1123,14 @@ function createCheckpointProtocolError(code, collection, message) {
   };
 }
 
-function classifySchemaProtocolError(collection, error) {
+export function classifySchemaProtocolError(collection, error) {
   const serialized = serializeError(error);
   const details = extractProtocolErrorDetails(error);
+  const rawCode = String(serialized?.code || '').trim();
+  const rawName = String(serialized?.name || '').trim();
   const haystack = [
+    rawName,
+    rawCode,
     serialized?.code,
     serialized?.message,
     details.expected,
@@ -755,11 +1138,19 @@ function classifySchemaProtocolError(collection, error) {
     details.collection,
     details.message,
   ].filter(Boolean).join('\n');
-  if (!haystack.includes('RC_WEBRTC_PROTOCOL') && !haystack.includes('schemaHash') && !haystack.includes('collection schema hash')) {
+  if (
+    rawName !== 'CtoxRxdbProtocolError'
+    && !rawCode.startsWith('ctox_rxdb_')
+    && !haystack.includes('RC_WEBRTC_PROTOCOL')
+    && !haystack.includes('schemaHash')
+    && !haystack.includes('collection schema hash')
+  ) {
     return null;
   }
   let code = 'ctox_schema_protocol_mismatch';
-  if (haystack.includes('collection schema hash') || haystack.includes('schemaHash')) {
+  if (rawCode.startsWith('ctox_rxdb_')) {
+    code = rawCode;
+  } else if (haystack.includes('collection schema hash') || haystack.includes('schemaHash')) {
     code = details.actual ? 'ctox_schema_hash_mismatch' : 'ctox_schema_hash_missing';
   } else if (details.expected === CTOX_RXDB_PROTOCOL || haystack.includes(CTOX_RXDB_PROTOCOL)) {
     code = 'ctox_schema_protocol_mismatch';
@@ -805,13 +1196,19 @@ function sanitizeProtocolDetail(value) {
 }
 
 function schemaProtocolMessageFor(code) {
+  if (code === 'ctox_rxdb_protocol_missing') return 'Remote RxDB peer did not provide the CTOX RxDB protocol marker.';
+  if (code === 'ctox_rxdb_protocol_mismatch') return 'Remote RxDB peer uses an incompatible CTOX RxDB protocol.';
+  if (code === 'ctox_rxdb_capability_missing') return 'Remote RxDB peer is missing a required CTOX capability.';
+  if (code === 'ctox_rxdb_collection_mismatch') return 'Remote RxDB peer answered with a different collection name.';
+  if (code === 'ctox_rxdb_schema_version_mismatch') return 'Remote RxDB peer collection schema version does not match the Browser schema.';
+  if (code === 'ctox_rxdb_schema_hash_mismatch') return 'Remote RxDB peer collection schema hash does not match the Browser schema.';
   if (code === 'ctox_schema_hash_mismatch') return 'Remote RxDB peer collection schema hash does not match the Browser schema.';
   if (code === 'ctox_schema_hash_missing') return 'Remote RxDB peer did not provide a collection schema hash.';
   if (code === 'ctox_schema_collection_mismatch') return 'Remote RxDB peer answered with a different collection name.';
   return 'Remote RxDB peer is not compatible with the CTOX RxDB protocol.';
 }
 
-function classifyReplicationIoError(collection, error) {
+export function classifyReplicationIoError(collection, error) {
   const serialized = serializeError(error);
   const details = extractReplicationErrorDetails(error);
   const rawCode = String(serialized?.code || details.code || '').trim();
@@ -838,8 +1235,8 @@ function classifyReplicationIoError(collection, error) {
     collection,
     direction: direction || null,
     upstreamCode: rawCode || null,
-    batchSize: Number.isFinite(Number(details.batchSize)) ? Number(details.batchSize) : null,
-    rowCount: Number.isFinite(Number(details.rowCount)) ? Number(details.rowCount) : null,
+    batchSize: details.batchSize !== null && Number.isFinite(Number(details.batchSize)) ? Number(details.batchSize) : null,
+    rowCount: details.rowCount !== null && Number.isFinite(Number(details.rowCount)) ? Number(details.rowCount) : null,
     message: replicationIoMessageFor(code),
   };
 }
@@ -851,24 +1248,37 @@ function extractReplicationErrorDetails(error) {
     error?.parameters?.error,
     error?.parameters?.error?.parameters,
   ];
+  let codeOnlyFallback = null;
   for (const candidate of candidates) {
     if (!candidate || typeof candidate !== 'object') continue;
     const direction = typeof candidate.direction === 'string' ? candidate.direction : '';
     const code = typeof candidate.code === 'string' ? candidate.code : '';
     const batchSize = candidate.batchSize ?? candidate.batch_size ?? null;
+    const explicitRowCount = Number.isFinite(Number(candidate.rowCount)) ? Number(candidate.rowCount) : null;
     const pushRows = Array.isArray(candidate.pushRows) ? candidate.pushRows : null;
     const pullRows = Array.isArray(candidate.pullRows) ? candidate.pullRows : null;
-    if (direction || code || batchSize !== null || pushRows || pullRows) {
+    if (direction || batchSize !== null || explicitRowCount !== null || pushRows || pullRows) {
       return {
         direction,
         code,
         batchSize,
-        rowCount: pushRows ? pushRows.length : pullRows ? pullRows.length : null,
+        rowCount: explicitRowCount !== null ? explicitRowCount : pushRows ? pushRows.length : pullRows ? pullRows.length : null,
       };
     }
+    if (code && !codeOnlyFallback) {
+      codeOnlyFallback = { direction: '', code, batchSize: null, rowCount: null };
+    }
   }
-  return { direction: '', code: '', batchSize: null, rowCount: null };
+  return codeOnlyFallback || { direction: '', code: '', batchSize: null, rowCount: null };
 }
+
+export const __ctoxSyncTestHooks = {
+  classifySignalingControlPlaneError,
+  classifyPeerLifecycleEvent,
+  classifySchemaProtocolError,
+  classifyReplicationIoError,
+  extractReplicationErrorDetails,
+};
 
 function replicationIoMessageFor(code) {
   if (code === 'ctox_replication_pull_failed') return 'RxDB WebRTC pull from the remote peer failed.';
@@ -894,9 +1304,18 @@ function classifyPeerLifecycleEvent(error) {
   } else if (haystack.includes('peer_signal_stale') || haystack.includes('ERR_SET_REMOTE_DESCRIPTION') || haystack.includes('ERR_ADD_ICE_CANDIDATE')) {
     lifecycleCode = 'peer_signal_stale';
     lifecycleMessage = 'WebRTC peer received stale signaling data; reconnect repair is scheduled.';
+  } else if (haystack.includes('ctox_data_channel_error')) {
+    lifecycleCode = 'peer_data_channel_closed';
+    lifecycleMessage = 'WebRTC data channel closed during peer replacement; reconnect repair is scheduled.';
+  } else if (haystack.includes('peer_signal_stale')) {
+    lifecycleCode = 'peer_signal_stale';
+    lifecycleMessage = 'Stale WebRTC signaling arrived after peer state changed; reconnect repair is scheduled.';
   } else if (haystack.includes('ERR_SET_LOCAL_DESCRIPTION')) {
     lifecycleCode = 'peer_negotiation_failed';
     lifecycleMessage = 'WebRTC peer negotiation failed; reconnect repair is scheduled.';
+  } else if (haystack.includes('ERR_SET_REMOTE_DESCRIPTION') || haystack.includes('ERR_ADD_ICE_CANDIDATE')) {
+    lifecycleCode = 'peer_negotiation_failed';
+    lifecycleMessage = 'WebRTC peer remote signaling failed; reconnect repair is scheduled.';
   } else if (haystack.includes('ERR_PC_CONSTRUCTOR') || haystack.includes('Cannot create so many PeerConnections')) {
     lifecycleCode = 'peer_connection_limit';
     lifecycleMessage = 'Browser peer connection limit was reached; reconnect repair is scheduled.';
@@ -914,6 +1333,42 @@ function classifyPeerLifecycleEvent(error) {
     lifecycle: true,
     message: lifecycleMessage,
   };
+}
+
+function classifyTransientShutdownEvent(error) {
+  const message = [
+    error?.name,
+    error?.message,
+    (() => {
+      try { return JSON.stringify(error?.parameters || null); } catch { return ''; }
+    })(),
+  ].filter(Boolean).join('\n');
+  if (
+    message.includes('InvalidStateError')
+    && message.includes('database connection is closing')
+  ) {
+    return {
+      name: 'CtoxWebRtcPeerLifecycleEvent',
+      code: 'local_database_closing',
+      phase: 'local-restart',
+      severity: 'recoverable',
+      retryable: true,
+      lifecycle: true,
+      message: 'Local RxDB connection is closing during Browser restart; sync will reopen with the new runtime.',
+    };
+  }
+  if (/WebRTC peer .+ is not open/.test(message)) {
+    return {
+      name: 'CtoxWebRtcPeerLifecycleEvent',
+      code: 'peer_channel_not_open',
+      phase: 'peer-reconnect',
+      severity: 'recoverable',
+      retryable: true,
+      lifecycle: true,
+      message: 'WebRTC peer channel is not open during peer replacement; reconnect will reopen the data channel.',
+    };
+  }
+  return null;
 }
 
 function isLifecycleEvent(value) {
@@ -993,6 +1448,27 @@ function iceServersFromConfig(config) {
       return server;
     })
     .filter(Boolean);
+}
+
+function iceServersContainTurn(iceServers) {
+  if (!Array.isArray(iceServers)) return false;
+  return iceServers.some((entry) => {
+    const urls = Array.isArray(entry?.urls) ? entry.urls : [entry?.urls];
+    return urls.some((url) => /^turns?:/i.test(String(url || '').trim()));
+  });
+}
+
+function iceServersContainCredentialedTurn(iceServers) {
+  if (!Array.isArray(iceServers)) return false;
+  return iceServers.some((entry) => {
+    const urls = Array.isArray(entry?.urls) ? entry.urls : [entry?.urls];
+    const hasTurn = urls.some((url) => /^turns?:/i.test(String(url || '').trim()));
+    return hasTurn
+      && typeof entry?.username === 'string'
+      && entry.username.trim()
+      && typeof entry?.credential === 'string'
+      && entry.credential.trim();
+  });
 }
 
 function ensureBrowserProcessNextTick() {

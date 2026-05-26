@@ -5264,8 +5264,11 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.engagement.resume"
             | "outbound.engagement.close"
             | "outbound.reply.classify"
+            | "outbound.reply.match"
             | "outbound.scheduling.prepare"
             | "outbound.scheduling.mark_booked"
+            | "outbound.campaign.mailbox.link"
+            | "outbound.campaign.status.set"
     )
 }
 
@@ -6105,8 +6108,378 @@ fn handle_outbound_active_command(
             }
             Ok(serde_json::json!({ "ok": true, "meeting_request": request }))
         }
+        "outbound.campaign.mailbox.link" => {
+            outbound_handle_campaign_mailbox_link(root, &conn, command, now)
+        }
+        "outbound.campaign.status.set" => {
+            outbound_handle_campaign_status_set(&conn, command, now)
+        }
+        "outbound.reply.match" => outbound_handle_reply_match(root, &conn, command, now),
         other => anyhow::bail!("unsupported active outbound command: {other}"),
     }
+}
+
+fn outbound_handle_campaign_mailbox_link(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+    let mailbox_address =
+        outbound_required_string(&command.payload, &["mailbox_address"]).or_else(|_| {
+            outbound_required_string(&command.payload, &["communication_account_address"])
+        })?;
+    let mailbox_address = mailbox_address.trim().to_string();
+    anyhow::ensure!(
+        mailbox_address.contains('@'),
+        "mailbox_address must be a valid email address"
+    );
+    let account_key = outbound_first_string(&[
+        outbound_string(&command.payload, &["communication_account_key"]),
+        outbound_string(&command.payload, &["account_key"]),
+        Some(format!("email:{}", mailbox_address.to_ascii_lowercase())),
+    ])
+    .unwrap_or_else(|| format!("email:{}", mailbox_address.to_ascii_lowercase()));
+    let channel = outbound_string(&command.payload, &["channel"])
+        .unwrap_or_else(|| "email".to_string());
+    let provider = outbound_string(&command.payload, &["provider"])
+        .unwrap_or_else(|| "business-os.outbound".to_string());
+    let mailbox_status = outbound_string(&command.payload, &["mailbox_status"])
+        .unwrap_or_else(|| "ready".to_string());
+    let display_name = outbound_string(&command.payload, &["display_name"]).unwrap_or_default();
+    let reply_to =
+        outbound_string(&command.payload, &["reply_to"]).unwrap_or_else(|| mailbox_address.clone());
+
+    let profile = serde_json::json!({
+        "address": mailbox_address,
+        "campaign_id": campaign_id,
+        "outbound_campaign_id": campaign_id,
+        "display_name": display_name,
+        "reply_to": reply_to,
+        "mailbox_status": mailbox_status,
+        "source": "business-os.outbound.campaign.mailbox.link",
+    });
+
+    let mut channel_conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+    channels::upsert_communication_account(
+        &mut channel_conn,
+        &account_key,
+        &channel,
+        &mailbox_address,
+        &provider,
+        profile.clone(),
+    )?;
+
+    let mut campaign = outbound_load_record(conn, "outbound_campaigns", &campaign_id)?
+        .unwrap_or_else(|| serde_json::json!({ "id": campaign_id.clone() }));
+    outbound_put_string(&mut campaign, "id", campaign_id.clone());
+    outbound_put_string(&mut campaign, "communication_account_key", account_key.clone());
+    outbound_put_string(
+        &mut campaign,
+        "communication_account_address",
+        mailbox_address.clone(),
+    );
+    outbound_put_string(&mut campaign, "mailbox_status", mailbox_status.clone());
+    outbound_put_default_object(&mut campaign, "payload");
+    outbound_payload_insert(
+        &mut campaign,
+        "communication_account_key",
+        Value::String(account_key.clone()),
+    );
+    outbound_payload_insert(
+        &mut campaign,
+        "communication_account_address",
+        Value::String(mailbox_address.clone()),
+    );
+    outbound_payload_insert(
+        &mut campaign,
+        "mailbox_status",
+        Value::String(mailbox_status.clone()),
+    );
+    outbound_put_default_i64(&mut campaign, "created_at_ms", now);
+    outbound_put_i64(&mut campaign, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_campaigns", &campaign_id, now, campaign.clone())?;
+
+    let mut limit = outbound_load_record(conn, "outbound_account_limits", &account_key)?
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": account_key,
+                "sender_account_id": account_key,
+                "daily_sent_count": 0,
+                "daily_limit": 0,
+                "status": "active",
+                "blocked": false,
+            })
+        });
+    outbound_put_string(&mut limit, "id", account_key.clone());
+    outbound_put_string(&mut limit, "sender_account_id", account_key.clone());
+    outbound_put_string(&mut limit, "campaign_id", campaign_id.clone());
+    outbound_put_default_i64(&mut limit, "daily_sent_count", 0);
+    outbound_put_default_i64(&mut limit, "daily_limit", 0);
+    outbound_put_default_string(&mut limit, "status", "active");
+    if !limit
+        .get("blocked")
+        .map(|value| value.is_boolean())
+        .unwrap_or(false)
+    {
+        if let Some(object) = limit.as_object_mut() {
+            object.insert("blocked".to_string(), Value::Bool(false));
+        }
+    }
+    outbound_put_default_i64(&mut limit, "created_at_ms", now);
+    outbound_put_i64(&mut limit, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_account_limits", &account_key, now, limit.clone())?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign": campaign,
+        "communication_account_key": account_key,
+        "communication_account_address": mailbox_address,
+        "mailbox_status": mailbox_status,
+        "account_limit": limit,
+    }))
+}
+
+fn outbound_handle_campaign_status_set(
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+    let requested_status = outbound_required_string(&command.payload, &["status"])?;
+    let allowed = matches!(
+        requested_status.as_str(),
+        "setup_required" | "active" | "paused" | "closed"
+    );
+    anyhow::ensure!(
+        allowed,
+        "unsupported campaign status: {requested_status}; allowed: setup_required, active, paused, closed"
+    );
+    let mut campaign = outbound_load_required(
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        "campaign not found",
+    )?;
+    let default_channel = outbound_first_string(&[
+        outbound_string(&command.payload, &["channel"]),
+        outbound_string(&campaign, &["payload", "active_outreach", "default_channel"]),
+        outbound_string(&campaign, &["channel"]),
+        Some("email".to_string()),
+    ])
+    .unwrap_or_else(|| "email".to_string());
+
+    if requested_status == "active" {
+        match default_channel.as_str() {
+            "physical_letter" => {
+                // manually-handled channel; no mailbox required.
+            }
+            _ => {
+                let account_key = outbound_first_string(&[
+                    outbound_string(&campaign, &["communication_account_key"]),
+                    outbound_string(&campaign, &["payload", "communication_account_key"]),
+                ])
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "campaign cannot activate email channel without a linked mailbox"
+                    )
+                })?;
+                let limit = outbound_load_record(conn, "outbound_account_limits", &account_key)?
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "campaign cannot activate email channel without outbound_account_limits"
+                        )
+                    })?;
+                let limit_status =
+                    outbound_string(&limit, &["status"]).unwrap_or_else(|| "active".to_string());
+                anyhow::ensure!(
+                    !matches!(
+                        limit_status.as_str(),
+                        "blocked" | "locked" | "suspended" | "disabled"
+                    ),
+                    "campaign mailbox is not ready (status: {limit_status})"
+                );
+                let blocked = limit
+                    .get("blocked")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                anyhow::ensure!(
+                    !blocked,
+                    "campaign mailbox is blocked for outbound communication"
+                );
+            }
+        }
+    }
+
+    outbound_put_string(&mut campaign, "status", requested_status.clone());
+    outbound_put_default_object(&mut campaign, "payload");
+    outbound_payload_insert(
+        &mut campaign,
+        "status_set_at_ms",
+        Value::Number(serde_json::Number::from(now)),
+    );
+    outbound_payload_insert(
+        &mut campaign,
+        "active_channel",
+        Value::String(default_channel.clone()),
+    );
+    outbound_put_i64(&mut campaign, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_campaigns", &campaign_id, now, campaign.clone())?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign": campaign,
+        "status": requested_status,
+        "channel": default_channel,
+    }))
+}
+
+fn outbound_handle_reply_match(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let engagement_id = outbound_required_string(&command.payload, &["engagement_id"])?;
+    let reply_message_key = outbound_required_string(&command.payload, &["reply_message_id"])
+        .or_else(|_| outbound_required_string(&command.payload, &["communication_message_key"]))?;
+    let classification = outbound_string(&command.payload, &["classification"])
+        .unwrap_or_else(|| "unclear".to_string());
+    let outbound_message_id =
+        outbound_string(&command.payload, &["outbound_message_id"]).unwrap_or_default();
+
+    let mut engagement = outbound_load_required(
+        conn,
+        "outbound_engagements",
+        &engagement_id,
+        "engagement not found",
+    )?;
+    outbound_put_string(&mut engagement, "status", "reply_received".to_string());
+    outbound_payload_insert(
+        &mut engagement,
+        "reply_classification",
+        Value::String(classification.clone()),
+    );
+    outbound_payload_insert(
+        &mut engagement,
+        "reply_message_id",
+        Value::String(reply_message_key.clone()),
+    );
+    outbound_payload_insert(
+        &mut engagement,
+        "reply_matched_at_ms",
+        Value::Number(serde_json::Number::from(now)),
+    );
+    outbound_put_i64(&mut engagement, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_engagements",
+        &engagement_id,
+        now,
+        engagement.clone(),
+    )?;
+
+    let pending_messages =
+        outbound_load_records_by_string_field(conn, "outbound_messages", "engagement_id", &engagement_id)?;
+    let mut cancelled = Vec::new();
+    for mut message in pending_messages {
+        let send_status =
+            outbound_string(&message, &["send_status"]).unwrap_or_else(|| "draft".to_string());
+        let direction =
+            outbound_string(&message, &["direction"]).unwrap_or_else(|| "outbound".to_string());
+        if direction != "outbound" {
+            continue;
+        }
+        if matches!(send_status.as_str(), "sent" | "delivered" | "queued_for_provider") {
+            continue;
+        }
+        if matches!(send_status.as_str(), "cancelled" | "paused") {
+            continue;
+        }
+        let Some(message_id) = outbound_string(&message, &["id"]) else {
+            continue;
+        };
+        outbound_put_string(&mut message, "send_status", "cancelled");
+        outbound_payload_insert(
+            &mut message,
+            "cancelled_reason",
+            Value::String("reply_received".to_string()),
+        );
+        outbound_payload_insert(
+            &mut message,
+            "cancelled_at_ms",
+            Value::Number(serde_json::Number::from(now)),
+        );
+        outbound_put_i64(&mut message, "updated_at_ms", now);
+        upsert_business_record(conn, "outbound_messages", &message_id, now, message)?;
+        cancelled.push(message_id);
+    }
+
+    // Best-effort: annotate the matched communication_message with outbound metadata.
+    let channel_path = crate::paths::core_db(root);
+    if channel_path.exists() {
+        if let Ok(mut channel_conn) = channels::open_channel_db(&channel_path) {
+            let _ = annotate_communication_message_with_outbound(
+                &mut channel_conn,
+                &reply_message_key,
+                &engagement_id,
+                &outbound_message_id,
+                &classification,
+            );
+        }
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "engagement": engagement,
+        "classification": classification,
+        "reply_message_key": reply_message_key,
+        "cancelled_message_ids": cancelled,
+    }))
+}
+
+fn annotate_communication_message_with_outbound(
+    conn: &mut Connection,
+    message_key: &str,
+    engagement_id: &str,
+    outbound_message_id: &str,
+    classification: &str,
+) -> anyhow::Result<()> {
+    let row: Option<String> = conn
+        .query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            rusqlite::params![message_key],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(metadata_text) = row else {
+        return Ok(());
+    };
+    let mut metadata: Value = serde_json::from_str(&metadata_text).unwrap_or_else(|_| serde_json::json!({}));
+    let object = metadata.as_object_mut().ok_or_else(|| {
+        anyhow::anyhow!("communication_messages.metadata_json is not an object for {message_key}")
+    })?;
+    object.insert(
+        "outbound_engagement_id".to_string(),
+        Value::String(engagement_id.to_string()),
+    );
+    if !outbound_message_id.is_empty() {
+        object.insert(
+            "outbound_message_id".to_string(),
+            Value::String(outbound_message_id.to_string()),
+        );
+    }
+    object.insert(
+        "outbound_reply_classification".to_string(),
+        Value::String(classification.to_string()),
+    );
+    let updated = serde_json::to_string(&metadata)?;
+    conn.execute(
+        "UPDATE communication_messages SET metadata_json = ?1 WHERE message_key = ?2",
+        rusqlite::params![updated, message_key],
+    )?;
+    Ok(())
 }
 
 fn outbound_object_payload(payload: &Value) -> Value {

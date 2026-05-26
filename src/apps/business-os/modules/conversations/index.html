@@ -1,12 +1,16 @@
 <main class="conv-module" data-conv-root>
   <aside class="conv-pane conv-left" aria-label="Conversations">
-    <header class="conv-left-header">
-      <h2 data-conv-title>Conversations</h2>
-      <p class="conv-left-sub" data-conv-sub></p>
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-conv-sub>Posteingang</span>
+          <h2 class="ctox-pane-title" data-conv-title>Conversations</h2>
+        </div>
+      </div>
+      <div class="ctox-pane-tools">
+        <input class="ctox-pane-search" type="search" data-conv-search placeholder="Suche" />
+      </div>
     </header>
-    <div class="conv-search">
-      <input type="search" data-conv-search placeholder="Suche" />
-    </div>
     <nav class="conv-channel-filters" data-conv-channel-filters aria-label="Channels">
       <button type="button" class="conv-channel-chip is-active" data-channel="all">
         <span class="conv-channel-dot"></span>
@@ -64,6 +68,8 @@
     </div>
   </aside>
 
+  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Linke Spaltenbreite anpassen"></button>
+
   <section class="conv-pane conv-center" aria-label="Conversation Detail">
     <header class="conv-center-header" data-conv-detail-header hidden>
       <div class="conv-detail-identity">
@@ -84,6 +90,8 @@
     </div>
   </section>
 
+  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+
   <aside class="conv-pane conv-right" aria-label="Conversation Context">
     <div class="conv-right-body">
       <div class="conv-right-empty" data-conv-right-empty>
@@ -101,6 +109,12 @@
               <span data-conv-contact-handle></span>
             </div>
           </div>
+        </section>
+        <section class="conv-card conv-outbound-card" data-conv-outbound-card hidden>
+          <header>
+            <span data-conv-card-label-outbound>Outbound</span>
+          </header>
+          <div class="conv-card-body" data-conv-outbound-card-body></div>
         </section>
         <section class="conv-card" data-conv-channels-card>
           <header>

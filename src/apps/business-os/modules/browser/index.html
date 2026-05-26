@@ -1,0 +1,69 @@
+<main class="browser-module" data-browser-root>
+  <section class="browser-sidebar browser-pane" aria-label="Browser Sessions">
+    <header class="browser-pane-header">
+      <div>
+        <span class="browser-kicker">Remote</span>
+        <h2>Browser</h2>
+      </div>
+      <button type="button" class="browser-icon-button" data-browser-refresh aria-label="Refresh">↻</button>
+    </header>
+    <div class="browser-session-card" data-browser-session-card>
+      <span class="browser-muted">No session</span>
+    </div>
+    <div class="browser-auth-assist" data-browser-auth-assist hidden></div>
+    <div class="browser-session-list" data-browser-session-list aria-label="Remote Browser sessions"></div>
+    <div class="browser-actions">
+      <button type="button" data-browser-start>Start Remote</button>
+      <button type="button" data-browser-stop>Stop</button>
+      <button type="button" data-browser-reset>Reset</button>
+      <button type="button" data-browser-send-to-ctox>Send to CTOX</button>
+      <button type="button" data-browser-seed>Seed Frame</button>
+      <button type="button" data-browser-clear>Clear Frames</button>
+    </div>
+    <div class="browser-notice" data-browser-notice hidden></div>
+  </section>
+
+  <section class="browser-workbench" aria-label="Remote Browser Frame">
+    <header class="browser-toolbar">
+      <div class="browser-nav-actions" aria-label="Navigation">
+        <button type="button" data-browser-back aria-label="Back">‹</button>
+        <button type="button" data-browser-forward aria-label="Forward">›</button>
+        <button type="button" data-browser-reload aria-label="Reload">↻</button>
+      </div>
+      <form class="browser-address-form" data-browser-address-form>
+        <input data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
+        <button type="submit">Go</button>
+      </form>
+    </header>
+    <div class="browser-status-strip" aria-label="Remote Browser status">
+      <span class="browser-status-chip" data-browser-status-chip>Offline</span>
+      <span data-browser-status-title>-</span>
+      <span data-browser-status-meta>-</span>
+    </div>
+    <div class="browser-frame-shell" data-browser-frame-shell>
+      <canvas data-browser-canvas width="1280" height="720" tabindex="0" aria-label="Remote browser frame"></canvas>
+      <div class="browser-empty" data-browser-empty>No frame</div>
+    </div>
+  </section>
+
+  <aside class="browser-inspector browser-pane" aria-label="Browser Diagnostics">
+    <header class="browser-pane-header">
+      <div>
+        <span class="browser-kicker">RxDB</span>
+        <h2>Diagnostics</h2>
+      </div>
+    </header>
+    <dl class="browser-diagnostics">
+      <div><dt>Frame</dt><dd data-browser-frame-id>-</dd></div>
+      <div><dt>Seq</dt><dd data-browser-frame-seq>-</dd></div>
+      <div><dt>Size</dt><dd data-browser-frame-size>-</dd></div>
+      <div><dt>Captured</dt><dd data-browser-frame-time>-</dd></div>
+      <div><dt>Input</dt><dd data-browser-input-state>-</dd></div>
+      <div><dt>Command</dt><dd data-browser-command-state>-</dd></div>
+    </dl>
+    <h3 class="browser-section-title">Commands</h3>
+    <div class="browser-history" data-browser-command-history aria-label="Recent Browser Commands"></div>
+    <h3 class="browser-section-title">CTOX Handoffs</h3>
+    <div class="browser-history" data-browser-handoff-history aria-label="Browser Context Handoffs"></div>
+  </aside>
+</main>

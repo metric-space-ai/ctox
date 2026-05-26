@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Per-model local backend registry — maps a request model ID onto
 //! the matching server binary under `src/core/inference/models/<model>/`

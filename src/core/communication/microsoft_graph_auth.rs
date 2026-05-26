@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Shared OAuth2 helpers for Microsoft Graph (and Azure AD / Entra ID).
 //!

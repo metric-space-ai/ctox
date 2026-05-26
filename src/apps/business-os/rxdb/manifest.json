@@ -1,0 +1,18 @@
+{
+  "name": "ctox-rxdb-js",
+  "format": "browser-esm",
+  "package_manager": "none",
+  "protocol": "ctox-rxdb-protocol-v1",
+  "entry": "dist/ctox-rxdb-js.mjs",
+  "source_entry": "src/index.mjs",
+  "storage": "indexeddb-native",
+  "transport": "webrtc-native",
+  "feature_gates": "none",
+  "runtime_addons": "none",
+  "contracts": [
+    "ctox-rxdb-protocol-v1",
+    "ctox-schema-hash-v1",
+    "ctox-peer-session-v1",
+    "ctox-checkpoint-epoch-v1"
+  ]
+}

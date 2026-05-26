@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Isolated microbench for `kernel_mul_mv_q4_K_f32` on this M5.
 //! Pre-allocates buffers once per (shape, nsg) cell, dispatches in a

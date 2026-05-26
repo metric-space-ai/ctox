@@ -1,4 +1,4 @@
-import { readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity4';
+import { FILE_CHUNK_ERROR_CODES, readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity5';
 
 export const manifest = {
   id: 'file-viewer',
@@ -87,6 +87,10 @@ function isMissingContentError(error) {
   return String(error?.message || error || '').includes('Dateiinhalt fehlt');
 }
 
+function isRetryableMaterializationReadError(error) {
+  return isMissingContentError(error) || error?.code === FILE_CHUNK_ERROR_CODES.GENERATION_MISMATCH;
+}
+
 function fileIntegrityDetails(args, fileId, mimeType) {
   return {
     fileId,
@@ -101,11 +105,12 @@ async function materializeStoredFile(ctx, file) {
   if (!ctx.commandBus?.dispatch) {
     throw new Error('business_commands collection is required for file materialization');
   }
-  await Promise.all([
+  const [commandBridge] = await Promise.all([
     ctx.sync?.startCollection?.('business_commands'),
     ctx.sync?.startCollection?.('desktop_files'),
     ctx.sync?.startCollection?.('desktop_file_chunks'),
   ]);
+  await waitForReplicationBridge(commandBridge, 'business_commands');
   const commandId = `cmd_${crypto.randomUUID()}`;
   await ctx.commandBus.dispatch({
     id: commandId,
@@ -123,7 +128,30 @@ async function materializeStoredFile(ctx, file) {
       actor: actorContext(ctx.session),
     },
   });
+  await waitForReplicationBridge(commandBridge, 'business_commands');
+  await waitForCommandReplication(ctx, commandId);
+  await waitForMaterializedFileProjection(ctx, file.fileId);
   return commandId;
+}
+
+async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
+  const state = bridge?.state;
+  const wait = typeof state?.awaitInSync === 'function'
+    ? state.awaitInSync.bind(state)
+    : typeof state?.awaitInitialReplication === 'function'
+      ? state.awaitInitialReplication.bind(state)
+      : null;
+  if (!wait) return;
+  try {
+    await Promise.race([
+      wait(),
+      delay(timeoutMs).then(() => {
+        throw new Error(`${collection} replication did not become ready in time`);
+      }),
+    ]);
+  } catch (error) {
+    throw new Error(`RxDB WebRTC konnte ${collection} nicht synchronisieren: ${error?.message || error}`);
+  }
 }
 
 async function readCommandProjection(db, commandId) {
@@ -132,19 +160,115 @@ async function readCommandProjection(db, commandId) {
   return doc?.toJSON?.() || null;
 }
 
+async function waitForCommandReplication(ctx, commandId, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs;
+  let nextRestartAt = Date.now() + 5000;
+  let lastCommand = null;
+  while (Date.now() < deadline) {
+    lastCommand = await readCommandProjection(ctx.db, commandId);
+    const status = lastCommand?.status || '';
+    if (status && status !== 'pending_sync') return lastCommand;
+    if (Date.now() >= nextRestartAt) {
+      nextRestartAt = Date.now() + 5000;
+      const bridge = shouldRestartSyncCollection(ctx, 'business_commands')
+        && typeof ctx.sync?.restartCollection === 'function'
+        ? await ctx.sync.restartCollection('business_commands')
+        : await ctx.sync?.startCollection?.('business_commands');
+      await touchCommandDocument(ctx.db, commandId);
+      await waitForReplicationBridge(bridge, 'business_commands');
+    }
+    await delay(300);
+  }
+  throw new Error(`RxDB WebRTC hat den Materialize-Befehl nicht an CTOX repliziert: ${lastCommand?.status || 'missing'}`);
+}
+
+function shouldRestartSyncCollection(ctx, collection) {
+  const diagnostics = ctx?.sync?.diagnostics || ctx?.syncDiagnostics || {};
+  const entry = diagnostics?.collections?.[collection] || {};
+  const status = entry.connectionStatus || entry.status || '';
+  return ['failed', 'error', 'stopped', 'reconnecting'].includes(status);
+}
+
+async function touchCommandDocument(db, commandId) {
+  const doc = await db?.collection?.('business_commands')?.findOne(commandId).exec();
+  if (!doc?.incrementalPatch) return;
+  await doc.incrementalPatch({ updated_at_ms: Date.now() });
+}
+
+async function waitForMaterializedFileProjection(ctx, fileId, timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  let restarted = false;
+  let lastFileState = '';
+  let lastGenerationId = '';
+  let lastChunkCount = 0;
+  let lastSyncNudgeAt = 0;
+  let nextMetadataRestartAt = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const file = await ctx.db?.collection?.('desktop_files')?.findOne(fileId).exec();
+    const fileData = file?.toJSON?.();
+    lastFileState = fileData?.content_state || '';
+    lastGenerationId = fileData?.content_generation_id || '';
+    const chunks = await ctx.db?.collection?.('desktop_file_chunks')?.find().exec();
+    lastChunkCount = (chunks || []).filter((doc) => {
+      const chunk = doc?.toJSON?.() || doc;
+      return chunk?.file_id === fileId && chunk?._deleted !== true;
+    }).length;
+    if (lastChunkCount > 0 && lastFileState === 'available' && lastGenerationId) return;
+    if (Date.now() - lastSyncNudgeAt > 1000) {
+      lastSyncNudgeAt = Date.now();
+      await nudgeFileProjectionSync(ctx);
+    }
+    if (lastChunkCount > 0 && lastFileState !== 'available' && Date.now() >= nextMetadataRestartAt) {
+      nextMetadataRestartAt = Date.now() + 5000;
+      const bridge = typeof ctx.sync?.restartCollection === 'function'
+        ? await ctx.sync.restartCollection('desktop_files')
+        : await ctx.sync?.startCollection?.('desktop_files');
+      await waitForReplicationBridge(bridge, 'desktop_files');
+    }
+    if (!restarted && Date.now() > deadline - timeoutMs + 5000) {
+      restarted = true;
+      const bridges = await Promise.all([
+        typeof ctx.sync?.restartCollection === 'function'
+          ? ctx.sync.restartCollection('desktop_files')
+          : ctx.sync?.startCollection?.('desktop_files'),
+        typeof ctx.sync?.restartCollection === 'function'
+          ? ctx.sync.restartCollection('desktop_file_chunks')
+          : ctx.sync?.startCollection?.('desktop_file_chunks'),
+      ]);
+      await Promise.all(bridges.map((bridge, index) => (
+        waitForReplicationBridge(bridge, index === 0 ? 'desktop_files' : 'desktop_file_chunks')
+      )));
+    }
+    await delay(300);
+  }
+  throw new Error(`RxDB WebRTC hat die materialisierte Datei nicht in den Browser repliziert: state=${lastFileState || 'missing'}, generation=${lastGenerationId || 'missing'}, chunks=${lastChunkCount}`);
+}
+
+async function nudgeFileProjectionSync(ctx) {
+  if (!ctx.sync?.startCollection) return;
+  const bridges = await Promise.all([
+    ctx.sync.startCollection('desktop_files').catch(() => null),
+    ctx.sync.startCollection('desktop_file_chunks').catch(() => null),
+  ]);
+  await Promise.all(bridges.map((bridge, index) => (
+    bridge ? waitForReplicationBridge(bridge, index === 0 ? 'desktop_files' : 'desktop_file_chunks').catch(() => {}) : null
+  )));
+}
+
 async function waitForStoredFile(db, fileId, mimeType, commandId = '', timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const file = await db?.collection?.('desktop_files')?.findOne(fileId).exec();
       const fileData = file?.toJSON?.();
+      const fileAvailable = fileData?.content_state === 'available';
       return await readStoredFile(db, fileId, mimeType, {
-        contentGenerationId: fileData?.content_generation_id || '',
-        contentHash: fileData?.content_hash || '',
-        contentHashScheme: fileData?.content_hash_scheme || '',
+        contentGenerationId: fileAvailable ? fileData?.content_generation_id || '' : '',
+        contentHash: fileAvailable ? fileData?.content_hash || '' : '',
+        contentHashScheme: fileAvailable ? fileData?.content_hash_scheme || '' : '',
       });
     } catch (error) {
-      if (!isMissingContentError(error)) throw error;
+      if (!isRetryableMaterializationReadError(error)) throw error;
       if (commandId) {
         const command = await readCommandProjection(db, commandId);
         if (command?.status === 'failed') {

@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Persistent-buffer bench harness — proves the per-dispatch
 //! buffer-alloc cost of the existing dispatcher path is real and

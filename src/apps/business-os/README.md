@@ -19,6 +19,14 @@ modules/<id>/
   index.css
 ```
 
+`module.json` uses `install_scope` to decide how the app is shipped:
+
+- `core`: always included and not removable (`ctox`, `desktop`, `app-store`, `knowledge`, `reports`).
+- `starter`: included on first installation as the standard workspace pack (`documents`, `spreadsheets`, `calendar`, `notes`).
+- `store`: discoverable in the App Store and installed into `installed-modules/` on demand.
+- `internal`: shipped for shell-owned workflows but hidden from normal launchers.
+- `sample`: ignored by the runtime; used only for checked-in example `installed-modules/`.
+
 The shell loads module manifests through the native Rust API and mounts modules
 as plain browser modules. React may be embedded for menus, settings, and dense
 forms, but the working views should remain direct, inspectable ESM.
@@ -53,3 +61,12 @@ example:
 The generalization contract for configurable importers, parsers, structure
 prompts, and scoring criteria lives in
 `modules/matching/REQUIREMENT_MATCHING.md`.
+
+## Trademark Notice
+
+CTOX and CTOX Business OS are names used by this project. The repository
+license grants rights to the covered source code, but it does not grant
+trademark rights or permission to present modified versions as official CTOX
+products. Forks and redistributed builds should use their own product branding
+unless they have separate permission to use the CTOX name, logos, or service
+marks.

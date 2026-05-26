@@ -1,0 +1,521 @@
+<main class="fibu-module" data-fibu-root>
+  <!-- Left Spalte: Selector & Navigation (Strictly links and filters only) -->
+  <section class="fibu-pane fibu-left" aria-label="Fibu Navigation">
+    <div class="fibu-sidebar">
+      <header class="ctox-pane-header">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker">CTOX</span>
+            <h2 class="ctox-pane-title">Finanzwesen</h2>
+          </div>
+        </div>
+      </header>
+
+      <div class="fibu-nav-list" data-fibu-nav>
+        <div class="fibu-nav-section-title">Kontenrahmen</div>
+        <button type="button" class="fibu-nav-item active" data-nav="skr">
+          <span class="fibu-nav-icon">📊</span> Kontenrahmen (SKR)
+        </button>
+
+        <div class="fibu-nav-section-title">Buchungen</div>
+        <button type="button" class="fibu-nav-item" data-nav="journal">
+          <span class="fibu-nav-icon">📖</span> Journal & Hauptbuch
+        </button>
+        <button type="button" class="fibu-nav-item" data-nav="receipts">
+          <span class="fibu-nav-icon">📁</span> Belege (OCR & Vorrat)
+        </button>
+
+        <div class="fibu-nav-section-title">Bank & Kasse</div>
+        <button type="button" class="fibu-nav-item" data-nav="banking">
+          <span class="fibu-nav-icon">🏦</span> Bankabgleich
+        </button>
+
+        <div class="fibu-nav-section-title">Reisen & PKW</div>
+        <button type="button" class="fibu-nav-item" data-nav="travel">
+          <span class="fibu-nav-icon">✈️</span> Reisekosten (VMA)
+        </button>
+        <button type="button" class="fibu-nav-item" data-nav="mileage">
+          <span class="fibu-nav-icon">🚗</span> Fahrtenbuch
+        </button>
+
+        <div class="fibu-nav-section-title">Auswertungen</div>
+        <button type="button" class="fibu-nav-item" data-nav="reports">
+          <span class="fibu-nav-icon">📈</span> Bilanz / GuV / UStVA
+        </button>
+
+        <div class="fibu-nav-section-title">Anlagen (AfA)</div>
+        <button type="button" class="fibu-nav-item" data-nav="assets">
+          <span class="fibu-nav-icon">🏢</span> Anlagenspiegel
+        </button>
+
+        <details class="fibu-nav-details">
+          <summary class="fibu-nav-section-title fibu-details-summary">🛠️ System & QS</summary>
+          <button type="button" class="fibu-nav-item" data-nav="tests">
+            <span class="fibu-nav-icon">🧪</span> E2E Test Suite (UI)
+          </button>
+        </details>
+      </div>
+
+      <div class="fibu-sidebar-footer">
+        <div class="fibu-skr-selector-wrap">
+          <label for="skr-select">Kontenrahmen:</label>
+          <select id="skr-select" class="fibu-select">
+            <option value="SKR03">SKR 03 (Prozessgliederung)</option>
+            <option value="SKR04">SKR 04 (Abschlussgliederung)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>
+  <div class="fibu-col-resizer" data-resizer="left" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+
+  <!-- Center Spalte: Active Workbench (Main Workbench views) -->
+  <section class="fibu-pane fibu-center" aria-label="Fibu Arbeitsbereich">
+    <!-- Header dynamically changed by controller -->
+    <header class="ctox-pane-header fibu-center-head">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles fibu-head-meta">
+          <span class="ctox-pane-kicker" data-active-category>KONTENRAHMEN</span>
+          <h2 class="ctox-pane-title" data-active-title>SKR03 Kontenrahmen-Explorer</h2>
+        </div>
+        <div class="ctox-pane-actions fibu-head-actions" data-center-actions>
+          <!-- Dynamic actions based on view -->
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workbench Area -->
+    <div class="fibu-workbench-body">
+      <!-- 1. SKR Explorer Panel -->
+      <div class="fibu-view-panel" data-panel="skr">
+        <div class="fibu-panel-toolbar">
+          <div class="fibu-search-wrapper">
+            <input type="search" class="fibu-search-input" data-search-accounts placeholder="Konto oder Code suchen..." />
+          </div>
+          <button type="button" class="fibu-btn fibu-btn-primary" data-action="init-skr">
+            🔄 Kontenrahmen neu initialisieren
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th style="width: 100px;">Konto</th>
+                <th>Kontenbezeichnung</th>
+                <th style="width: 140px;">Typ</th>
+                <th style="width: 120px;">USt-Schlüssel</th>
+                <th style="width: 150px; text-align: right;">Soll-Saldo</th>
+                <th style="width: 150px; text-align: right;">Haben-Saldo</th>
+              </tr>
+            </thead>
+            <tbody data-accounts-list>
+              <!-- Dynamic SKR account rows -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 2. Journal & Ledger Panel -->
+      <div class="fibu-view-panel" data-panel="journal" hidden>
+        <div class="fibu-panel-toolbar">
+          <div class="fibu-search-wrapper">
+            <input type="search" class="fibu-search-input" data-search-journal placeholder="Journal durchsuchen..." />
+          </div>
+          <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-entry">
+            ➕ Neue manuelle Buchung
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th style="width: 100px;">Datum</th>
+                <th style="width: 120px;">Belegnummer</th>
+                <th>Verwendungszweck / Buchungstext</th>
+                <th style="width: 140px;">Zugeordneter Beleg</th>
+                <th style="width: 150px; text-align: right;">Betrag</th>
+                <th style="width: 120px; text-align: center;">Status</th>
+                <th style="width: 80px; text-align: center;">Aktionen</th>
+              </tr>
+            </thead>
+            <tbody data-journal-list>
+              <!-- Dynamic journal rows -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 3. Receipts & OCR Panel -->
+      <div class="fibu-view-panel" data-panel="receipts" hidden>
+        <div class="fibu-panel-toolbar">
+          <div class="fibu-file-dropzone" data-file-dropzone>
+            <span class="dropzone-icon">📥</span>
+            <span class="dropzone-text">Belege hier ablegen (PDF/Image) oder zum Auswählen klicken</span>
+            <input type="file" id="fibu-file-input" style="display:none;" accept="application/pdf,image/*" multiple />
+          </div>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th>Dateiname</th>
+                <th style="width: 140px;">Lieferant</th>
+                <th style="width: 100px;">Datum</th>
+                <th style="width: 100px; text-align: right;">Netto</th>
+                <th style="width: 80px; text-align: right;">USt %</th>
+                <th style="width: 100px; text-align: right;">Brutto</th>
+                <th style="width: 160px;">Vorgeschlagenes Konto</th>
+                <th style="width: 100px; text-align: center;">Status</th>
+                <th style="width: 100px; text-align: center;">Buchen</th>
+              </tr>
+            </thead>
+            <tbody data-receipts-list>
+              <!-- Dynamic receipt rows -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 4. Banking Integration & Reconciliation Panel -->
+      <div class="fibu-view-panel" data-panel="banking" hidden>
+        <div class="fibu-panel-toolbar" style="flex-wrap: wrap; gap: 10px;">
+          <div class="fibu-file-dropzone compact" data-bank-dropzone style="flex: 1; min-width: 250px;">
+            <span>🏦 Bankauszug einlesen (camt.053 XML / MT940 Text)</span>
+            <input type="file" id="fibu-bank-input" style="display:none;" accept=".xml,.txt,.mt940" />
+          </div>
+          <div class="fibu-toolbar-actions">
+            <button type="button" class="fibu-btn fibu-btn-secondary" data-action="run-auto-reconciliation">
+              🤖 Auto-Matching ausführen
+            </button>
+          </div>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th style="width: 100px;">Wertstellung</th>
+                <th>Zahlungsempfänger / IBAN</th>
+                <th>Verwendungszweck</th>
+                <th style="width: 120px; text-align: right;">Betrag</th>
+                <th style="width: 200px;">Vorgeschlagener Beleg</th>
+                <th style="width: 130px; text-align: center;">Status</th>
+                <th style="width: 100px; text-align: center;">Aktionen</th>
+              </tr>
+            </thead>
+            <tbody data-banking-list>
+              <!-- Dynamic bank transactions -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 5. Reports Workspace (Bilanz, GuV, UStVA, DATEV) -->
+      <div class="fibu-view-panel" data-panel="reports" hidden>
+        <div class="fibu-report-tabs">
+          <button type="button" class="fibu-report-tab-btn active" data-report-tab="bilanz">🏛️ HGB-Bilanz</button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="guv">📊 HGB-GuV</button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="ustva">📋 Umsatzsteuer-Voranmeldung</button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="datev">📦 DATEV EXTF-Export</button>
+        </div>
+
+        <div class="fibu-report-workspace-content">
+          <!-- Bilanz View -->
+          <div class="fibu-report-subpanel" data-report-subpanel="bilanz">
+            <div class="fibu-report-header">
+              <h3>Erstellung der Bilanz nach § 266 HGB</h3>
+              <span class="fibu-badge date-badge" data-report-date-badge>Aktiv</span>
+            </div>
+            <div class="fibu-bilanz-tree-wrapper">
+              <div class="fibu-bilanz-column">
+                <div class="fibu-bilanz-side-title">AKTIVA (Vermögenswerte)</div>
+                <div class="fibu-tree" data-bilanz-aktiva-tree>
+                  <!-- Dynamic Aktiva Tree -->
+                </div>
+              </div>
+              <div class="fibu-bilanz-divider"></div>
+              <div class="fibu-bilanz-column">
+                <div class="fibu-bilanz-side-title">PASSIVA (Eigenkapital & Schulden)</div>
+                <div class="fibu-tree" data-bilanz-passiva-tree>
+                  <!-- Dynamic Passiva Tree -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- GuV View -->
+          <div class="fibu-report-subpanel" data-report-subpanel="guv" hidden>
+            <div class="fibu-report-header">
+              <h3>Gewinn- und Verlustrechnung (Gesamtkostenverfahren § 275 HGB)</h3>
+            </div>
+            <div class="fibu-guv-wrapper">
+              <div class="fibu-tree" data-guv-tree>
+                <!-- Dynamic GuV Tree -->
+              </div>
+            </div>
+          </div>
+
+          <!-- UStVA View -->
+          <div class="fibu-report-subpanel" data-report-subpanel="ustva" hidden>
+            <div class="fibu-report-header">
+              <h3>Umsatzsteuer-Voranmeldung (UStVA / ELSTER)</h3>
+            </div>
+            <div class="fibu-ustva-container">
+              <div class="fibu-ustva-grid">
+                <div class="fibu-ustva-card">
+                  <div class="ustva-card-label">Lieferungen und Leistungen (Umsätze) 19% [Kennziffer 81]</div>
+                  <div class="ustva-card-value" data-ustva-field-81>0,00 €</div>
+                </div>
+                <div class="fibu-ustva-card">
+                  <div class="ustva-card-label">Umsatzsteuer auf steuerpflichtige Umsätze 19%</div>
+                  <div class="ustva-card-value" data-ustva-tax-81>0,00 €</div>
+                </div>
+                <div class="fibu-ustva-card">
+                  <div class="ustva-card-label">Lieferungen und Leistungen (Umsätze) 7% [Kennziffer 86]</div>
+                  <div class="ustva-card-value" data-ustva-field-86>0,00 €</div>
+                </div>
+                <div class="fibu-ustva-card">
+                  <div class="ustva-card-label">Umsatzsteuer auf steuerpflichtige Umsätze 7%</div>
+                  <div class="ustva-card-value" data-ustva-tax-86>0,00 €</div>
+                </div>
+                <div class="fibu-ustva-card highlighted">
+                  <div class="ustva-card-label">Abziehbare Vorsteuer (Einkäufe) [Kennziffer 66]</div>
+                  <div class="ustva-card-value" data-ustva-field-66>0,00 €</div>
+                </div>
+                <div class="fibu-ustva-card total">
+                  <div class="ustva-card-label">Umsatzsteuer-Zahllast / Erstattung [Zahllast]</div>
+                  <div class="ustva-card-value" data-ustva-zahllast>0,00 €</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- DATEV View -->
+          <div class="fibu-report-subpanel" data-report-subpanel="datev" hidden>
+            <div class="fibu-report-header">
+              <h3>DATEV EXTF CSV-Buchungsstapel Export</h3>
+            </div>
+            <div class="fibu-datev-exporter-box">
+              <p>Generieren Sie eine offizielle DATEV-kompatible Export-CSV für Ihren Steuerberater (Format-Version v7.0/8.0). Der Export enthält alle festgeschriebenen Buchungen.</p>
+              <div class="fibu-form-row inline" style="margin: 20px 0;">
+                <div class="fibu-form-group">
+                  <label for="datev-start">Startdatum:</label>
+                  <input type="date" id="datev-start" class="fibu-input" value="2026-01-01" />
+                </div>
+                <div class="fibu-form-group">
+                  <label for="datev-end">Enddatum:</label>
+                  <input type="date" id="datev-end" class="fibu-input" value="2026-12-31" />
+                </div>
+              </div>
+              <button type="button" class="fibu-btn fibu-btn-primary fibu-btn-large" data-action="export-datev">
+                📥 DATEV CSV-Stapel herunterladen (EXTF)
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. Assets & Depreciation (AfA) Panel -->
+      <div class="fibu-view-panel" data-panel="assets" hidden>
+        <div class="fibu-panel-toolbar">
+          <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-asset">
+            ➕ Neues Anlagegut erfassen
+          </button>
+          <button type="button" class="fibu-btn fibu-btn-secondary" data-action="trigger-depreciations">
+            ⚙️ AfA-Abschreibungslauf triggern
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th style="width: 80px;">Inventar-Nr</th>
+                <th>Bezeichnung des Anlageguts</th>
+                <th style="width: 100px;">Anschaffungsdatum</th>
+                <th style="width: 120px; text-align: right;">Anschaffungswert</th>
+                <th style="width: 100px; text-align: center;">Nutzungsdauer (Jahre)</th>
+                <th style="width: 120px;">Abschreibungsart</th>
+                <th style="width: 120px; text-align: right;">Bisherige AfA</th>
+                <th style="width: 120px; text-align: right;">Buchwert</th>
+                <th style="width: 80px; text-align: center;">Details</th>
+              </tr>
+            </thead>
+            <tbody data-assets-list>
+              <!-- Dynamic assets list -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 6b. Travel Expenses Panel -->
+      <div class="fibu-view-panel" data-panel="travel" hidden>
+        <div class="fibu-panel-toolbar">
+          <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewTravelDrawer()">
+            ➕ Neue Dienstreise erfassen
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th>Ziel / Zweck</th>
+                <th>Zeitraum</th>
+                <th style="text-align: right;">Verpflegungsmehraufwand (VMA)</th>
+                <th>Status</th>
+                <th style="width: 100px; text-align: center;">Aktion</th>
+              </tr>
+            </thead>
+            <tbody id="travel-expenses-list">
+              <!-- Dynamic travel list -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 6c. Mileage Log Panel -->
+      <div class="fibu-view-panel" data-panel="mileage" hidden>
+        <div class="fibu-panel-toolbar" style="display:flex; justify-content:space-between; align-items:center;">
+          <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewMileageDrawer()">
+            ➕ Neue Fahrt eintragen
+          </button>
+          <div id="mileage-dashboard-summary" style="display:flex; gap:16px; font-size:12.5px; background:var(--surface-2); padding:6px 12px; border-radius:6px; border:1px solid var(--line);">
+            <!-- Live km shares dashboard -->
+          </div>
+          <button type="button" class="fibu-btn fibu-btn-secondary fibu-btn-dashed-warning" onclick="triggerAnnualPrivateCarShare()">
+            🚗 Privatanteil buchen
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th>Datum</th>
+                <th>Zweck / Route</th>
+                <th>Gesprächspartner</th>
+                <th style="text-align: right;">Kilometer</th>
+                <th style="text-align: right;">Erstattung (0,30 €/km)</th>
+                <th>Typ</th>
+                <th>Status</th>
+                <th style="width: 100px; text-align: center;">Aktion</th>
+              </tr>
+            </thead>
+            <tbody id="mileage-log-list">
+              <!-- Dynamic mileage list -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 7. E2E UI Tests Panel -->
+      <div class="fibu-view-panel" data-panel="tests" hidden>
+        <div class="fibu-panel-toolbar" style="border-bottom: none; padding-bottom: 0;">
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            <h3 style="margin:0; color:var(--text-strong); font-size:15px;">Interaktive UI E2E-Testsuite</h3>
+            <p style="margin:0; font-size:12px; color:var(--text-muted);">
+              Führen Sie Klick-Simulations-Tests direkt im echten DOM der Anwendung aus. Die Schritte werden visuell hervorgehoben.
+            </p>
+          </div>
+          <button type="button" class="fibu-btn fibu-btn-primary" data-action="run-all-ui-tests">
+            ⚡ Alle UI-Tests ausführen
+          </button>
+        </div>
+        <div class="fibu-scrollable-container">
+          <div class="e2e-summary-bar" style="display:flex; gap:16px; margin-bottom:16px; background:var(--surface-2); padding:12px 18px; border-radius:10px; border:1px solid var(--line); align-items:center;">
+            <div style="font-size:13px;"><strong id="ui-test-total">0</strong> Tests spezifiziert</div>
+            <div style="font-size:13px;" class="fibu-text-debit"><strong id="ui-test-passed">0</strong> Bestanden</div>
+            <div style="font-size:13px;" class="fibu-text-credit"><strong id="ui-test-failed">0</strong> Fehlgeschlagen</div>
+            <div style="font-size:13px; display:none;" class="fibu-text-warning" id="ui-test-running-indicator">⏳ Test läuft... <span id="ui-test-active-step"></span></div>
+          </div>
+          <table class="fibu-table">
+            <thead>
+              <tr>
+                <th style="width: 120px;">Test-ID</th>
+                <th style="width: 250px;">Name / User Story</th>
+                <th>Ablauf-Schritte</th>
+                <th style="width: 140px; text-align: center;">Status</th>
+                <th style="width: 120px; text-align: center;">Aktionen</th>
+              </tr>
+            </thead>
+            <tbody data-ui-tests-list>
+              <!-- Dynamic E2E Test Cases -->
+            </tbody>
+          </table>
+
+          <!-- Interaktives Log-Panel -->
+          <div style="margin-top: 24px;">
+            <h4 style="margin: 0 0 10px 0; color:var(--text-strong); font-size:13px; text-transform:uppercase; letter-spacing:0.05em;">Ausführungsprotokoll (E2E Live Log)</h4>
+            <div id="e2e-live-log" class="fibu-e2e-terminal">
+              <div style="color:var(--text-muted)">⏳ Bereit für Testausführung. Wählen Sie einen Test oder klicken Sie auf "Alle UI-Tests ausführen".</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Elegant Slide-up Bottom Drawer (For details and edits, maintaining uncluttered center view) -->
+    <div class="ctox-bottom-drawer" data-drawer>
+      <div class="fibu-drawer-handle" data-drawer-toggle>
+        <div class="fibu-drawer-handle-bar"></div>
+        <span class="fibu-drawer-title" data-drawer-header-title>Buchungszeilen-Editor</span>
+        <button type="button" class="fibu-drawer-close-btn" data-action="close-drawer">✕</button>
+      </div>
+      <div class="fibu-drawer-content" data-drawer-content-body>
+        <!-- Content will be injected dynamically -->
+      </div>
+    </div>
+  </section>
+  <div class="fibu-col-resizer" data-resizer="right" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+
+  <!-- Right Spalte: Companion & Auxiliary Functions (Complementary OCR viewer & AI chat, completely independent) -->
+  <section class="fibu-pane fibu-right" aria-label="Belege & Agenten-Begleiter">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Companion</span>
+          <h2 class="ctox-pane-title">Assistent</h2>
+        </div>
+        <div class="ctox-pane-actions">
+          <div class="ctox-pane-tabs fibu-right-tabs">
+            <button type="button" class="ctox-pane-tab fibu-right-tab-btn active" data-right-tab="ocr">📄 Beleg-Vorschau</button>
+            <button type="button" class="ctox-pane-tab fibu-right-tab-btn" data-right-tab="agent">🤖 CTOX AI Agent</button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <div class="fibu-right-content-area">
+      <!-- OCR Document Preview -->
+      <div class="fibu-right-subpanel" data-right-subpanel="ocr">
+        <div class="fibu-document-preview-container" data-ocr-preview-container>
+          <div class="fibu-empty-state">
+            <span class="empty-icon">📄</span>
+            <p>Wählen Sie eine Banktransaktion oder einen Beleg aus, um die PDF-Vorschau und OCR-Daten anzuzeigen.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Agent Companion Chat -->
+      <div class="fibu-right-subpanel" data-right-subpanel="agent" hidden>
+        <div class="fibu-agent-chat-container">
+          <div class="fibu-agent-chat-messages" data-chat-messages>
+            <div class="chat-message system">
+              <span class="avatar">🤖</span>
+              <div class="message-bubble">
+                Hallo! Ich bin dein CTOX Fibu-Agent. Ich unterstütze dich bei:
+                <ul>
+                  <li>OCR-Belegimport & Kontierungsvorschlägen</li>
+                  <li>camt.053/MT940 Kontoauszugs-Zuordnung</li>
+                  <li>GoBD-konformen Stornos & Abschluss-Prüfungen</li>
+                </ul>
+                Frag mich z.B.: "Buche die Hetzner-Rechnung" oder "Gleicht die Banktransaktionen ab".
+              </div>
+            </div>
+          </div>
+          <div class="fibu-agent-chat-input-wrap">
+            <input type="text" class="fibu-agent-chat-input" data-chat-input placeholder="Fibu-Agent fragen..." />
+            <button type="button" class="fibu-agent-chat-send" data-action="send-chat-msg">🚀</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>

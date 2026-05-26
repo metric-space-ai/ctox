@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Rust dispatcher for the vendored short causal conv1d kernel
 //! `kernel_ssm_conv_f32_f32` — runs on q/k/v before the

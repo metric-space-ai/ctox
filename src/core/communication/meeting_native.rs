@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Meeting bot adapter — joins video meetings (Google Meet, Microsoft Teams, Zoom)
 // as a silent participant via Playwright, captures audio for transcription, monitors

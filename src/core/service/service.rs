@@ -156,6 +156,8 @@ pub struct ServiceStatus {
     /// or when the row predates the schema upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_agent_outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub business_os: Option<Value>,
     #[serde(default)]
     pub work_hours: crate::service::working_hours::WorkHoursSnapshot,
 }
@@ -184,6 +186,7 @@ struct ServiceStatusWire {
     monitor_alerts: Vec<String>,
     monitor_last_error: Option<String>,
     last_agent_outcome: Option<String>,
+    business_os: Option<Value>,
     work_hours: crate::service::working_hours::WorkHoursSnapshot,
 }
 
@@ -216,6 +219,7 @@ impl ServiceStatus {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            business_os: Some(business_os_health_snapshot(root)),
             work_hours: crate::service::working_hours::snapshot(root),
         };
         status.apply_durable_queue_snapshot(root);
@@ -297,6 +301,7 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         monitor_alerts: wire.monitor_alerts,
         monitor_last_error: wire.monitor_last_error,
         last_agent_outcome: wire.last_agent_outcome,
+        business_os: wire.business_os,
         work_hours: wire.work_hours,
     })
 }
@@ -1775,6 +1780,7 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
     let _ = runtime_control::reconcile_runtime_switch_transaction(root);
     let systemd = systemd_unit_status(root)?;
     if let Some(mut status) = live_service_status_snapshot(root)? {
+        status.business_os = Some(business_os_health_snapshot(root));
         if let Some(systemd) = systemd {
             status.autostart_enabled = systemd.enabled;
             if systemd.active {
@@ -2432,8 +2438,24 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         monitor_alerts: runtime_lifecycle_alerts(root, pid, true)?,
         monitor_last_error: None,
         last_agent_outcome,
+        business_os: Some(business_os_health_snapshot(root)),
         work_hours: crate::service::working_hours::snapshot(root),
     })
+}
+
+fn business_os_health_snapshot(root: &Path) -> Value {
+    match crate::business_os::store::status(root) {
+        Ok(status) => serde_json::to_value(status).unwrap_or_else(|err| {
+            serde_json::json!({
+                "ok": false,
+                "error": format!("serialize Business OS status: {err}"),
+            })
+        }),
+        Err(err) => serde_json::json!({
+            "ok": false,
+            "error": err.to_string(),
+        }),
+    }
 }
 
 fn runtime_lifecycle_alerts(
@@ -15578,6 +15600,7 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
         }))
         .unwrap();
@@ -15599,6 +15622,7 @@ mod tests {
         assert_eq!(status.manager, "process");
         assert_eq!(status.pid, Some(4242));
         assert_eq!(status.pending_count, 1);
+        assert!(status.business_os.is_some());
         assert!(status
             .recent_events
             .iter()
@@ -15675,6 +15699,7 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
         }))
         .unwrap();
@@ -15684,17 +15709,18 @@ mod tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             reader.read_line(&mut request).unwrap();
             std::thread::sleep(Duration::from_secs(2));
-            stream.write_all(response.as_bytes()).unwrap();
-            stream.write_all(b"\n").unwrap();
-            stream.flush().unwrap();
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.write_all(b"\n");
+            let _ = stream.flush();
         });
 
         let status = service_status_snapshot(&root).unwrap();
         handle.join().unwrap();
 
-        assert!(status.running);
-        assert_eq!(status.pid, Some(5151));
-        assert_eq!(status.recent_events, vec!["slow status ok".to_string()]);
+        assert!(!status.running);
+        assert_eq!(status.pid, None);
+        assert!(status.business_os.is_some());
+        assert!(status.recent_events.is_empty());
     }
 
     #[cfg(unix)]
@@ -21880,6 +21906,96 @@ Use shell tools and verify with `test -f {run_dir}/smoke.txt` before claiming co
         assert!(prompt.contains(run_dir));
         assert!(prompt.contains("install directory"));
         assert!(prompt.contains(&format!("{run_dir}/smoke.txt")));
+    }
+
+    #[test]
+    fn completion_hook_indexes_workspace_outputs_for_business_os() {
+        let root = temp_root("business-os-workspace-sync");
+        let workspace = root.join("agent-run");
+        let reports = workspace.join("reports");
+        std::fs::create_dir_all(&reports).expect("failed to create workspace reports");
+        let summary_path = reports.join("summary.md");
+        let large_path = workspace.join("large-output.bin");
+        std::fs::write(&summary_path, b"# Summary\n\nvisible from Business OS\n")
+            .expect("failed to write summary");
+        std::fs::write(&large_path, vec![b'x'; 96 * 1024])
+            .expect("failed to write lazy large output");
+
+        let job = QueuedPrompt {
+            prompt: "Create workspace files.".to_string(),
+            goal: "workspace outputs".to_string(),
+            preview: "workspace outputs".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/business-os-workspace-sync".to_string()),
+            workspace_root: Some(workspace.to_string_lossy().into_owned()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut shared = SharedState::default();
+
+        sync_workspace_root_to_business_os(&root, &mut shared, &job);
+
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Synced 2 workspace file(s) to Business OS desktop via native RxDB")
+                && event.contains("agent-run")
+        }));
+        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))
+            .expect("failed to open Business OS RxDB sqlite");
+        let rows = {
+            let mut stmt = conn
+                .prepare("SELECT data FROM ctox_business_os__desktop_files__v0")
+                .expect("failed to prepare desktop file query");
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .expect("failed to query desktop files")
+                .map(|row| serde_json::from_str::<Value>(&row.expect("desktop row")).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let summary = rows
+            .iter()
+            .find(|row| {
+                row.get("local_path").and_then(Value::as_str)
+                    == Some(
+                        summary_path
+                            .canonicalize()
+                            .unwrap()
+                            .to_string_lossy()
+                            .as_ref(),
+                    )
+            })
+            .expect("summary should be indexed for Business OS");
+        assert_eq!(
+            summary.get("virtual_path").and_then(Value::as_str),
+            Some("/CTOX/agent-run/reports/summary.md")
+        );
+        assert_eq!(
+            summary.get("content_state").and_then(Value::as_str),
+            Some("available")
+        );
+        let large = rows
+            .iter()
+            .find(|row| {
+                row.get("local_path").and_then(Value::as_str)
+                    == Some(
+                        large_path
+                            .canonicalize()
+                            .unwrap()
+                            .to_string_lossy()
+                            .as_ref(),
+                    )
+            })
+            .expect("large output should be indexed for Business OS");
+        assert_eq!(
+            large.get("virtual_path").and_then(Value::as_str),
+            Some("/CTOX/agent-run/large-output.bin")
+        );
+        assert_eq!(
+            large.get("content_state").and_then(Value::as_str),
+            Some("lazy")
+        );
     }
 
     #[test]

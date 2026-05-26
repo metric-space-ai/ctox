@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Rust dispatcher for the vendored `kernel_get_rows_q4_K` MSL kernel
 //! — token-embedding lookup for Qwen3.6-35B-A3B (vocab=248320, hidden=2048).

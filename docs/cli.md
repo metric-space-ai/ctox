@@ -2,17 +2,51 @@
 
 This page is the command reference for CTOX. The root `README.md` intentionally does not duplicate this material.
 
-## Service
+## Service and Everyday Commands
 
-Manage the persistent CTOX loop:
+Manage the persistent CTOX daemon loop and perform everyday interactions:
 
 ```sh
-ctox version
-ctox start
-ctox stop
-ctox status
-ctox
+ctox                             # Open the TUI
+ctox tui                         # Open the TUI
+ctox start                       # Start the persistent mission loop daemon
+ctox stop                        # Stop the daemon
+ctox status                      # Show service status (JSON)
+ctox version                     # Print the version and build info (JSON)
+ctox doctor                      # Run environment health check
 ```
+
+Submit prompts directly to the running daemon loop:
+
+```sh
+ctox chat "Run a git pull, cargo build, and tell me if it succeeded"
+ctox chat "Analyze logs" --wait  # Block until the slice completes
+ctox chat "Send update" --to boss@example.com --subject "Daily Report"
+```
+
+Configure allowed working-hours for the daemon to start active slices:
+
+```sh
+ctox work-hours set 08:00 18:00
+ctox work-hours off
+```
+
+Inspect API model token and cost accounting:
+
+```sh
+ctox cost today
+ctox cost daily
+ctox cost week
+ctox cost month
+```
+
+Inspect or end the current CLI turn ledger (tracking locking state):
+
+```sh
+ctox turn status
+ctox turn end
+```
+
 
 ## Updates
 
@@ -45,16 +79,38 @@ ctox update apply --version v0.4.0
 ctox update rollback
 ```
 
-## Runtime
+## Runtime / Boost
 
-Apply local chat runtime presets:
+Switch the active chat model and runtime profile preset:
 
 ```sh
-ctox chat-runtime-apply openai/gpt-oss-20b quality
-ctox chat-runtime-apply Qwen/Qwen3.5-35B-A3B performance
+ctox runtime switch Qwen/Qwen3.5-27B quality --context 128k
+ctox runtime switch openai/gpt-5.4 quality --context 128k --timeout 1800
 ```
 
-The legacy local proxy command has been removed. Runtime model access now goes through the managed internal gateway and IPC runtime paths.
+Inspect or start a temporary chat runtime model boost lease:
+
+```sh
+ctox boost status
+ctox boost start --minutes 60 --model Qwen/Qwen3.5-27B --reason "complex code migration"
+ctox boost stop
+```
+
+Check local hardware acceleration capabilities, embedding, speech-to-text (STT), and text-to-speech (TTS) engines:
+
+```sh
+ctox doctor
+ctox runtime embedding-doctor
+ctox runtime embedding-smoke [--token-id 123]
+ctox runtime stt-doctor
+ctox runtime stt-smoke /path/to/audio.wav
+ctox runtime stt-realtime-smoke /path/to/audio.wav
+ctox runtime tts-doctor
+ctox runtime tts-smoke --text "hello world"
+ctox runtime openrouter-tool-smoke [--model model-id]
+```
+
+The legacy local proxy command and `chat-runtime-apply` have been removed. Runtime model access now goes through the managed internal gateway, Candle/integrated runtimes, and IPC runtime paths.
 
 ## Channels
 
@@ -158,20 +214,42 @@ ctox doc read --path ~/Documents/roadmap.pdf --query "milestones and owners"
 ctox doc read --path ~/Documents/roadmap.pdf --find "budget" --find "deadline"
 ```
 
-## Continuity And Memory
+## Continuity and Memory (LCM)
 
-Inspect the local continuity substrate:
+Inspect and maintain the long-context memory (LCM) substrate:
 
 ```sh
-ctox lcm-init runtime/ctox_lcm.db
-ctox lcm-compact runtime/ctox_lcm.db 1
-ctox lcm-show-continuity runtime/ctox_lcm.db 1
-ctox context-retrieve --db runtime/ctox_lcm.db --conversation-id 1 --mode current
+# Long-Context Memory (LCM) CLI commands
+ctox lcm-init runtime/ctox.sqlite3
+ctox lcm-add-message runtime/ctox.sqlite3 <conversation-id> <role> <content>
+ctox lcm-compact runtime/ctox.sqlite3 <conversation-id> [token-budget] [--force]
+ctox lcm-grep runtime/ctox.sqlite3 <conversation-id|all> <scope> <mode> <query> [limit]
+ctox lcm-describe runtime/ctox.sqlite3 <summary-id>
+ctox lcm-expand runtime/ctox.sqlite3 <summary-id> [depth] [--messages] [token-cap]
+ctox lcm-dump runtime/ctox.sqlite3 <conversation-id>
+ctox lcm-refresh-continuity runtime/ctox.sqlite3 <conversation-id>
+ctox lcm-show-continuity runtime/ctox.sqlite3 <conversation-id>
+ctox lcm-run-fixture runtime/ctox.sqlite3 <fixture-path>
+
+# Continuity substrate
+ctox continuity-init runtime/ctox.sqlite3 <conversation-id>
+ctox continuity-show runtime/ctox.sqlite3 <conversation-id> [narrative|anchors|focus]
+ctox continuity-apply runtime/ctox.sqlite3 <conversation-id>
+ctox continuity-log runtime/ctox.sqlite3 <conversation-id>
+ctox continuity-forgotten runtime/ctox.sqlite3 <conversation-id>
+ctox continuity-build-prompt runtime/ctox.sqlite3 <conversation-id>
+ctox continuity-rebuild runtime/ctox.sqlite3 <conversation-id>
+
+# Context health and retrieval
+ctox context-health --db runtime/ctox.sqlite3 --conversation-id 1
+ctox context-retrieve --db runtime/ctox.sqlite3 --conversation-id 1 --mode current
+ctox context-stress --db runtime/ctox.sqlite3 --conversation-id 1
+ctox chat-prompt-export
 ```
 
 ## Verification
 
-Inspect verification runs and mission assurance:
+Inspect verification runs and mission assurance evidence:
 
 ```sh
 ctox verification assurance
@@ -187,4 +265,78 @@ Prepare the local Playwright reference workspace:
 ctox browser install-reference
 ctox browser doctor
 ctox browser install-reference --install-browser
+```
+
+## Business OS
+
+Manage the bundled WebRTC pairing room and customer repositories for the Business OS frontend shell:
+
+```sh
+ctox business-os status                               # Show native/bundled status
+ctox business-os peer status                          # Show active pairing configuration
+ctox business-os peer rotate                          # Rotate signaling room and password
+ctox business-os serve [--addr 127.0.0.1:8765]        # Serve Business OS static web app
+ctox business-os install --target <empty-dir>         # Install standalone Business OS repo
+ctox business-os modules list|enable|disable          # Manage skill-app module options
+ctox business-os skills list|enable|disable           # Manage packed skills
+```
+
+## Secrets and Credentials
+
+Securely store and retrieve API keys, credentials, and configuration scopes:
+
+```sh
+ctox secret put --scope <scope> --name <name> --value "<value>"
+ctox secret get --scope <scope> --name <name>
+ctox secret list
+```
+
+## Skills Catalog
+
+Manage modular system skills:
+
+```sh
+ctox skills list
+ctox skills enable <skill-name>
+ctox skills disable <skill-name>
+```
+
+## Strategic Directives
+
+Inspect the high-level goals and mission directives for the daemon loop:
+
+```sh
+ctox strategy show
+```
+
+## Governance
+
+Inspect governance decisions, safety overrides, and active block/gate state:
+
+```sh
+ctox governance audit
+ctox governance list
+```
+
+## Mailserver
+
+Manage integrated mailserver accounts for daemon intake/outbound reviewed send:
+
+```sh
+ctox mailserver list
+ctox mailserver domain add <domain>
+ctox mailserver user add <email> --password <pwd>
+ctox mailserver test-send --to <recipient> --subject <subj> --body <body>
+```
+
+## Forensic Process Mining
+
+Investigate daemon liveness, harness executions, mutation event logs, and conformance drift:
+
+```sh
+ctox harness-flow                                     # Render visual harness ASCII flowchart
+ctox process-mining spawn-liveness                     # Verify worker liveness & contracts
+ctox harness-mining stuck-cases                       # Detect stuck agent runs
+ctox harness-mining variants                          # Analyze executed harness variants
+ctox harness-mining multiperspective                   # Deep multiperspective conformance audit
 ```

@@ -18,6 +18,9 @@
 //! - Per-peer fork `RxReplicationState`s are owned by `PeerState` so cancel
 //!   propagates on `remove_peer`.
 
+#[path = "protocol_contract_generated.rs"]
+mod protocol_contract_generated;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,9 +53,14 @@ use crate::rx_collection::RxCollection;
 use crate::rx_error::{new_rx_error, RxError};
 use crate::rxjs_compat::RxSubject;
 use crate::types::{DocumentsWithCheckpoint, RxReplicationHandler, RxReplicationMasterChange};
+use protocol_contract_generated::{
+    CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
+    CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
+    CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
+    CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+};
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
-const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -410,10 +418,52 @@ where
                         continue;
                     }
                 }
-                // 1. Token handshake. The browser hard fork actively gates the
-                // DataChannel with `ctoxProtocol`; Rust answers that request in
-                // the control-handler above. Keeping Rust passive here avoids a
-                // symmetric probe race while preserving the protocol gate.
+                // 1. CTOX protocol handshake. Rust actively reads the remote
+                // role so Browser/CTOX pairs make the same deterministic
+                // master/fork decision instead of relying on random storage
+                // token ordering after reconnects.
+                let req_id = {
+                    let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    format!("{}|{}|{}", collection.database.token, request_flag, n)
+                };
+                let local_protocol =
+                    ctox_protocol_response(&collection, peer_session_id.as_deref()).await;
+                let protocol_response = match send_message_and_await_answer(
+                    Arc::clone(&handler),
+                    peer.clone(),
+                    WebRTCMessage {
+                        id: req_id,
+                        method: "ctoxProtocol".to_string(),
+                        params: vec![local_protocol.clone()],
+                    },
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        pool_clone.error_subject.next(new_rx_error(
+                            "RC_WEBRTC_PROTOCOL",
+                            Some(serde_json::json!({ "message": e.to_string() })),
+                        ));
+                        continue;
+                    }
+                };
+                if let Err(e) = validate_ctox_protocol_response(
+                    &protocol_response.result,
+                    local_protocol.get("collection"),
+                    true,
+                ) {
+                    pool_clone.error_subject.next(e);
+                    continue;
+                }
+                let remote_peer_role = protocol_response
+                    .result
+                    .pointer("/peerSession/role")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+
+                // 2. Token handshake.
                 let req_id = {
                     let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     format!("{}|{}|{}", collection.database.token, request_flag, n)
@@ -444,8 +494,13 @@ where
                     .unwrap_or_default()
                     .to_string();
                 let hash_fn = Arc::clone(&collection.database.hash_function);
-                let is_master =
+                let elected_master =
                     is_master_in_webrtc_replication(hash_fn, &storage_token, &peer_token).await;
+                let is_master = if remote_peer_role == "browser" {
+                    true
+                } else {
+                    elected_master
+                };
 
                 let mut peer_sub_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
                 if is_master {
@@ -493,7 +548,7 @@ where
                             .await;
                             let resp = WebRTCResponse {
                                 id: item.message.id.clone(),
-                                result: result.unwrap_or(Value::Null),
+                                result,
                                 error: None,
                             };
                             let _ = handler_for_msgs
@@ -550,6 +605,7 @@ async fn ctox_protocol_response(
             "name": collection.name,
             "schemaVersion": schema.version(),
             "schemaHash": schema.hash().await,
+            "schemaHashSource": CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
             "checkpoint": checkpoint,
         }),
         None => Value::Null,
@@ -573,23 +629,144 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
     })
 }
 
-#[cfg(test)]
-fn validate_ctox_protocol_response(value: &Value) -> Result<(), RxError> {
+fn validate_ctox_protocol_response(
+    value: &Value,
+    local_collection: Option<&Value>,
+    validate_schema: bool,
+) -> Result<(), RxError> {
     let protocol = value
         .get("protocol")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    if protocol != CTOX_RXDB_PROTOCOL {
-        return Err(new_rx_error(
-            "RC_WEBRTC_PROTOCOL",
-            Some(serde_json::json!({
-                "message": "incompatible CTOX RxDB WebRTC protocol",
-                "expected": CTOX_RXDB_PROTOCOL,
-                "actual": protocol,
-            })),
+    if protocol.is_empty() {
+        return Err(ctox_protocol_error(
+            CTOX_PROTOCOL_ERROR_MISSING,
+            "CTOX RxDB WebRTC protocol marker is missing",
+            Some(Value::String(CTOX_RXDB_PROTOCOL.to_string())),
+            Some(Value::Null),
+            None,
         ));
     }
+    if protocol != CTOX_RXDB_PROTOCOL {
+        return Err(ctox_protocol_error(
+            CTOX_PROTOCOL_ERROR_MISMATCH,
+            "incompatible CTOX RxDB WebRTC protocol",
+            Some(Value::String(CTOX_RXDB_PROTOCOL.to_string())),
+            Some(Value::String(protocol.to_string())),
+            None,
+        ));
+    }
+    let capabilities = value
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for capability in CTOX_REQUIRED_PROTOCOL_CAPABILITIES {
+        let has_capability = capabilities
+            .iter()
+            .any(|item| item.as_str() == Some(*capability));
+        if !has_capability {
+            return Err(ctox_protocol_error(
+                CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING,
+                "remote CTOX RxDB peer is missing a required capability",
+                Some(Value::String((*capability).to_string())),
+                Some(Value::Array(capabilities)),
+                None,
+            ));
+        }
+    }
+    if let (Some(local), Some(remote)) = (local_collection, value.get("collection")) {
+        let local_name = local
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let remote_name = remote
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !local_name.is_empty() && !remote_name.is_empty() && local_name != remote_name {
+            return Err(ctox_protocol_error(
+                CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
+                "CTOX RxDB collection mismatch",
+                Some(Value::String(local_name.to_string())),
+                Some(Value::String(remote_name.to_string())),
+                Some(local_name.to_string()),
+            ));
+        }
+        let local_version = local.get("schemaVersion").and_then(Value::as_i64);
+        let remote_version = remote.get("schemaVersion").and_then(Value::as_i64);
+        if let (Some(expected), Some(actual)) = (local_version, remote_version) {
+            if expected != actual {
+                if !validate_schema {
+                    return Ok(());
+                }
+                return Err(ctox_protocol_error(
+                    CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
+                    "CTOX RxDB schema version mismatch",
+                    Some(Value::Number(expected.into())),
+                    Some(Value::Number(actual.into())),
+                    non_empty(local_name).map(str::to_string),
+                ));
+            }
+        }
+        let local_hash = local
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let remote_hash = remote
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if validate_schema
+            && !local_hash.is_empty()
+            && !remote_hash.is_empty()
+            && local_hash != remote_hash
+        {
+            return Err(ctox_protocol_error(
+                CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+                "CTOX RxDB schema hash mismatch",
+                Some(Value::String(local_hash.to_string())),
+                Some(Value::String(remote_hash.to_string())),
+                non_empty(local_name).map(str::to_string),
+            ));
+        }
+    }
     Ok(())
+}
+
+fn non_empty(value: &str) -> Option<&str> {
+    if value.is_empty() {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+fn ctox_protocol_error(
+    code: &str,
+    message: &str,
+    expected: Option<Value>,
+    actual: Option<Value>,
+    collection: Option<String>,
+) -> RxError {
+    let mut params = serde_json::json!({
+        "type": "ctoxError",
+        "name": "CtoxRxdbProtocolError",
+        "code": code,
+        "message": message,
+        "phase": "rxdb-protocol-handshake",
+        "retryable": false,
+    });
+    if let Some(expected) = expected {
+        params["expected"] = expected;
+    }
+    if let Some(actual) = actual {
+        params["actual"] = actual;
+    }
+    if let Some(collection) = collection {
+        params["collection"] = Value::String(collection);
+    }
+    new_rx_error("RC_WEBRTC_PROTOCOL", Some(params))
 }
 
 // ref: rxdb/src/plugins/replication-webrtc/index.ts:172-218
@@ -634,15 +811,25 @@ where
                     WebRTCMessage {
                         id,
                         method: "masterChangesSince".to_string(),
-                        params: vec![checkpoint.unwrap_or(Value::Null), Value::from(batch_size)],
+                        params: vec![
+                            checkpoint.clone().unwrap_or(Value::Null),
+                            Value::from(batch_size),
+                        ],
                     },
                 )
                 .await?;
+                if let Some(error) = replication_error_from_webrtc_result(&answer.result) {
+                    return Err(error);
+                }
                 let docs_cp: DocumentsWithCheckpoint =
                     serde_json::from_value(answer.result.clone()).map_err(|e| {
                         new_rx_error(
-                            "RC_WEBRTC_PEER",
+                            "RC_PULL",
                             Some(serde_json::json!({
+                                "direction": "pull",
+                                "phase": "replication-pull",
+                                "checkpoint": checkpoint,
+                                "batchSize": batch_size,
                                 "message": format!("fork masterChangesSince decode: {}", e),
                             })),
                         )
@@ -672,12 +859,25 @@ where
                     WebRTCMessage {
                         id,
                         method: "masterWrite".to_string(),
-                        params: vec![rows_json],
+                        params: vec![rows_json.clone()],
                     },
                 )
                 .await?;
+                if let Some(error) = replication_error_from_webrtc_result(&answer.result) {
+                    return Err(error);
+                }
                 let conflicts: Vec<Value> =
-                    serde_json::from_value(answer.result.clone()).unwrap_or_default();
+                    serde_json::from_value(answer.result.clone()).map_err(|e| {
+                        new_rx_error(
+                            "RC_PUSH_NO_AR",
+                            Some(serde_json::json!({
+                                "direction": "push",
+                                "phase": "replication-push",
+                                "pushRows": rows_json,
+                                "message": format!("fork masterWrite decode: {}", e),
+                            })),
+                        )
+                    })?;
                 Ok(conflicts)
             })
         })
@@ -752,7 +952,7 @@ async fn call_master_method(
     handler: &dyn RxReplicationHandler,
     method: &str,
     params: Vec<Value>,
-) -> Option<Value> {
+) -> Value {
     match method {
         "masterChangesSince" => {
             let checkpoint = params.first().cloned();
@@ -761,36 +961,189 @@ async fn call_master_method(
                 Some(Value::Null) | None => None,
                 other => other,
             };
-            handler
-                .master_changes_since(normalized_checkpoint, batch_size)
+            match handler
+                .master_changes_since(normalized_checkpoint.clone(), batch_size)
                 .await
-                .ok()
-                .and_then(|r| serde_json::to_value(&r).ok())
+            {
+                Ok(result) => serde_json::to_value(&result).unwrap_or_else(|e| {
+                    replication_error_result(
+                        "RC_PULL",
+                        "replication-pull",
+                        "pull",
+                        serde_json::json!({
+                            "checkpoint": normalized_checkpoint,
+                            "batchSize": batch_size,
+                            "message": format!("masterChangesSince encode: {}", e),
+                        }),
+                        Vec::new(),
+                    )
+                }),
+                Err(error) => replication_error_result(
+                    "RC_PULL",
+                    "replication-pull",
+                    "pull",
+                    serde_json::json!({
+                        "checkpoint": normalized_checkpoint,
+                        "batchSize": batch_size,
+                    }),
+                    vec![rx_error_to_value(&error)],
+                ),
+            }
         }
         "masterWrite" => {
-            let rows: Vec<crate::types::RxReplicationWriteToMasterRow> = params
-                .first()
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .unwrap_or_default();
-            handler
-                .master_write(rows)
-                .await
-                .ok()
-                .map(|c| serde_json::to_value(&c).unwrap_or(Value::Null))
+            let rows_value = params.first().cloned().unwrap_or(Value::Null);
+            let rows: Vec<crate::types::RxReplicationWriteToMasterRow> =
+                match serde_json::from_value(rows_value.clone()) {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        return replication_error_result(
+                            "RC_PUSH",
+                            "replication-push",
+                            "push",
+                            serde_json::json!({
+                                "pushRows": rows_value,
+                                "message": format!("masterWrite request decode: {}", error),
+                            }),
+                            Vec::new(),
+                        );
+                    }
+                };
+            let row_count = rows.len();
+            match handler.master_write(rows).await {
+                Ok(conflicts) => serde_json::to_value(&conflicts).unwrap_or_else(|e| {
+                    replication_error_result(
+                        "RC_PUSH",
+                        "replication-push",
+                        "push",
+                        serde_json::json!({
+                            "rowCount": row_count,
+                            "message": format!("masterWrite encode: {}", e),
+                        }),
+                        Vec::new(),
+                    )
+                }),
+                Err(error) => replication_error_result(
+                    "RC_PUSH",
+                    "replication-push",
+                    "push",
+                    serde_json::json!({
+                        "rowCount": row_count,
+                    }),
+                    vec![rx_error_to_value(&error)],
+                ),
+            }
         }
         _ => {
             tracing::warn!(
                 target: "ctox_rxdb::plugins::replication_webrtc",
                 "unknown method on master handler: {method}",
             );
-            None
+            replication_error_result(
+                "RC_WEBRTC_PEER",
+                "replication-io",
+                "unknown",
+                serde_json::json!({
+                    "method": method,
+                    "message": "unknown WebRTC master method",
+                }),
+                Vec::new(),
+            )
         }
     }
+}
+
+fn replication_error_result(
+    code: &str,
+    phase: &str,
+    direction: &str,
+    details: Value,
+    errors: Vec<Value>,
+) -> Value {
+    let mut payload = serde_json::json!({
+        "type": "ctoxError",
+        "scope": "replication",
+        "rxdb": true,
+        "code": code,
+        "phase": phase,
+        "direction": direction,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(details_object) = details.as_object() {
+            for (key, value) in details_object {
+                object.insert(key.clone(), value.clone());
+            }
+        }
+        if !errors.is_empty() {
+            object.insert("errors".to_string(), Value::Array(errors));
+        }
+    }
+    payload
+}
+
+fn replication_error_from_webrtc_result(result: &Value) -> Option<RxError> {
+    let object = result.as_object()?;
+    let is_replication_error = object.get("type").and_then(Value::as_str) == Some("ctoxError")
+        && object.get("scope").and_then(Value::as_str) == Some("replication")
+        && object.get("rxdb").and_then(Value::as_bool).unwrap_or(false);
+    if !is_replication_error {
+        return None;
+    }
+    let code = object
+        .get("code")
+        .and_then(Value::as_str)
+        .unwrap_or("RC_WEBRTC_PEER");
+    Some(new_rx_error(code, Some(result.clone())))
+}
+
+fn rx_error_to_value(error: &RxError) -> Value {
+    serde_json::json!({
+        "rxdb": true,
+        "code": error.code(),
+        "name": error.name(),
+        "message": error.to_string(),
+        "parameters": error.parameters(),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StaticReplicationHandler {
+        pull_error: Option<RxError>,
+        push_error: Option<RxError>,
+    }
+
+    #[async_trait::async_trait]
+    impl RxReplicationHandler for StaticReplicationHandler {
+        fn master_change_stream(&self) -> crate::rxjs_compat::RxStream<RxReplicationMasterChange> {
+            Box::pin(futures::stream::empty())
+        }
+
+        async fn master_changes_since(
+            &self,
+            _checkpoint: Option<Value>,
+            _batch_size: u64,
+        ) -> Result<DocumentsWithCheckpoint, RxError> {
+            if let Some(error) = &self.pull_error {
+                return Err(error.clone());
+            }
+            Ok(DocumentsWithCheckpoint {
+                documents: vec![serde_json::json!({ "id": "alice", "_deleted": false })],
+                checkpoint: serde_json::json!({ "sequence": 2 }),
+            })
+        }
+
+        async fn master_write(
+            &self,
+            _rows: Vec<crate::types::RxReplicationWriteToMasterRow>,
+        ) -> Result<Vec<Value>, RxError> {
+            if let Some(error) = &self.push_error {
+                return Err(error.clone());
+            }
+            Ok(Vec::new())
+        }
+    }
 
     #[tokio::test]
     async fn periodic_resync_stream_emits_resync() {
@@ -801,6 +1154,97 @@ mod tests {
         assert_eq!(item, Some(RxReplicationMasterChange::Resync));
     }
 
+    #[tokio::test]
+    async fn call_master_method_wraps_master_changes_since_errors() {
+        let handler = StaticReplicationHandler {
+            pull_error: Some(new_rx_error(
+                "TEST_PULL",
+                Some(serde_json::json!({ "attempt": 1 })),
+            )),
+            push_error: None,
+        };
+
+        let result = call_master_method(
+            &handler,
+            "masterChangesSince",
+            vec![serde_json::json!({ "sequence": 1 }), Value::from(10)],
+        )
+        .await;
+
+        assert_eq!(result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(result["scope"], serde_json::json!("replication"));
+        assert_eq!(result["code"], serde_json::json!("RC_PULL"));
+        assert_eq!(result["direction"], serde_json::json!("pull"));
+        assert_eq!(result["phase"], serde_json::json!("replication-pull"));
+        assert_eq!(result["checkpoint"], serde_json::json!({ "sequence": 1 }));
+        assert_eq!(result["batchSize"], serde_json::json!(10));
+        assert_eq!(result["errors"][0]["code"], serde_json::json!("TEST_PULL"));
+        assert_eq!(result["errors"][0]["rxdb"], serde_json::json!(true));
+
+        let error = replication_error_from_webrtc_result(&result)
+            .expect("replication error result should become RxError");
+        assert_eq!(error.code(), "RC_PULL");
+        assert_eq!(error.parameters()["direction"], serde_json::json!("pull"));
+    }
+
+    #[tokio::test]
+    async fn call_master_method_wraps_master_write_errors() {
+        let handler = StaticReplicationHandler {
+            pull_error: None,
+            push_error: Some(new_rx_error(
+                "TEST_PUSH",
+                Some(serde_json::json!({ "attempt": 1 })),
+            )),
+        };
+
+        let result = call_master_method(
+            &handler,
+            "masterWrite",
+            vec![serde_json::json!([{
+                "newDocumentState": { "id": "alice", "_deleted": false },
+                "assumedMasterState": { "id": "alice", "_deleted": false }
+            }])],
+        )
+        .await;
+
+        assert_eq!(result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(result["scope"], serde_json::json!("replication"));
+        assert_eq!(result["code"], serde_json::json!("RC_PUSH"));
+        assert_eq!(result["direction"], serde_json::json!("push"));
+        assert_eq!(result["phase"], serde_json::json!("replication-push"));
+        assert_eq!(result["rowCount"], serde_json::json!(1));
+        assert_eq!(result["errors"][0]["code"], serde_json::json!("TEST_PUSH"));
+        assert_eq!(result["errors"][0]["rxdb"], serde_json::json!(true));
+
+        let error = replication_error_from_webrtc_result(&result)
+            .expect("replication error result should become RxError");
+        assert_eq!(error.code(), "RC_PUSH");
+        assert_eq!(error.parameters()["direction"], serde_json::json!("push"));
+    }
+
+    #[tokio::test]
+    async fn call_master_method_rejects_invalid_master_write_rows() {
+        let handler = StaticReplicationHandler {
+            pull_error: None,
+            push_error: None,
+        };
+
+        let result = call_master_method(
+            &handler,
+            "masterWrite",
+            vec![serde_json::json!({ "newDocumentState": { "id": "not-an-array" } })],
+        )
+        .await;
+
+        assert_eq!(result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(result["code"], serde_json::json!("RC_PUSH"));
+        assert_eq!(result["direction"], serde_json::json!("push"));
+        assert!(result["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("masterWrite request decode"));
+    }
+
     #[test]
     fn ctox_protocol_response_advertises_native_capabilities() {
         let payload = ctox_protocol_response_payload(
@@ -808,6 +1252,7 @@ mod tests {
                 "name": "desktop_files",
                 "schemaVersion": 0,
                 "schemaHash": "schema-hash-1",
+                "schemaHashSource": CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
                 "checkpoint": {
                     "source": "rxdb-rs-sqlite",
                     "state": "advertised",
@@ -848,6 +1293,12 @@ mod tests {
         );
         assert_eq!(
             payload
+                .pointer("/collection/schemaHashSource")
+                .and_then(Value::as_str),
+            Some(CTOX_RXDB_RS_SCHEMA_HASH_SOURCE)
+        );
+        assert_eq!(
+            payload
                 .pointer("/collection/checkpoint/epoch")
                 .and_then(Value::as_str),
             Some("checkpoint-epoch-1")
@@ -862,7 +1313,7 @@ mod tests {
                 .and_then(Value::as_str),
             Some("rxdb-rs-test-session")
         );
-        assert!(validate_ctox_protocol_response(&payload).is_ok());
+        assert!(validate_ctox_protocol_response(&payload, payload.get("collection"), true).is_ok());
     }
 
     #[test]
@@ -885,11 +1336,105 @@ mod tests {
 
     #[test]
     fn ctox_protocol_response_rejects_mismatch() {
-        let result = validate_ctox_protocol_response(&serde_json::json!({
-            "protocol": "rxdb-upstream",
-            "capabilities": []
-        }));
+        let result = validate_ctox_protocol_response(
+            &serde_json::json!({
+                "protocol": "rxdb-upstream",
+                "capabilities": CTOX_REQUIRED_PROTOCOL_CAPABILITIES
+            }),
+            None,
+            true,
+        );
         let error = result.expect_err("protocol mismatch must fail");
         assert_eq!(error.code(), "RC_WEBRTC_PROTOCOL");
+        assert_eq!(
+            error.parameters().get("code").and_then(Value::as_str),
+            Some(CTOX_PROTOCOL_ERROR_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn ctox_protocol_fixture_matches_rust_handshake_contract() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webrtc-rxdb-protocol.json"
+        ))
+        .expect("parse WebRTC RxDB protocol fixture");
+        assert_eq!(
+            fixture.get("protocol").and_then(Value::as_str),
+            Some(CTOX_RXDB_PROTOCOL)
+        );
+        assert_eq!(
+            fixture
+                .pointer("/errorCodes/schemaHashMismatch")
+                .and_then(Value::as_str),
+            Some(CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH)
+        );
+        assert_eq!(
+            fixture
+                .pointer("/schemaHashSources/rxdbRs")
+                .and_then(Value::as_str),
+            Some(CTOX_RXDB_RS_SCHEMA_HASH_SOURCE)
+        );
+        let required = fixture
+            .get("requiredCapabilities")
+            .and_then(Value::as_array)
+            .expect("required capabilities");
+        assert_eq!(required.len(), CTOX_REQUIRED_PROTOCOL_CAPABILITIES.len());
+        for capability in CTOX_REQUIRED_PROTOCOL_CAPABILITIES {
+            assert!(required
+                .iter()
+                .any(|item| item.as_str() == Some(*capability)));
+        }
+        let browser = fixture
+            .pointer("/compatible/browser")
+            .expect("browser fixture");
+        let native = fixture
+            .pointer("/compatible/native")
+            .expect("native fixture");
+        assert!(validate_ctox_protocol_response(native, browser.get("collection"), true).is_ok());
+
+        let mut missing_capability = native.clone();
+        missing_capability["capabilities"] = serde_json::json!(["ctox-schema-hash-v1"]);
+        assert_protocol_error(
+            validate_ctox_protocol_response(&missing_capability, browser.get("collection"), true),
+            CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING,
+        );
+
+        let mut collection_mismatch = native.clone();
+        collection_mismatch["collection"]["name"] = serde_json::json!("desktop_file_chunks");
+        assert_protocol_error(
+            validate_ctox_protocol_response(&collection_mismatch, browser.get("collection"), true),
+            CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
+        );
+
+        let mut version_mismatch = native.clone();
+        version_mismatch["collection"]["schemaVersion"] = serde_json::json!(2);
+        assert_protocol_error(
+            validate_ctox_protocol_response(&version_mismatch, browser.get("collection"), true),
+            CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
+        );
+
+        let mut hash_mismatch = native.clone();
+        hash_mismatch["collection"]["schemaHash"] = serde_json::json!("different-fixture-hash");
+        assert_protocol_error(
+            validate_ctox_protocol_response(&hash_mismatch, browser.get("collection"), true),
+            CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+        );
+    }
+
+    fn assert_protocol_error(result: Result<(), RxError>, expected_code: &str) {
+        let error = result.expect_err("protocol validation must fail");
+        assert_eq!(error.code(), "RC_WEBRTC_PROTOCOL");
+        assert_eq!(
+            error.parameters().get("name").and_then(Value::as_str),
+            Some("CtoxRxdbProtocolError")
+        );
+        assert_eq!(
+            error.parameters().get("code").and_then(Value::as_str),
+            Some(expected_code)
+        );
+        assert_eq!(
+            error.parameters().get("phase").and_then(Value::as_str),
+            Some("rxdb-protocol-handshake")
+        );
     }
 }

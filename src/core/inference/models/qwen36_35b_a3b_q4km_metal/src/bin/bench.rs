@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Stage-1 bench harness entry point. Real prefill/decode benchmarks
 //! land in stage 2 once the GGUF loader and the MSL kernel forward

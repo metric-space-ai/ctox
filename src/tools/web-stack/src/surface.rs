@@ -387,6 +387,7 @@ fn source_manifest_json(module: &'static dyn crate::sources::SourceModule) -> Va
         .iter()
         .map(|f| f.as_str())
         .collect();
+    let browser_recipe = module.browser_recipe();
     json!({
         "id": module.id(),
         "aliases": module.aliases(),
@@ -394,6 +395,16 @@ fn source_manifest_json(module: &'static dyn crate::sources::SourceModule) -> Va
         "countries": countries,
         "authoritative_for": fields,
         "requires_credential": module.requires_credential(),
+        "browser_recipe": browser_recipe.as_ref().map(|recipe| json!({
+            "source_id": recipe.source_id,
+            "login_url": recipe.login_url.clone(),
+            "allowed_domains": recipe.allowed_domains.clone(),
+            "required_secret_name": recipe.required_secret_name,
+            "verify_selector": recipe.verify_selector,
+            "credential_selector": recipe.credential_selector,
+            "capture_script": recipe.capture_script,
+            "secret_value_in_payload": false,
+        })),
     })
 }
 

@@ -278,6 +278,14 @@ jobs:
           mkdir -p bundle/rxdb-js/source
           cp src/core/rxdb/js-fork/source/package.json bundle/rxdb-js/source/
           cp src/core/rxdb/js-fork/source/package-lock.json bundle/rxdb-js/source/
+          mkdir -p bundle/rxdb-js/app-local/dist
+          mkdir -p bundle/rxdb-js/app-local/src
+          mkdir -p bundle/rxdb-js/app-local/tests
+          cp src/apps/business-os/rxdb/manifest.json bundle/rxdb-js/app-local/
+          cp src/apps/business-os/rxdb/README.md bundle/rxdb-js/app-local/
+          cp src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs bundle/rxdb-js/app-local/dist/
+          cp src/apps/business-os/rxdb/src/*.mjs bundle/rxdb-js/app-local/src/
+          cp src/apps/business-os/rxdb/tests/*.mjs bundle/rxdb-js/app-local/tests/
           cp install.sh bundle/
           cp LICENSE bundle/
           cp docs/legal/NOTICE bundle/NOTICE
@@ -299,6 +307,14 @@ jobs:
           New-Item -ItemType Directory -Force bundle\rxdb-js\source | Out-Null
           Copy-Item -Path "src\core\rxdb\js-fork\source\package.json" -Destination "bundle\rxdb-js\source\"
           Copy-Item -Path "src\core\rxdb\js-fork\source\package-lock.json" -Destination "bundle\rxdb-js\source\"
+          New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\dist | Out-Null
+          New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\src | Out-Null
+          New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\tests | Out-Null
+          Copy-Item -Path "src\apps\business-os\rxdb\manifest.json" -Destination "bundle\rxdb-js\app-local\"
+          Copy-Item -Path "src\apps\business-os\rxdb\README.md" -Destination "bundle\rxdb-js\app-local\"
+          Copy-Item -Path "src\apps\business-os\rxdb\dist\ctox-rxdb-js.mjs" -Destination "bundle\rxdb-js\app-local\dist\"
+          Copy-Item -Path "src\apps\business-os\rxdb\src\*.mjs" -Destination "bundle\rxdb-js\app-local\src\"
+          Copy-Item -Path "src\apps\business-os\rxdb\tests\*.mjs" -Destination "bundle\rxdb-js\app-local\tests\"
           Copy-Item -Path "install.sh", "LICENSE" -Destination "bundle\"
           Copy-Item -Path "docs\legal\NOTICE" -Destination "bundle\NOTICE"
           Compress-Archive -Path "bundle\*" -DestinationPath "${{ matrix.artifact }}.zip" -Force

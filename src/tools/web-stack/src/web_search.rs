@@ -275,6 +275,17 @@ struct SearchResponse {
     hits: Vec<SearchHit>,
     evidence: Vec<EvidenceDoc>,
     executed_queries: Vec<String>,
+    source_failures: Vec<SourceFailure>,
+}
+
+#[derive(Debug, Clone)]
+struct SourceFailure {
+    requested_source: String,
+    source_id: Option<String>,
+    kind: String,
+    error: String,
+    secret_name: Option<&'static str>,
+    browser_assist: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -886,6 +897,22 @@ fn ctox_web_search_payload(
         "external_web_access": tool_request.external_web_access,
         "allowed_domains": tool_request.allowed_domains,
         "executed_queries": result.executed_queries,
+        "source_failures": result
+            .source_failures
+            .iter()
+            .map(|failure| {
+                json!({
+                    "requested_source": failure.requested_source,
+                    "source_id": failure.source_id,
+                    "kind": failure.kind,
+                    "error": failure.error,
+                    "secret_name": failure.secret_name,
+                    "browser_assist": failure.browser_assist,
+                    "secret_value_in_payload": false,
+                    "frame_data_in_payload": false,
+                })
+            })
+            .collect::<Vec<_>>(),
         "results": results,
         "citations": result
             .hits
@@ -936,7 +963,7 @@ fn execute_search(
     // API-pathed source modules (`fetch_direct`) contribute hits directly;
     // crawl-pathed modules contribute additional allow-list domains via
     // their `shape_query`. The cascade then runs over the merged domain set.
-    let (pinned_hits, pinned_domains) =
+    let (pinned_hits, pinned_domains, source_failures) =
         run_pinned_sources_for_search(root, tool_request, original_query);
     let mut effective = tool_request.clone();
     if !pinned_domains.is_empty() {
@@ -958,12 +985,14 @@ fn execute_search(
             evidence,
             hits: merge_pinned_hits(pinned_hits, hits),
             executed_queries: planned_queries,
+            source_failures,
         });
     }
 
     let mut response = search_with_query_plan(root, config, query, &planned_queries)?;
     response.hits = filter_hits_by_domain(response.hits, &tool_request.allowed_domains);
     response.hits = merge_pinned_hits(pinned_hits, response.hits);
+    response.source_failures.extend(source_failures);
     let mut session = WebSearchSession::new(root, config)?;
     response.evidence = session.fetch_evidence(
         &query.text,
@@ -985,11 +1014,11 @@ fn run_pinned_sources_for_search(
     root: &Path,
     tool_request: &SearchToolRequest,
     original_query: &str,
-) -> (Vec<SearchHit>, Vec<String>) {
-    use crate::sources::{self, ResearchMode, SourceCtx};
+) -> (Vec<SearchHit>, Vec<String>, Vec<SourceFailure>) {
+    use crate::sources::{self, ResearchMode, SourceCtx, SourceError};
 
     if tool_request.pinned_sources.is_empty() {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), Vec::new());
     }
 
     let country = tool_request
@@ -1005,27 +1034,49 @@ fn run_pinned_sources_for_search(
 
     let mut hits = Vec::new();
     let mut domains = Vec::new();
+    let mut failures = Vec::new();
     for raw in &tool_request.pinned_sources {
         let Some(module) = sources::find(raw) else {
+            failures.push(SourceFailure {
+                requested_source: raw.to_string(),
+                source_id: None,
+                kind: "unknown_source".to_string(),
+                error: format!("unknown source: {raw}"),
+                secret_name: None,
+                browser_assist: None,
+            });
             continue;
         };
         // API path: native fetch_direct → hits, skip search-engine cascade.
         if let Some(direct_result) = module.fetch_direct(&ctx, original_query) {
-            if let Ok(direct_hits) = direct_result {
-                let id = module.id();
-                for (rank_idx, hit) in direct_hits.into_iter().enumerate() {
-                    hits.push(SearchHit {
-                        title: hit.title,
-                        url: hit.url,
-                        snippet: hit.snippet,
-                        source: id.to_string(),
-                        rank: rank_idx + 1,
+            match direct_result {
+                Ok(direct_hits) => {
+                    let id = module.id();
+                    for (rank_idx, hit) in direct_hits.into_iter().enumerate() {
+                        hits.push(SearchHit {
+                            title: hit.title,
+                            url: hit.url,
+                            snippet: hit.snippet,
+                            source: id.to_string(),
+                            rank: rank_idx + 1,
+                        });
+                    }
+                }
+                Err(err) => {
+                    let secret_name = match &err {
+                        SourceError::CredentialMissing { secret_name } => Some(*secret_name),
+                        _ => None,
+                    };
+                    failures.push(SourceFailure {
+                        requested_source: raw.to_string(),
+                        source_id: Some(module.id().to_string()),
+                        kind: err.as_str().to_string(),
+                        error: err.to_string(),
+                        secret_name,
+                        browser_assist: browser_assist_failure_metadata(module, secret_name),
                     });
                 }
             }
-            // On Err (credential_missing, no_match, network, …) we silently
-            // fall through to the cascade — the agent will see partial
-            // results via the generic pipeline.
             continue;
         }
         // Crawl path: shape_query contributes domain pins.
@@ -1033,7 +1084,26 @@ fn run_pinned_sources_for_search(
             domains.extend(shape.domains);
         }
     }
-    (hits, domains)
+    (hits, domains, failures)
+}
+
+fn browser_assist_failure_metadata(
+    module: &'static dyn crate::sources::SourceModule,
+    secret_name: Option<&'static str>,
+) -> Option<Value> {
+    let recipe = module.browser_recipe()?;
+    Some(json!({
+        "source_id": recipe.source_id,
+        "stream": "rxdb",
+        "target_url": recipe.login_url,
+        "allowed_domains": recipe.allowed_domains,
+        "required_secret_name": recipe.required_secret_name.or(secret_name),
+        "verify_selector": recipe.verify_selector,
+        "credential_selector": recipe.credential_selector,
+        "capture_script": recipe.capture_script,
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false,
+    }))
 }
 
 fn merge_pinned_hits(pinned: Vec<SearchHit>, generic: Vec<SearchHit>) -> Vec<SearchHit> {
@@ -1160,6 +1230,7 @@ fn search_with_query_plan(
         hits: merged_hits,
         evidence: Vec::new(),
         executed_queries,
+        source_failures: Vec::new(),
     })
 }
 
@@ -1350,6 +1421,7 @@ fn bing_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchRespo
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -1400,6 +1472,7 @@ fn brave_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchResp
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -1553,6 +1626,7 @@ fn duckduckgo_search(config: &SearchConfig, query: &SearchQuery) -> Result<Searc
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -1775,6 +1849,7 @@ fn searxng_search(config: &SearchConfig, query: &SearchQuery) -> Result<SearchRe
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -1970,6 +2045,7 @@ fn google_search(
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -2029,6 +2105,7 @@ fn annas_archive_search_as_web(root: &Path, query: &SearchQuery) -> Result<Searc
         hits,
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     })
 }
 
@@ -2047,6 +2124,7 @@ fn mock_search(query: &SearchQuery) -> SearchResponse {
         }],
         evidence: Vec::new(),
         executed_queries: vec![query.text.clone()],
+        source_failures: Vec::new(),
     }
 }
 
@@ -5021,6 +5099,25 @@ fn render_results_context(
             tool_request.search_content_types.join(", ")
         ));
     }
+    if !result.source_failures.is_empty() {
+        lines.push("Pinned source status:".to_string());
+        for failure in &result.source_failures {
+            let source = failure
+                .source_id
+                .as_deref()
+                .unwrap_or(failure.requested_source.as_str());
+            lines.push(format!(
+                "- {source}: {} ({})",
+                failure.kind, failure.error
+            ));
+            if let Some(secret_name) = failure.secret_name {
+                lines.push(format!("- {source} required credential: {secret_name}"));
+            }
+            if failure.browser_assist.is_some() {
+                lines.push(format!("- {source} browser assist available via RxDB."));
+            }
+        }
+    }
     lines.push(
         "Use these web results as external context. Prefer the URLs below when citing sources."
             .to_string(),
@@ -6705,6 +6802,50 @@ mod tests {
     }
 
     #[test]
+    fn ctox_web_search_surfaces_pinned_source_credential_failure_for_browser_assist() {
+        let root = unique_test_root("ctox_web_search_source_failure");
+        set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
+
+        let payload = run_ctox_web_search_tool(
+            &root,
+            &CanonicalWebSearchRequest {
+                query: "WITTENSTEIN SE".to_string(),
+                external_web_access: Some(true),
+                allowed_domains: Vec::new(),
+                user_location: SearchUserLocation {
+                    country: Some("DE".to_string()),
+                    ..SearchUserLocation::default()
+                },
+                search_context_size: Some(ContextSize::Medium),
+                search_content_types: Vec::new(),
+                include_sources: true,
+                pinned_sources: vec!["linkedin.com".to_string()],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(payload["ok"], json!(true));
+        assert_eq!(payload["source_failures"][0]["source_id"], "linkedin.com");
+        assert_eq!(payload["source_failures"][0]["kind"], "credential_missing");
+        assert_eq!(
+            payload["source_failures"][0]["secret_name"],
+            "LINKEDIN_SALES_NAV_TOKEN"
+        );
+        assert_eq!(
+            payload["source_failures"][0]["browser_assist"]["stream"],
+            "rxdb"
+        );
+        assert_eq!(
+            payload["source_failures"][0]["browser_assist"]["secret_value_in_payload"],
+            false
+        );
+        assert!(payload["context"]
+            .as_str()
+            .unwrap()
+            .contains("browser assist available via RxDB"));
+    }
+
+    #[test]
     fn ctox_web_read_tool_returns_find_results() {
         let root = unique_test_root("ctox_web_read_tool");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_PROVIDER", "mock");
@@ -6877,6 +7018,7 @@ mod tests {
                 raw_html: None,
             }],
             executed_queries: vec!["find CTOX_REMOTE_WEB_OK".to_string()],
+        source_failures: Vec::new(),
         };
         let calls = build_web_search_calls("ws_1", &result, true);
         assert_eq!(calls.len(), 4);

@@ -430,7 +430,7 @@ async function refreshRunbooks(state) {
   const storedRunbooks = collection
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
-  state.runbooks = mergeDocumentRunbooks(state, storedRunbooks);
+  state.runbooks = mergeDocumentRunbooks(storedRunbooks);
 }
 
 async function createMarkdownDocument(state, input = {}) {
@@ -592,35 +592,38 @@ function renderLeft(state) {
   const visible = visibleDocuments(state);
   const selected = selectedRecord(state);
   wrap.innerHTML = `
-    <div class="documents-column-head">
-      <div class="documents-column-title">${escapeHtml(state.t('documentsTitle', 'Documents'))}</div>
-      <div class="documents-column-actions">
-        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${iconSvg('new')}</button>
-        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${iconSvg('import')}</button>
-        <button class="documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Dateien</span>
+          <h2 class="ctox-pane-title documents-column-title">${escapeHtml(state.t('documentsTitle', 'Documents'))}</h2>
+        </div>
+        <div class="ctox-pane-actions documents-column-actions">
+          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${iconSvg('new')}</button>
+          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${iconSvg('import')}</button>
+          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
+        </div>
       </div>
-    </div>
-    <div class="documents-column-tools">
-      <input type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Dokument suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Dokumente suchen'))}" data-documents-search value="${escapeHtml(state.searchQuery)}">
-      <div class="documents-column-sort">
-        <select aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort>
+      <div class="ctox-pane-tools">
+        <input class="ctox-pane-search" type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Dokument suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Dokumente suchen'))}" data-documents-search value="${escapeHtml(state.searchQuery)}">
+        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort style="width: 70px; flex-shrink: 0;">
           <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
           <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
+        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status style="width: 60px; flex-shrink: 0;">
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
+        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag style="width: 60px; flex-shrink: 0;">
+          ${tagFilterOptions(state)}
+        </select>
       </div>
-      <select aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
-        ${tagFilterOptions(state)}
-      </select>
-    </div>
+    </header>
   `;
   const list = document.createElement('div');
   list.className = 'documents-list';

@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 use crate::service::core_state_machine as csm;
 use crate::service::core_transition_guard;

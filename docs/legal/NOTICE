@@ -53,5 +53,14 @@ been retired.
   475cddd5539d8eeb6ec1b86dbe1e57db8d1c03b7. The OSKO-derived code has been
   refactored into its CTOX-native form and is owned and maintained by CTOX.
 
-The root LICENSE applies to first-party CTOX repository code unless an
-integrated source subtree or file states otherwise.
+The root AGPLv3 LICENSE applies to first-party CTOX repository code unless
+an integrated source subtree or file states otherwise.
+
+Trademark notice:
+
+CTOX and CTOX Business OS are names used by this project. The AGPLv3 license
+grants rights to copy, modify, and distribute the covered source code, but it
+does not grant trademark rights or permission to present modified versions as
+official CTOX products. Forks and redistributed builds should use their own
+product branding unless they have separate permission to use the CTOX name,
+logos, or service marks.

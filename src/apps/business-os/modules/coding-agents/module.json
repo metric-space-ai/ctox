@@ -1,0 +1,36 @@
+{
+  "id": "coding-agents",
+  "title": "Coding Agents",
+  "description": "Unified dashboard to manage, configure, license, and remotely run Antigravity, Claude, and Codex agents.",
+  "entry": "modules/coding-agents/index.html",
+  "collections": [
+    "business_commands"
+  ],
+  "layout": {
+    "shell": "full-workspace",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-coding-agents\"><defs><linearGradient id=\"grad-coding-agents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" ry=\"2\" fill=\"url(#grad-coding-agents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-coding-agents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M9 16l-3-3 3-3M15 10l3 3-3 3\" stroke=\"url(#grad-coding-agents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"13\" y1=\"8\" x2=\"11\" y2=\"16\" stroke=\"url(#grad-coding-agents)\" stroke-width=\"2\" stroke-linecap=\"round\"></line></svg>",
+    "left": "Agent selector and remote connection status",
+    "center": "Unified Agent Control, subscriptions, permission bypasses, and active terminal",
+    "right": "Sessions, remote jobs logs, and CLI runner"
+  },
+  "category": "Development",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": [
+    "coding",
+    "agents",
+    "automation",
+    "dev-tools"
+  ],
+  "store": {
+    "summary": "Unified dashboard to manage, configure, license, and remotely run Antigravity, Claude, and Codex agents.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/coding-agents",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
+  },
+  "install_scope": "store",
+  "default_installed": false
+}

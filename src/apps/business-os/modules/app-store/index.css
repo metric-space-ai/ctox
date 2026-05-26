@@ -1,13 +1,18 @@
 /* --- Business OS App Store Module Styling --- */
 
 .app-store-module[data-app-store-root] {
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--app-store-left-width, 320px) 12px minmax(0, 1fr);
+  gap: 0;
+  padding: 12px;
   height: 100%;
   width: 100%;
-  background: var(--surface-1, #1e1e1e);
-  color: var(--text, #f5f5f7);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   overflow: hidden;
+  box-sizing: border-box;
+  position: relative;
 }
 
 /* Three Pane Resizing Layout */
@@ -17,40 +22,32 @@
   height: 100%;
   overflow: hidden;
   position: relative;
-  background: var(--surface-1, #1e1e1e);
+  box-sizing: border-box;
 }
 
 /* Left Sidebar Explorer Pane */
 .store-left {
-  flex: 0 0 260px;
-  min-width: 220px;
-  max-width: 380px;
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
 }
 
 .store-sidebar {
   height: 100%;
-  background: var(--surface-2, rgba(20, 20, 20, 0.6));
-  backdrop-filter: blur(10px);
+  background: transparent;
   display: flex;
   flex-direction: column;
 }
 
 /* Center Catalog Grid Pane */
 .store-center {
-  flex: 1;
-  min-width: 400px;
-  background: var(--surface-1, #151517);
-  border-right: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
-}
-
-/* Right Detail Drawer Pane */
-.store-right {
-  flex: 0 0 380px;
-  min-width: 300px;
-  max-width: 500px;
-  background: var(--surface-2, rgba(20, 20, 20, 0.4));
-  backdrop-filter: blur(15px);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
 }
 
 /* Headers */

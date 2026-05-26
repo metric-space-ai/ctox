@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // harness-mining brief — the agent-shaped synthesis layer over Tier 1+2.
 //

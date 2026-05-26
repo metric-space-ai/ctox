@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Stage-1 server binary entry point. Thin CLI on top of
 //! `ctox_qwen36_35b_a3b_q4km_metal::server::run`.

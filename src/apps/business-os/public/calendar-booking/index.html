@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Termin buchen | Business OS</title>
+  <!-- Google Fonts: Inter & Outfit -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/calendar-booking/index.css">
+</head>
+<body>
+  <div class="booking-portal-container">
+    <!-- Main glass card -->
+    <main class="booking-card" id="bookingMainCard">
+      <!-- LEFT SIDE: Host Info & Details -->
+      <section class="booking-host-section">
+        <header class="host-header">
+          <div class="host-avatar">OS</div>
+          <div class="host-meta">
+            <span class="host-company">Business OS</span>
+            <h1 class="event-title" id="eventTitle">30 Min. Erstgespräch</h1>
+          </div>
+        </header>
+
+        <div class="event-details-list">
+          <div class="event-detail-item">
+            <span class="detail-icon">⏱️</span>
+            <span class="detail-text" id="eventDuration">30 Minuten</span>
+          </div>
+          <div class="event-detail-item">
+            <span class="detail-icon">📞</span>
+            <span class="detail-text" id="eventLocation">Online-Meeting</span>
+          </div>
+        </div>
+
+        <p class="event-description" id="eventDescription">
+          Laden Sie sich ein und wählen Sie ein passendes Zeitfenster. Wir besprechen Ihre Anforderungen im Detail.
+        </p>
+
+        <footer class="portal-footer">
+          Powered by <strong>Business OS</strong>
+        </footer>
+      </section>
+
+      <!-- RIGHT SIDE: Slots & Date Picker -->
+      <section class="booking-slots-section" id="stepSlots">
+        <h2 class="section-title">Datum & Uhrzeit wählen</h2>
+
+        <div class="slots-container">
+          <!-- Calendar Days list (dynamic) -->
+          <div class="datepicker-container">
+            <div class="datepicker-header">
+              <span id="monthYearTitle">Mai 2026</span>
+              <div class="datepicker-nav">
+                <button type="button" class="nav-btn" id="btnPrevMonth">&lt;</button>
+                <button type="button" class="nav-btn" id="btnNextMonth">&gt;</button>
+              </div>
+            </div>
+            <div class="datepicker-weekdays">
+              <div>Mo</div><div>Di</div><div>Mi</div><div>Do</div><div>Fr</div><div>Sa</div><div>So</div>
+            </div>
+            <div class="datepicker-grid" id="datepickerGrid">
+              <!-- Calendar day buttons -->
+            </div>
+          </div>
+
+          <!-- Time slots list (dynamic, shows up when a date is selected) -->
+          <div class="timeslot-pane" id="timeslotPane">
+            <h3 class="timeslot-date-title" id="selectedDateTitle">Ausgewähltes Datum</h3>
+            <div class="timeslot-list" id="timeslotList">
+              <div class="timeslot-empty-state">Wählen Sie ein Datum links.</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 2: Attendee Info Form -->
+      <section class="booking-form-section hidden" id="stepForm">
+        <button type="button" class="back-link-btn" id="btnBackToSlots">&larr; Zurück zur Zeitauswahl</button>
+        <h2 class="section-title" style="margin-top:12px;">Ihre Details eingeben</h2>
+
+        <form id="bookingAttendeeForm" class="booking-details-form">
+          <div class="form-group">
+            <label for="attendeeName">Ihr Name *</label>
+            <input type="text" id="attendeeName" required placeholder="z. B. Max Mustermann" />
+          </div>
+
+          <div class="form-group">
+            <label for="attendeeEmail">Ihre E-Mail *</label>
+            <input type="email" id="attendeeEmail" required placeholder="max@example.com" />
+          </div>
+
+          <div class="form-group">
+            <label for="attendeePhone">Telefonnummer (optional)</label>
+            <input type="tel" id="attendeePhone" placeholder="+49 170 1234567" />
+          </div>
+
+          <div class="form-group">
+            <label for="attendeeNotes">Zusätzliche Notizen</label>
+            <textarea id="attendeeNotes" rows="3" placeholder="Gibt es bestimmte Themen, die Sie besprechen möchten?"></textarea>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="confirm-btn">Termin jetzt buchen 🚀</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- STEP 3: Success Screen -->
+      <section class="booking-success-section hidden" id="stepSuccess">
+        <div class="success-icon-wrapper">
+          <div class="success-icon">✓</div>
+        </div>
+        <h2 class="success-title">Termin bestätigt! 🎉</h2>
+        <p class="success-msg">
+          Ihr Termin wurde erfolgreich eingetragen. Eine Bestätigungsmail mit den Details wurde an Sie gesendet.
+        </p>
+
+        <div class="success-summary-card">
+          <div class="summary-item">
+            <span class="summary-label">Terminart:</span>
+            <strong id="summaryTitle">-</strong>
+          </div>
+          <div class="summary-item">
+            <span class="summary-label">Wann:</span>
+            <strong id="summaryTime">-</strong>
+          </div>
+          <div class="summary-item" id="summaryLocationRow">
+            <span class="summary-label">Ort:</span>
+            <strong id="summaryLocation">-</strong>
+          </div>
+        </div>
+
+        <div class="success-actions">
+          <p style="font-size:12px; color: var(--muted); margin-bottom: 16px;">Sie können dieses Fenster jetzt schließen.</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/calendar-booking/index.js"></script>
+</body>
+</html>

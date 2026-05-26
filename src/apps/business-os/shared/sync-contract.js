@@ -10,8 +10,8 @@ export function collectionTopic(syncRoom, collection) {
 }
 
 export function batchSizeFor(collection) {
-  if (collection === 'desktop_file_chunks') return 1;
-  return collection.includes('attachment') || collection.includes('chunk') ? 1 : 10;
+  if (collection === 'desktop_file_chunks') return 2;
+  return collection.includes('attachment') || collection.includes('chunk') ? 4 : 10;
 }
 
 export function nativeRxdbPeerReady(config, db) {

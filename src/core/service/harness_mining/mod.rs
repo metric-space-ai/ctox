@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 //
 // Harness Mining: forensic and conformance analysis of the autonomous-agent
 // harness. Replaces the rust4pm-vendored discovery layer with a tier-based

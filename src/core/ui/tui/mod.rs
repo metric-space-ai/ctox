@@ -1116,6 +1116,7 @@ impl App {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            business_os: None,
             work_hours: service::working_hours::WorkHoursSnapshot::default(),
         };
         let model_perf_stats = load_model_perf_stats(&root);
@@ -1762,6 +1763,7 @@ impl App {
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
                 last_agent_outcome: None,
+                business_os: None,
                 work_hours: service::working_hours::snapshot(&self.root),
             }
         });

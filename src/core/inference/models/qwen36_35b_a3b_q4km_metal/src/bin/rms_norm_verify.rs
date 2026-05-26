@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Per-op verifier for the `rms_norm_f32` MSL port.
 //!

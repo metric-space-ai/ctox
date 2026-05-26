@@ -1126,6 +1126,24 @@ fn ctox_web_tools_are_hidden_by_default() {
     assert!(
         !tools
             .iter()
+            .any(|tool| tool.spec.name() == "ctox_web_auth_assist_request"),
+        "ctox_web_auth_assist_request should stay hidden unless the typed CTOX web-stack policy enables it"
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.spec.name() == "ctox_browser_context_capture"),
+        "ctox_browser_context_capture should stay hidden unless the typed CTOX web-stack policy enables it"
+    );
+    assert!(
+        !tools
+            .iter()
+            .any(|tool| tool.spec.name() == "ctox_browser_context_extract"),
+        "ctox_browser_context_extract should stay hidden unless the typed CTOX web-stack policy enables it"
+    );
+    assert!(
+        !tools
+            .iter()
             .any(|tool| tool.spec.name() == "ctox_doc_search"),
         "ctox_doc_search should stay hidden unless the typed CTOX doc-stack policy enables it"
     );
@@ -1157,6 +1175,10 @@ fn ctox_web_stack_registers_only_ctox_web_tools() {
             "ctox_web_read",
             "ctox_deep_research",
             "ctox_web_scrape",
+            "ctox_web_auth_assist_request",
+            "ctox_web_auth_assist_status",
+            "ctox_browser_context_capture",
+            "ctox_browser_context_extract",
             "ctox_browser_automation",
         ],
     );
@@ -1199,6 +1221,10 @@ fn ctox_web_stack_exposes_browser_automation_without_js_repl() {
             "ctox_web_read",
             "ctox_deep_research",
             "ctox_web_scrape",
+            "ctox_web_auth_assist_request",
+            "ctox_web_auth_assist_status",
+            "ctox_browser_context_capture",
+            "ctox_browser_context_extract",
             "ctox_browser_automation",
         ],
     );

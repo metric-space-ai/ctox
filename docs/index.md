@@ -7,15 +7,11 @@ This docs tree is the canonical home for architecture notes, command reference, 
 ## Start Here
 
 - [Architecture](architecture.md)
+- [CLI Reference](cli.md)
 - [Harness Operating Model](harness-operating-model.md)
 - [Core Runtime State Machine](core_runtime_state_machine.md)
-- [State Invariant Strategy](state_invariant_strategy.md)
-- [RFC: Local IPC Runtime Without Local HTTP Proxy](rfc-local-ipc-runtime.md)
-- [CLI Reference](cli.md)
+- [Business OS](business-os.md)
 - [Web Paths](web-paths.md)
-- [Clean-Room Baseline](clean-room-baseline.md)
-- [PDF Benchmark Plan](pdf-benchmark-plan.md)
-- [PDF Test Strategy](pdf-test-strategy.md)
 
 ## Reading Order
 

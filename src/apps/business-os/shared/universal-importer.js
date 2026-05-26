@@ -1,4 +1,4 @@
-import { readStoredFileFromChunks } from './file-integrity.js?v=20260522-file-chunk-integrity4';
+import { readStoredFileFromChunks } from './file-integrity.js?v=20260522-file-chunk-integrity5';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 
@@ -20,7 +20,7 @@ export async function openUniversalImporter(ctx, config = {}) {
   // In-memory list of files currently selected (either locally or from Business OS)
   const stagedFiles = [];
   drawer.stagedFiles = stagedFiles;
-  
+
   // Business OS virtual filesystem navigation state
   let currentFolderId = 'fs_root';
   let folderDocs = new Map();
@@ -142,7 +142,7 @@ export async function openUniversalImporter(ctx, config = {}) {
     try {
       const docs = await collection.find().exec();
       const data = docs.map(doc => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
-      
+
       allFileDocs = data.filter(item => !item.is_deleted);
       folderDocs = new Map(allFileDocs.filter(item => item.kind === 'folder').map(item => [item.id, item]));
 
@@ -399,6 +399,58 @@ export function parseDelimitedText(text, options = {}) {
     });
     return row;
   });
+}
+
+export function tabularCellsToCompanyRows(matrix, options = {}) {
+  const rows = Array.isArray(matrix)
+    ? matrix
+      .map((row) => (Array.isArray(row) ? row.map((cell) => cleanCell(cell)) : []))
+      .filter((row) => row.some(Boolean))
+    : [];
+  if (!rows.length) return [];
+  const header = rows[0].map(normalizeHeader);
+  const hasHeader = header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name))
+    || isSingleColumnListHeader(rows);
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  if (hasHeader && !header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name))) {
+    return dataRows
+      .map((cells, index) => normalizeCompanyRow({ __rowIndex: index, company: cells[0] || '', raw: cells }, index))
+      .filter((row) => row.name);
+  }
+  if (!hasHeader) {
+    return dataRows
+      .map((cells, index) => normalizeCompanyRow({ __rowIndex: index, company: cells[0] || '', domain: cells[1] || '', raw: cells }, index))
+      .filter((row) => row.name);
+  }
+  return dataRows
+    .map((cells, index) => {
+      const row = { __rowIndex: index, raw: cells };
+      header.forEach((key, cellIndex) => {
+        if (key) row[key] = cells[cellIndex] || '';
+      });
+      return normalizeCompanyRow(row, index);
+    })
+    .filter((row) => row.name);
+}
+
+export async function extractCompanyRowsFromWorkbookFile(file, options = {}) {
+  if (!/\.(xlsx)$/i.test(file?.name || '')) return [];
+  const bytes = file.base64
+    ? base64ToBytes(file.base64)
+    : new Uint8Array(await file.arrayBuffer?.() || []);
+  if (!bytes.length) return [];
+  const zip = await readZipEntries(bytes);
+  const workbookXml = await zipText(zip, 'xl/workbook.xml');
+  if (!workbookXml) return [];
+  const workbook = parseXml(workbookXml);
+  const relsXml = await zipText(zip, 'xl/_rels/workbook.xml.rels');
+  const relTargets = workbookRelationshipTargets(relsXml);
+  const sheetEntry = selectWorkbookSheet(workbook, relTargets, options.sheet || '');
+  if (!sheetEntry?.path) return [];
+  const sharedStrings = await readSharedStrings(zip);
+  const sheetXml = await zipText(zip, sheetEntry.path);
+  const matrix = sheetXmlToMatrix(sheetXml, sharedStrings);
+  return tabularCellsToCompanyRows(matrix, options);
 }
 
 export function renderUniversalImportDrawerMarkup(options = {}) {
@@ -721,7 +773,7 @@ function importerTemplate(config) {
               <span>oder klicken</span>
             </div>
           </div>
-          
+
           <!-- Right side: Business OS File Explorer Widget -->
           <div class="importer-bos-explorer">
             <header class="explorer-widget-header">
@@ -735,7 +787,7 @@ function importerTemplate(config) {
             </div>
           </div>
         </div>
-        
+
         <!-- Staged files display -->
         <div class="importer-staged-files" data-staged-files-container hidden>
           <span class="staged-title">Ausgewählte Dateien:</span>
@@ -821,6 +873,173 @@ function splitDelimitedLine(line, delimiter) {
   }
   cells.push(current);
   return cells;
+}
+
+function isSingleColumnListHeader(rows) {
+  if (rows.length < 3) return false;
+  const first = normalizeHeader(rows[0]?.find(Boolean) || '');
+  if (!first) return false;
+  const firstRowValues = rows[0].filter(Boolean);
+  const secondRowValues = rows[1]?.filter(Boolean) || [];
+  if (firstRowValues.length !== 1 || secondRowValues.length !== 1) return false;
+  return ['unternehmen', 'firmen', 'firma', 'company', 'companies', 'accounts', 'personalvermittler', 'liste'].includes(first);
+}
+
+function base64ToBytes(base64) {
+  try {
+    const binary = atob(String(base64 || '').replace(/^data:[^,]+,/, ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+    return bytes;
+  } catch {
+    return new Uint8Array();
+  }
+}
+
+async function readZipEntries(bytes) {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const eocdOffset = findEndOfCentralDirectory(view);
+  if (eocdOffset < 0) throw new Error('Excel-Datei konnte nicht gelesen werden: ZIP-Verzeichnis fehlt.');
+  const centralDirectoryOffset = view.getUint32(eocdOffset + 16, true);
+  const totalEntries = view.getUint16(eocdOffset + 10, true);
+  const entries = new Map();
+  let cursor = centralDirectoryOffset;
+  for (let entryIndex = 0; entryIndex < totalEntries; entryIndex += 1) {
+    if (view.getUint32(cursor, true) !== 0x02014b50) break;
+    const method = view.getUint16(cursor + 10, true);
+    const compressedSize = view.getUint32(cursor + 20, true);
+    const uncompressedSize = view.getUint32(cursor + 24, true);
+    const nameLength = view.getUint16(cursor + 28, true);
+    const extraLength = view.getUint16(cursor + 30, true);
+    const commentLength = view.getUint16(cursor + 32, true);
+    const localOffset = view.getUint32(cursor + 42, true);
+    const name = utf8FromBytes(bytes.slice(cursor + 46, cursor + 46 + nameLength));
+    const localNameLength = view.getUint16(localOffset + 26, true);
+    const localExtraLength = view.getUint16(localOffset + 28, true);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    entries.set(name, {
+      method,
+      compressedSize,
+      uncompressedSize,
+      data: bytes.slice(dataOffset, dataOffset + compressedSize),
+    });
+    cursor += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function findEndOfCentralDirectory(view) {
+  const minOffset = Math.max(0, view.byteLength - 65557);
+  for (let offset = view.byteLength - 22; offset >= minOffset; offset -= 1) {
+    if (view.getUint32(offset, true) === 0x06054b50) return offset;
+  }
+  return -1;
+}
+
+async function zipText(entries, path) {
+  const entry = entries.get(path.replace(/^\/+/, ''));
+  if (!entry) return '';
+  const bytes = await unzipEntry(entry);
+  return utf8FromBytes(bytes);
+}
+
+async function unzipEntry(entry) {
+  if (entry.method === 0) return entry.data;
+  if (entry.method !== 8) throw new Error('Excel-Datei nutzt ein nicht unterstütztes ZIP-Kompressionsverfahren.');
+  if (typeof DecompressionStream !== 'function') {
+    throw new Error('Dieser Browser kann Excel-Dateien ohne Hintergrundparser nicht entpacken.');
+  }
+  const blob = new Blob([entry.data]);
+  for (const format of ['deflate-raw', 'deflate']) {
+    try {
+      const stream = blob.stream().pipeThrough(new DecompressionStream(format));
+      const buffer = await new Response(stream).arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+      if (!entry.uncompressedSize || bytes.length === entry.uncompressedSize) return bytes;
+    } catch {
+      // Try the next browser-supported deflate wrapper.
+    }
+  }
+  throw new Error('Excel-Datei konnte nicht entpackt werden.');
+}
+
+function utf8FromBytes(bytes) {
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+function parseXml(text) {
+  return new DOMParser().parseFromString(String(text || ''), 'application/xml');
+}
+
+function workbookRelationshipTargets(relsXml) {
+  const rels = new Map();
+  if (!relsXml) return rels;
+  const doc = parseXml(relsXml);
+  doc.querySelectorAll('Relationship').forEach((rel) => {
+    const id = rel.getAttribute('Id') || '';
+    const target = rel.getAttribute('Target') || '';
+    if (id && target) rels.set(id, normalizeWorkbookTarget(target));
+  });
+  return rels;
+}
+
+function normalizeWorkbookTarget(target) {
+  const path = String(target || '').replace(/^\/+/, '');
+  return path.startsWith('xl/') ? path : `xl/${path}`;
+}
+
+function selectWorkbookSheet(workbook, relTargets, preferredSheet = '') {
+  const sheets = Array.from(workbook.querySelectorAll('sheet')).map((sheet) => {
+    const relId = sheet.getAttribute('r:id') || sheet.getAttribute('id') || sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id') || '';
+    return {
+      name: sheet.getAttribute('name') || '',
+      path: relTargets.get(relId) || '',
+    };
+  });
+  if (!sheets.length) return null;
+  const preferred = normalizeHeader(preferredSheet);
+  return (preferred && sheets.find((sheet) => normalizeHeader(sheet.name) === preferred)) || sheets[0];
+}
+
+async function readSharedStrings(zip) {
+  const xml = await zipText(zip, 'xl/sharedStrings.xml');
+  if (!xml) return [];
+  const doc = parseXml(xml);
+  return Array.from(doc.querySelectorAll('si')).map((item) => Array.from(item.querySelectorAll('t')).map((node) => node.textContent || '').join(''));
+}
+
+function sheetXmlToMatrix(sheetXml, sharedStrings) {
+  if (!sheetXml) return [];
+  const doc = parseXml(sheetXml);
+  const rows = [];
+  doc.querySelectorAll('sheetData row').forEach((rowEl) => {
+    const cells = [];
+    rowEl.querySelectorAll('c').forEach((cellEl) => {
+      const ref = cellEl.getAttribute('r') || '';
+      const columnIndex = columnIndexFromCellRef(ref);
+      cells[columnIndex] = cellValue(cellEl, sharedStrings);
+    });
+    rows.push(cells.map((cell) => cell || ''));
+  });
+  return rows;
+}
+
+function columnIndexFromCellRef(ref) {
+  const letters = String(ref || '').match(/^[A-Z]+/i)?.[0]?.toUpperCase() || 'A';
+  let value = 0;
+  for (const letter of letters) value = value * 26 + (letter.charCodeAt(0) - 64);
+  return Math.max(0, value - 1);
+}
+
+function cellValue(cellEl, sharedStrings) {
+  const type = cellEl.getAttribute('t') || '';
+  if (type === 'inlineStr') {
+    return Array.from(cellEl.querySelectorAll('is t')).map((node) => node.textContent || '').join('');
+  }
+  const raw = cellEl.querySelector('v')?.textContent || '';
+  if (type === 's') return sharedStrings[Number(raw)] || '';
+  if (type === 'b') return raw === '1' ? 'true' : 'false';
+  return raw;
 }
 
 const COMPANY_HEADER_KEYS = new Set(['company', 'unternehmen', 'firma', 'organisation', 'organization', 'account', 'name', 'companyname']);

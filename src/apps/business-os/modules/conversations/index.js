@@ -1,12 +1,22 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 // This module reads the canonical CTOX channel projection (mirror of the
 // communication_* tables in runtime/ctox.sqlite3). Per-channel threads are the
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260520-conversations3';
+const STYLE_BUILD = '20260525-conversations-reply-match1';
 const SUPPORTED_CHANNELS = ['whatsapp', 'email', 'jami', 'teams', 'meeting'];
+const OUTBOUND_REPLY_CLASSIFICATIONS = [
+  'positive',
+  'negative',
+  'objection',
+  'out_of_office',
+  'referral',
+  'unsubscribe',
+  'unclear',
+];
 const CHANNEL_LABEL_FALLBACK = {
   whatsapp: 'WhatsApp',
   email: 'E-Mail',
@@ -38,6 +48,7 @@ const FALLBACK_LABELS = {
     rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
     cardLabelContact: 'Kontakt',
     cardLabelChannels: 'Aktive Channels',
+    cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Aktivität',
     cardLabelAccount: 'CTOX-Account',
     cardLabelAccounts: 'CTOX-Accounts',
@@ -114,6 +125,14 @@ const FALLBACK_LABELS = {
     trustLow: 'Niedrig',
     trustUnknown: 'Unbekannt',
     copiedToast: 'In Zwischenablage kopiert',
+    outboundOpenCampaign: 'In Outbound öffnen',
+    outboundApprove: 'Freigeben',
+    outboundReject: 'Ablehnen',
+    outboundAwaitingApproval: 'wartet auf Freigabe',
+    outboundReplyLabel: 'Antwort',
+    outboundReplyClassify: 'Klassifizieren',
+    outboundReplyClassification: 'Reply-Klasse',
+    outboundReplyMatched: 'Antwort automatisch zugeordnet',
   },
   en: {
     moduleTitle: 'Conversations',
@@ -132,6 +151,7 @@ const FALLBACK_LABELS = {
     rightEmptyBody: 'Contact details and linked records appear here.',
     cardLabelContact: 'Contact',
     cardLabelChannels: 'Active channels',
+    cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Activity',
     cardLabelAccount: 'CTOX account',
     cardLabelAccounts: 'CTOX accounts',
@@ -208,6 +228,14 @@ const FALLBACK_LABELS = {
     trustLow: 'Low',
     trustUnknown: 'Unknown',
     copiedToast: 'Copied to clipboard',
+    outboundOpenCampaign: 'Open in Outbound',
+    outboundApprove: 'Approve',
+    outboundReject: 'Reject',
+    outboundAwaitingApproval: 'awaiting approval',
+    outboundReplyLabel: 'Reply',
+    outboundReplyClassify: 'Classify',
+    outboundReplyClassification: 'Reply class',
+    outboundReplyMatched: 'Reply matched automatically',
   },
 };
 
@@ -222,6 +250,43 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
 
+  // Standardised 3-column resizer system
+  const leftResizerEl = ctx.host.querySelector('[data-resizer="left"]');
+  const rightResizerEl = ctx.host.querySelector('[data-resizer="right"]');
+
+  const leftStorageKey = 'ctox.conversations.layout.leftWidth';
+  const rightStorageKey = 'ctox.conversations.layout.rightWidth';
+
+  const savedLeftWidth = localStorage.getItem(leftStorageKey) || '320';
+  const savedRightWidth = localStorage.getItem(rightStorageKey) || '320';
+
+  root.style.setProperty('--conversations-left-width', `${savedLeftWidth}px`);
+  root.style.setProperty('--conversations-right-width', `${savedRightWidth}px`);
+
+  const resizerL = leftResizerEl ? new CtoxResizer({
+    resizerEl: leftResizerEl,
+    containerEl: root,
+    cssVar: '--conversations-left-width',
+    side: 'left',
+    minWidth: 260,
+    maxWidth: 550,
+    onResize: (width) => {
+      localStorage.setItem(leftStorageKey, width);
+    }
+  }) : null;
+
+  const resizerR = rightResizerEl ? new CtoxResizer({
+    resizerEl: rightResizerEl,
+    containerEl: root,
+    cssVar: '--conversations-right-width',
+    side: 'right',
+    minWidth: 260,
+    maxWidth: 550,
+    onResize: (width) => {
+      localStorage.setItem(rightStorageKey, width);
+    }
+  }) : null;
+
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;
 
@@ -231,6 +296,11 @@ export async function mount(ctx) {
   const threadsCollection = ctx.db?.collection?.('communication_threads') || null;
   const messagesCollection = ctx.db?.collection?.('communication_messages') || null;
   const accountsCollection = ctx.db?.collection?.('communication_accounts') || null;
+  const outboundCampaignsCollection = ctx.db?.collection?.('outbound_campaigns') || null;
+  const outboundPipelineItemsCollection = ctx.db?.collection?.('outbound_pipeline_items') || null;
+  const outboundEngagementsCollection = ctx.db?.collection?.('outbound_engagements') || null;
+  const outboundMessagesCollection = ctx.db?.collection?.('outbound_messages') || null;
+  const outboundApprovalsCollection = ctx.db?.collection?.('outbound_approvals') || null;
 
   const view = {
     channel: 'all',
@@ -246,9 +316,17 @@ export async function mount(ctx) {
     timelineMessages: [],
     timelineTotal: 0,
     timelineLimit: MESSAGE_PAGE_SIZE,
+    deepLink: parseConversationDeepLink(),
+    highlightedMessageKey: '',
+    outboundContext: null,
+    outboundStatus: '',
+    outboundReplyMatchKeys: new Set(),
   };
+  view.highlightedMessageKey = view.deepLink.message_key || '';
 
   const cleanups = [];
+  if (resizerL) cleanups.push(() => resizerL.destroy());
+  if (resizerR) cleanups.push(() => resizerR.destroy());
 
   wireChannelFilters(refs.channelFilterButtons, view, renderList);
   refs.search.addEventListener('input', () => {
@@ -273,6 +351,7 @@ export async function mount(ctx) {
   await Promise.all([loadAccounts(), loadThreads()]);
   rebuildBuckets();
   populateAccountFilter();
+  await applyConversationDeepLink();
   renderList();
 
   if (threadsCollection?.$) {
@@ -308,6 +387,17 @@ export async function mount(ctx) {
     });
     cleanups.push(() => sub.unsubscribe?.());
   }
+
+  const hashChangeHandler = async () => {
+    if (!String(location.hash || '').startsWith('#conversations')) return;
+    view.deepLink = parseConversationDeepLink();
+    view.highlightedMessageKey = view.deepLink.message_key || '';
+    await applyConversationDeepLink();
+    renderList();
+    if (view.selectedBucketKey) await renderDetail();
+  };
+  window.addEventListener('hashchange', hashChangeHandler);
+  cleanups.push(() => window.removeEventListener('hashchange', hashChangeHandler));
 
   return () => {
     for (const dispose of cleanups) {
@@ -394,6 +484,93 @@ export async function mount(ctx) {
     await loadTimelineForBucket(bucket);
     renderTimeline();
     renderRightPane();
+  }
+
+  async function applyConversationDeepLink() {
+    const link = view.deepLink;
+    if (!link || link.applied) return;
+    if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
+      view.channel = link.channel === 'all' ? 'all' : link.channel;
+      for (const btn of refs.channelFilterButtons) {
+        btn.classList.toggle('is-active', btn.dataset.channel === view.channel);
+      }
+    }
+    if (link.account_key) {
+      view.account = link.account_key;
+      if (refs.accountFilter) refs.accountFilter.value = link.account_key;
+    }
+    if (link.message_key && messagesCollection) {
+      try {
+        const doc = await messagesCollection.findOne(link.message_key).exec();
+        const message = doc?.toJSON?.();
+        if (message) {
+          link.thread_key ||= message.thread_key || '';
+          link.account_key ||= message.account_key || '';
+          link.channel ||= message.channel || '';
+          view.highlightedMessageKey = message.message_key || link.message_key;
+        }
+      } catch (error) {
+        console.warn('[conversations] deep link message lookup failed:', error);
+      }
+    }
+    const bucket = findBucketForDeepLink(link);
+    if (bucket) {
+      view.selectedBucketKey = bucket.key;
+      view.selectedChannel = link.channel && bucket.channels.has(link.channel) ? link.channel : ALL_CHANNELS_TAB;
+      view.timelineLimit = MESSAGE_PAGE_SIZE;
+      link.resolved = true;
+    }
+    view.outboundContext = await loadOutboundContextForLink(link);
+    link.applied = true;
+  }
+
+  async function loadOutboundContextForLink(link = {}) {
+    if (!outboundMessagesCollection && !outboundEngagementsCollection && !outboundCampaignsCollection) return null;
+    let outboundMessage = null;
+    if (link.outbound_message_id && outboundMessagesCollection) {
+      outboundMessage = await findOneJson(outboundMessagesCollection, link.outbound_message_id);
+    }
+    if (!outboundMessage && outboundMessagesCollection && (link.message_key || link.thread_key || link.engagement_id)) {
+      const docs = await outboundMessagesCollection.find().exec();
+      outboundMessage = docs
+        .map((doc) => doc.toJSON())
+        .find((message) => (
+          (link.message_key && (message.communication_message_key === link.message_key || message.payload?.communication_message_key === link.message_key))
+          || (link.thread_key && (message.thread_key === link.thread_key || message.payload?.thread_key === link.thread_key))
+          || (link.engagement_id && message.engagement_id === link.engagement_id)
+        )) || null;
+    }
+    let engagement = null;
+    const engagementId = link.engagement_id || outboundMessage?.engagement_id || '';
+    if (engagementId && outboundEngagementsCollection) {
+      engagement = await findOneJson(outboundEngagementsCollection, engagementId);
+    }
+    let campaign = null;
+    const campaignId = link.campaign_id || outboundMessage?.campaign_id || engagement?.campaign_id || '';
+    if (campaignId && outboundCampaignsCollection) {
+      campaign = await findOneJson(outboundCampaignsCollection, campaignId);
+    }
+    let pipeline = null;
+    let contact = null;
+    if (engagement?.pipeline_id && outboundPipelineItemsCollection) {
+      pipeline = await findOneJson(outboundPipelineItemsCollection, engagement.pipeline_id);
+      contact = contactForOutboundEngagement(pipeline, engagement);
+    }
+    let approvals = [];
+    if (outboundMessage?.id && outboundApprovalsCollection) {
+      const docs = await outboundApprovalsCollection.find().exec();
+      approvals = docs.map((doc) => doc.toJSON()).filter((item) => item.message_id === outboundMessage.id);
+      approvals.sort((a, b) => (Number(b.updated_at_ms) || 0) - (Number(a.updated_at_ms) || 0));
+    }
+    if (!outboundMessage && !engagement && !campaign) return null;
+    return { campaign, pipeline, contact, engagement, message: outboundMessage, approvals };
+  }
+
+  function findBucketForDeepLink(link = {}) {
+    return view.buckets.find((bucket) => link.thread_key && bucket.threadKeys.has(link.thread_key))
+      || view.buckets.find((bucket) => link.account_key && bucket.accountKeys.has(link.account_key))
+      || view.buckets.find((bucket) => bucket.threads.some((thread) => metadataMatchesOutboundLink(thread.metadata_json, link)))
+      || null;
   }
 
   // ----- bucketing -----
@@ -558,6 +735,8 @@ export async function mount(ctx) {
     view.selectedBucketKey = bucketKey;
     view.selectedChannel = ALL_CHANNELS_TAB;
     view.timelineLimit = MESSAGE_PAGE_SIZE;
+    view.outboundContext = null;
+    view.highlightedMessageKey = '';
     markActiveBucket();
     renderDetail();
   }
@@ -675,12 +854,22 @@ export async function mount(ctx) {
       }
       refs.timeline.appendChild(buildMessageBubble(msg));
     }
-    refs.timeline.scrollTop = refs.timeline.scrollHeight;
+    const highlighted = Array.from(refs.timeline.querySelectorAll('.conv-message'))
+      .find((node) => node.dataset.messageKey === view.highlightedMessageKey);
+    if (highlighted) {
+      highlighted.scrollIntoView({ block: 'center' });
+    } else {
+      refs.timeline.scrollTop = refs.timeline.scrollHeight;
+    }
   }
 
   function buildMessageBubble(msg) {
     const el = document.createElement('article');
     el.className = 'conv-message';
+    if (view.highlightedMessageKey && msg.message_key === view.highlightedMessageKey) {
+      el.classList.add('is-highlighted');
+      el.setAttribute('aria-current', 'true');
+    }
     el.dataset.channel = msg.channel || '';
     el.dataset.direction = msg.direction || 'inbound';
     el.dataset.status = msg.status || '';
@@ -983,6 +1172,14 @@ export async function mount(ctx) {
       items.push({ type: 'separator' });
     }
     items.push({
+      label: 'Chat to CTOX',
+      icon: '💬',
+      action: () => {
+        spawnMessageCtoxForm(event.clientX, event.clientY, msg);
+      }
+    });
+    items.push({ type: 'separator' });
+    items.push({
       label: t('contextCopyId', 'Message-Key kopieren'),
       icon: '⧉',
       action: () => copyToClipboard(msg.message_key),
@@ -1017,6 +1214,124 @@ export async function mount(ctx) {
       });
     }
     ctx.contextMenu.show(event, items);
+  }
+
+  function spawnMessageCtoxForm(x, y, msg) {
+    const menu = document.createElement('div');
+    menu.className = 'ctox-context-menu';
+    menu.style.position = 'fixed';
+    menu.hidden = true;
+    document.body.append(menu);
+
+    const escapeHtml = (val) => String(val || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+
+    const label = msg.subject || msg.sender_address || 'Nachricht';
+
+    menu.innerHTML = `
+      <form class="conversations-context-chat" data-conversations-context-form>
+        <header>
+          <div>
+            <strong>Chat to CTOX</strong>
+            <span>Nachricht · ${escapeHtml(msg.channel || 'conversations')}</span>
+          </div>
+          <button type="button" data-context-close aria-label="Schließen">×</button>
+        </header>
+        <div class="conversations-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
+          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
+          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
+        </div>
+        <textarea data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
+        <footer>
+          <span data-context-status></span>
+          <button type="submit">Senden</button>
+        </footer>
+      </form>
+    `;
+
+    menu.hidden = false;
+    const rect = menu.getBoundingClientRect();
+    const left = Math.min(x, window.innerWidth - rect.width - 8);
+    const top = Math.min(y, window.innerHeight - rect.height - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+
+    const form = menu.querySelector('[data-conversations-context-form]');
+    const textarea = menu.querySelector('[data-context-message]');
+    const status = menu.querySelector('[data-context-status]');
+
+    menu.querySelector('[data-context-close]')?.addEventListener('click', () => {
+      menu.remove();
+    });
+
+    const handleOutside = (e) => {
+      if (!menu.contains(e.target)) {
+        menu.remove();
+        document.removeEventListener('click', handleOutside, true);
+      }
+    };
+    document.addEventListener('click', handleOutside, true);
+
+    form?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const instruction = String(textarea?.value || '').trim();
+      if (!instruction) {
+        textarea?.focus();
+        return;
+      }
+      const mode = new FormData(form).get('contextMode') || 'data';
+      status.textContent = 'Gesendet.';
+
+      const title = `${mode === 'app' ? 'Conversations App modifizieren' : 'Nachricht bearbeiten'} · ${msg.channel || 'conversations'}`;
+      const context = {
+        module: 'conversations',
+        column: msg.channel || 'conversations',
+        record_type: 'message',
+        record_id: msg.message_key || '',
+        label,
+        text: (msg.body_text || msg.preview || '').slice(0, 240)
+      };
+
+      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+        detail: {
+          text: instruction,
+          module: 'conversations',
+          source_title: 'Conversations',
+          command_type: mode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
+          record_id: msg.message_key || 'conversations',
+          title,
+          instruction,
+          payload: {
+            title,
+            instruction,
+            prompt: instruction,
+            user_message: instruction,
+            mode,
+            target: mode === 'app' ? 'app' : 'data',
+            selected_message: msg,
+            context,
+            thread_key: 'business-os/conversations',
+          },
+          client_context: {
+            action: 'context-chat',
+            mode,
+            column: msg.channel,
+            message_key: msg.message_key,
+          },
+        },
+      }));
+
+      setTimeout(() => {
+        menu.remove();
+        document.removeEventListener('click', handleOutside, true);
+      }, 650);
+    });
+
+    requestAnimationFrame(() => textarea?.focus());
   }
 
   function copyToClipboard(value) {
@@ -1088,7 +1403,289 @@ export async function mount(ctx) {
     }
 
     renderAccountsCard(bucket);
+    renderOutboundCard(bucket);
     renderFolderCard(bucket);
+  }
+
+  function renderOutboundCard(bucket) {
+    if (!refs.outboundCard || !refs.outboundBody) return;
+    const context = view.outboundContext || outboundContextFromBucket(bucket);
+    if (!context) {
+      refs.outboundCard.hidden = true;
+      refs.outboundBody.replaceChildren();
+      return;
+    }
+    refs.outboundCard.hidden = false;
+    refs.outboundBody.replaceChildren();
+
+    const campaign = context.campaign || {};
+    const engagement = context.engagement || {};
+    const message = context.message || {};
+    const latestApproval = context.approvals?.[0] || null;
+    const leadName = context.contact?.name
+      || context.contact?.full_name
+      || engagement.payload?.contact_name
+      || message.recipient_email
+      || formatParticipantHandles(bucket.participants);
+    const companyName = context.pipeline?.company_name || engagement.payload?.company_name || campaign.name || '';
+
+    const summary = document.createElement('div');
+    summary.className = 'conv-outbound-summary';
+    summary.innerHTML = `
+      <strong></strong>
+      <span></span>
+      <span></span>
+    `;
+    summary.querySelector('strong').textContent = campaign.name || campaign.id || 'Outbound Campaign';
+    summary.querySelectorAll('span')[0].textContent = [companyName, leadName].filter(Boolean).join(' · ') || engagement.id || message.id || '';
+    summary.querySelectorAll('span')[1].textContent = outboundStatusLine({
+      engagement,
+      message,
+      latestApproval,
+      statusNote: view.outboundStatus,
+    });
+    refs.outboundBody.appendChild(summary);
+
+    const rows = [
+      ['Campaign', campaign.id || message.campaign_id || engagement.campaign_id],
+      ['Engagement', engagement.id || message.engagement_id],
+      ['Message', message.id],
+      ['Approval', message.approval_status || latestApproval?.decision],
+      ['Lead', leadName],
+      ['Sequenz', engagement.sequence_id || message.payload?.sequence_id],
+    ].filter(([, value]) => value);
+    if (rows.length) {
+      const dl = document.createElement('dl');
+      dl.className = 'conv-outbound-facts';
+      for (const [label, value] of rows) {
+        const dt = document.createElement('dt');
+        dt.textContent = label;
+        const dd = document.createElement('dd');
+        dd.textContent = String(value);
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      }
+      refs.outboundBody.appendChild(dl);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'conv-outbound-actions';
+    const openBtn = document.createElement('button');
+    openBtn.type = 'button';
+    openBtn.className = 'conv-action-button';
+    openBtn.textContent = t('outboundOpenCampaign', 'In Outbound öffnen');
+    openBtn.addEventListener('click', () => openOutboundContext(context));
+    actions.appendChild(openBtn);
+
+    if (canApproveOutboundMessage(message)) {
+      const approveBtn = document.createElement('button');
+      approveBtn.type = 'button';
+      approveBtn.className = 'conv-action-button conv-action-button--primary';
+      approveBtn.textContent = t('outboundApprove', 'Freigeben');
+      approveBtn.addEventListener('click', () => approveOutboundMessageFromConversations(message.id));
+      actions.appendChild(approveBtn);
+
+      const rejectBtn = document.createElement('button');
+      rejectBtn.type = 'button';
+      rejectBtn.className = 'conv-action-button';
+      rejectBtn.textContent = t('outboundReject', 'Ablehnen');
+      rejectBtn.addEventListener('click', () => rejectOutboundMessageFromConversations(message.id));
+      actions.appendChild(rejectBtn);
+    }
+    refs.outboundBody.appendChild(actions);
+
+    const inboundReply = inboundReplyForContext(context, bucket);
+    if (engagement.id && inboundReply) {
+      maybeAutoMatchOutboundReply(context, inboundReply);
+      refs.outboundBody.appendChild(buildReplyClassificationControl(context, inboundReply));
+    }
+  }
+
+  function buildReplyClassificationControl(context, inboundReply) {
+    const wrap = document.createElement('div');
+    wrap.className = 'conv-outbound-reply-classifier';
+    const current = context.engagement?.payload?.reply_classification || 'unclear';
+    wrap.innerHTML = `
+      <label>
+        <span></span>
+        <select></select>
+      </label>
+      <button type="button" class="conv-action-button conv-action-button--primary"></button>
+      <small></small>
+    `;
+    wrap.querySelector('label span').textContent = t('outboundReplyClassification', 'Reply-Klasse');
+    const select = wrap.querySelector('select');
+    for (const option of OUTBOUND_REPLY_CLASSIFICATIONS) {
+      const opt = document.createElement('option');
+      opt.value = option;
+      opt.textContent = labelForReplyClassification(option);
+      select.appendChild(opt);
+    }
+    select.value = OUTBOUND_REPLY_CLASSIFICATIONS.includes(current) ? current : 'unclear';
+    wrap.querySelector('button').textContent = t('outboundReplyClassify', 'Klassifizieren');
+    wrap.querySelector('small').textContent = `${t('outboundReplyLabel', 'Antwort')}: ${shortenId(inboundReply.message_key || inboundReply.remote_id || '')}`;
+    wrap.querySelector('button').addEventListener('click', async () => {
+      await classifyOutboundReply({
+        engagementId: context.engagement.id,
+        replyMessageKey: inboundReply.message_key || '',
+        classification: select.value,
+      });
+    });
+    return wrap;
+  }
+
+  function outboundContextFromBucket(bucket) {
+    if (view.outboundContext || !bucket) return view.outboundContext;
+    const threadContext = bucket.threads
+      .map((thread) => outboundLinkFromMetadata(thread.metadata_json))
+      .find(Boolean);
+    const messageContext = view.timelineMessages
+      .map((message) => outboundLinkFromMetadata(message.metadata_json))
+      .find(Boolean);
+    const link = threadContext || messageContext;
+    if (!link) return null;
+    loadOutboundContextForLink(link).then((context) => {
+      view.outboundContext = context;
+      renderRightPane();
+    }).catch((error) => console.warn('[conversations] outbound context lookup failed:', error));
+    return null;
+  }
+
+  function outboundStatusLine({ engagement = {}, message = {}, latestApproval = null, statusNote = '' } = {}) {
+    const parts = [];
+    if (statusNote) parts.push(statusNote);
+    if (engagement.status) parts.push(`Engagement: ${engagement.status}`);
+    if (message.approval_status) {
+      const approval = message.approval_status === 'awaiting_approval'
+        ? t('outboundAwaitingApproval', 'wartet auf Freigabe')
+        : message.approval_status;
+      parts.push(`Approval: ${approval}`);
+    }
+    if (message.send_status) parts.push(`Versand: ${message.send_status}`);
+    if (latestApproval?.decision) parts.push(`Letzte Entscheidung: ${latestApproval.decision}`);
+    return parts.join(' · ') || 'Outbound-Kontext';
+  }
+
+  function canApproveOutboundMessage(message = {}) {
+    if (!message.id) return false;
+    if (message.approval_status !== 'awaiting_approval') return false;
+    if (message.send_status && message.send_status !== 'awaiting_approval') return false;
+    if (!message.subject && message.channel !== 'physical_letter') return false;
+    if (!message.body_text && !message.body_html) return false;
+    if (message.channel === 'physical_letter') return Boolean(message.recipient_address_text || message.payload?.recipient_address_text);
+    return Boolean(message.recipient_email);
+  }
+
+  function inboundReplyForContext(context = {}, bucket = null) {
+    const replyMessageId = context.engagement?.payload?.reply_message_id || '';
+    if (replyMessageId) {
+      const existing = view.timelineMessages.find((message) => message.message_key === replyMessageId);
+      if (existing) return existing;
+    }
+    const outboundThreadKey = context.message?.thread_key || context.message?.payload?.thread_key || '';
+    const candidates = view.timelineMessages
+      .filter((message) => message.direction === 'inbound')
+      .filter((message) => !outboundThreadKey || message.thread_key === outboundThreadKey || bucket?.threadKeys?.has(message.thread_key));
+    return candidates.sort((a, b) => compareIsoDesc(a.external_created_at, b.external_created_at))[0] || null;
+  }
+
+  function openOutboundContext(context = {}) {
+    const campaignId = context.campaign?.id || context.message?.campaign_id || context.engagement?.campaign_id || '';
+    const engagementId = context.engagement?.id || context.message?.engagement_id || '';
+    const messageId = context.message?.id || '';
+    const params = new URLSearchParams();
+    if (campaignId) params.set('campaign_id', campaignId);
+    if (engagementId) params.set('engagement_id', engagementId);
+    if (messageId) params.set('message_id', messageId);
+    const next = params.toString() ? `#outbound?${params.toString()}` : '#outbound';
+    if (location.hash === next) {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    } else {
+      location.hash = next;
+    }
+  }
+
+  async function approveOutboundMessageFromConversations(messageId) {
+    await dispatchOutboundCommand('outbound.message.approve', messageId, { message_id: messageId });
+    view.outboundStatus = t('outboundApprove', 'Freigeben');
+  }
+
+  async function rejectOutboundMessageFromConversations(messageId) {
+    await dispatchOutboundCommand('outbound.message.reject', messageId, {
+      message_id: messageId,
+      comment: 'Rejected from Conversations',
+    });
+    view.outboundStatus = t('outboundReject', 'Ablehnen');
+  }
+
+  async function classifyOutboundReply({ engagementId, replyMessageKey, classification }) {
+    await dispatchOutboundCommand('outbound.reply.classify', engagementId, {
+      engagement_id: engagementId,
+      classification,
+      reply_message_id: replyMessageKey,
+    });
+    if (view.outboundContext?.engagement?.id === engagementId) {
+      view.outboundContext.engagement.status = 'reply_received';
+      view.outboundContext.engagement.payload = {
+        ...(view.outboundContext.engagement.payload || {}),
+        reply_classification: classification,
+        reply_message_id: replyMessageKey,
+      };
+    }
+    renderRightPane();
+  }
+
+  function maybeAutoMatchOutboundReply(context = {}, inboundReply = {}) {
+    const engagementId = context.engagement?.id || context.message?.engagement_id || '';
+    const replyMessageKey = inboundReply.message_key || '';
+    if (!engagementId || !replyMessageKey) return;
+    if (context.engagement?.payload?.reply_message_id === replyMessageKey) return;
+    const dedupeKey = `${engagementId}:${replyMessageKey}`;
+    if (view.outboundReplyMatchKeys.has(dedupeKey)) return;
+    view.outboundReplyMatchKeys.add(dedupeKey);
+    dispatchOutboundCommand('outbound.reply.match', engagementId, {
+      engagement_id: engagementId,
+      outbound_message_id: context.message?.id || '',
+      reply_message_id: replyMessageKey,
+      classification: context.engagement?.payload?.reply_classification || 'unclear',
+    }).then(() => {
+      if (view.outboundContext?.engagement?.id === engagementId) {
+        view.outboundContext.engagement.status = 'reply_received';
+        view.outboundContext.engagement.payload = {
+          ...(view.outboundContext.engagement.payload || {}),
+          reply_message_id: replyMessageKey,
+          reply_classification: context.engagement?.payload?.reply_classification || 'unclear',
+        };
+      }
+      view.outboundStatus = t('outboundReplyMatched', 'Antwort automatisch zugeordnet');
+      renderRightPane();
+    }).catch((error) => {
+      view.outboundReplyMatchKeys.delete(dedupeKey);
+      console.warn('[conversations] outbound reply auto-match failed:', error);
+    });
+  }
+
+  async function dispatchOutboundCommand(type, recordId, payload) {
+    if (!ctx.commandBus?.dispatch) {
+      throw new Error('RxDB command bus is not available');
+    }
+    const commandId = `cmd_${type.replaceAll('.', '_')}_${crypto.randomUUID()}`;
+    await ctx.commandBus.dispatch({
+      id: commandId,
+      module: 'outbound',
+      type,
+      record_id: recordId || '',
+      payload,
+      client_context: {
+        source_module: 'conversations',
+        deep_link: view.deepLink || {},
+      },
+    });
+    ctx.notifications?.show?.({
+      type: 'info',
+      title: 'Outbound',
+      message: type,
+    });
   }
 
   function renderAccountsCard(bucket) {
@@ -1214,6 +1811,8 @@ function collectRefs(root) {
     contactAvatar: root.querySelector('[data-conv-contact-avatar]'),
     contactName: root.querySelector('[data-conv-contact-name]'),
     contactHandle: root.querySelector('[data-conv-contact-handle]'),
+    outboundCard: root.querySelector('[data-conv-outbound-card]'),
+    outboundBody: root.querySelector('[data-conv-outbound-card-body]'),
     channelsBody: root.querySelector('[data-conv-channels-card-body]'),
     accountsBody: root.querySelector('[data-conv-accounts-card-body]'),
     folderCard: root.querySelector('[data-conv-folder-card]'),
@@ -1237,6 +1836,7 @@ function applyStaticLabels(root, t) {
     '[data-right-empty-body]': 'rightEmptyBody',
     '[data-conv-card-label-contact]': 'cardLabelContact',
     '[data-conv-card-label-channels]': 'cardLabelChannels',
+    '[data-conv-card-label-outbound]': 'cardLabelOutbound',
     '[data-conv-card-label-stats]': 'cardLabelStats',
     '[data-conv-card-label-accounts]': 'cardLabelAccounts',
     '[data-conv-card-label-folder]': 'cardLabelFolder',
@@ -1313,6 +1913,115 @@ function filterBuckets(buckets, view, t) {
     }
     return true;
   });
+}
+
+function parseConversationDeepLink() {
+  const query = String(location.hash || '').split('?')[1] || '';
+  const params = new URLSearchParams(query);
+  return {
+    campaign_id: cleanParam(params.get('campaign_id')),
+    engagement_id: cleanParam(params.get('engagement_id')),
+    outbound_message_id: cleanParam(params.get('outbound_message_id') || params.get('message_id')),
+    thread_key: cleanParam(params.get('thread_key')),
+    message_key: cleanParam(params.get('message_key')),
+    account_key: cleanParam(params.get('account_key')),
+    channel: normalizeConversationChannel(params.get('channel')),
+    applied: false,
+    resolved: false,
+  };
+}
+
+function metadataMatchesOutboundLink(metadata, link = {}) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const values = new Set();
+  collectMetadataValues(metadata, values);
+  return Boolean(
+    (link.campaign_id && values.has(link.campaign_id))
+    || (link.engagement_id && values.has(link.engagement_id))
+    || (link.outbound_message_id && values.has(link.outbound_message_id)),
+  );
+}
+
+function outboundLinkFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null;
+  const link = {
+    campaign_id: firstMetadataValue(metadata, ['campaign_id', 'outbound_campaign_id']),
+    engagement_id: firstMetadataValue(metadata, ['engagement_id', 'outbound_engagement_id']),
+    outbound_message_id: firstMetadataValue(metadata, ['outbound_message_id', 'message_id']),
+    thread_key: firstMetadataValue(metadata, ['thread_key', 'communication_thread_key']),
+    message_key: firstMetadataValue(metadata, ['message_key', 'communication_message_key']),
+    account_key: firstMetadataValue(metadata, ['account_key', 'communication_account_key']),
+    channel: normalizeConversationChannel(firstMetadataValue(metadata, ['channel'])),
+    applied: false,
+    resolved: false,
+  };
+  return Object.values(link).some(Boolean) ? link : null;
+}
+
+function firstMetadataValue(value, keys) {
+  if (!value || typeof value !== 'object') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const nested = firstMetadataValue(item, keys);
+      if (nested) return nested;
+    }
+    return '';
+  }
+  for (const key of keys) {
+    if (value[key] != null && typeof value[key] !== 'object') return cleanParam(value[key]);
+  }
+  for (const item of Object.values(value)) {
+    const nested = firstMetadataValue(item, keys);
+    if (nested) return nested;
+  }
+  return '';
+}
+
+function collectMetadataValues(value, out) {
+  if (value == null) return;
+  if (typeof value === 'string' || typeof value === 'number') {
+    out.add(String(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectMetadataValues(item, out));
+    return;
+  }
+  if (typeof value === 'object') {
+    Object.values(value).forEach((item) => collectMetadataValues(item, out));
+  }
+}
+
+function cleanParam(value) {
+  return String(value || '').trim();
+}
+
+function normalizeConversationChannel(value) {
+  const channel = cleanParam(value);
+  if (channel === 'physical_letter') return 'email';
+  return SUPPORTED_CHANNELS.includes(channel) || channel === 'all' ? channel : '';
+}
+
+async function findOneJson(collection, id) {
+  if (!collection || !id) return null;
+  const doc = await collection.findOne(id).exec();
+  return doc?.toJSON?.() || null;
+}
+
+function contactForOutboundEngagement(pipeline, engagement) {
+  const contacts = Array.isArray(pipeline?.contacts) ? pipeline.contacts : [];
+  if (!contacts.length || !engagement) return null;
+  const contactId = cleanParam(engagement.contact_id);
+  const email = cleanParam(engagement.payload?.contact_email || '').toLowerCase();
+  return contacts.find((contact) => {
+    const ids = [contact.id, contact.contact_id, contact.outbound_contact_id, contact.key]
+      .map(cleanParam)
+      .filter(Boolean);
+    return contactId && ids.includes(contactId);
+  }) || contacts.find((contact) => {
+    const candidate = cleanParam(contact.email || contact.email_address).toLowerCase();
+    return email && candidate === email;
+  }) || null;
 }
 
 function dateCutoff(range) {
@@ -1432,6 +2141,19 @@ function labelForTrust(level, t) {
     case 'low': return t('trustLow', 'Niedrig');
     case 'unknown': return t('trustUnknown', 'Unbekannt');
     default: return level || '';
+  }
+}
+
+function labelForReplyClassification(value) {
+  switch (value) {
+    case 'positive': return 'positiv';
+    case 'negative': return 'negativ';
+    case 'objection': return 'Einwand';
+    case 'out_of_office': return 'Out of office';
+    case 'referral': return 'Weiterleitung';
+    case 'unsubscribe': return 'Unsubscribe';
+    case 'unclear': return 'unklar';
+    default: return value || '';
   }
 }
 

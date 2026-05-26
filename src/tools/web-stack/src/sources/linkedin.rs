@@ -39,14 +39,20 @@ use anyhow::anyhow;
 use serde_json::Value;
 
 use super::{
-    Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx, SourceError, SourceHit,
-    SourceModule, SourceReadResult, Tier,
+    BrowserSourceRecipe, Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx,
+    SourceError, SourceHit, SourceModule, SourceReadResult, Tier,
 };
 use crate::runtime_config;
 
 const API_BASE: &str = "https://api.linkedin.com/v2";
 const PROFILE_BASE: &str = "https://www.linkedin.com/in";
 const SECRET_NAME: &str = "LINKEDIN_SALES_NAV_TOKEN";
+const LOGIN_URL: &str = "https://www.linkedin.com/login";
+const VERIFY_SELECTOR: &str =
+    "a[href*=\"/in/\"], input[placeholder*=\"Search\"], [data-control-name=\"identity_welcome_message\"]";
+const CREDENTIAL_SELECTOR: &str =
+    "input[name=\"session_password\"], input#password, input[type=\"password\"]";
+const CAPTURE_SCRIPT: &str = "linkedin.profile_capture.v1";
 const MAX_HITS: usize = 10;
 const TIMEOUT_MS: u64 = 12_000;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
@@ -86,6 +92,22 @@ impl SourceModule for LinkedIn {
 
     fn requires_credential(&self) -> Option<&'static str> {
         Some(SECRET_NAME)
+    }
+
+    fn browser_recipe(&self) -> Option<BrowserSourceRecipe> {
+        Some(BrowserSourceRecipe {
+            source_id: self.id(),
+            login_url: LOGIN_URL.to_string(),
+            allowed_domains: vec![
+                "linkedin.com".to_string(),
+                "www.linkedin.com".to_string(),
+                "api.linkedin.com".to_string(),
+            ],
+            required_secret_name: Some(SECRET_NAME),
+            verify_selector: Some(VERIFY_SELECTOR),
+            credential_selector: Some(CREDENTIAL_SELECTOR),
+            capture_script: Some(CAPTURE_SCRIPT),
+        })
     }
 
     fn shape_query(&self, _query: &str, _ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {

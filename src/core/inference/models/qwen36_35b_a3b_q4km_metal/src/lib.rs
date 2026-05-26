@@ -1,5 +1,5 @@
 // Origin: CTOX
-// License: Apache-2.0
+// License: AGPL-3.0-only
 
 //! Self-contained Qwen3.6-35B-A3B Q4_K_M Metal-only inference engine
 //! for Apple Silicon (M-series). Stage-1 skeleton.

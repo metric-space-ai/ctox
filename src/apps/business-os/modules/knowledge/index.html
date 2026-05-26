@@ -1,15 +1,20 @@
 <main class="knowledge-module" data-knowledge-root>
       <section class="knowledge-pane knowledge-left" aria-label="Knowledge">
-        <header class="knowledge-pane-head">
-          <div>
-            <span data-i18n="leftEyebrow">Research</span>
-            <h2 data-i18n="leftTitle">Knowledge</h2>
+        <header class="ctox-pane-header">
+          <div class="ctox-pane-title-row">
+            <div class="ctox-pane-titles">
+              <span class="ctox-pane-kicker" data-i18n="leftEyebrow">Research</span>
+              <h2 class="ctox-pane-title" data-i18n="leftTitle">Knowledge</h2>
+            </div>
+            <div class="ctox-pane-actions">
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
+              <button class="ctox-pane-icon icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
+            </div>
           </div>
-          <div class="knowledge-pane-actions">
-            <button class="icon-button" type="button" data-icon="plus" data-action="create-knowledge-book" aria-label="Knowledge Book erstellen" title="Knowledge Book erstellen"></button>
-            <button class="icon-button" type="button" data-icon="import" data-action="import-knowledge-book" aria-label="Knowledge Book importieren" title="Knowledge Book importieren"></button>
-            <button class="icon-button" type="button" data-icon="export" data-action="export-knowledge-book" aria-label="Knowledge Books exportieren" title="Knowledge Books exportieren"></button>
-            <button class="icon-button" type="button" data-icon="settings" data-action="configure-knowledge" aria-label="Knowledge konfigurieren" title="Knowledge konfigurieren"></button>
+          <div class="ctox-pane-tools">
+            <input class="ctox-pane-search" data-search placeholder="Suchen..." />
           </div>
         </header>
         <div class="knowledge-scope-switch" role="tablist" aria-label="Knowledge Quelle">
@@ -17,22 +22,23 @@
           <button type="button" data-scope="system" aria-pressed="false">System</button>
           <button type="button" data-scope="all" aria-pressed="false">Alle</button>
         </div>
-        <div class="knowledge-tools">
-          <input data-search placeholder="Suchen..." />
-        </div>
         <div class="knowledge-scroll" data-knowledge-list></div>
       </section>
 
       <section class="knowledge-pane knowledge-center" aria-label="Knowledge Dokument">
-        <header class="knowledge-pane-head knowledge-center-head">
-          <div>
-            <span data-selected-kind>Knowledge</span>
-            <h2 data-selected-title>Knowledge</h2>
-          </div>
-          <div class="segmented" role="tablist" aria-label="Knowledge Ansicht">
-            <button type="button" data-tab="skill" aria-pressed="true">Skill</button>
-            <button type="button" data-tab="runbooks" aria-pressed="false">Runbooks</button>
-            <button type="button" data-tab="data" aria-pressed="false">Data</button>
+        <header class="ctox-pane-header knowledge-center-head">
+          <div class="ctox-pane-title-row">
+            <div class="ctox-pane-titles">
+              <span class="ctox-pane-kicker" data-selected-kind>Knowledge</span>
+              <h2 class="ctox-pane-title" data-selected-title>Knowledge</h2>
+            </div>
+            <div class="ctox-pane-actions">
+              <div class="ctox-pane-tabs segmented" role="tablist" aria-label="Knowledge Ansicht">
+                <button type="button" class="ctox-pane-tab" data-tab="skill" aria-pressed="true">Skill</button>
+                <button type="button" class="ctox-pane-tab" data-tab="runbooks" aria-pressed="false">Runbooks</button>
+                <button type="button" class="ctox-pane-tab" data-tab="data" aria-pressed="false">Data</button>
+              </div>
+            </div>
           </div>
         </header>
         <div class="knowledge-tab-panel" data-panel="skill">
