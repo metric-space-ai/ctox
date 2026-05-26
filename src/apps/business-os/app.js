@@ -1638,6 +1638,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     .filter((collection) => requiredCollectionSet.has(collection));
   const optionalReconnectingCollections = reconnectingCollections
     .filter((collection) => !requiredCollectionSet.has(collection));
+  const frameTransport = buildAdvancedStatusFrameTransport(collectionValues, requiredCollections);
   const peerSessions = collectionValues
     .filter((item) => item?.remotePeerSession)
     .map((item) => ({
@@ -1678,6 +1679,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     noReplicationIoErrors: replicationErrors.length === 0,
     noFailedCollections: failedCollections.length === 0,
     noStalledReconnect: requiredReconnectingCollections.length === 0,
+    frameTransportRealtimeHealthy: frameTransport.healthy,
     noAutomaticRepairRunning: !syncRecoveryRepairRunning,
   };
   const ok = Object.values(checks).every(Boolean);
@@ -1719,6 +1721,7 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       reconnectingCollections,
       requiredReconnectingCollections,
       optionalReconnectingCollections,
+      frameTransport,
       lifecycleEvents,
       nativePeerRecovery: sanitizeAdvancedStatusNativePeerRecovery(diagnostics?.nativePeerRecovery || diagnostics?.recovery || null),
       requiredCollections,
@@ -1741,6 +1744,148 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       lastError: fileIntegrityErrors[0] || null,
     },
     data: { counts },
+  };
+}
+
+function buildAdvancedStatusFrameTransport(collectionValues, requiredCollections = []) {
+  const requiredSet = new Set(requiredCollections);
+  const entries = collectionValues
+    .map((item) => sanitizeAdvancedStatusFrameTransportEntry(item?.collection, item?.frameTransport))
+    .filter(Boolean);
+  const byCollection = new Map(entries.map((entry) => [entry.collection, entry]));
+  const missingCollections = requiredCollections.filter((collection) => !byCollection.has(collection));
+  const unhealthyCollections = [];
+  const thresholds = {
+    maxAckLagMs: 5000,
+    maxPendingAcks: 16,
+    maxActiveTransfers: 32,
+    maxQueueDepth: 128,
+    maxHighPriorityQueueDepth: 32,
+  };
+  for (const entry of entries) {
+    const reasons = [];
+    if (entry.protocol !== 'ctox-rxdb-frame-v1') reasons.push('protocol');
+    if (requiredSet.has(entry.collection) && entry.activePeerCount < 1) reasons.push('no-active-peer');
+    if (entry.pendingAcks > thresholds.maxPendingAcks) reasons.push('pending-acks');
+    if (entry.activeTransfers > thresholds.maxActiveTransfers) reasons.push('active-transfers');
+    if (entry.priorityQueueDepth > thresholds.maxQueueDepth) reasons.push('queue-depth');
+    if (entry.highPriorityQueueDepth > thresholds.maxHighPriorityQueueDepth) reasons.push('high-priority-queue-depth');
+    if (entry.lastAckLagMs > thresholds.maxAckLagMs) reasons.push('ack-lag');
+    if (entry.sendBufferHighWater > 0 && entry.lastBufferedAmount >= entry.sendBufferHighWater) reasons.push('datachannel-backpressure');
+    if (reasons.length > 0) {
+      unhealthyCollections.push({
+        collection: entry.collection,
+        reasons,
+        required: requiredSet.has(entry.collection),
+      });
+    }
+  }
+  for (const collection of missingCollections) {
+    unhealthyCollections.push({
+      collection,
+      reasons: ['missing-frame-transport-status'],
+      required: true,
+    });
+  }
+  const totals = entries.reduce((acc, entry) => {
+    acc.activePeerCount += entry.activePeerCount;
+    acc.activeTransfers += entry.activeTransfers;
+    acc.pendingAcks += entry.pendingAcks;
+    acc.incomingTransfers += entry.incomingTransfers;
+    acc.sentFrames += entry.sentFrames;
+    acc.sentBytes += entry.sentBytes;
+    acc.receivedFrames += entry.receivedFrames;
+    acc.receivedBytes += entry.receivedBytes;
+    acc.retryCount += entry.retryCount;
+    acc.resumeRequestCount += entry.resumeRequestCount;
+    acc.resumeAckCount += entry.resumeAckCount;
+    acc.backpressureWaitCount += entry.backpressureWaitCount;
+    acc.queuedFrames += entry.queuedFrames;
+    acc.priorityQueueDepth += entry.priorityQueueDepth;
+    acc.highPriorityQueueDepth += entry.highPriorityQueueDepth;
+    acc.normalPriorityQueueDepth += entry.normalPriorityQueueDepth;
+    acc.lowPriorityQueueDepth += entry.lowPriorityQueueDepth;
+    acc.lastAckLagMs = Math.max(acc.lastAckLagMs, entry.lastAckLagMs);
+    acc.lastBufferedAmount = Math.max(acc.lastBufferedAmount, entry.lastBufferedAmount);
+    return acc;
+  }, {
+    activePeerCount: 0,
+    activeTransfers: 0,
+    pendingAcks: 0,
+    incomingTransfers: 0,
+    sentFrames: 0,
+    sentBytes: 0,
+    receivedFrames: 0,
+    receivedBytes: 0,
+    retryCount: 0,
+    resumeRequestCount: 0,
+    resumeAckCount: 0,
+    backpressureWaitCount: 0,
+    queuedFrames: 0,
+    priorityQueueDepth: 0,
+    highPriorityQueueDepth: 0,
+    normalPriorityQueueDepth: 0,
+    lowPriorityQueueDepth: 0,
+    lastAckLagMs: 0,
+    lastBufferedAmount: 0,
+  });
+  return {
+    protocol: 'ctox-rxdb-frame-v1',
+    healthy: unhealthyCollections.length === 0,
+    thresholds,
+    collectionTotal: entries.length,
+    requiredCollectionTotal: requiredCollections.length,
+    missingCollections,
+    unhealthyCollections,
+    totals,
+    entries,
+    collections: entries,
+  };
+}
+
+function sanitizeAdvancedStatusFrameTransportEntry(collection, value) {
+  if (!value || typeof value !== 'object') return null;
+  const numberField = (key) => Number.isFinite(Number(value[key])) ? Number(value[key]) : 0;
+  const stringField = (key, fallback = null, maxLength = 120) => {
+    const raw = value[key];
+    return typeof raw === 'string' && raw.trim() ? raw.slice(0, maxLength) : fallback;
+  };
+  return {
+    collection: stringField('collection', collection || null, 120),
+    topic: stringField('topic', null, 180),
+    protocol: stringField('protocol', 'ctox-rxdb-frame-v1', 80),
+    maxInlineFrameBytes: numberField('maxInlineFrameBytes'),
+    maxChunkChars: numberField('maxChunkChars'),
+    maxTransferBytes: numberField('maxTransferBytes'),
+    ackWindow: numberField('ackWindow'),
+    sendBufferHighWater: numberField('sendBufferHighWater'),
+    sendBufferLowWater: numberField('sendBufferLowWater'),
+    activePeerCount: numberField('activePeerCount'),
+    activeTransfers: numberField('activeTransfers'),
+    pendingAcks: numberField('pendingAcks'),
+    incomingTransfers: numberField('incomingTransfers'),
+    completedAckCacheSize: numberField('completedAckCacheSize'),
+    sentFrames: numberField('sentFrames'),
+    sentBytes: numberField('sentBytes'),
+    receivedFrames: numberField('receivedFrames'),
+    receivedBytes: numberField('receivedBytes'),
+    retryCount: numberField('retryCount'),
+    resumeRequestCount: numberField('resumeRequestCount'),
+    resumeAckCount: numberField('resumeAckCount'),
+    backpressureWaitCount: numberField('backpressureWaitCount'),
+    queuedFrames: numberField('queuedFrames'),
+    sentScheduledFrames: numberField('sentScheduledFrames'),
+    priorityQueueDepth: numberField('priorityQueueDepth'),
+    highPriorityQueueDepth: numberField('highPriorityQueueDepth'),
+    normalPriorityQueueDepth: numberField('normalPriorityQueueDepth'),
+    lowPriorityQueueDepth: numberField('lowPriorityQueueDepth'),
+    lastSendPriority: stringField('lastSendPriority', 'normal', 20),
+    lastAckLagMs: numberField('lastAckLagMs'),
+    lastBufferedAmount: numberField('lastBufferedAmount'),
+    pullInProgress: value.pullInProgress === true,
+    pushInProgress: value.pushInProgress === true,
+    updatedAtMs: numberField('updatedAtMs'),
+    observedAt: stringField('observedAt', null, 80),
   };
 }
 
@@ -4458,11 +4603,15 @@ async function loadModules(options = {}) {
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed: normalized.allowShellSeed !== false,
   });
+  const modules = await ensurePackagedModuleList(
+    normalizeModuleList(catalog.modules),
+    { allowShellSeed: normalized.allowShellSeed !== false }
+  );
   return {
     ok: catalog.ok !== false,
-    modules: normalizeModuleList(catalog.modules),
+    modules,
     governance: catalog.governance || null,
-    catalogFingerprint: moduleCatalogFingerprint(catalog),
+    catalogFingerprint: moduleCatalogFingerprint({ ...catalog, modules }),
   };
 }
 
@@ -4581,6 +4730,18 @@ function normalizeModuleList(modules) {
     normalized.push(mod);
   }
   return normalized;
+}
+
+async function ensurePackagedModuleList(modules, options = {}) {
+  const normalized = normalizeModuleList(modules);
+  if (options.allowShellSeed === false) return normalized;
+  const shellCatalog = await loadPackagedModuleCatalog();
+  if (!Array.isArray(shellCatalog?.modules) || shellCatalog.modules.length === 0) return normalized;
+  const merged = [...normalized];
+  for (const shellMod of normalizeModuleList(shellCatalog.modules)) {
+    if (!merged.some((mod) => mod.id === shellMod.id)) merged.push(shellMod);
+  }
+  return normalizeModuleList(merged);
 }
 
 async function readModuleCatalogProjection(coll) {
@@ -5425,12 +5586,13 @@ function refreshRemoteShellStateInBackground() {
     loadModules({ timeoutMs: 20000, allowShellSeed: false })
       .then((modules) => {
         if (!Array.isArray(modules?.modules) || !modules.modules.length) return;
+        const nextModules = preserveCurrentShellModules(modules.modules, state.modules);
         const currentIds = state.modules.map((mod) => mod.id).join('\n');
-        const nextIds = modules.modules.map((mod) => mod.id).join('\n');
-        const nextFingerprint = modules.catalogFingerprint || '';
+        const nextIds = nextModules.map((mod) => mod.id).join('\n');
+        const nextFingerprint = moduleCatalogFingerprint({ ok: modules.ok !== false, modules: nextModules, governance: modules.governance || null });
         if ((nextFingerprint && nextFingerprint === state.moduleCatalogFingerprint)
           || (!nextFingerprint && currentIds === nextIds)) return;
-        state.modules = modules.modules;
+        state.modules = nextModules;
         state.moduleCatalogFingerprint = nextFingerprint || state.moduleCatalogFingerprint;
         registerCustomModuleIcons();
         state.governance = modules.governance || state.governance;
@@ -5440,6 +5602,25 @@ function refreshRemoteShellStateInBackground() {
       })
       .catch(() => {});
   }, 2000);
+}
+
+function preserveCurrentShellModules(remoteModules, currentModules) {
+  const merged = normalizeModuleList(remoteModules);
+  const seen = new Set(merged.map((mod) => mod.id));
+  for (const mod of normalizeModuleList(currentModules)) {
+    if (!isShellPackagedModule(mod) || seen.has(mod.id)) continue;
+    merged.push(mod);
+    seen.add(mod.id);
+  }
+  return normalizeModuleList(merged);
+}
+
+function isShellPackagedModule(mod) {
+  const entry = String(mod?.entry || '');
+  const source = String(mod?.source || '');
+  return entry.startsWith('modules/')
+    || source === 'business-os-shell'
+    || source === 'business-os-shell-embedded-catalog';
 }
 
 function setStatus(text) {
