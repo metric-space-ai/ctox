@@ -10019,6 +10019,638 @@ mod tests {
     }
 
     #[test]
+    fn outbound_empty_collections_load_without_errors() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        for collection in [
+            "outbound_campaigns",
+            "outbound_engagements",
+            "outbound_messages",
+            "outbound_approvals",
+            "outbound_sequences",
+            "outbound_sender_assignments",
+            "outbound_meeting_requests",
+            "outbound_suppression_entries",
+            "outbound_account_limits",
+        ] {
+            let records =
+                outbound_load_records_by_string_field(&conn, collection, "campaign_id", "missing")?;
+            assert!(
+                records.is_empty(),
+                "expected {collection} to be empty but got {} rows",
+                records.len()
+            );
+            let single = outbound_load_record(&conn, collection, "missing-id")?;
+            assert!(
+                single.is_none(),
+                "expected {collection} missing-id lookup to be None"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_tombstone_marks_record_as_deleted() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        upsert_business_record(
+            &conn,
+            "outbound_messages",
+            "msg_tombstone",
+            1000,
+            serde_json::json!({
+                "id": "msg_tombstone",
+                "engagement_id": "eng_t",
+                "send_status": "draft",
+                "created_at_ms": 1000,
+                "updated_at_ms": 1000,
+            }),
+        )?;
+        // Soft-delete: set deleted = 1
+        conn.execute(
+            "UPDATE business_records SET deleted = 1 WHERE collection = 'outbound_messages' AND record_id = 'msg_tombstone'",
+            [],
+        )?;
+        // After tombstone, outbound_load_record (which filters deleted = 0) must return None
+        let loaded = outbound_load_record(&conn, "outbound_messages", "msg_tombstone")?;
+        assert!(
+            loaded.is_none(),
+            "tombstoned outbound_messages record must not be loadable"
+        );
+        // Re-upserting must re-activate (deleted = 0)
+        upsert_business_record(
+            &conn,
+            "outbound_messages",
+            "msg_tombstone",
+            2000,
+            serde_json::json!({
+                "id": "msg_tombstone",
+                "engagement_id": "eng_t",
+                "send_status": "draft",
+                "updated_at_ms": 2000,
+            }),
+        )?;
+        let reloaded = outbound_load_record(&conn, "outbound_messages", "msg_tombstone")?;
+        assert!(
+            reloaded.is_some(),
+            "re-upserted record must replace the tombstone"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_message_send_blocked_when_recipient_is_suppressed() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_supp",
+                "command_id": "cmd_eng_supp",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_supp",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_supp",
+                    "company_id": "co_supp",
+                    "contact_id": "ct_supp"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_supp",
+                "command_id": "cmd_msg_supp",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_supp",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_supp",
+                    "campaign_id": "camp_supp",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "blocked@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_supp_entry",
+                "command_id": "cmd_supp_entry",
+                "module": "outbound",
+                "command_type": "outbound.suppression.add",
+                "record_id": "supp_blocked",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "supp_blocked",
+                    "email": "blocked@example.com",
+                    "reason": "unsubscribe",
+                    "status": "active"
+                },
+                "client_context": actor.clone()
+            }),
+        )
+        .ok();
+        // The suppression collection is generic; insert directly to bypass any module guard.
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_suppression_entries",
+                "supp_blocked",
+                1000,
+                serde_json::json!({
+                    "id": "supp_blocked",
+                    "email": "blocked@example.com",
+                    "reason": "unsubscribe",
+                    "status": "active",
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_supp",
+                "command_id": "cmd_req_supp",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_supp",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_supp" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_supp",
+                "command_id": "cmd_apv_supp",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_supp",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_supp" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let blocked = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_supp",
+                "command_id": "cmd_send_supp",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_supp",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_supp" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("send must be blocked by suppression");
+        assert!(
+            blocked.to_string().contains("suppressed"),
+            "{blocked}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_message_send_is_idempotent_after_queueing() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_idem",
+                "command_id": "cmd_eng_idem",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_idem",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_idem",
+                    "company_id": "co_idem",
+                    "contact_id": "ct_idem"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_idem",
+                "command_id": "cmd_msg_idem",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_idem",
+                    "campaign_id": "camp_idem",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_idem",
+                "command_id": "cmd_req_idem",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_idem" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_idem",
+                "command_id": "cmd_apv_idem",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_idem" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let first = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_idem_1",
+                "command_id": "cmd_send_idem_1",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_idem" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            first
+                .pointer("/result/provider_dispatch_status")
+                .and_then(Value::as_str),
+            Some("queued_in_mailserver")
+        );
+        let first_queue_id = first
+            .pointer("/result/provider_queue_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        assert!(first_queue_id.is_some(), "expected provider_queue_id");
+
+        let second = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_idem_2",
+                "command_id": "cmd_send_idem_2",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_idem" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            second.pointer("/result/idempotent").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            second
+                .pointer("/result/provider_queue_id")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            first_queue_id
+        );
+
+        // Ensure stalwart_smtp_queue contains exactly one queued row.
+        let queue_conn = Connection::open(crate::paths::core_db(root))?;
+        let count: i64 = queue_conn.query_row(
+            "SELECT COUNT(*) FROM stalwart_smtp_queue WHERE to_addr = 'lead@example.com'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 1, "idempotent re-send must not double-queue");
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_campaign_mailbox_link_projects_to_communication_accounts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let res = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mailbox_link",
+                "command_id": "cmd_mailbox_link",
+                "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link",
+                "record_id": "camp_mbx",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_mbx",
+                    "mailbox_address": "outreach@example.com",
+                    "mailbox_status": "ready",
+                    "display_name": "Outreach"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            res.pointer("/result/communication_account_key")
+                .and_then(Value::as_str),
+            Some("email:outreach@example.com")
+        );
+        let conn = open_store(root)?;
+        let campaign = outbound_load_required(&conn, "outbound_campaigns", "camp_mbx", "campaign")?;
+        assert_eq!(
+            outbound_string(&campaign, &["mailbox_status"]).as_deref(),
+            Some("ready")
+        );
+        assert_eq!(
+            outbound_string(&campaign, &["communication_account_address"]).as_deref(),
+            Some("outreach@example.com")
+        );
+        let limit = outbound_load_required(
+            &conn,
+            "outbound_account_limits",
+            "email:outreach@example.com",
+            "account_limits",
+        )?;
+        assert_eq!(
+            outbound_string(&limit, &["campaign_id"]).as_deref(),
+            Some("camp_mbx")
+        );
+        drop(conn);
+
+        // verify communication_accounts row exists in channels db
+        let channel_conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+        let exists: Option<String> = channel_conn
+            .query_row(
+                "SELECT address FROM communication_accounts WHERE account_key = ?1",
+                rusqlite::params!["email:outreach@example.com"],
+                |row| row.get(0),
+            )
+            .optional()?;
+        assert_eq!(exists.as_deref(), Some("outreach@example.com"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_campaign_activation_requires_ready_channel() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        // Create campaign without any mailbox link
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_campaigns",
+                "camp_act",
+                1000,
+                serde_json::json!({
+                    "id": "camp_act",
+                    "status": "setup_required",
+                    "payload": { "active_outreach": { "default_channel": "email" } },
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+
+        let blocked = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_status_blocked",
+                "command_id": "cmd_status_blocked",
+                "module": "outbound",
+                "command_type": "outbound.campaign.status.set",
+                "record_id": "camp_act",
+                "status": "pending_sync",
+                "payload": { "campaign_id": "camp_act", "status": "active", "channel": "email" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("activation must require a linked mailbox");
+        assert!(
+            blocked.to_string().contains("linked mailbox"),
+            "{blocked}"
+        );
+
+        // Link mailbox + activate must succeed
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mbx_link_act",
+                "command_id": "cmd_mbx_link_act",
+                "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link",
+                "record_id": "camp_act",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_act",
+                    "mailbox_address": "ops@example.com"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let ok = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_status_ok",
+                "command_id": "cmd_status_ok",
+                "module": "outbound",
+                "command_type": "outbound.campaign.status.set",
+                "record_id": "camp_act",
+                "status": "pending_sync",
+                "payload": { "campaign_id": "camp_act", "status": "active", "channel": "email" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            ok.pointer("/result/status").and_then(Value::as_str),
+            Some("active")
+        );
+
+        // physical_letter activation must work without mailbox
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_campaigns",
+                "camp_phys",
+                1100,
+                serde_json::json!({
+                    "id": "camp_phys",
+                    "status": "setup_required",
+                    "payload": { "active_outreach": { "default_channel": "physical_letter" } },
+                    "created_at_ms": 1100,
+                    "updated_at_ms": 1100
+                }),
+            )?;
+        }
+        let phys = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_status_phys",
+                "command_id": "cmd_status_phys",
+                "module": "outbound",
+                "command_type": "outbound.campaign.status.set",
+                "record_id": "camp_phys",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_phys",
+                    "status": "active",
+                    "channel": "physical_letter"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            phys.pointer("/result/status").and_then(Value::as_str),
+            Some("active")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_reply_match_sets_engagement_and_stops_pending_followups() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_reply",
+                "command_id": "cmd_eng_reply",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_reply",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_reply",
+                    "company_id": "co_reply",
+                    "contact_id": "ct_reply"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_followup",
+                "command_id": "cmd_msg_followup",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_followup",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_reply",
+                    "campaign_id": "camp_reply",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Follow-up",
+                    "body_text": "Just checking in",
+                    "message_type": "followup"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        let res = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_reply_match",
+                "command_id": "cmd_reply_match",
+                "module": "outbound",
+                "command_type": "outbound.reply.match",
+                "record_id": "eng_reply",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_reply",
+                    "reply_message_id": "email:inbox/lead-reply-1",
+                    "classification": "positive"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let cancelled_ids = res
+            .pointer("/result/cancelled_message_ids")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(cancelled_ids.len(), 1);
+        assert_eq!(
+            cancelled_ids[0].as_str(),
+            Some("msg_followup")
+        );
+
+        let conn = open_store(root)?;
+        let engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_reply", "engagement")?;
+        assert_eq!(
+            outbound_string(&engagement, &["status"]).as_deref(),
+            Some("reply_received")
+        );
+        assert_eq!(
+            outbound_string(&engagement, &["payload", "reply_classification"]).as_deref(),
+            Some("positive")
+        );
+        let message =
+            outbound_load_required(&conn, "outbound_messages", "msg_followup", "message")?;
+        assert_eq!(
+            outbound_string(&message, &["send_status"]).as_deref(),
+            Some("cancelled")
+        );
+        assert_eq!(
+            outbound_string(&message, &["payload", "cancelled_reason"]).as_deref(),
+            Some("reply_received")
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_module_snapshots_and_rollback() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
