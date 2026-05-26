@@ -3887,6 +3887,141 @@ function ensureCtoxSmokeBinary() {
             document.querySelector('.research-modal [data-close]')?.click();
             await waitForAbsent('[data-research-task-form]', 'research modal close');
             evidence.actions.push('research-new-task-modal');
+          } else if (moduleId === 'matching') {
+            const tabMap = document.querySelector('#tabMap');
+            const tabList = document.querySelector('#tabList');
+            if (!tabMap || !tabList) throw new Error('Matching list/matrix tabs are missing');
+            tabMap.click();
+            await waitFor(() => {
+              const mapWrap = document.querySelector('#mapWrap');
+              const requirementList = document.querySelector('#requirementList');
+              return {
+                ok: Boolean(mapWrap?.classList?.contains('active')
+                  && tabMap.classList.contains('active')
+                  && !tabList.classList.contains('active')
+                  && requirementList?.style?.display === 'none'),
+                mapActive: Boolean(mapWrap?.classList?.contains('active')),
+                tabMapActive: tabMap.classList.contains('active'),
+                tabListActive: tabList.classList.contains('active'),
+                requirementDisplay: requirementList?.style?.display || '',
+              };
+            }, 5000, 'matching matrix tab');
+            tabList.click();
+            await waitFor(() => {
+              const mapWrap = document.querySelector('#mapWrap');
+              const requirementList = document.querySelector('#requirementList');
+              return {
+                ok: Boolean(!mapWrap?.classList?.contains('active')
+                  && tabList.classList.contains('active')
+                  && !tabMap.classList.contains('active')
+                  && requirementList?.style?.display !== 'none'),
+                mapActive: Boolean(mapWrap?.classList?.contains('active')),
+                tabMapActive: tabMap.classList.contains('active'),
+                tabListActive: tabList.classList.contains('active'),
+                requirementDisplay: requirementList?.style?.display || '',
+              };
+            }, 5000, 'matching list tab');
+            evidence.actions.push('matching-list-matrix-tabs');
+          } else if (moduleId === 'conversations') {
+            const whatsapp = document.querySelector('[data-conv-channel-filters] [data-channel="whatsapp"]');
+            const all = document.querySelector('[data-conv-channel-filters] [data-channel="all"]');
+            if (!whatsapp || !all) throw new Error('Conversations channel filters are missing');
+            whatsapp.click();
+            await waitFor(() => ({
+              ok: whatsapp.classList.contains('is-active') && !all.classList.contains('is-active'),
+              whatsappActive: whatsapp.classList.contains('is-active'),
+              allActive: all.classList.contains('is-active'),
+            }), 5000, 'conversations whatsapp filter');
+            all.click();
+            await waitFor(() => ({
+              ok: all.classList.contains('is-active') && !whatsapp.classList.contains('is-active'),
+              whatsappActive: whatsapp.classList.contains('is-active'),
+              allActive: all.classList.contains('is-active'),
+            }), 5000, 'conversations all filter');
+            evidence.actions.push('conversations-channel-filter');
+          } else if (moduleId === 'outbound') {
+            const toggle = document.querySelector('[data-action="toggle-outreach"]');
+            if (!toggle) throw new Error('Outbound outreach toggle is missing');
+            const before = toggle.getAttribute('aria-pressed') || '';
+            toggle.click();
+            await waitFor(() => {
+              const current = document.querySelector('[data-action="toggle-outreach"]');
+              const after = current?.getAttribute('aria-pressed') || '';
+              return {
+                ok: after && after !== before,
+                before,
+                after,
+              };
+            }, 5000, 'outbound outreach toggle');
+            document.querySelector('[data-action="toggle-outreach"]')?.click();
+            evidence.actions.push('outbound-outreach-toggle');
+          } else if (moduleId === 'shiftflow') {
+            const scheduler = document.querySelector('#viewSchedulerTabBtn');
+            const timesheets = document.querySelector('#viewTimesheetsTabBtn');
+            const billing = document.querySelector('#viewBillingTabBtn');
+            if (!scheduler || !timesheets || !billing) throw new Error('Shiftflow center tabs are missing');
+            timesheets.click();
+            await waitFor(() => ({
+              ok: timesheets.classList.contains('active')
+                && !document.querySelector('#timesheetsView')?.classList?.contains('hidden')
+                && document.querySelector('#schedulerView')?.classList?.contains('hidden'),
+              title: document.querySelector('#centerPaneTitle')?.textContent?.trim() || '',
+            }), 5000, 'shiftflow timesheets tab');
+            billing.click();
+            await waitFor(() => ({
+              ok: billing.classList.contains('active')
+                && !document.querySelector('#billingView')?.classList?.contains('hidden')
+                && document.querySelector('#timesheetsView')?.classList?.contains('hidden'),
+              title: document.querySelector('#centerPaneTitle')?.textContent?.trim() || '',
+            }), 5000, 'shiftflow billing tab');
+            scheduler.click();
+            await waitFor(() => ({
+              ok: scheduler.classList.contains('active')
+                && !document.querySelector('#schedulerView')?.classList?.contains('hidden')
+                && document.querySelector('#billingView')?.classList?.contains('hidden'),
+              title: document.querySelector('#centerPaneTitle')?.textContent?.trim() || '',
+            }), 5000, 'shiftflow scheduler tab');
+            evidence.actions.push('shiftflow-center-tabs');
+          } else if (moduleId === 'buchhaltung') {
+            for (const navId of ['journal', 'reports', 'skr']) {
+              const button = document.querySelector(`[data-nav="${navId}"]`);
+              if (!button) throw new Error(`Buchhaltung nav item missing: ${navId}`);
+              button.click();
+              await waitFor(() => {
+                const panel = document.querySelector(`[data-panel="${navId}"]`);
+                const title = document.querySelector('[data-active-title]')?.textContent?.trim() || '';
+                return {
+                  ok: Boolean(panel && !panel.hidden && button.classList.contains('active') && title),
+                  navId,
+                  panelHidden: panel?.hidden ?? null,
+                  active: button.classList.contains('active'),
+                  title,
+                };
+              }, 5000, `buchhaltung nav ${navId}`);
+            }
+            evidence.actions.push('buchhaltung-nav-switch');
+          } else if (moduleId === 'coding-agents') {
+            const openSettings = document.querySelector('#open-settings-btn');
+            const closeSettings = document.querySelector('#close-settings-btn');
+            const modal = document.querySelector('#settings-modal');
+            if (!openSettings || !closeSettings || !modal) {
+              throw new Error(`Coding Agents settings modal controls missing: ${JSON.stringify({
+                openSettings: Boolean(openSettings),
+                closeSettings: Boolean(closeSettings),
+                modal: Boolean(modal),
+              })}`);
+            }
+            openSettings.click();
+            await waitFor(() => ({
+              ok: !document.querySelector('#settings-modal')?.hasAttribute('hidden'),
+              hidden: document.querySelector('#settings-modal')?.hasAttribute('hidden') ?? null,
+            }), 5000, 'coding agents settings open');
+            closeSettings.click();
+            await waitFor(() => ({
+              ok: document.querySelector('#settings-modal')?.hasAttribute('hidden') === true,
+              hidden: document.querySelector('#settings-modal')?.hasAttribute('hidden') ?? null,
+            }), 5000, 'coding agents settings close');
+            evidence.actions.push('coding-agents-settings-modal');
           }
           return evidence.actions.length ? evidence : null;
         };
@@ -5448,6 +5583,8 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_ui_min_module_text_length=${Math.min(...result.openedModules.map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
       console.log(`business_os_ui_secondary_opened_modules=${(result.secondaryOpenedModules || []).map((entry) => entry.activeModule).join(',')}`);
       console.log(`business_os_ui_secondary_rendered_modules=${(result.secondaryOpenedModules || []).map((entry) => entry.renderEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_secondary_interacted_modules=${(result.secondaryOpenedModules || []).map((entry) => entry.interactionEvidence?.moduleId).filter(Boolean).join(',')}`);
+      console.log(`business_os_ui_secondary_interaction_names=${(result.secondaryOpenedModules || []).flatMap((entry) => (entry.interactionEvidence?.actions || []).map((action) => String(action).replace(/:.+$/, ''))).join(',')}`);
       console.log(`business_os_ui_min_secondary_text_length=${Math.min(...(result.secondaryOpenedModules || []).map((entry) => Number(entry.renderEvidence?.textLength || 0)))}`);
       console.log(`business_os_ui_desktop_opened=${result.desktopOpened ? 1 : 0}`);
       console.log(`business_os_ui_active_module=${result.activeModule || ''}`);
