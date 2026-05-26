@@ -58,11 +58,12 @@ flowchart LR
   CTOX -. "join room" .-> Signaling
 ```
 
-| Setup | How the app reaches the browser | Data path |
+| Setup | How the app reaches the browser | Pairing and data path |
 | --- | --- | --- |
-| CTOX with public IP or domain | CTOX serves Business OS and injects session plus pairing config. | Browser and CTOX replicate collections through WebRTC. |
-| CTOX behind a managed `*.ctox.dev` subdomain | ctox.dev routes to the instance or serves the static shell with `ctox_config`. | Browser and CTOX use the same signaling room and RxDB contract. |
-| Local or private CTOX without inbound reachability | The desktop app or ctox.dev serves the shell. CTOX connects outbound to signaling. | Pairing room password brings both peers together, then SQLite-backed RxDB sync carries modules, files, commands, and status. |
+| Public CTOX host | CTOX serves Business OS and injects session plus pairing config from the public host or customer domain. | Browser and CTOX join `signaling.ctox.dev`, negotiate WebRTC, and replicate collections directly. |
+| Managed `*.ctox.dev` subdomain | ctox.dev serves the shell, account flow, and launch URL; `/.well-known/ctox-business-os.json` exposes non-secret status. | The subdomain is not an HTTP data proxy. It hands the browser a room config, then RxDB/WebRTC talks to CTOX. |
+| ctox.dev Web Deploy | ctox.dev serves the static Business OS shell when CTOX is not the web host. | The launch URL carries packed `ctox_config` bootstrap only; WebRTC carries collections, commands, files, manifests, and status. |
+| Desktop/private CTOX | The Desktop app opens the static shell for a local or private instance with no inbound IP. | The room password pairs the outbound browser and native peer. Private/NAT closure requires credentialed TURN, not STUN-only ICE. |
 
 The supported modes are intentionally delivery choices, not data-channel
 choices. A reachable host, managed ctox.dev entrypoint, or desktop launcher may
@@ -84,6 +85,40 @@ The older remote TUI room is only for terminal/control sessions.
 Business OS normalizes them into the local pairing config and removes the
 sensitive query parameters from the address bar before continuing with
 RxDB/WebRTC sync.
+
+### Business OS Readiness Checks
+
+Use these checks when bringing up a CTOX instance or debugging a browser that
+loads the shell but shows no app data:
+
+```sh
+ctox status
+ctox business-os peer status
+```
+
+For a public or managed host, `/api/business-os/status` must report the native
+RxDB peer and required SQLite collections as healthy before the Browser shell is
+considered ready. A reachable HTTP page alone is not readiness. In ctox.dev
+managed mode, `/.well-known/ctox-business-os.json` must keep
+`httpDataProxy:false` and `businessDataPath:"rxdb-webrtc"`.
+
+Private/NAT installs must include credentialed TURN in the launch config or in
+the ctox.dev-generated ICE servers. A naked `turn:` URL or STUN-only config is a
+diagnostic state, not production closure. Business OS Advanced Status should
+show `sync.iceServersHaveCredentialedTurn:true` for private/NAT evidence.
+
+### Data Boundary
+
+The following records must never be proxied through HTTP between the browser and
+CTOX:
+
+- Business OS collections and module runtime data
+- `business_commands` and `ctox_queue_tasks`
+- `desktop_files` and `desktop_file_chunks`
+- module manifests and native runtime status
+
+Those records replicate only through RxDB/WebRTC and persist on the CTOX side in
+`runtime/ctox.sqlite3`.
 
 ## Install
 
