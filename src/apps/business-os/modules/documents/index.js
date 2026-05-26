@@ -1556,20 +1556,49 @@ function mountMarkdownDocument(state, host, version, formatModule) {
   host.replaceChildren();
   const wrap = document.createElement('div');
   wrap.className = 'documents-markdown-editor';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'documents-markdown-toolbar';
+  const editButton = document.createElement('button');
+  editButton.type = 'button';
+  editButton.className = 'documents-markdown-toggle';
+  editButton.textContent = state.t('edit', 'Bearbeiten');
+  toolbar.append(editButton);
+  const preview = document.createElement('article');
+  preview.className = 'documents-markdown-preview';
   const textarea = document.createElement('textarea');
   textarea.className = 'documents-markdown-textarea';
   textarea.value = formatModule.exportMarkdown(version.model_json);
   textarea.spellcheck = true;
-  wrap.append(textarea);
+  textarea.hidden = true;
+  preview.innerHTML = renderMarkdownPreview(textarea.value);
+  wrap.append(toolbar, preview, textarea);
   host.append(wrap);
 
   let saveSerial = 0;
+  let editing = false;
+  const setEditing = (nextEditing) => {
+    editing = Boolean(nextEditing);
+    textarea.hidden = !editing;
+    preview.hidden = editing;
+    editButton.textContent = editing ? state.t('preview', 'Vorschau') : state.t('edit', 'Bearbeiten');
+    editButton.setAttribute('aria-pressed', String(editing));
+    if (editing) textarea.focus();
+  };
+  editButton.addEventListener('click', () => {
+    if (editing) {
+      preview.innerHTML = renderMarkdownPreview(textarea.value);
+      setEditing(false);
+      return;
+    }
+    setEditing(true);
+  });
   textarea.addEventListener('input', () => {
     const parsed = formatModule.importMarkdown(textarea.value);
     const document = parsed.document;
     const serial = ++saveSerial;
     state.dirty = true;
     version.model_json = document;
+    preview.innerHTML = renderMarkdownPreview(textarea.value);
     saveDraftVersion(state, document).catch((error) => {
       if (serial === saveSerial) console.error('[documents] Markdown draft save failed', error);
     });
@@ -1581,10 +1610,68 @@ function mountMarkdownDocument(state, host, version, formatModule) {
       host.replaceChildren();
     },
     focus() {
-      textarea.focus();
+      if (editing) textarea.focus();
+      else preview.focus?.();
     },
   };
-  textarea.focus();
+  setEditing(false);
+}
+
+function renderMarkdownPreview(markdown) {
+  const lines = String(markdown || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let paragraph = [];
+  let listOpen = false;
+
+  const flushParagraph = () => {
+    if (!paragraph.length) return;
+    html.push(`<p>${renderInlineMarkdown(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+  const closeList = () => {
+    if (!listOpen) return;
+    html.push('</ul>');
+    listOpen = false;
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      closeList();
+      continue;
+    }
+    const heading = /^(#{1,4})\s+(.+)$/.exec(trimmed);
+    if (heading) {
+      flushParagraph();
+      closeList();
+      const level = Math.min(heading[1].length, 4);
+      html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+      continue;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(trimmed);
+    if (bullet) {
+      flushParagraph();
+      if (!listOpen) {
+        html.push('<ul>');
+        listOpen = true;
+      }
+      html.push(`<li>${renderInlineMarkdown(bullet[1])}</li>`);
+      continue;
+    }
+    paragraph.push(trimmed);
+  }
+
+  flushParagraph();
+  closeList();
+  return html.join('') || '<p class="documents-markdown-empty">Leeres Dokument</p>';
+}
+
+function renderInlineMarkdown(value) {
+  return escapeHtml(value)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em>$1</em>');
 }
 
 async function mountSuperDocDocument(state, host, record, version, renderSerial) {

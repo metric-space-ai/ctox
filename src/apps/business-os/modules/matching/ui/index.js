@@ -2694,12 +2694,14 @@ function setupMatchingColumnResizing() {
 
   const leftHandle = document.createElement('div');
   leftHandle.className = 'col-resizer col-resizer-left';
+  leftHandle.dataset.resizer = 'left';
   leftHandle.setAttribute('role', 'separator');
   leftHandle.setAttribute('aria-orientation', 'vertical');
   leftHandle.setAttribute('aria-label', 'Spaltenbreite links/mittig anpassen');
 
   const rightHandle = document.createElement('div');
   rightHandle.className = 'col-resizer col-resizer-right';
+  rightHandle.dataset.resizer = 'right';
   rightHandle.setAttribute('role', 'separator');
   rightHandle.setAttribute('aria-orientation', 'vertical');
   rightHandle.setAttribute('aria-label', 'Spaltenbreite mittig/rechts anpassen');

@@ -547,6 +547,7 @@ function setupKnowledgeColumnResizing() {
 
   const handle = document.createElement('div');
   handle.className = 'knowledge-col-resizer';
+  handle.dataset.resizer = 'left';
   handle.setAttribute('role', 'separator');
   handle.setAttribute('aria-orientation', 'vertical');
   handle.setAttribute('aria-label', 'Spaltenbreite anpassen');

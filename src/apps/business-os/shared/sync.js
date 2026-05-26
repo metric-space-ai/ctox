@@ -312,6 +312,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   const topic = collectionTopic(config.sync_room, collection);
   const batchSize = batchSizeFor(collection);
   const initialReplicationStartedAt = new Date().toISOString();
+  let nativePeerProtocolReady = false;
   recordCollection?.(collection, {
     status: 'connecting',
     topic,
@@ -350,6 +351,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
         const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
         const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);
         const checkpointError = classifyCheckpointProtocolError(collection, remoteCapabilities, remoteCheckpoint);
+        nativePeerProtocolReady = !checkpointError && hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint);
         recordCollection?.(collection, {
           remoteProtocol: info?.protocol || null,
           remoteCapabilities,
@@ -363,6 +365,10 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
                 lastError: checkpointError,
               }
             : {
+                status: 'connected',
+                connectionStatus: 'connected',
+                connectedAt: new Date().toISOString(),
+                reconnectingSince: null,
                 lastError: null,
               }),
         });
@@ -450,6 +456,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection,
     isStopped: () => stopped,
     startedAt: initialReplicationStartedAt,
+    canCompleteInitialReplication: () => nativePeerProtocolReady && hasOpenNativePeerState(replicationState),
   });
 
   return {
@@ -469,7 +476,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   };
 }
 
-function watchInitialReplication({ replicationState, collection, recordCollection, isStopped, startedAt }) {
+function watchInitialReplication({ replicationState, collection, recordCollection, isStopped, startedAt, canCompleteInitialReplication }) {
   const awaitInitialReplication = initialReplicationAwaiter(replicationState);
   if (!awaitInitialReplication) {
     recordCollection?.(collection, {
@@ -485,8 +492,19 @@ function watchInitialReplication({ replicationState, collection, recordCollectio
   });
   Promise.resolve()
     .then(() => awaitInitialReplication.fn.call(awaitInitialReplication.receiver || replicationState))
-    .then(() => {
+    .then(async () => {
       if (isStopped?.()) return;
+      if (canCompleteInitialReplication && !canCompleteInitialReplication()) {
+        recordCollection?.(collection, {
+          status: 'connecting',
+          connectionStatus: 'connecting',
+          initialReplicationState: 'waiting-for-peer',
+          initialReplicationSource: awaitInitialReplication.source,
+          initialReplicationAt: null,
+        });
+        const ready = await waitForCondition(canCompleteInitialReplication, 30000, 250, isStopped);
+        if (!ready || isStopped?.()) return;
+      }
       recordCollection?.(collection, {
         status: 'connected',
         connectionStatus: 'connected',
@@ -507,6 +525,30 @@ function watchInitialReplication({ replicationState, collection, recordCollectio
         lastError: serializeError(error),
       });
     });
+}
+
+function waitForCondition(predicate, timeoutMs, intervalMs, isStopped) {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const tick = () => {
+      if (isStopped?.()) {
+        resolve(false);
+        return;
+      }
+      try {
+        if (predicate()) {
+          resolve(true);
+          return;
+        }
+      } catch {}
+      if (Date.now() >= deadline) {
+        resolve(false);
+        return;
+      }
+      setTimeout(tick, intervalMs);
+    };
+    tick();
+  });
 }
 
 function initialReplicationAwaiter(replicationState) {
@@ -560,6 +602,27 @@ function waitForWebRtcPeerStates(pool, timeoutMs) {
       resolve(peerStates);
     });
   });
+}
+
+function hasOpenNativePeerState(replicationState) {
+  const peerStates = replicationState?.peerStates$?.getValue?.();
+  if (!peerStates || typeof peerStates.values !== 'function') return false;
+  for (const peerState of peerStates.values()) {
+    if (peerState?.peer && peerState.peer.destroyed !== true) return true;
+  }
+  return false;
+}
+
+function hasNativePeerProtocolEvidence(info, remoteCapabilities, remoteCheckpoint) {
+  const capabilities = Array.isArray(remoteCapabilities) ? remoteCapabilities : [];
+  return info?.protocol === CTOX_RXDB_PROTOCOL &&
+    typeof info?.peerSession === 'string' &&
+    info.peerSession.length > 0 &&
+    capabilities.includes('ctox-peer-session-v1') &&
+    capabilities.includes('ctox-checkpoint-epoch-v1') &&
+    remoteCheckpoint?.state === 'advertised' &&
+    typeof remoteCheckpoint.epoch === 'string' &&
+    remoteCheckpoint.epoch.length > 0;
 }
 
 function isFatalPeerStormError(error) {
@@ -828,6 +891,9 @@ function classifyPeerLifecycleEvent(error) {
   if (haystack.includes('ERR_CONNECTION_FAILURE')) {
     lifecycleCode = 'peer_connection_lost';
     lifecycleMessage = 'WebRTC peer connection was lost; reconnect repair is scheduled.';
+  } else if (haystack.includes('peer_signal_stale') || haystack.includes('ERR_SET_REMOTE_DESCRIPTION') || haystack.includes('ERR_ADD_ICE_CANDIDATE')) {
+    lifecycleCode = 'peer_signal_stale';
+    lifecycleMessage = 'WebRTC peer received stale signaling data; reconnect repair is scheduled.';
   } else if (haystack.includes('ERR_SET_LOCAL_DESCRIPTION')) {
     lifecycleCode = 'peer_negotiation_failed';
     lifecycleMessage = 'WebRTC peer negotiation failed; reconnect repair is scheduled.';

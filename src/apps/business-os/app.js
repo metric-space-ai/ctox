@@ -1172,12 +1172,14 @@ function setupShellColumnResizing() {
 
   const leftHandle = document.createElement('div');
   leftHandle.className = 'workspace-col-resizer workspace-col-resizer-left';
+  leftHandle.dataset.resizer = 'left';
   leftHandle.setAttribute('role', 'separator');
   leftHandle.setAttribute('aria-orientation', 'vertical');
   leftHandle.setAttribute('aria-label', 'Linke und mittlere Spalte anpassen');
 
   const rightHandle = document.createElement('div');
   rightHandle.className = 'workspace-col-resizer workspace-col-resizer-right';
+  rightHandle.dataset.resizer = 'right';
   rightHandle.setAttribute('role', 'separator');
   rightHandle.setAttribute('aria-orientation', 'vertical');
   rightHandle.setAttribute('aria-label', 'Mittlere und rechte Spalte anpassen');

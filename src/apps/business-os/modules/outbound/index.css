@@ -32,7 +32,7 @@
   position: absolute;
   top: 12px;
   bottom: 12px;
-  width: 14px;
+  width: 12px;
   transform: translateX(-50%);
   cursor: col-resize;
   z-index: 30;
@@ -48,22 +48,19 @@
 
 .outbound-col-resizer::before {
   content: "";
-  width: 3px;
-  height: 56px;
-  border: 1px solid var(--outbound-line);
+  width: 4px;
+  height: 48px;
+  border: 0;
   border-radius: 999px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--outbound-surface-2) 88%, var(--outbound-text)),
-    color-mix(in srgb, var(--outbound-bg) 72%, var(--outbound-surface))
-  );
-  opacity: 0.72;
-  transition: opacity 120ms ease, box-shadow 120ms ease;
+  background: var(--line);
+  opacity: 0.5;
+  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
 }
 
 .outbound-col-resizer:hover::before,
 .outbound-col-resizer.is-active::before {
   opacity: 1;
+  background: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--outbound-accent) 18%, transparent);
 }
 
@@ -2633,6 +2630,5 @@ body.is-outbound-center-resizing * {
   display: flex;
   gap: 6px;
 }
-
 
 

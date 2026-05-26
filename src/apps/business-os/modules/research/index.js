@@ -1833,6 +1833,7 @@ function researchResizeHandle(side, label) {
   const handle = document.createElement('div');
   handle.className = `research-col-resizer research-col-resizer-${side}`;
   handle.dataset.researchResizer = side;
+  handle.dataset.resizer = side;
   handle.setAttribute('role', 'separator');
   handle.setAttribute('aria-orientation', 'vertical');
   handle.setAttribute('aria-label', label);

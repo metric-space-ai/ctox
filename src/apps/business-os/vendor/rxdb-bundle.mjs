@@ -40198,6 +40198,35 @@ function sendMessage(ws, msg) {
     return false;
   }
 }
+function isRecoverableSignalError(error) {
+  const haystack = [
+    error?.code,
+    error?.message,
+    (() => {
+      try {
+        return JSON.stringify(error || null);
+      } catch {
+        return "";
+      }
+    })()
+  ].filter(Boolean).join("\n");
+  return haystack.includes("ERR_SET_REMOTE_DESCRIPTION") || haystack.includes("ERR_ADD_ICE_CANDIDATE") || haystack.includes("Called in wrong state: stable") || haystack.includes("remote description was null");
+}
+function toPeerLifecycleError(error) {
+  if (!isRecoverableSignalError(error)) {
+    return error;
+  }
+  const message = String(error?.message || error || "Recoverable WebRTC peer signal race");
+  const lifecycleError = new Error(message);
+  lifecycleError.name = "CtoxWebRtcPeerLifecycleEvent";
+  lifecycleError.code = "peer_signal_stale";
+  lifecycleError.phase = "peer-reconnect";
+  lifecycleError.severity = "recoverable";
+  lifecycleError.retryable = true;
+  lifecycleError.lifecycle = true;
+  lifecycleError.cause = error;
+  return lifecycleError;
+}
 var DEFAULT_SIGNALING_SERVER_HOSTNAME = "signaling.rxdb.info";
 var DEFAULT_SIGNALING_SERVER = "wss://" + DEFAULT_SIGNALING_SERVER_HOSTNAME + "/";
 var defaultServerWarningShown = false;
@@ -40298,7 +40327,7 @@ function getConnectionHandlerSimplePeer({
                 });
                 newSimplePeer.on("error", (error) => {
                   error$.next(newRxError("RC_WEBRTC_PEER", {
-                    error
+                    error: toPeerLifecycleError(error)
                   }));
                   newSimplePeer.destroy();
                   if (!disconnected) {
@@ -40329,7 +40358,14 @@ function getConnectionHandlerSimplePeer({
               break;
             case "signal":
               const peer = getFromMapOrThrow(peers, msg.senderPeerId);
-              peer.signal(msg.data);
+              try {
+                peer.signal(msg.data);
+              } catch (error) {
+                error$.next(newRxError("RC_WEBRTC_PEER", {
+                  error: toPeerLifecycleError(error)
+                }));
+                peer.destroy();
+              }
               break;
           }
         };
