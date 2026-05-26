@@ -5740,7 +5740,73 @@ fn handle_outbound_active_command(
                 "message not found",
             )?;
             outbound_enforce_send_gate(&conn, &message)?;
+            let existing_provider_queue_id = outbound_first_string(&[
+                outbound_string(&message, &["provider_message_id"]),
+                outbound_string(&message, &["payload", "provider_queue_id"]),
+                outbound_string(&message, &["payload", "provider_message_id"]),
+            ]);
+            let existing_send_status =
+                outbound_string(&message, &["send_status"]).unwrap_or_default();
+            let already_queued = matches!(
+                existing_send_status.as_str(),
+                "queued_for_provider" | "sent" | "accepted"
+            ) && existing_provider_queue_id.is_some()
+                && message
+                    .get("payload")
+                    .and_then(|payload| payload.get("provider_send_executed"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+            if already_queued {
+                outbound_sync_email_message_to_communication(
+                    root,
+                    &mut message,
+                    &existing_send_status,
+                )?;
+                return Ok(serde_json::json!({
+                    "ok": true,
+                    "message": message,
+                    "provider_dispatch_status": "queued_in_mailserver",
+                    "provider_queue_id": existing_provider_queue_id,
+                    "provider_send_executed": true,
+                    "idempotent": true
+                }));
+            }
+            let provider_queue_id = outbound_queue_email_delivery(root, &message)
+                .context("failed to queue approved outbound email")?;
+            outbound_put_string(
+                &mut message,
+                "provider_message_id",
+                provider_queue_id.clone(),
+            );
+            outbound_payload_insert(
+                &mut message,
+                "provider_queue_id",
+                Value::String(provider_queue_id.clone()),
+            );
+            outbound_payload_insert(
+                &mut message,
+                "provider_message_id",
+                Value::String(provider_queue_id.clone()),
+            );
+            outbound_payload_insert(
+                &mut message,
+                "provider_dispatch_status",
+                Value::String("queued_in_mailserver".to_string()),
+            );
+            outbound_payload_insert(&mut message, "provider_send_executed", Value::Bool(true));
+            outbound_payload_insert(
+                &mut message,
+                "provider_queued_at_ms",
+                Value::Number(serde_json::Number::from(now)),
+            );
             outbound_put_string(&mut message, "send_status", "queued_for_provider");
+            outbound_sync_email_message_to_communication(
+                root,
+                &mut message,
+                "queued_for_provider",
+            )?;
+            let sender_account_id = outbound_required_string(&message, &["sender_account_id"])?;
+            outbound_increment_account_send_count(&conn, &sender_account_id, now)?;
             outbound_put_i64(&mut message, "updated_at_ms", now);
             upsert_business_record(
                 &conn,
@@ -5754,9 +5820,10 @@ fn handle_outbound_active_command(
             }
             Ok(serde_json::json!({
                 "ok": true,
-                "message": message,
-                "provider_dispatch_status": "deferred_until_mailserver_wave",
-                "provider_send_executed": false
+                "message": message.clone(),
+                "provider_dispatch_status": "queued_in_mailserver",
+                "provider_queue_id": outbound_string(&message, &["payload", "provider_queue_id"]),
+                "provider_send_executed": true
             }))
         }
         "outbound.message.pause" | "outbound.message.cancel" => {
@@ -6176,6 +6243,246 @@ fn outbound_payload_insert(record: &mut Value, key: &str, value: Value) {
     if let Some(payload) = record.get_mut("payload").and_then(Value::as_object_mut) {
         payload.insert(key.to_string(), value);
     }
+}
+
+fn outbound_email_account_key_from(value: Option<String>) -> Option<String> {
+    let raw = value?.trim().to_ascii_lowercase();
+    if raw.is_empty() {
+        return None;
+    }
+    if raw.starts_with("email:") {
+        return Some(raw);
+    }
+    if raw.contains('@') {
+        return Some(format!("email:{raw}"));
+    }
+    Some(raw)
+}
+
+fn outbound_email_address_from_account_key(account_key: &str) -> String {
+    account_key
+        .trim()
+        .strip_prefix("email:")
+        .unwrap_or(account_key.trim())
+        .to_ascii_lowercase()
+}
+
+fn outbound_sync_email_message_to_communication(
+    root: &Path,
+    message: &mut Value,
+    status: &str,
+) -> anyhow::Result<()> {
+    let Some(account_key) = outbound_email_account_key_from(outbound_first_string(&[
+        outbound_string(message, &["communication_account_key"]),
+        outbound_string(message, &["payload", "communication_account_key"]),
+        outbound_string(message, &["sender_account_id"]),
+    ])) else {
+        return Ok(());
+    };
+    let account_address = outbound_email_address_from_account_key(&account_key);
+    if !account_key.starts_with("email:") || !account_address.contains('@') {
+        return Ok(());
+    }
+    let Some(recipient_email) = outbound_string(message, &["recipient_email"]) else {
+        return Ok(());
+    };
+    let Some(message_id) = outbound_string(message, &["id"]) else {
+        return Ok(());
+    };
+    let engagement_id = outbound_string(message, &["engagement_id"]).unwrap_or_default();
+    let campaign_id = outbound_string(message, &["campaign_id"]).unwrap_or_default();
+    let subject = outbound_string(message, &["subject"]).unwrap_or_default();
+    let body_text = outbound_string(message, &["body_text"]).unwrap_or_default();
+    let body_html = outbound_string(message, &["body_html"]).unwrap_or_default();
+    let message_key = outbound_first_string(&[
+        outbound_string(message, &["communication_message_key"]),
+        outbound_string(message, &["payload", "communication_message_key"]),
+    ])
+    .unwrap_or_else(|| {
+        format!(
+            "email:{}:outbound:{}",
+            account_address,
+            channels::stable_digest(&message_id)
+        )
+    });
+    let thread_key = outbound_first_string(&[
+        outbound_string(message, &["thread_key"]),
+        outbound_string(message, &["payload", "thread_key"]),
+    ])
+    .unwrap_or_else(|| {
+        let material = format!("{account_key}|{campaign_id}|{engagement_id}|{recipient_email}");
+        format!(
+            "email:{}:outbound-thread:{}",
+            account_address,
+            channels::stable_digest(&material)
+        )
+    });
+    let now_iso = channels::now_iso_string();
+    let recipient_addresses_json = serde_json::to_string(&vec![recipient_email.clone()])?;
+    let preview = channels::preview_text(&body_text, &subject);
+    let remote_id = outbound_first_string(&[
+        outbound_string(message, &["provider_message_id"]),
+        outbound_string(message, &["payload", "provider_message_id"]),
+        outbound_string(message, &["payload", "provider_queue_id"]),
+    ])
+    .unwrap_or_else(|| message_id.clone());
+    let provider_send_executed = message
+        .get("payload")
+        .and_then(|payload| payload.get("provider_send_executed"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let provider_dispatch_status =
+        outbound_string(message, &["payload", "provider_dispatch_status"])
+            .unwrap_or_else(|| "not_dispatched".to_string());
+    let provider_queue_id = outbound_first_string(&[
+        outbound_string(message, &["payload", "provider_queue_id"]),
+        outbound_string(message, &["provider_message_id"]),
+    ])
+    .unwrap_or_default();
+    let metadata = serde_json::json!({
+        "source": "business-os.outbound",
+        "campaign_id": campaign_id,
+        "outbound_campaign_id": campaign_id,
+        "engagement_id": engagement_id,
+        "outbound_engagement_id": engagement_id,
+        "outbound_message_id": message_id,
+        "communication_account_key": account_key,
+        "communication_thread_key": thread_key,
+        "communication_message_key": message_key,
+        "approval_status": outbound_string(message, &["approval_status"]).unwrap_or_default(),
+        "send_status": outbound_string(message, &["send_status"]).unwrap_or_default(),
+        "provider_dispatch_status": provider_dispatch_status,
+        "provider_queue_id": provider_queue_id,
+        "provider_send_executed": provider_send_executed,
+    });
+    let metadata_json = serde_json::to_string(&metadata)?;
+    let mut channel_conn = channels::open_channel_db(&crate::paths::core_db(root))?;
+    channels::upsert_communication_message(
+        &mut channel_conn,
+        channels::UpsertMessage {
+            message_key: &message_key,
+            channel: "email",
+            account_key: &account_key,
+            thread_key: &thread_key,
+            remote_id: &remote_id,
+            direction: "outbound",
+            folder_hint: "outbound",
+            sender_display: "",
+            sender_address: &account_address,
+            recipient_addresses_json: &recipient_addresses_json,
+            cc_addresses_json: "[]",
+            bcc_addresses_json: "[]",
+            subject: &subject,
+            preview: &preview,
+            body_text: &body_text,
+            body_html: &body_html,
+            raw_payload_ref: "",
+            trust_level: "business-os",
+            status,
+            seen: true,
+            has_attachments: false,
+            external_created_at: &now_iso,
+            observed_at: &now_iso,
+            metadata_json: &metadata_json,
+        },
+    )?;
+    channels::refresh_thread(&mut channel_conn, &thread_key)?;
+    outbound_put_string(message, "sender_account_id", account_key.clone());
+    outbound_put_string(message, "communication_account_key", account_key.clone());
+    outbound_put_string(message, "communication_message_key", message_key.clone());
+    outbound_put_string(message, "thread_key", thread_key.clone());
+    outbound_payload_insert(
+        message,
+        "communication_account_key",
+        Value::String(account_key),
+    );
+    outbound_payload_insert(
+        message,
+        "communication_message_key",
+        Value::String(message_key),
+    );
+    outbound_payload_insert(message, "thread_key", Value::String(thread_key));
+    Ok(())
+}
+
+fn outbound_queue_email_delivery(root: &Path, message: &Value) -> anyhow::Result<String> {
+    let sender_account_id = outbound_required_string(message, &["sender_account_id"])?;
+    let from = outbound_email_address_from_account_key(&sender_account_id);
+    let to = outbound_required_string(message, &["recipient_email"])?;
+    let subject = outbound_string(message, &["subject"]).unwrap_or_default();
+    let body = outbound_string(message, &["body_text"]).unwrap_or_default();
+    let sender_domain = from.split('@').nth(1).unwrap_or("ctox.local");
+    let msg_id = format!("<{}@{}>", Uuid::new_v4(), sender_domain);
+    let date = chrono::Utc::now().to_rfc2822();
+    let rfc822_body = format!(
+        "From: {from}\r\n\
+         To: {to}\r\n\
+         Subject: {subject}\r\n\
+         Message-ID: {msg_id}\r\n\
+         Date: {date}\r\n\
+         MIME-Version: 1.0\r\n\
+         Content-Type: text/plain; charset=utf-8\r\n\
+         Content-Transfer-Encoding: 8bit\r\n\
+         \r\n\
+         {body}\r\n",
+        from = outbound_header_value(&from),
+        to = outbound_header_value(&to),
+        subject = outbound_header_value(&subject),
+        msg_id = outbound_header_value(&msg_id),
+        date = outbound_header_value(&date),
+        body = body.replace("\r\n", "\n").replace('\r', "\n")
+    );
+    let db_path = root
+        .join("runtime/ctox.sqlite3")
+        .to_string_lossy()
+        .into_owned();
+    let store = ctox_mailserver::store::sqlite::SqliteStore::new(&db_path);
+    store.init()?;
+    store
+        .queue_email(&from, &to, &rfc822_body)
+        .map_err(Into::into)
+}
+
+fn outbound_header_value(value: &str) -> String {
+    value
+        .replace(['\r', '\n'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn outbound_increment_account_send_count(
+    conn: &Connection,
+    sender_account_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    let Some(mut limit) = outbound_load_record(conn, "outbound_account_limits", sender_account_id)?
+    else {
+        return Ok(());
+    };
+    let sent_today = limit
+        .get("sent_today")
+        .and_then(Value::as_i64)
+        .or_else(|| limit.get("daily_sent_count").and_then(Value::as_i64))
+        .unwrap_or(0)
+        + 1;
+    outbound_put_i64(&mut limit, "sent_today", sent_today);
+    outbound_put_i64(&mut limit, "daily_sent_count", sent_today);
+    if let Some(limit_value) = limit.get("daily_limit").and_then(Value::as_i64) {
+        outbound_put_i64(
+            &mut limit,
+            "remaining_today",
+            limit_value.saturating_sub(sent_today),
+        );
+    }
+    outbound_put_i64(&mut limit, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_account_limits",
+        sender_account_id,
+        now,
+        limit,
+    )
 }
 
 fn outbound_load_record(
@@ -8837,13 +9144,30 @@ mod tests {
         assert_eq!(
             send.pointer("/result/provider_send_executed")
                 .and_then(Value::as_bool),
-            Some(false)
+            Some(true)
+        );
+        assert_eq!(
+            send.pointer("/result/provider_dispatch_status")
+                .and_then(Value::as_str),
+            Some("queued_in_mailserver")
         );
         assert_eq!(
             send.pointer("/result/message/send_status")
                 .and_then(Value::as_str),
             Some("queued_for_provider")
         );
+        let provider_queue_id = send
+            .pointer("/result/provider_queue_id")
+            .and_then(Value::as_str)
+            .context("provider_queue_id should be returned")?;
+        let queue_conn = Connection::open(crate::paths::core_db(root))?;
+        let queued_count: i64 = queue_conn.query_row(
+            "SELECT COUNT(*) FROM stalwart_smtp_queue WHERE id = ?1 AND from_addr = 'sender@example.com' AND to_addr = 'lead@example.com' AND status = 'pending'",
+            params![provider_queue_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(queued_count, 1);
+        drop(queue_conn);
 
         accept_rxdb_business_command(
             root,
