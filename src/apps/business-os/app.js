@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260527-critical-sync-seq1';
+const APP_BUILD = '20260527-critical-sync-seq2';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -4636,6 +4636,9 @@ function renderShellCtoxWarning(status) {
 function shellCtoxHealthProblem(status) {
   if (status?.pending) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
+  }
+  if (status?.source === 'rxdb' && status.ok === false) {
+    return '';
   }
   if (!status || status.ok === false) {
     return [shellText('ctoxStatusUnavailable'), status?.error].filter(Boolean).join(' ');
