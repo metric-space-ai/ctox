@@ -199,7 +199,7 @@ try {
     room: 'ctox-business-os:test:desktop_file_chunks',
     clientId: 'browser-peer',
   });
-  const peers = [{ peerId: 'browser-peer', role: 'browser' }, { peerId: 'ctox-peer', role: 'ctox_instance' }];
+  const peers = [{ peerId: 'browser-peer', role: 'browser' }, { peerId: 'ctox-peer', role: 'ctox_instance', joinedAt: 1 }];
   peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
   peer.handleSignalingMessage(JSON.stringify({ type: 'joined', otherPeerIds: ['stale-browser-peer'] }));
   if (peer.connections.has('stale-browser-peer')) {
@@ -208,8 +208,16 @@ try {
   const firstConnection = peer.connections.get('ctox-peer');
   peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
   const secondConnection = peer.connections.get('ctox-peer');
-  if (!firstConnection || !secondConnection || firstConnection === secondConnection || closedConnections.length !== 1) {
-    throw new Error('rejoined native peer must replace stale RTC connections');
+  if (!firstConnection || firstConnection !== secondConnection || closedConnections.length !== 0) {
+    throw new Error('repeated joined broadcasts must not replace an in-flight native RTC connection');
+  }
+  peer.handleSignalingMessage(JSON.stringify({
+    type: 'joined',
+    peers: [{ peerId: 'browser-peer', role: 'browser' }, { peerId: 'ctox-peer', role: 'ctox_instance', joinedAt: 2 }],
+  }));
+  const thirdConnection = peer.connections.get('ctox-peer');
+  if (!thirdConnection || thirdConnection === firstConnection || closedConnections.length !== 1) {
+    throw new Error('native peer rejoin with changed joinedAt must replace stale RTC connections');
   }
   const prefixedPeer = createCtoxWebRtcNativePeer({
     signalingUrl: 'ws://127.0.0.1:19998',

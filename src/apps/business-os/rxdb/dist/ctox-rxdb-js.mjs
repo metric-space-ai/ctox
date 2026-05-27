@@ -1116,6 +1116,7 @@ var CtoxWebRtcNativePeer = class {
         this.options.clientId = String(ownPeerId);
       }
       const descriptors = signalingPeerDescriptors(message);
+      const previousMetadata = new Map(this.peerMetadata);
       for (const descriptor of descriptors) {
         if (descriptor.peerId) this.rememberPeerMetadata(descriptor.peerId, descriptor);
       }
@@ -1128,7 +1129,9 @@ var CtoxWebRtcNativePeer = class {
           this.removeConnection(remotePeerId, "signaling-non-target-native-peer");
           continue;
         }
-        if (message.type === "joined" && remotePeerId !== this.options.clientId && this.connections.has(remotePeerId)) {
+        const previousDescriptor = previousMetadata.get(remotePeerId);
+        const nativePeerRejoined = message.type === "joined" && remotePeerId !== this.options.clientId && this.connections.has(remotePeerId) && peerJoinedAtChanged(previousDescriptor, descriptor);
+        if (nativePeerRejoined) {
           this.removeConnection(remotePeerId, "signaling-peer-rejoined");
         }
         if (!this.shouldConnectToRemotePeer(remotePeerId)) {
@@ -1861,8 +1864,15 @@ function normalizePeerMetadata(entry = {}) {
     protocol: typeof entry.protocol === "string" ? entry.protocol.trim() : "",
     instanceId: typeof entry.instanceId === "string" ? entry.instanceId.trim() : "",
     client: typeof entry.client === "string" ? entry.client.trim() : "",
+    joinedAt: entry.joinedAt ?? null,
     capabilities
   };
+}
+function peerJoinedAtChanged(previous = {}, next = {}) {
+  if (!previous || !next) return false;
+  if (previous.joinedAt === null || previous.joinedAt === void 0) return false;
+  if (next.joinedAt === null || next.joinedAt === void 0) return false;
+  return String(previous.joinedAt) !== String(next.joinedAt);
 }
 function buildSignalingUrl(options) {
   const url = new URL(options.signalingUrl);
