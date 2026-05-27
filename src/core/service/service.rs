@@ -4614,7 +4614,7 @@ fn run_completion_review(
                             )
                         })
                     };
-                    match send_result {
+                    let send_result = match send_result {
                         Ok(send_result) => {
                             push_event(
                                 state,
@@ -4624,6 +4624,7 @@ fn run_completion_review(
                                     clip_text(&send_result.to_string(), 180)
                                 ),
                             );
+                            send_result
                         }
                         Err(err) => {
                             push_event(
@@ -4637,25 +4638,34 @@ fn run_completion_review(
                                 summary: err.to_string(),
                             };
                         }
-                    }
-                    if founder_reply_key.is_some()
-                        && channels::terminal_founder_outbound_artifact_count(
-                            root,
-                            &channels::FounderOutboundAction {
-                                account_key: email_account_key_from_message_key(message_key),
-                                thread_key: action.thread_key.clone(),
-                                subject: action.subject.clone(),
-                                to: action.to.clone(),
-                                cc: action.cc.clone(),
-                                attachments: action.attachments.clone(),
-                            },
-                        )
-                        .unwrap_or(0)
-                            == 0
-                    {
-                        return CompletionReviewDisposition::Hold {
-                            summary: "Communication review passed, but harness auto-send did not produce a durable outbound artifact.".to_string(),
-                        };
+                    };
+                    if founder_reply_key.is_some() {
+                        let durable_send_artifact =
+                            channels::reviewed_send_result_has_durable_outbound_artifact(
+                                root,
+                                &send_result,
+                            )
+                            .unwrap_or(false)
+                                || channels::terminal_founder_outbound_artifact_count(
+                                    root,
+                                    &channels::FounderOutboundAction {
+                                        account_key: email_account_key_from_message_key(
+                                            message_key,
+                                        ),
+                                        thread_key: action.thread_key.clone(),
+                                        subject: action.subject.clone(),
+                                        to: action.to.clone(),
+                                        cc: action.cc.clone(),
+                                        attachments: action.attachments.clone(),
+                                    },
+                                )
+                                .unwrap_or(0)
+                                    > 0;
+                        if !durable_send_artifact {
+                            return CompletionReviewDisposition::Hold {
+                                summary: "Communication review passed, but harness auto-send did not produce a durable outbound artifact.".to_string(),
+                            };
+                        }
                     }
                 }
                 CompletionReviewDisposition::Approved {

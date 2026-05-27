@@ -3925,8 +3925,33 @@ fn send_email_message(
     let approval_key = reviewed_context
         .map(|context| context.approval_key)
         .unwrap_or("");
-    let pending_message_key =
-        record_outbound_pending_send(conn, request, approval_key, &body_sha256)?;
+    let pending_send = record_outbound_pending_send(conn, request, approval_key, &body_sha256)?;
+    let pending_message_key = pending_send.message_key;
+    if let Some(existing) = pending_send.existing_result {
+        return Ok(json!({
+            "ok": true,
+            "channel": "email",
+            "db_path": db_path,
+            "message_key": pending_message_key,
+            "status": existing
+                .get("status")
+                .and_then(Value::as_str)
+                .unwrap_or("accepted"),
+            "delivery_confirmed": existing
+                .get("adapter_result")
+                .or_else(|| existing.get("adapterResult"))
+                .and_then(|value| value.get("delivery"))
+                .and_then(|value| value.get("confirmed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            "adapter_result": existing
+                .get("adapter_result")
+                .or_else(|| existing.get("adapterResult"))
+                .cloned()
+                .unwrap_or_else(|| json!({ "deduplicated": true })),
+            "deduplicated": true,
+        }));
+    }
     let adapter_json = match adapter.send_cli(
         root,
         &communication_adapters::EmailSendCommandRequest {
@@ -3992,9 +4017,15 @@ fn record_outbound_pending_send(
     request: &ChannelSendRequest,
     approval_key: &str,
     body_sha256: &str,
-) -> Result<String> {
+) -> Result<PendingSendReservation> {
     let observed_at = now_iso_string();
     let message_key = pending_send_message_key(request, body_sha256);
+    if let Some(existing) = existing_durable_outbound_send_result(conn, &message_key)? {
+        return Ok(PendingSendReservation {
+            message_key,
+            existing_result: Some(existing),
+        });
+    }
     let remote_id = format!("pending-send-{}", stable_digest(&message_key));
     let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
     let sender_email = request
@@ -4031,6 +4062,7 @@ fn record_outbound_pending_send(
             body_text=excluded.body_text,
             metadata_json=excluded.metadata_json,
             observed_at=excluded.observed_at
+        WHERE communication_messages.status IN ('draft_pending_send', 'send_failed')
         "#,
         params![
             message_key,
@@ -4050,7 +4082,80 @@ fn record_outbound_pending_send(
             metadata_json,
         ],
     )?;
-    Ok(message_key)
+    if let Some(existing) = existing_durable_outbound_send_result(conn, &message_key)? {
+        return Ok(PendingSendReservation {
+            message_key,
+            existing_result: Some(existing),
+        });
+    }
+    Ok(PendingSendReservation {
+        message_key,
+        existing_result: None,
+    })
+}
+
+#[derive(Debug)]
+struct PendingSendReservation {
+    message_key: String,
+    existing_result: Option<Value>,
+}
+
+fn existing_durable_outbound_send_result(
+    conn: &Connection,
+    message_key: &str,
+) -> Result<Option<Value>> {
+    let existing = conn
+        .query_row(
+            r#"
+            SELECT status, folder_hint, metadata_json
+            FROM communication_messages
+            WHERE message_key = ?1
+              AND channel = 'email'
+              AND direction = 'outbound'
+            "#,
+            params![message_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((status, folder_hint, metadata_json)) = existing else {
+        return Ok(None);
+    };
+    let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
+    if !is_durable_outbound_send_state(&status, &folder_hint, &metadata) {
+        return Ok(None);
+    }
+    Ok(Some(json!({
+        "status": status,
+        "folder_hint": folder_hint,
+        "adapter_result": metadata
+            .get("adapterResult")
+            .or_else(|| metadata.get("adapter_result"))
+            .cloned()
+            .unwrap_or_else(|| json!({})),
+    })))
+}
+
+fn is_durable_outbound_send_state(status: &str, folder_hint: &str, metadata: &Value) -> bool {
+    if !folder_hint.eq_ignore_ascii_case("sent") {
+        return false;
+    }
+    if matches!(
+        status,
+        "draft_pending_send" | "send_failed" | "failed" | "cancelled"
+    ) {
+        return false;
+    }
+    !metadata
+        .get("pendingSend")
+        .or_else(|| metadata.get("pending_send"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 fn mark_outbound_send_accepted(
@@ -4375,7 +4480,7 @@ pub(crate) fn terminal_founder_outbound_artifact_count(
         FROM communication_messages
         WHERE channel = 'email'
           AND direction = 'outbound'
-          AND status IN ('accepted', 'sent')
+          AND status IN ('accepted', 'sent', 'queued', 'queued_in_mailserver', 'queued_for_provider')
           AND lower(account_key) = lower(?1)
           AND thread_key = ?2
           AND subject = ?3
@@ -4394,6 +4499,41 @@ pub(crate) fn terminal_founder_outbound_artifact_count(
         |row| row.get(0),
     )
     .context("failed to count terminal founder outbound artifacts")
+}
+
+pub(crate) fn reviewed_send_result_has_durable_outbound_artifact(
+    root: &Path,
+    send_result: &Value,
+) -> Result<bool> {
+    let Some(message_key) = send_result
+        .get("message_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(false);
+    };
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let count: i64 = conn.query_row(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages
+        WHERE message_key = ?1
+          AND channel = 'email'
+          AND direction = 'outbound'
+          AND lower(COALESCE(folder_hint, '')) = 'sent'
+          AND status NOT IN ('draft_pending_send', 'send_failed', 'failed', 'cancelled')
+          AND COALESCE(
+                json_extract(metadata_json, '$.pendingSend'),
+                json_extract(metadata_json, '$.pending_send'),
+                0
+              ) = 0
+        "#,
+        params![message_key],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 pub(crate) fn record_founder_outbound_review_approval(
@@ -10822,7 +10962,8 @@ mod tests {
 
         let message_key =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("pending send must persist");
+                .expect("pending send must persist")
+                .message_key;
 
         let (status, body_text, direction, subject, recipients_json, metadata_json): (
             String,
@@ -10935,7 +11076,8 @@ mod tests {
         let body_sha256 = sha256_hex(request.body.trim().as_bytes());
         let message_key =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("pending send must persist");
+                .expect("pending send must persist")
+                .message_key;
 
         update_pending_send_to_accepted(
             &conn,
@@ -10984,7 +11126,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_founder_outbound_artifact_count_requires_terminal_send_row() {
+    fn terminal_founder_outbound_artifact_count_accepts_terminal_and_queued_send_row() {
         let root = unique_root("ctox-terminal-outbound-artifact-count");
         fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
         let db_path = resolve_db_path(&root, None);
@@ -11001,7 +11143,8 @@ mod tests {
         let body_sha256 = sha256_hex(request.body.trim().as_bytes());
         let message_key =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("pending send must persist");
+                .expect("pending send must persist")
+                .message_key;
 
         assert_eq!(
             terminal_founder_outbound_artifact_count(&root, &action)
@@ -11031,6 +11174,53 @@ mod tests {
     }
 
     #[test]
+    fn reviewed_send_result_witness_accepts_queued_sent_artifact_by_message_key() {
+        let root = unique_root("ctox-reviewed-send-result-witness");
+        fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+        let db_path = resolve_db_path(&root, None);
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Body fuer Queue-Witness");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:queued", &body_sha256)
+                .expect("pending send must persist")
+                .message_key;
+
+        assert!(
+            !reviewed_send_result_has_durable_outbound_artifact(
+                &root,
+                &json!({ "message_key": message_key })
+            )
+            .expect("pending witness should be queryable"),
+            "draft_pending_send must not satisfy the reviewed-send witness"
+        );
+
+        mark_outbound_send_accepted(
+            &conn,
+            &message_key,
+            "queued",
+            &json!({
+                "ok": true,
+                "channel": "email",
+                "status": "queued",
+                "provider_dispatch_status": "queued_in_mailserver",
+            }),
+        )
+        .expect("queued update must persist");
+
+        assert!(
+            reviewed_send_result_has_durable_outbound_artifact(
+                &root,
+                &json!({ "message_key": message_key })
+            )
+            .expect("queued witness should be queryable"),
+            "a concrete queued send row with pendingSend=false is a durable outbound artifact"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn phase1_update_pending_send_to_failed_preserves_body_and_records_provider_error() {
         let db_path = unique_test_db_path("ctox-phase1-failed");
         let conn = open_channel_db(&db_path).expect("failed to open db");
@@ -11040,7 +11230,8 @@ mod tests {
         let body_sha256 = sha256_hex(request.body.trim().as_bytes());
         let message_key =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("pending send must persist");
+                .expect("pending send must persist")
+                .message_key;
 
         update_pending_send_to_failed(
             &conn,
@@ -11083,7 +11274,8 @@ mod tests {
         let body_sha256 = sha256_hex(request.body.trim().as_bytes());
         let pending_message_key =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("pending send must persist");
+                .expect("pending send must persist")
+                .message_key;
 
         // First the Approved → Sending proof (precondition for SendFailed):
         enforce_reviewed_founder_send_core_transition(
@@ -11135,10 +11327,12 @@ mod tests {
 
         let key_first =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("first persist");
+                .expect("first persist")
+                .message_key;
         let key_second =
             record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
-                .expect("second persist (retry-style) must not crash");
+                .expect("second persist (retry-style) must not crash")
+                .message_key;
         assert_eq!(
             key_first, key_second,
             "retrying record_outbound_pending_send must yield the same key (idempotent upsert)"
@@ -11155,6 +11349,55 @@ mod tests {
             count, 1,
             "exactly one durable row must exist for the retry-bound key"
         );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_record_outbound_pending_send_does_not_reset_existing_sent_row() {
+        let db_path = unique_test_db_path("ctox-phase1-retry-existing-sent");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Bereits versendet");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+
+        let first =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("first persist");
+        assert!(
+            first.existing_result.is_none(),
+            "first reservation should require provider send"
+        );
+        mark_outbound_send_accepted(
+            &conn,
+            &first.message_key,
+            "accepted",
+            &json!({
+                "ok": true,
+                "channel": "email",
+                "status": "accepted",
+                "remote_id": "smtp-msg-existing",
+            }),
+        )
+        .expect("accepted update must persist");
+
+        let second =
+            record_outbound_pending_send(&conn, &request, "founder-review:phase1", &body_sha256)
+                .expect("second persist");
+        assert_eq!(first.message_key, second.message_key);
+        assert!(
+            second.existing_result.is_some(),
+            "a retry-bound sent row must be returned as an existing durable send"
+        );
+
+        let (status, folder_hint): (String, String) = conn
+            .query_row(
+                "SELECT status, folder_hint FROM communication_messages WHERE message_key = ?1",
+                params![first.message_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("row must exist");
+        assert_eq!(status, "accepted");
+        assert_eq!(folder_hint, "sent");
 
         let _ = std::fs::remove_file(&db_path);
     }
