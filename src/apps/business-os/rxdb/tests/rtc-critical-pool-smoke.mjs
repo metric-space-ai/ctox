@@ -57,6 +57,7 @@ optionalPeer.handleSignalingMessage(joined);
 await delay(10);
 
 const snapshot = optionalPeer.getTransportStatus().rtcConnectionPool;
+assertEqual(snapshot.maxActive, 8, 'browser RTC pool must leave headroom after shell-critical startup');
 assertEqual(snapshot.active, 5, 'critical collections must consume the active RTC pool first');
 assertEqual(snapshot.queued, 1, 'optional collection must wait for critical DataChannels');
 assertEqual(snapshot.criticalReady, false, 'critical pool must wait for datachannel-open, not slot allocation');

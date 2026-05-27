@@ -1622,15 +1622,46 @@ async function startCriticalSyncCollections() {
     'business_commands',
     'ctox_queue_tasks',
     'desktop_files',
-    'desktop_file_chunks',
   ];
   for (const collection of collections) {
     try {
       await state.sync?.startCollection?.(collection);
+      await waitForCriticalSyncCollection(collection);
     } catch (error) {
       console.warn(`[business-os] critical sync collection ${collection} did not start during repair`, error);
     }
   }
+}
+
+async function waitForCriticalSyncCollection(collection, timeoutMs = 18000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (isCriticalSyncCollectionReady(collection)) return true;
+    await delay(250);
+  }
+  const diagnostics = state.syncDiagnostics?.collections?.[collection] || null;
+  console.warn('[business-os] critical sync collection did not become ready before continuing', {
+    collection,
+    connectionStatus: diagnostics?.connectionStatus || diagnostics?.status || null,
+    activePeerCount: diagnostics?.frameTransport?.activePeerCount ?? null,
+    sentFrames: diagnostics?.frameTransport?.sentFrames ?? null,
+    receivedFrames: diagnostics?.frameTransport?.receivedFrames ?? null,
+    lastLifecycleEvent: diagnostics?.lastLifecycleEvent || null,
+    lastError: diagnostics?.lastError || null,
+  });
+  return false;
+}
+
+function isCriticalSyncCollectionReady(collection) {
+  const diagnostics = state.syncDiagnostics?.collections?.[collection];
+  if (!diagnostics) return false;
+  const status = diagnostics.connectionStatus || diagnostics.status || '';
+  if (['connected', 'running', 'reused'].includes(status)) return true;
+  if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
+  if (diagnostics.initialReplicationState === 'complete') return true;
+  const transport = diagnostics.frameTransport || {};
+  return Number(transport.activePeerCount || 0) > 0
+    && (Number(transport.sentFrames || 0) > 0 || Number(transport.receivedFrames || 0) > 0);
 }
 
 function scheduleCriticalSyncWarmup() {

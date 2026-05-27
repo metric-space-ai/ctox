@@ -760,7 +760,7 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var SEND_PRIORITIES = ["high", "normal", "low"];
-var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 5;
+var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 8;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
@@ -2103,6 +2103,8 @@ function getRtcPeerConnectionPool() {
       queue: [],
       criticalOpened: /* @__PURE__ */ new Set()
     };
+  } else if (root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive < MAX_GLOBAL_RTC_PEER_CONNECTIONS) {
+    root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive = MAX_GLOBAL_RTC_PEER_CONNECTIONS;
   }
   return root[GLOBAL_RTC_CONNECTION_POOL_KEY];
 }

@@ -15,7 +15,7 @@ const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const SEND_PRIORITIES = ['high', 'normal', 'low'];
-const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 5;
+const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 8;
 const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
@@ -1445,6 +1445,8 @@ function getRtcPeerConnectionPool() {
       queue: [],
       criticalOpened: new Set(),
     };
+  } else if (root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive < MAX_GLOBAL_RTC_PEER_CONNECTIONS) {
+    root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive = MAX_GLOBAL_RTC_PEER_CONNECTIONS;
   }
   return root[GLOBAL_RTC_CONNECTION_POOL_KEY];
 }
