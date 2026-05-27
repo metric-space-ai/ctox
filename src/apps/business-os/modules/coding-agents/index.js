@@ -221,63 +221,84 @@ function bindElements(root) {
 }
 
 function wireEvents() {
+  const openDialog = (modal, focusTarget) => {
+    if (!modal) return;
+    modal.removeAttribute('hidden');
+    requestAnimationFrame(() => focusTarget?.focus?.());
+  };
+  const closeDialog = (modal, restoreFocus) => {
+    if (!modal) return;
+    modal.setAttribute('hidden', '');
+    restoreFocus?.focus?.();
+  };
+  const syncWorkspaceForm = () => {
+    const validation = validateWorkspacePath(els.addWorkspaceInput?.value || '');
+    setFormError(els.addWorkspaceInput, els.addWorkspaceError, validation.error);
+    if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = !validation.valid;
+  };
+  const syncNewSessionForm = () => {
+    const validation = validateNewSessionPrompt(els.newSessionPrompt?.value || '');
+    setFormError(els.newSessionPrompt, els.newSessionError, validation.error);
+    if (els.newSessionSubmit) els.newSessionSubmit.disabled = !validation.valid || !state.activeWorkspace;
+  };
+
   // Modal open/close listeners
   if (els.openSettingsBtn) {
     els.openSettingsBtn.addEventListener('click', () => {
-      openModal(els.settingsModal, els.closeSettingsBtn);
+      openDialog(els.settingsModal, els.closeSettingsBtn);
     });
   }
   if (els.closeSettingsBtn) {
     els.closeSettingsBtn.addEventListener('click', () => {
-      closeModal(els.settingsModal, els.openSettingsBtn);
+      closeDialog(els.settingsModal, els.openSettingsBtn);
     });
   }
   if (els.addWorkspaceBtn) {
     els.addWorkspaceBtn.addEventListener('click', () => {
       if (els.addWorkspaceModal) {
-        syncWorkspaceFormState();
-        openModal(els.addWorkspaceModal, els.addWorkspaceInput);
+        syncWorkspaceForm();
+        openDialog(els.addWorkspaceModal, els.addWorkspaceInput);
       }
     });
   }
   if (els.closeAddWorkspaceBtn) {
     els.closeAddWorkspaceBtn.addEventListener('click', () => {
-      closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
+      closeDialog(els.addWorkspaceModal, els.addWorkspaceBtn);
     });
   }
   if (els.addWorkspaceInput) {
-    els.addWorkspaceInput.addEventListener('input', syncWorkspaceFormState);
+    els.addWorkspaceInput.addEventListener('input', syncWorkspaceForm);
   }
   // Click-outside-to-close for the Add Workspace modal so it always has an
   // escape hatch even if the close button isn't visible.
   if (els.addWorkspaceModal) {
     els.addWorkspaceModal.addEventListener('click', (event) => {
       if (event.target === els.addWorkspaceModal) {
-        closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
+        closeDialog(els.addWorkspaceModal, els.addWorkspaceBtn);
       }
     });
   }
   if (els.settingsModal) {
     els.settingsModal.addEventListener('click', (event) => {
       if (event.target === els.settingsModal) {
-        closeModal(els.settingsModal, els.openSettingsBtn);
+        closeDialog(els.settingsModal, els.openSettingsBtn);
       }
     });
   }
   if (els.newSessionModal) {
     els.newSessionModal.addEventListener('click', (event) => {
       if (event.target === els.newSessionModal) {
-        closeModal(els.newSessionModal, els.newSessionBtn);
+        closeDialog(els.newSessionModal, els.newSessionBtn);
       }
     });
   }
   if (els.closeNewSessionBtn) {
     els.closeNewSessionBtn.addEventListener('click', () => {
-      closeModal(els.newSessionModal, els.newSessionBtn);
+      closeDialog(els.newSessionModal, els.newSessionBtn);
     });
   }
   if (els.newSessionPrompt) {
-    els.newSessionPrompt.addEventListener('input', syncNewSessionFormState);
+    els.newSessionPrompt.addEventListener('input', syncNewSessionForm);
   }
   els.root.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -286,7 +307,7 @@ function wireEvents() {
     if (!topDialog) return;
     event.preventDefault();
     const restore = topDialog === els.newSessionModal ? els.newSessionBtn : topDialog === els.addWorkspaceModal ? els.addWorkspaceBtn : els.openSettingsBtn;
-    closeModal(topDialog, restore);
+    closeDialog(topDialog, restore);
   });
 
   // Handle Workspace creation form submission
@@ -307,12 +328,12 @@ function wireEvents() {
       if (res && res.ok) {
         appendTerminalOutput(`Path successfully authorized.`);
         els.addWorkspaceInput.value = '';
-        syncWorkspaceFormState();
-        closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
+        syncWorkspaceForm();
+        closeDialog(els.addWorkspaceModal, els.addWorkspaceBtn);
         await refreshBypassData();
       } else {
         appendTerminalOutput(`Failed to authorize path:\n${res?.stderr || 'Unknown error'}`);
-        syncWorkspaceFormState();
+        syncWorkspaceForm();
         showBusinessAlert(`Failed to authorize workspace path: ${res?.stderr || 'Error'}`);
       }
     });
@@ -373,8 +394,8 @@ function wireEvents() {
         els.newSessionContext.textContent = `Workspace: ${state.activeWorkspace}. Agent: ${state.activeApp.toUpperCase()}.`;
       }
       if (els.newSessionPrompt) els.newSessionPrompt.value = '';
-      syncNewSessionFormState();
-      openModal(els.newSessionModal, els.newSessionPrompt);
+      syncNewSessionForm();
+      openDialog(els.newSessionModal, els.newSessionPrompt);
     });
   }
 
@@ -396,10 +417,10 @@ function wireEvents() {
       if (res && res.ok) {
         appendTerminalOutput(`Session created successfully.`);
         if (els.newSessionPrompt) els.newSessionPrompt.value = '';
-        closeModal(els.newSessionModal, els.newSessionBtn);
+        closeDialog(els.newSessionModal, els.newSessionBtn);
         await refreshSessions();
       } else {
-        syncNewSessionFormState();
+        syncNewSessionForm();
         appendTerminalOutput(`Failed to create session:\n${res?.stderr || ''}`);
         showBusinessAlert(`Failed to create session: ${res?.stderr || 'Error'}`);
       }
@@ -435,7 +456,7 @@ function wireEvents() {
   if (els.legacyRightTabSubscription) {
     els.legacyRightTabSubscription.addEventListener('click', () => {
       // Legacy trigger opens our settings modal overlay directly!
-      openModal(els.settingsModal, els.closeSettingsBtn);
+      openDialog(els.settingsModal, els.closeSettingsBtn);
     });
   }
 
