@@ -156,6 +156,12 @@
   color: var(--text-strong);
 }
 
+.booking-page-item.is-selected {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: var(--text-strong);
+}
+
 .calendar-item-left, .booking-page-item-left {
   display: flex;
   align-items: center;
@@ -196,8 +202,17 @@
 }
 
 .calendar-item:hover .calendar-item-actions,
-.booking-page-item:hover .booking-page-item-actions {
+.calendar-item:focus-within .calendar-item-actions,
+.booking-page-item:hover .booking-page-item-actions,
+.booking-page-item:focus-within .booking-page-item-actions {
   opacity: 1;
+}
+
+.calendar-row-action {
+  min-height: 24px;
+  max-width: 88px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* Separator line */
@@ -218,10 +233,35 @@
 .calendar-grid-container {
   flex: 1;
   padding: 16px;
-  overflow: hidden;
+  overflow: auto;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+#eventCalendarView {
+  min-height: 0;
+  height: 100%;
+}
+
+.calendar-data-status {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.calendar-data-status[data-state="error"] {
+  color: #ef4444;
+}
+
+.calendar-data-status[data-state="ready"] {
+  color: color-mix(in srgb, var(--accent) 75%, var(--text));
 }
 
 /* Override EventCalendar styles for Business OS Premium dark/glass design */
@@ -324,6 +364,39 @@
   padding: 16px 0;
 }
 
+.calendar-booking-context {
+  margin-bottom: 12px;
+}
+
+.calendar-booking-context-card,
+.calendar-booking-context-empty {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--muted);
+  padding: 10px 12px;
+  font-size: 12px;
+}
+
+.calendar-booking-context-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+}
+
+.calendar-booking-context-card strong,
+.calendar-context-kicker {
+  color: var(--text-strong);
+}
+
+.calendar-context-kicker {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
 /* Forms and Inputs in Drawer */
 .calendar-form-group {
   display: flex;
@@ -372,6 +445,13 @@
   border: none;
 }
 
+.os-btn:disabled,
+.os-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.52;
+  transform: none;
+}
+
 .os-btn-primary:hover {
   background: color-mix(in srgb, var(--accent) 80%, #000);
   color: #ffffff;
@@ -404,6 +484,36 @@
 .os-input:focus, .os-textarea:focus, .os-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.os-input[aria-invalid="true"],
+.os-textarea[aria-invalid="true"],
+.os-select[aria-invalid="true"] {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #ef4444 18%, transparent);
+}
+
+.calendar-field-error {
+  min-height: 14px;
+  color: #ef4444;
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.calendar-field-error:empty {
+  display: none;
+}
+
+.calendar-col-resizer {
+  min-height: 0;
+  cursor: col-resize;
+  border-radius: 8px;
+}
+
+.calendar-col-resizer:hover,
+.calendar-col-resizer:focus-visible {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: 0;
 }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */

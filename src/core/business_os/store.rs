@@ -37,7 +37,14 @@ const DEFAULT_SIGNALING_URL: &str = "wss://signaling.ctox.dev";
 const DEFAULT_STUN_URL: &str = "stun:stun.l.google.com:19302";
 const BUSINESS_OS_SIGNALING_URLS_FILE: &str = "business-os-signaling-urls.json";
 const DOCUMENT_BLOB_CHUNK_SIZE: usize = 256_000;
-const CORE_MODULE_IDS: &[&str] = &["ctox", "knowledge", "app-store", "desktop", "reports"];
+const CORE_MODULE_IDS: &[&str] = &[
+    "ctox",
+    "knowledge",
+    "app-store",
+    "desktop",
+    "reports",
+    "tickets",
+];
 const STARTER_MODULE_IDS: &[&str] = &["documents", "spreadsheets", "calendar", "notes"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
@@ -449,16 +456,22 @@ fn rxdb_data_plane_status(root: &Path) -> Value {
     let mut collections = BTreeMap::new();
     let mut required_ok = true;
     for (collection, required_for_shell) in CRITICAL_COLLECTIONS {
-        let table = format!("ctox_business_os__{collection}__v0");
-        let table_exists = rxdb_table_exists(&conn, &table).unwrap_or(false);
+        let table = rxdb_collection_table_name(&conn, collection);
+        let table_exists = table
+            .as_deref()
+            .map(|table| rxdb_table_exists(&conn, table).unwrap_or(false))
+            .unwrap_or(false);
         let row_count = if table_exists {
-            rxdb_table_row_count(&conn, &table).ok()
+            table
+                .as_deref()
+                .and_then(|table| rxdb_table_row_count(&conn, table).ok())
         } else {
             None
         };
         let latest_updated_at_ms = if table_exists {
-            rxdb_table_latest_updated_at_ms(&conn, &table)
-                .ok()
+            table
+                .as_deref()
+                .and_then(|table| rxdb_table_latest_updated_at_ms(&conn, table).ok())
                 .flatten()
         } else {
             None
@@ -516,6 +529,45 @@ fn rxdb_table_latest_updated_at_ms(conn: &Connection, table: &str) -> anyhow::Re
     .with_context(|| format!("read latest updated_at_ms in {table}"))
 }
 
+fn rxdb_collection_table_name(conn: &Connection, collection: &str) -> Option<String> {
+    let expected = format!(
+        "ctox_business_os__{collection}__v{}",
+        rxdb_schema_version(collection)
+    );
+    if rxdb_table_exists(conn, &expected).unwrap_or(false) {
+        return Some(expected);
+    }
+    let prefix = format!("ctox_business_os__{collection}__v");
+    let pattern = format!("{prefix}%");
+    conn.query_row(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name LIKE ?1
+         ORDER BY CAST(substr(name, length(?2) + 1) AS INTEGER) DESC
+         LIMIT 1",
+        params![pattern, prefix],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .ok()
+    .flatten()
+}
+
+fn rxdb_schema_version(collection: &str) -> i64 {
+    business_os_schema_contract_for_store()
+        .get(collection)
+        .and_then(|schema| schema.get("version"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+fn business_os_schema_contract_for_store() -> &'static BTreeMap<String, Value> {
+    static CONTRACT: std::sync::OnceLock<BTreeMap<String, Value>> = std::sync::OnceLock::new();
+    CONTRACT.get_or_init(|| {
+        serde_json::from_str(include_str!("business_os_schema_contract.json"))
+            .expect("Business OS RxDB schema contract JSON must be valid")
+    })
+}
+
 fn rxdb_module_catalog_status(root: &Path) -> Value {
     let path = rxdb_store_path(root);
     if !path.is_file() {
@@ -536,26 +588,16 @@ fn rxdb_module_catalog_status(root: &Path) -> Value {
         }
     };
     let _ = conn.busy_timeout(Duration::from_millis(100));
-    let table_exists = conn
-        .query_row(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'ctox_business_os__business_module_catalog__v0'",
-            [],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-        .ok()
-        .flatten()
-        .is_some();
-    if !table_exists {
+    let Some(table) = rxdb_collection_table_name(&conn, "business_module_catalog") else {
         return serde_json::json!({
             "ok": false,
             "path": path.display().to_string(),
             "reason": "business_module_catalog RxDB collection table is missing",
         });
-    }
+    };
     let data = match conn
         .query_row(
-            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+            &format!("SELECT data FROM {table} WHERE id = 'module-catalog'"),
             [],
             |row| row.get::<_, String>(0),
         )
@@ -566,7 +608,7 @@ fn rxdb_module_catalog_status(root: &Path) -> Value {
             return serde_json::json!({
                 "ok": false,
                 "path": path.display().to_string(),
-                "table": "ctox_business_os__business_module_catalog__v0",
+                "table": table,
                 "reason": "module-catalog document is missing",
             });
         }
@@ -574,7 +616,7 @@ fn rxdb_module_catalog_status(root: &Path) -> Value {
             return serde_json::json!({
                 "ok": false,
                 "path": path.display().to_string(),
-                "table": "ctox_business_os__business_module_catalog__v0",
+                "table": table,
                 "reason": format!("read module-catalog document: {err}"),
             });
         }
@@ -588,7 +630,7 @@ fn rxdb_module_catalog_status(root: &Path) -> Value {
     serde_json::json!({
         "ok": module_count > 0,
         "path": path.display().to_string(),
-        "table": "ctox_business_os__business_module_catalog__v0",
+        "table": table,
         "document_id": "module-catalog",
         "module_count": module_count,
         "template_count": parsed
@@ -4214,6 +4256,13 @@ pub fn pull_collection_records(
         }
         documents.push(payload);
     }
+    if documents.is_empty() {
+        if let Some(rxdb_projection) =
+            pull_rxdb_collection_table_records(root, collection, since_ms, limit)?
+        {
+            return Ok(rxdb_projection);
+        }
+    }
     Ok(serde_json::json!({
         "ok": true,
         "collection": collection,
@@ -4221,6 +4270,68 @@ pub fn pull_collection_records(
         "count": documents.len(),
         "since_ms": since_ms
     }))
+}
+
+fn pull_rxdb_collection_table_records(
+    root: &Path,
+    collection: &str,
+    since_ms: i64,
+    limit: usize,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(path)?;
+    for version in (0..=1).rev() {
+        let table = format!("ctox_business_os__{collection}__v{version}");
+        if !rxdb_table_exists(&conn, &table)? {
+            continue;
+        }
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data
+             FROM {table}
+             WHERE CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) >= ?1
+             ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) ASC, id ASC
+             LIMIT ?2"
+        ))?;
+        let rows = statement.query_map(params![since_ms, limit as i64], |row| {
+            let id: String = row.get(0)?;
+            let data: String = row.get(1)?;
+            Ok((id, data))
+        })?;
+        let mut documents = Vec::new();
+        for row in rows {
+            let (id, data) = row?;
+            let mut payload = serde_json::from_str::<Value>(&data).unwrap_or(Value::Null);
+            if let Some(obj) = payload.as_object_mut() {
+                obj.entry("id".to_string())
+                    .or_insert_with(|| Value::String(id));
+            }
+            documents.push(payload);
+        }
+        return Ok(Some(serde_json::json!({
+            "ok": true,
+            "collection": collection,
+            "documents": documents,
+            "count": documents.len(),
+            "since_ms": since_ms,
+            "source": "rxdb_projection",
+            "table": table,
+            "schema_version": version
+        })));
+    }
+    Ok(None)
+}
+
+fn is_safe_rxdb_collection_name(collection: &str) -> bool {
+    !collection.is_empty()
+        && collection
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
 }
 
 fn sanitize_filename(title: &str) -> String {
@@ -4760,6 +4871,27 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 &command,
                 "completed",
                 None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        command_type if command_type.starts_with("ctox.ticket.") => {
+            let _session = rxdb_authenticated_session(&command)?;
+            let outcome = crate::mission::tickets::run_business_os_ticket_command(
+                root,
+                command_type,
+                &command.payload,
+            )?;
+            let task_id = outcome
+                .get("case_id")
+                .or_else(|| outcome.get("ticket_key"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                task_id.as_deref(),
                 Some("completed"),
                 outcome,
             );
@@ -10431,6 +10563,14 @@ mod tests {
             )?;
         }
         conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES ('cmd-1', ?1)",
+            [serde_json::json!({"updated_at_ms": 1200, "status": "accepted"}).to_string()],
+        )?;
+        conn.execute(
             "INSERT INTO ctox_business_os__business_module_catalog__v0 (id, data) VALUES ('module-catalog', ?1)",
             [serde_json::json!({"updated_at_ms": 1000, "modules": [{"id": "ctox"}]}).to_string()],
         )?;
@@ -10458,6 +10598,57 @@ mod tests {
                 .pointer("/collections/desktop_files/ok")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        assert_eq!(
+            status
+                .pointer("/collections/business_commands/table")
+                .and_then(Value::as_str),
+            Some("ctox_business_os__business_commands__v1")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn pull_collection_records_falls_back_to_versioned_rxdb_table() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let sqlite_path = rxdb_store_path(root);
+        let conn = Connection::open(sqlite_path)?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data) VALUES ('cmd-module-versions', ?1)",
+            [serde_json::json!({
+                "id": "cmd-module-versions",
+                "command_type": "ctox.source.list_snapshots",
+                "status": "completed",
+                "updated_at_ms": 1_700
+            })
+            .to_string()],
+        )?;
+        drop(conn);
+
+        let pulled = pull_collection_records(root, "business_commands", Some(1_000), Some(10))?;
+        assert_eq!(
+            pulled.get("source").and_then(Value::as_str),
+            Some("rxdb_projection")
+        );
+        assert_eq!(
+            pulled.get("table").and_then(Value::as_str),
+            Some("ctox_business_os__business_commands__v1")
+        );
+        assert_eq!(
+            pulled.pointer("/documents/0/id").and_then(Value::as_str),
+            Some("cmd-module-versions")
+        );
+        assert_eq!(
+            pulled
+                .pointer("/documents/0/status")
+                .and_then(Value::as_str),
+            Some("completed")
         );
         Ok(())
     }

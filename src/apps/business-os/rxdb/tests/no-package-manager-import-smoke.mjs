@@ -8,7 +8,7 @@ import {
   canonicalJson,
   createRxDatabase,
   createCtoxWebRtcNativePeer,
-  getRxStorageDexie,
+  getCtoxIndexedDbStorage,
   addRxPlugin,
   getConnectionHandlerSimplePeer,
   normalizeSignalingControlPlaneError,
@@ -130,8 +130,8 @@ for (const [mutator, expectedCode] of [
   }
 }
 
-if (typeof createRxDatabase !== 'function' || getRxStorageDexie().name !== 'ctox-indexeddb-native') {
-  throw new Error('database compatibility exports are missing');
+if (typeof createRxDatabase !== 'function' || getCtoxIndexedDbStorage().name !== 'ctox-indexeddb-native') {
+  throw new Error('CTOX DB database exports are missing');
 }
 
 if (addRxPlugin({ name: 'ignored-transition-plugin' }) !== undefined) {

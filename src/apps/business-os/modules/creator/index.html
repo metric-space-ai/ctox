@@ -16,13 +16,13 @@
         <div class="form-group">
           <label class="form-label" for="select-preset-prompt">Schnellstart-Vorlage laden</label>
           <select id="select-preset-prompt" class="os-select">
-            <option value="" selected disabled>-- Wähle eine App-Vorlage --</option>
-            <option value="standard-mgmt">📦 Lagerverwaltung</option>
-            <option value="notes-style">📝 Notizbuch</option>
-            <option value="kanban-style">📋 Taskboard</option>
-            <option value="support-style">🎫 Support Desk</option>
-            <option value="time-style">⏱️ Zeiterfassung</option>
-            <option value="plant-style">🌱 Pflanzen-Tracker</option>
+            <option value="" selected disabled>Vorlage auswählen</option>
+            <option value="standard-mgmt">Lagerverwaltung</option>
+            <option value="notes-style">Notizbuch</option>
+            <option value="kanban-style">Taskboard</option>
+            <option value="support-style">Support Desk</option>
+            <option value="time-style">Zeiterfassung</option>
+            <option value="plant-style">Pflanzen-Tracker</option>
           </select>
         </div>
 
@@ -30,16 +30,20 @@
         <div class="form-group">
           <label class="form-label" for="ai-prompt-input">Wunsch-App Prompt</label>
           <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'"></textarea>
-          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;">
+          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;" disabled>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             Spezifikation optimieren & anwenden
           </button>
+          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite">Prompt fehlt. Beschreibe zuerst die App.</p>
         </div>
 
         <!-- 3. Advanced Settings Accordion -->
         <div class="expert-accordion">
-          <button type="button" class="accordion-trigger" id="expert-accordion-btn">
-            <span>⚙️ Erweiterte Einstellungen (Optional)</span>
+          <button type="button" class="accordion-trigger" id="expert-accordion-btn" aria-expanded="false" aria-controls="expert-accordion-content">
+            <span class="accordion-label">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.07A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1A1.7 1.7 0 0 0 2.9 13H3a2 2 0 1 1 0-4h-.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 1 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v-.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9c.18.36.4.7.6 1 .3.3.7.5 1.1.5H21a2 2 0 1 1 0 4h.1c-.4 0-.8.2-1.1.5-.2.3-.42.64-.6 1Z"/></svg>
+              Erweiterte Einstellungen
+            </span>
             <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
 
@@ -114,7 +118,7 @@
       <div class="creator-card-body">
         <!-- Deployment Action -->
         <div class="deploy-action-section">
-          <button type="button" id="btn-deploy-app" class="os-btn is-primary">
+          <button type="button" id="btn-deploy-app" class="os-btn is-primary" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             App jetzt generieren & installieren
           </button>

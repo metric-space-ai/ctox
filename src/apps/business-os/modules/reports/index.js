@@ -2,6 +2,15 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
 const REPORTS_REFRESH_DEBOUNCE_MS = 80;
+const REPORTS_SYNC_RESTART_TIMEOUT_MS = 6000;
+const REPORT_COLLECTIONS = [
+  'business_module_reports',
+  'ctox_bug_reports',
+  'business_module_releases',
+  'business_commands',
+  'ctox_queue_tasks',
+];
+const REPORT_DATA_COLLECTIONS = ['business_module_reports', 'ctox_bug_reports'];
 
 const state = {
   ctx: null,
@@ -21,6 +30,7 @@ const state = {
   renderKey: '',
   renderedDetailId: '',
   detailScrollByReport: {},
+  diagnostics: createDiagnosticsState(),
   t: null,
   lang: 'de',
 };
@@ -32,6 +42,7 @@ export async function mount(ctx) {
   state.selectedId = '';
   state.renderedDetailId = '';
   state.renderKey = '';
+  state.diagnostics = createDiagnosticsState();
   await ensureStyles();
 
   // Load localizations
@@ -148,17 +159,20 @@ function applyStaticLabels(host, t) {
 function wireUi() {
   const root = state.ctx.host.querySelector('[data-reports-root]');
   if (!root) return;
-  root.querySelector('[data-refresh-reports]')?.addEventListener('click', () => refreshReports());
+  root.querySelector('[data-refresh-reports]')?.addEventListener('click', () => refreshReports({ restartSync: true, manual: true }));
   root.querySelector('[data-report-search]')?.addEventListener('input', (event) => {
     state.search = event.target.value || '';
+    syncSelectionToVisibleItems();
     render();
   });
   root.querySelector('[data-report-kind]')?.addEventListener('change', (event) => {
     state.kind = event.target.value || 'all';
+    syncSelectionToVisibleItems();
     render();
   });
   root.querySelector('[data-report-status]')?.addEventListener('change', (event) => {
     state.status = event.target.value || 'all';
+    syncSelectionToVisibleItems();
     render();
   });
   // Use event delegation on the list container so the click handler survives
@@ -185,8 +199,7 @@ function wireUi() {
 }
 
 function wireRealtime() {
-  const names = ['business_module_reports', 'ctox_bug_reports', 'business_module_releases', 'business_commands', 'ctox_queue_tasks'];
-  const subscriptions = names.map((name) => state.ctx.db?.raw?.[name]?.$?.subscribe?.(() => scheduleRefresh())).filter(Boolean);
+  const subscriptions = REPORT_COLLECTIONS.map((name) => state.ctx.db?.raw?.[name]?.$?.subscribe?.(() => scheduleRefresh())).filter(Boolean);
   return () => subscriptions.forEach((sub) => {
     try { sub.unsubscribe?.(); } catch {}
   });
@@ -204,15 +217,24 @@ function scheduleRefresh() {
   }, REPORTS_REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshReports() {
+async function refreshReports(options = {}) {
   const previousSelectedId = state.selectedId;
-  const [reports, bugs, releases, commands, queue] = await Promise.all([
-    loadCollection('business_module_reports'),
-    loadCollection('ctox_bug_reports'),
-    loadCollection('business_module_releases'),
-    loadCollection('business_commands'),
-    loadCollection('ctox_queue_tasks'),
-  ]);
+  state.diagnostics = {
+    ...state.diagnostics,
+    loading: true,
+    lastAttemptAt: Date.now(),
+    lastManual: Boolean(options.manual),
+  };
+  renderDiagnostics();
+
+  const syncErrors = options.restartSync ? await restartReportSync() : [];
+  const results = await Promise.all(REPORT_COLLECTIONS.map((name) => loadCollectionResult(name)));
+  const byName = Object.fromEntries(results.map((result) => [result.name, result]));
+  const reports = byName.business_module_reports?.items || [];
+  const bugs = byName.ctox_bug_reports?.items || [];
+  const releases = byName.business_module_releases?.items || [];
+  const commands = byName.business_commands?.items || [];
+  const queue = byName.ctox_queue_tasks?.items || [];
   const nextRenderKey = buildRenderKey({ reports, bugs, releases, commands, queue });
   const hadSameData = nextRenderKey === state.renderKey;
   state.reports = reports;
@@ -220,20 +242,53 @@ async function refreshReports() {
   state.releases = releases;
   state.commands = commands;
   state.queue = queue;
+  state.diagnostics = buildDiagnosticsState({
+    results,
+    syncErrors,
+    syncDiagnostics: state.ctx.sync?.diagnostics,
+    reportCount: normalizeReportItems({ reports, bugs, commands, queue, t: state.t }).length,
+    manual: Boolean(options.manual),
+  });
   state.renderKey = nextRenderKey;
-  const items = filteredReports();
-  if (!state.selectedId || !items.some((item) => item.id === state.selectedId)) {
-    state.selectedId = items[0]?.id || '';
+  syncSelectionToVisibleItems();
+  if (hadSameData && previousSelectedId === state.selectedId) {
+    renderDiagnostics();
+    return;
   }
-  if (hadSameData && previousSelectedId === state.selectedId) return;
   render();
 }
 
-async function loadCollection(name) {
+async function restartReportSync() {
+  const sync = state.ctx.sync;
+  if (!sync) return [];
+  const errors = [];
+  try {
+    if (typeof sync.restartCollections === 'function') {
+      await withTimeout(sync.restartCollections(REPORT_COLLECTIONS), REPORTS_SYNC_RESTART_TIMEOUT_MS, 'Sync-Neustart laeuft noch');
+      return errors;
+    }
+  } catch (error) {
+    errors.push({ name: 'sync', message: safeErrorMessage(error) });
+  }
+  await Promise.all(REPORT_COLLECTIONS.map(async (name) => {
+    try {
+      await withTimeout(sync.startCollection?.(name), REPORTS_SYNC_RESTART_TIMEOUT_MS, 'Sync-Start laeuft noch');
+    } catch (error) {
+      errors.push({ name, message: safeErrorMessage(error) });
+    }
+  }));
+  return errors;
+}
+
+async function loadCollectionResult(name) {
   const collection = state.ctx.db?.raw?.[name];
-  if (!collection) return [];
-  const docs = await collection.find().exec();
-  return docs.map((doc) => doc.toJSON());
+  if (!collection) return { name, items: [], missing: true, error: '' };
+  try {
+    const docs = await collection.find().exec();
+    return { name, items: docs.map((doc) => doc.toJSON()), missing: false, error: '' };
+  } catch (error) {
+    return { name, items: [], missing: false, error: safeErrorMessage(error) };
+  }
 }
 
 function buildRenderKey(collections) {
@@ -250,6 +305,66 @@ function buildRenderKey(collections) {
 function render() {
   renderList();
   renderDetail();
+  renderDiagnostics();
+}
+
+function renderDiagnostics() {
+  const root = state.ctx?.host?.querySelector?.('[data-reports-root]');
+  if (!root) return;
+  const diagnosticsEl = root.querySelector('[data-reports-diagnostics]');
+  const refreshBtn = root.querySelector('[data-refresh-reports]');
+  if (refreshBtn) {
+    refreshBtn.disabled = Boolean(state.diagnostics.loading);
+    refreshBtn.setAttribute('aria-busy', state.diagnostics.loading ? 'true' : 'false');
+    refreshBtn.title = refreshDiagnosticTitle(state.diagnostics);
+  }
+  if (!diagnosticsEl) return;
+  const messages = diagnosticsMessages(state.diagnostics, state.t);
+  if (!messages.length && !state.diagnostics.lastManual) {
+    diagnosticsEl.hidden = true;
+    diagnosticsEl.replaceChildren();
+    return;
+  }
+  diagnosticsEl.hidden = false;
+  diagnosticsEl.dataset.state = state.diagnostics.loading ? 'loading' : (messages.length ? 'warn' : 'ok');
+  const text = messages.length
+    ? messages.join(' ')
+    : state.t('refreshOk', 'Aktualisiert: {0} Reports lokal verfuegbar.', state.diagnostics.reportCount || 0);
+  diagnosticsEl.textContent = text;
+}
+
+function renderListEmptyState(allItems) {
+  if (hasBlockingReportDiagnostic()) {
+    return `<div class="reports-empty is-diagnostic"><strong>${escapeHtml(state.t('reportsUnavailable', 'Reports-Speicher nicht bereit.'))}</strong><span>${escapeHtml(diagnosticsMessages(state.diagnostics, state.t).join(' ') || state.t('refreshTryAgain', 'Aktualisieren zeigt die letzte Sync-Diagnose.'))}</span></div>`;
+  }
+  if (allItems.length) {
+    return `<p class="reports-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Reports im aktuellen Filter.'))}</p>`;
+  }
+  return `<p class="reports-empty">${escapeHtml(state.t('noReports', 'Keine Reports gefunden.'))}</p>`;
+}
+
+function renderDetailEmptyState({ normalized, filtered }) {
+  if (hasBlockingReportDiagnostic()) {
+    return `<div class="reports-detail-empty is-diagnostic"><strong>${escapeHtml(state.t('reportsUnavailable', 'Reports-Speicher nicht bereit.'))}</strong><p>${escapeHtml(diagnosticsMessages(state.diagnostics, state.t).join(' ') || state.t('refreshTryAgain', 'Aktualisieren zeigt die letzte Sync-Diagnose.'))}</p></div>`;
+  }
+  if (!normalized.length) {
+    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Reports'))}</strong><p>${escapeHtml(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wuensche synchronisiert sind, erscheinen Liste und Details hier.'))}</p></div>`;
+  }
+  if (!filtered.length) {
+    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><p>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter aendern, um wieder Reportdetails zu sehen.'))}</p></div>`;
+  }
+  return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Report auswählen'))}</strong><p>${escapeHtml(state.t('selectReport', 'Wähle links einen Report aus.'))}</p></div>`;
+}
+
+function syncSelectionToVisibleItems() {
+  const items = filteredReports();
+  if (!items.length) {
+    state.selectedId = '';
+    return;
+  }
+  if (!state.selectedId || !items.some((item) => item.id === state.selectedId)) {
+    state.selectedId = items[0]?.id || '';
+  }
 }
 
 function rememberDetailScroll() {
@@ -263,8 +378,9 @@ function renderList() {
   const list = state.ctx.host.querySelector('[data-reports-list]');
   if (!list) return;
   const items = filteredReports();
+  const allItems = normalizedReports();
   if (!items.length) {
-    list.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('noReports', 'Keine Reports gefunden.'))}</p>`;
+    list.innerHTML = renderListEmptyState(allItems);
     return;
   }
   list.innerHTML = items.map((report) => `
@@ -291,33 +407,26 @@ function renderDetail() {
     return;
   }
   rememberDetailScroll();
-  // Look the selected report up against the unfiltered list as well — if the
-  // user clicked a row while a filter was being narrowed, the selection must
-  // still resolve to the clicked entry instead of silently falling back to
-  // the first visible row (which left the panel looking blank/stale).
   const normalized = normalizedReports();
   const filtered = filteredReports();
-  const report = filtered.find((item) => item.id === state.selectedId)
-    || normalized.find((item) => item.id === state.selectedId)
-    || filtered[0]
-    || normalized[0]
-    || null;
+  const report = filtered.find((item) => item.id === state.selectedId) || null;
   if (!report) {
     state.renderedDetailId = '';
-    detail.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('selectReport', 'Wähle links einen Report aus.'))}</p>`;
+    detail.innerHTML = renderDetailEmptyState({ normalized, filtered });
     return;
   }
   const previousRenderedId = state.renderedDetailId;
   state.renderedDetailId = report.id;
   const releases = releasesForModule(report.moduleId);
   const attachment = report.attachment;
+  const hasCtoxTask = Boolean(report.commandId || report.taskId);
   detail.innerHTML = `
     <header class="reports-detail-head">
       <div>
         <span>${escapeHtml(report.kindLabel)} · ${escapeHtml(displayStatus(report.status))}</span>
         <h1>${escapeHtml(report.title)}</h1>
       </div>
-      <button type="button" class="os-btn" data-focus-task>${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}</button>
+      <button type="button" class="os-btn" data-focus-task ${hasCtoxTask ? '' : 'disabled'}>${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}</button>
     </header>
     <div class="reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
       <section class="reports-section">
@@ -394,30 +503,52 @@ function restoreDetailScroll(scroller, reportId, shouldRestore) {
 }
 
 function filteredReports() {
-  const query = state.search.trim().toLowerCase();
-  return normalizedReports().filter((report) => {
-    if (state.kind !== 'all' && report.kind !== state.kind) return false;
-    if (state.status !== 'all' && normalizeStatus(report.status) !== state.status) return false;
-    if (!query) return true;
-    return [report.title, report.summary, report.expected, report.moduleId, report.commandId, report.taskId]
-      .some((value) => String(value || '').toLowerCase().includes(query));
+  return filterReportItems(normalizedReports(), {
+    search: state.search,
+    kind: state.kind,
+    status: state.status,
   });
 }
 
 function normalizedReports() {
-  const bugById = new Map(state.bugs.map((bug) => [bug.id || bug.report_id, bug]));
-  const commandById = new Map(state.commands.map((command) => [command.command_id || command.id, command]));
-  const queueByTaskId = new Map(state.queue.map((task) => [task.id || task.task_id, task]));
-  return state.reports.map((report) => {
-    const id = report.report_id || report.id;
+  return normalizeReportItems({
+    reports: state.reports,
+    bugs: state.bugs,
+    commands: state.commands,
+    queue: state.queue,
+    t: state.t,
+  });
+}
+
+export function normalizeReportItems({ reports = [], bugs = [], commands = [], queue = [], t = defaultTranslate } = {}) {
+  const reportById = new Map();
+  const bugById = new Map();
+  const ids = [];
+  for (const report of reports) {
+    const id = reportIdFor(report);
+    if (!id) continue;
+    if (!reportById.has(id)) ids.push(id);
+    reportById.set(id, report);
+  }
+  for (const bug of bugs) {
+    const id = reportIdFor(bug);
+    if (!id) continue;
+    if (!reportById.has(id) && !bugById.has(id)) ids.push(id);
+    bugById.set(id, bug);
+  }
+  const commandById = keyedByAny(commands, ['command_id', 'id']);
+  const queueByTaskId = keyedByAny(queue, ['task_id', 'id']);
+  return ids.map((id) => {
+    const report = reportById.get(id) || {};
     const bug = bugById.get(id) || {};
-    const payload = objectValue(bug.payload);
+    const payload = objectValue(bug.payload || report.payload);
     const clientContext = objectValue(report.client_context || bug.evidence);
-    const commandId = report.ctox_command_id || payload.ctox_command_id || '';
+    const commandId = report.ctox_command_id || payload.ctox_command_id || report.command_id || '';
     const taskId = report.task_id || payload.task_id || '';
     const command = commandById.get(commandId) || {};
     const task = queueByTaskId.get(taskId) || {};
     const status = task.route_status || task.status || report.status || bug.status || command.status || 'open';
+    const kind = normalizeKind(report.kind || payload.kind || bug.kind);
     const changeSummary = payload.change_summary
       || payload.ctox_change_summary
       || clientContext.ctox_change_summary
@@ -426,23 +557,136 @@ function normalizedReports() {
       || '';
     return {
       id,
-      kind: normalizeKind(report.kind || payload.kind),
-      kindLabel: normalizeKind(report.kind || payload.kind) === 'bug' ? state.t('bugs', 'Bug') : state.t('features', 'Feature'),
+      kind,
+      kindLabel: kind === 'bug' ? t('bugs', 'Bug') : t('features', 'Feature'),
       severity: report.severity || bug.severity || '',
       title: report.title || bug.title || id,
       summary: report.summary || bug.description || '',
       expected: report.expected || payload.expected || '',
       status,
-      moduleId: report.module_id || bug.module || 'ctox',
+      moduleId: report.module_id || bug.module || report.inbound_channel || bug.inbound_channel || 'ctox',
       commandId,
       taskId,
       changeSummary,
       rollbackVersionId: payload.rollback_version_id || clientContext.rollback_version_id || '',
       attachment: objectValue(clientContext.attachment),
-      createdAt: report.created_at_ms || bug.created_at_ms || report.updated_at_ms || 0,
-      updatedAt: report.updated_at_ms || bug.updated_at_ms || report.created_at_ms || 0,
+      createdAt: report.created_at_ms || bug.created_at_ms || report.updated_at_ms || bug.updated_at_ms || 0,
+      updatedAt: report.updated_at_ms || bug.updated_at_ms || report.created_at_ms || bug.created_at_ms || 0,
     };
   }).sort((left, right) => (right.updatedAt || 0) - (left.updatedAt || 0));
+}
+
+export function filterReportItems(items, { search = '', kind = 'all', status = 'all' } = {}) {
+  const query = String(search || '').trim().toLowerCase();
+  return items.filter((report) => {
+    if (kind !== 'all' && report.kind !== kind) return false;
+    if (status !== 'all' && normalizeStatus(report.status) !== status) return false;
+    if (!query) return true;
+    return [report.title, report.summary, report.expected, report.moduleId, report.commandId, report.taskId]
+      .some((value) => String(value || '').toLowerCase().includes(query));
+  });
+}
+
+function keyedByAny(items, keys) {
+  const map = new Map();
+  for (const item of items) {
+    for (const key of keys) {
+      const value = item?.[key];
+      if (value) map.set(value, item);
+    }
+  }
+  return map;
+}
+
+function reportIdFor(item) {
+  return item?.report_id || item?.id || '';
+}
+
+function defaultTranslate(_key, fallback) {
+  return fallback;
+}
+
+function createDiagnosticsState() {
+  return {
+    loading: false,
+    lastAttemptAt: 0,
+    lastSuccessAt: 0,
+    lastManual: false,
+    reportCount: 0,
+    collections: Object.fromEntries(REPORT_COLLECTIONS.map((name) => [name, {
+      name,
+      count: 0,
+      missing: false,
+      error: '',
+      syncStatus: '',
+      syncError: '',
+    }])),
+    syncErrors: [],
+  };
+}
+
+function buildDiagnosticsState({ results, syncErrors, syncDiagnostics, reportCount, manual }) {
+  const collections = {};
+  for (const result of results) {
+    const syncInfo = syncDiagnostics?.collections?.[result.name] || {};
+    collections[result.name] = {
+      name: result.name,
+      count: result.items.length,
+      missing: Boolean(result.missing),
+      error: result.error || '',
+      syncStatus: syncInfo.connectionStatus || syncInfo.status || '',
+      syncError: safeErrorMessage(syncInfo.lastError || ''),
+    };
+  }
+  return {
+    loading: false,
+    lastAttemptAt: Date.now(),
+    lastSuccessAt: Date.now(),
+    lastManual: manual,
+    reportCount,
+    collections,
+    syncErrors,
+  };
+}
+
+function diagnosticsMessages(diagnostics, t = defaultTranslate) {
+  if (diagnostics.loading) return [t('refreshRunning', 'Aktualisiere Reports und Sync-Status...')];
+  const messages = [];
+  for (const name of REPORT_DATA_COLLECTIONS) {
+    const info = diagnostics.collections?.[name];
+    if (!info) continue;
+    if (info.missing) messages.push(t('collectionMissing', 'Collection {0} ist lokal nicht verfuegbar.', name));
+    if (info.error) messages.push(t('collectionLoadFailed', 'Collection {0} konnte nicht gelesen werden: {1}', name, info.error));
+    if (isUnhealthySyncStatus(info.syncStatus) || info.syncError) {
+      messages.push(t('collectionSyncIssue', 'Sync fuer {0}: {1}', name, info.syncError || info.syncStatus));
+    }
+  }
+  for (const error of diagnostics.syncErrors || []) {
+    messages.push(t('syncRestartFailed', 'Sync-Neustart fuer {0} fehlgeschlagen: {1}', error.name, error.message));
+  }
+  return [...new Set(messages)];
+}
+
+function hasBlockingReportDiagnostic() {
+  const dataCollections = REPORT_DATA_COLLECTIONS.map((name) => state.diagnostics.collections?.[name]).filter(Boolean);
+  if (!dataCollections.length) return true;
+  const allStoresUnavailable = dataCollections.every((info) => info.missing || info.error);
+  const anyDataSyncIssue = dataCollections.some((info) => info.missing || info.error || info.syncError || isUnhealthySyncStatus(info.syncStatus));
+  return allStoresUnavailable || ((state.diagnostics.reportCount || 0) === 0 && anyDataSyncIssue);
+}
+
+function isUnhealthySyncStatus(value) {
+  return ['failed', 'error', 'stopped'].includes(String(value || '').toLowerCase());
+}
+
+function refreshDiagnosticTitle(diagnostics) {
+  if (diagnostics.loading) return state.t('refreshRunning', 'Aktualisiere Reports und Sync-Status...');
+  const messages = diagnosticsMessages(diagnostics, state.t);
+  if (messages.length) return messages.join(' ');
+  if (diagnostics.lastSuccessAt) {
+    return state.t('refreshTitleOk', 'Zuletzt aktualisiert: {0}', formatDate(diagnostics.lastSuccessAt));
+  }
+  return state.t('refresh', 'Aktualisieren');
 }
 
 function releasesForModule(moduleId) {
@@ -602,6 +846,21 @@ function newId() {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withTimeout(promise, timeoutMs, message) {
+  if (!promise || typeof promise.then !== 'function') return promise;
+  promise.catch(() => {});
+  return Promise.race([
+    promise,
+    delay(timeoutMs).then(() => { throw new Error(message); }),
+  ]);
+}
+
+function safeErrorMessage(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  return error.message || error.reason || String(error);
 }
 
 function escapeHtml(value) {

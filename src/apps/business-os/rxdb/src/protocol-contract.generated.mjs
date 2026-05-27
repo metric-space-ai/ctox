@@ -29,7 +29,7 @@ export const CTOX_QUERY_RPC = Object.freeze({
   cancel: "rxdb.query.cancel",
   maxDocumentsPerChunk: 200,
   maxBytesPerChunk: 262144,
-  maxInFlightStreams: 4,
+  maxInFlightStreams: 8,
   maxQueryRuntimeMs: 30000,
   defaultWindowLimit: 200
 });

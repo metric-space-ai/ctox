@@ -8,6 +8,14 @@ const ROW_LIMIT = 320;
 const RESEARCH_LAYOUT_KEY = 'ctox.businessOs.research.columnLayout';
 const RESEARCH_COL_MIN = Object.freeze({ left: 260, center: 420, right: 240 });
 const RESEARCH_COL_MAX = Object.freeze({ left: 680, right: 520 });
+const RESEARCH_COLLECTIONS = Object.freeze([
+  'business_commands',
+  'ctox_queue_tasks',
+  'research_tasks',
+  'research_runs',
+  'research_notes',
+  'knowledge_tables',
+]);
 const STOP_TERMS = new Set(['eine', 'einen', 'einer', 'eines', 'und', 'oder', 'auf', 'basis', 'nutze', 'score', 'quellen', 'source', 'sources', 'dashboard', 'research', 'knowledge', 'base', 'table', 'data', 'fuer', 'from', 'with', 'that', 'this', 'the']);
 
 const BASE_AXES = Object.freeze([
@@ -265,6 +273,12 @@ const state = {
     drag: null,
   },
   status: '',
+  diagnostics: {
+    collections: {},
+    reloadStartedAt: 0,
+    reloadFinishedAt: 0,
+    reloadCount: 0,
+  },
   refreshTimer: null,
   cleanup: [],
   contextMenu: null,
@@ -309,15 +323,18 @@ export async function mount(ctx) {
 }
 
 async function startResearchCollections() {
-  const collections = [
-    'business_commands',
-    'ctox_queue_tasks',
-    'research_tasks',
-    'research_runs',
-    'research_notes',
-    'knowledge_tables',
-  ];
-  await Promise.allSettled(collections.map((collection) => state.ctx.sync?.startCollection?.(collection)));
+  await Promise.all(RESEARCH_COLLECTIONS.map(async (collection) => {
+    if (typeof state.ctx.sync?.startCollection !== 'function') {
+      markCollectionDiagnostic(collection, 'sync', 'local', state.t('localOnly', 'Lokaler Modus'));
+      return;
+    }
+    try {
+      await state.ctx.sync.startCollection(collection);
+      markCollectionDiagnostic(collection, 'sync', 'ok', state.t('syncReady', 'Sync bereit'));
+    } catch (error) {
+      markCollectionDiagnostic(collection, 'sync', 'failed', errorMessage(error));
+    }
+  }));
 }
 
 async function ensureStyles() {
@@ -421,6 +438,9 @@ function bindEvents(root) {
 }
 
 async function refreshAll({ seed = false } = {}) {
+  state.diagnostics.reloadStartedAt = Date.now();
+  state.diagnostics.reloadFinishedAt = 0;
+  state.diagnostics.reloadCount += 1;
   setStatus(state.t('loadingKnowledge', 'Knowledge wird geladen...'));
   state.knowledgeBases = await loadKnowledgeBases();
   await loadLocalState();
@@ -430,16 +450,18 @@ async function refreshAll({ seed = false } = {}) {
   }
   await loadDashboardData();
   render();
-  setStatus('');
+  state.diagnostics.reloadFinishedAt = Date.now();
+  setStatus(reloadStatusText());
+  renderDiagnosticsIntoDom();
 }
 
 async function loadLocalState() {
   const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
-    findAll(state.ctx.db.raw.research_tasks),
-    findAll(state.ctx.db.raw.research_runs),
-    findAll(state.ctx.db.raw.research_notes),
-    findAll(state.ctx.db.raw.business_commands),
-    findAll(state.ctx.db.raw.ctox_queue_tasks),
+    findAll(state.ctx.db.raw.research_tasks, 'research_tasks'),
+    findAll(state.ctx.db.raw.research_runs, 'research_runs'),
+    findAll(state.ctx.db.raw.research_notes, 'research_notes'),
+    findAll(state.ctx.db.raw.business_commands, 'business_commands'),
+    findAll(state.ctx.db.raw.ctox_queue_tasks, 'ctox_queue_tasks'),
   ]);
   if (tasks.length || !state.tasks.length) {
     state.tasks = tasks
@@ -560,7 +582,7 @@ async function loadKnowledgeBases() {
 }
 
 async function loadKnowledgeTables() {
-  return findAll(state.ctx?.db?.raw?.knowledge_tables);
+  return findAll(state.ctx?.db?.raw?.knowledge_tables, 'knowledge_tables');
 }
 
 function isResearchKnowledgeBase(base) {
@@ -779,7 +801,7 @@ function renderLeft() {
           <span>${state.tasks.length} ${escapeHtml(state.t('active', 'aktiv'))}</span>
         </div>
         <div class="research-task-list">
-          ${state.tasks.map(renderTaskButton).join('') || `<div class="research-empty">${escapeHtml(state.t('noTasksFound', 'Keine Knowledge-basierte Research-Aufgabe gefunden.'))}</div>`}
+          ${state.tasks.map(renderTaskButton).join('') || renderNoTasksEmpty()}
         </div>
       </section>
       <section class="research-section">
@@ -788,9 +810,10 @@ function renderLeft() {
           <span>${escapeHtml(axisLabel('portfolio_priority'))}</span>
         </div>
         <div class="research-ranking-list">
-          ${state.sourceModels.map(renderRankingRow).join('') || `<div class="research-empty">${escapeHtml(state.t('noSourcesLoaded', 'Noch keine Quellen geladen.'))}</div>`}
+          ${state.sourceModels.map(renderRankingRow).join('') || renderNoSourcesEmpty(task)}
         </div>
       </section>
+      ${renderDiagnosticsPanel()}
       <section class="research-status-line">${escapeHtml(state.status || task?.knowledge_domain || '')}</section>
     </div>
   `;
@@ -820,12 +843,83 @@ function renderRankingRow(source) {
   `;
 }
 
+function renderNoTasksEmpty() {
+  const empty = emptyStateForNoTask();
+  return `
+    <div class="research-empty research-empty-diagnostic">
+      <strong>${escapeHtml(empty.title)}</strong>
+      <span>${escapeHtml(empty.body)}</span>
+    </div>
+  `;
+}
+
+function renderNoSourcesEmpty(task) {
+  const failure = diagnosticFailures()[0];
+  let body = state.t('noSourcesLoaded', 'Noch keine Quellen geladen.');
+  if (failure) {
+    body = state.t('syncFailedSources', 'Quellen konnten wegen eines Collection- oder Sync-Problems nicht geladen werden.');
+  } else if (task && !knowledgeBaseForTask(task)) {
+    body = state.t('selectedDomainMissing', 'Die ausgewählte Knowledge Domain ist lokal nicht verfügbar.');
+  } else if (task) {
+    body = state.t('selectedDomainNoSources', 'Die Knowledge Domain ist geladen, enthält aber noch keine Quellenzeilen für dieses Dashboard.');
+  }
+  return `<div class="research-empty research-empty-diagnostic"><strong>${escapeHtml(state.t('sources', 'Sources'))}</strong><span>${escapeHtml(body)}</span></div>`;
+}
+
+function renderDiagnosticsPanel() {
+  const rows = diagnosticRows();
+  const failures = rows.filter((row) => row.kind === 'failed');
+  const status = failures.length
+    ? state.t('syncFailedShort', 'Sync-Problem')
+    : state.diagnostics.reloadFinishedAt
+      ? state.t('loadedShort', 'geladen')
+      : state.t('pendingShort', 'wartet');
+  return `
+    <section class="research-diagnostics" data-research-diagnostics aria-live="polite">
+      <div class="research-section-head flush">
+        <strong>${escapeHtml(state.t('reloadDiagnostics', 'Reload Diagnose'))}</strong>
+        <span>${escapeHtml(status)}</span>
+      </div>
+      <div class="research-diagnostic-summary">${escapeHtml(reloadStatusText())}</div>
+      <div class="research-diagnostic-list">
+        ${rows.map((row) => `
+          <div class="research-diagnostic-row research-diagnostic-${escapeHtml(row.kind)}">
+            <span>${escapeHtml(row.collection)}</span>
+            <strong>${escapeHtml(row.label)}</strong>
+          </div>
+        `).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function emptyStateForNoTask() {
+  const failure = diagnosticFailures()[0];
+  if (failure) {
+    return {
+      title: state.t('syncFailedTitle', 'Daten konnten nicht geladen werden'),
+      body: state.t('syncFailedBody', `Collection ${failure.collection} meldet: ${failure.message}`, failure.collection, failure.message),
+    };
+  }
+  if (!state.knowledgeBases.length) {
+    return {
+      title: state.t('noKnowledgeDomains', 'Keine Knowledge-Domains lokal verfügbar'),
+      body: state.t('noKnowledgeDomainsBody', 'Daten neu laden zeigt hier Collection- und Sync-Diagnosen; Research-Dashboards erscheinen, sobald Knowledge-Tabellen lokal verfügbar sind.'),
+    };
+  }
+  return {
+    title: state.t('noResearchTask', 'Keine Research-Aufgabe'),
+    body: state.t('createTaskBase', 'Lege eine Aufgabe auf Basis einer Knowledge Base an.'),
+  };
+}
+
 function renderCenter() {
   const root = pane('center');
   if (!root) return;
   const task = selectedTask();
   if (!task) {
-    root.innerHTML = `<div class="research-empty-state"><strong>${escapeHtml(state.t('noResearchTask', 'Keine Research-Aufgabe'))}</strong><span>${escapeHtml(state.t('createTaskBase', 'Lege eine Aufgabe auf Basis einer Knowledge Base an.'))}</span></div>`;
+    const empty = emptyStateForNoTask();
+    root.innerHTML = `<div class="research-empty-state"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`;
     return;
   }
   const axisPair = normalizedAxisPair(task);
@@ -1311,10 +1405,11 @@ function renderRight() {
   const runInfo = researchRunInfo(task);
   const notes = computedDecisionNotes(source);
   const axisPair = normalizedAxisPair(task);
+  const canRun = canRunResearchTask(task);
   root.innerHTML = `
     <header class="research-pane-header">
       <div><span>${escapeHtml(state.t('context', 'Context'))}</span><h2>${escapeHtml(task?.title || 'Research')}</h2></div>
-      <button type="button" class="research-button primary" data-action="run-research" ${task ? '' : 'disabled'} title="${escapeHtml(state.t('runHint', 'Systematic Research für dieses Dashboard'))} ${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'fortsetzen')) : escapeHtml(state.t('researchStarten', 'starten'))}">${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}</button>
+      <button type="button" class="research-button primary" data-action="run-research" ${canRun ? '' : 'disabled aria-disabled="true"'} title="${escapeHtml(runResearchHint(task, runInfo))}">${runInfo.hasRun ? escapeHtml(state.t('researchFortsetzen', 'Research fortsetzen')) : escapeHtml(state.t('researchStarten', 'Research starten'))}</button>
     </header>
     <div class="research-right-scroll">
       <section class="research-context-block">
@@ -1423,13 +1518,71 @@ function renderScoringModel(task) {
   `;
 }
 
+function canRunResearchTask(task) {
+  return validateSelectedResearchTask(task, state.knowledgeBases).valid;
+}
+
+function validateSelectedResearchTask(task, knowledgeBases = []) {
+  if (!task?.id) return { valid: false, message: state.t('selectTaskFirst', 'Wähle zuerst eine Research-Aufgabe.') };
+  if (!String(task.title || '').trim()) return { valid: false, message: state.t('missingTaskTitle', 'Die Research-Aufgabe hat keinen Titel.') };
+  const domain = String(task.knowledge_domain || '').trim();
+  if (!domain) return { valid: false, message: state.t('missingDomain', 'Die Research-Aufgabe hat keine Knowledge Domain.') };
+  if (!knowledgeBases.some((base) => base.domain === domain)) {
+    return { valid: false, message: state.t('domainNotLoaded', 'Die Knowledge Domain ist lokal nicht geladen.') };
+  }
+  return { valid: true, message: '' };
+}
+
+function runResearchHint(task, runInfo) {
+  const validation = validateSelectedResearchTask(task, state.knowledgeBases);
+  if (!validation.valid) return validation.message;
+  return `${state.t('runHint', 'Systematic Research für dieses Dashboard')} ${runInfo.hasRun ? state.t('researchFortsetzen', 'fortsetzen') : state.t('researchStarten', 'starten')}`;
+}
+
+function runDisabledReason(task) {
+  return validateSelectedResearchTask(task, state.knowledgeBases).message;
+}
+
+function validateResearchTaskInput(values, knowledgeBases = [], { isEdit = false } = {}) {
+  const title = String(values?.title || '').trim();
+  const domain = String(values?.domain || '').trim();
+  const prompt = String(values?.prompt || '').trim();
+  if (!title) return { valid: false, field: 'title', message: 'Titel ist erforderlich.' };
+  if (!domain) return { valid: false, field: 'domain', message: 'Knowledge Domain ist erforderlich.' };
+  if (!isEdit && !knowledgeBases.some((base) => base.domain === domain)) {
+    return { valid: false, field: 'domain', message: 'Wähle eine lokal verfügbare Knowledge Domain.' };
+  }
+  if (!prompt) return { valid: false, field: 'prompt', message: 'Auftrag ist erforderlich.' };
+  return { valid: true, field: '', message: '' };
+}
+
+function formValues(form) {
+  const data = new FormData(form);
+  return {
+    title: data.get('title'),
+    domain: data.get('domain'),
+    prompt: data.get('prompt'),
+  };
+}
+
+function domainSelectionNote(isEdit) {
+  if (isEdit) return state.t('domainLockedEdit', 'Domain bleibt beim Bearbeiten an die bestehende Research-Aufgabe gebunden.');
+  if (!state.knowledgeBases.length) return state.t('noLocalDomainsNote', 'Keine lokalen Knowledge Domains gefunden. Nutze Daten neu laden und prüfe die Reload Diagnose.');
+  return state.t('localDomainsNote', `${state.knowledgeBases.length} lokale Knowledge Domains verfügbar.`, state.knowledgeBases.length);
+}
+
 function openTaskDialog(editTask = null) {
   closeTaskDialog();
   const root = state.ctx.host.querySelector('[data-research-root]');
   if (!root) return;
   const isEdit = Boolean(editTask?.id);
-  const selectedDomain = editTask?.knowledge_domain || state.knowledgeBases[0]?.domain || '';
+  const selectedDomain = editTask?.knowledge_domain || selectedTask()?.knowledge_domain || state.knowledgeBases[0]?.domain || '';
   const dimensionsText = formatDimensionLines(scoringDimensionsForTask(editTask));
+  const domainOptions = state.knowledgeBases.map((base) => `
+    <option value="${escapeHtml(base.domain)}" ${base.domain === selectedDomain ? 'selected' : ''}>
+      ${escapeHtml(`${base.title || titleFromDomain(base.domain)} · ${base.domain}`)}
+    </option>
+  `).join('');
   const overlay = document.createElement('div');
   overlay.className = 'research-modal-backdrop';
   overlay.innerHTML = `
@@ -1443,14 +1596,23 @@ function openTaskDialog(editTask = null) {
       </header>
       <form data-research-task-form>
         <input type="hidden" name="task_id" value="${escapeHtml(editTask?.id || '')}">
+        ${isEdit ? `<input type="hidden" name="domain" value="${escapeHtml(selectedDomain)}">` : ''}
         <label><span>${escapeHtml(state.t('titel', 'Titel'))}</span><input name="title" placeholder="${escapeHtml(state.t('neueResearch', 'Neue Research'))}" value="${escapeHtml(editTask?.title || '')}" required></label>
-        <label><span>Knowledge Domain</span><input name="domain" list="research-knowledge-domains" placeholder="research/vendor-ai-agents" value="${escapeHtml(selectedDomain)}" ${isEdit ? 'readonly' : ''} required><datalist id="research-knowledge-domains">${state.knowledgeBases.map((base) => `<option value="${escapeHtml(base.domain)}">${escapeHtml(base.title)}</option>`).join('')}</datalist></label>
-        <label><span>${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}">${escapeHtml(editTask?.prompt || '')}</textarea></label>
+        <label>
+          <span>Knowledge Domain</span>
+          <select name="${isEdit ? 'domain_display' : 'domain'}" ${isEdit || !state.knowledgeBases.length ? 'disabled' : ''} required>
+            <option value="" ${selectedDomain ? '' : 'selected'} disabled>${escapeHtml(state.t('selectKnowledgeDomain', 'Knowledge Domain auswählen'))}</option>
+            ${domainOptions}
+          </select>
+          <small class="research-field-note">${escapeHtml(domainSelectionNote(isEdit))}</small>
+        </label>
+        <label><span>${escapeHtml(state.t('auftrag', 'Auftrag'))}</span><textarea name="prompt" placeholder="${escapeHtml(state.t('promptPlaceholder', 'Was soll das Dashboard auswerten?'))}" required>${escapeHtml(editTask?.prompt || '')}</textarea></label>
         <label><span>${escapeHtml(state.t('kriterien', 'Kriterien'))}</span><textarea name="criteria" placeholder="${escapeHtml(state.t('criteriaPlaceholder', 'Scope, Ausschlüsse, Scoring-Hinweise'))}">${escapeHtml(editTask?.criteria || '')}</textarea></label>
         <label><span>${escapeHtml(state.t('scoringDimensions', 'Scoring Dimensionen'))}</span><textarea name="scoring_dimensions" placeholder="${escapeHtml(state.t('scoringPlaceholder', 'overlap: Overlap\nbuyer_clarity: Buyer clarity'))}">${escapeHtml(dimensionsText)}</textarea></label>
+        <p class="research-validation" data-validation-status aria-live="polite"></p>
         <footer>
           <button type="button" class="research-button" data-close>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-          <button type="submit" class="research-button primary">${isEdit ? escapeHtml(state.t('save', 'Speichern')) : escapeHtml(state.t('create', 'Anlegen'))}</button>
+          <button type="submit" class="research-button primary" disabled>${isEdit ? escapeHtml(state.t('save', 'Speichern')) : escapeHtml(state.t('create', 'Anlegen'))}</button>
         </footer>
       </form>
     </section>
@@ -1459,15 +1621,39 @@ function openTaskDialog(editTask = null) {
   overlay.addEventListener('click', (event) => {
     if (event.target === overlay || event.target.closest('[data-close]')) close();
   });
-  overlay.querySelector('[data-research-task-form]')?.addEventListener('submit', async (event) => {
+  const formEl = overlay.querySelector('[data-research-task-form]');
+  const syncFormState = () => {
+    const submit = formEl?.querySelector('button[type="submit"]');
+    const status = formEl?.querySelector('[data-validation-status]');
+    if (!submit || !status || !formEl) return;
+    const validation = validateResearchTaskInput(formValues(formEl), state.knowledgeBases, { isEdit });
+    submit.disabled = !validation.valid;
+    status.textContent = validation.valid ? '' : validation.message;
+  };
+  formEl?.addEventListener('input', syncFormState);
+  formEl?.addEventListener('change', syncFormState);
+  formEl?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const submit = event.currentTarget.querySelector('button[type="submit"]');
+    const status = event.currentTarget.querySelector('[data-validation-status]');
+    const validation = validateResearchTaskInput(formValues(event.currentTarget), state.knowledgeBases, { isEdit });
+    if (!validation.valid) {
+      if (status) status.textContent = validation.message;
+      submit.disabled = true;
+      return;
+    }
     submit.disabled = true;
     const form = new FormData(event.currentTarget);
-    await createTaskFromForm(form);
-    close();
+    try {
+      await createTaskFromForm(form);
+      close();
+    } catch (error) {
+      if (status) status.textContent = errorMessage(error);
+      submit.disabled = false;
+    }
   });
   root.append(overlay);
+  syncFormState();
   requestAnimationFrame(() => overlay.querySelector('input[name="title"]')?.focus());
 }
 
@@ -1478,6 +1664,12 @@ function closeTaskDialog() {
 async function createTaskFromForm(form) {
   const taskId = String(form.get('task_id') || '').trim();
   const current = taskId ? state.tasks.find((item) => item.id === taskId) : null;
+  const validation = validateResearchTaskInput({
+    title: String(form.get('title') || ''),
+    domain: String(form.get('domain') || current?.knowledge_domain || ''),
+    prompt: String(form.get('prompt') || ''),
+  }, state.knowledgeBases, { isEdit: Boolean(current) });
+  if (!validation.valid) throw new Error(validation.message);
   const rawDomain = String(form.get('domain') || current?.knowledge_domain || '').trim();
   const rawTitle = String(form.get('title') || '').trim();
   const domain = normalizeResearchDomain(rawDomain || rawTitle || current?.title || 'research');
@@ -1521,7 +1713,11 @@ async function createTaskFromForm(form) {
 
 async function runSelectedResearch() {
   const task = selectedTask();
-  if (!task) return;
+  if (!canRunResearchTask(task)) {
+    setStatus(runDisabledReason(task));
+    renderRight();
+    return;
+  }
   const base = knowledgeBaseForTask(task);
   const now = Date.now();
   const scoringDimensions = scoringDimensionsForTask(task).filter((axis) => axis.id !== 'portfolio_priority');
@@ -2207,15 +2403,85 @@ function avgScore() {
   return (state.sourceModels.reduce((sum, item) => sum + item.score, 0) / state.sourceModels.length / 10).toFixed(1);
 }
 
-async function findAll(collection) {
-  if (!collection?.find) return [];
-  try {
-    const docs = await withTimeout(collection.find().exec(), 1600, 'collection read timed out');
-    return docs.map(toJson);
-  } catch (error) {
-    console.warn('[research] collection read skipped', error);
+async function findAll(collection, collectionName = '') {
+  if (!collection?.find) {
+    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'missing', state.t('collectionMissing', 'Collection nicht verfügbar'));
     return [];
   }
+  try {
+    const docs = await withTimeout(collection.find().exec(), 1600, 'collection read timed out');
+    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'ok', `${docs.length} rows`);
+    return docs.map(toJson);
+  } catch (error) {
+    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'failed', errorMessage(error));
+    return [];
+  }
+}
+
+function markCollectionDiagnostic(collection, phase, kind, message = '') {
+  const current = state.diagnostics.collections[collection] || {};
+  state.diagnostics.collections[collection] = {
+    ...current,
+    collection,
+    [phase]: {
+      kind,
+      message: String(message || ''),
+      at: Date.now(),
+    },
+  };
+}
+
+function diagnosticRows() {
+  return collectionDiagnosticRows(RESEARCH_COLLECTIONS, state.diagnostics.collections, state.t);
+}
+
+function collectionDiagnosticRows(collections, diagnostics = {}, t = (_key, fallback) => fallback) {
+  return collections.map((collection) => {
+    const diagnostic = diagnostics[collection] || {};
+    const read = diagnostic.read || null;
+    const sync = diagnostic.sync || null;
+    const failed = [sync, read].find((entry) => entry?.kind === 'failed');
+    if (failed) {
+      return {
+        collection,
+        kind: 'failed',
+        label: failed.message || t('failed', 'fehlgeschlagen'),
+      };
+    }
+    if (read?.kind === 'ok') return { collection, kind: 'ok', label: read.message || t('loadedShort', 'geladen') };
+    if (sync?.kind === 'ok') return { collection, kind: 'ok', label: t('syncReady', 'Sync bereit') };
+    if (sync?.kind === 'local') return { collection, kind: 'local', label: t('localOnly', 'Lokaler Modus') };
+    if (read?.kind === 'missing') return { collection, kind: 'missing', label: read.message };
+    return { collection, kind: 'pending', label: t('pendingShort', 'wartet') };
+  });
+}
+
+function diagnosticFailures() {
+  return diagnosticRows()
+    .filter((row) => row.kind === 'failed' || row.kind === 'missing')
+    .map((row) => ({ collection: row.collection, message: row.label }));
+}
+
+function reloadStatusText() {
+  const failures = diagnosticFailures();
+  if (failures.length) {
+    const first = failures[0];
+    return `${state.t('reloadProblem', 'Reload Diagnose')}: ${first.collection} - ${first.message}`;
+  }
+  if (!state.diagnostics.reloadFinishedAt) return state.t('loadingKnowledge', 'Knowledge wird geladen...');
+  const domainCount = state.knowledgeBases.length;
+  const taskCount = state.tasks.length;
+  const sourceCount = state.sourceModels.length;
+  if (!domainCount) return state.t('reloadNoDomains', 'Reload abgeschlossen: keine lokalen Knowledge Domains gefunden.');
+  return `Reload abgeschlossen: ${taskCount} Aufgaben, ${domainCount} Domains, ${sourceCount} Sources.`;
+}
+
+function renderDiagnosticsIntoDom() {
+  const host = state.ctx?.host?.querySelector?.('[data-research-diagnostics]');
+  if (!host) return;
+  const template = document.createElement('template');
+  template.innerHTML = renderDiagnosticsPanel().trim();
+  host.replaceWith(template.content.firstElementChild);
 }
 
 async function upsertDoc(collection, doc) {
@@ -2377,6 +2643,10 @@ function setStatus(value) {
   if (line) line.textContent = value;
 }
 
+function errorMessage(error) {
+  return String(error?.message || error || '').trim() || 'unknown error';
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -2385,3 +2655,10 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 }
+
+export const __researchTestHooks = {
+  collectionDiagnosticRows,
+  diagnosticRows,
+  validateResearchTaskInput,
+  validateSelectedResearchTask,
+};

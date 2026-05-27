@@ -284,6 +284,12 @@
   font-weight: 700;
 }
 
+.spreadsheets-card-main .spreadsheets-card-diagnostics {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
 /* Center Editor Header & Surface */
 
 .spreadsheets-editor-header {
@@ -716,6 +722,19 @@
   gap: 12px;
 }
 
+.spreadsheets-drawer-copy,
+.spreadsheets-form-status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.spreadsheets-form-status:not([hidden]) {
+  color: var(--danger);
+  font-weight: 700;
+}
+
 .spreadsheets-drawer-form label {
   display: flex;
   flex-direction: column;
@@ -772,9 +791,14 @@
   color: var(--accent);
 }
 
-.spreadsheets-drawer-actions button[type="submit"]:hover {
+.spreadsheets-drawer-actions button[type="submit"]:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
   box-shadow: var(--sh-subtle);
+}
+
+.spreadsheets-drawer-actions button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
 }
 
 .spreadsheets-drawer-actions button.danger-button {
@@ -806,4 +830,31 @@
   border-width: 0 6px 6px 0;
   border-color: transparent var(--danger) transparent transparent;
   pointer-events: none;
+}
+
+body[data-active-module="spreadsheets"] .workspace-pane-left,
+body[data-active-module="spreadsheets"] .workspace-pane-right {
+  min-width: 240px;
+}
+
+body[data-active-module="spreadsheets"] .workspace-col-resizer,
+body[data-active-module="spreadsheets"] [data-resizer] {
+  min-height: 100%;
+}
+
+body[data-active-module="spreadsheets"] .workspace-col-resizer::before,
+body[data-active-module="spreadsheets"] [data-resizer]::before {
+  border-radius: 0;
+  opacity: 0.45;
+}
+
+body[data-active-module="spreadsheets"] .workspace-col-resizer::before {
+  height: calc(100% - 16px);
+}
+
+body[data-active-module="spreadsheets"] [data-resizer]::before {
+  top: 0;
+  bottom: 0;
+  height: auto;
+  min-height: 100%;
 }

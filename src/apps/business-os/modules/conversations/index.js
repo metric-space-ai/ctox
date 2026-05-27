@@ -6,8 +6,12 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260525-conversations-reply-match1';
+const STYLE_BUILD = '20260527-conversations-diagnostics1';
 const SUPPORTED_CHANNELS = ['whatsapp', 'email', 'jami', 'teams', 'meeting'];
+const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
+  'communication_accounts',
+  'communication_messages',
+];
 const OUTBOUND_REPLY_CLASSIFICATIONS = [
   'positive',
   'negative',
@@ -40,9 +44,21 @@ const FALLBACK_LABELS = {
     channelJami: 'Jami',
     channelTeams: 'MS Teams',
     channelMeeting: 'Meeting',
-    searchPlaceholder: 'Kontakt, Inhalt, Account…',
+    searchPlaceholder: 'Kontakt/Text/Account',
     emptyListTitle: 'Keine Konversationen',
     emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami, MS Teams oder Meeting führt.',
+    noResultsTitle: 'Keine Treffer',
+    noResultsBody: 'Keine Konversation passt zu den aktiven Filtern.',
+    syncFailureTitle: 'Kommunikations-Sync prüfen',
+    syncFailureBody: 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.',
+    syncStartingTitle: 'Kommunikation wird synchronisiert',
+    syncStartingBody: 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.',
+    projectionMissingTitle: 'Thread-Projektion fehlt',
+    projectionMissingBody: 'Accounts oder Nachrichten sind lokal vorhanden, aber es wurden keine Conversation-Threads projiziert.',
+    diagnosticsLabel: 'Diagnose',
+    accountFilterEmpty: 'Keine Communication-Accounts synchronisiert',
+    accountFilterCount: 'Accounts verfügbar',
+    accountFilterSyncFailure: 'Account-Sync prüfen',
     emptyDetailTitle: 'Keine Konversation ausgewählt',
     emptyDetailBody: 'Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.',
     rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
@@ -143,9 +159,21 @@ const FALLBACK_LABELS = {
     channelJami: 'Jami',
     channelTeams: 'MS Teams',
     channelMeeting: 'Meeting',
-    searchPlaceholder: 'Contact, content, account…',
+    searchPlaceholder: 'Contact/text/account',
     emptyListTitle: 'No conversations',
     emptyListBody: 'Communications CTOX has on WhatsApp, Email, Jami, MS Teams, or Meeting appear here.',
+    noResultsTitle: 'No matches',
+    noResultsBody: 'No conversation matches the active filters.',
+    syncFailureTitle: 'Check communication sync',
+    syncFailureBody: 'Conversations cannot fully load communication data right now.',
+    syncStartingTitle: 'Communication is syncing',
+    syncStartingBody: 'Accounts and messages have not fully arrived in the local app yet.',
+    projectionMissingTitle: 'Thread projection missing',
+    projectionMissingBody: 'Accounts or messages exist locally, but no conversation threads were projected.',
+    diagnosticsLabel: 'Diagnostics',
+    accountFilterEmpty: 'No communication accounts synced',
+    accountFilterCount: 'accounts available',
+    accountFilterSyncFailure: 'Check account sync',
     emptyDetailTitle: 'No conversation selected',
     emptyDetailBody: 'Pick a conversation on the left to view the CTOX-side timeline.',
     rightEmptyBody: 'Contact details and linked records appear here.',
@@ -310,6 +338,10 @@ export async function mount(ctx) {
     search: '',
     threads: [],
     accountsById: new Map(),
+    messageProbeCount: null,
+    collectionErrors: new Map(),
+    missingCollections: new Set(),
+    syncDiagnostics: ctx.sync?.diagnostics || window.ctoxBusinessOsSyncDiagnostics || null,
     buckets: [],
     selectedBucketKey: null,
     selectedChannel: ALL_CHANNELS_TAB,
@@ -327,6 +359,9 @@ export async function mount(ctx) {
   const cleanups = [];
   if (resizerL) cleanups.push(() => resizerL.destroy());
   if (resizerR) cleanups.push(() => resizerR.destroy());
+
+  markMissingCollections();
+  ensureCommunicationCollectionsSync();
 
   wireChannelFilters(refs.channelFilterButtons, view, renderList);
   refs.search.addEventListener('input', () => {
@@ -348,7 +383,7 @@ export async function mount(ctx) {
     if (view.selectedBucketKey) refreshTimelineForActiveBucket();
   });
 
-  await Promise.all([loadAccounts(), loadThreads()]);
+  await Promise.all([loadAccounts(), loadThreads(), probeMessages()]);
   rebuildBuckets();
   populateAccountFilter();
   await applyConversationDeepLink();
@@ -368,6 +403,7 @@ export async function mount(ctx) {
 
   if (messagesCollection?.$) {
     const sub = messagesCollection.$.subscribe((change) => {
+      probeMessages().then(() => renderList()).catch(() => {});
       const doc = change?.documentData || change?.doc?._data || change?.doc;
       if (!doc) return;
       const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
@@ -387,6 +423,16 @@ export async function mount(ctx) {
     });
     cleanups.push(() => sub.unsubscribe?.());
   }
+
+  const syncDiagnosticsHandler = (event) => {
+    view.syncDiagnostics = event.detail || window.ctoxBusinessOsSyncDiagnostics || ctx.sync?.diagnostics || null;
+    populateAccountFilter();
+    renderList();
+    if (view.selectedBucketKey) renderRightPane();
+    else renderRightPane();
+  };
+  window.addEventListener('ctox-business-os-sync-diagnostics', syncDiagnosticsHandler);
+  cleanups.push(() => window.removeEventListener('ctox-business-os-sync-diagnostics', syncDiagnosticsHandler));
 
   const hashChangeHandler = async () => {
     if (!String(location.hash || '').startsWith('#conversations')) return;
@@ -410,6 +456,7 @@ export async function mount(ctx) {
   async function loadThreads() {
     if (!threadsCollection) {
       view.threads = [];
+      view.missingCollections.add('communication_threads');
       return;
     }
     try {
@@ -417,8 +464,11 @@ export async function mount(ctx) {
       view.threads = docs
         .map((doc) => doc.toJSON())
         .sort((a, b) => compareIsoDesc(a.last_message_at, b.last_message_at));
+      view.collectionErrors.delete('communication_threads');
+      view.missingCollections.delete('communication_threads');
     } catch (error) {
       console.error('[conversations] loadThreads failed:', error);
+      view.collectionErrors.set('communication_threads', error);
       view.threads = [];
     }
   }
@@ -426,6 +476,7 @@ export async function mount(ctx) {
   async function loadAccounts() {
     if (!accountsCollection) {
       view.accountsById = new Map();
+      view.missingCollections.add('communication_accounts');
       return;
     }
     try {
@@ -436,9 +487,33 @@ export async function mount(ctx) {
           .filter((account) => account && account._deleted !== true && account.is_deleted !== true)
           .map((account) => [account.account_key, account]),
       );
+      view.collectionErrors.delete('communication_accounts');
+      view.missingCollections.delete('communication_accounts');
     } catch (error) {
       console.error('[conversations] loadAccounts failed:', error);
+      view.collectionErrors.set('communication_accounts', error);
       view.accountsById = new Map();
+    }
+  }
+
+  async function probeMessages() {
+    if (!messagesCollection) {
+      view.messageProbeCount = null;
+      view.missingCollections.add('communication_messages');
+      return;
+    }
+    try {
+      const docs = await messagesCollection.find({ limit: 1 }).exec();
+      view.messageProbeCount = docs
+        .map((doc) => doc.toJSON?.() || doc)
+        .filter((message) => message && message._deleted !== true && message.is_deleted !== true)
+        .length;
+      view.collectionErrors.delete('communication_messages');
+      view.missingCollections.delete('communication_messages');
+    } catch (error) {
+      console.error('[conversations] probeMessages failed:', error);
+      view.collectionErrors.set('communication_messages', error);
+      view.messageProbeCount = null;
     }
   }
 
@@ -460,12 +535,33 @@ export async function mount(ctx) {
       const trimmed = all.slice(0, view.timelineLimit);
       trimmed.reverse();
       view.timelineMessages = trimmed;
+      view.collectionErrors.delete('communication_messages');
     } catch (error) {
       console.error('[conversations] loadTimeline failed:', error);
+      view.collectionErrors.set('communication_messages', error);
       view.timelineMessages = [];
       view.timelineTotal = 0;
     }
     return view.timelineMessages;
+  }
+
+  function markMissingCollections() {
+    const required = ['communication_accounts', 'communication_threads', 'communication_messages'];
+    for (const name of required) {
+      if (!ctx.db?.collection?.(name)) view.missingCollections.add(name);
+      else view.missingCollections.delete(name);
+    }
+  }
+
+  function ensureCommunicationCollectionsSync() {
+    for (const name of COMMUNICATION_DIAGNOSTIC_COLLECTIONS) {
+      ctx.sync?.startCollection?.(name)?.catch?.((error) => {
+        console.warn(`[conversations] ${name} sync start failed`, error);
+        view.collectionErrors.set(name, error);
+        populateAccountFilter();
+        renderList();
+      });
+    }
   }
 
   function applyMessageFilters(messages) {
@@ -492,7 +588,9 @@ export async function mount(ctx) {
     if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
       view.channel = link.channel === 'all' ? 'all' : link.channel;
       for (const btn of refs.channelFilterButtons) {
-        btn.classList.toggle('is-active', btn.dataset.channel === view.channel);
+        const active = btn.dataset.channel === view.channel;
+        btn.classList.toggle('is-active', active);
+        btn.setAttribute('aria-pressed', String(active));
       }
     }
     if (link.account_key) {
@@ -639,6 +737,22 @@ export async function mount(ctx) {
       select.value = '';
       view.account = '';
     }
+    select.disabled = accounts.length === 0;
+    renderAccountFilterStatus(accounts.length);
+  }
+
+  function renderAccountFilterStatus(accountCount) {
+    if (!refs.accountFilterStatus) return;
+    const diagnostics = currentDataDiagnostics();
+    const hasAccountFailure = diagnostics.problemCollections.includes('communication_accounts');
+    refs.accountFilterStatus.dataset.state = hasAccountFailure ? 'error' : '';
+    if (hasAccountFailure) {
+      refs.accountFilterStatus.textContent = `${t('accountFilterSyncFailure', 'Account-Sync prüfen')}: ${diagnostics.detail}`;
+    } else if (accountCount > 0) {
+      refs.accountFilterStatus.textContent = `${accountCount} ${t('accountFilterCount', 'Accounts verfügbar')}`;
+    } else {
+      refs.accountFilterStatus.textContent = t('accountFilterEmpty', 'Keine Communication-Accounts synchronisiert');
+    }
   }
 
   // ----- renderers -----
@@ -648,11 +762,14 @@ export async function mount(ctx) {
     refs.threadList.replaceChildren();
     updateChannelCounts(view.buckets);
     if (!filtered.length) {
+      renderListEmptyState(filtered);
       refs.emptyList.hidden = false;
       if (view.selectedBucketKey) {
         view.selectedBucketKey = null;
         view.selectedChannel = ALL_CHANNELS_TAB;
         renderDetail();
+      } else {
+        renderRightPane();
       }
       return;
     }
@@ -673,6 +790,21 @@ export async function mount(ctx) {
     } else {
       markActiveBucket();
     }
+  }
+
+  function renderListEmptyState(filtered) {
+    const state = conversationEmptyState({
+      totalBuckets: view.buckets.length,
+      filteredBuckets: filtered.length,
+      hasActiveFilters: hasActiveListFilters(view),
+      diagnostics: currentDataDiagnostics(),
+      hasLocalCommunicationData: hasLocalCommunicationData(view),
+      t,
+    });
+    const title = refs.emptyList.querySelector('[data-empty-list-title]');
+    const body = refs.emptyList.querySelector('[data-empty-list-body]');
+    if (title) title.textContent = state.title;
+    if (body) body.textContent = state.body;
   }
 
   function buildBucketItem(bucket) {
@@ -755,6 +887,7 @@ export async function mount(ctx) {
       refs.channelTabs.replaceChildren();
       refs.timeline.replaceChildren();
       refs.emptyDetail.hidden = false;
+      renderRightEmptyState();
       refs.rightEmpty.hidden = false;
       refs.rightDetail.hidden = true;
       return;
@@ -1351,6 +1484,7 @@ export async function mount(ctx) {
   function renderRightPane() {
     const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
     if (!bucket) {
+      renderRightEmptyState();
       refs.rightEmpty.hidden = false;
       refs.rightDetail.hidden = true;
       return;
@@ -1405,6 +1539,21 @@ export async function mount(ctx) {
     renderAccountsCard(bucket);
     renderOutboundCard(bucket);
     renderFolderCard(bucket);
+  }
+
+  function renderRightEmptyState() {
+    const state = conversationEmptyState({
+      totalBuckets: view.buckets.length,
+      filteredBuckets: filterBuckets(view.buckets, view, t).length,
+      hasActiveFilters: hasActiveListFilters(view),
+      diagnostics: currentDataDiagnostics(),
+      hasLocalCommunicationData: hasLocalCommunicationData(view),
+      t,
+    });
+    if (refs.rightEmptyTitle) refs.rightEmptyTitle.textContent = state.kind === 'initial-empty' ? '' : state.title;
+    if (refs.rightEmptyBody) refs.rightEmptyBody.textContent = state.kind === 'initial-empty'
+      ? t('rightEmptyBody', 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.')
+      : state.body;
   }
 
   function renderOutboundCard(bucket) {
@@ -1786,6 +1935,15 @@ export async function mount(ctx) {
   function newestThreadOf(bucket) {
     return [...bucket.threads].sort((a, b) => compareIsoDesc(a.last_message_at, b.last_message_at))[0];
   }
+
+  function currentDataDiagnostics() {
+    return buildConversationDataDiagnostics({
+      requiredCollections: COMMUNICATION_DIAGNOSTIC_COLLECTIONS,
+      missingCollections: view.missingCollections,
+      collectionErrors: view.collectionErrors,
+      syncDiagnostics: view.syncDiagnostics || ctx.sync?.diagnostics || window.ctoxBusinessOsSyncDiagnostics || null,
+    });
+  }
 }
 
 // ----- helpers (pure / DOM-agnostic) -----
@@ -1796,6 +1954,7 @@ function collectRefs(root) {
     search: root.querySelector('[data-conv-search]'),
     channelFilterButtons: Array.from(root.querySelectorAll('[data-conv-channel-filters] [data-channel]')),
     accountFilter: root.querySelector('[data-conv-account-filter]'),
+    accountFilterStatus: root.querySelector('[data-conv-account-filter-status]'),
     directionFilter: root.querySelector('[data-conv-direction-filter]'),
     dateFilter: root.querySelector('[data-conv-date-filter]'),
     emptyList: root.querySelector('[data-conv-empty-list]'),
@@ -1807,6 +1966,8 @@ function collectRefs(root) {
     channelTabs: root.querySelector('[data-conv-channel-tabs]'),
     timeline: root.querySelector('[data-conv-timeline]'),
     rightEmpty: root.querySelector('[data-conv-right-empty]'),
+    rightEmptyTitle: root.querySelector('[data-right-empty-title]'),
+    rightEmptyBody: root.querySelector('[data-right-empty-body]'),
     rightDetail: root.querySelector('[data-conv-right-detail]'),
     contactAvatar: root.querySelector('[data-conv-contact-avatar]'),
     contactName: root.querySelector('[data-conv-contact-name]'),
@@ -1886,11 +2047,16 @@ function applyStaticLabels(root, t) {
 
 function wireChannelFilters(buttons, view, onChange) {
   for (const btn of buttons) {
+    btn.setAttribute('aria-pressed', String(btn.classList.contains('is-active')));
     btn.addEventListener('click', () => {
       const channel = btn.dataset.channel || 'all';
       if (view.channel === channel) return;
       view.channel = channel;
-      for (const other of buttons) other.classList.toggle('is-active', other === btn);
+      for (const other of buttons) {
+        const active = other === btn;
+        other.classList.toggle('is-active', active);
+        other.setAttribute('aria-pressed', String(active));
+      }
       onChange();
     });
   }
@@ -1913,6 +2079,132 @@ function filterBuckets(buckets, view, t) {
     }
     return true;
   });
+}
+
+function hasActiveListFilters(view = {}) {
+  return Boolean(
+    view.search
+    || (view.channel && view.channel !== 'all')
+    || view.account
+    || (view.direction && view.direction !== 'any')
+    || (view.dateRange && view.dateRange !== 'any'),
+  );
+}
+
+function hasLocalCommunicationData(view = {}) {
+  return Boolean(
+    view.accountsById?.size > 0
+    || Number(view.messageProbeCount) > 0
+    || Number(view.threads?.length) > 0,
+  );
+}
+
+function conversationEmptyState({
+  totalBuckets = 0,
+  filteredBuckets = 0,
+  hasActiveFilters = false,
+  diagnostics = {},
+  hasLocalCommunicationData: localData = false,
+  t = (key, fallback) => fallback || key,
+} = {}) {
+  if (diagnostics.hasFailure) {
+    return {
+      kind: 'sync-failure',
+      title: t('syncFailureTitle', 'Kommunikations-Sync prüfen'),
+      body: diagnostics.detail
+        ? `${t('syncFailureBody', 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.')} ${diagnostics.detail}`
+        : t('syncFailureBody', 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.'),
+    };
+  }
+  if (totalBuckets > 0 && filteredBuckets === 0 && hasActiveFilters) {
+    return {
+      kind: 'no-results',
+      title: t('noResultsTitle', 'Keine Treffer'),
+      body: t('noResultsBody', 'Keine Konversation passt zu den aktiven Filtern.'),
+    };
+  }
+  if (totalBuckets === 0 && localData) {
+    return {
+      kind: 'projection-missing',
+      title: t('projectionMissingTitle', 'Thread-Projektion fehlt'),
+      body: t('projectionMissingBody', 'Accounts oder Nachrichten sind lokal vorhanden, aber es wurden keine Conversation-Threads projiziert.'),
+    };
+  }
+  if (diagnostics.isStarting) {
+    return {
+      kind: 'sync-starting',
+      title: t('syncStartingTitle', 'Kommunikation wird synchronisiert'),
+      body: diagnostics.detail
+        ? `${t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.')} ${diagnostics.detail}`
+        : t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.'),
+    };
+  }
+  return {
+    kind: 'initial-empty',
+    title: t('emptyListTitle', 'Keine Konversationen'),
+    body: t('emptyListBody', 'Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami, MS Teams oder Meeting führt.'),
+  };
+}
+
+function buildConversationDataDiagnostics({
+  requiredCollections = COMMUNICATION_DIAGNOSTIC_COLLECTIONS,
+  missingCollections = new Set(),
+  collectionErrors = new Map(),
+  syncDiagnostics = null,
+} = {}) {
+  const missing = new Set(Array.from(missingCollections || []));
+  const errors = collectionErrors instanceof Map
+    ? collectionErrors
+    : new Map(Object.entries(collectionErrors || {}));
+  const syncCollections = syncDiagnostics?.collections || {};
+  const problemCollections = new Set();
+  const startingCollections = new Set();
+  const details = [];
+
+  for (const name of requiredCollections) {
+    const sync = syncCollections[name] || null;
+    const localError = errors.get(name);
+    if (missing.has(name)) {
+      problemCollections.add(name);
+      details.push(`${name}: collection missing`);
+    }
+    if (localError) {
+      problemCollections.add(name);
+      details.push(`${name}: ${errorToText(localError)}`);
+    }
+    const status = String(sync?.status || '').toLowerCase();
+    const connectionStatus = String(sync?.connectionStatus || '').toLowerCase();
+    if (sync?.lastError) {
+      problemCollections.add(name);
+      details.push(`${name}: ${syncErrorText(sync.lastError)}`);
+    } else if (['failed', 'error'].includes(status) || ['failed', 'error'].includes(connectionStatus)) {
+      problemCollections.add(name);
+      details.push(`${name}: ${status || connectionStatus}`);
+    }
+    if (!problemCollections.has(name) && (!sync || ['pending', 'starting', 'connecting', 'reconnecting'].includes(status || connectionStatus))) {
+      startingCollections.add(name);
+    }
+  }
+
+  return {
+    hasFailure: problemCollections.size > 0,
+    isStarting: problemCollections.size === 0 && startingCollections.size > 0,
+    problemCollections: [...problemCollections],
+    startingCollections: [...startingCollections],
+    detail: details.join(' · '),
+  };
+}
+
+function syncErrorText(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  return error.message || error.reason || error.code || JSON.stringify(error);
+}
+
+function errorToText(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  return error.message || String(error);
 }
 
 function parseConversationDeepLink() {
@@ -2253,3 +2545,11 @@ async function ensureStyles() {
   link.href = href;
   document.head.append(link);
 }
+
+export const __conversationsTestHooks = {
+  buildConversationDataDiagnostics,
+  conversationEmptyState,
+  filterBuckets,
+  hasActiveListFilters,
+  hasLocalCommunicationData,
+};

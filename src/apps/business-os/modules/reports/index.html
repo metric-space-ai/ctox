@@ -12,12 +12,12 @@
       </div>
       <div class="ctox-pane-tools">
         <input class="ctox-pane-search" data-report-search placeholder="Suchen..." />
-        <select class="ctox-pane-filter" data-report-kind style="min-width: 120px; width: auto; flex-shrink: 0;">
+        <select class="ctox-pane-filter" data-report-kind>
           <option value="all">Alle Typen</option>
           <option value="bug">Bugs</option>
           <option value="feature">Features</option>
         </select>
-        <select class="ctox-pane-sort" data-report-status style="min-width: 120px; width: auto; flex-shrink: 0;">
+        <select class="ctox-pane-sort" data-report-status>
           <option value="all">Alle Status</option>
           <option value="open">Offen</option>
           <option value="running">In Arbeit</option>
@@ -25,6 +25,7 @@
           <option value="blocked">Blockiert</option>
         </select>
       </div>
+      <div class="reports-diagnostics" data-reports-diagnostics hidden></div>
     </header>
     <div class="reports-list os-scrollbar" data-reports-list></div>
   </aside>

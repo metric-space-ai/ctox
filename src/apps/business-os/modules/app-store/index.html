@@ -14,7 +14,7 @@
       </header>
 
       <div class="store-create-scratch-wrapper" style="padding: 0 16px 16px 16px; border-bottom: 1px solid var(--line);">
-        <button type="button" class="store-action-btn primary" id="btn-create-scratch" style="width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; height: 38px; font-size: 12px; background: var(--accent-gradient); border-color: transparent; color: white; cursor: pointer; border-radius: var(--control-radius); box-shadow: var(--shadow-sm); transition: transform 0.2s ease;">
+        <button type="button" class="store-action-btn primary" id="btn-create-scratch" title="Zum App Creator wechseln, Rueckweg: App Store" style="width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 8px; font-weight: 700; height: 38px; font-size: 12px; background: var(--accent-gradient); border-color: transparent; color: white; cursor: pointer; border-radius: var(--control-radius); box-shadow: var(--shadow-sm); transition: transform 0.2s ease;">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
           App von Scratch erstellen
         </button>
@@ -77,11 +77,11 @@
           <h2 class="ctox-pane-title" data-visible-category-title>GitHub Marketplace</h2>
         </div>
         <div class="ctox-pane-actions" style="gap: 10px;">
-          <div class="view-toggle-buttons" data-view-toggle style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.05); padding: 2px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08); height: 26px; box-sizing: border-box;">
-            <button type="button" class="view-toggle-btn active" data-view="grid" title="Grid View" style="background: rgba(255, 255, 255, 0.1); border: none; color: var(--text, #ffffff); cursor: pointer; padding: 0 8px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
+          <div class="view-toggle-buttons" data-view-toggle style="display: flex; align-items: center; background: rgba(255, 255, 255, 0.05); padding: 3px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.08); min-height: 34px; box-sizing: border-box;">
+            <button type="button" class="view-toggle-btn active" data-view="grid" title="Grid View" aria-label="Grid View" style="background: rgba(255, 255, 255, 0.1); border: none; color: var(--text, #ffffff); cursor: pointer; padding: 0 10px; min-width: 34px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
             </button>
-            <button type="button" class="view-toggle-btn" data-view="list" title="List View" style="background: transparent; border: none; color: var(--text-muted, #8e8e93); cursor: pointer; padding: 0 8px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
+            <button type="button" class="view-toggle-btn" data-view="list" title="List View" aria-label="List View" style="background: transparent; border: none; color: var(--text-muted, #8e8e93); cursor: pointer; padding: 0 10px; min-width: 34px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
             </button>
           </div>
@@ -94,20 +94,24 @@
 
     <div class="store-grid-workspace" style="position: relative;">
       <div class="store-card-grid" data-apps-grid></div>
+      <div class="store-loading-overlay" data-loading-spinner hidden>
+        <span class="store-loading-dot"></span>
+        <span data-loading-text>GitHub Discovery wird synchronisiert.</span>
+      </div>
 
       <!-- Sliding Bottom Details Drawer -->
       <div class="ctox-bottom-drawer" data-detail-drawer>
         <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
         <header class="ctox-drawer-header">
           <div style="display: flex; align-items: center; gap: 14px; flex: 1; min-width: 0;">
-            <div class="app-logo-large" data-detail-icon style="flex-shrink: 0; width: 44px; height: 44px; font-size: 24px; background: rgba(255, 255, 255, 0.06); border-radius: 10px; display: flex; align-items: center; justify-content: center;">GH</div>
+            <div class="app-logo-large" data-detail-icon style="flex-shrink: 0; width: 44px; height: 44px; font-size: 24px; background: rgba(255, 255, 255, 0.06); border-radius: 10px; display: flex; align-items: center; justify-content: center;">?</div>
             <div style="min-width: 0;">
               <span class="ctox-drawer-kicker">Catalog</span>
-              <h3 class="ctox-drawer-title" data-detail-title>Application Title</h3>
+              <h3 class="ctox-drawer-title" data-detail-title>Keine App ausgewählt</h3>
               <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px;">
-                <span class="app-version-badge" data-detail-version style="font-size: 9px; font-weight: 700; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; border-radius: 4px; color: var(--text, #ffffff);">v1</span>
-                <span class="app-category-badge" data-detail-category style="font-size: 9px; font-weight: 700; background: rgba(229, 169, 60, 0.15); color: var(--accent, #e5a93c); padding: 1px 5px; border-radius: 4px;">Marketplace</span>
-                <span class="app-status-badge" data-detail-status style="font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">Available</span>
+                <span class="app-version-badge" data-detail-version style="font-size: 9px; font-weight: 700; background: rgba(255, 255, 255, 0.08); padding: 1px 5px; border-radius: 4px; color: var(--text, #ffffff);">-</span>
+                <span class="app-category-badge" data-detail-category style="font-size: 9px; font-weight: 700; background: rgba(229, 169, 60, 0.15); color: var(--accent, #e5a93c); padding: 1px 5px; border-radius: 4px;">Empty</span>
+                <span class="app-status-badge" data-detail-status style="font-size: 9px; font-weight: 700; padding: 1px 5px; border-radius: 4px;">No selection</span>
               </div>
             </div>
           </div>

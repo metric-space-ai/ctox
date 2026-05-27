@@ -1,7 +1,6 @@
 console.log('[notes-module] Top-level evaluation started');
 import * as Lexical from '../../vendor/lexical.mjs';
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const ElementNode = Object.getPrototypeOf(Lexical.HeadingNode);
 
@@ -103,6 +102,7 @@ class CustomHTMLNode extends ElementNode {
 
 const SAVE_DEBOUNCE_MS = 250;
 const NOTES_RENDER_DEBOUNCE_MS = 50;
+const DRAFT_NOTE_MARKER = '__notes_draft';
 
 const labels = {
   de: {
@@ -116,6 +116,14 @@ const labels = {
     words: 'Wörter',
     chars: 'Zeichen',
     deleteConfirm: 'Möchtest du diese Notiz wirklich löschen?',
+    deleteToTrash: 'Notiz in den Papierkorb verschieben?',
+    draftStatus: 'Entwurf - noch nicht gespeichert',
+    draftSaved: 'Entwurf gespeichert',
+    draftDiscarded: 'Entwurf verworfen',
+    noSearchResults: 'Keine passenden Notizen',
+    dataUnavailable: 'Notizdaten sind nicht verbunden.',
+    usingLocalCache: 'Lokale zwischengespeicherte Notizen werden angezeigt.',
+    seededNotes: 'Beispielnotizen wurden lokal angelegt.',
     newNotebookPrompt: 'Name für das neue Notizbuch:',
     newTagPrompt: 'Name für den neuen Tag:',
     defaultFolder: 'Notizen',
@@ -133,6 +141,14 @@ const labels = {
     words: 'words',
     chars: 'characters',
     deleteConfirm: 'Are you sure you want to delete this note?',
+    deleteToTrash: 'Move this note to trash?',
+    draftStatus: 'Draft - not saved yet',
+    draftSaved: 'Draft saved',
+    draftDiscarded: 'Draft discarded',
+    noSearchResults: 'No matching notes',
+    dataUnavailable: 'Notes data is not connected.',
+    usingLocalCache: 'Showing locally cached notes.',
+    seededNotes: 'Sample notes were created locally.',
     newNotebookPrompt: 'Name for the new notebook:',
     newTagPrompt: 'Name for the new tag:',
     defaultFolder: 'Notes',
@@ -164,6 +180,8 @@ const state = {
   t: (key, fallback) => fallback ?? key,
   contextMenu: null,
   contextMenuCleanup: null,
+  dataDiagnostics: { kind: 'starting', message: '' },
+  toastTimer: null,
   lexicalEditor: null,
   lexicalRichTextCleanup: null,
   lexicalUpdateListenerCleanup: null,
@@ -173,6 +191,54 @@ const state = {
 };
 
 const els = {};
+
+function getCachePrefix() {
+  return state.ctx?.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+}
+
+function createDefaultNotes(now = Date.now()) {
+  return [
+    {
+      id: 'notes_seed_ops_review',
+      title: 'Operations Review',
+      content: '<h1>Operations Review</h1><p>Prioritaeten fuer diese Woche pruefen und offene Entscheidungen im Dashboard nachhalten.</p>',
+      folder: 'Notes',
+      notebook: 'Operations',
+      tags: 'review,team',
+      is_favorite: true,
+      is_trashed: false,
+      is_locked: false,
+      lock_passcode: '',
+      updated_at_ms: now - 1000 * 60 * 18
+    },
+    {
+      id: 'notes_seed_product_notes',
+      title: 'Produktnotizen',
+      content: '<h1>Produktnotizen</h1><p>Editoraktionen, Favoriten und Papierkorb vor dem naechsten QA-Lauf validieren.</p>',
+      folder: 'Notes',
+      notebook: 'Produkt',
+      tags: 'qa,notizen',
+      is_favorite: false,
+      is_trashed: false,
+      is_locked: false,
+      lock_passcode: '',
+      updated_at_ms: now - 1000 * 60 * 60 * 4
+    },
+    {
+      id: 'notes_seed_meeting_followup',
+      title: 'Meeting Follow-up',
+      content: '<h1>Meeting Follow-up</h1><p>Naechste Schritte, Verantwortliche und offene Risiken fuer den Kundenworkshop sammeln.</p>',
+      folder: 'Notes',
+      notebook: 'Kunden',
+      tags: 'meeting',
+      is_favorite: false,
+      is_trashed: false,
+      is_locked: false,
+      lock_passcode: '',
+      updated_at_ms: now - 1000 * 60 * 60 * 24
+    }
+  ];
+}
 
 function getCollection() {
   const isNotizen = state.ctx?.module?.id === 'notizen';
@@ -287,6 +353,7 @@ export async function mount(ctx) {
   return () => {
     if (state.saveTimer) clearTimeout(state.saveTimer);
     if (state.renderTimer) clearTimeout(state.renderTimer);
+    if (state.toastTimer) clearTimeout(state.toastTimer);
     
     state.lexicalUpdateListenerCleanup?.();
     state.lexicalUpdateListenerCleanup = null;
@@ -303,6 +370,7 @@ export async function mount(ctx) {
     state.contextMenuCleanup?.();
     state.contextMenu?.remove();
     state.contextMenu = null;
+    state.ctx.host?.querySelector('.nn-action-toast')?.remove();
     
     resizerCleanup();
     unbindEvents();
@@ -451,6 +519,7 @@ function wireEvents() {
   
   // Global closes and custom circular checklist toggles
   document.addEventListener('click', handleGlobalClick);
+  document.addEventListener('keydown', handleDocumentKeydown);
   els.editor?.addEventListener('click', handleEditorCheckboxClick);
 }
 
@@ -481,29 +550,39 @@ function unbindEvents() {
   els.timestampBtn?.removeEventListener('click', handleTimestampBtnClick);
   
   document.removeEventListener('click', handleGlobalClick);
+  document.removeEventListener('keydown', handleDocumentKeydown);
   els.editor?.removeEventListener('click', handleEditorCheckboxClick);
 }
 
 // Local Cache Persistence
 function saveToLocalCache() {
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
-  localStorage.setItem(`${cachePrefix}.local_records`, JSON.stringify(state.notes));
+  const cachePrefix = getCachePrefix();
+  localStorage.setItem(`${cachePrefix}.local_records`, JSON.stringify(state.notes.filter(note => !note[DRAFT_NOTE_MARKER])));
   localStorage.setItem(`${cachePrefix}.local_notebooks`, JSON.stringify(state.notebooks));
   localStorage.setItem(`${cachePrefix}.local_tags`, JSON.stringify(state.tags));
 }
 
-function loadFromLocalCache() {
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+function readLocalCacheData() {
+  const cachePrefix = getCachePrefix();
+  const data = { notes: [], notebooks: [], tags: [] };
   try {
     const recs = localStorage.getItem(`${cachePrefix}.local_records`);
-    if (recs) state.notes = JSON.parse(recs);
+    if (recs) data.notes = JSON.parse(recs);
     const notebooks = localStorage.getItem(`${cachePrefix}.local_notebooks`);
-    if (notebooks) state.notebooks = JSON.parse(notebooks);
+    if (notebooks) data.notebooks = JSON.parse(notebooks);
     const tags = localStorage.getItem(`${cachePrefix}.local_tags`);
-    if (tags) state.tags = JSON.parse(tags);
+    if (tags) data.tags = JSON.parse(tags);
   } catch (e) {
     console.error('Failed to load local cache', e);
   }
+  return data;
+}
+
+function loadFromLocalCache() {
+  const data = readLocalCacheData();
+  state.notes = data.notes;
+  state.notebooks = data.notebooks;
+  state.tags = data.tags;
 }
 async function decryptLockedNotesInMemory() {
   for (const note of state.notes) {
@@ -528,7 +607,10 @@ async function loadNotesFromLocal() {
   const collection = getCollection();
   const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
   if (!collection) {
-    state.notes = [];
+    loadFromLocalCache();
+    state.dataDiagnostics = state.notes.length
+      ? { kind: 'local-cache', message: state.t('usingLocalCache') }
+      : { kind: 'missing', message: state.t('dataUnavailable') };
     syncNotebooksAndTags();
     scheduleRender();
     return;
@@ -537,9 +619,38 @@ async function loadNotesFromLocal() {
   try {
     const docs = await collection.find().exec();
     const serverNotes = docs.map(d => d.toJSON()).filter(n => n.id);
-    
-    // Use RxDB as the absolute single source of truth
-    state.notes = serverNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+
+    if (serverNotes.length === 0) {
+      const cached = readLocalCacheData();
+      if (cached.notes.length > 0) {
+        state.notes = cached.notes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+        state.notebooks = cached.notebooks;
+        state.tags = cached.tags;
+        state.dataDiagnostics = { kind: 'local-cache', message: state.t('usingLocalCache') };
+      } else if (localStorage.getItem(`${getCachePrefix()}.defaultSeeded`) !== 'true') {
+        const seedNotes = createDefaultNotes();
+        state.notes = seedNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+        state.dataDiagnostics = { kind: 'seeded', message: state.t('seededNotes') };
+        let seededCount = 0;
+        for (const note of seedNotes) {
+          try {
+            await collection.insert(note);
+            seededCount += 1;
+          } catch (insertError) {
+            console.warn(`${logPrefix} failed to seed sample note`, insertError);
+          }
+        }
+        if (seededCount > 0) {
+          localStorage.setItem(`${getCachePrefix()}.defaultSeeded`, 'true');
+        }
+      } else {
+        state.notes = [];
+        state.dataDiagnostics = { kind: 'ok-empty', message: '' };
+      }
+    } else {
+      state.notes = serverNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
+      state.dataDiagnostics = { kind: 'ok', message: '' };
+    }
     
     await decryptLockedNotesInMemory();
     
@@ -548,7 +659,13 @@ async function loadNotesFromLocal() {
     scheduleRender();
   } catch (error) {
     console.error(`${logPrefix} failed to load notes`, error);
-    state.notes = [];
+    const cached = readLocalCacheData();
+    state.notes = cached.notes;
+    state.notebooks = cached.notebooks;
+    state.tags = cached.tags;
+    state.dataDiagnostics = cached.notes.length
+      ? { kind: 'local-cache', message: state.t('usingLocalCache') }
+      : { kind: 'error', message: error?.message || state.t('dataUnavailable') };
     syncNotebooksAndTags();
     scheduleRender();
   }
@@ -696,8 +813,8 @@ function renderSidebar() {
   }
 }
 
-function getFilteredNotes() {
-  let list = state.notes;
+function getFilteredNotes({ includeSearch = true } = {}) {
+  let list = state.notes.slice();
   
   if (state.activeCategory === 'favorites') {
     list = list.filter(n => n.is_favorite && !n.is_trashed);
@@ -713,7 +830,7 @@ function getFilteredNotes() {
   
   // Search query filter
   const query = state.searchQuery.toLowerCase().trim();
-  if (query) {
+  if (includeSearch && query) {
     list = list.filter(n => {
       let textToSearch = n.content || '';
       if (n.is_locked) {
@@ -734,6 +851,52 @@ function getFilteredNotes() {
   }
   
   return list;
+}
+
+function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel, diagnostics, t }) {
+  const translate = typeof t === 'function' ? t : (_key, fallback) => fallback;
+  const diagnosticKind = diagnostics?.kind || 'ok';
+  if (diagnosticKind === 'missing' || diagnosticKind === 'error') {
+    return {
+      kind: 'diagnostic',
+      title: translate('dataUnavailable', 'Notes data is not connected.'),
+      body: diagnostics?.message || translate('dataUnavailable', 'Notes data is not connected.')
+    };
+  }
+  if (hasSearch) {
+    return {
+      kind: 'no-results',
+      title: translate('noSearchResults', 'No matching notes'),
+      body: translate('clearSearchHint', 'Suche loeschen oder Suchbegriff anpassen.')
+    };
+  }
+  if (totalNotes > 0 && scopedNotes === 0) {
+    return {
+      kind: 'empty-scope',
+      title: translate('noNotes', 'No notes'),
+      body: activeLabel ? `${activeLabel}: ${translate('noNotes', 'No notes')}` : translate('noNotes', 'No notes')
+    };
+  }
+  if (diagnosticKind === 'local-cache' || diagnosticKind === 'seeded') {
+    return {
+      kind: diagnosticKind,
+      title: translate('noNotes', 'No notes'),
+      body: diagnostics?.message || ''
+    };
+  }
+  return {
+    kind: 'empty',
+    title: translate('noNotes', 'No notes'),
+    body: ''
+  };
+}
+
+function getActiveListLabel() {
+  if (state.activeNotebook) return state.activeNotebook;
+  if (state.activeTag) return `#${state.activeTag}`;
+  if (state.activeCategory === 'favorites') return 'Favoriten';
+  if (state.activeCategory === 'trash') return 'Papierkorb';
+  return state.t('allNotes');
 }
 
 function renderNotesList() {
@@ -762,9 +925,19 @@ function renderNotesList() {
   }
   
   if (list.length === 0) {
+    const scopedNotes = getFilteredNotes({ includeSearch: false }).length;
+    const emptyState = buildNotesEmptyState({
+      totalNotes: state.notes.length,
+      scopedNotes,
+      hasSearch: !!state.searchQuery.trim(),
+      activeLabel: getActiveListLabel(),
+      diagnostics: state.dataDiagnostics,
+      t: state.t
+    });
     els.notesList.innerHTML = `
-      <div style="padding: 30px 20px; font-size:12px; color: var(--nn-text-muted); text-align:center;">
-        ${state.t('noNotes')}
+      <div class="nn-empty-state nn-empty-state-${escapeHtml(emptyState.kind)}">
+        <strong>${escapeHtml(emptyState.title)}</strong>
+        ${emptyState.body ? `<span>${escapeHtml(emptyState.body)}</span>` : ''}
       </div>
     `;
     return;
@@ -863,8 +1036,9 @@ function renderEditor() {
   
   // Clean up any dynamic restore banner
   els.editorWorkspace?.querySelector('.nn-restore-banner')?.remove();
+  els.editorWorkspace?.querySelector('.nn-draft-banner')?.remove();
   
-  if (els.deleteBtn) els.deleteBtn.disabled = !note;
+  updateActionAvailability(note);
   
   if (!note) {
     state.renderedNoteId = '';
@@ -877,6 +1051,7 @@ function renderEditor() {
     els.starBtn?.classList.remove('active');
     els.lockNoteBtn?.classList.remove('active');
     els.noteLockScreen?.setAttribute('hidden', '');
+    setToolbarDisabled(true, 'Keine Notiz ausgewählt');
     return;
   }
   
@@ -916,6 +1091,21 @@ function renderEditor() {
     els.editorWorkspace.prepend(banner);
     banner.querySelector('[data-action="restore-note"]')?.addEventListener('click', handleRestoreNoteClick);
   }
+
+  if (note[DRAFT_NOTE_MARKER] && els.editorWorkspace) {
+    const banner = document.createElement('div');
+    banner.className = 'nn-draft-banner';
+    banner.innerHTML = `
+      <span>${escapeHtml(state.t('draftStatus'))}</span>
+      <div class="nn-banner-actions">
+        <button type="button" data-action="save-draft-note">${escapeHtml(state.t('save', 'Speichern'))}</button>
+        <button type="button" data-action="discard-draft-note">${escapeHtml(state.t('discard', 'Verwerfen'))}</button>
+      </div>
+    `;
+    els.editorWorkspace.prepend(banner);
+    banner.querySelector('[data-action="save-draft-note"]')?.addEventListener('click', handleSaveDraftNoteClick);
+    banner.querySelector('[data-action="discard-draft-note"]')?.addEventListener('click', handleDiscardDraftNoteClick);
+  }
   
   // Check Zero-Knowledge locked state
   if (note.is_locked && !state.activeNoteDecrypted[note.id]) {
@@ -923,8 +1113,10 @@ function renderEditor() {
     if (els.editor) els.editor.innerHTML = '';
     if (els.words) els.words.textContent = `0 ${state.t('words')}`;
     if (els.chars) els.chars.textContent = `0 ${state.t('chars')}`;
+    setToolbarDisabled(true, 'Notiz ist gesperrt');
   } else {
     els.noteLockScreen?.setAttribute('hidden', '');
+    setToolbarDisabled(false);
     
     let contentToDisplay = normalizeStoredContent(note.content || '');
     if (note.is_locked) {
@@ -961,6 +1153,41 @@ function renderEditor() {
     if (els.words) els.words.textContent = `${wordCount} ${state.t('words')}`;
     if (els.chars) els.chars.textContent = `${charCount} ${state.t('chars')}`;
     if (els.readTime) els.readTime.textContent = `${readMin} ${state.t('readTime')}`;
+  }
+}
+
+function updateActionAvailability(note) {
+  const hasNote = !!note;
+  if (els.deleteBtn) {
+    els.deleteBtn.disabled = !hasNote;
+    els.deleteBtn.title = note?.[DRAFT_NOTE_MARKER] ? state.t('discard', 'Verwerfen') : state.t('deleteNote', 'Notiz loeschen');
+  }
+  if (els.starBtn) {
+    els.starBtn.disabled = !hasNote || !!note?.[DRAFT_NOTE_MARKER] || !!note?.is_locked;
+    els.starBtn.title = note?.[DRAFT_NOTE_MARKER]
+      ? state.t('draftSaveFirst', 'Entwurf zuerst speichern')
+      : 'Favorit umschalten';
+  }
+  if (els.lockNoteBtn) {
+    els.lockNoteBtn.disabled = !hasNote || !!note?.[DRAFT_NOTE_MARKER];
+    els.lockNoteBtn.title = note?.[DRAFT_NOTE_MARKER]
+      ? state.t('draftSaveFirst', 'Entwurf zuerst speichern')
+      : 'Notiz verschluesseln';
+  }
+  [els.notebookSelectBtn, els.tagsSelectBtn].forEach(btn => {
+    if (btn) btn.disabled = !hasNote;
+  });
+}
+
+function setToolbarDisabled(disabled, reason = '') {
+  state.ctx?.host?.querySelectorAll('.nn-editor-toolbar button').forEach(btn => {
+    btn.disabled = disabled;
+    btn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    if (reason) btn.setAttribute('data-disabled-reason', reason);
+    else btn.removeAttribute('data-disabled-reason');
+  });
+  if (els.editor) {
+    els.editor.setAttribute('contenteditable', disabled ? 'false' : 'true');
   }
 }
 
@@ -1002,7 +1229,9 @@ function processContentInput(newHtml) {
   
   note.title = newTitle;
   note.updated_at_ms = Date.now();
-  saveToLocalCache();  
+  if (!note[DRAFT_NOTE_MARKER]) {
+    saveToLocalCache();
+  }
   // Instant UI reflection
   const card = els.notesList?.querySelector(`[data-note-id="${note.id}"]`);
   if (card) {
@@ -1025,12 +1254,17 @@ function processContentInput(newHtml) {
   
   // Syncing display
   if (els.status) {
-    els.status.innerHTML = `
-      <svg class="nn-sync-icon pulse" style="color: var(--nn-accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
-      <span>${state.t('saving')}</span>
-    `;
+    if (note[DRAFT_NOTE_MARKER]) {
+      els.status.textContent = state.t('draftStatus');
+    } else {
+      els.status.innerHTML = `
+        <svg class="nn-sync-icon pulse" style="color: var(--nn-accent);" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
+        <span>${state.t('saving')}</span>
+      `;
+    }
   }
   if (state.saveTimer) clearTimeout(state.saveTimer);
+  if (note[DRAFT_NOTE_MARKER]) return;
   
   state.saveTimer = setTimeout(() => {
     state.saveTimer = null;
@@ -1062,6 +1296,7 @@ function normalizeStoredContent(content) {
   }).join('');
 }
 async function commitSave(note) {
+  if (!note || note[DRAFT_NOTE_MARKER]) return;
   const collection = getCollection();
   if (!collection) return;
   
@@ -1106,6 +1341,14 @@ async function commitSave(note) {
   }
 }
 async function handleCreateNote() {
+  const existingDraft = state.notes.find(note => note[DRAFT_NOTE_MARKER]);
+  if (existingDraft) {
+    state.activeNoteId = existingDraft.id;
+    scheduleRender();
+    window.setTimeout(() => focusEditorAtEnd(), NOTES_RENDER_DEBOUNCE_MS + 20);
+    return;
+  }
+
   const folder = 'Notes';
   const newId = generateUUID();
   const title = state.t('newNote');
@@ -1122,32 +1365,62 @@ async function handleCreateNote() {
     is_trashed: false,
     is_locked: false,
     lock_passcode: '',
-    updated_at_ms: Date.now()
+    updated_at_ms: Date.now(),
+    [DRAFT_NOTE_MARKER]: true
   };
   
   state.notes.unshift(newNote);
   syncNotebooksAndTags();
-  saveToLocalCache();
   
   state.activeNoteId = newId;
   scheduleRender();
   window.setTimeout(() => focusEditorAtEnd(), NOTES_RENDER_DEBOUNCE_MS + 20);
-  
-  // Background RxDB insertion
+}
+
+async function handleSaveDraftNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note || !note[DRAFT_NOTE_MARKER]) return;
+
+  delete note[DRAFT_NOTE_MARKER];
+  note.updated_at_ms = Date.now();
+
   const collection = getCollection();
   if (collection) {
     try {
-      await collection.insert(newNote);
+      await collection.insert({ ...note });
     } catch (error) {
       const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-      console.warn(`${logPrefix} background note creation failed`, error);
+      console.warn(`${logPrefix} background draft save failed`, error);
+      const doc = await collection.findOne(note.id).exec().catch(() => null);
+      if (doc) await doc.patch(note);
     }
   }
+
+  syncNotebooksAndTags();
+  saveToLocalCache();
+  showActionToast(state.t('draftSaved'));
+  scheduleRender();
+}
+
+function handleDiscardDraftNoteClick() {
+  const note = state.notes.find(n => n.id === state.activeNoteId);
+  if (!note || !note[DRAFT_NOTE_MARKER]) return;
+
+  state.notes = state.notes.filter(n => n.id !== note.id);
+  state.activeNoteId = getFilteredNotes()[0]?.id || '';
+  syncNotebooksAndTags();
+  showActionToast(state.t('draftDiscarded'));
+  scheduleRender();
 }
 
 async function handleDeleteNote() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
+
+  if (note[DRAFT_NOTE_MARKER]) {
+    handleDiscardDraftNoteClick();
+    return;
+  }
   
   if (note.is_trashed) {
     const confirmMessage = state.t('deleteConfirm');
@@ -1174,6 +1447,9 @@ async function handleDeleteNote() {
       }
     }
   } else {
+    const confirmMessage = state.t('deleteToTrash');
+    if (!confirm(confirmMessage)) return;
+
     note.is_trashed = true;
     note.updated_at_ms = Date.now();
     saveToLocalCache();
@@ -1193,6 +1469,19 @@ async function handleDeleteNote() {
         console.warn(`${logPrefix} background trash failed`, error);
       }
     }
+
+    showActionToast('Notiz in den Papierkorb verschoben.', 'Rueckgaengig', async () => {
+      note.is_trashed = false;
+      note.updated_at_ms = Date.now();
+      state.activeNoteId = note.id;
+      saveToLocalCache();
+      scheduleRender();
+      const undoCollection = getCollection();
+      if (undoCollection) {
+        const doc = await undoCollection.findOne(note.id).exec().catch(() => null);
+        if (doc) await doc.patch({ is_trashed: false, updated_at_ms: Date.now() });
+      }
+    });
   }
 }
 
@@ -1369,20 +1658,45 @@ function handleDecryptNoteKeydown(e) {
 function handleStarNoteClick() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
+  if (note[DRAFT_NOTE_MARKER] || note.is_locked) {
+    showActionToast(state.t('draftSaveFirst', 'Entwurf zuerst speichern'));
+    return;
+  }
   
+  const previousValue = !!note.is_favorite;
   note.is_favorite = !note.is_favorite;
   note.updated_at_ms = Date.now();
   saveToLocalCache();
   
   scheduleRender();
   commitSave(note);
+  showActionToast(
+    note.is_favorite ? 'Als Favorit markiert.' : 'Favorit entfernt.',
+    'Rueckgaengig',
+    async () => {
+      note.is_favorite = previousValue;
+      note.updated_at_ms = Date.now();
+      saveToLocalCache();
+      scheduleRender();
+      await commitSave(note);
+    }
+  );
 }
 
 async function handleLockNoteClick() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
   if (!note) return;
+  if (note[DRAFT_NOTE_MARKER]) {
+    showActionToast(state.t('draftSaveFirst', 'Entwurf zuerst speichern'));
+    return;
+  }
   
   if (note.is_locked) {
+    if (!state.activeNoteDecrypted[note.id]) {
+      showActionToast('Notiz zuerst entsperren, dann Verschluesselung entfernen.');
+      return;
+    }
+    if (!confirm('Verschluesselung fuer diese Notiz entfernen?')) return;
     let plainText = note.content;
     const passcode = state.activeNoteDecrypted[note.id];
     if (passcode) {
@@ -1399,7 +1713,9 @@ async function handleLockNoteClick() {
     scheduleRender();
     await commitSave(note);
   } else {
-    const pw = prompt('Gebe ein Passwort für diese Notiz ein (Standard: 1234):') || '1234';
+    const entered = prompt('Gebe ein Passwort für diese Notiz ein (Standard: 1234):');
+    if (entered === null) return;
+    const pw = entered.trim() || '1234';
     const plainText = note.content;
     try {
       const encrypted = await encryptContent(plainText, pw);
@@ -1453,6 +1769,7 @@ function handleNotebookSelectBtnClick(e) {
         saveToLocalCache();
         scheduleRender();
         commitSave(note);
+        closeAllDropdowns();
       });
     });
   }
@@ -1535,6 +1852,7 @@ function handleViewModeClick(e) {
     el.classList.toggle('active', el.getAttribute('data-view-mode') === state.viewMode);
   });
   els.notesList?.classList.toggle('nn-compact-view', state.viewMode === 'compact');
+  closeAllDropdowns();
 }
 
 // Rich Text format dropdown
@@ -1808,12 +2126,50 @@ function handleGlobalClick(e) {
   closeAllDropdowns();
 }
 
+function handleDocumentKeydown(e) {
+  if (e.key === 'Escape') {
+    closeAllDropdowns();
+  }
+}
+
 function closeAllDropdowns() {
   if (els.notebookDropdown) els.notebookDropdown.hidden = true;
   if (els.tagsDropdown) els.tagsDropdown.hidden = true;
   if (els.filterPopover) els.filterPopover.hidden = true;
   if (els.headersDropdown) els.headersDropdown.hidden = true;
   if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
+}
+
+function showActionToast(message, actionLabel = '', onAction = null) {
+  if (!els.root) return;
+  if (state.toastTimer) clearTimeout(state.toastTimer);
+  els.root.querySelector('.nn-action-toast')?.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'nn-action-toast';
+  const text = document.createElement('span');
+  text.textContent = message;
+  toast.append(text);
+
+  if (actionLabel && typeof onAction === 'function') {
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.textContent = actionLabel;
+    action.addEventListener('click', async () => {
+      try {
+        await onAction();
+      } finally {
+        toast.remove();
+      }
+    }, { once: true });
+    toast.append(action);
+  }
+
+  els.root.append(toast);
+  state.toastTimer = setTimeout(() => {
+    state.toastTimer = null;
+    toast.remove();
+  }, 6500);
 }
 
 function handleEditorCheckboxClick(e) {
@@ -2232,40 +2588,110 @@ function setupResizers(host) {
   const leftResizer = host.querySelector('[data-resizer="left"]');
   const rightResizer = host.querySelector('[data-resizer="right"]');
   const containerEl = host.querySelector('[data-notes-root]') || host;
+  const leftPane = host.querySelector('.notes-sidebar-pane');
+  const listPane = host.querySelector('.notes-list-pane');
   
   const cleanups = [];
-  const cachePrefix = state.ctx.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
-  
-  if (leftResizer) {
-    const resizerL = new CtoxResizer({
-      resizerEl: leftResizer,
-      containerEl,
-      cssVar: '--notes-left-width',
-      side: 'left',
-      minWidth: 160,
-      maxWidth: 350,
-      onResize: (width) => localStorage.setItem(`${cachePrefix}.layout.leftWidth`, width)
-    });
-    cleanups.push(() => resizerL.destroy());
-  }
-  
-  if (rightResizer) {
-    const resizerR = new CtoxResizer({
-      resizerEl: rightResizer,
-      containerEl,
-      cssVar: '--notes-right-width',
-      side: 'left',
-      minWidth: 220,
-      maxWidth: 450,
-      onResize: (width) => localStorage.setItem(`${cachePrefix}.layout.rightWidth`, width)
-    });
-    cleanups.push(() => resizerR.destroy());
-  }
+  const cachePrefix = getCachePrefix();
+
+  const attachLocalResizer = ({ handle, pane, cssVar, storageKey, minWidth, maxWidth }) => {
+    if (!handle || !pane) return null;
+
+    let startX = 0;
+    let startWidth = 0;
+    let raf = 0;
+
+    const clamp = (width) => Math.max(minWidth, Math.min(maxWidth, width));
+    const setWidth = (width) => {
+      const next = clamp(width);
+      containerEl.style.setProperty(cssVar, `${next}px`);
+      handle.setAttribute('aria-valuenow', String(Math.round(next)));
+      handle.setAttribute('aria-valuetext', `${Math.round(next)} px`);
+      localStorage.setItem(storageKey, String(Math.round(next)));
+      return next;
+    };
+    const currentWidth = () => {
+      const raw = window.getComputedStyle(containerEl).getPropertyValue(cssVar);
+      const parsed = parseFloat(raw);
+      return clamp(Number.isFinite(parsed) ? parsed : pane.getBoundingClientRect().width);
+    };
+    const onPointerMove = (event) => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        setWidth(startWidth + event.clientX - startX);
+      });
+    };
+    const onPointerUp = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = 0;
+      document.body.classList.remove('is-resizing');
+      handle.classList.remove('is-active');
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerUp);
+    };
+    const onPointerDown = (event) => {
+      event.preventDefault();
+      startX = event.clientX;
+      startWidth = currentWidth();
+      document.body.classList.add('is-resizing');
+      handle.classList.add('is-active');
+      window.addEventListener('pointermove', onPointerMove);
+      window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
+    };
+    const onKeyDown = (event) => {
+      const delta = event.key === 'ArrowLeft' ? -24 : event.key === 'ArrowRight' ? 24 : 0;
+      if (event.key === 'Home') {
+        event.preventDefault();
+        setWidth(minWidth);
+      } else if (event.key === 'End') {
+        event.preventDefault();
+        setWidth(maxWidth);
+      } else if (delta) {
+        event.preventDefault();
+        setWidth(currentWidth() + delta);
+      }
+    };
+
+    handle.style.touchAction = 'none';
+    handle.tabIndex = 0;
+    handle.setAttribute('aria-valuemin', String(minWidth));
+    handle.setAttribute('aria-valuemax', String(maxWidth));
+    setWidth(currentWidth());
+    handle.addEventListener('pointerdown', onPointerDown);
+    handle.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      handle.removeEventListener('pointerdown', onPointerDown);
+      handle.removeEventListener('keydown', onKeyDown);
+      onPointerUp();
+    };
+  };
   
   const leftWidth = localStorage.getItem(`${cachePrefix}.layout.leftWidth`) || '240';
   const rightWidth = localStorage.getItem(`${cachePrefix}.layout.rightWidth`) || '300';
   containerEl.style.setProperty('--notes-left-width', `${leftWidth}px`);
   containerEl.style.setProperty('--notes-right-width', `${rightWidth}px`);
+  const leftCleanup = attachLocalResizer({
+    handle: leftResizer,
+    pane: leftPane,
+    cssVar: '--notes-left-width',
+    storageKey: `${cachePrefix}.layout.leftWidth`,
+    minWidth: 180,
+    maxWidth: 380
+  });
+  const rightCleanup = attachLocalResizer({
+    handle: rightResizer,
+    pane: listPane,
+    cssVar: '--notes-right-width',
+    storageKey: `${cachePrefix}.layout.rightWidth`,
+    minWidth: 240,
+    maxWidth: 480
+  });
+  if (leftCleanup) cleanups.push(leftCleanup);
+  if (rightCleanup) cleanups.push(rightCleanup);
   
   return () => {
     cleanups.forEach(c => c());
@@ -2591,3 +3017,39 @@ function ensureCtoxContextMenuStyles() {
   `;
   document.head.append(style);
 }
+
+function noteActionAvailability(note) {
+  if (!note) {
+    return {
+      canDelete: false,
+      canFavorite: false,
+      canLock: false,
+      deleteMode: 'disabled',
+      lockMode: 'disabled'
+    };
+  }
+  if (note[DRAFT_NOTE_MARKER]) {
+    return {
+      canDelete: true,
+      canFavorite: false,
+      canLock: false,
+      deleteMode: 'discard-draft',
+      lockMode: 'save-draft-first'
+    };
+  }
+  return {
+    canDelete: true,
+    canFavorite: !note.is_locked,
+    canLock: !note.is_locked || !!note.decrypted,
+    deleteMode: note.is_trashed ? 'confirm-permanent-delete' : 'confirm-trash-with-undo',
+    lockMode: note.is_locked ? 'unlock-requires-decryption' : 'prompt-password'
+  };
+}
+
+export const __notesTestHooks = {
+  DRAFT_NOTE_MARKER,
+  buildNotesEmptyState,
+  createDefaultNotes,
+  getCachePrefix,
+  noteActionAvailability
+};

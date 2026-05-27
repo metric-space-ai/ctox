@@ -36,6 +36,7 @@
   position: absolute;
   top: 12px;
   bottom: 12px;
+  left: calc(12px + var(--knowledge-left-width, 390px) + 6px);
   width: 12px;
   transform: translateX(-50%);
   cursor: col-resize;
@@ -424,6 +425,13 @@ body.is-knowledge-col-resizing * {
   background: var(--knowledge-surface-muted);
   color: var(--knowledge-text);
   border-radius: 0;
+}
+
+.knowledge-module .segmented button:disabled,
+.knowledge-module .knowledge-edit-actions button:disabled,
+.knowledge-drawer-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .knowledge-module .segmented button:last-child {

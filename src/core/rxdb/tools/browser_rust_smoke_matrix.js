@@ -18,6 +18,7 @@
  *   SMOKE_MODES=workspace-large-file-viewer-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=migration-version-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=tickets-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-burst-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
@@ -50,6 +51,7 @@ const defaultModes = [
   'rust-to-browser',
   'browser-to-rust',
   'command-browser-to-rust',
+  'tickets-browser-to-rust',
   'business-os-ui-regression',
   'browser-lifecycle-ui',
   'browser-handoff-ui',
@@ -89,6 +91,13 @@ const modeEvidenceRequirements = {
   'command-browser-to-rust': {
     keys: ['command_id', 'task_id', 'task_count_for_command', 'status', 'task_status'],
   },
+  'tickets-browser-to-rust': {
+    keys: ['command_id', 'task_id', 'status', 'ticket_key', 'ticket_source', 'ticket_title'],
+    values: {
+      status: 'completed',
+      ticket_source: 'local',
+    },
+  },
   'business-os-ui-regression': {
     keys: [
       'business_os_ui_module_count',
@@ -121,10 +130,10 @@ const modeEvidenceRequirements = {
     },
     values: {
       business_os_ui_rendered_modules: 'ctox,documents,knowledge,research',
-      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
-      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,conversations-channel-filter,outbound-compact-view-toggle,shiftflow-center-tabs,buchhaltung-nav-switch,coding-agents-settings-modal,app-store-view-scope,browser-address-refresh,calendar-new-event-drawer,creator-expert-accordion,notes-nav-filter,reports-filter-controls,spreadsheets-search-filter',
+      business_os_ui_secondary_opened_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
+      business_os_ui_secondary_rendered_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
+      business_os_ui_secondary_interacted_modules: 'matching,conversations,outbound,tickets,shiftflow,buchhaltung,coding-agents,app-store,browser,calendar,creator,notes,reports,spreadsheets',
+      business_os_ui_secondary_interaction_names: 'matching-list-matrix-tabs,conversations-channel-filter,outbound-compact-view-toggle,tickets-search-status-filter,shiftflow-center-tabs,buchhaltung-nav-switch,coding-agents-settings-modal,app-store-view-scope,browser-address-refresh,calendar-new-event-drawer,creator-expert-accordion,notes-nav-filter,reports-filter-controls,spreadsheets-search-filter',
       business_os_ui_interacted_modules: 'ctox,documents,knowledge,research',
       business_os_ui_interaction_names: 'ctox-zoom,documents-new-drawer,knowledge-tab-runbooks,knowledge-tab-data,knowledge-tab-skill,research-new-task-modal',
       business_os_ui_desktop_opened: 1,

@@ -3,6 +3,7 @@
 
 use super::store;
 use crate::mission::channels;
+use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use rxdb::plugins::replication_webrtc::{
@@ -62,6 +63,10 @@ const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
+const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
+const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
+const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
+const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email", "meeting"];
 const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
 
@@ -80,6 +85,8 @@ struct NativePeer {
     _business_users_sync: tokio::task::JoinHandle<()>,
     _runtime_settings_sync: tokio::task::JoinHandle<()>,
     _module_catalog_sync: tokio::task::JoinHandle<()>,
+    _ticket_state_sync: tokio::task::JoinHandle<()>,
+    _business_record_projection_sync: tokio::task::JoinHandle<()>,
 }
 
 impl NativePeer {
@@ -94,6 +101,8 @@ impl NativePeer {
         self._business_users_sync.abort();
         self._runtime_settings_sync.abort();
         self._module_catalog_sync.abort();
+        self._ticket_state_sync.abort();
+        self._business_record_projection_sync.abort();
         let _ = self.database.close().await;
     }
 }
@@ -543,6 +552,84 @@ fn sync_module_catalog(root: &Path) -> anyhow::Result<()> {
     })
 }
 
+#[cfg(test)]
+fn sync_ticket_state(root: &Path) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS ticket state sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            return sync_ticket_state_with_database(root, &peer.database).await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let synced = sync_ticket_state_with_database(root, &database).await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
+#[cfg(test)]
+fn sync_business_record_projections(root: &Path) -> anyhow::Result<usize> {
+    let database_path = store::rxdb_store_path(root);
+    if let Some(parent) = database_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Business OS business record projection sync runtime")?;
+    let _database_guard = TEMPORARY_RXDB_DATABASE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    runtime.block_on(async move {
+        if let Some(peer) = current_peer() {
+            let mut since_by_collection = HashMap::new();
+            return sync_business_record_projections_with_database(
+                root,
+                &peer.database,
+                &mut since_by_collection,
+            )
+            .await;
+        }
+
+        let database = open_database(database_path).await?;
+        database
+            .add_collections(collection_creators())
+            .await
+            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        let mut since_by_collection = HashMap::new();
+        let synced = sync_business_record_projections_with_database(
+            root,
+            &database,
+            &mut since_by_collection,
+        )
+        .await?;
+        database
+            .close()
+            .await
+            .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+        Ok(synced)
+    })
+}
+
 pub fn enqueue_business_command_document(root: &Path, document: Value) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if let Some(parent) = database_path.parent() {
@@ -645,10 +732,9 @@ pub fn browser_context_capture(
                 .await
                 .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
             let capture = browser_context_snapshot_with_database(&database, &session_id).await?;
-            database
-                .close()
-                .await
-                .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
+            database.close().await.map_err(|err| {
+                anyhow::anyhow!("close temporary Business OS RxDB database: {err}")
+            })?;
             Ok::<Value, anyhow::Error>(capture)
         })?
     };
@@ -775,6 +861,17 @@ async fn run_native_peer(
         Arc::clone(&database),
         Arc::clone(&database_write_lock),
     ));
+    let ticket_state_sync = tokio::spawn(sync_ticket_state_background_loop(
+        root.clone(),
+        Arc::clone(&database),
+        Arc::clone(&database_write_lock),
+    ));
+    let business_record_projection_sync =
+        tokio::spawn(sync_business_record_projections_background_loop(
+            root.clone(),
+            Arc::clone(&database),
+            Arc::clone(&database_write_lock),
+        ));
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let peer = Arc::new(NativePeer {
@@ -790,6 +887,8 @@ async fn run_native_peer(
         _business_users_sync: business_users_sync,
         _runtime_settings_sync: runtime_settings_sync,
         _module_catalog_sync: module_catalog_sync,
+        _ticket_state_sync: ticket_state_sync,
+        _business_record_projection_sync: business_record_projection_sync,
     });
     if let Ok(mut current) = NATIVE_PEER.lock() {
         *current = Some(Arc::clone(&peer));
@@ -1119,6 +1218,49 @@ async fn sync_module_catalog_background_loop(
     }
 }
 
+async fn sync_ticket_state_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
+    loop {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_ticket_state_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
+            eprintln!("[business-os] native rxdb ticket state sync failed: {err:#}");
+        }
+        tokio::time::sleep(Duration::from_secs(TICKET_STATE_SYNC_INTERVAL_SECS)).await;
+    }
+}
+
+async fn sync_business_record_projections_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
+    let mut since_by_collection = HashMap::<String, i64>::new();
+    loop {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_business_record_projections_with_database(
+                &root,
+                &database,
+                &mut since_by_collection,
+            )
+            .await
+        };
+        if let Err(err) = result {
+            eprintln!("[business-os] native rxdb business record projection sync failed: {err:#}");
+        }
+        tokio::time::sleep(Duration::from_secs(
+            BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS,
+        ))
+        .await;
+    }
+}
+
 async fn consume_business_commands_loop(
     root: PathBuf,
     database: Arc<RxDatabase>,
@@ -1206,8 +1348,11 @@ async fn browser_context_snapshot_with_database(
         .into_iter()
         .next()
         .with_context(|| format!("browser session not found: {session_id}"))?;
-    let tab = browser_context_related_document(database, "browser_tabs", "session_id", session_id).await?;
-    let frame = browser_context_related_document(database, "browser_frames", "session_id", session_id).await?;
+    let tab = browser_context_related_document(database, "browser_tabs", "session_id", session_id)
+        .await?;
+    let frame =
+        browser_context_related_document(database, "browser_frames", "session_id", session_id)
+            .await?;
     Ok(redacted_browser_context_capture(
         &session,
         tab.as_ref(),
@@ -1499,6 +1644,9 @@ async fn accept_pending_business_command(
     if command_type == "ctox.runtime_settings.save" {
         sync_runtime_settings_with_database(&root, database).await?;
     }
+    if command_type.starts_with("ctox.ticket.") {
+        sync_ticket_state_with_database(&root, database).await?;
+    }
     if command_type == "ctox.file.materialize" {
         if let Some(materialized_path) = accepted
             .get("result")
@@ -1679,6 +1827,121 @@ async fn sync_module_catalog_with_database(
         .await
         .map_err(|err| anyhow::anyhow!("upsert module catalog projection: {err}"))?;
     Ok(())
+}
+
+async fn sync_ticket_state_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let root = root.to_path_buf();
+    let projection = tokio::task::spawn_blocking(move || {
+        tickets::business_os_ticket_projection_documents(&root, TICKET_STATE_SYNC_LIMIT)
+    })
+    .await
+    .context("join native ticket state projection load")??;
+
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    let mut count = 0usize;
+    for collection_name in tickets::BUSINESS_OS_TICKET_COLLECTIONS {
+        let collection = database
+            .collection(collection_name)
+            .with_context(|| format!("{collection_name} collection is not registered"))?;
+        for mut document in projection
+            .get(*collection_name)
+            .cloned()
+            .unwrap_or_default()
+        {
+            if let Some(object) = document.as_object_mut() {
+                object.remove("_rev");
+                object.remove("_meta");
+                object.insert("_deleted".to_string(), Value::Bool(false));
+                object.insert("is_deleted".to_string(), Value::Bool(false));
+            }
+            collection
+                .incremental_upsert(document)
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!("upsert {collection_name} ticket projection: {err}")
+                })?;
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+async fn sync_business_record_projections_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    since_by_collection: &mut HashMap<String, i64>,
+) -> anyhow::Result<usize> {
+    let collections = business_record_projection_collections();
+    let root = root.to_path_buf();
+    let pull_jobs = collections
+        .iter()
+        .map(|collection| {
+            let collection = collection.clone();
+            let root = root.clone();
+            let since_ms = *since_by_collection.get(&collection).unwrap_or(&0);
+            tokio::task::spawn_blocking(move || {
+                let pulled = store::pull_collection_records(
+                    &root,
+                    &collection,
+                    Some(since_ms),
+                    Some(BUSINESS_RECORD_PROJECTION_SYNC_LIMIT),
+                )?;
+                Ok::<_, anyhow::Error>((collection, since_ms, pulled))
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut pulled_collections = Vec::with_capacity(pull_jobs.len());
+    for job in pull_jobs {
+        pulled_collections.push(
+            job.await
+                .context("join native business record projection load")??,
+        );
+    }
+
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    let mut count = 0usize;
+    for (collection_name, since_ms, pulled) in pulled_collections {
+        let documents = pulled
+            .get("documents")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if documents.is_empty() {
+            since_by_collection
+                .entry(collection_name)
+                .or_insert(since_ms);
+            continue;
+        }
+        let collection = database
+            .collection(&collection_name)
+            .with_context(|| format!("{collection_name} collection is not registered"))?;
+        let mut max_updated_at_ms = since_ms;
+        for mut document in documents {
+            if let Some(object) = document.as_object_mut() {
+                object.remove("_rev");
+                object.remove("_meta");
+                object
+                    .entry("is_deleted".to_string())
+                    .or_insert_with(|| Value::Bool(false));
+                if let Some(updated_at_ms) = object.get("updated_at_ms").and_then(Value::as_i64) {
+                    max_updated_at_ms = max_updated_at_ms.max(updated_at_ms);
+                }
+            }
+            collection
+                .incremental_upsert(document)
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!("upsert {collection_name} business record projection: {err}")
+                })?;
+            count += 1;
+        }
+        since_by_collection.insert(collection_name, max_updated_at_ms.saturating_add(1));
+    }
+    Ok(count)
 }
 
 async fn upsert_business_record_projection(
@@ -2762,6 +3025,14 @@ fn business_os_collections() -> Vec<(String, String)> {
     collections
 }
 
+fn business_record_projection_collections() -> Vec<String> {
+    business_os_collections()
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| name != "desktop_file_chunks")
+        .collect()
+}
+
 pub fn repair_optional_rxdb_collection_schema_drift(
     root: &Path,
     collection: &str,
@@ -2891,6 +3162,11 @@ mod tests {
                 "ctox_runtime_settings",
                 "id",
                 "3958bb6580e9705f3688fcf453a80ec33c486b43ac6988f015ffc16cb5ac918d",
+            ),
+            (
+                "ctox_ticket_items",
+                "id",
+                "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
             ),
         ];
         for (collection, primary_key, expected_hash) in cases {
@@ -3637,6 +3913,77 @@ mod tests {
     }
 
     #[test]
+    fn sync_business_record_projections_materializes_generic_collections() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "documents",
+            "doc_projection_1",
+            1_000,
+            json!({
+                "id": "doc_projection_1",
+                "title": "Projected document",
+                "filename": "projected.docx",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "status": "imported",
+                "current_version_id": "doc_projection_1_v1",
+                "index_text": "Projected document body",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 1_000
+            }),
+        )
+        .expect("insert document business record");
+        store::upsert_business_record(
+            &conn,
+            "document_versions",
+            "doc_projection_1_v1",
+            1_001,
+            json!({
+                "id": "doc_projection_1_v1",
+                "document_id": "doc_projection_1",
+                "version": 1,
+                "source_kind": "import",
+                "blob_id": "doc_projection_1_blob",
+                "model_json": {},
+                "diagnostics": [],
+                "created_at_ms": 901,
+                "updated_at_ms": 1_001
+            }),
+        )
+        .expect("insert document version business record");
+        drop(conn);
+
+        let synced = sync_business_record_projections(root.path())
+            .expect("sync business record projections");
+        assert!(synced >= 2);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let document_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__documents__v0 WHERE id = 'doc_projection_1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected document row");
+        let document: Value = serde_json::from_str(&document_json).expect("document json");
+        assert_eq!(
+            document.get("title").and_then(Value::as_str),
+            Some("Projected document")
+        );
+
+        let version_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__document_versions__v0 WHERE id = 'doc_projection_1_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected version count");
+        assert_eq!(version_count, 1);
+    }
+
+    #[test]
     fn sync_desktop_file_index_scans_runtime_outputs_with_lazy_large_files() {
         let root = tempfile::tempdir().expect("temp root");
         let output_dir = root
@@ -4105,6 +4452,57 @@ mod tests {
     }
 
     #[test]
+    fn sync_ticket_state_projects_local_ticket_items_and_events() {
+        let root = tempfile::tempdir().expect("temp root");
+        let remote = crate::mission::ticket_local_native::create_local_ticket(
+            root.path(),
+            "Business OS ticket smoke",
+            "Ticket projection must reach native RxDB.",
+            Some("open"),
+            Some("normal"),
+        )
+        .expect("create local ticket");
+        tickets::sync_ticket_system(root.path(), "local").expect("sync local tickets");
+
+        let synced = sync_ticket_state(root.path()).expect("sync ticket projections");
+        assert!(synced >= 2, "expected item and event projection");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let ticket_key = format!("local:{}", remote.ticket_id);
+        let item_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__ctox_ticket_items__v0 WHERE id = ?1",
+                [ticket_key.as_str()],
+                |row| row.get(0),
+            )
+            .expect("ticket item projection");
+        let item: Value = serde_json::from_str(&item_json).expect("ticket item json");
+        assert_eq!(
+            item.get("title").and_then(Value::as_str),
+            Some("Business OS ticket smoke")
+        );
+        assert_eq!(
+            item.get("source_system").and_then(Value::as_str),
+            Some("local")
+        );
+        assert!(
+            item.get("updated_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or_default()
+                > 0
+        );
+
+        let event_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__ctox_ticket_events__v0 WHERE json_extract(data, '$.ticket_key') = ?1",
+                [ticket_key.as_str()],
+                |row| row.get(0),
+            )
+            .expect("ticket event projection count");
+        assert!(event_count >= 1, "expected projected ticket events");
+    }
+
+    #[test]
     fn native_peer_consumes_pending_business_command() {
         let root = tempfile::tempdir().expect("temp root");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -4247,6 +4645,201 @@ mod tests {
             assert_eq!(
                 replayed.get("task_id").and_then(Value::as_str),
                 Some(task_id)
+            );
+        });
+    }
+
+    #[test]
+    fn native_peer_consumes_ticket_local_create_command_and_projects_ticket() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_ticket_local_create",
+                    "command_id": "cmd_ticket_local_create",
+                    "module": "tickets",
+                    "command_type": "ctox.ticket.local.create",
+                    "record_id": "local:test",
+                    "status": "pending_sync",
+                    "inbound_channel": "tickets",
+                    "payload": {
+                        "title": "Business OS command ticket",
+                        "body": "Created through business_commands.",
+                        "status": "open",
+                        "priority": "normal"
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "tester",
+                            "display_name": "Tester",
+                            "role": "admin",
+                            "is_admin": true
+                        }
+                    },
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert pending ticket command");
+
+            consume_pending_business_commands(root.path(), &database)
+                .await
+                .expect("consume pending ticket command");
+
+            let accepted = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_ticket_local_create" } })),
+                    ..Default::default()
+                }))
+                .expect("accepted query")
+                .exec(false)
+                .await
+                .expect("accepted document");
+            assert_eq!(
+                accepted.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            assert_eq!(
+                accepted.get("task_status").and_then(Value::as_str),
+                Some("completed")
+            );
+
+            let tickets = database
+                .collection("ctox_ticket_items")
+                .expect("ctox_ticket_items collection");
+            let docs = tickets
+                .find(None)
+                .expect("ticket query")
+                .exec(false)
+                .await
+                .expect("ticket documents");
+            let docs = docs.as_array().expect("ticket documents array");
+            assert!(
+                docs.iter().any(|doc| {
+                    doc.get("title").and_then(Value::as_str) == Some("Business OS command ticket")
+                        && doc.get("source_system").and_then(Value::as_str) == Some("local")
+                }),
+                "missing projected ticket item: {docs:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn native_peer_marks_invalid_ticket_commands_failed() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+
+            for (id, command_type, payload) in [
+                (
+                    "cmd_ticket_unsupported",
+                    "ctox.ticket.unsupported",
+                    json!({"case_id": "case_missing"}),
+                ),
+                (
+                    "cmd_ticket_missing_title",
+                    "ctox.ticket.local.create",
+                    json!({"body": "missing title"}),
+                ),
+            ] {
+                commands
+                    .insert(json!({
+                        "id": id,
+                        "command_id": id,
+                        "module": "tickets",
+                        "command_type": command_type,
+                        "record_id": "",
+                        "status": "pending_sync",
+                        "inbound_channel": "tickets",
+                        "payload": payload,
+                        "client_context": {
+                            "actor": {
+                                "id": "tester",
+                                "display_name": "Tester",
+                                "role": "admin",
+                                "is_admin": true
+                            }
+                        },
+                        "updated_at_ms": now_ms() as u64
+                    }))
+                    .await
+                    .expect("insert invalid ticket command");
+            }
+
+            consume_pending_business_commands(root.path(), &database)
+                .await
+                .expect("consume invalid ticket commands");
+
+            let unsupported = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_ticket_unsupported" } })),
+                    ..Default::default()
+                }))
+                .expect("unsupported query")
+                .exec(false)
+                .await
+                .expect("unsupported document");
+            assert_eq!(
+                unsupported.get("status").and_then(Value::as_str),
+                Some("failed")
+            );
+            assert!(
+                unsupported
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("unsupported Business OS ticket command"),
+                "unexpected unsupported error: {unsupported:?}"
+            );
+
+            let missing_title = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_ticket_missing_title" } })),
+                    ..Default::default()
+                }))
+                .expect("missing title query")
+                .exec(false)
+                .await
+                .expect("missing title document");
+            assert_eq!(
+                missing_title.get("status").and_then(Value::as_str),
+                Some("failed")
+            );
+            assert!(
+                missing_title
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("title is required"),
+                "unexpected missing title error: {missing_title:?}"
             );
         });
     }

@@ -12,7 +12,7 @@
         </div>
       </div>
       <div class="ctox-pane-tools">
-        <input type="search" id="employeeSearchInput" class="ctox-pane-search" data-t-placeholder="searchEmployees" data-t-aria="searchEmployeesAria" placeholder="Mitarbeiter suchen..." aria-label="Mitarbeiter suchen" />
+        <input type="search" id="employeeSearchInput" class="ctox-pane-search" data-t-placeholder="searchEmployees" data-t-aria="searchEmployeesAria" placeholder="Mitarbeiter in Liste & Plan suchen..." aria-label="Mitarbeiter in Liste und Dienstplan suchen" />
         <select id="departmentFilterSelect" class="ctox-pane-filter" data-t-aria="filterDepartment" aria-label="Abteilung filtern">
           <option value="all" data-t="allDepartments">Alle Abteilungen</option>
           <option value="Service" data-t="deptService">Service</option>
@@ -73,10 +73,10 @@
           <h2 class="ctox-pane-title" id="centerPaneTitle" data-t="schedulePlanning">Einsatzplanung</h2>
         </div>
         <div class="ctox-pane-actions">
-          <div class="ctox-pane-tabs shiftflow-tabs">
-            <button class="ctox-pane-tab shiftflow-tab-btn active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
-            <button class="ctox-pane-tab shiftflow-tab-btn" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
-            <button class="ctox-pane-tab shiftflow-tab-btn" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
+          <div class="ctox-pane-tabs shiftflow-tabs" role="group" aria-label="Einsatzplanung Ansicht">
+            <button type="button" class="ctox-pane-tab shiftflow-tab-btn active" id="viewSchedulerTabBtn" data-t="tabScheduler" aria-pressed="true">Dienstplan</button>
+            <button type="button" class="ctox-pane-tab shiftflow-tab-btn" id="viewTimesheetsTabBtn" data-t="tabTimesheets" aria-pressed="false">Zeiterfassung</button>
+            <button type="button" class="ctox-pane-tab shiftflow-tab-btn" id="viewBillingTabBtn" data-t="tabBilling" aria-pressed="false">Abrechnung</button>
           </div>
           <button class="ctox-pane-icon icon-button" id="prevWeekBtn" data-icon="prev" data-t-title="prevWeek" data-t-aria="prevWeek" title="Vorherige Woche" aria-label="Vorherige Woche"></button>
           <button class="ctox-pane-icon icon-button" id="nextWeekBtn" data-icon="next" data-t-title="nextWeek" data-t-aria="nextWeek" title="Nächste Woche" aria-label="Nächste Woche"></button>
@@ -88,12 +88,13 @@
     <div class="shiftflow-view-content" id="schedulerView">
       <!-- Toolbar for Dual-Timeline Switcher -->
       <div class="shiftflow-scheduler-toolbar">
-        <div class="shiftflow-view-toggle">
-          <button class="shiftflow-toggle-btn active" id="toggleViewEmployeesBtn" data-t="employeeTimeline">Mitarbeiter-Timeline</button>
-          <button class="shiftflow-toggle-btn" id="toggleViewProjectsBtn" data-t="projectTimeline">Projekt-Timeline</button>
+        <div class="shiftflow-view-toggle" role="group" aria-label="Timeline Fokus">
+          <button type="button" class="shiftflow-toggle-btn active" id="toggleViewEmployeesBtn" data-t="employeeTimeline" aria-pressed="true">Mitarbeiter-Timeline</button>
+          <button type="button" class="shiftflow-toggle-btn" id="toggleViewProjectsBtn" data-t="projectTimeline" aria-pressed="false">Projekt-Timeline</button>
         </div>
         <div class="flex-spacer"></div>
-        <button class="os-btn" id="btnPublishSchedule" data-t="publishSchedule" style="font-size:12px; padding:6px 12px; height:32px;">📅 Dienstplan veröffentlichen</button>
+        <span class="shiftflow-publish-status" id="publishScheduleStatus" aria-live="polite"></span>
+        <button type="button" class="os-btn" id="btnPublishSchedule" data-t="publishSchedule" style="font-size:12px; padding:6px 12px; height:32px;">Dienstplan veröffentlichen</button>
       </div>
 
       <div class="shiftflow-scheduler-container os-scrollbar">
@@ -214,21 +215,24 @@
         <div class="shiftflow-conflicts-list" id="conflictsList">
           <div class="shiftflow-conflict-empty-state" data-t="noConflictsDetected">Keine aktiven Konflikte erkannt. Der Dienstplan erfüllt alle Vorgaben.</div>
         </div>
+      </div>
+    </div>
+
+    <div class="shiftflow-right-pane-section shiftflow-detail-pane hidden" id="detailInspectorSection" data-detail-drawer>
+      <header class="ctox-pane-header">
+        <div class="ctox-pane-title-row">
+          <div class="ctox-pane-titles">
+            <span class="ctox-pane-kicker" data-t="shiftDetails">Schicht-Details</span>
+            <h2 class="ctox-pane-title" id="inspectorTitle">Details</h2>
+          </div>
+          <div class="ctox-pane-actions">
+            <button type="button" class="ctox-pane-icon icon-button" data-icon="close" id="closeInspectorBtn" data-t-aria="close" aria-label="Schließen"></button>
+          </div>
+        </div>
+      </header>
+      <div class="shiftflow-detail-body os-scrollbar" id="inspectorContent">
+        <!-- Detail view will be loaded here -->
+      </div>
     </div>
   </aside>
-
-  <!-- Shift Details Bottom Drawer -->
-  <div class="ctox-bottom-drawer" id="detailInspectorSection" data-detail-drawer>
-    <div class="ctox-drawer-handle"><div class="ctox-drawer-handle-bar"></div></div>
-    <header class="ctox-drawer-header">
-      <div class="ctox-drawer-header-left">
-        <span class="ctox-drawer-kicker" data-t="shiftDetails">Schicht-Details</span>
-        <h3 class="ctox-drawer-title" id="inspectorTitle">Details</h3>
-      </div>
-      <button type="button" class="ctox-drawer-close" id="closeInspectorBtn" aria-label="Schließen">&times;</button>
-    </header>
-    <div class="ctox-drawer-body os-scrollbar" id="inspectorContent">
-      <!-- Form or detail view will be loaded here -->
-    </div>
-  </div>
 </div>

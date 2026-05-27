@@ -9,13 +9,8 @@ const releasePath = path.join(repoRoot, '.github/workflows/release.yml');
 const offenders = [];
 
 const requiredEvidence = [
-  'runtime/build/ctox-rxdb-js/rxdb-bundle.mjs',
-  'runtime/build/ctox-rxdb-js/rxdb-bundle.provenance.json',
-  'src/core/rxdb/js-fork/bundle-contract.json',
-  'src/core/rxdb/js-fork/dependency-audit-baseline.json',
-  'src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json',
-  'src/core/rxdb/js-fork/source/package.json',
-  'src/core/rxdb/js-fork/source/package-lock.json',
+  'runtime/build/ctox-rxdb-js/ctox-rxdb-js.mjs',
+  'runtime/build/ctox-rxdb-js/ctox-rxdb-js.provenance.json',
   'src/apps/business-os/rxdb/manifest.json',
   'src/apps/business-os/rxdb/README.md',
   'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs',
@@ -28,13 +23,15 @@ const requiredEvidence = [
   'src/apps/business-os/rxdb/tests/storage-index-smoke.mjs',
 ];
 
+const forbiddenLegacyEvidence = [
+  'src/core/rxdb/js-fork',
+  'src/apps/business-os/vendor/rxdb-bundle.mjs',
+  'src/apps/business-os/vendor/rxdb-bundle.provenance.json',
+  'src/core/rxdb/js-fork/source/package-lock.json',
+  'npm --prefix src/core/rxdb/js-fork/source ci',
+];
+
 const unixReleaseEvidence = [
-  'src/apps/business-os/vendor/rxdb-bundle.provenance.json bundle/rxdb-js/',
-  'src/core/rxdb/js-fork/bundle-contract.json bundle/rxdb-js/',
-  'src/core/rxdb/js-fork/dependency-audit-baseline.json bundle/rxdb-js/',
-  'src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json bundle/rxdb-js/',
-  'src/core/rxdb/js-fork/source/package.json bundle/rxdb-js/source/',
-  'src/core/rxdb/js-fork/source/package-lock.json bundle/rxdb-js/source/',
   'src/apps/business-os/rxdb/manifest.json bundle/rxdb-js/app-local/',
   'src/apps/business-os/rxdb/README.md bundle/rxdb-js/app-local/',
   'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs bundle/rxdb-js/app-local/dist/',
@@ -43,12 +40,6 @@ const unixReleaseEvidence = [
 ];
 
 const windowsReleaseEvidence = [
-  '"src\\apps\\business-os\\vendor\\rxdb-bundle.provenance.json" -Destination "bundle\\rxdb-js\\"',
-  '"src\\core\\rxdb\\js-fork\\bundle-contract.json" -Destination "bundle\\rxdb-js\\"',
-  '"src\\core\\rxdb\\js-fork\\dependency-audit-baseline.json" -Destination "bundle\\rxdb-js\\"',
-  '"src\\core\\rxdb\\js-fork\\ctox-rxdb-js.manifest.json" -Destination "bundle\\rxdb-js\\"',
-  '"src\\core\\rxdb\\js-fork\\source\\package.json" -Destination "bundle\\rxdb-js\\source\\"',
-  '"src\\core\\rxdb\\js-fork\\source\\package-lock.json" -Destination "bundle\\rxdb-js\\source\\"',
   '"src\\apps\\business-os\\rxdb\\manifest.json" -Destination "bundle\\rxdb-js\\app-local\\"',
   '"src\\apps\\business-os\\rxdb\\README.md" -Destination "bundle\\rxdb-js\\app-local\\"',
   '"src\\apps\\business-os\\rxdb\\dist\\ctox-rxdb-js.mjs" -Destination "bundle\\rxdb-js\\app-local\\dist\\"',
@@ -60,20 +51,21 @@ const ci = read(ciPath);
 const release = read(releasePath);
 
 if (ci) {
-  assertContains(ciPath, ci, 'ctox-rxdb-js bundle provenance', 'node src/scripts/vendor-builds/build-ctox-rxdb-js.mjs --artifact-dir runtime/build/ctox-rxdb-js --write-provenance');
+  assertContains(ciPath, ci, 'ctox-db app-local evidence build', 'node src/scripts/vendor-builds/build-ctox-rxdb-js.mjs --artifact-dir runtime/build/ctox-rxdb-js --write-provenance');
   assertContains(ciPath, ci, 'release evidence guard syntax check', 'node --check src/core/rxdb/tools/assert_js_fork_release_evidence.js');
   assertContains(ciPath, ci, 'release evidence guard execution', 'node src/core/rxdb/tools/assert_js_fork_release_evidence.js');
   for (const item of requiredEvidence) {
-    assertContains(ciPath, ci, `uploaded bundle evidence ${item}`, item);
+    assertContains(ciPath, ci, `uploaded CTOX DB evidence ${item}`, item);
+  }
+  for (const item of forbiddenLegacyEvidence) {
+    assertNotContains(ciPath, ci, `legacy RxDB fork evidence ${item}`, item);
   }
 }
 
 if (release) {
-  assertContains(releasePath, release, 'Unix rxdb-js evidence directory', 'mkdir -p bundle/rxdb-js/source');
   assertContains(releasePath, release, 'Unix app-local rxdb-js evidence directory', 'mkdir -p bundle/rxdb-js/app-local/dist');
   assertContains(releasePath, release, 'Unix app-local rxdb-js source directory', 'mkdir -p bundle/rxdb-js/app-local/src');
   assertContains(releasePath, release, 'Unix app-local rxdb-js test directory', 'mkdir -p bundle/rxdb-js/app-local/tests');
-  assertContains(releasePath, release, 'Windows rxdb-js evidence directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\source');
   assertContains(releasePath, release, 'Windows app-local rxdb-js evidence directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\dist');
   assertContains(releasePath, release, 'Windows app-local rxdb-js source directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\src');
   assertContains(releasePath, release, 'Windows app-local rxdb-js test directory', 'New-Item -ItemType Directory -Force bundle\\rxdb-js\\app-local\\tests');
@@ -82,6 +74,9 @@ if (release) {
   }
   for (const item of windowsReleaseEvidence) {
     assertContains(releasePath, release, `Windows release evidence ${item}`, item);
+  }
+  for (const item of forbiddenLegacyEvidence) {
+    assertNotContains(releasePath, release, `legacy RxDB fork evidence ${item}`, item);
   }
 }
 
@@ -93,11 +88,11 @@ for (const item of requiredEvidence.slice(2)) {
 }
 
 if (offenders.length) {
-  console.error(`ctox-rxdb-js release evidence guard failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
+  console.error(`ctox-db release evidence guard failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
   process.exit(1);
 }
 
-console.log('ctox-rxdb-js release evidence guard OK');
+console.log('ctox-db release evidence guard OK');
 
 function read(file) {
   try {
@@ -111,6 +106,12 @@ function read(file) {
 function assertContains(file, content, label, needle) {
   if (!content.includes(needle)) {
     offenders.push(`${relative(file)}: missing ${label}`);
+  }
+}
+
+function assertNotContains(file, content, label, needle) {
+  if (content.includes(needle)) {
+    offenders.push(`${relative(file)}: must not contain ${label}`);
   }
 }
 

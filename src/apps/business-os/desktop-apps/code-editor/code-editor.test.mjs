@@ -1,0 +1,76 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  filterSourceFiles,
+  normalizeModuleCatalog,
+  normalizeSourceFiles,
+  sourceEditorActionState,
+} from './app.js';
+
+test('module catalog exposes editable Business OS apps once each', () => {
+  const modules = normalizeModuleCatalog([
+    { id: 'ctox', title: 'CTOX', editable: true },
+    { id: 'ctox', title: 'Duplicate', editable: true },
+    { id: 'hidden', title: 'Hidden', hidden: true },
+    { id: 'locked', title: 'Locked', editable: false },
+    { id: 'notes', title: 'Notizen' },
+  ]);
+
+  assert.deepEqual(modules.map((module) => module.id).sort(), ['ctox', 'notes']);
+  assert.equal(modules.find((module) => module.id === 'notes').title, 'Notizen');
+});
+
+test('source file normalization removes deleted rows and sorts paths', () => {
+  const files = normalizeSourceFiles([
+    { path: 'z.css', content: '', is_deleted: false },
+    { path: 'deleted.js', _deleted: true },
+    { path: 'index.js', content: 'export {}' },
+    { path: '', content: 'bad' },
+  ]);
+
+  assert.deepEqual(files.map((file) => file.path), ['index.js', 'z.css']);
+  assert.equal(files[0].language, 'javascript');
+  assert.equal(files[1].language, 'css');
+  assert.equal(files[0].dirty, false);
+});
+
+test('file search matches path and language without mutating rows', () => {
+  const files = normalizeSourceFiles([
+    { path: 'index.js', language: 'javascript' },
+    { path: 'styles/main.css', language: 'css' },
+  ]);
+
+  assert.deepEqual(filterSourceFiles(files, 'css').map((file) => file.path), ['styles/main.css']);
+  assert.equal(filterSourceFiles(files, '').length, 2);
+});
+
+test('actions stay disabled until a dirty writable file is selected', () => {
+  assert.deepEqual(sourceEditorActionState({}), {
+    openApp: false,
+    diff: false,
+    revert: false,
+    reload: false,
+    save: false,
+  });
+
+  assert.deepEqual(sourceEditorActionState({
+    moduleId: 'ctox',
+    hasFile: true,
+    dirty: true,
+    readonly: false,
+  }), {
+    openApp: true,
+    diff: true,
+    revert: true,
+    reload: true,
+    save: true,
+  });
+
+  assert.equal(sourceEditorActionState({
+    moduleId: 'ctox',
+    hasFile: true,
+    dirty: true,
+    readonly: true,
+  }).save, false);
+});

@@ -36,17 +36,17 @@ export function createCalendarView({
   // Initialize EventCalendar
   const options = {
     view: view,
-    headerToolbar: {
-      start: 'prev,next today',
-      center: 'title',
-      end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek'
-    },
     buttonText: {
       today: 'Heute',
       month: 'Monat',
       week: 'Woche',
       day: 'Tag',
       list: 'Liste'
+    },
+    headerToolbar: {
+      start: '',
+      center: '',
+      end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek'
     },
     locale: 'de',
     firstDay: 1, // Monday
@@ -59,8 +59,7 @@ export function createCalendarView({
     dayMaxEvents: true,
     eventClick: (info) => {
       if (onEventClick) {
-        // Find original event
-        const originalId = info.event.id.split('_')[0]; // handle virtual recurring IDs
+        const originalId = getOriginalEventId(info.event.id);
         const original = events.find(e => e.id === originalId);
         onEventClick({
           event: info.event,
@@ -76,7 +75,7 @@ export function createCalendarView({
     },
     eventDrop: (info) => {
       if (onEventMove) {
-        const originalId = info.event.id.split('_')[0];
+        const originalId = getOriginalEventId(info.event.id);
         onEventMove({
           id: originalId,
           start: info.event.start,
@@ -87,7 +86,7 @@ export function createCalendarView({
     },
     eventResize: (info) => {
       if (onEventResize) {
-        const originalId = info.event.id.split('_')[0];
+        const originalId = getOriginalEventId(info.event.id);
         onEventResize({
           id: originalId,
           start: info.event.start,
@@ -228,3 +227,12 @@ function mapSingleEvent(ev, color) {
     editable: true
   };
 }
+
+function getOriginalEventId(eventCalendarId) {
+  return String(eventCalendarId || '').replace(/_occ_\d+$/, '');
+}
+
+export const __calendarViewAdapterTestHooks = {
+  getOriginalEventId,
+  prepareEventsForCalendar,
+};

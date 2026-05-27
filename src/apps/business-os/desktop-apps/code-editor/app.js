@@ -13,9 +13,14 @@ export async function mount(container, ctx) {
   const state = {
     moduleId: ctx.args?.moduleId || '',
     moduleTitle: ctx.args?.moduleTitle || ctx.args?.moduleId || 'Module',
+    modules: [],
     files: [],
     activePath: '',
+    search: '',
     saving: false,
+    loading: false,
+    loadingModules: false,
+    readonly: false,
     monaco: null,
     editor: null,
     model: null,
@@ -28,8 +33,13 @@ export async function mount(container, ctx) {
       <aside class="source-editor-sidebar">
         <div class="source-editor-sidebar-head">
           <strong data-source-module-title>${escapeHtml(state.moduleTitle)}</strong>
-          <span data-source-module-id>${escapeHtml(state.moduleId)}</span>
+          <span data-source-module-id>${escapeHtml(state.moduleId || 'Modul auswählen')}</span>
         </div>
+        <div class="source-editor-module-list" data-source-module-list aria-label="Business-OS Apps"></div>
+        <label class="source-editor-search">
+          <span aria-hidden="true">⌕</span>
+          <input data-source-search type="search" placeholder="Dateien suchen" autocomplete="off">
+        </label>
         <nav data-source-file-list aria-label="Source files"></nav>
       </aside>
       <main class="source-editor-main">
@@ -39,10 +49,11 @@ export async function mount(container, ctx) {
             <span data-source-file-detail></span>
           </div>
           <div class="source-editor-actions">
-            <button type="button" data-source-open-app>App öffnen</button>
-            <button type="button" data-source-diff>Diff</button>
-            <button type="button" data-source-reload>Neu laden</button>
-            <button type="button" data-source-save>Speichern</button>
+            <button type="button" data-source-open-app aria-label="App öffnen" title="App öffnen"><span aria-hidden="true">↗</span><span>App</span></button>
+            <button type="button" data-source-diff aria-label="Diff anzeigen" title="Diff anzeigen"><span aria-hidden="true">⇄</span><span>Diff</span></button>
+            <button type="button" data-source-revert aria-label="Änderungen verwerfen" title="Änderungen verwerfen"><span aria-hidden="true">↶</span><span>Revert</span></button>
+            <button type="button" data-source-reload aria-label="Neu laden" title="Neu laden"><span aria-hidden="true">↻</span><span>Laden</span></button>
+            <button type="button" data-source-save aria-label="Speichern" title="Speichern"><span aria-hidden="true">✓</span><span>Speichern</span></button>
           </div>
         </header>
         <div class="source-editor-workbench" data-source-workbench>
@@ -50,6 +61,10 @@ export async function mount(container, ctx) {
           <div class="source-editor-fallback" data-source-fallback hidden>
             <div class="source-editor-lines" data-source-lines aria-hidden="true">1</div>
             <textarea data-source-code spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+          </div>
+          <div class="source-editor-placeholder" data-source-placeholder>
+            <strong>Modul auswählen</strong>
+            <span>Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.</span>
           </div>
           <aside class="source-editor-diff" data-source-diff-panel hidden></aside>
         </div>
@@ -59,7 +74,11 @@ export async function mount(container, ctx) {
   `;
 
   const refs = {
+    moduleTitle: container.querySelector('[data-source-module-title]'),
+    moduleId: container.querySelector('[data-source-module-id]'),
+    moduleList: container.querySelector('[data-source-module-list]'),
     fileList: container.querySelector('[data-source-file-list]'),
+    search: container.querySelector('[data-source-search]'),
     activeFile: container.querySelector('[data-source-active-file]'),
     fileDetail: container.querySelector('[data-source-file-detail]'),
     code: container.querySelector('[data-source-code]'),
@@ -67,17 +86,24 @@ export async function mount(container, ctx) {
     status: container.querySelector('[data-source-status]'),
     save: container.querySelector('[data-source-save]'),
     reload: container.querySelector('[data-source-reload]'),
+    revert: container.querySelector('[data-source-revert]'),
     openApp: container.querySelector('[data-source-open-app]'),
     diff: container.querySelector('[data-source-diff]'),
     diffPanel: container.querySelector('[data-source-diff-panel]'),
     monacoHost: container.querySelector('[data-source-monaco]'),
     fallback: container.querySelector('[data-source-fallback]'),
+    placeholder: container.querySelector('[data-source-placeholder]'),
   };
 
+  refs.search.addEventListener('input', () => {
+    state.search = refs.search.value.trim();
+    renderFileList();
+  });
   refs.code.addEventListener('input', () => {
     setActiveDirty(true);
     updateLineNumbers();
     renderStatus();
+    updateActionState();
     if (state.diffOpen) renderDiff();
   });
   refs.code.addEventListener('scroll', () => {
@@ -95,8 +121,10 @@ export async function mount(container, ctx) {
     }
   });
   refs.save.addEventListener('click', saveActiveFile);
+  refs.revert.addEventListener('click', revertActiveFile);
   refs.reload.addEventListener('click', loadBundle);
   refs.diff.addEventListener('click', () => {
+    if (!activeFile()) return;
     state.diffOpen = !state.diffOpen;
     refs.diffPanel.hidden = !state.diffOpen;
     refs.diff.classList.toggle('is-active', state.diffOpen);
@@ -114,7 +142,14 @@ export async function mount(container, ctx) {
     setStatus('Monaco konnte nicht geladen werden. Texteditor-Fallback aktiv.', true);
   });
 
-  await loadBundle();
+  await loadModuleCatalog();
+  if (state.moduleId) {
+    await loadBundle();
+  } else {
+    clearEditor('Modul auswählen', 'Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.');
+    setStatus(moduleEmptyStatus());
+    updateActionState();
+  }
   await monacoReady;
   if (state.files.length) openFile(state.activePath);
 
@@ -144,20 +179,67 @@ export async function mount(container, ctx) {
     state.editor.onDidChangeModelContent(() => {
       setActiveDirty(true);
       renderStatus();
+      updateActionState();
       if (state.diffOpen) renderDiff();
     });
     state.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
     if (state.activePath) setEditorValue(currentFileValue(), activeFile()?.language || 'text', state.activePath);
     renderStatus();
+    updateActionState();
+  }
+
+  async function loadModuleCatalog() {
+    state.loadingModules = true;
+    renderModuleList();
+    try {
+      const modules = await fetchModuleCatalog();
+      state.modules = normalizeModuleCatalog(modules);
+      const selected = state.modules.find((entry) => entry.id === state.moduleId);
+      if (selected) state.moduleTitle = selected.title;
+      renderModuleHeader();
+    } catch (error) {
+      console.warn('[source-editor] module catalog unavailable:', error);
+      state.modules = state.moduleId ? [{ id: state.moduleId, title: state.moduleTitle }] : [];
+      renderModuleHeader();
+      if (!state.moduleId) setStatus(`Modulkatalog nicht verfügbar: ${error?.message || error}`, true);
+    } finally {
+      state.loadingModules = false;
+      renderModuleList();
+    }
+  }
+
+  async function selectModule(module) {
+    if (!module?.id || module.id === state.moduleId) return;
+    persistActiveDraft();
+    state.moduleId = module.id;
+    state.moduleTitle = module.title || module.id;
+    state.files = [];
+    state.activePath = '';
+    state.readonly = false;
+    refs.search.value = '';
+    state.search = '';
+    renderModuleHeader();
+    renderModuleList();
+    clearEditor('Lade Source...', `${state.moduleTitle} wird geladen.`);
+    ctx.setTitle?.(`${state.moduleTitle} Source`);
+    await loadBundle();
   }
 
   async function loadBundle() {
     if (!state.moduleId) {
-      setStatus('Kein Modul ausgewählt.', true);
+      state.files = [];
+      state.activePath = '';
+      clearEditor('Modul auswählen', 'Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.');
+      renderFileList();
+      setStatus(moduleEmptyStatus());
+      updateActionState();
       return;
     }
+    state.loading = true;
+    state.readonly = false;
     setStatus('Lade Source...');
-    refs.save.disabled = true;
+    clearEditor('Lade Source...', `${state.moduleTitle} wird geladen.`);
+    updateActionState();
     try {
       await ensureSourceReplication();
       const projection = await dispatchSourceCommand('ctox.source.load', {
@@ -166,11 +248,7 @@ export async function mount(container, ctx) {
       });
       const expectedCount = Number(projection?.result?.count || 0);
       const files = await waitForSourceFiles(expectedCount);
-      state.files = files.map((file) => ({
-        ...file,
-        draft_content: null,
-        dirty: false,
-      }));
+      state.files = normalizeSourceFiles(files);
       renderFileList();
       openFile(state.activePath && state.files.some((file) => file.path === state.activePath)
         ? state.activePath
@@ -178,22 +256,74 @@ export async function mount(container, ctx) {
       setStatus(`${state.files.length} Source-Dateien geladen.${state.usingMonaco ? ' Monaco aktiv.' : ''}`);
     } catch (error) {
       console.error('[source-editor] load failed:', error);
-      setStatus(`Source konnte nicht geladen werden: ${error?.message || error}`, true);
+      state.files = [];
+      state.activePath = '';
+      clearEditor('Source nicht verfügbar', `${state.moduleTitle}: ${error?.message || error}`);
+      renderFileList();
+      setStatus(`Source konnte nicht über RxDB/WebRTC geladen werden: ${error?.message || error}`, true);
     } finally {
-      refs.save.disabled = false;
+      state.loading = false;
+      renderFileList();
+      updateActionState();
     }
+  }
+
+  function renderModuleHeader() {
+    refs.moduleTitle.textContent = state.moduleTitle || 'Module';
+    refs.moduleId.textContent = state.moduleId || 'Modul auswählen';
+  }
+
+  function renderModuleList() {
+    refs.moduleList.innerHTML = '';
+    if (state.loadingModules) {
+      refs.moduleList.innerHTML = '<p class="source-editor-empty">Lade Apps...</p>';
+      return;
+    }
+    if (!state.modules.length) {
+      refs.moduleList.innerHTML = '<p class="source-editor-empty">Keine Apps im Katalog gefunden.</p>';
+      return;
+    }
+    const list = document.createElement('div');
+    list.className = 'source-editor-modules';
+    for (const module of state.modules) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'source-editor-module';
+      button.classList.toggle('is-active', module.id === state.moduleId);
+      button.innerHTML = `
+        <span>${escapeHtml(module.title || module.id)}</span>
+        <small>${escapeHtml(module.id)}</small>
+      `;
+      button.addEventListener('click', () => selectModule(module));
+      list.append(button);
+    }
+    refs.moduleList.append(list);
   }
 
   function renderFileList() {
     refs.fileList.innerHTML = '';
-    if (!state.files.length) {
-      refs.fileList.innerHTML = '<p class="source-editor-empty">Keine editierbaren Source-Dateien.</p>';
+    if (!state.moduleId) {
+      refs.fileList.innerHTML = '<p class="source-editor-empty">Erst eine App wählen.</p>';
       return;
     }
-    for (const file of state.files) {
+    if (state.loading) {
+      refs.fileList.innerHTML = '<p class="source-editor-empty">Lade Source-Dateien...</p>';
+      return;
+    }
+    if (!state.files.length) {
+      refs.fileList.innerHTML = '<p class="source-editor-empty">Keine editierbaren Source-Dateien oder Projektion leer.</p>';
+      return;
+    }
+    const files = filteredFiles();
+    if (!files.length) {
+      refs.fileList.innerHTML = '<p class="source-editor-empty">Keine Treffer für diese Suche.</p>';
+      return;
+    }
+    for (const file of files) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'source-editor-file';
+      button.setAttribute('aria-current', file.path === state.activePath ? 'page' : 'false');
       button.classList.toggle('is-active', file.path === state.activePath);
       button.classList.toggle('is-dirty', Boolean(file.dirty));
       button.innerHTML = `
@@ -210,30 +340,43 @@ export async function mount(container, ctx) {
     const file = state.files.find((entry) => entry.path === path);
     if (!file) {
       state.activePath = '';
-      refs.activeFile.textContent = 'Keine Datei';
-      refs.fileDetail.textContent = '';
-      setEditorValue('', 'text', 'empty.txt');
-      updateLineNumbers();
+      clearEditor('Keine Datei', 'Wähle eine Source-Datei aus der linken Liste.');
+      renderFileList();
+      renderDiff();
+      renderStatus();
+      updateActionState();
       return;
     }
     state.activePath = file.path;
     refs.activeFile.textContent = file.path;
     refs.fileDetail.textContent = fileDetail(file);
+    refs.placeholder.hidden = true;
+    refs.monacoHost.classList.remove('is-empty');
+    refs.fallback.classList.remove('is-empty');
     setEditorValue(file.draft_content ?? file.content ?? '', file.language || 'text', file.path);
     updateLineNumbers();
     renderFileList();
     renderDiff();
     renderStatus();
+    updateActionState();
     ctx.setTitle?.(`${state.moduleTitle} · ${shortName(file.path)}`);
   }
 
   async function saveActiveFile() {
     const file = activeFile();
-    if (!file || state.saving) return;
+    if (!file || state.saving || state.readonly) {
+      updateActionState();
+      return;
+    }
     persistActiveDraft();
+    if (!file.dirty) {
+      renderStatus();
+      updateActionState();
+      return;
+    }
     const content = file.draft_content ?? file.content ?? '';
     state.saving = true;
-    refs.save.disabled = true;
+    updateActionState();
     setStatus(`Speichere ${file.path}...`);
     try {
       await ensureSourceReplication();
@@ -262,8 +405,21 @@ export async function mount(container, ctx) {
       setStatus(`Speichern fehlgeschlagen: ${error?.message || error}`, true);
     } finally {
       state.saving = false;
-      refs.save.disabled = false;
+      updateActionState();
     }
+  }
+
+  function revertActiveFile() {
+    const file = activeFile();
+    if (!file || state.saving) return;
+    file.draft_content = null;
+    file.dirty = false;
+    setEditorValue(file.content ?? '', file.language || 'text', file.path);
+    updateLineNumbers();
+    renderFileList();
+    renderDiff();
+    renderStatus();
+    updateActionState();
   }
 
   function persistActiveDraft() {
@@ -285,6 +441,10 @@ export async function mount(container, ctx) {
     file.dirty = Boolean(value) && getEditorValue() !== (file.content ?? '');
     file.draft_content = file.dirty ? getEditorValue() : null;
     renderFileList();
+  }
+
+  function filteredFiles() {
+    return filterSourceFiles(state.files, state.search);
   }
 
   function activeFile() {
@@ -326,7 +486,7 @@ export async function mount(container, ctx) {
     if (!state.diffOpen) return;
     const file = activeFile();
     if (!file) {
-      refs.diffPanel.innerHTML = '<p>Keine Datei ausgewählt.</p>';
+      refs.diffPanel.innerHTML = '<p class="source-editor-empty">Keine Datei ausgewählt.</p>';
       return;
     }
     const diff = buildLineDiff(file.content ?? '', getEditorValue());
@@ -355,15 +515,51 @@ export async function mount(container, ctx) {
   function renderStatus() {
     const file = activeFile();
     refs.status.classList.remove('is-error');
-    if (!file) return;
+    if (!file) {
+      refs.status.textContent = state.moduleId
+        ? `${state.moduleTitle}: keine Datei ausgewählt.`
+        : moduleEmptyStatus();
+      return;
+    }
     const mode = state.usingMonaco ? 'Monaco' : 'Texteditor';
     const suffix = file.dirty ? ' · ungespeichert' : '';
-    refs.status.textContent = `${state.moduleId}/${file.path} · ${mode}${suffix}`;
+    const readonly = state.readonly ? ' · read-only fallback' : '';
+    refs.status.textContent = `${state.moduleId}/${file.path} · ${mode}${suffix}${readonly}`;
   }
 
   function setStatus(text, error = false) {
     refs.status.textContent = text;
     refs.status.classList.toggle('is-error', Boolean(error));
+  }
+
+  function clearEditor(title, detail) {
+    refs.activeFile.textContent = title;
+    refs.fileDetail.textContent = detail || '';
+    refs.placeholder.hidden = false;
+    refs.placeholder.querySelector('strong').textContent = title;
+    refs.placeholder.querySelector('span').textContent = detail || '';
+    refs.monacoHost.classList.add('is-empty');
+    refs.fallback.classList.add('is-empty');
+    setEditorValue('', 'text', 'empty.txt');
+    updateLineNumbers();
+  }
+
+  function updateActionState() {
+    const file = activeFile();
+    persistActiveDraft();
+    const actions = sourceEditorActionState({
+      moduleId: state.moduleId,
+      hasFile: Boolean(file),
+      dirty: Boolean(file?.dirty),
+      saving: state.saving,
+      loading: state.loading,
+      readonly: state.readonly,
+    });
+    refs.openApp.disabled = !actions.openApp;
+    refs.diff.disabled = !actions.diff;
+    refs.revert.disabled = !actions.revert;
+    refs.reload.disabled = !actions.reload;
+    refs.save.disabled = !actions.save;
   }
 
   async function ensureSourceReplication() {
@@ -446,6 +642,69 @@ export async function mount(container, ctx) {
     state.model?.dispose?.();
     container.replaceChildren();
   };
+}
+
+async function fetchModuleCatalog() {
+  const response = await fetch('./modules/registry.json', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`registry.json ${response.status}`);
+  const payload = await response.json();
+  return payload.modules || payload;
+}
+
+export function normalizeModuleCatalog(modules) {
+  const rows = Array.isArray(modules) ? modules : [];
+  const seen = new Set();
+  return rows
+    .filter((module) => module && typeof module.id === 'string' && module.id.trim())
+    .filter((module) => module.editable !== false && module.hidden !== true)
+    .map((module) => ({
+      id: module.id.trim(),
+      title: module.title || module.name || module.id.trim(),
+      source: module.source || '',
+    }))
+    .filter((module) => {
+      if (seen.has(module.id)) return false;
+      seen.add(module.id);
+      return true;
+    })
+    .sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
+}
+
+export function normalizeSourceFiles(files) {
+  return (Array.isArray(files) ? files : [])
+    .filter((file) => file && !file._deleted && !file.is_deleted && typeof file.path === 'string' && file.path.trim())
+    .map((file) => ({
+      ...file,
+      path: file.path.trim(),
+      language: file.language || languageFromPath(file.path),
+      draft_content: null,
+      dirty: false,
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }));
+}
+
+export function filterSourceFiles(files, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return files;
+  return files.filter((file) => `${file.path} ${file.language || ''}`.toLowerCase().includes(needle));
+}
+
+export function sourceEditorActionState(input) {
+  const hasModule = Boolean(input.moduleId);
+  const hasFile = Boolean(input.hasFile);
+  const busy = Boolean(input.loading || input.saving);
+  const dirty = Boolean(input.dirty);
+  return {
+    openApp: hasModule && !busy,
+    diff: hasFile && !busy,
+    revert: hasFile && dirty && !busy,
+    reload: hasModule && !Boolean(input.saving),
+    save: hasFile && dirty && !busy && !Boolean(input.readonly),
+  };
+}
+
+function moduleEmptyStatus() {
+  return 'Kein Modul ausgewählt. Links eine Business-OS App auswählen.';
 }
 
 function loadMonaco() {
@@ -574,6 +833,17 @@ function monacoLanguage(language) {
   return language || 'plaintext';
 }
 
+function languageFromPath(path) {
+  const ext = String(path || '').split('.').pop()?.toLowerCase();
+  if (ext === 'js' || ext === 'mjs' || ext === 'cjs') return 'javascript';
+  if (ext === 'ts' || ext === 'tsx') return 'typescript';
+  if (ext === 'css') return 'css';
+  if (ext === 'html') return 'html';
+  if (ext === 'json') return 'json';
+  if (ext === 'md') return 'markdown';
+  return 'text';
+}
+
 function formatBytes(value) {
   const bytes = Number(value || 0);
   if (bytes < 1024) return `${bytes} B`;
@@ -597,7 +867,7 @@ function ensureStyles() {
     }
     .source-editor-sidebar {
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: auto minmax(96px, 24%) auto minmax(0, 1fr);
       min-width: 0;
       border-right: 1px solid var(--hairline, var(--line));
       background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
@@ -617,6 +887,67 @@ function ensureStyles() {
     }
     .source-editor-sidebar-head strong { font-size: 13px; }
     .source-editor-sidebar-head span { color: var(--muted); font-size: 11px; }
+    .source-editor-module-list {
+      min-height: 0;
+      overflow: auto;
+      padding: 8px;
+      border-bottom: 1px solid var(--hairline, var(--line));
+    }
+    .source-editor-modules {
+      display: grid;
+      gap: 5px;
+    }
+    .source-editor-module {
+      display: grid;
+      gap: 1px;
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--text);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .source-editor-module:hover {
+      background: color-mix(in srgb, var(--surface) 70%, transparent);
+    }
+    .source-editor-module.is-active {
+      border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+    }
+    .source-editor-module span,
+    .source-editor-module small {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .source-editor-module span { font-weight: 760; }
+    .source-editor-module small { color: var(--muted); }
+    .source-editor-search {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      align-items: center;
+      gap: 6px;
+      padding: 8px;
+      border-bottom: 1px solid var(--hairline, var(--line));
+      color: var(--muted);
+    }
+    .source-editor-search input {
+      width: 100%;
+      min-width: 0;
+      min-height: 28px;
+      border: 1px solid var(--hairline, var(--line));
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--surface) 76%, var(--surface-2));
+      color: var(--text);
+      padding: 0 8px;
+      outline: none;
+    }
+    .source-editor-search input:focus {
+      border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+    }
     .source-editor-sidebar nav {
       min-height: 0;
       overflow: auto;
@@ -698,6 +1029,9 @@ function ensureStyles() {
       flex: 0 0 auto;
     }
     .source-editor-actions button {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
       min-height: 28px;
       border: 1px solid var(--hairline, var(--line));
       border-radius: 7px;
@@ -711,11 +1045,18 @@ function ensureStyles() {
       border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
       color: var(--accent);
     }
+    .source-editor-actions button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      color: var(--muted);
+      border-color: var(--hairline, var(--line));
+    }
     .source-editor-actions button[data-source-save] {
       color: var(--accent);
       border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
     }
     .source-editor-workbench {
+      position: relative;
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(260px, 34%);
       min-height: 0;
@@ -732,6 +1073,10 @@ function ensureStyles() {
       min-height: 0;
       height: 100%;
     }
+    .source-editor-monaco.is-empty {
+      opacity: 0;
+      pointer-events: none;
+    }
     .source-editor-monaco[hidden],
     .source-editor-fallback[hidden] {
       display: none !important;
@@ -741,6 +1086,36 @@ function ensureStyles() {
       grid-template-columns: 58px minmax(0, 1fr);
       min-height: 0;
       height: 100%;
+    }
+    .source-editor-fallback.is-empty {
+      visibility: hidden;
+      pointer-events: none;
+    }
+    .source-editor-placeholder {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      display: grid;
+      gap: 6px;
+      max-width: min(460px, calc(100% - 48px));
+      padding: 18px 20px;
+      border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 84%, var(--bg));
+      color: var(--text);
+      text-align: center;
+      z-index: 1;
+    }
+    .source-editor-placeholder[hidden] {
+      display: none;
+    }
+    .source-editor-placeholder strong {
+      font-size: 13px;
+    }
+    .source-editor-placeholder span {
+      color: var(--muted);
+      font-size: 12px;
     }
     .source-editor-lines,
     .source-editor textarea {

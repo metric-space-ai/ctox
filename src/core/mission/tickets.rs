@@ -1,5 +1,6 @@
 use anyhow::Context;
 use anyhow::Result;
+use chrono::DateTime;
 use chrono::Utc;
 use regex::Regex;
 use rusqlite::params;
@@ -493,6 +494,20 @@ pub struct TicketAuditRecord {
     pub details: Value,
     pub created_at: String,
 }
+
+pub(crate) const BUSINESS_OS_TICKET_COLLECTIONS: &[&str] = &[
+    "ctox_ticket_items",
+    "ctox_ticket_events",
+    "ctox_ticket_event_routing_state",
+    "ctox_ticket_cases",
+    "ctox_ticket_self_work_items",
+    "ctox_ticket_self_work_notes",
+    "ctox_ticket_label_assignments",
+    "ctox_ticket_control_bundles",
+    "ctox_ticket_approvals",
+    "ctox_ticket_verifications",
+    "ctox_ticket_writebacks",
+];
 
 #[derive(Debug, Clone)]
 pub(crate) struct AdapterTicketMirrorRequest<'a> {
@@ -6004,6 +6019,385 @@ fn list_ticket_history(
         .map_err(anyhow::Error::from)
 }
 
+pub(crate) fn business_os_ticket_projection_documents(
+    root: &Path,
+    limit: usize,
+) -> Result<BTreeMap<String, Vec<Value>>> {
+    let conn = open_ticket_db(root)?;
+    let mut documents = BTreeMap::new();
+
+    documents.insert(
+        "ctox_ticket_items".to_string(),
+        list_tickets(root, None, limit)?
+            .into_iter()
+            .map(|item| {
+                ticket_projection_document(item, |value| {
+                    (
+                        value
+                            .get("ticket_key")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("updated_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
+
+    documents.insert(
+        "ctox_ticket_events".to_string(),
+        list_recent_ticket_events_for_business_os(&conn, limit)?
+            .into_iter()
+            .map(|event| {
+                ticket_projection_document(event, |value| {
+                    (
+                        value
+                            .get("event_key")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("observed_at")
+                            .and_then(Value::as_str)
+                            .or_else(|| value.get("external_created_at").and_then(Value::as_str))
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
+
+    documents.insert(
+        "ctox_ticket_event_routing_state".to_string(),
+        list_ticket_event_routing_for_business_os(&conn, limit)?,
+    );
+
+    documents.insert(
+        "ctox_ticket_cases".to_string(),
+        list_cases(root, None, limit)?
+            .into_iter()
+            .map(|case| {
+                ticket_projection_document(case, |value| {
+                    (
+                        value
+                            .get("case_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("updated_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
+
+    documents.insert(
+        "ctox_ticket_self_work_items".to_string(),
+        list_ticket_self_work_items(root, None, None, limit)?
+            .into_iter()
+            .map(|item| {
+                ticket_projection_document(item, |value| {
+                    (
+                        value
+                            .get("work_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("updated_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
+
+    documents.insert(
+        "ctox_ticket_self_work_notes".to_string(),
+        list_ticket_self_work_notes_for_business_os(&conn, limit)?,
+    );
+    documents.insert(
+        "ctox_ticket_label_assignments".to_string(),
+        list_ticket_label_assignments_for_business_os(&conn, limit)?,
+    );
+    documents.insert(
+        "ctox_ticket_control_bundles".to_string(),
+        list_control_bundles(root)?
+            .into_iter()
+            .map(|bundle| {
+                ticket_projection_document(bundle, |value| {
+                    (
+                        value
+                            .get("label")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        value
+                            .get("updated_at")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+    );
+    documents.insert(
+        "ctox_ticket_approvals".to_string(),
+        list_ticket_approvals_for_business_os(&conn, limit)?,
+    );
+    documents.insert(
+        "ctox_ticket_verifications".to_string(),
+        list_ticket_verifications_for_business_os(&conn, limit)?,
+    );
+    documents.insert(
+        "ctox_ticket_writebacks".to_string(),
+        list_ticket_writebacks_for_business_os(&conn, limit)?,
+    );
+
+    Ok(documents)
+}
+
+fn ticket_projection_document<T, F>(value: T, id_and_updated_at: F) -> Result<Value>
+where
+    T: Serialize,
+    F: FnOnce(&Value) -> (String, String),
+{
+    let mut document = serde_json::to_value(value)?;
+    let (id, updated_at) = id_and_updated_at(&document);
+    let updated_at_ms = iso_to_epoch_ms(&updated_at);
+    if let Some(object) = document.as_object_mut() {
+        object.insert("id".to_string(), Value::String(id));
+        object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+        object.insert("is_deleted".to_string(), Value::Bool(false));
+    }
+    Ok(document)
+}
+
+fn iso_to_epoch_ms(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value.trim())
+        .map(|parsed| parsed.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn list_recent_ticket_events_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<TicketEventView>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT event_key, ticket_key, source_system, remote_event_id, direction, event_type,
+               summary, body_text, metadata_json, external_created_at, observed_at
+        FROM ticket_events
+        ORDER BY external_created_at DESC, observed_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], map_ticket_event_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_event_routing_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT event_key, route_status, lease_owner, leased_at, acked_at, updated_at
+        FROM ticket_event_routing_state
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let event_key: String = row.get(0)?;
+        let updated_at: String = row.get(5)?;
+        Ok(json!({
+            "id": event_key,
+            "event_key": event_key,
+            "route_status": row.get::<_, String>(1)?,
+            "lease_owner": row.get::<_, Option<String>>(2)?,
+            "leased_at": row.get::<_, Option<String>>(3)?,
+            "acked_at": row.get::<_, Option<String>>(4)?,
+            "updated_at": updated_at,
+            "updated_at_ms": iso_to_epoch_ms(&updated_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_self_work_notes_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT note_id, work_id, body_text, visibility, authored_by, remote_event_id, created_at
+        FROM ticket_self_work_notes
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let note_id: String = row.get(0)?;
+        let created_at: String = row.get(6)?;
+        Ok(json!({
+            "id": note_id,
+            "note_id": note_id,
+            "work_id": row.get::<_, String>(1)?,
+            "body_text": row.get::<_, String>(2)?,
+            "visibility": row.get::<_, String>(3)?,
+            "authored_by": row.get::<_, String>(4)?,
+            "remote_event_id": row.get::<_, Option<String>>(5)?,
+            "created_at": created_at,
+            "updated_at_ms": iso_to_epoch_ms(&created_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_label_assignments_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT ticket_key, label, assigned_by, rationale, evidence_json, assigned_at, updated_at
+        FROM ticket_label_assignments
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let ticket_key: String = row.get(0)?;
+        let updated_at: String = row.get(6)?;
+        let evidence_raw: String = row.get(4)?;
+        Ok(json!({
+            "id": ticket_key,
+            "ticket_key": ticket_key,
+            "label": row.get::<_, String>(1)?,
+            "assigned_by": row.get::<_, String>(2)?,
+            "rationale": row.get::<_, Option<String>>(3)?,
+            "evidence": parse_json_or_empty(&evidence_raw),
+            "assigned_at": row.get::<_, String>(5)?,
+            "updated_at": updated_at,
+            "updated_at_ms": iso_to_epoch_ms(&updated_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_approvals_for_business_os(conn: &Connection, limit: usize) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT approval_id, case_id, status, decided_by, rationale, created_at
+        FROM ticket_approvals
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let approval_id: String = row.get(0)?;
+        let created_at: String = row.get(5)?;
+        Ok(json!({
+            "id": approval_id,
+            "approval_id": approval_id,
+            "case_id": row.get::<_, String>(1)?,
+            "status": row.get::<_, String>(2)?,
+            "decided_by": row.get::<_, String>(3)?,
+            "rationale": row.get::<_, Option<String>>(4)?,
+            "created_at": created_at,
+            "updated_at_ms": iso_to_epoch_ms(&created_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_verifications_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT verification_id, case_id, status, summary, created_at
+        FROM ticket_verifications
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let verification_id: String = row.get(0)?;
+        let created_at: String = row.get(4)?;
+        Ok(json!({
+            "id": verification_id,
+            "verification_id": verification_id,
+            "case_id": row.get::<_, String>(1)?,
+            "status": row.get::<_, String>(2)?,
+            "summary": row.get::<_, Option<String>>(3)?,
+            "created_at": created_at,
+            "updated_at_ms": iso_to_epoch_ms(&created_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn list_ticket_writebacks_for_business_os(conn: &Connection, limit: usize) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT writeback_id, case_id, ticket_key, operation, payload_json, status, created_at
+        FROM ticket_writebacks
+        ORDER BY created_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let writeback_id: String = row.get(0)?;
+        let created_at: String = row.get(6)?;
+        let payload_raw: String = row.get(4)?;
+        Ok(json!({
+            "id": writeback_id,
+            "writeback_id": writeback_id,
+            "case_id": row.get::<_, String>(1)?,
+            "ticket_key": row.get::<_, String>(2)?,
+            "operation": row.get::<_, String>(3)?,
+            "payload": parse_json_or_empty(&payload_raw),
+            "status": row.get::<_, String>(5)?,
+            "created_at": created_at,
+            "updated_at_ms": iso_to_epoch_ms(&created_at),
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn parse_json_or_empty(raw: &str) -> Value {
+    serde_json::from_str(raw).unwrap_or_else(|_| json!({}))
+}
+
 fn set_ticket_label(
     root: &Path,
     ticket_key: &str,
@@ -7095,6 +7489,145 @@ fn close_case(root: &Path, case_id: &str, summary: Option<&str>) -> Result<Ticke
         },
     )?;
     load_case(root, case_id)?.context("failed to load case after close")
+}
+
+pub(crate) fn run_business_os_ticket_command(
+    root: &Path,
+    command_type: &str,
+    payload: &Value,
+) -> Result<Value> {
+    match command_type {
+        "ctox.ticket.local.create" => {
+            let title = required_payload_string(payload, "title")?;
+            let body = payload_string(payload, "body")
+                .or_else(|| payload_string(payload, "body_text"))
+                .unwrap_or_default();
+            let record = crate::mission::ticket_local_native::create_local_ticket(
+                root,
+                &title,
+                &body,
+                payload_string(payload, "status").as_deref(),
+                payload_string(payload, "priority").as_deref(),
+            )?;
+            sync_ticket_system(root, "local")?;
+            Ok(json!({
+                "ticket": record,
+                "ticket_key": record.ticket_id,
+                "source_system": "local",
+            }))
+        }
+        "ctox.ticket.local.comment" => {
+            let ticket_id = required_payload_string(payload, "ticket_id")
+                .or_else(|_| required_payload_string(payload, "ticket_key"))?;
+            let body = required_payload_string(payload, "body")?;
+            let event =
+                crate::mission::ticket_local_native::add_local_comment(root, &ticket_id, &body)?;
+            sync_ticket_system(root, "local")?;
+            Ok(json!({
+                "event": event,
+                "ticket_key": ticket_id,
+                "source_system": "local",
+            }))
+        }
+        "ctox.ticket.local.transition" => {
+            let ticket_id = required_payload_string(payload, "ticket_id")
+                .or_else(|_| required_payload_string(payload, "ticket_key"))?;
+            let status = required_payload_string(payload, "status")
+                .or_else(|_| required_payload_string(payload, "state"))?;
+            let record = crate::mission::ticket_local_native::transition_local_ticket(
+                root, &ticket_id, &status,
+            )?;
+            sync_ticket_system(root, "local")?;
+            Ok(json!({
+                "ticket": record,
+                "ticket_key": ticket_id,
+                "source_system": "local",
+            }))
+        }
+        "ctox.ticket.approve" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let status = required_payload_string(payload, "status")?;
+            let decided_by =
+                payload_string(payload, "decided_by").unwrap_or_else(|| "owner".to_string());
+            let case = decide_case_approval(
+                root,
+                &case_id,
+                &status,
+                &decided_by,
+                payload_string(payload, "rationale").as_deref(),
+            )?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        "ctox.ticket.execute" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let summary = required_payload_string(payload, "summary")?;
+            let case = record_execution_action(root, &case_id, &summary)?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        "ctox.ticket.verify" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let status = required_payload_string(payload, "status")?;
+            let case = record_verification(
+                root,
+                &case_id,
+                &status,
+                payload_string(payload, "summary").as_deref(),
+            )?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        "ctox.ticket.writeback_comment" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let body = required_payload_string(payload, "body")?;
+            let case = writeback_comment(
+                root,
+                &case_id,
+                &body,
+                payload_bool(payload, "internal").unwrap_or(false),
+            )?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        "ctox.ticket.writeback_transition" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let state = required_payload_string(payload, "state")?;
+            let case = writeback_transition(
+                root,
+                &case_id,
+                &state,
+                payload_string(payload, "body").as_deref(),
+                payload_bool(payload, "internal").unwrap_or(false),
+            )?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        "ctox.ticket.close" => {
+            let case_id = required_payload_string(payload, "case_id")?;
+            let case = close_case(
+                root,
+                &case_id,
+                payload_string(payload, "summary").as_deref(),
+            )?;
+            Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
+        }
+        other => anyhow::bail!("unsupported Business OS ticket command: {other}"),
+    }
+}
+
+fn required_payload_string(payload: &Value, key: &str) -> Result<String> {
+    payload_string(payload, key)
+        .filter(|value| !value.trim().is_empty())
+        .with_context(|| format!("{key} is required"))
+}
+
+fn payload_string(payload: &Value, key: &str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn payload_bool(payload: &Value, key: &str) -> Option<bool> {
+    payload.get(key).and_then(Value::as_bool)
 }
 
 fn enforce_ticket_case_close_transition(
@@ -9057,6 +9590,144 @@ mod tests {
 
         let history = list_ticket_history(&root, &ticket_key, 20)?;
         assert!(history.iter().any(|event| event.event_type == "comment"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn business_os_ticket_commands_drive_full_case_lifecycle() -> Result<()> {
+        let root = temp_root("business-os-ticket-lifecycle");
+        std::fs::create_dir_all(&root)?;
+
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Business OS lifecycle",
+            "Exercise the command adapter for every visible Ticket action.",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        let ticket_key = format!("local:{}", remote.ticket_id);
+
+        put_control_bundle(
+            &root,
+            ControlBundleInput {
+                label: "support/business-os".to_string(),
+                runbook_id: "rb-business-os".to_string(),
+                runbook_version: "v1".to_string(),
+                policy_id: "pol-business-os".to_string(),
+                policy_version: "v1".to_string(),
+                approval_mode: "human_approval_required".to_string(),
+                autonomy_level: "A1".to_string(),
+                verification_profile_id: "verify-business-os".to_string(),
+                writeback_profile_id: "writeback-comment".to_string(),
+                support_mode: "support_case".to_string(),
+                default_risk_level: "low".to_string(),
+                execution_actions: default_execution_actions(),
+                notes: Some("Business OS command adapter lifecycle coverage".to_string()),
+            },
+        )?;
+        set_ticket_label(
+            &root,
+            &ticket_key,
+            "support/business-os",
+            "test",
+            Some("route to Business OS support controls"),
+            json!({"source": "business-os-command-test"}),
+        )?;
+
+        let dry_run = create_dry_run(
+            &root,
+            &ticket_key,
+            Some("Business OS command lifecycle dry run"),
+            None,
+        )?;
+        let case_id = dry_run.case_id;
+
+        let approved = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.approve",
+            &json!({
+                "case_id": case_id,
+                "status": "approved",
+                "decided_by": "business-os-test",
+                "rationale": "approve command adapter path",
+            }),
+        )?;
+        assert_eq!(
+            approved.pointer("/case/state").and_then(Value::as_str),
+            Some("executable")
+        );
+
+        let executed = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.execute",
+            &json!({
+                "case_id": case_id,
+                "summary": "Executed through Business OS command adapter",
+            }),
+        )?;
+        assert_eq!(
+            executed.pointer("/case/state").and_then(Value::as_str),
+            Some("executing")
+        );
+
+        let verified = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.verify",
+            &json!({
+                "case_id": case_id,
+                "status": "passed",
+                "summary": "Verified through Business OS command adapter",
+            }),
+        )?;
+        assert_eq!(
+            verified.pointer("/case/state").and_then(Value::as_str),
+            Some("writeback_pending")
+        );
+
+        let written_back = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.writeback_comment",
+            &json!({
+                "case_id": case_id,
+                "body": "Business OS command adapter writeback smoke.",
+                "internal": false,
+            }),
+        )?;
+        assert_eq!(
+            written_back.pointer("/case/state").and_then(Value::as_str),
+            Some("writeback_pending")
+        );
+
+        let closed = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.close",
+            &json!({
+                "case_id": case_id,
+                "summary": "Closed through Business OS command adapter",
+            }),
+        )?;
+        assert_eq!(
+            closed.pointer("/case/state").and_then(Value::as_str),
+            Some("closed")
+        );
+
+        let audit = list_audit_records(&root, Some(&ticket_key), 30)?;
+        assert!(audit
+            .iter()
+            .any(|item| item.action_type == "approval_decision"));
+        assert!(audit
+            .iter()
+            .any(|item| item.action_type == "execution_case"));
+        assert!(audit
+            .iter()
+            .any(|item| item.action_type == "verification_record"));
+        assert!(audit
+            .iter()
+            .any(|item| item.action_type == "writeback_record"));
+        assert!(audit.iter().any(|item| item.action_type == "case_closed"));
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

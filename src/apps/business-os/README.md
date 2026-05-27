@@ -21,7 +21,7 @@ modules/<id>/
 
 `module.json` uses `install_scope` to decide how the app is shipped:
 
-- `core`: always included and not removable (`ctox`, `desktop`, `app-store`, `knowledge`, `reports`).
+- `core`: always included and not removable (`ctox`, `tickets`, `desktop`, `app-store`, `knowledge`, `reports`).
 - `starter`: included on first installation as the standard workspace pack (`documents`, `spreadsheets`, `calendar`, `notes`).
 - `store`: discoverable in the App Store and installed into `installed-modules/` on demand.
 - `internal`: shipped for shell-owned workflows but hidden from normal launchers.
@@ -30,6 +30,23 @@ modules/<id>/
 The shell loads module manifests through the native Rust API and mounts modules
 as plain browser modules. React may be embedded for menus, settings, and dense
 forms, but the working views should remain direct, inspectable ESM.
+
+## Data Runtime Contract
+
+Business OS modules use **CTOX DB**, the CTOX-owned browser data runtime backed
+by `ctox-rxdb-js` and the native `rxdb-rs` peer. It is RxDB-derived, but it is
+not upstream npm `rxdb` and not a drop-in replacement for arbitrary RxDB
+plugins.
+
+Module code must use database, collection, sync, and command handles supplied
+by the Business OS shell context. Do not import `rxdb` or `rxdb/plugins/...`
+from a module. The app-facing compatibility contract is
+`ctox-db-business-os-v1`.
+
+The Tickets app is the reference core module for native CTOX capability
+projection. It reads only replicated `ctox_ticket_*` collections and writes
+durable `ctox.ticket.*` command documents through `business_commands`; it does
+not use a module-local HTTP command bridge.
 
 ## Layout Contract
 

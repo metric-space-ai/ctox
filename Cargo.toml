@@ -1,6 +1,6 @@
 [package]
 name = "ctox"
-version = "0.3.21"
+version = "0.3.22"
 edition = "2021"
 license = "AGPL-3.0-only"
 build = "src/build.rs"

@@ -15,7 +15,7 @@ import { readViewState, patchViewState } from './viewState.js';
 window.recomputeAllMatchScoresOnce = recomputeAllMatchScoresOnce;
 
 import { CtoxQueuedCommandError, llmChat, queueObjectParseTask, queueRequirementParseTask } from './ctoxCommandAdapter.js';
-import { getContactsCollection } from './businessOsDataSource.js';
+import { getContactsCollection, getMatchingCollectionDiagnostics } from './businessOsDataSource.js';
 import { createSyncFeedback } from './syncFeedback.js';
 import { getActiveMatchingDefinition, matchingText, setActiveMatchingDefinition } from './matchingDefinition.js';
 import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../../shared/dialogs.js';
@@ -938,6 +938,8 @@ let sources = [];
 let objects = [];
 let matches = [];
 const rawDocCounts = { sources: 0, requirements: 0, objects: 0, matches: 0 };
+let matchingCollectionDiagnostics = null;
+let matchingDiagnosticsPromise = null;
 
 function hasUnsyncedMatchingData() {
   // True when the RxDB collections hold records but the aggregated UI arrays
@@ -945,6 +947,68 @@ function hasUnsyncedMatchingData() {
   // state — show a sync placeholder instead of "empty database".
   return (rawDocCounts.sources > 0 || rawDocCounts.requirements > 0)
     && sources.length === 0;
+}
+
+function renderCollectionDiagnostic(collectionName, fallbackText) {
+  const entry = matchingCollectionDiagnostics?.collections?.find(item => item.collection === collectionName);
+  if (!entry) return fallbackText;
+
+  const localCount = Number(entry.localCount || 0);
+  const sync = entry.sync;
+  const pull = entry.pull;
+  const syncText = sync
+    ? (sync.ok
+        ? `RxDB/WebRTC: ${Number(sync.count || 0)} Datensätze`
+        : `RxDB/WebRTC: Fehler${sync.error ? ` ${sync.error}` : ''}`)
+    : 'RxDB/WebRTC: nicht geprüft';
+  const pullText = pull
+    ? (pull.ok
+        ? `HTTP Pull: ${Number(pull.count || 0)} Datensätze`
+        : `HTTP Pull: Fehler${pull.status ? ` ${pull.status}` : ''}`)
+    : 'HTTP Pull: nicht geprüft';
+  const suffix = [
+    `Collection ${entry.collection}`,
+    `Schema v${entry.schemaVersion || 0}`,
+    `lokal ${localCount}`,
+    syncText,
+    pullText
+  ].join(' · ');
+
+  return `${fallbackText}<br><span class="collection-diagnostic">${_escapeHtml(suffix)}</span>`;
+}
+
+function shouldRefreshMatchingDiagnostics() {
+  return !matchingDiagnosticsPromise && (
+    (!sources.length && !objects.length && !matches.length) ||
+    hasUnsyncedMatchingData()
+  );
+}
+
+function refreshMatchingCollectionDiagnostics({ rerender = false } = {}) {
+  if (matchingDiagnosticsPromise) return matchingDiagnosticsPromise;
+  matchingDiagnosticsPromise = getMatchingCollectionDiagnostics({ probePull: true })
+    .then((diagnostics) => {
+      matchingCollectionDiagnostics = diagnostics;
+      if (rerender) {
+        renderSources();
+        renderRequirements();
+        renderObjects();
+        renderMap();
+      }
+      return diagnostics;
+    })
+    .catch((error) => {
+      matchingCollectionDiagnostics = {
+        checkedAt: new Date().toISOString(),
+        collections: [],
+        error: String(error?.message || error || 'diagnostics failed')
+      };
+      return matchingCollectionDiagnostics;
+    })
+    .finally(() => {
+      matchingDiagnosticsPromise = null;
+    });
+  return matchingDiagnosticsPromise;
 }
 
 // requirement matching view globals
@@ -1302,10 +1366,73 @@ function scoreFromMatchItems(items) {
   return computeTotalMatchScoreFromItems(items);
 }
 
+function slugForSyntheticSource(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80);
+}
+
+function getRequirementSourceName(requirementDoc) {
+  const source = requirementDoc?.source && typeof requirementDoc.source === 'object' ? requirementDoc.source : {};
+  return String(
+    requirementDoc?.sourceName ||
+    requirementDoc?.source_name ||
+    source.name ||
+    source.legalName ||
+    requirementDoc?.companyName ||
+    requirementDoc?.company_name ||
+    requirementDoc?.clientName ||
+    requirementDoc?.client_name ||
+    ''
+  ).trim();
+}
+
+function getRequirementSourceId(requirementDoc) {
+  const source = requirementDoc?.source && typeof requirementDoc.source === 'object' ? requirementDoc.source : {};
+  const explicit = String(
+    requirementDoc?.sourceId ||
+    requirementDoc?.source_id ||
+    source.id ||
+    requirementDoc?.companyId ||
+    requirementDoc?.company_id ||
+    requirementDoc?.clientId ||
+    requirementDoc?.client_id ||
+    ''
+  ).trim();
+  if (explicit) return explicit;
+
+  const name = getRequirementSourceName(requirementDoc);
+  return name ? `source_${slugForSyntheticSource(name)}` : 'matching_requirements';
+}
+
+function buildSyntheticSourcesFromRequirements(sourceDocs, requirementDocs) {
+  const byId = new Map((sourceDocs || []).filter(Boolean).map(source => [String(source.id || ''), source]));
+
+  for (const requirement of requirementDocs || []) {
+    const sourceId = getRequirementSourceId(requirement);
+    if (!sourceId || byId.has(sourceId)) continue;
+    const sourceName = getRequirementSourceName(requirement) || 'Matching-Anforderungen';
+    byId.set(sourceId, {
+      id: sourceId,
+      name: sourceName,
+      legalName: sourceName,
+      logoUrl: requirement?.sourceLogoUrl || '',
+      locations: [],
+      active: true,
+      hasRelation: false,
+      synthetic: true
+    });
+  }
+
+  return Array.from(byId.values());
+}
+
 async function loadFromRxdb(){
   try {
     const previousDb = rxdb;
-    const { getContactsCollection } = await import('./businessOsDataSource.js');
     const contactsCol = await getContactsCollection();
     rxdb = contactsCol.database;
 
@@ -1336,10 +1463,13 @@ async function loadFromRxdb(){
     rawDocCounts.objects = objectsJson.length;
     rawDocCounts.matches = matchesJson.length;
 
+    const sourceRowsForUi = buildSyntheticSourcesFromRequirements(sourcesJson, requirementsJson);
+
     const requirementsBySource = new Map();
     requirementsJson.forEach(j => {
-      if (!requirementsBySource.has(j.sourceId)) requirementsBySource.set(j.sourceId, []);
-      requirementsBySource.get(j.sourceId).push(j);
+      const sourceId = getRequirementSourceId(j);
+      if (!requirementsBySource.has(sourceId)) requirementsBySource.set(sourceId, []);
+      requirementsBySource.get(sourceId).push({ ...j, sourceId });
     });
 
     const requirementSourcesByRequirement = new Map();
@@ -1416,7 +1546,7 @@ async function loadFromRxdb(){
     }
 
     // Firmen + Requirements für UI aus RxDB bauen
-    const dbSourcesUi = sourcesJson.map(compDoc => {
+    const dbSourcesUi = sourceRowsForUi.map(compDoc => {
       const requirementsForComp = requirementsBySource.get(compDoc.id) || [];
       const compLocations = Array.isArray(compDoc.locations) ? compDoc.locations : [];
 
@@ -1501,7 +1631,7 @@ async function loadFromRxdb(){
       objectsJson.map(async (c) => {
         const fullname = c.name || `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'Unbekannt';
         const tax = c.taxonomy || c.degree || c.highestDegree || 'Objekt';
-        const skillsStr = (c.skills || []).slice(0, 8).join(', ');
+        const skillsStr = normalizeTextList(c.skills || []).slice(0, 8).join(', ');
 
         const add = Array.isArray(c.additional) ? c.additional : [];
         const importMeta = getObjectImportMetaFromAdditional(add);
@@ -1591,7 +1721,7 @@ async function loadFromRxdb(){
     });
 
     const sourceIdByRequirementId = new Map(
-      requirementsJson.map((requirement) => [String(requirement.id), requirement.sourceId || ''])
+      requirementsJson.map((requirement) => [String(requirement.id), getRequirementSourceId(requirement)])
     );
 
     // Matches aus RxDB auf UI-Struktur mappen
@@ -1647,9 +1777,13 @@ async function loadFromRxdb(){
     }
 
     reconcilePersistedMatchingSelection();
+    if (shouldRefreshMatchingDiagnostics()) {
+      await refreshMatchingCollectionDiagnostics({ rerender: false });
+    }
 
   } catch (e) {
     console.error('Fehler beim Laden aus RxDB (UI bleibt leer oder minimal):', e);
+    await refreshMatchingCollectionDiagnostics({ rerender: false });
   }
 }
 
@@ -2715,6 +2849,7 @@ function _isDesktopThreeColumnLayout(appEl) {
 function setupMatchingColumnResizing() {
   const appEl = getMatchingModuleHost().querySelector('.app');
   if (!appEl) return;
+  appEl.querySelectorAll('.col-resizer').forEach((node) => node.remove());
 
   const leftHandle = document.createElement('div');
   leftHandle.className = 'col-resizer col-resizer-left';
@@ -2722,7 +2857,6 @@ function setupMatchingColumnResizing() {
   leftHandle.setAttribute('role', 'separator');
   leftHandle.setAttribute('aria-orientation', 'vertical');
   leftHandle.setAttribute('aria-label', 'Spaltenbreite links/mittig anpassen');
-  leftHandle.dataset.resizer = 'left';
 
   const rightHandle = document.createElement('div');
   rightHandle.className = 'col-resizer col-resizer-right';
@@ -2730,7 +2864,6 @@ function setupMatchingColumnResizing() {
   rightHandle.setAttribute('role', 'separator');
   rightHandle.setAttribute('aria-orientation', 'vertical');
   rightHandle.setAttribute('aria-label', 'Spaltenbreite mittig/rechts anpassen');
-  rightHandle.dataset.resizer = 'right';
 
   appEl.appendChild(leftHandle);
   appEl.appendChild(rightHandle);
@@ -2755,8 +2888,12 @@ function setupMatchingColumnResizing() {
     onResize: (width) => localStorage.setItem('ctox.matching.layout.rightWidth', width)
   });
 
-  const leftWidth = localStorage.getItem('ctox.matching.layout.leftWidth') || '280';
-  const rightWidth = localStorage.getItem('ctox.matching.layout.rightWidth') || '280';
+  const safeStoredWidth = (key, fallback) => {
+    const value = Number.parseFloat(localStorage.getItem(key) || '');
+    return Number.isFinite(value) ? Math.max(260, Math.min(560, value)) : fallback;
+  };
+  const leftWidth = safeStoredWidth('ctox.matching.layout.leftWidth', 300);
+  const rightWidth = safeStoredWidth('ctox.matching.layout.rightWidth', 300);
   appEl.style.setProperty('--matching-left-width', `${leftWidth}px`);
   appEl.style.setProperty('--matching-right-width', `${rightWidth}px`);
 
@@ -4908,10 +5045,15 @@ function renderSources(){
     // hasn't been projected into the UI shape). Show a sync state instead of
     // the misleading "empty database" message.
     if (hasUnsyncedMatchingData()) {
-      grid.innerHTML = '<div class="muted" style="padding:8px">Daten werden synchronisiert…</div>';
+      grid.innerHTML = `<div class="muted collection-empty-state">` +
+        renderCollectionDiagnostic('matching_requirements', 'Daten werden synchronisiert…') +
+        `</div>`;
     } else {
-      grid.innerHTML = '<div class="muted" style="padding:8px">Keine Anforderungen in der Datenbank gefunden.</div>';
+      grid.innerHTML = `<div class="muted collection-empty-state">` +
+        renderCollectionDiagnostic('matching_requirements', 'Keine Anforderungen in der Datenbank gefunden.') +
+        `</div>`;
     }
+    if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
     return;
   }
 
@@ -5100,7 +5242,10 @@ function renderRequirements(){
 
   if (!sources.length){
     compNameEl.textContent = 'Keine Anforderungen';
-    list.innerHTML = '';
+    list.innerHTML = `<div class="muted collection-empty-state">` +
+      renderCollectionDiagnostic('matching_requirements', 'Keine Anforderungen in der Datenbank gefunden.') +
+      `</div>`;
+    if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
     return;
   }
 
@@ -6962,7 +7107,10 @@ function renderObjects(opts = {}){
     for (const [, node] of objectDomById) { try { node.remove(); } catch (_) {} }
     objectDomById.clear();
 
-    list.innerHTML = '<div class="muted" style="padding:8px">Keine Objekte in der Datenbank gefunden.</div>';
+    list.innerHTML = `<div class="muted collection-empty-state">` +
+      renderCollectionDiagnostic('matching_objects', 'Keine Objekte in der Datenbank gefunden.') +
+      `</div>`;
+    if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
     return;
   }
 
@@ -7596,6 +7744,10 @@ if (tabList && tabMap && mapWrap && requirementListEl && listTools) {
     if (nextTab === 'matrix') {
       tabMap.classList.add('active');
       tabList.classList.remove('active');
+      tabMap.setAttribute('aria-pressed', 'true');
+      tabList.setAttribute('aria-pressed', 'false');
+      tabMap.setAttribute('aria-selected', 'true');
+      tabList.setAttribute('aria-selected', 'false');
       mapWrap.classList.add('active');
       requirementListEl.style.display = 'none';
       listTools.style.display = 'none';
@@ -7603,10 +7755,14 @@ if (tabList && tabMap && mapWrap && requirementListEl && listTools) {
     } else {
       tabList.classList.add('active');
       tabMap.classList.remove('active');
+      tabList.setAttribute('aria-pressed', 'true');
+      tabMap.setAttribute('aria-pressed', 'false');
+      tabList.setAttribute('aria-selected', 'true');
+      tabMap.setAttribute('aria-selected', 'false');
       cleanupMatrixViewArtifacts();
       mapWrap.classList.remove('active');
       requirementListEl.style.display = 'block';
-      listTools.style.display = 'flex';
+      listTools.style.display = '';
     }
 
     if (persist) {
@@ -7716,7 +7872,12 @@ function renderMap() {
     .filter(x => x.sourceMatches.length > 0);
 
   if (!sourcesWithMatches.length) {
-    mapEl.innerHTML = `<div class="muted" style="padding:8px">Keine Matches im aktuellen Matrix-Filter.</div>`;
+    mapEl.innerHTML = `<div class="muted collection-empty-state">` +
+      renderCollectionDiagnostic('matching_results', 'Keine Matches im aktuellen Matrix-Filter.') +
+      `</div>`;
+    if (!matchingCollectionDiagnostics && !matchingDiagnosticsPromise) {
+      refreshMatchingCollectionDiagnostics({ rerender: true });
+    }
     return;
   }
 
@@ -8119,7 +8280,12 @@ function renderMap() {
   });
 
   if (!renderedSections) {
-    container.innerHTML = `<div class="muted" style="padding:8px">Keine Matches im aktuellen Matrix-Filter.</div>`;
+    container.innerHTML = `<div class="muted collection-empty-state">` +
+      renderCollectionDiagnostic('matching_results', 'Keine Matches im aktuellen Matrix-Filter.') +
+      `</div>`;
+    if (!matchingCollectionDiagnostics && !matchingDiagnosticsPromise) {
+      refreshMatchingCollectionDiagnostics({ rerender: true });
+    }
   }
 }
 

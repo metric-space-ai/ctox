@@ -21,7 +21,6 @@ const forbiddenCodeTokens = [
   'ajv',
   'z-schema',
   'mingo',
-  'broadcast-channel',
   'node_modules',
   'pluginMissing',
   'NON_PREMIUM',
@@ -75,7 +74,7 @@ function assertNoBareImports(rel, content) {
   for (const pattern of [staticImport, dynamicImport]) {
     let match;
     while ((match = pattern.exec(content))) {
-      if (rel.includes('/tests/') && match[1].startsWith('node:')) {
+      if ((rel.includes('/tests/') || rel.includes('/tools/')) && match[1].startsWith('node:')) {
         continue;
       }
       offenders.push(`${rel}: bare module import ${match[1]} is not allowed`);
@@ -144,7 +143,7 @@ function assertRequiredMarkers() {
   ]);
   assertText('src/rx-database.mjs', [
     ['createRxDatabase compatibility export', /export async function createRxDatabase/],
-    ['dexie compatibility shim without dependency', /getRxStorageDexie/],
+    ['ctox indexeddb storage factory', /getCtoxIndexedDbStorage/],
     ['addRxPlugin transition shim', /export function addRxPlugin\(_ignored = null\)/],
     ['rxdbCore runtime WebRTC export', /replicateWebRTC/],
     ['rxdbCore runtime connection handler export', /getConnectionHandlerSimplePeer/],

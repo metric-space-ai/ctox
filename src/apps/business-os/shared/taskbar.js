@@ -39,6 +39,7 @@ export function createTaskbar({ container, windowManager, eventBus, t, ownerLabe
   function render() {
     const wins = windowManager.listWindows();
     container.innerHTML = '';
+    document.body?.toggleAttribute('data-shell-taskbar-open', wins.length > 0);
     if (!wins.length) return;
 
     const groups = new Map();
@@ -206,6 +207,7 @@ export function createTaskbar({ container, windowManager, eventBus, t, ownerLabe
         }
       }
       container.innerHTML = '';
+      document.body?.removeAttribute('data-shell-taskbar-open');
     },
   };
 }

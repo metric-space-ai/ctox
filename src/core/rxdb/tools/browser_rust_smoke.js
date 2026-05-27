@@ -17,6 +17,8 @@
  *   SMOKE_MODE=workspace-large-file-viewer-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=tickets-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=migration-version-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
@@ -51,6 +53,7 @@
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=workspace-large-file-viewer-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=command-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=tickets-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html#browser SMOKE_MODE=browser-lifecycle-ui node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html#browser SMOKE_MODE=browser-handoff-ui node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=migration-version-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
@@ -172,6 +175,8 @@ if (![
   'workspace-large-file-viewer-rust-to-browser',
   'workspace-large-file-viewer-restart-rust-to-browser',
   'command-browser-to-rust',
+  'tickets-browser-to-rust',
+  'outbound-active-ui',
   'business-os-ui-regression',
   'browser-lifecycle-ui',
   'browser-handoff-ui',
@@ -200,6 +205,8 @@ if (![
   throw new Error(`Unsupported SMOKE_MODE=${smokeMode}`);
 }
 if ([
+  'tickets-browser-to-rust',
+  'outbound-active-ui',
   'signaling-error-browser-status',
   'peer-lifecycle-browser-status',
   'checkpoint-error-browser-status',
@@ -1045,8 +1052,12 @@ function assertHealthyAdvancedStatusContract(status) {
     problems.push(`checks.rxdbRuntimeAppLocal is ${JSON.stringify(status.checks?.rxdbRuntimeAppLocal)}`);
   }
   if (status.rxdbRuntime?.name !== 'ctox-rxdb-js'
+    || status.rxdbRuntime?.publicName !== 'CTOX DB'
     || status.rxdbRuntime?.source !== 'app-local'
-    || status.rxdbRuntime?.packageManager !== 'none') {
+    || status.rxdbRuntime?.packageManager !== 'none'
+    || status.rxdbRuntime?.apiContract !== 'ctox-db-business-os-v1'
+    || status.rxdbRuntime?.upstreamCompatibility !== 'not-upstream-rxdb'
+    || status.rxdbRuntime?.upstreamCompatible !== false) {
     problems.push(`rxdbRuntime is not app-local ctox-rxdb-js: ${JSON.stringify(status.rxdbRuntime)}`);
   }
   if (!Array.isArray(status.sync?.capabilities) || !status.sync.capabilities.includes('ctox-peer-session-v1')) {
@@ -1873,6 +1884,17 @@ function ensureCtoxSmokeBinary() {
         browserDiagnostics.assetResponseErrors += 1;
         console.error(`[browser:response] ${response.status()} ${url}`);
       }
+    });
+    const outboundScreenshotDir = process.env.SMOKE_OUTBOUND_SCREENSHOT_DIR
+      ? path.resolve(process.env.SMOKE_OUTBOUND_SCREENSHOT_DIR)
+      : '';
+    if (outboundScreenshotDir) fs.mkdirSync(outboundScreenshotDir, { recursive: true });
+    await page.exposeFunction('__ctoxCaptureSmokeScreenshot', async (name) => {
+      if (!outboundScreenshotDir) return '';
+      const safeName = String(name || 'screenshot').replace(/[^a-z0-9_.-]+/gi, '-').replace(/^-+|-+$/g, '') || 'screenshot';
+      const target = path.join(outboundScreenshotDir, `${safeName}.png`);
+      await page.screenshot({ path: target, fullPage: false });
+      return target;
     });
     await page.exposeFunction('__ctoxSyncRustSeedFile', () => syncRustSeedFile(rustSeed));
     await page.exposeFunction('__ctoxUpdateRustSeedFile', (content) => {
@@ -3377,10 +3399,14 @@ function ensureCtoxSmokeBinary() {
       let appChunkReplicationState = null;
       let appCommandReplicationState = null;
       let appQueueReplicationState = null;
+      let appTicketItemReplicationState = null;
+      let appTicketEventReplicationState = null;
       let ownsDb = false;
       let advancedStatusVersion = advancedStatusEvidenceVersion || '';
       let advancedStatusRuntime = advancedStatusEvidenceRuntime || null;
       const replicationStates = [];
+      const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust';
+      const outboundActiveUiSmokeMode = smokeMode === 'outbound-active-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
         || smokeMode === 'command-burst-browser-to-rust'
@@ -3392,8 +3418,9 @@ function ensureCtoxSmokeBinary() {
         || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
-      const needsCommandCollections = commandSmokeMode || materializeSmokeMode;
-      const needsFileCollections = (!commandSmokeMode || materializeSmokeMode) && !deferInitialFileCollections;
+      const needsCommandCollections = commandSmokeMode || materializeSmokeMode || ticketSmokeMode || outboundActiveUiSmokeMode;
+      const needsTicketCollections = ticketSmokeMode;
+      const needsFileCollections = (!commandSmokeMode && !outboundActiveUiSmokeMode || materializeSmokeMode) && !deferInitialFileCollections;
       const setupPhaseTimings = {};
 
       let appState = null;
@@ -3425,6 +3452,18 @@ function ensureCtoxSmokeBinary() {
             status: document.querySelector('[data-status]')?.textContent || '',
             bodyClass: document.body?.className || '',
           })}`);
+        }
+        if (needsTicketCollections
+          && (!appState.db.raw?.ctox_ticket_items || !appState.db.raw?.ctox_ticket_events)) {
+          const ticketSchemaMod = await import('/modules/tickets/schema.js');
+          const ticketCollections = {};
+          if (!appState.db.raw?.ctox_ticket_items) {
+            ticketCollections.ctox_ticket_items = { schema: ticketSchemaMod.collections.ctox_ticket_items };
+          }
+          if (!appState.db.raw?.ctox_ticket_events) {
+            ticketCollections.ctox_ticket_events = { schema: ticketSchemaMod.collections.ctox_ticket_events };
+          }
+          await appState.db.raw.addCollections(ticketCollections);
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
@@ -3458,6 +3497,22 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appChunkReplicationState, 'desktop_file_chunks');
           setupPhaseTimings.fileCollectionsReadyMs = Date.now() - fileCollectionsStartedAt;
         }
+        if (needsTicketCollections) {
+          const ticketCollectionsStartedAt = Date.now();
+          const ticketItemBridge = await appState.sync.startCollection('ctox_ticket_items');
+          const ticketEventBridge = await appState.sync.startCollection('ctox_ticket_events');
+          ticketItemBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_ticket_items replication error', error));
+          ticketEventBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_ticket_events replication error', error));
+          appTicketItemReplicationState = ticketItemBridge?.state || null;
+          appTicketEventReplicationState = ticketEventBridge?.state || null;
+          await bounded(appTicketItemReplicationState?.awaitInitialReplication?.(), 15000);
+          await bounded(appTicketEventReplicationState?.awaitInitialReplication?.(), 15000);
+          await bounded(appTicketItemReplicationState?.awaitInSync?.(), 15000);
+          await bounded(appTicketEventReplicationState?.awaitInSync?.(), 15000);
+          await waitForNativePeerOpen(appTicketItemReplicationState, 'ctox_ticket_items');
+          await waitForNativePeerOpen(appTicketEventReplicationState, 'ctox_ticket_events');
+          setupPhaseTimings.ticketCollectionsReadyMs = Date.now() - ticketCollectionsStartedAt;
+        }
         db = appState.db.raw;
       } else {
         const config = await (await fetch('/api/business-os/sync/config')).json();
@@ -3467,7 +3522,7 @@ function ensureCtoxSmokeBinary() {
         const ctoxSchemaMod = await import('/modules/ctox/schema.js');
         db = await rxdb.createRxDatabase({
           name: `ctox_smoke_${Date.now()}`,
-          storage: rxdb.getRxStorageDexie(),
+          storage: rxdb.getCtoxIndexedDbStorage(),
           multiInstance: false,
           closeDuplicates: true,
         });
@@ -3675,6 +3730,7 @@ function ensureCtoxSmokeBinary() {
           'matching',
           'conversations',
           'outbound',
+          'tickets',
           'shiftflow',
           'buchhaltung',
           'coding-agents',
@@ -3791,6 +3847,10 @@ function ensureCtoxSmokeBinary() {
             selectors: ['[data-outbound-root]', '.outbound-left', '.outbound-center'],
             minTextLength: 30,
           },
+          tickets: {
+            selectors: ['[data-tickets-root]', '[data-ticket-list]', '[data-ticket-detail]', '[data-ticket-context]'],
+            minTextLength: 40,
+          },
           shiftflow: {
             selectors: ['[data-shiftflow-root]', '#shiftflow-left', '#shiftflow-center', '#schedulerView'],
             minTextLength: 80,
@@ -3905,13 +3965,49 @@ function ensureCtoxSmokeBinary() {
             await waitForAbsent('[data-documents-new-form]', 'documents drawer close');
             evidence.actions.push('documents-new-drawer');
           } else if (moduleId === 'knowledge') {
+            const root = document.querySelector('[data-knowledge-root]');
+            if (!root) throw new Error('Knowledge root is missing');
+            const selectableEvidence = () => {
+              const selected = root.querySelector('.knowledge-item[aria-current="true"], .knowledge-bundle[aria-current="true"]');
+              const firstItem = root.querySelector('.knowledge-item');
+              return {
+                ok: Boolean(selected || firstItem),
+                selected: selected?.getAttribute('data-knowledge-id') || selected?.getAttribute('data-bundle-id') || '',
+                firstItem: firstItem?.getAttribute('data-knowledge-id') || '',
+              };
+            };
+            let selectionReady = selectableEvidence();
+            if (!selectionReady.ok) {
+              await seedBusinessOsUiRegressionFixtures();
+              selectionReady = await waitFor(selectableEvidence, 15000, 'knowledge selectable item');
+            }
+            if (!root.querySelector('.knowledge-item[aria-current="true"]') && selectionReady.firstItem) {
+              root.querySelector('.knowledge-item')?.click();
+              await waitFor(() => {
+                const selected = root.querySelector('.knowledge-item[aria-current="true"]');
+                return {
+                  ok: Boolean(selected),
+                  selected: selected?.getAttribute('data-knowledge-id') || '',
+                };
+              }, 5000, 'knowledge selected item after click');
+            }
             for (const tab of ['runbooks', 'data', 'skill']) {
-              const button = document.querySelector(`[data-tab="${tab}"]`);
-              if (!button) throw new Error(`Knowledge tab button missing: ${tab}`);
+              const ready = await waitFor(() => {
+                const button = root.querySelector(`[data-tab="${tab}"]`);
+                return {
+                  ok: Boolean(button && !button.disabled && button.getAttribute('aria-disabled') !== 'true'),
+                  tab,
+                  exists: Boolean(button),
+                  disabled: button?.disabled ?? null,
+                  ariaDisabled: button?.getAttribute('aria-disabled') ?? null,
+                };
+              }, 10000, `knowledge tab ${tab} ready`);
+              const button = root.querySelector(`[data-tab="${tab}"]`);
+              if (!button || !ready.ok) throw new Error(`Knowledge tab button missing or disabled: ${tab}`);
               button.click();
               await waitFor(() => {
-                const panel = document.querySelector(`[data-panel="${tab}"]`);
-                const pressed = document.querySelector(`[data-tab="${tab}"]`)?.getAttribute('aria-pressed') === 'true';
+                const panel = root.querySelector(`[data-panel="${tab}"]`);
+                const pressed = root.querySelector(`[data-tab="${tab}"]`)?.getAttribute('aria-pressed') === 'true';
                 return {
                   ok: Boolean(panel && !panel.hidden && pressed),
                   tab,
@@ -3997,6 +4093,25 @@ function ensureCtoxSmokeBinary() {
             }, 5000, 'outbound compact view toggle');
             document.querySelector('#toggle-compact')?.click();
             evidence.actions.push('outbound-compact-view-toggle');
+          } else if (moduleId === 'tickets') {
+            const search = document.querySelector('[data-ticket-search]');
+            const stateFilter = document.querySelector('[data-ticket-state]');
+            if (!search || !stateFilter) throw new Error('Tickets search or state filter controls are missing');
+            search.value = 'regression-smoke';
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+            stateFilter.value = 'open';
+            stateFilter.dispatchEvent(new Event('change', { bubbles: true }));
+            await waitFor(() => ({
+              ok: document.querySelector('[data-ticket-search]')?.value === 'regression-smoke'
+                && document.querySelector('[data-ticket-state]')?.value === 'open',
+              search: document.querySelector('[data-ticket-search]')?.value || '',
+              state: document.querySelector('[data-ticket-state]')?.value || '',
+            }), 5000, 'tickets search and state filter');
+            search.value = '';
+            search.dispatchEvent(new Event('input', { bubbles: true }));
+            stateFilter.value = 'all';
+            stateFilter.dispatchEvent(new Event('change', { bubbles: true }));
+            evidence.actions.push('tickets-search-status-filter');
           } else if (moduleId === 'shiftflow') {
             const scheduler = document.querySelector('#viewSchedulerTabBtn');
             const timesheets = document.querySelector('#viewTimesheetsTabBtn');
@@ -4177,6 +4292,71 @@ function ensureCtoxSmokeBinary() {
           }
           return evidence.actions.length ? evidence : null;
         };
+        const seedBusinessOsUiRegressionFixtures = async () => {
+          const rawDb = appState?.db?.raw;
+          if (!rawDb?.knowledge_items || !rawDb?.knowledge_runbooks || !rawDb?.knowledge_tables) return;
+          const now = Date.now();
+          const upsert = async (collection, document) => {
+            if (collection.incrementalUpsert) {
+              await collection.incrementalUpsert(document);
+              return;
+            }
+            if (collection.upsert) {
+              await collection.upsert(document);
+              return;
+            }
+            try {
+              await collection.insert(document);
+            } catch (error) {
+              throw new Error(`failed to seed Business OS UI regression fixture ${document.id}: ${error?.message || String(error)}`);
+            }
+          };
+          await upsert(rawDb.knowledge_items, {
+            id: 'ui_regression_skillbook',
+            kind: 'skillbook',
+            title: 'UI Regression Skillbook',
+            subtitle: 'Business OS smoke fixture',
+            summary: 'Deterministic fixture for Business OS UI regression tab coverage.',
+            source_path: 'ui-regression',
+            linked_runbook_ids: ['ui_regression_runbook'],
+            updated_at: new Date(now).toISOString(),
+            updated_at_ms: now,
+          });
+          await upsert(rawDb.knowledge_items, {
+            id: 'ui_regression_skill',
+            kind: 'skill',
+            title: 'UI Regression Skill',
+            subtitle: 'Business OS smoke fixture',
+            summary: 'Allows deterministic Knowledge tab interactions in the UI regression harness.',
+            source_path: 'ui-regression',
+            skillbook_id: 'ui_regression_skillbook',
+            linked_runbook_ids: ['ui_regression_runbook'],
+            updated_at: new Date(now).toISOString(),
+            updated_at_ms: now,
+          });
+          await upsert(rawDb.knowledge_runbooks, {
+            id: 'ui_regression_runbook',
+            kind: 'runbook',
+            title: 'UI Regression Runbook',
+            subtitle: 'Business OS smoke fixture',
+            summary: 'Runbook fixture for tab coverage.',
+            prompt: 'Verify the Knowledge module tab surface.',
+            source_path: 'ui-regression',
+            updated_at: new Date(now).toISOString(),
+            updated_at_ms: now,
+          });
+          await upsert(rawDb.knowledge_tables, {
+            id: 'ui_regression_table',
+            kind: 'dataframe',
+            title: 'UI Regression Data',
+            subtitle: 'Business OS smoke fixture',
+            summary: 'Table fixture for tab coverage.',
+            row_count: 1,
+            source_path: 'ui-regression',
+            updated_at: new Date(now).toISOString(),
+            updated_at_ms: now,
+          });
+        };
         const openAndVerifyModule = async (moduleId, opener, label) => {
           const opened = await opener();
           const renderEvidence = await waitForModuleRendered(moduleId);
@@ -4232,6 +4412,7 @@ function ensureCtoxSmokeBinary() {
           return evidence;
         };
 
+        await seedBusinessOsUiRegressionFixtures();
         const startMenu = await openStartMenu();
         if (startMenu.itemCount < 8) {
           throw new Error(`Business OS start menu rendered too few launch targets: ${JSON.stringify(startMenu)}`);
@@ -4665,8 +4846,344 @@ function ensureCtoxSmokeBinary() {
         })}`);
       }
 
+      async function runOutboundActiveUiSmoke() {
+        const state = globalThis.ctoxBusinessOsSmoke?.state;
+        const rawDb = state?.db?.raw;
+        if (!state?.sync?.startCollection || !rawDb?.outbound_campaigns || !rawDb?.outbound_pipeline_items) {
+          throw new Error('Outbound active UI smoke requires Business OS app DB and outbound collections');
+        }
+        const waitFor = async (probe, timeoutMs, label) => {
+          const deadline = Date.now() + timeoutMs;
+          let last = null;
+          while (Date.now() < deadline) {
+            last = await probe();
+            if (last?.ok) return last;
+            await delay(250);
+          }
+          throw new Error(`Timed out waiting for ${label}: ${JSON.stringify(last)}`);
+        };
+        const upsert = async (collection, document) => {
+          if (collection.incrementalUpsert) return collection.incrementalUpsert(document);
+          if (collection.upsert) return collection.upsert(document);
+          const existing = await collection.findOne(document.id).exec();
+          if (existing?.incrementalPatch) return existing.incrementalPatch(document);
+          if (existing?.patch) return existing.patch(document);
+          return collection.insert(document);
+        };
+        const jsonDocs = async (collection) => (await collection.find().exec()).map((doc) => doc.toJSON?.() || doc);
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/"/g, '\\"');
+        };
+        const click = (selector, label) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`${label} not found: ${selector}`);
+          element.click();
+          return true;
+        };
+        const screenshotPaths = [];
+        const capture = async (name) => {
+          const path = await globalThis.__ctoxCaptureSmokeScreenshot?.(name);
+          if (path) screenshotPaths.push(path);
+        };
+        const outboundCollections = [
+          'business_commands',
+          'ctox_queue_tasks',
+          'outbound_campaigns',
+          'outbound_pipeline_items',
+          'outbound_engagements',
+          'outbound_messages',
+          'outbound_approvals',
+          'outbound_sender_assignments',
+          'outbound_account_limits',
+          'outbound_meeting_requests',
+          'outbound_suppression_entries',
+          'outbound_sequences',
+          'outbound_skillbooks',
+          'outbound_letter_templates',
+        ].filter((collection) => rawDb[collection]);
+        const bridges = [];
+        for (const collection of outboundCollections) {
+          const bridge = await state.sync.startCollection(collection);
+          bridges.push(bridge?.state);
+          await bounded(bridge?.state?.awaitInitialReplication?.(), 20000);
+          await bounded(bridge?.state?.awaitInSync?.(), 20000);
+        }
+        const commandBridge = bridges[outboundCollections.indexOf('business_commands')];
+        const queueBridge = bridges[outboundCollections.indexOf('ctox_queue_tasks')];
+        if (commandBridge) await waitForNativePeerOpen(commandBridge, 'business_commands');
+        if (queueBridge) await waitForNativePeerOpen(queueBridge, 'ctox_queue_tasks');
+
+        if (!/#outbound(?:$|[?&])/.test(location.hash)) {
+          location.hash = '#outbound';
+        }
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector('[data-outbound-root]')),
+          activeModule: state.activeModule?.id || '',
+          body: document.body?.dataset?.activeModule || '',
+        }), 60000, 'Outbound module root');
+
+        const now = Date.now();
+        const suffix = String(now).slice(-8);
+        const campaignId = `outbound_active_ui_${suffix}`;
+        const pipelineId = `outbound_active_ui_lead_${suffix}`;
+        const senderAccount = 'email:outbound-smoke@example.com';
+        const recipientEmail = `lead-${suffix}@example.com`;
+        await upsert(rawDb.outbound_campaigns, {
+          id: campaignId,
+          name: 'Outbound Active UI Smoke',
+          objective: 'Browser E2E approval-gated outbound communication',
+          market: 'DACH',
+          status: 'active',
+          owner_id: 'browser-smoke',
+          source_count: 1,
+          company_count: 1,
+          qualified_count: 1,
+          pipeline_count: 1,
+          communication_account_key: senderAccount,
+          communication_account_address: 'outbound-smoke@example.com',
+          payload: {
+            subtitle: 'Browser smoke',
+            scope: 'Approval gate and mailserver queue',
+            communication_account_key: senderAccount,
+            communication_account_address: 'outbound-smoke@example.com',
+            active_outreach: {
+              default_channel: 'email',
+              strategy_text: 'Initial message, user approval, then provider queue.',
+            },
+          },
+          created_at_ms: now,
+          updated_at_ms: now,
+        });
+        await upsert(rawDb.outbound_account_limits, {
+          id: senderAccount,
+          sender_account_id: senderAccount,
+          campaign_id: campaignId,
+          daily_limit: 20,
+          sent_today: 0,
+          daily_sent_count: 0,
+          status: 'ready',
+          send_window: { timezone: 'Europe/Berlin', text: 'Mo-Fr 09:00-17:00' },
+          payload: {},
+          created_at_ms: now,
+          updated_at_ms: now,
+        });
+        await upsert(rawDb.outbound_pipeline_items, {
+          id: pipelineId,
+          campaign_id: campaignId,
+          company_id: `company_${suffix}`,
+          company_name: 'Smoke GmbH',
+          stage: 'lead_qualified',
+          contact_research_status: 'qualified',
+          outreach_status: 'qualified',
+          priority: 'high',
+          contacts: [{
+            id: `contact_${suffix}`,
+            name: 'Erika Smoke',
+            email: recipientEmail,
+          }],
+          contact_id: `contact_${suffix}`,
+          contact_name: 'Erika Smoke',
+          contact_email: recipientEmail,
+          lead_name: 'Erika Smoke',
+          lead_status: 'qualified',
+          payload: {
+            company_id: `company_${suffix}`,
+            contact_id: `contact_${suffix}`,
+            contact_name: 'Erika Smoke',
+            contact_email: recipientEmail,
+            company_name: 'Smoke GmbH',
+            lead_name: 'Erika Smoke',
+          },
+          created_at_ms: now,
+          updated_at_ms: now,
+        });
+
+        await bounded(commandBridge?.awaitInSync?.(), 20000);
+        await waitFor(async () => {
+          const button = document.querySelector(`[data-action="select-campaign"][data-id="${css(campaignId)}"]`);
+          return {
+            ok: Boolean(button),
+            campaignCards: document.querySelectorAll('.outbound-campaign-item').length,
+            bodyText: document.body?.innerText?.slice(0, 300) || '',
+          };
+        }, 15000, 'seeded campaign in left pane');
+        click(`[data-action="select-campaign"][data-id="${css(campaignId)}"]`, 'seeded campaign selector');
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="import-source"][data-id="${css(campaignId)}"]`)),
+          selected: document.querySelector('.outbound-campaign-item[aria-current="true"] strong')?.textContent?.trim() || '',
+        }), 10000, 'seeded campaign selected');
+
+        const outreachToggle = document.querySelector('[data-action="toggle-outreach"]');
+        if (!outreachToggle) throw new Error('Active Outreach toggle not found');
+        if (outreachToggle.getAttribute('aria-pressed') !== 'true') outreachToggle.click();
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="ao-auto-draft"][data-lead-id="${css(pipelineId)}"]`)),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 500) || '',
+        }), 15000, 'lead queue auto-draft action');
+        await capture('outbound-active-01-lead-queue');
+
+        click(`[data-action="ao-auto-draft"][data-lead-id="${css(pipelineId)}"]`, 'auto-draft button');
+        const draftReady = await waitFor(async () => {
+          const messages = await jsonDocs(rawDb.outbound_messages);
+          const message = messages.find((doc) => doc.campaign_id === campaignId && doc.engagement_id);
+          return {
+            ok: Boolean(message && message.approval_status === 'awaiting_approval' && message.send_status === 'awaiting_approval'),
+            message: message ? {
+              id: message.id,
+              approval_status: message.approval_status,
+              send_status: message.send_status,
+              subject: message.subject || '',
+              channel: message.channel || '',
+            } : null,
+            count: messages.length,
+          };
+        }, 60000, 'approval-gated auto draft');
+        const messageId = draftReady.message.id;
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="ao-approve"][data-message-id="${css(messageId)}"]`)),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 700) || '',
+        }), 15000, 'approval card rendered');
+        await capture('outbound-active-02-approval-inbox');
+
+        const preApprovalMessage = (await rawDb.outbound_messages.findOne(messageId).exec())?.toJSON?.();
+        if (!preApprovalMessage || preApprovalMessage.send_status !== 'awaiting_approval') {
+          throw new Error(`approval gate was not enforced before approval: ${JSON.stringify(preApprovalMessage)}`);
+        }
+
+        click(`[data-action="ao-approve"][data-message-id="${css(messageId)}"]`, 'approve message button');
+        await waitFor(async () => {
+          const message = (await rawDb.outbound_messages.findOne(messageId).exec())?.toJSON?.();
+          return {
+            ok: message?.approval_status === 'approved' && message?.send_status === 'approved_not_sent',
+            approval_status: message?.approval_status || '',
+            send_status: message?.send_status || '',
+          };
+        }, 60000, 'approved message ready to send');
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="ao-send-approved"][data-message-id="${css(messageId)}"]`)),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 700) || '',
+        }), 15000, 'ready-to-send action rendered');
+        await capture('outbound-active-03-ready-to-send');
+
+        click(`[data-action="ao-send-approved"][data-message-id="${css(messageId)}"]`, 'send approved button');
+        const queued = await waitFor(async () => {
+          const message = (await rawDb.outbound_messages.findOne(messageId).exec())?.toJSON?.();
+          const commandDocs = (await jsonDocs(rawDb.business_commands))
+            .filter((doc) => doc.module === 'outbound')
+            .slice(-8)
+            .map((doc) => ({
+              id: doc.id,
+              command_type: doc.command_type,
+              record_id: doc.record_id,
+              status: doc.status,
+              error: doc.error || '',
+            }));
+          return {
+            ok: message?.send_status === 'queued_for_provider' && Boolean(message?.provider_message_id || message?.payload?.provider_queue_id),
+            send_status: message?.send_status || '',
+            provider_message_id: message?.provider_message_id || message?.payload?.provider_queue_id || '',
+            communication_message_key: message?.communication_message_key || message?.payload?.communication_message_key || '',
+            errorBanner: document.querySelector('.outbound-outreach-error')?.textContent?.trim() || '',
+            commands: commandDocs,
+          };
+        }, 60000, 'approved message queued in mailserver');
+        click('[data-action="ao-view"][data-view="engagements"]', 'engagements tab');
+        await waitFor(async () => ({
+          ok: /Im Versand|scheduled_to_send|Versand/.test(document.querySelector('[data-outbound-root]')?.innerText || ''),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 900) || '',
+        }), 15000, 'queued engagement visible');
+        await capture('outbound-active-04-queued-engagement');
+
+        const engagement = (await jsonDocs(rawDb.outbound_engagements))
+          .find((doc) => doc.campaign_id === campaignId && doc.payload?.pipeline_id === pipelineId);
+        const approval = (await jsonDocs(rawDb.outbound_approvals))
+          .find((doc) => doc.message_id === messageId);
+        const conversationLink = document.querySelector('.outbound-outreach-conv-link')?.getAttribute('href') || '';
+        return {
+          mode: smokeMode,
+          campaignId,
+          pipelineId,
+          engagementId: engagement?.id || '',
+          messageId,
+          approvalId: approval?.id || '',
+          approvalGateVerified: true,
+          finalSendStatus: queued.send_status,
+          providerMessageId: queued.provider_message_id,
+          communicationMessageKey: queued.communication_message_key,
+          conversationLink,
+          screenshotPaths,
+          advancedStatusVersion,
+          advancedStatusRuntime,
+        };
+      }
+
+      if (smokeMode === 'outbound-active-ui') {
+        return await runOutboundActiveUiSmoke();
+      }
+
       if (smokeMode === 'business-os-ui-regression') {
         return await runBusinessOsUiRegression();
+      }
+
+      if (ticketSmokeMode) {
+        const now = Date.now();
+        const id = `ticket_command_smoke_${now}`;
+        const title = `WebRTC ticket smoke ${now}`;
+        await db.business_commands.insert({
+          id,
+          command_id: id,
+          module: 'tickets',
+          command_type: 'ctox.ticket.local.create',
+          record_id: '',
+          status: 'pending_sync',
+          inbound_channel: 'tickets',
+          payload: {
+            title,
+            body: 'created by Business OS RxDB/WebRTC smoke',
+            priority: 'medium',
+            labels: ['smoke'],
+          },
+          client_context: { source: 'rxdb-ticket-smoke' },
+          updated_at_ms: now,
+        });
+        await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
+        await bounded(appTicketItemReplicationState?.awaitInSync?.(), 25000);
+        await bounded(appTicketEventReplicationState?.awaitInSync?.(), 25000);
+        const deadline = Date.now() + 60000;
+        while (Date.now() < deadline) {
+          const commandDoc = await db.business_commands.findOne(id).exec();
+          const command = commandDoc?.toJSON?.();
+          const ticketDocs = (await db.ctox_ticket_items.find().exec()).map((doc) => doc.toJSON?.() || doc);
+          const ticket = ticketDocs.find((doc) => doc.title === title && doc.source_system === 'local');
+          if (command && command.status === 'completed' && ticket) {
+            await Promise.all(replicationStates.map((state) => state.cancel?.()));
+            if (ownsDb) await db.close();
+            return {
+              mode: smokeMode,
+              id,
+              status: command.status,
+              taskId: command.task_id || '',
+              ticketKey: ticket.ticket_key || '',
+              ticketSource: ticket.source_system || '',
+              ticketTitle: ticket.title || '',
+            };
+          }
+          await delay(500);
+        }
+        const commandDoc = await db.business_commands.findOne(id).exec();
+        const ticketDocs = (await db.ctox_ticket_items.find({ limit: 10 }).exec()).map((doc) => doc.toJSON?.() || doc);
+        throw new Error(`ticket command ${id} was not completed via RxDB/WebRTC: ${JSON.stringify({
+          command: commandDoc?.toJSON?.() || null,
+          ticketCount: ticketDocs.length,
+          tickets: ticketDocs.map((doc) => ({
+            title: doc.title || '',
+            ticket_key: doc.ticket_key || '',
+            source_system: doc.source_system || '',
+          })),
+          syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
+          syncConfig: globalThis.ctoxBusinessOsSmoke?.state?.sync?.config || null,
+        })}`);
       }
 
       if (commandSmokeMode) {
@@ -5747,6 +6264,20 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_visual_screenshot_dominant_ratio_pct=${result.screenshotEvidence?.dominantColorRatioPct || 0}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'outbound-active-ui') {
+      console.log(`outbound_active_ui_campaign_id=${result.campaignId}`);
+      console.log(`outbound_active_ui_pipeline_id=${result.pipelineId}`);
+      console.log(`outbound_active_ui_engagement_id=${result.engagementId}`);
+      console.log(`outbound_active_ui_message_id=${result.messageId}`);
+      console.log(`outbound_active_ui_approval_id=${result.approvalId}`);
+      console.log(`outbound_active_ui_approval_gate_verified=${result.approvalGateVerified ? 1 : 0}`);
+      console.log(`outbound_active_ui_final_send_status=${result.finalSendStatus || ''}`);
+      console.log(`outbound_active_ui_provider_message_id=${result.providerMessageId || ''}`);
+      console.log(`outbound_active_ui_communication_message_key=${result.communicationMessageKey || ''}`);
+      console.log(`outbound_active_ui_conversation_link=${result.conversationLink || ''}`);
+      console.log(`outbound_active_ui_screenshots=${(result.screenshotPaths || []).join(',')}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
     } else if (result.mode === 'command-burst-browser-to-rust') {
       console.log(`command_count=${result.commandCount}`);
       console.log(`task_count_for_commands=${result.taskCountForCommands}`);
@@ -5781,6 +6312,13 @@ function ensureCtoxSmokeBinary() {
       console.log(`task_count_for_command=${result.taskCountForCommand}`);
       console.log(`status=${result.status}`);
       console.log(`task_status=${result.taskStatus}`);
+    } else if (result.mode === 'tickets-browser-to-rust') {
+      console.log(`command_id=${result.id}`);
+      console.log(`task_id=${result.taskId}`);
+      console.log(`status=${result.status}`);
+      console.log(`ticket_key=${result.ticketKey}`);
+      console.log(`ticket_source=${result.ticketSource}`);
+      console.log(`ticket_title=${result.ticketTitle}`);
     } else {
       if (result.readinessPayload !== rustSeed.content) {
         throw new Error(`browser readiness payload mismatch: ${result.readinessPayload}`);

@@ -8,7 +8,7 @@
  *
  * Examples:
  *   node src/core/rxdb/tools/browser_rust_soak.js
- *   SOAK_CYCLES=12 SOAK_MODES=browser-to-rust,workspace-agent-artifacts-rust-to-browser,workspace-agent-artifacts-stress-rust-to-browser,workspace-agent-artifacts-churn-rust-to-browser,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,migration-version-browser-to-rust,command-burst-browser-to-rust,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,peer-lifecycle-browser-status,checkpoint-error-browser-status,schema-error-browser-status,replication-error-browser-status,replication-push-contract-error-browser-status,file-chunk-metadata-error-browser-status,file-chunk-tombstone-error-browser-status,file-chunk-stale-generation-error-browser-status node src/core/rxdb/tools/browser_rust_soak.js
+ *   SOAK_CYCLES=12 SOAK_MODES=browser-to-rust,tickets-browser-to-rust,workspace-agent-artifacts-rust-to-browser,workspace-agent-artifacts-stress-rust-to-browser,workspace-agent-artifacts-churn-rust-to-browser,workspace-update-rust-to-browser,workspace-large-materialize-rust-to-browser,workspace-large-file-viewer-rust-to-browser,workspace-large-file-viewer-restart-rust-to-browser,migration-version-browser-to-rust,command-burst-browser-to-rust,restart-browser-to-rust,restart-signaling-browser-to-rust,rollover-native-peer-browser-to-rust,tab-freeze-browser-to-rust,network-flap-browser-to-rust,command-midflight-restart-browser-to-rust,signaling-error-browser-status,peer-lifecycle-browser-status,checkpoint-error-browser-status,schema-error-browser-status,replication-error-browser-status,replication-push-contract-error-browser-status,file-chunk-metadata-error-browser-status,file-chunk-tombstone-error-browser-status,file-chunk-stale-generation-error-browser-status node src/core/rxdb/tools/browser_rust_soak.js
  *   SOAK_FAIL_ON_RETRY=1 SOAK_RESULT_PATH=/tmp/rxdb-soak.json node src/core/rxdb/tools/browser_rust_soak.js
  */
 const path = require('path');
@@ -21,6 +21,7 @@ const matrixPath = path.join(__dirname, 'browser_rust_smoke_matrix.js');
 const defaultSoakModes = [
   'browser-to-rust',
   'command-browser-to-rust',
+  'tickets-browser-to-rust',
   'migration-version-browser-to-rust',
   'command-burst-browser-to-rust',
   'command-reload-browser-to-rust',

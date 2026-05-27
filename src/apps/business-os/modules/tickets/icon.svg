@@ -1,0 +1,11 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tickets-icon" x1="10" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+  </defs>
+  <path d="M14 10a5 5 0 0 1 5-5h25l9 9v40a5 5 0 0 1-5 5H19a5 5 0 0 1-5-5V10Z" fill="url(#tickets-icon)" fill-opacity=".12" stroke="url(#tickets-icon)" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M44 5v13h9" stroke="url(#tickets-icon)" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M24 27h18M24 37h18M24 47h12" stroke="url(#tickets-icon)" stroke-width="4" stroke-linecap="round"/>
+</svg>

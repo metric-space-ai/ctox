@@ -20,6 +20,30 @@ import { getOperatingGuVResult, buildHgbBilanzTree, buildHgbGuvTree } from './re
 import { calculateElsterUstva } from './reports/elster.js';
 import { generateDatevCsvString } from './exporters/datev.js';
 
+if (typeof globalThis.DOMParser === 'undefined') {
+  class TestXmlElement {
+    constructor(source) {
+      this.source = source || '';
+    }
+
+    get textContent() {
+      return this.source.replace(/<[^>]+>/g, '').trim();
+    }
+
+    getElementsByTagName(tagName) {
+      const escaped = tagName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const pattern = new RegExp(`<${escaped}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${escaped}>`, 'g');
+      return Array.from(this.source.matchAll(pattern), (match) => new TestXmlElement(match[1]));
+    }
+  }
+
+  globalThis.DOMParser = class TestDomParser {
+    parseFromString(xmlText) {
+      return new TestXmlElement(xmlText);
+    }
+  };
+}
+
 // Simple light-weight testing harness
 const tests = [];
 function test(name, fn) {

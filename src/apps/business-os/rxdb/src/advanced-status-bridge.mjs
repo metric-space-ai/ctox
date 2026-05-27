@@ -28,8 +28,13 @@ export function buildBusinessOsAdvancedStatus({
     ok,
     rxdbRuntime: {
       name: 'ctox-rxdb-js',
+      publicName: 'CTOX DB',
       source: 'app-local',
       packageManager: 'none',
+      compatibility: 'ctox-db-api',
+      upstreamCompatible: false,
+      upstreamCompatibility: 'not-upstream-rxdb',
+      apiContract: 'ctox-db-business-os-v1',
       protocolVersion: snapshot.rxdbProtocolVersion,
     },
     checks: {

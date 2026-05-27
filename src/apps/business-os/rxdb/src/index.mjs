@@ -42,7 +42,7 @@ export {
   addRxPlugin,
   createRxDatabase,
   ctoxRxdbTestInternals,
-  getRxStorageDexie,
+  getCtoxIndexedDbStorage,
   removeRxDatabase,
   rxdbCore,
 } from './rx-database.mjs';

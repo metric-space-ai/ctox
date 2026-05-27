@@ -49,10 +49,12 @@ function openBusinessDialog({
   confirmLabel = 'OK',
   cancelLabel = '',
   defaultValue = '',
+  requireText = '',
   prompt = false,
   kind = 'info',
 } = {}) {
   installDialogStyles();
+  const confirmationText = String(requireText || '').trim();
   const layer = document.createElement('div');
   layer.className = `business-dialog-layer is-${kind}`;
   layer.innerHTML = `
@@ -62,9 +64,16 @@ function openBusinessDialog({
         <p>${escapeHtml(message).replace(/\n/g, '<br>')}</p>
       </div>
       ${prompt ? `<input class="business-dialog-input" data-dialog-input value="${escapeAttr(defaultValue)}">` : ''}
+      ${confirmationText ? `
+        <label class="business-dialog-confirmation">
+          <span>${escapeHtml(confirmTextLabel(kind))}</span>
+          <code>${escapeHtml(confirmationText)}</code>
+          <input class="business-dialog-input" data-dialog-confirmation autocomplete="off" spellcheck="false">
+        </label>
+      ` : ''}
       <div class="business-dialog-actions">
         ${cancelLabel ? `<button class="business-dialog-secondary" type="button" data-dialog-cancel>${escapeHtml(cancelLabel)}</button>` : ''}
-        <button class="business-dialog-primary" type="button" data-dialog-confirm>${escapeHtml(confirmLabel)}</button>
+        <button class="business-dialog-primary" type="button" data-dialog-confirm${confirmationText ? ' disabled' : ''}>${escapeHtml(confirmLabel)}</button>
       </div>
     </section>
   `;
@@ -72,8 +81,13 @@ function openBusinessDialog({
 
   const panel = layer.querySelector('.business-dialog');
   const input = layer.querySelector('[data-dialog-input]');
+  const confirmationInput = layer.querySelector('[data-dialog-confirmation]');
   const confirm = layer.querySelector('[data-dialog-confirm]');
   const cancel = layer.querySelector('[data-dialog-cancel]');
+
+  confirmationInput?.addEventListener('input', () => {
+    confirm.disabled = confirmationInput.value.trim() !== confirmationText;
+  });
 
   return new Promise((resolve) => {
     let done = false;
@@ -92,29 +106,45 @@ function openBusinessDialog({
         event.preventDefault();
         close(prompt ? null : false);
       }
-      if (event.key === 'Enter' && (prompt ? document.activeElement === input : true)) {
+      if (event.key === 'Enter' && canConfirmWithEnter({ kind, prompt, input, confirmationInput, confirm })) {
         event.preventDefault();
         close(prompt ? input.value : true);
       }
     };
     document.addEventListener('keydown', onKeydown);
-    confirm?.addEventListener('click', () => close(prompt ? input.value : true));
+    confirm?.addEventListener('click', () => {
+      if (confirm.disabled) return;
+      close(prompt ? input.value : true);
+    });
     cancel?.addEventListener('click', () => close(prompt ? null : false));
     layer.addEventListener('pointerdown', (event) => {
       if (event.target === layer) close(prompt ? null : false);
     });
     window.requestAnimationFrame(() => {
       layer.classList.add('is-open');
-      (input || confirm || panel)?.focus?.();
+      (input || confirmationInput || (kind === 'danger' && cancel ? cancel : confirm) || panel)?.focus?.();
       input?.select?.();
     });
   });
 }
 
+function canConfirmWithEnter({ kind, prompt, input, confirmationInput, confirm }) {
+  if (prompt) return document.activeElement === input;
+  if (confirmationInput) return document.activeElement === confirmationInput && !confirm?.disabled;
+  if (kind === 'danger') return document.activeElement === confirm;
+  return true;
+}
+
 function dialogTitleForKind(kind, prompt) {
   if (prompt) return 'Eingabe';
-  if (kind === 'danger') return 'Bestätigung';
+  if (kind === 'danger') return 'Destruktive Aktion bestätigen';
   return 'Hinweis';
+}
+
+function confirmTextLabel(kind) {
+  return kind === 'danger'
+    ? 'Zum Fortfahren exakt eingeben:'
+    : 'Zur Bestätigung eingeben:';
 }
 
 function installDialogStyles() {
@@ -184,6 +214,29 @@ function installDialogStyles() {
       padding: 9px 10px;
       font: inherit;
     }
+    .business-dialog-confirmation {
+      display: grid;
+      gap: 6px;
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 720;
+    }
+    .business-dialog-confirmation code {
+      width: fit-content;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      border: 1px solid color-mix(in srgb, var(--danger, #ef7f78) 34%, var(--line));
+      border-radius: 6px;
+      background: color-mix(in srgb, var(--danger, #ef7f78) 10%, var(--surface));
+      color: var(--text);
+      padding: 3px 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 11px;
+    }
+    .business-dialog-confirmation .business-dialog-input {
+      margin-top: 0;
+    }
     .business-dialog-actions {
       display: flex;
       justify-content: flex-end;
@@ -197,6 +250,11 @@ function installDialogStyles() {
       font: inherit;
       font-weight: 760;
       cursor: pointer;
+    }
+    .business-dialog-actions button:disabled {
+      cursor: not-allowed;
+      opacity: .46;
+      filter: grayscale(.25);
     }
     .business-dialog-secondary {
       border: 1px solid var(--hairline, var(--line));

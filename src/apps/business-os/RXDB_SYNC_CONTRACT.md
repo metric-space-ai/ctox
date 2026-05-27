@@ -1,13 +1,33 @@
-# Business OS RxDB Sync Contract
+# Business OS CTOX DB / RxDB Sync Contract
 
 This is the only supported Business OS data path.
 
+## Naming and Compatibility
+
+Business OS uses **CTOX DB** for its browser storage and sync runtime. The
+runtime id is `ctox-rxdb-js` and the native peer is `rxdb-rs`, but this is not
+upstream RxDB and it is not a drop-in replacement for the npm `rxdb` package.
+
+The supported app-facing contract is:
+
+- public runtime: `CTOX DB`
+- runtime id: `ctox-rxdb-js`
+- API contract: `ctox-db-business-os-v1`
+- compatibility marker: `not-upstream-rxdb`
+
+Business OS apps must use the database and collection handles supplied by the
+Business OS shell. They must not import `rxdb` or `rxdb/plugins/...`, and they
+must not rely on arbitrary upstream RxDB plugins, premium gates, or package
+manager behavior.
+
 ## Browser Peer
 
-- RxDB version: `16.20.0`
-- Storage: `getRxStorageDexie()`
+- Runtime: CTOX DB (`ctox-rxdb-js`)
+- Upstream provenance: historical RxDB `16.20.0` fork baseline, not a
+  compatibility promise
+- Storage: CTOX native IndexedDB storage via `getCtoxIndexedDbStorage()`
 - Local database: IndexedDB
-- Transport: RxDB WebRTC replication with `simple-peer`
+- Transport: CTOX DB WebRTC replication over native browser WebRTC APIs
 - Topic per collection: `{sync_room}:{collection}`
 - Room derivation: `ctox-business-os:{instance_id}:{sha256(room_password).base64url[0..22]}`
 - Protocol marker: `ctox-rxdb-protocol-v1`
@@ -23,7 +43,7 @@ This is the only supported Business OS data path.
   Signaling server rejects missing or mismatched `ctox-rxdb-protocol-v1`
   metadata before peers can join Business OS rooms.
 - ICE configuration: optional `ice_servers` / `iceServers` from the launch
-  config, passed to simple-peer as `config.iceServers`
+  config, passed into the native WebRTC peer setup
 
 The browser writes user actions and module commands into local RxDB collections.
 It does not call HTTP command, pull, push, status, session, module metadata, or
@@ -153,6 +173,17 @@ Business OS users are also a projection. Settings user mutations are
 replicated `business_users` collection. The Rust peer projects the canonical
 store table into RxDB SQLite and the browser applies the same session visibility
 rule locally.
+
+Tickets follow the same command/projection rule. The Tickets app writes
+`ctox.ticket.*` commands into `business_commands` for local ticket creation,
+comments, transitions, approvals, execution, verification, writeback, and close
+actions. The Rust peer executes those commands through the native CTOX ticket
+capabilities and projects canonical ticket state back through the
+`ctox_ticket_*` collections, including `ctox_ticket_items`,
+`ctox_ticket_events`, `ctox_ticket_cases`, `ctox_ticket_self_work_items`,
+`ctox_ticket_control_bundles`, `ctox_ticket_approvals`,
+`ctox_ticket_verifications`, and `ctox_ticket_writebacks`. The browser does not
+call a ticket HTTP API.
 
 Runtime settings are projected the same way. Settings runtime/auth mutations are
 `ctox.runtime_settings.save` commands, and the runtime status panel reads the

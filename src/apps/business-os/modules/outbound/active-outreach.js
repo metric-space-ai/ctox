@@ -966,7 +966,81 @@ async function dispatchOutboundCommand(type, recordId, payload, options = {}) {
       ...(options.context || {}),
     },
   };
-  return stateRef.ctx.commandBus.dispatch(command);
+  const result = await stateRef.ctx.commandBus.dispatch(command);
+  const acknowledged = await waitForOutboundCommandProjection(result?.command_id || commandId, options.timeoutMs || 45000);
+  await projectOutboundCommandResult(acknowledged);
+  return acknowledged;
+}
+
+async function waitForOutboundCommandProjection(commandId, timeoutMs) {
+  const collection = stateRef.ctx?.db?.raw?.business_commands;
+  if (!collection || !commandId) {
+    throw new Error('business_commands collection is required for outbound command acknowledgements');
+  }
+  const deadline = Date.now() + timeoutMs;
+  let lastStatus = null;
+  while (Date.now() < deadline) {
+    const doc = await collection.findOne(commandId).exec();
+    const command = doc?.toJSON?.() || null;
+    lastStatus = command?.status || null;
+    if (command && command.status && command.status !== 'pending_sync') {
+      if (command.status === 'failed') {
+        throw new Error(command.error || `Outbound command ${commandId} failed`);
+      }
+      return command;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`Outbound command ${commandId} was not acknowledged by the native RxDB peer (last status: ${lastStatus || 'missing'}).`);
+}
+
+async function projectOutboundCommandResult(command) {
+  const result = command?.result;
+  const raw = stateRef.ctx?.db?.raw;
+  if (!result || !raw) return;
+  const projections = [
+    ['outbound_engagements', result.engagement],
+    ['outbound_messages', result.message],
+    ['outbound_approvals', result.approval],
+    ['outbound_sender_assignments', result.assignment],
+    ['outbound_sequences', result.sequence],
+    ['outbound_skillbooks', result.skillbook],
+    ['outbound_letter_templates', result.template || result.letter_template],
+    ['outbound_meeting_requests', result.meeting_request || result.request],
+  ];
+  for (const [collectionName, record] of projections) {
+    if (!record?.id || !raw[collectionName]) continue;
+    await upsertLocalProjection(raw[collectionName], record);
+  }
+  if (Array.isArray(result.updated)) {
+    for (const record of result.updated) {
+      const collectionName = record?.collection || record?.collection_name;
+      const payload = record?.record || record?.message || record;
+      if (!collectionName || !payload?.id || !raw[collectionName]) continue;
+      await upsertLocalProjection(raw[collectionName], payload);
+    }
+  }
+}
+
+async function upsertLocalProjection(collection, record) {
+  if (collection.incrementalUpsert) {
+    await collection.incrementalUpsert(record);
+    return;
+  }
+  if (collection.upsert) {
+    await collection.upsert(record);
+    return;
+  }
+  const existing = await collection.findOne(record.id).exec();
+  if (existing?.incrementalPatch) {
+    await existing.incrementalPatch(record);
+    return;
+  }
+  if (existing?.patch) {
+    await existing.patch(record);
+    return;
+  }
+  await collection.insert(record);
 }
 
 function setError(msg) {

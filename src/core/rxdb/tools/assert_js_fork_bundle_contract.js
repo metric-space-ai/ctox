@@ -1,178 +1,61 @@
 #!/usr/bin/env node
-const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
 const rxdbRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(rxdbRoot, '..', '..', '..');
-const contractPath = path.join(rxdbRoot, 'js-fork/bundle-contract.json');
+const manifestPath = path.join(repoRoot, 'src/apps/business-os/rxdb/manifest.json');
+const distPath = path.join(repoRoot, 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs');
 const offenders = [];
 
-const contract = readJson(contractPath, 'bundle contract');
-if (contract) assertContract(contract);
+const manifest = readJson(manifestPath);
+if (manifest) {
+  if (manifest.name !== 'ctox-rxdb-js') offenders.push(`${relative(manifestPath)}: name must be ctox-rxdb-js`);
+  if (manifest.public_name !== 'CTOX DB') offenders.push(`${relative(manifestPath)}: public_name must be CTOX DB`);
+  if (manifest.package_manager !== 'none') offenders.push(`${relative(manifestPath)}: package_manager must be none`);
+  if (manifest.api_contract !== 'ctox-db-business-os-v1') offenders.push(`${relative(manifestPath)}: api_contract must be ctox-db-business-os-v1`);
+  if (manifest.upstream_compatible !== false || manifest.upstream_compatibility !== 'not-upstream-rxdb') {
+    offenders.push(`${relative(manifestPath)}: upstream compatibility marker is invalid`);
+  }
+  if (manifest.entry !== 'dist/ctox-rxdb-js.mjs') offenders.push(`${relative(manifestPath)}: entry must be dist/ctox-rxdb-js.mjs`);
+}
+
+const dist = readText(distPath);
+if (dist) {
+  for (const name of [
+    'createRxDatabase',
+    'getCtoxIndexedDbStorage',
+    'replicateWebRTC',
+    'getConnectionHandlerSimplePeer',
+    'buildBusinessOsAdvancedStatus',
+  ]) {
+    if (!new RegExp(`\\b${name}\\b`).test(dist)) {
+      offenders.push(`${relative(distPath)}: missing expected CTOX DB export ${name}`);
+    }
+  }
+  for (const forbidden of ['simple-peer', 'Dexie', 'npm', 'premium access', 'rxdb-premium']) {
+    if (dist.includes(forbidden)) offenders.push(`${relative(distPath)}: forbidden legacy token ${forbidden}`);
+  }
+}
+
+for (const legacy of [
+  path.join(rxdbRoot, 'js-fork'),
+  path.join(repoRoot, 'src/apps/business-os/vendor/rxdb-bundle.mjs'),
+  path.join(repoRoot, 'src/apps/business-os/vendor/rxdb-bundle.provenance.json'),
+]) {
+  if (fs.existsSync(legacy)) {
+    offenders.push(`${relative(legacy)}: legacy generated bundle contract must not be active`);
+  }
+}
 
 if (offenders.length) {
-  console.error(`ctox-rxdb-js bundle contract guard failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
+  console.error(`ctox-db bundle contract guard failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
   process.exit(1);
 }
 
-console.log('ctox-rxdb-js bundle contract guard OK');
+console.log('ctox-db bundle contract guard OK');
 
-function assertContract(parsed) {
-  const sourcePackagePath = resolveRxdb(parsed.source_package);
-  const sourceLockfilePath = resolveRxdb(parsed.source_lockfile);
-  const bundlePath = resolveRxdb(parsed.output_path);
-  const provenancePath = resolveRxdb(parsed.provenance_path);
-  const sourcePackage = readJson(sourcePackagePath, 'source package');
-  const sourceLockfile = readJson(sourceLockfilePath, 'source lockfile');
-  const provenance = readJson(provenancePath, 'bundle provenance');
-
-  if (parsed.name !== 'ctox-rxdb-js-browser-bundle') {
-    offenders.push(`${relative(contractPath)}: unexpected contract name`);
-  }
-  if (parsed.fork_package !== 'ctox-rxdb-js') {
-    offenders.push(`${relative(contractPath)}: fork_package must be ctox-rxdb-js`);
-  }
-  if (parsed.upstream_version !== '16.20.0') {
-    offenders.push(`${relative(contractPath)}: upstream_version must remain pinned to 16.20.0`);
-  }
-  if (parsed.protocol !== 'ctox-rxdb-protocol-v1') {
-    offenders.push(`${relative(contractPath)}: protocol must be ctox-rxdb-protocol-v1`);
-  }
-  if (parsed.package_manager !== 'npm-ci') {
-    offenders.push(`${relative(contractPath)}: package_manager must be npm-ci`);
-  }
-  if (parsed.publish_policy !== 'private-package-only') {
-    offenders.push(`${relative(contractPath)}: publish_policy must be private-package-only`);
-  }
-  if (parsed.version_discipline !== 'upstream-version-pinned-with-ctox-provenance') {
-    offenders.push(`${relative(contractPath)}: version_discipline must pin upstream version with CTOX provenance`);
-  }
-  if (parsed.active_runtime_import !== 'rxdb/dist/ctox-rxdb-js.mjs') {
-    offenders.push(`${relative(contractPath)}: active_runtime_import must point at the app-local no-package-manager runtime`);
-  }
-  if (parsed.legacy_bundle_status !== 'retained-provenance-not-active-business-os-runtime') {
-    offenders.push(`${relative(contractPath)}: legacy_bundle_status must document that vendor bundle is no longer active runtime`);
-  }
-
-  if (sourcePackage) {
-    if (sourcePackage.name !== parsed.fork_package) {
-      offenders.push(`${relative(sourcePackagePath)}: package name must be ${parsed.fork_package}`);
-    }
-    if (sourcePackage.version !== parsed.upstream_version) {
-      offenders.push(`${relative(sourcePackagePath)}: package version must match ${parsed.upstream_version}`);
-    }
-    if (sourcePackage.private !== true) {
-      offenders.push(`${relative(sourcePackagePath)}: package must be private to prevent accidental npm publish`);
-    }
-    if (sourcePackage.publishConfig?.access !== 'restricted') {
-      offenders.push(`${relative(sourcePackagePath)}: publishConfig.access must be restricted`);
-    }
-    if (!/^https:\/\/github\.com\/metric-space-ai\/ctox\.git$/.test(sourcePackage.repository?.url || '')) {
-      offenders.push(`${relative(sourcePackagePath)}: repository must point at the CTOX fork repository`);
-    }
-    if (sourcePackage.repository?.directory !== 'src/core/rxdb/js-fork/source') {
-      offenders.push(`${relative(sourcePackagePath)}: repository.directory must point at the hard-fork source path`);
-    }
-    if (sourcePackage.homepage !== 'https://ctox.dev/') {
-      offenders.push(`${relative(sourcePackagePath)}: homepage must point at ctox.dev, not upstream RxDB`);
-    }
-    if (sourcePackage.ctoxHardFork?.upstream?.version !== parsed.upstream_version) {
-      offenders.push(`${relative(sourcePackagePath)}: missing ctoxHardFork upstream version provenance`);
-    }
-    if (sourcePackage.ctoxHardFork?.publishPolicy?.npm !== parsed.publish_policy) {
-      offenders.push(`${relative(sourcePackagePath)}: ctoxHardFork.publishPolicy.npm must match bundle contract`);
-    }
-    if (sourcePackage.scripts?.postinstall !== 'node -e "process.exit(0)"') {
-      offenders.push(`${relative(sourcePackagePath)}: postinstall must be a deterministic no-op for npm ci`);
-    }
-  }
-  if (sourceLockfile) {
-    if (sourceLockfile.name !== parsed.fork_package) {
-      offenders.push(`${relative(sourceLockfilePath)}: lockfile name must be ${parsed.fork_package}`);
-    }
-    if (sourceLockfile.lockfileVersion !== 3) {
-      offenders.push(`${relative(sourceLockfilePath)}: lockfileVersion must be 3 for reproducible npm ci installs`);
-    }
-    if (sourceLockfile.packages?.['']?.name !== parsed.fork_package) {
-      offenders.push(`${relative(sourceLockfilePath)}: root package metadata must name ${parsed.fork_package}`);
-    }
-    if (sourceLockfile.packages?.['']?.version !== parsed.upstream_version) {
-      offenders.push(`${relative(sourceLockfilePath)}: root package metadata must preserve upstream baseline ${parsed.upstream_version}`);
-    }
-  }
-
-  const bundle = readText(bundlePath, 'browser bundle');
-  if (bundle) {
-    const exportLine = bundle.match(/export\s+\{[^}]+\}/s)?.[0] || '';
-    for (const name of parsed.expected_exports || []) {
-      if (!exportLine.includes(name)) {
-        offenders.push(`${relative(bundlePath)}: missing expected export ${name}`);
-      }
-    }
-  }
-
-  if (provenance) {
-    if (provenance.name !== parsed.name) {
-      offenders.push(`${relative(provenancePath)}: provenance name must match contract`);
-    }
-    if (provenance.source_name !== parsed.fork_package) {
-      offenders.push(`${relative(provenancePath)}: source_name must be ${parsed.fork_package}`);
-    }
-    if (provenance.source_version !== parsed.upstream_version) {
-      offenders.push(`${relative(provenancePath)}: source_version must be ${parsed.upstream_version}`);
-    }
-    if (provenance.protocol !== parsed.protocol) {
-      offenders.push(`${relative(provenancePath)}: protocol must match contract`);
-    }
-    if (provenance.package_manager !== parsed.package_manager) {
-      offenders.push(`${relative(provenancePath)}: package_manager must match contract`);
-    }
-    if (provenance.publish_policy !== parsed.publish_policy) {
-      offenders.push(`${relative(provenancePath)}: publish_policy must match contract`);
-    }
-    if (provenance.version_discipline !== parsed.version_discipline) {
-      offenders.push(`${relative(provenancePath)}: version_discipline must match contract`);
-    }
-    if (provenance.source_lockfile !== path.relative(repoRoot, sourceLockfilePath)) {
-      offenders.push(`${relative(provenancePath)}: source_lockfile must point at the fork package lockfile`);
-    }
-    if (provenance.source_lock_sha256 !== sha256(sourceLockfilePath)) {
-      offenders.push(`${relative(provenancePath)}: source_lock_sha256 is stale; expected ${sha256(sourceLockfilePath)}`);
-    }
-    const hash = sha256(bundlePath);
-    if (provenance.bundle_sha256 !== hash) {
-      offenders.push(`${relative(provenancePath)}: bundle_sha256 is stale; expected ${hash}`);
-    }
-    for (const name of parsed.expected_exports || []) {
-      if (!provenance.expected_exports?.includes(name)) {
-        offenders.push(`${relative(provenancePath)}: missing expected export ${name}`);
-      }
-    }
-  }
-
-  for (const importer of parsed.expected_importers || []) {
-    const importerPath = path.join(repoRoot, importer);
-    const importerSource = readText(importerPath, 'expected importer');
-    if (!importerSource) continue;
-    if (!/rxdb\/dist\/ctox-rxdb-js\.mjs/.test(importerSource)) {
-      offenders.push(`${relative(importerPath)}: does not import the app-local ctox-rxdb-js runtime`);
-    }
-    if (/vendor\/rxdb-bundle\.mjs/.test(importerSource)) {
-      offenders.push(`${relative(importerPath)}: must not import the retained legacy vendor rxdb-bundle.mjs as active runtime`);
-    }
-  }
-}
-
-function resolveRxdb(relativePath) {
-  return path.resolve(rxdbRoot, relativePath);
-}
-
-function readJson(file, label) {
-  if (!fs.existsSync(file)) {
-    offenders.push(`${relative(file)}: missing ${label}`);
-    return null;
-  }
+function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   } catch (error) {
@@ -181,16 +64,13 @@ function readJson(file, label) {
   }
 }
 
-function readText(file, label) {
-  if (!fs.existsSync(file)) {
-    offenders.push(`${relative(file)}: missing ${label}`);
-    return null;
+function readText(file) {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    offenders.push(`${relative(file)}: ${error.message}`);
+    return '';
   }
-  return fs.readFileSync(file, 'utf8');
-}
-
-function sha256(file) {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
 
 function relative(file) {

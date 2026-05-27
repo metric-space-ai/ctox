@@ -4,27 +4,27 @@ Upstream: `pubkey/rxdb` tag **16.20.0** @ commit `c69c94bb107a4d36dbf989de0e5f17
 
 Vendored at `src/core/rxdb/vendor/rxdb-16.20.0/`. See `vendor/rxdb.version` for the pin.
 
-**Scope:** CTOX-as-WebRTC-peer MVP. Browser side now moves to a CTOX-owned
-`ctox-rxdb-js` hard fork built exactly for Business OS data-plane needs. The
-upstream JS snapshot remains a provenance baseline, not a compatibility ceiling.
+**Scope:** CTOX-as-WebRTC-peer MVP. Browser side now uses CTOX DB, a
+CTOX-owned `ctox-rxdb-js` runtime built exactly for Business OS data-plane
+needs. The upstream JS snapshot remains a historical provenance baseline, not
+a maintained npm/TS fork or compatibility ceiling.
 
-## ctox-rxdb-js Hard Fork
+## CTOX DB Browser Runtime
 
-The JavaScript RxDB side is now treated as a hard fork, not as an immutable
-upstream bundle. CTOX Business OS is the source of truth; upstream RxDB
-compatibility is secondary to deterministic WebRTC replication, native peer
-restart recovery, typed diagnostics, protocol/schema parity with `rxdb-rs`, and
-file/chunk materialization semantics. The next fork generation is
-`ctox-rxdb-js`: plain Browser ESM, native IndexedDB, native WebRTC, and
-no package-manager or external runtime dependency surface.
+The JavaScript RxDB side is now treated as CTOX DB, not as upstream npm `rxdb`.
+CTOX Business OS is the source of truth; upstream RxDB compatibility is
+secondary to deterministic WebRTC replication, native peer restart recovery,
+typed diagnostics, protocol/schema parity with `rxdb-rs`, and file/chunk
+materialization semantics. The active browser runtime is `ctox-rxdb-js`: plain
+Browser ESM, native IndexedDB, native WebRTC, and no package-manager or
+external runtime dependency surface.
 
 Fork control files:
 
-- `js-fork/README.md`
-- `js-fork/ctox-rxdb-js.manifest.json`
-- `js-fork/bundle-contract.json`
-- `js/README.md`
-- `js/manifest.json`
+- `../../apps/business-os/rxdb/README.md`
+- `../../apps/business-os/rxdb/manifest.json`
+- `../../apps/business-os/rxdb/src/*.mjs`
+- `../../apps/business-os/rxdb/dist/ctox-rxdb-js.mjs`
 - `tools/assert_js_fork_strategy.js`
 - `tools/assert_js_fork_bundle_contract.js`
 - `tools/assert_js_fork_release_evidence.js`
@@ -51,6 +51,8 @@ This sits outside the rxdb-rs file-port matrix, but it is part of the target dat
 
 | Wave | Status | Area | Files | Notes |
 |---:|---|---|---|---|
+| 527 | done | ctox-rxdb release closure and WebRTC stream backpressure | `src/apps/business-os/rxdb/src/demand-loading-transport.mjs`, `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs`, `src/core/rxdb/tools/browser_rust_smoke.js`, `src/apps/business-os/index.html`, `src/apps/business-os/app.js`, `Cargo.toml`, `src/apps/desktop/Cargo.toml`, `Cargo.lock` | Closed the v0.3.22 release gate. The CTOX DB browser transport now uses a browser-wide WebRTC query-stream semaphore, bounded retry/backoff for retryable `STREAM_LIMIT_EXCEEDED`, and queued pending-query diagnostics so app modules cannot overload the Rust peer with parallel DataChannel query streams. The Business OS UI regression smoke now seeds Knowledge fixtures via `upsert` and waits for async Knowledge selection before tab assertions. Verified no-package-manager runtime import, bundle contract, dependency guards, full UI regression smoke with 19 modules rendered/interacted, zero Browser errors, zero WebSocket warnings, zero request failures, and no final stream-limit errors. |
+| 526 | done | CTOX DB JS runtime ballast removal | `src/apps/business-os/rxdb`, `src/apps/business-os/shared/db.js`, `src/apps/business-os/modules/matching/ui/businessOsDataSource.js`, `src/apps/business-os/vendor/README.md`, `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs`, `src/core/rxdb/tools/assert_js_fork_*.js`, `.github/workflows/ci.yml`, `.github/workflows/release.yml`, `/Users/michaelwelsch/Documents/ctox-dev/public/business-os`, `/Users/michaelwelsch/Documents/ctox-dev/docs/production-readiness.md` | Removed the old active TS/npm RxDB hard-fork path and legacy `vendor/rxdb-bundle.mjs` from the CTOX DB JavaScript data plane. The browser runtime now stays app-local under `src/apps/business-os/rxdb`, CI/release evidence copies the package-manager-free `dist/ctox-rxdb-js.mjs`, and guards reject `src/core/rxdb/js-fork`, `vendor/rxdb-bundle.mjs`, package manifests, lockfiles, package-manager install steps, premium-gate tokens, third-party peer-package imports, and upstream-shaped Dexie storage exports. Business OS now uses `getCtoxIndexedDbStorage()`. Synced ctox-dev public Business OS assets and verified CTOX DB strategy, bundle-contract, dependency-surface, release-evidence, RxDB-only, no-package-manager, compression, multi-tab broker, import smokes, ctox.dev fork strategy, ctox.dev shell asset guard, production dashboard, and the live Business OS UI regression smoke with 19 desktop icons, all primary/secondary modules rendered/interacted, Advanced Status v1, zero Browser errors, zero request failures, and branded CTOX DB runtime fields. |
 | 525 | done | Current WebRTC optimization E2E verification | `/Users/michaelwelsch/Documents/ctox-dev/public/business-os`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/sync-business-os-shell-assets.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/docs/production-readiness.md`, `src/core/rxdb/tools/browser_rust_smoke.js` | Verified the current RxDB/WebRTC optimization state and repaired ctox-dev public Business OS asset drift. `guard:webrtc-frame-stream` initially failed because `public/business-os/rxdb/dist/ctox-rxdb-js.mjs` was stale and lacked the current `ctox-rxdb-frame-v1` frame-stream code; `sync:business-os-shell` resynced it from Core, and the public bundle now byte-matches `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs`. Verified `guard:webrtc-frame-stream`, `guard:business-os-shell-assets`, `guard:rxdb-data-plane`, `smoke:business-os-shell`, and the focused direct E2E smoke. The direct E2E smoke passed `rust-to-browser`, `browser-to-rust`, `command-browser-to-rust`, `business-os-ui-regression`, `workspace-agent-artifacts-rust-to-browser`, and `workspace-large-file-viewer-restart-rust-to-browser` on first attempt, including 103 chunks / 1,260,036 bytes through File Viewer after native peer restart. |
 | 524 | done | Cloudflare cost guard CI and TURN cache | `/Users/michaelwelsch/Documents/ctox-dev/cloudflare-service-hotfix/src/index.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/assert-cloudflare-cost-guard.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/smoke-turn-edge-route.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/assert-turn-diagnostics.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/assert-production-ops.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/.github/workflows/production-readiness.yml`, `/Users/michaelwelsch/Documents/ctox-dev/package.json`, `/Users/michaelwelsch/Documents/ctox-dev/docs/production-readiness.md` | Pinned the post-limit Cloudflare cost controls into CI and reduced repeated TURN credential churn. `guard:cloudflare-cost` now rejects broad public website Worker routes, public registry dumps, missing strict Signaling route scope, missing service rate limiting, and missing TURN credential caching. The Production Readiness workflow runs that guard directly. The `/turn-ice` route caches successful Cloudflare Realtime TURN credentials per edge key for 80% of the one-hour TTL, and the route smoke proves two equivalent credential requests make only one mocked upstream TURN API call. Deployed `service` Worker version `5ee4e633-12fd-4003-827c-53c49d7c5561`; live unauthenticated `/registry/dump` and `/turn-ice` fail closed while `/registry/hc` stays public healthy. |
 | 523 | done | Cloudflare cost guard | `/Users/michaelwelsch/Documents/ctox-dev/cloudflare-service-hotfix/wrangler.toml`, `/Users/michaelwelsch/Documents/ctox-dev/cloudflare-service-hotfix/src/index.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/scripts/assert-production-ops.mjs`, `/Users/michaelwelsch/Documents/ctox-dev/docs/production-readiness.md` | Removed broad `metricspace.org/*` and `www.metricspace.org/*` Worker routes after the daily Cloudflare Worker limit was exhausted. A live registry dump showed scanner traffic for `.env`, WordPress, phpinfo, Swagger, and other random paths had been routed through the `service` Worker and stored as registry endpoint state. The deployed Worker is now scoped to explicit API routes plus `ctox.dev/turn-ice*`, registry debug/mutation endpoints require the operator key, and `guard:production-ops` rejects future broad public website Worker routes. Deployed `service` version `a3a16af5-e036-4108-8fbe-a5039b00b546`. |

@@ -141,6 +141,35 @@
   cursor: default;
 }
 
+.documents-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(132px, max-content) minmax(104px, max-content) minmax(132px, max-content);
+  align-items: center;
+  gap: 8px;
+}
+
+.documents-filter-bar .ctox-pane-search,
+.documents-filter-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.documents-filter-control {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1120px) {
+  .documents-filter-bar {
+    grid-template-columns: minmax(0, 1fr) minmax(118px, 1fr);
+  }
+
+  .documents-filter-bar .ctox-pane-search {
+    grid-column: 1 / -1;
+  }
+}
+
 .documents-upload input {
   position: absolute;
   inline-size: 1px;
@@ -616,6 +645,18 @@
   gap: 8px;
 }
 
+.documents-form-status {
+  min-height: 18px;
+  margin: -2px 0 0;
+  color: var(--danger, #b94a45);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.documents-form-status[hidden] {
+  display: none;
+}
+
 .documents-drawer-actions-three {
   grid-template-columns: 1fr 1fr 1fr;
 }
@@ -667,6 +708,14 @@
   font: inherit;
   font-weight: 760;
   cursor: pointer;
+}
+
+.documents-runbook-form button:disabled,
+.documents-drawer-actions button:disabled,
+.documents-workflow-actions button:disabled,
+.documents-knowledge-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .documents-markdown-editor {
@@ -1105,6 +1154,14 @@
   box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.06);
 }
 
+.documents-workflow-actions button:disabled:hover,
+.documents-drawer-actions button:disabled:hover,
+.documents-runbook-form button:disabled:hover,
+.documents-knowledge-link:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 .documents-workflow-actions button:active,
 .documents-drawer-actions button:active,
 .documents-runbook-form button:active,
@@ -1139,4 +1196,31 @@
 /* Elegant transition for sliding right-hand runbook workflow panel */
 .documents-workflow {
   transition: transform var(--spring-duration) var(--spring-snappy), opacity var(--spring-duration) ease;
+}
+
+body[data-active-module="documents"] .workspace-pane-right {
+  min-width: 260px;
+}
+
+body[data-active-module="documents"] .workspace-col-resizer,
+body[data-active-module="documents"] [data-resizer] {
+  min-height: 100%;
+}
+
+body[data-active-module="documents"] .workspace-col-resizer::before,
+body[data-active-module="documents"] [data-resizer]::before {
+  border-radius: 0;
+  opacity: 0.42;
+}
+
+body[data-active-module="documents"] .workspace-col-resizer::before {
+  height: calc(100% - 16px);
+}
+
+body[data-active-module="documents"] [data-resizer]::before {
+  top: 0;
+  bottom: 0;
+  height: auto;
+  min-height: 100%;
+  transform: translateX(-50%);
 }

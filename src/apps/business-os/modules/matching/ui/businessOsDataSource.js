@@ -17,17 +17,45 @@ let rawDbPromise = null;
 let injectedRawDatabase = null;
 const cacheByCollection = new Map();
 const hydratedRemoteCollections = new Set();
+let diagnosticsCache = null;
 
 export function setBusinessOsRawDatabase(raw) {
   injectedRawDatabase = raw && typeof raw === 'object' ? raw : null;
   dbPromise = null;
   rawDbPromise = null;
+  diagnosticsCache = null;
   cacheByCollection.clear();
   hydratedRemoteCollections.clear();
 }
 
 export async function getContactsCollection() {
   return { database: await getDatabase() };
+}
+
+export async function getMatchingCollectionDiagnostics({ probePull = false } = {}) {
+  if (!probePull && diagnosticsCache) return structuredCloneSafe(diagnosticsCache);
+
+  const collections = await Promise.all(
+    ['matching_requirements', 'matching_objects', 'matching_results'].map(async (collectionName) => {
+      const local = await describeLocalCollection(collectionName);
+      const pull = probePull ? describeLocalPullEquivalent(collectionName, local) : null;
+      return {
+        collection: collectionName,
+        schemaVersion: Number(matchingSchemas?.[collectionName]?.version ?? 0),
+        localCount: local.count,
+        localError: local.error,
+        sync: describeRxdbSyncCollection(collectionName, local),
+        pull
+      };
+    })
+  );
+
+  diagnosticsCache = {
+    checkedAt: new Date().toISOString(),
+    databaseName: DB_NAME,
+    collections
+  };
+  return structuredCloneSafe(diagnosticsCache);
 }
 
 export async function getDatabase() {
@@ -55,10 +83,10 @@ async function createRawDatabase() {
     return injectedRawDatabase;
   }
   const rxdb = await loadRxdb();
-  const { createRxDatabase, getRxStorageDexie } = rxdb;
+  const { createRxDatabase, getCtoxIndexedDbStorage } = rxdb;
   const raw = await createRxDatabase({
     name: DB_NAME,
-    storage: getRxStorageDexie(),
+    storage: getCtoxIndexedDbStorage(),
     multiInstance: false,
     closeDuplicates: true,
   });
@@ -172,6 +200,7 @@ async function saveDocument(name, input) {
 }
 
 function invalidateCacheForRemote(remote) {
+  diagnosticsCache = null;
   for (const [name, mapped] of Object.entries(COLLECTION_MAP)) {
     if (mapped === remote) cacheByCollection.delete(name);
   }
@@ -227,12 +256,82 @@ function compareBySort(a, b, sortSpec) {
 
 function fromPersistedDocument(name, row) {
   const data = row?.data && typeof row.data === 'object' ? row.data : row;
+  const normalized = normalizePersistedDataForUi(name, data || {}, row || {});
+  const kind = row?.kind || data?.__ctox_kind || inferKindFromData(name, data || {}) || inferKind(name);
   return {
-    ...data,
-    definitionId: data?.definitionId || row?.definition_id || '',
-    schemaVersion: data?.schemaVersion || row?.schema_version || '',
-    __ctox_kind: row?.kind || data?.__ctox_kind || inferKind(name)
+    ...normalized,
+    definitionId: normalized?.definitionId || data?.definitionId || row?.definition_id || '',
+    schemaVersion: normalized?.schemaVersion || data?.schemaVersion || row?.schema_version || '',
+    __ctox_kind: kind
   };
+}
+
+function normalizePersistedDataForUi(name, data, row) {
+  if (!data || typeof data !== 'object') return {};
+
+  if ((name === 'requirements' || name === 'requirementSources' || name === 'sources') && data.requirement && typeof data.requirement === 'object') {
+    const requirement = data.requirement;
+    const source = data.source && typeof data.source === 'object' ? data.source : {};
+    const requirementSource = data.requirementSource && typeof data.requirementSource === 'object' ? data.requirementSource : {};
+    return {
+      ...data,
+      ...requirement,
+      id: requirement.id || data.id || row.id,
+      title: requirement.title || data.title || row.title || '',
+      sourceId: requirement.sourceId || requirement.source_id || source.id || data.sourceId || data.source_id || '',
+      sourceName: requirement.sourceName || source.name || source.legalName || data.sourceName || '',
+      sourceLogoUrl: source.logoUrl || source.logo_url || '',
+      parsed: requirementSource.parsed || data.parsed || null,
+      rawText: requirementSource.rawText || requirementSource.raw_text || data.rawText || ''
+    };
+  }
+
+  if (name === 'objects' && data.object && typeof data.object === 'object') {
+    const object = data.object;
+    return {
+      ...data,
+      ...object,
+      id: object.id || data.id || row.id,
+      name: object.name || data.name || row.title || '',
+      taxonomy: object.taxonomy || object.currentRole || object.desiredPosition || data.taxonomy || '',
+      skills: object.skills || data.skills || [],
+      languages: object.languages || data.languages || [],
+      education: object.education || data.education || [],
+      experience: object.experience || data.experience || [],
+      executiveInfo: object.executiveInfo || data.executiveInfo || {}
+    };
+  }
+
+  if (name === 'matches' && data.match && typeof data.match === 'object') {
+    const match = data.match;
+    const requirement = data.requirement && typeof data.requirement === 'object' ? data.requirement : {};
+    const object = data.object && typeof data.object === 'object' ? data.object : {};
+    const source = data.source && typeof data.source === 'object' ? data.source : {};
+    return {
+      ...data,
+      ...match,
+      id: match.id || data.id || row.id,
+      sourceId: match.sourceId || match.source_id || source.id || requirement.sourceId || requirement.source_id || '',
+      requirementId: match.requirementId || match.requirement_id || requirement.id || '',
+      objectId: match.objectId || match.object_id || object.id || '',
+      items: match.items || data.items || data.evidence || [],
+      score: match.score ?? data.score
+    };
+  }
+
+  return data;
+}
+
+function inferKindFromData(name, data) {
+  if (!data || typeof data !== 'object') return '';
+  if (data.__ctox_kind) return data.__ctox_kind;
+  if (data.requirement) return 'requirement';
+  if (data.object) return 'object';
+  if (data.match) return 'match';
+  if (name === 'matches' && (data.requirementId || data.requirement_id || data.objectId || data.object_id)) return 'match';
+  if (name === 'objects' && (data.name || data.firstName || data.lastName || data.currentRole)) return 'object';
+  if ((name === 'requirements' || name === 'requirementSources') && (data.title || data.sourceId || data.source_id)) return 'requirement';
+  return '';
 }
 
 function toPersistedDocument(name, doc) {
@@ -265,6 +364,37 @@ function belongsToUiCollection(name, doc) {
   if (name === 'objects') return kind === 'object' || kind === 'object';
   if (name === 'matches') return kind === 'match' || kind === 'result';
   return true;
+}
+
+async function describeLocalCollection(collectionName) {
+  try {
+    const raw = await getRawDatabase();
+    const rxCollection = raw?.[collectionName];
+    if (!rxCollection?.find) return { count: 0, error: 'collection unavailable' };
+    const rows = await rxCollection.find().exec();
+    return { count: Array.isArray(rows) ? rows.length : 0, error: '' };
+  } catch (error) {
+    return { count: 0, error: String(error?.message || error || 'unknown error') };
+  }
+}
+
+function describeRxdbSyncCollection(collectionName, local) {
+  return {
+    ok: !local.error,
+    mode: 'rxdb-webrtc',
+    count: Number(local.count || 0),
+    error: local.error || ''
+  };
+}
+
+function describeLocalPullEquivalent(collectionName, local) {
+  return {
+    ok: !local.error,
+    status: 'rxdb-local',
+    collection: collectionName,
+    count: Number(local.count || 0),
+    error: local.error || ''
+  };
 }
 
 function inferKind(name) {

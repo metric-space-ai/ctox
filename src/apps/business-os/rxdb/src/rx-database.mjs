@@ -19,13 +19,13 @@ import {
   replicateWebRTC,
 } from './replication-webrtc.mjs';
 
-export function getRxStorageDexie() {
+export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
 }
 
 export async function createRxDatabase({
   name,
-  storage = getRxStorageDexie(),
+  storage = getCtoxIndexedDbStorage(),
   multiInstance = false,
   closeDuplicates = true,
 } = {}) {
@@ -73,7 +73,7 @@ export function rxdbCore() {
     buildProtocolPayload,
     canonicalJson,
     createRxDatabase,
-    getRxStorageDexie,
+    getCtoxIndexedDbStorage,
     getConnectionHandlerSimplePeer,
     replicateWebRTC,
     removeRxDatabase,

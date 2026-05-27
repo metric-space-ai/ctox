@@ -1,7 +1,12 @@
 {
   "name": "ctox-rxdb-js",
+  "public_name": "CTOX DB",
   "format": "browser-esm",
   "package_manager": "none",
+  "api_contract": "ctox-db-business-os-v1",
+  "compatibility": "ctox-db-api",
+  "upstream_compatible": false,
+  "upstream_compatibility": "not-upstream-rxdb",
   "protocol": "ctox-rxdb-protocol-v1",
   "entry": "dist/ctox-rxdb-js.mjs",
   "source_entry": "src/index.mjs",

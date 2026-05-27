@@ -40,10 +40,12 @@ assertActiveNotesModuleDoesNotUseLegacyNotesnookBuild();
 assertSyncWarmupDoesNotBlockBoot();
 assertConnectionSmokeRequiresAdvancedStatusBootBudget();
 assertLoginDoesNotDefaultToAdmin();
+assertCtoxDbBrandingContract();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
   const content = readFileSync(file, 'utf8');
+  assertNoUpstreamRxdbImports(file, content);
   for (const rule of forbidden) {
     if (rule.frontendOnly && !isFrontendFile(file)) continue;
     if (rule.pattern.test(content)) offenders.push(`${rel}: ${rule.name}`);
@@ -82,6 +84,84 @@ function assertLoginDoesNotDefaultToAdmin() {
   }
   if (!/const\s+pairedConfig\s*=\s*await\s+readBusinessOsLaunchConfig\(\)/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: loadSession must await pairing config before authenticating');
+  }
+}
+
+function assertCtoxDbBrandingContract() {
+  const sharedDbPath = join(appRoot, 'shared/db.js');
+  const contractPath = join(appRoot, 'RXDB_SYNC_CONTRACT.md');
+  const appReadmePath = join(appRoot, 'README.md');
+  const runtimeReadmePath = join(appRoot, 'rxdb/README.md');
+  const runtimeManifestPath = join(appRoot, 'rxdb/manifest.json');
+  const advancedStatusBridgePath = join(appRoot, 'rxdb/src/advanced-status-bridge.mjs');
+  const rootReadmePath = join(repoRoot, 'README.md');
+  const businessOsDocPath = join(repoRoot, 'docs/business-os.md');
+
+  const sharedDb = readFileSync(sharedDbPath, 'utf8');
+  for (const marker of [
+    "publicName: 'CTOX DB'",
+    "compatibility: 'ctox-db-api'",
+    'upstreamCompatible: false',
+    "upstreamCompatibility: 'not-upstream-rxdb'",
+    "apiContract: 'ctox-db-business-os-v1'",
+  ]) {
+    if (!sharedDb.includes(marker)) {
+      offenders.push(`src/apps/business-os/shared/db.js: CTOX DB runtime branding missing ${marker}`);
+    }
+  }
+
+  const runtimeManifest = JSON.parse(readFileSync(runtimeManifestPath, 'utf8'));
+  if (runtimeManifest.public_name !== 'CTOX DB') {
+    offenders.push('src/apps/business-os/rxdb/manifest.json: public_name must be CTOX DB');
+  }
+  if (runtimeManifest.api_contract !== 'ctox-db-business-os-v1') {
+    offenders.push('src/apps/business-os/rxdb/manifest.json: api_contract must be ctox-db-business-os-v1');
+  }
+  if (runtimeManifest.upstream_compatible !== false || runtimeManifest.upstream_compatibility !== 'not-upstream-rxdb') {
+    offenders.push('src/apps/business-os/rxdb/manifest.json: must explicitly reject upstream RxDB compatibility');
+  }
+
+  const advancedStatusBridge = readFileSync(advancedStatusBridgePath, 'utf8');
+  for (const marker of [
+    "publicName: 'CTOX DB'",
+    "apiContract: 'ctox-db-business-os-v1'",
+    "upstreamCompatibility: 'not-upstream-rxdb'",
+    'upstreamCompatible: false',
+  ]) {
+    if (!advancedStatusBridge.includes(marker)) {
+      offenders.push(`src/apps/business-os/rxdb/src/advanced-status-bridge.mjs: CTOX DB status branding missing ${marker}`);
+    }
+  }
+
+  for (const [path, required] of [
+    [contractPath, ['CTOX DB', 'upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1', "must not import `rxdb`"]],
+    [appReadmePath, ['CTOX DB', 'not upstream npm `rxdb`', 'ctox-db-business-os-v1', "Do not import `rxdb`"]],
+    [runtimeReadmePath, ['CTOX DB', 'not upstream RxDB', 'not a drop-in replacement', 'ctox-db-business-os-v1']],
+    [rootReadmePath, ['CTOX DB', 'not upstream npm `rxdb`', 'not a drop-in replacement']],
+    [businessOsDocPath, ['CTOX DB', 'not a drop-in replacement for upstream npm `rxdb`']],
+  ]) {
+    const content = readFileSync(path, 'utf8');
+    for (const marker of required) {
+      if (!content.includes(marker)) {
+        offenders.push(`${relative(repoRoot, path)}: CTOX DB compatibility docs missing ${marker}`);
+      }
+    }
+  }
+}
+
+function assertNoUpstreamRxdbImports(file, content) {
+  if (!isFrontendFile(file)) return;
+  const rel = relative(repoRoot, file);
+  const importPatterns = [
+    /\bimport\s+(?:[^'"]+\s+from\s+)?['"]rxdb(?:\/plugins\/[^'"]*)?['"]/,
+    /\bimport\s*\(\s*['"]rxdb(?:\/plugins\/[^'"]*)?['"]\s*\)/,
+    /\brequire\s*\(\s*['"]rxdb(?:\/plugins\/[^'"]*)?['"]\s*\)/,
+  ];
+  for (const pattern of importPatterns) {
+    if (pattern.test(content)) {
+      offenders.push(`${rel}: Business OS apps must use CTOX DB shell handles, not upstream rxdb imports`);
+      return;
+    }
   }
 }
 

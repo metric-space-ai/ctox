@@ -2,8 +2,8 @@
   "overview": "Overview",
   "teamAndStatus": "Team & Status",
   "addEmployee": "Add Employee",
-  "searchEmployees": "Search employees...",
-  "searchEmployeesAria": "Search employees",
+  "searchEmployees": "Search employees in list & schedule...",
+  "searchEmployeesAria": "Search employees in list and schedule",
   "filterDepartment": "Filter department",
   "allDepartments": "All Departments",
   "deptService": "Service",
@@ -25,7 +25,7 @@
   "nextWeek": "Next week",
   "employeeTimeline": "Employee Timeline",
   "projectTimeline": "Project Timeline",
-  "publishSchedule": "📅 Publish Schedule",
+  "publishSchedule": "Publish Schedule",
   "employee": "Employee",
   "projects": "Projects",
   "timesheetsToolbarTitle": "Target/Actual Comparison & Hour Approval",
@@ -142,5 +142,11 @@
   "billingTitle": "Billing & Aggregation",
   "autoPlannedNotes": "Automatically planned by CTOX Assistant",
   "invoiceDraftDownloadSuccess": "Invoice draft successfully created and downloaded! 📝\n\nYou can import this file directly into the CTOX Invoicing module.",
-  "shift": "Shift"
+  "shift": "Shift",
+  "publishNoShifts": "No shifts in this week.",
+  "publishAlreadyDone": "Week is already published.",
+  "confirmPublishSchedule": "Do you want to publish {0} shift(s) for week {1}?",
+  "publishInProgress": "Publishing...",
+  "publishSuccess": "{0} shift(s) published.",
+  "publishFailed": "Publish failed."
 }

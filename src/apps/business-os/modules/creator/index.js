@@ -1,4 +1,5 @@
 import { CtoxResizer } from '../../shared/resizer.js';
+import { showBusinessConfirm } from '../../shared/dialogs.js';
 
 const PRESETS = {
   'standard-mgmt': {
@@ -66,11 +67,135 @@ const state = {
   appLayout: 'full-workspace',
   appCollections: ['inventory_records', 'inventory_transactions'],
   appVersion: 'v1',
+  specPrompt: '',
   generatedFiles: {},
   contextMenu: null,
   contextMenuCleanup: null,
-  resizerCleanup: null
+  resizerCleanup: null,
+  isOptimizing: false,
+  isDeploying: false
 };
+
+export function normalizeModuleId(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+export function normalizeCollectionName(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_]/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '');
+}
+
+export function deriveSpecFromPrompt(prompt) {
+  const cleanPrompt = String(prompt || '').trim();
+  const lowerPrompt = cleanPrompt.toLowerCase();
+  let guessedTitle = 'Spezialanwendung';
+  let guessedId = 'spezialapp';
+  let guessedDesc = cleanPrompt;
+  let guessedCategory = 'Management';
+  let guessedLayout = 'full-workspace';
+  let guessedCollections = ['records'];
+
+  if (lowerPrompt.includes('pflanze') || lowerPrompt.includes('blume') || lowerPrompt.includes('garten') || lowerPrompt.includes('botanik')) {
+    guessedTitle = 'Pflanzen-Tracker';
+    guessedId = 'pflanzen-tracker';
+    guessedDesc = 'Übersicht über Büropflanzen, deren Standorte und Gieß-Erinnerungen.';
+    guessedCategory = 'Utilities';
+    guessedLayout = 'pane';
+    guessedCollections = ['plants', 'watering_logs'];
+  } else if (lowerPrompt.includes('auto') || lowerPrompt.includes('fahrzeug') || lowerPrompt.includes('fleet') || lowerPrompt.includes('fuhrpark') || lowerPrompt.includes('kfz')) {
+    guessedTitle = 'Fuhrparkverwaltung';
+    guessedId = 'fuhrpark';
+    guessedDesc = 'Fahrzeuge, Kilometerstände, TÜV-Termine und Wartungsprotokolle im Überblick.';
+    guessedCategory = 'Management';
+    guessedLayout = 'full-workspace';
+    guessedCollections = ['vehicles', 'maintenance_logs', 'refuels'];
+  } else if (lowerPrompt.includes('kunde') || lowerPrompt.includes('crm') || lowerPrompt.includes('sales') || lowerPrompt.includes('kontakt')) {
+    guessedTitle = 'Kundenverwaltung (CRM)';
+    guessedId = 'crm-kontakte';
+    guessedDesc = 'Zentrales CRM zur Verwaltung von Leads, Kontakten und Interaktionsberichten.';
+    guessedCategory = 'Finance';
+    guessedLayout = 'full-workspace';
+    guessedCollections = ['customers', 'interactions'];
+  } else if (lowerPrompt.includes('ticket') || lowerPrompt.includes('support') || lowerPrompt.includes('helpdesk') || lowerPrompt.includes('fehler')) {
+    guessedTitle = 'Support Desk';
+    guessedId = 'supportdesk';
+    guessedDesc = 'Helpdesk-System zur Bearbeitung von Kundenanfragen, Störungstickets und Fehlermeldungen.';
+    guessedCategory = 'Management';
+    guessedLayout = 'pane';
+    guessedCollections = ['tickets', 'ticket_comments'];
+  } else if (lowerPrompt.includes('zeit') || lowerPrompt.includes('stunde') || lowerPrompt.includes('timer') || lowerPrompt.includes('time')) {
+    guessedTitle = 'Zeiterfassung';
+    guessedId = 'zeiterfassung';
+    guessedDesc = 'Tool zur schnellen Erfassung von Arbeitszeiten und Projektstunden.';
+    guessedCategory = 'Productivity';
+    guessedLayout = 'full-workspace';
+    guessedCollections = ['time_logs', 'projects'];
+  } else if (lowerPrompt.includes('möbel') || lowerPrompt.includes('inventar') || lowerPrompt.includes('office') || lowerPrompt.includes('anlage') || lowerPrompt.includes('lager')) {
+    guessedTitle = 'Inventarverwaltung';
+    guessedId = 'inventar';
+    guessedDesc = 'Schnelles Tracken von Büroausstattung, Mobiliar und IT-Hardware.';
+    guessedCategory = 'Management';
+    guessedLayout = 'full-workspace';
+    guessedCollections = ['inventory_items', 'audits'];
+  } else {
+    const cleanPromptStr = cleanPrompt.replace(/[^a-zA-Z0-9\s]/g, '').trim();
+    const words = cleanPromptStr.split(/\s+/).filter(w => w.length > 3);
+    if (words.length > 0) {
+      guessedTitle = words[0].charAt(0).toUpperCase() + words[0].slice(1);
+      if (words[1]) guessedTitle += ` ${words[1].charAt(0).toUpperCase()}${words[1].slice(1)}`;
+      guessedId = normalizeModuleId(guessedTitle) || guessedId;
+    }
+    guessedDesc = cleanPrompt.length > 100 ? `${cleanPrompt.substring(0, 97)}...` : cleanPrompt;
+    guessedCollections = [`${guessedId}_records`, `${guessedId}_history`];
+  }
+
+  return {
+    id: normalizeModuleId(guessedId),
+    title: guessedTitle,
+    desc: guessedDesc,
+    category: guessedCategory,
+    layout: guessedLayout,
+    collections: guessedCollections.map(normalizeCollectionName).filter(Boolean)
+  };
+}
+
+export function validateCreatorSpec({ appId, appTitle, appDesc, appCollections }) {
+  const errors = [];
+  if (!normalizeModuleId(appId)) errors.push('Modul-ID fehlt oder ist ungültig.');
+  if (!String(appTitle || '').trim()) errors.push('Titel fehlt.');
+  if (!String(appDesc || '').trim()) errors.push('Beschreibung fehlt.');
+  const collections = Array.isArray(appCollections) ? appCollections.map(normalizeCollectionName).filter(Boolean) : [];
+  if (collections.length === 0) errors.push('Mindestens eine RxDB Collection ist erforderlich.');
+  return errors;
+}
+
+export function computeCreatorActionState({ prompt, specPrompt, appId, appTitle, appDesc, appCollections, isOptimizing = false, isDeploying = false }) {
+  const promptText = String(prompt || '').trim();
+  const specText = String(specPrompt || '').trim();
+  const validationErrors = validateCreatorSpec({ appId, appTitle, appDesc, appCollections });
+  const hasPrompt = Boolean(promptText);
+  const hasFreshSpec = hasPrompt && specText === promptText;
+  const isBusy = Boolean(isOptimizing || isDeploying);
+  const optimizeReady = hasPrompt && !isBusy;
+  const deployReady = hasFreshSpec && validationErrors.length === 0 && !isBusy;
+  let diagnostic = 'Prompt fehlt. Beschreibe zuerst die App.';
+  if (isOptimizing) diagnostic = 'Spezifikation wird aktualisiert.';
+  else if (isDeploying) diagnostic = 'Installation läuft.';
+  else if (hasPrompt && !hasFreshSpec) diagnostic = 'Spezifikation ist nicht aktuell. Bitte zuerst optimieren.';
+  else if (hasFreshSpec && validationErrors.length > 0) diagnostic = validationErrors[0];
+  else if (deployReady) diagnostic = 'Spezifikation ist aktuell und installierbar.';
+
+  return { hasPrompt, hasFreshSpec, validationErrors, optimizeReady, deployReady, diagnostic };
+}
 
 export async function mount(ctx) {
   state.ctx = ctx;
@@ -114,32 +239,51 @@ async function ensureStyles() {
 
 function setupResizers(host) {
   const containerEl = host.querySelector('[data-creator-root]') || host;
-  const resizerEl = host.querySelector('[data-resizer="left"]');
-  if (!resizerEl) return () => {};
+  const resizers = [];
+  const configs = [
+    {
+      side: 'left',
+      selector: '[data-resizer="left"]',
+      cssVar: '--creator-left-width',
+      storageKey: 'ctox.creator.layout.leftWidth',
+      defaultWidth: 320,
+      minWidth: 260,
+      maxWidth: 550,
+    },
+    {
+      side: 'right',
+      selector: '[data-resizer="right"]',
+      cssVar: '--creator-right-width',
+      storageKey: 'ctox.creator.layout.rightWidth',
+      defaultWidth: 300,
+      minWidth: 240,
+      maxWidth: 520,
+    },
+  ];
 
-  const cssVar = '--creator-left-width';
-  const storageKey = 'ctox.creator.layout.leftWidth';
+  for (const config of configs) {
+    const resizerEl = host.querySelector(config.selector);
+    if (!resizerEl) continue;
 
-  // Read saved width
-  const savedWidth = localStorage.getItem(storageKey);
-  if (savedWidth) {
-    containerEl.style.setProperty(cssVar, `${savedWidth}px`);
+    const savedWidth = parseInt(localStorage.getItem(config.storageKey) || '', 10);
+    const initialWidth = Number.isFinite(savedWidth) ? savedWidth : config.defaultWidth;
+    containerEl.style.setProperty(config.cssVar, `${initialWidth}px`);
+
+    resizers.push(new CtoxResizer({
+      resizerEl,
+      containerEl,
+      cssVar: config.cssVar,
+      side: config.side,
+      minWidth: config.minWidth,
+      maxWidth: config.maxWidth,
+      onResize: (width) => {
+        localStorage.setItem(config.storageKey, String(Math.round(width)));
+      }
+    }));
   }
 
-  const resizer = new CtoxResizer({
-    resizerEl,
-    containerEl,
-    cssVar,
-    side: 'left',
-    minWidth: 260,
-    maxWidth: 550,
-    onResize: (width) => {
-      localStorage.setItem(storageKey, width);
-    }
-  });
-
   return () => {
-    resizer.destroy();
+    for (const resizer of resizers) resizer.destroy();
   };
 }
 
@@ -155,6 +299,12 @@ function wireUi(host) {
   const selectPreset = host.querySelector('#select-preset-prompt');
   const inputPrompt = host.querySelector('#ai-prompt-input');
   const btnApplyPrompt = host.querySelector('#btn-apply-prompt');
+  const specDiagnostics = host.querySelector('#creator-spec-diagnostics');
+  const syncDot = host.querySelector('#deploy-sync-dot');
+  const syncText = host.querySelector('#deploy-sync-text');
+  state.specPrompt = '';
+  state.isOptimizing = false;
+  state.isDeploying = false;
 
   // Accordion Expand/Collapse Trigger
   const accordionTrigger = host.querySelector('#expert-accordion-btn');
@@ -162,6 +312,7 @@ function wireUi(host) {
   const accordionChevron = host.querySelector('.accordion-chevron');
   accordionTrigger.addEventListener('click', () => {
     const isCollapsed = accordionContent.classList.contains('is-collapsed');
+    accordionTrigger.setAttribute('aria-expanded', String(isCollapsed));
     if (isCollapsed) {
       accordionContent.classList.remove('is-collapsed');
       accordionChevron.style.transform = 'rotate(180deg)';
@@ -180,15 +331,17 @@ function wireUi(host) {
     inputPrompt.value = preset.prompt;
 
     // Automatically fill advanced values
-    inputId.value = preset.id;
+    inputId.value = normalizeModuleId(preset.id);
     inputTitle.value = preset.title;
     inputDesc.value = preset.desc;
     selectCategory.value = preset.category;
     selectLayout.value = preset.layout;
-    state.appCollections = [...preset.collections];
+    state.appCollections = preset.collections.map(normalizeCollectionName).filter(Boolean);
 
     renderCollectionsList(host);
     syncStateFromInputs();
+    state.specPrompt = inputPrompt.value.trim();
+    updateCreatorActionState();
 
     addConsoleLog(`[INFO] Vorlage '${preset.title}' erfolgreich geladen. Spezifikation im Hintergrund angepasst.`, 'info');
   });
@@ -205,119 +358,113 @@ function wireUi(host) {
       return;
     }
 
-    btnApplyPrompt.disabled = true;
+    state.isOptimizing = true;
     btnApplyPrompt.innerHTML = `
       <svg class="animate-spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="animation: pulse-sync 1s infinite alternate; margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
       KI analysiert Prompt...
     `;
+    updateCreatorActionState();
 
-    addConsoleLog('==================================================', 'info');
-    addConsoleLog('[KI-OPERATOR] Analysiere Anwendungsbeschreibung...', 'info');
-    await new Promise(r => setTimeout(r, 600));
+    try {
+      addConsoleLog('==================================================', 'info');
+      addConsoleLog('[KI-OPERATOR] Analysiere Anwendungsbeschreibung...', 'info');
+      await new Promise(r => setTimeout(r, 600));
 
-    const lowerPrompt = prompt.toLowerCase();
-    let guessedTitle = 'Spezialanwendung';
-    let guessedId = 'spezialapp';
-    let guessedDesc = prompt;
-    let guessedCategory = 'Management';
-    let guessedLayout = 'full-workspace';
-    let guessedCollections = ['records'];
+      const spec = deriveSpecFromPrompt(prompt);
 
-    if (lowerPrompt.includes('pflanze') || lowerPrompt.includes('blume') || lowerPrompt.includes('garten') || lowerPrompt.includes('botanik')) {
-      guessedTitle = 'Pflanzen-Tracker';
-      guessedId = 'pflanzen-tracker';
-      guessedDesc = 'Übersicht über Büropflanzen, deren Standorte und Gieß-Erinnerungen.';
-      guessedCategory = 'Utilities';
-      guessedLayout = 'pane';
-      guessedCollections = ['plants', 'watering_logs'];
-    } else if (lowerPrompt.includes('auto') || lowerPrompt.includes('fahrzeug') || lowerPrompt.includes('fleet') || lowerPrompt.includes('fuhrpark') || lowerPrompt.includes('kfz')) {
-      guessedTitle = 'Fuhrparkverwaltung';
-      guessedId = 'fuhrpark';
-      guessedDesc = 'Fahrzeuge, Kilometerstände, TÜV-Termine und Wartungsprotokolle im Überblick.';
-      guessedCategory = 'Management';
-      guessedLayout = 'full-workspace';
-      guessedCollections = ['vehicles', 'maintenance_logs', 'refuels'];
-    } else if (lowerPrompt.includes('kunde') || lowerPrompt.includes('crm') || lowerPrompt.includes('sales') || lowerPrompt.includes('kontakt')) {
-      guessedTitle = 'Kundenverwaltung (CRM)';
-      guessedId = 'crm-kontakte';
-      guessedDesc = 'Zentrales CRM zur Verwaltung von Leads, Kontakten und Interaktionsberichten.';
-      guessedCategory = 'Finance';
-      guessedLayout = 'full-workspace';
-      guessedCollections = ['customers', 'interactions'];
-    } else if (lowerPrompt.includes('ticket') || lowerPrompt.includes('support') || lowerPrompt.includes('helpdesk') || lowerPrompt.includes('fehler')) {
-      guessedTitle = 'Support Desk';
-      guessedId = 'supportdesk';
-      guessedDesc = 'Helpdesk-System zur Bearbeitung von Kundenanfragen, Störungstickets und Fehlermeldungen.';
-      guessedCategory = 'Management';
-      guessedLayout = 'pane';
-      guessedCollections = ['tickets', 'ticket_comments'];
-    } else if (lowerPrompt.includes('zeit') || lowerPrompt.includes('stunde') || lowerPrompt.includes('timer') || lowerPrompt.includes('time')) {
-      guessedTitle = 'Zeiterfassung';
-      guessedId = 'zeiterfassung';
-      guessedDesc = 'Tool zur schnellen Erfassung von Arbeitszeiten und Projektstunden.';
-      guessedCategory = 'Productivity';
-      guessedLayout = 'full-workspace';
-      guessedCollections = ['time_logs', 'projects'];
-    } else if (lowerPrompt.includes('möbel') || lowerPrompt.includes('inventar') || lowerPrompt.includes('office') || lowerPrompt.includes('anlage') || lowerPrompt.includes('lager')) {
-      guessedTitle = 'Inventarverwaltung';
-      guessedId = 'inventar';
-      guessedDesc = 'Schnelles Tracken von Büroausstattung, Mobiliar und IT-Hardware.';
-      guessedCategory = 'Management';
-      guessedLayout = 'full-workspace';
-      guessedCollections = ['inventory_items', 'audits'];
-    } else {
-      const cleanPromptStr = prompt.replace(/[^a-zA-Z0-9\s]/g, '').trim();
-      const words = cleanPromptStr.split(/\s+/).filter(w => w.length > 3);
-      if (words.length > 0) {
-        guessedTitle = words[0].charAt(0).toUpperCase() + words[0].slice(1);
-        if (words[1]) guessedTitle += ' ' + words[1].charAt(0).toUpperCase() + words[1].slice(1);
-        guessedId = guessedTitle.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9\-]/g, '');
-      }
-      guessedDesc = prompt.length > 100 ? prompt.substring(0, 97) + '...' : prompt;
-      guessedCollections = [guessedId + '_records', guessedId + '_history'];
+      addConsoleLog(`[KI-OPERATOR] Erkenne Domäne & Absicht: ${spec.category}`, 'info');
+      await new Promise(r => setTimeout(r, 300));
+      addConsoleLog(`[KI-OPERATOR] Bestimme Layout-Struktur: ${spec.layout === 'pane' ? 'Spalten-Tracker' : 'Tabellen-Workspace'}`, 'info');
+      addConsoleLog(`[KI-OPERATOR] Generiere RxDB Collections: [${spec.collections.join(', ')}]`, 'info');
+
+      inputId.value = spec.id;
+      inputTitle.value = spec.title;
+      inputDesc.value = spec.desc;
+      selectCategory.value = spec.category;
+      selectLayout.value = spec.layout;
+      state.appCollections = [...spec.collections];
+
+      renderCollectionsList(host);
+      syncStateFromInputs({ preserveFreshSpec: true });
+      state.specPrompt = prompt;
+
+      addConsoleLog(`[SUCCESS] Spezifikation für '${spec.title}' erfolgreich generiert.`, 'success');
+      addConsoleLog('==================================================', 'success');
+
+      state.ctx.notifications.show({
+        title: 'Spezifikation optimiert',
+        message: `Die App-Spezifikation für '${spec.title}' wurde aktualisiert.`,
+        type: 'success'
+      });
+    } catch (error) {
+      state.specPrompt = '';
+      addConsoleLog(`[ERROR] Spezifikation konnte nicht aktualisiert werden: ${error.message}`, 'error');
+      state.ctx.notifications.show({
+        title: 'Spezifikation fehlgeschlagen',
+        message: error.message,
+        type: 'error'
+      });
+    } finally {
+      state.isOptimizing = false;
+      btnApplyPrompt.innerHTML = `
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        Spezifikation optimieren & anwenden
+      `;
+      updateCreatorActionState();
     }
-
-    addConsoleLog(`[KI-OPERATOR] Erkenne Domäne & Absicht: ${guessedCategory}`, 'info');
-    await new Promise(r => setTimeout(r, 300));
-    addConsoleLog(`[KI-OPERATOR] Bestimme Layout-Struktur: ${guessedLayout === 'pane' ? 'Spalten-Tracker' : 'Tabellen-Workspace'}`, 'info');
-    addConsoleLog(`[KI-OPERATOR] Generiere RxDB Collections: [${guessedCollections.join(', ')}]`, 'info');
-
-    // Update inputs
-    inputId.value = guessedId;
-    inputTitle.value = guessedTitle;
-    inputDesc.value = guessedDesc;
-    selectCategory.value = guessedCategory;
-    selectLayout.value = guessedLayout;
-    state.appCollections = [...guessedCollections];
-
-    renderCollectionsList(host);
-    syncStateFromInputs();
-
-    addConsoleLog(`[SUCCESS] Spezifikation für '${guessedTitle}' erfolgreich generiert!`, 'success');
-    addConsoleLog('==================================================', 'success');
-
-    state.ctx.notifications.show({
-      title: 'Spezifikation optimiert',
-      message: `Die App-Spezifikation für '${guessedTitle}' wurde per KI optimiert.`,
-      type: 'success'
-    });
-
-    btnApplyPrompt.disabled = false;
-    btnApplyPrompt.innerHTML = `
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-      Spezifikation optimieren & anwenden
-    `;
   });
 
-  const syncStateFromInputs = () => {
-    state.appId = inputId.value.trim().toLowerCase().replace(/[^a-z0-9\-]/g, '');
+  const syncStateFromInputs = ({ preserveFreshSpec = false } = {}) => {
+    state.appId = normalizeModuleId(inputId.value);
+    if (inputId.value !== state.appId) inputId.value = state.appId;
     state.appTitle = inputTitle.value.trim();
     state.appDesc = inputDesc.value.trim();
     state.appCategory = selectCategory.value;
     state.appLayout = selectLayout.value;
+    if (!preserveFreshSpec) state.specPrompt = '';
 
     generateAllFiles();
+    updateCreatorActionState();
   };
+
+  const updateCreatorActionState = () => {
+    const actionState = computeCreatorActionState({
+      prompt: inputPrompt.value,
+      specPrompt: state.specPrompt,
+      appId: inputId.value,
+      appTitle: inputTitle.value,
+      appDesc: inputDesc.value,
+      appCollections: state.appCollections,
+      isOptimizing: state.isOptimizing,
+      isDeploying: state.isDeploying
+    });
+    btnApplyPrompt.disabled = !actionState.optimizeReady;
+    btnDeploy.disabled = !actionState.deployReady;
+    btnApplyPrompt.setAttribute('aria-disabled', String(btnApplyPrompt.disabled));
+    btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
+    btnApplyPrompt.title = actionState.hasPrompt
+      ? 'Prompt analysieren und Spezifikation aktualisieren'
+      : 'Bitte zuerst einen Prompt eingeben.';
+    btnDeploy.title = actionState.deployReady
+      ? 'Frische Spezifikation generieren und installieren'
+      : actionState.diagnostic;
+    btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
+    if (specDiagnostics) {
+      specDiagnostics.textContent = actionState.diagnostic;
+      specDiagnostics.dataset.state = actionState.deployReady ? 'ready' : actionState.hasPrompt ? 'pending' : 'blocked';
+    }
+    if (!state.isDeploying && syncText && syncDot) {
+      syncDot.style.background = '';
+      syncText.textContent = actionState.diagnostic;
+      syncDot.className = actionState.deployReady ? 'sync-dot is-ready' : 'sync-dot is-blocked';
+    }
+    return actionState;
+  };
+
+  inputPrompt.addEventListener('input', () => {
+    state.specPrompt = '';
+    updateCreatorActionState();
+  });
 
   // Text inputs changed manually inside the expandable accordion
   [inputId, inputTitle, inputDesc, selectCategory, selectLayout].forEach(el => {
@@ -333,10 +480,18 @@ function wireUi(host) {
       row.className = 'collection-row';
       row.innerHTML = `
         <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${coll}</span>
-        <button type="button" class="os-icon-btn is-danger" data-remove-idx="${idx}" title="Löschen" style="width: 24px; height: 24px; font-size: 11px;">×</button>
+        <button type="button" class="os-icon-btn is-danger" data-remove-idx="${idx}" aria-label="Collection ${coll} entfernen" title="Collection entfernen" style="width: 24px; height: 24px; font-size: 11px;">×</button>
       `;
-      row.querySelector('[data-remove-idx]').addEventListener('click', (e) => {
+      row.querySelector('[data-remove-idx]').addEventListener('click', async (e) => {
         const removeIdx = parseInt(e.currentTarget.getAttribute('data-remove-idx'), 10);
+        const name = state.appCollections[removeIdx];
+        const confirmed = await showBusinessConfirm(`Collection "${name}" aus der Spezifikation entfernen?`, {
+          title: 'Collection entfernen',
+          confirmLabel: 'Entfernen',
+          cancelLabel: 'Abbrechen',
+          kind: 'danger'
+        });
+        if (!confirmed) return;
         state.appCollections.splice(removeIdx, 1);
         renderCollectionsList(h);
         syncStateFromInputs();
@@ -346,7 +501,7 @@ function wireUi(host) {
   };
 
   btnAddColl.addEventListener('click', () => {
-    const newName = inputNewColl.value.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+    const newName = normalizeCollectionName(inputNewColl.value);
     if (!newName) return;
     if (state.appCollections.includes(newName)) {
       addConsoleLog(`[WARN] Collection '${newName}' existiert bereits.`, 'warning');
@@ -360,29 +515,44 @@ function wireUi(host) {
   });
 
   renderCollectionsList(host);
+  updateCreatorActionState();
 
   // Install / Deploy Button
   btnDeploy.addEventListener('click', async () => {
     try {
       const currentPrompt = inputPrompt.value.trim();
-      if (currentPrompt && !currentPrompt.startsWith('Upgrade für') && (state.appTitle === 'Lagerverwaltung' && state.appId === 'lagerverwaltung')) {
-        // Run a quick silent sync
-        const lowerPrompt = currentPrompt.toLowerCase();
-        if (lowerPrompt.includes('pflanze') || lowerPrompt.includes('blume') || lowerPrompt.includes('garten')) {
-          inputId.value = 'pflanzen-tracker';
-          inputTitle.value = 'Pflanzen-Tracker';
-          state.appCollections = ['plants', 'watering_logs'];
-        } else if (lowerPrompt.includes('zeit') || lowerPrompt.includes('stunde')) {
-          inputId.value = 'zeiterfassung';
-          inputTitle.value = 'Zeiterfassung';
-          state.appCollections = ['time_logs', 'projects'];
-        }
-        syncStateFromInputs();
+      if (!currentPrompt || state.specPrompt !== currentPrompt) {
+        state.ctx.notifications.show({
+          title: 'Spezifikation nicht bereit',
+          message: 'Bitte gib einen Prompt ein und aktualisiere die Spezifikation, bevor du installierst.',
+          type: 'warning'
+        });
+        addConsoleLog('[BLOCKED] Installation verhindert: Prompt fehlt oder Spezifikation ist nicht frisch.', 'warning');
+        updateCreatorActionState();
+        return;
       }
 
-      await triggerAppDeployment(host);
+      const actionState = updateCreatorActionState();
+      if (!actionState.deployReady) {
+        addConsoleLog(`[BLOCKED] Installation verhindert: ${actionState.diagnostic}`, 'warning');
+        return;
+      }
+
+      const confirmed = await showBusinessConfirm(`Modul "${state.appTitle}" (${state.appId}) jetzt installieren? Die generierten Dateien werden in installed-modules/${state.appId}/ geschrieben.`, {
+        title: 'Installation bestätigen',
+        confirmLabel: 'Installieren',
+        cancelLabel: 'Abbrechen'
+      });
+      if (!confirmed) {
+        addConsoleLog('[INFO] Installation abgebrochen. Es wurden keine Dateien geschrieben.', 'info');
+        return;
+      }
+
+      await triggerAppDeployment(host, updateCreatorActionState);
     } catch (e) {
       console.error('[ERROR] triggerAppDeployment failed:', e);
+      state.isDeploying = false;
+      updateCreatorActionState();
     }
   });
 
@@ -425,11 +595,14 @@ function wireUi(host) {
         addConsoleLog(`[INFO] Upgrade-Version erkannt: ${currentVer} -> ${nextVer}. Suffixe aus Collections entfernt.`, 'info');
 
         renderCollectionsList(host);
-        syncStateFromInputs();
+        syncStateFromInputs({ preserveFreshSpec: true });
+        state.specPrompt = inputPrompt.value.trim();
 
         addConsoleLog(`[SUCCESS] Spezifikation für '${manifest.title || upgradeAppId}' erfolgreich geladen. Passen Sie die Prompt-Eingabe an und starten Sie das Deployment!`, 'success');
+        updateCreatorActionState();
       } catch (err) {
         addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
+        updateCreatorActionState();
       }
     }
   })();
@@ -957,7 +1130,7 @@ function wireUi(host) {
 `;
 }
 
-async function triggerAppDeployment(host) {
+async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   const syncDot = host.querySelector('#deploy-sync-dot');
   const syncText = host.querySelector('#deploy-sync-text');
   const btnDeploy = host.querySelector('#btn-deploy-app');
@@ -976,14 +1149,16 @@ async function triggerAppDeployment(host) {
       message: 'Bitte fülle alle Pflichtfelder (Modul ID, Titel, Beschreibung) aus.',
       type: 'error'
     });
-    addConsoleLog('[FEHLER] Spezifikation unvollständig! ID, Titel und Beschreibung sind erforderlich.', 'error');
+    addConsoleLog('[FEHLER] Spezifikation unvollständig. ID, Titel und Beschreibung sind erforderlich.', 'error');
     return;
   }
 
   // Visual lock UI
+  state.isDeploying = true;
   btnDeploy.disabled = true;
   syncDot.className = 'sync-dot is-saving';
   syncText.textContent = 'Speichere Modul...';
+  updateCreatorActionState();
 
   // Visual delay logs to mimic compiler
   addConsoleLog('==================================================', 'info');
@@ -1091,7 +1266,8 @@ async function triggerAppDeployment(host) {
     syncDot.className = 'sync-dot';
     syncDot.style.background = 'var(--danger)';
     syncText.textContent = 'Fehler beim Speichern';
-    btnDeploy.disabled = false;
+    state.isDeploying = false;
+    updateCreatorActionState();
   }
 }
 

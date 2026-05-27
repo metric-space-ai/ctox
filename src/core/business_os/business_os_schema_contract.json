@@ -1149,6 +1149,281 @@
     ],
     "additionalProperties": true
   },
+  "ctox_ticket_approvals": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_cases": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_control_bundles": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_event_routing_state": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_items": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_label_assignments": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_self_work_items": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_self_work_notes": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_verifications": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "ctox_ticket_writebacks": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "desktop_file_chunks": {
     "version": 0,
     "primaryKey": "id",
@@ -2407,6 +2682,50 @@
     ],
     "additionalProperties": true
   },
+  "outbound_letter_templates": {
+    "title": "outbound_letter_templates",
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "campaign_id": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "title": {
+        "type": "string"
+      },
+      "salutation": {
+        "type": "string"
+      },
+      "closing": {
+        "type": "string"
+      },
+      "body_template": {
+        "type": "string"
+      },
+      "version_number": {
+        "type": "number"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "title",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "outbound_meeting_requests": {
     "version": 0,
     "primaryKey": "id",
@@ -2809,6 +3128,73 @@
       "sequence_policy_text",
       "approval_policy",
       "payload",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "outbound_skillbooks": {
+    "title": "outbound_skillbooks",
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "skillbook_id": {
+        "type": "string",
+        "maxLength": 100
+      },
+      "title": {
+        "type": "string"
+      },
+      "version": {
+        "type": "string"
+      },
+      "version_number": {
+        "type": "number"
+      },
+      "mission": {
+        "type": "string"
+      },
+      "non_negotiable_rules": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "workflow_backbone": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "routing_taxonomy": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "stop_rules": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "skillbook_id",
+      "title",
+      "version",
       "created_at_ms",
       "updated_at_ms"
     ],

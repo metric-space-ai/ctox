@@ -1190,18 +1190,18 @@ records
           <p class="connectivity-intro">
             CTOX can be public, routed through ctox.dev, or private behind NAT.
             The browser only needs the static Business OS shell and a pairing
-            config. Data moves through RxDB WebRTC replication between browser
+            config. Data moves through CTOX DB WebRTC replication between browser
             IndexedDB and the Rust daemon's SQLite store.
           </p>
 
           <div class="connectivity-map" aria-label="Business OS WebRTC data path">
             <div class="connectivity-node">
               <b>Browser</b>
-              <span><code>rxdb-bundle.mjs</code>, Dexie, IndexedDB, module shell.</span>
+              <span><code>ctox-rxdb-js.mjs</code>, CTOX DB, IndexedDB, module shell.</span>
             </div>
             <div class="connectivity-path">
               <small>same room password</small>
-              <b>RxDB WebRTC collections</b>
+              <b>CTOX DB WebRTC collections</b>
               <span>module catalog, runtime state, commands, files, channel data.</span>
             </div>
             <div class="connectivity-node">

@@ -1,7 +1,7 @@
 // V1.5 chunk envelope decoder. Handles both the plain form (documents array
 // inline) and the compressed form (deflate + base64). Browsers use native
-// `DecompressionStream("deflate")`; Node falls back to `zlib.inflateRawSync`
-// for test parity (deflate-raw, no zlib wrapper — matches flate2 default).
+// `DecompressionStream("deflate-raw")`; no npm or Node-only decompression
+// package is part of the browser runtime.
 
 export async function decodeChunk(chunk) {
   if (!chunk || typeof chunk !== 'object') {
@@ -34,19 +34,10 @@ function base64ToBytes(b64) {
 }
 
 async function deflateInflate(bytes) {
-  // flate2's DeflateEncoder produces RAW deflate (no zlib header).
-  // Browsers expose this as "deflate-raw"; older Node versions don't have
-  // DecompressionStream at all and need node:zlib's inflateRawSync.
   if (typeof globalThis.DecompressionStream === 'function') {
-    try {
-      const stream = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream('deflate-raw'));
-      const buf = await new Response(stream).arrayBuffer();
-      return new TextDecoder().decode(buf);
-    } catch (err) {
-      // Fall through to zlib path if "deflate-raw" isn't supported.
-    }
+    const stream = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream('deflate-raw'));
+    const buf = await new Response(stream).arrayBuffer();
+    return new TextDecoder().decode(buf);
   }
-  const zlib = await import('node:zlib');
-  const inflated = zlib.inflateRawSync(Buffer.from(bytes));
-  return inflated.toString('utf8');
+  throw new Error('DecompressionStream("deflate-raw") is required for compressed CTOX DB chunks');
 }

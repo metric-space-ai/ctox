@@ -1,0 +1,29 @@
+<main class="tickets-module" data-tickets-root>
+  <aside class="tickets-pane tickets-left" aria-label="Tickets">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-ticket-kicker>CTOX</span>
+          <h2 class="ctox-pane-title" data-ticket-title>Tickets</h2>
+        </div>
+      </div>
+      <div class="ctox-pane-tools">
+        <button class="tickets-command-button" type="button" data-ticket-create-local>Neu</button>
+        <input class="ctox-pane-search" data-ticket-search placeholder="Suchen..." />
+        <select class="ctox-pane-filter" data-ticket-state>
+          <option value="all">Alle Status</option>
+          <option value="open">Offen</option>
+          <option value="pending">Pending</option>
+          <option value="blocked">Blockiert</option>
+          <option value="closed">Geschlossen</option>
+        </select>
+      </div>
+      <p class="tickets-command-status" data-ticket-command-status hidden></p>
+    </header>
+    <div class="tickets-list os-scrollbar" data-ticket-list></div>
+  </aside>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Spaltenbreite anpassen"></button>
+  <section class="tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <aside class="tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
+</main>

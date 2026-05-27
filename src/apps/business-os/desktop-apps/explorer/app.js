@@ -43,6 +43,7 @@ export async function mount(container, ctx) {
     selectedId: '',
     rows: [],
     previewUrl: '',
+    lastLoad: null,
   };
 
   container.innerHTML = `
@@ -76,7 +77,6 @@ export async function mount(container, ctx) {
             </div>
             <div class="app-explorer-view-toggle" aria-label="Ansicht">
               <button type="button" class="is-active">Details</button>
-              <button type="button" disabled>Icons</button>
             </div>
           </div>
           <section class="app-explorer-table" data-explorer-table aria-label="Dateien"></section>
@@ -111,12 +111,8 @@ export async function mount(container, ctx) {
   });
   refs.up.addEventListener('click', goUp);
   refs.refresh.addEventListener('click', loadRows);
-  refs.newFolder.addEventListener('click', createFolder);
-  refs.upload.addEventListener('click', () => refs.fileInput.click());
-  refs.fileInput.addEventListener('change', async () => {
-    await uploadFiles(refs.fileInput.files);
-    refs.fileInput.value = '';
-  });
+  refs.newFolder.addEventListener('click', promptCreateFolder);
+  refs.upload.addEventListener('click', openUploadDialog);
   refs.root.addEventListener('dragover', (event) => {
     if (!isFilesystemSource()) return;
     event.preventDefault();
@@ -150,30 +146,48 @@ export async function mount(container, ctx) {
     const collection = ctx.db?.collection?.(state.activeSource.id);
     if (!collection) {
       state.rows = [];
-      refs.table.replaceChildren(message(`Collection "${state.activeSource.id}" ist nicht verfügbar.`, 'error'));
+      state.lastLoad = {
+        ok: false,
+        reason: 'missing_collection',
+        total: 0,
+        visible: 0,
+        message: `Collection "${state.activeSource.id}" ist nicht verfügbar.`,
+      };
       renderHeader();
-      renderFooter();
+      renderRows();
       return;
     }
     try {
       const docs = await collection.find().exec();
       const data = docs.map((doc) => (typeof doc.toJSON === 'function' ? doc.toJSON() : doc));
+      const activeData = data.filter((item) => !item.is_deleted);
       if (isFilesystemSource()) {
-        state.folderDocs = new Map(data.filter((item) => item.kind === 'folder' && !item.is_deleted).map((item) => [item.id, item]));
-        state.rows = data
-          .filter((item) => !item.is_deleted && item.parent_id === state.currentFolderId)
-          .map((item) => normalizeFileRow(item));
+        state.folderDocs = new Map(activeData.filter((item) => item.kind === 'folder').map((item) => [item.id, item]));
       } else {
-        state.rows = data.map((item) => normalizeBusinessRow(item, state.activeSource));
+        state.folderDocs = new Map();
       }
+      state.rows = normalizeRowsForSource(data, state.activeSource, state.currentFolderId);
+      state.lastLoad = {
+        ok: true,
+        reason: '',
+        total: activeData.length,
+        visible: state.rows.length,
+        message: '',
+      };
       renderHeader();
       renderRows();
     } catch (error) {
       console.error('[explorer] render failed:', error);
       state.rows = [];
-      refs.table.replaceChildren(message(`Fehler: ${error?.message || error}`, 'error'));
+      state.lastLoad = {
+        ok: false,
+        reason: 'load_error',
+        total: 0,
+        visible: 0,
+        message: `Fehler: ${error?.message || error}`,
+      };
       renderHeader();
-      renderFooter();
+      renderRows();
     }
   }
 
@@ -212,25 +226,35 @@ export async function mount(container, ctx) {
     refs.up.disabled = !isFilesystemSource() || state.currentFolderId === ROOT_ID;
     refs.newFolder.hidden = !isFilesystemSource();
     refs.upload.hidden = !isFilesystemSource();
+    refs.refresh.setAttribute('aria-label', `Aktualisieren: ${state.activeSource.label}`);
   }
 
   function renderRows() {
     const rows = filteredRows();
     refs.count.textContent = `${rows.length} Objekt${rows.length === 1 ? '' : 'e'}`;
+    if (state.lastLoad && !state.lastLoad.ok) {
+      refs.table.replaceChildren(message(state.lastLoad.message, 'error'));
+      refs.preview.innerHTML = emptyPreview(state.lastLoad.message);
+      renderFooter(rows);
+      return;
+    }
     if (!rows.length) {
-      refs.table.replaceChildren(message(state.query ? 'Keine Treffer.' : 'Dieser Ort ist leer.'));
-      refs.preview.innerHTML = emptyPreview();
+      refs.table.replaceChildren(message(emptyStateText()));
+      refs.preview.innerHTML = emptyPreview(emptyStateText());
       renderFooter(rows);
       return;
     }
 
     const table = document.createElement('div');
     table.className = 'app-explorer-grid';
+    table.setAttribute('role', 'grid');
     table.innerHTML = `
-      <button class="app-explorer-grid-head app-explorer-grid-name" type="button" data-sort="name">Name</button>
-      <button class="app-explorer-grid-head" type="button" data-sort="kind">Art</button>
-      <button class="app-explorer-grid-head" type="button" data-sort="modified">Geändert</button>
-      <div class="app-explorer-grid-head">Größe</div>
+      <div class="app-explorer-grid-header" role="row">
+        <button class="app-explorer-grid-head app-explorer-grid-name" type="button" data-sort="name" role="columnheader">Name</button>
+        <button class="app-explorer-grid-head" type="button" data-sort="kind" role="columnheader">Art</button>
+        <button class="app-explorer-grid-head" type="button" data-sort="modified" role="columnheader">Geändert</button>
+        <div class="app-explorer-grid-head" role="columnheader">Größe</div>
+      </div>
     `;
     for (const row of rows) table.append(rowNode(row));
     table.querySelectorAll('[data-sort]').forEach((button) => {
@@ -259,6 +283,7 @@ export async function mount(container, ctx) {
     item.type = 'button';
     item.className = 'app-explorer-row';
     item.dataset.id = row.id;
+    item.setAttribute('aria-label', `${row.label}, ${row.kind}`);
     item.innerHTML = `
       <span class="app-explorer-file">
         <span class="app-explorer-file-icon" data-kind="${escapeHtml(row.iconKind)}">${escapeHtml(row.mark)}</span>
@@ -423,11 +448,23 @@ export async function mount(container, ctx) {
   }
 
   async function createFolder() {
+    const name = await askName(container, 'Neuer Ordner', '', {
+      submitLabel: 'Erstellen',
+      existingNames: state.rows.map((row) => row.label),
+    });
+    if (!name) return;
+    await persistFolder(name);
+  }
+
+  async function promptCreateFolder() {
+    await createFolder();
+  }
+
+  async function persistFolder(name) {
     if (!isFilesystemSource()) return;
     const files = ctx.db?.collection?.('desktop_files');
     if (!files) return;
     const now = Date.now();
-    const name = uniqueName('Neuer Ordner', state.rows.map((row) => row.label));
     const parent = currentFolder();
     const path = joinPath(parent?.path || '/', name);
     await files.upsert({
@@ -459,8 +496,78 @@ export async function mount(container, ctx) {
     await loadRows();
   }
 
+  async function openUploadDialog() {
+    if (!isFilesystemSource()) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'app-explorer-upload-dialog';
+    overlay.innerHTML = `
+      <form role="dialog" aria-modal="true" aria-label="Dateien hochladen">
+        <strong>Dateien hochladen</strong>
+        <p>Wähle Dateien für ${escapeHtml(currentFolder()?.path || '/')}.</p>
+        <button type="button" class="app-explorer-dropzone" data-pick-files>Dateien auswählen</button>
+        <ul data-upload-list></ul>
+        <div class="app-explorer-dialog-error" data-upload-error role="alert"></div>
+        <div class="app-explorer-dialog-actions">
+          <button type="button" data-cancel>Abbrechen</button>
+          <button type="submit" data-submit disabled>Importieren</button>
+        </div>
+      </form>
+    `;
+    container.append(overlay);
+    const selected = [];
+    const list = overlay.querySelector('[data-upload-list]');
+    const submit = overlay.querySelector('[data-submit]');
+    const error = overlay.querySelector('[data-upload-error]');
+    const close = () => {
+      if (refs.fileInput.onchange) refs.fileInput.onchange = null;
+      overlay.remove();
+    };
+    const renderSelection = () => {
+      if (!list || !submit) return;
+      list.replaceChildren(...selected.map((file) => {
+        const item = document.createElement('li');
+        item.textContent = `${file.name || 'Datei'} · ${formatBytes(file.size || 0)}`;
+        return item;
+      }));
+      submit.disabled = selected.length === 0;
+      if (error) error.textContent = selected.length ? '' : 'Noch keine Datei ausgewählt.';
+    };
+    overlay.querySelector('[data-pick-files]')?.addEventListener('click', () => refs.fileInput.click());
+    overlay.querySelector('[data-cancel]')?.addEventListener('click', close);
+    overlay.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      overlay.classList.add('is-dragging-files');
+    });
+    overlay.addEventListener('dragleave', () => overlay.classList.remove('is-dragging-files'));
+    overlay.addEventListener('drop', (event) => {
+      event.preventDefault();
+      overlay.classList.remove('is-dragging-files');
+      selected.splice(0, selected.length, ...(event.dataTransfer?.files ? [...event.dataTransfer.files] : []));
+      renderSelection();
+    });
+    refs.fileInput.onchange = () => {
+      selected.splice(0, selected.length, ...(refs.fileInput.files ? [...refs.fileInput.files] : []));
+      refs.fileInput.value = '';
+      renderSelection();
+    };
+    overlay.querySelector('form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!selected.length) {
+        if (error) error.textContent = 'Wähle mindestens eine Datei aus.';
+        return;
+      }
+      if (submit) submit.disabled = true;
+      await uploadFiles(selected);
+      close();
+    });
+    renderSelection();
+  }
+
   async function renameFileRow(row) {
-    const nextName = await askName(container, 'Umbenennen', row.label);
+    const nextName = await askName(container, 'Umbenennen', row.label, {
+      submitLabel: 'Speichern',
+      existingNames: state.rows.filter((item) => item.id !== row.id).map((item) => item.label),
+    });
     if (!nextName || nextName === row.label) return;
     const files = ctx.db?.collection?.('desktop_files');
     const doc = await files?.findOne(row.id).exec();
@@ -475,6 +582,8 @@ export async function mount(container, ctx) {
   }
 
   async function trashFileRow(row) {
+    const confirmed = await confirmAction(container, 'In Papierkorb verschieben', `"${row.label}" wird aus diesem Ordner entfernt.`);
+    if (!confirmed) return;
     const files = ctx.db?.collection?.('desktop_files');
     const doc = await files?.findOne(row.id).exec();
     await doc?.incrementalPatch({ is_deleted: true, updated_at_ms: Date.now() });
@@ -490,13 +599,25 @@ export async function mount(container, ctx) {
   }
 
   function renderFooter(rows = filteredRows()) {
-    refs.status.textContent = `${rows.length} Objekt${rows.length === 1 ? '' : 'e'} · ${isFilesystemSource() ? (currentFolder()?.path || '/') : state.activeSource.label}`;
+    const sourceLabel = isFilesystemSource() ? (currentFolder()?.path || '/') : state.activeSource.label;
+    const sourceState = state.lastLoad?.ok === false ? 'Fehler' : `${state.lastLoad?.total ?? rows.length} geladen`;
+    refs.status.textContent = `${rows.length} sichtbar · ${sourceState} · ${sourceLabel}`;
   }
 
   function revokePreviewUrl() {
     if (!state.previewUrl) return;
     URL.revokeObjectURL(state.previewUrl);
     state.previewUrl = '';
+  }
+
+  function emptyStateText() {
+    if (state.query) return `Keine Treffer für "${state.query}".`;
+    if (state.lastLoad?.ok && state.lastLoad.total > 0 && state.lastLoad.visible === 0) {
+      return 'Daten vorhanden, aber für diesen Ordner nicht sichtbar.';
+    }
+    return isFilesystemSource()
+      ? 'Dieser Ordner ist leer.'
+      : `Keine ${state.activeSource.kind}-Einträge verfügbar.`;
   }
 
   return () => {
@@ -639,35 +760,101 @@ function normalizeBusinessRow(data, source) {
   };
 }
 
-function askName(container, title, value) {
+function normalizeRowsForSource(data, source, currentFolderId = ROOT_ID) {
+  const activeData = data.filter((item) => !item.is_deleted);
+  if (source.filesystem) {
+    return activeData
+      .filter((item) => item.parent_id === currentFolderId)
+      .map((item) => normalizeFileRow(item));
+  }
+  return activeData.map((item) => normalizeBusinessRow(item, source));
+}
+
+function askName(container, title, value, options = {}) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'app-explorer-name-dialog';
     overlay.innerHTML = `
-      <form>
+      <form role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
         <strong>${escapeHtml(title)}</strong>
-        <input name="name" value="${escapeHtml(value)}" autocomplete="off">
-        <div>
+        <input name="name" value="${escapeHtml(value)}" autocomplete="off" aria-describedby="app-explorer-name-error">
+        <p id="app-explorer-name-error" class="app-explorer-dialog-error" data-name-error role="alert"></p>
+        <div class="app-explorer-dialog-actions">
           <button type="button" data-cancel>Abbrechen</button>
-          <button type="submit">Speichern</button>
+          <button type="submit">${escapeHtml(options.submitLabel || 'Speichern')}</button>
         </div>
       </form>
     `;
     container.append(overlay);
     const form = overlay.querySelector('form');
     const input = overlay.querySelector('input');
+    const error = overlay.querySelector('[data-name-error]');
+    const submit = overlay.querySelector('[type="submit"]');
+    const existing = new Set((options.existingNames || []).map((name) => String(name).toLowerCase()));
     input?.focus();
     input?.select();
     const close = (nextValue) => {
       overlay.remove();
       resolve(String(nextValue || '').trim());
     };
+    const validate = () => {
+      const name = String(input?.value || '').trim();
+      const problem = validateEntryName(name, existing);
+      if (error) error.textContent = problem;
+      if (submit) submit.disabled = Boolean(problem);
+      return !problem;
+    };
+    input?.addEventListener('input', validate);
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') close('');
+    });
     overlay.querySelector('[data-cancel]')?.addEventListener('click', () => close(''));
     form?.addEventListener('submit', (event) => {
       event.preventDefault();
+      if (!validate()) return;
       close(input?.value || '');
     });
+    validate();
   });
+}
+
+function confirmAction(container, title, messageText) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'app-explorer-name-dialog';
+    overlay.innerHTML = `
+      <form role="dialog" aria-modal="true" aria-label="${escapeHtml(title)}">
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(messageText)}</p>
+        <div class="app-explorer-dialog-actions">
+          <button type="button" data-cancel>Abbrechen</button>
+          <button type="submit" class="is-danger">Verschieben</button>
+        </div>
+      </form>
+    `;
+    container.append(overlay);
+    const close = (value) => {
+      overlay.remove();
+      resolve(Boolean(value));
+    };
+    overlay.querySelector('[data-cancel]')?.addEventListener('click', () => close(false));
+    overlay.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') close(false);
+    });
+    overlay.querySelector('form')?.addEventListener('submit', (event) => {
+      event.preventDefault();
+      close(true);
+    });
+    overlay.querySelector('button')?.focus();
+  });
+}
+
+function validateEntryName(name, existingNames = new Set()) {
+  if (!name) return 'Name ist erforderlich.';
+  if (/[\\/]/.test(name)) return 'Name darf keine Schrägstriche enthalten.';
+  if (name === '.' || name === '..') return 'Dieser Name ist reserviert.';
+  if (existingNames.has(String(name).toLowerCase())) return 'Name existiert bereits in diesem Ordner.';
+  return '';
 }
 
 function readFileAsDataUrl(file) {
@@ -831,7 +1018,8 @@ function ensureStyles() {
     .app-explorer-actions button,
     .app-explorer-view-toggle button,
     .app-explorer-preview button,
-    .app-explorer-name-dialog button {
+    .app-explorer-name-dialog button,
+    .app-explorer-upload-dialog button {
       border: 1px solid var(--hairline, var(--line));
       border-radius: 7px;
       background: color-mix(in srgb, var(--surface) 76%, var(--surface-2));
@@ -953,9 +1141,14 @@ function ensureStyles() {
     }
     .app-explorer-grid {
       display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) minmax(110px, .65fr) minmax(130px, .55fr) minmax(90px, .45fr);
       align-content: start;
       min-width: 680px;
+    }
+    .app-explorer-grid-header,
+    .app-explorer-row {
+      display: grid;
+      grid-template-columns: minmax(220px, 1.4fr) minmax(110px, .65fr) minmax(130px, .55fr) minmax(90px, .45fr);
+      width: 100%;
     }
     .app-explorer-grid-head {
       position: sticky;
@@ -975,7 +1168,11 @@ function ensureStyles() {
     button.app-explorer-grid-head { cursor: pointer; }
     .app-explorer-grid-head.is-active { color: var(--text); }
     .app-explorer-row {
-      display: contents;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      text-align: left;
+      cursor: default;
     }
     .app-explorer-row > span {
       display: flex;
@@ -1110,6 +1307,14 @@ function ensureStyles() {
       place-items: center;
       background: color-mix(in srgb, var(--bg) 42%, transparent);
     }
+    .app-explorer-upload-dialog {
+      position: absolute;
+      inset: 0;
+      z-index: 8;
+      display: grid;
+      place-items: center;
+      background: color-mix(in srgb, var(--bg) 42%, transparent);
+    }
     .app-explorer-name-dialog form {
       display: grid;
       gap: 10px;
@@ -1120,6 +1325,22 @@ function ensureStyles() {
       padding: 14px;
       box-shadow: var(--shadow-2, 0 18px 50px rgba(0,0,0,.35));
     }
+    .app-explorer-upload-dialog form {
+      display: grid;
+      gap: 10px;
+      width: min(420px, calc(100% - 40px));
+      border: 1px solid var(--hairline, var(--line));
+      border-radius: 10px;
+      background: var(--surface);
+      padding: 14px;
+      box-shadow: var(--shadow-2, 0 18px 50px rgba(0,0,0,.35));
+    }
+    .app-explorer-upload-dialog p,
+    .app-explorer-name-dialog p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
     .app-explorer-name-dialog input {
       min-height: 32px;
       border: 1px solid var(--hairline, var(--line));
@@ -1129,10 +1350,42 @@ function ensureStyles() {
       padding: 0 10px;
       outline: 0;
     }
-    .app-explorer-name-dialog form > div {
+    .app-explorer-dropzone {
+      min-height: 84px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 44%, var(--line));
+      border-radius: 9px;
+      background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+      color: var(--accent);
+      font-weight: 780;
+    }
+    .app-explorer-upload-dialog.is-dragging-files .app-explorer-dropzone {
+      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    }
+    .app-explorer-upload-dialog ul {
+      display: grid;
+      gap: 4px;
+      max-height: 120px;
+      overflow: auto;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      color: var(--text);
+      font-size: 12px;
+    }
+    .app-explorer-dialog-error {
+      min-height: 16px;
+      margin: 0;
+      color: var(--danger);
+      font-size: 11px;
+    }
+    .app-explorer-dialog-actions {
       display: flex;
       justify-content: flex-end;
       gap: 6px;
+    }
+    .app-explorer-dialog-actions .is-danger {
+      border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+      color: var(--danger);
     }
     @media (max-width: 900px) {
       .app-explorer-body { grid-template-columns: 180px minmax(0, 1fr); }
@@ -1153,3 +1406,16 @@ function escapeHtml(value) {
     "'": '&#39;',
   }[char]));
 }
+
+export const __explorerTestHooks = {
+  FILE_SOURCE,
+  SOURCES,
+  formatBytes,
+  joinPath,
+  mimeFromName,
+  normalizeBusinessRow,
+  normalizeFileRow,
+  normalizeRowsForSource,
+  uniqueName,
+  validateEntryName,
+};

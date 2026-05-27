@@ -8,14 +8,14 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260527-outbound-review-fixes1';
+const APP_BUILD = '20260527-rxdb-release1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 8000;
-const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
+const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
@@ -141,8 +141,8 @@ async function loadShellUiModules() {
       importBusinessOsModule('./shared/event-bus.js?v=20260519-shell-os1', 'shell event bus'),
       importBusinessOsModule('./shared/notifications.js?v=20260519-shell-os1', 'shell notifications'),
       importBusinessOsModule('./shared/context-menu.js?v=20260519-shell-os1', 'shell context menu'),
-      importBusinessOsModule('./shared/window-manager.js?v=20260519-shell-os1', 'shell window manager'),
-      importBusinessOsModule('./shared/taskbar.js?v=20260519-shell-os1', 'shell taskbar'),
+      importBusinessOsModule('./shared/window-manager.js?v=20260527-rxdb-release1', 'shell window manager'),
+      importBusinessOsModule('./shared/taskbar.js?v=20260527-rxdb-release1', 'shell taskbar'),
       importBusinessOsModule('./shared/window-switcher.js?v=20260519-shell-os1', 'shell window switcher'),
     ]).then(([
       eventBus,
@@ -166,7 +166,7 @@ async function loadShellUiModules() {
 
 async function loadShellDialogsModule() {
   if (!shellDialogsModulePromise) {
-    shellDialogsModulePromise = importBusinessOsModule('./shared/dialogs.js?v=20260519-dialogs1', 'shell dialogs');
+    shellDialogsModulePromise = importBusinessOsModule('./shared/dialogs.js?v=20260527-rxdb-release1', 'shell dialogs');
   }
   return shellDialogsModulePromise;
 }
@@ -310,6 +310,7 @@ const shellMessages = {
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
+      tickets: 'Tickets',
       research: 'Web Research',
       conversations: 'Conversations',
       calendar: 'Kalender',
@@ -367,6 +368,7 @@ const shellMessages = {
       knowledge: 'Knowledge',
       'matching': 'Matching',
       reports: 'Bugs & Features',
+      tickets: 'Tickets',
       research: 'Web Research',
       conversations: 'Conversations',
       calendar: 'Calendar',
@@ -489,7 +491,7 @@ async function bootstrap() {
   state.windowManager.setChromeLayout(
     document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows'
   );
-  state.windowManager.setInsets({ top: 0, bottom: els.shellTaskbar ? 54 : 0 });
+  state.windowManager.setInsets({ top: 0, bottom: els.shellTaskbar ? 58 : 0 });
   if (els.shellTaskbar) {
     state.taskbar = shellUi.createTaskbar({
       container: els.shellTaskbar,
@@ -1176,6 +1178,7 @@ function setupShellColumnResizing() {
   leftHandle.setAttribute('role', 'separator');
   leftHandle.setAttribute('aria-orientation', 'vertical');
   leftHandle.setAttribute('aria-label', 'Linke und mittlere Spalte anpassen');
+  leftHandle.setAttribute('tabindex', '0');
 
   const rightHandle = document.createElement('div');
   rightHandle.className = 'workspace-col-resizer workspace-col-resizer-right';
@@ -1183,6 +1186,7 @@ function setupShellColumnResizing() {
   rightHandle.setAttribute('role', 'separator');
   rightHandle.setAttribute('aria-orientation', 'vertical');
   rightHandle.setAttribute('aria-label', 'Mittlere und rechte Spalte anpassen');
+  rightHandle.setAttribute('tabindex', '0');
 
   frame.append(leftHandle, rightHandle);
 
@@ -1232,12 +1236,25 @@ function setupShellColumnResizing() {
   function applyWidths(widths) {
     if (!widths) return;
     frame.style.gridTemplateColumns = `${widths.left}px ${widths.center}px ${widths.right}px`;
+    updateHandleAria(widths);
   }
 
   function placeHandles(metrics, widths) {
     if (!metrics || !widths) return;
     leftHandle.style.left = `${Math.round(widths.left + (metrics.gap / 2))}px`;
     rightHandle.style.left = `${Math.round(widths.left + metrics.gap + widths.center + (metrics.gap / 2))}px`;
+  }
+
+  function updateHandleAria(widths) {
+    if (!widths) return;
+    leftHandle.setAttribute('aria-valuemin', String(SHELL_COL_MIN.left));
+    leftHandle.setAttribute('aria-valuemax', String(SHELL_COL_SIDE_MAX));
+    leftHandle.setAttribute('aria-valuenow', String(Math.round(widths.left)));
+    leftHandle.setAttribute('aria-valuetext', `${Math.round(widths.left)} px`);
+    rightHandle.setAttribute('aria-valuemin', String(SHELL_COL_MIN.right));
+    rightHandle.setAttribute('aria-valuemax', String(SHELL_COL_SIDE_MAX));
+    rightHandle.setAttribute('aria-valuenow', String(Math.round(widths.right)));
+    rightHandle.setAttribute('aria-valuetext', `${Math.round(widths.right)} px`);
   }
 
   function persistCurrentLayout() {
@@ -1342,8 +1359,50 @@ function setupShellColumnResizing() {
     });
   }
 
+  function handleKeyboardResize(which, event) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    if (!isResizableLayout()) return;
+    const metrics = getGridMetrics(frame);
+    if (!metrics || metrics.trackTotal <= 0) return;
+    const current = activeWidths || clampShellColumns(readGridTrackPixels(frame), metrics.trackTotal);
+    if (!current) return;
+
+    const step = event.shiftKey ? 64 : 24;
+    let left = current.left;
+    let right = current.right;
+    const maxLeft = Math.max(
+      SHELL_COL_MIN.left,
+      Math.min(SHELL_COL_SIDE_MAX, metrics.trackTotal - right - SHELL_COL_MIN.center)
+    );
+    const maxRight = Math.max(
+      SHELL_COL_MIN.right,
+      Math.min(SHELL_COL_SIDE_MAX, metrics.trackTotal - left - SHELL_COL_MIN.center)
+    );
+
+    if (which === 'left') {
+      if (event.key === 'Home') left = SHELL_COL_MIN.left;
+      else if (event.key === 'End') left = maxLeft;
+      else left += event.key === 'ArrowLeft' ? -step : step;
+      left = clampNumber(left, SHELL_COL_MIN.left, maxLeft);
+    } else {
+      if (event.key === 'Home') right = SHELL_COL_MIN.right;
+      else if (event.key === 'End') right = maxRight;
+      else right += event.key === 'ArrowLeft' ? step : -step;
+      right = clampNumber(right, SHELL_COL_MIN.right, maxRight);
+    }
+
+    activeWidths = clampShellColumns({ left, center: metrics.trackTotal - left - right, right }, metrics.trackTotal);
+    if (!activeWidths) return;
+    applyWidths(activeWidths);
+    placeHandles(metrics, activeWidths);
+    persistCurrentLayout();
+    event.preventDefault();
+  }
+
   leftHandle.addEventListener('pointerdown', (event) => startDrag('left', event));
   rightHandle.addEventListener('pointerdown', (event) => startDrag('right', event));
+  leftHandle.addEventListener('keydown', (event) => handleKeyboardResize('left', event));
+  rightHandle.addEventListener('keydown', (event) => handleKeyboardResize('right', event));
   window.addEventListener('pointermove', handleDragMove);
   window.addEventListener('pointerup', stopDrag);
   window.addEventListener('pointercancel', stopDrag);
@@ -2025,9 +2084,15 @@ function sanitizeRxdbRuntime(value) {
   if (!value || typeof value !== 'object') return null;
   return {
     name: typeof value.name === 'string' ? value.name.slice(0, 80) : null,
+    publicName: typeof value.publicName === 'string' ? value.publicName.slice(0, 80) : null,
     source: typeof value.source === 'string' ? value.source.slice(0, 80) : null,
     importPath: typeof value.importPath === 'string' ? value.importPath.slice(0, 200) : null,
     packageManager: typeof value.packageManager === 'string' ? value.packageManager.slice(0, 40) : null,
+    compatibility: typeof value.compatibility === 'string' ? value.compatibility.slice(0, 80) : null,
+    upstreamCompatible: value.upstreamCompatible === true ? true : value.upstreamCompatible === false ? false : null,
+    upstreamCompatibility: typeof value.upstreamCompatibility === 'string' ? value.upstreamCompatibility.slice(0, 80) : null,
+    apiContract: typeof value.apiContract === 'string' ? value.apiContract.slice(0, 120) : null,
+    protocolVersion: typeof value.protocolVersion === 'string' ? value.protocolVersion.slice(0, 80) : null,
   };
 }
 
@@ -2178,6 +2243,7 @@ const MODULE_GLYPHS = {
   matching: '🔗',
   outbound: '📣',
   reports: '🐞',
+  tickets: '▤',
   research: '🔬',
   conversations: '💬',
   notes: '📝',
@@ -2225,8 +2291,9 @@ const DESKTOP_APPS = [
 ];
 
 function listDesktopApps() {
+  const moduleIds = new Set((state.modules || []).map((mod) => mod?.id).filter(Boolean));
   return DESKTOP_APPS
-    .filter((app) => app.id !== 'file-viewer')
+    .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
     .map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
       id,
       title,
@@ -2512,6 +2579,7 @@ function moduleAppearsInSwitcher(mod) {
 }
 
 function listLaunchTargets(kind = '') {
+  const moduleIds = new Set((state.modules || []).map((mod) => mod?.id).filter(Boolean));
   const moduleTargets = state.modules
     .filter(moduleAppearsInSwitcher)
     .map((mod) => ({
@@ -2522,7 +2590,7 @@ function listLaunchTargets(kind = '') {
       module: mod,
     }));
   const appTargets = DESKTOP_APPS
-    .filter((app) => app.id !== 'file-viewer')
+    .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
     .map((app) => ({
       id: app.id,
       kind: 'app',
@@ -2530,7 +2598,17 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       app,
     }));
-  const all = [...moduleTargets, ...appTargets];
+  const targetsById = new Map();
+  for (const target of moduleTargets) {
+    if (!target?.id || targetsById.has(target.id)) continue;
+    targetsById.set(target.id, target);
+  }
+  for (const target of appTargets) {
+    if (!target?.id) continue;
+    if (targetsById.has(target.id)) continue;
+    targetsById.set(target.id, target);
+  }
+  const all = Array.from(targetsById.values());
   return kind ? all.filter((target) => target.kind === kind) : all;
 }
 
@@ -3234,6 +3312,7 @@ function taskbarMarkForModule(mod) {
     matching: 'M',
     outbound: 'O',
     reports: '🐞',
+    tickets: 'T',
     research: 'R',
     'coding-agents': '🤖',
   };
@@ -5802,17 +5881,17 @@ const LAUNCHER_CATEGORIES = [
   {
     id: 'system',
     name: '🧠 System',
-    matchIds: ['ctox', 'app-store', 'coding-agents']
+    matchIds: ['ctox', 'tickets', 'app-store', 'coding-agents']
   },
   {
     id: 'productivity',
     name: shellLang() === 'de' ? '⚡ Produktivität' : '⚡ Productivity',
-    matchIds: ['notizen', 'notes', 'spreadsheets', 'documents', 'calendar']
+    matchIds: ['explorer', 'notizen', 'notes', 'spreadsheets', 'documents', 'calendar', 'conversations']
   },
   {
     id: 'management',
     name: '📋 Management',
-    matchIds: ['reports', 'shiftflow', 'buchhaltung']
+    matchIds: ['reports', 'shiftflow', 'buchhaltung', 'outbound']
   },
   {
     id: 'recherche',
@@ -5978,6 +6057,7 @@ function filterStartMenu(panel, query) {
   }
 
   // Otherwise, render categorized layout
+  const renderedIds = new Set();
   LAUNCHER_CATEGORIES.forEach(cat => {
     const catTargets = filtered.filter(target => cat.matchIds.includes(target.id));
     if (catTargets.length === 0) return;
@@ -5991,9 +6071,25 @@ function filterStartMenu(panel, query) {
     `;
     catTargets.forEach(target => {
       categoryContainer.appendChild(buildStartMenuItem(target));
+      renderedIds.add(target.id);
     });
     body.appendChild(categoryContainer);
   });
+
+  const uncategorized = filtered.filter((target) => !renderedIds.has(target.id));
+  if (uncategorized.length) {
+    const categoryContainer = document.createElement('div');
+    categoryContainer.className = 'start-menu-category';
+    categoryContainer.innerHTML = `
+      <div class="start-menu-category-title">
+        <span>${shellLang() === 'de' ? 'Weitere Apps' : 'More Apps'}</span>
+      </div>
+    `;
+    uncategorized.forEach(target => {
+      categoryContainer.appendChild(buildStartMenuItem(target));
+    });
+    body.appendChild(categoryContainer);
+  }
 }
 
 function buildStartMenuItem(target) {

@@ -17,6 +17,7 @@ const matrixPath = path.join(__dirname, 'browser_rust_smoke_matrix.js');
 const defaultModes = [
   'browser-to-rust',
   'command-browser-to-rust',
+  'tickets-browser-to-rust',
   'migration-version-browser-to-rust',
   'command-burst-browser-to-rust',
   'command-reload-browser-to-rust',

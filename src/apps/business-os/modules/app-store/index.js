@@ -160,8 +160,8 @@ function wireEvents() {
 
   els.refresh?.addEventListener('click', () => refreshMarketplace({ force: true }));
 
-  document.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
-    openModule('creator');
+  state.ctx.host.querySelector('#btn-create-scratch')?.addEventListener('click', () => {
+    openCreatorFromStore({ mode: 'scratch' });
   });
 }
 
@@ -173,12 +173,14 @@ async function triggerCardAction(appId, actionType) {
     await installMarketplaceItem(item);
   } else if (actionType === 'open') {
     if (item.id === 'create-scratch') {
-      openModule('creator');
+      openCreatorFromStore({ mode: 'scratch' });
+    } else if (item.launch_kind === 'desktop-app') {
+      await state.ctx?.openDesktopApp?.(item.id);
     } else {
       openModule(item.id);
     }
   } else if (actionType === 'upgrade') {
-    openModule(`creator?upgrade=${item.id}`);
+    openCreatorFromStore({ mode: 'upgrade', upgrade: item.id });
   } else if (actionType === 'uninstall') {
     await uninstallInstalledItem(item);
   } else if (actionType === 'repository') {
@@ -268,6 +270,8 @@ async function manifestPathToMarketplaceItem(path) {
 function catalogItems() {
   const modules = Array.isArray(state.catalog?.modules) ? state.catalog.modules : [];
   const templates = Array.isArray(state.catalog?.templates) ? state.catalog.templates : [];
+  const moduleIds = new Set(modules.map((item) => item?.id).filter(Boolean));
+  const desktopApps = Array.isArray(state.ctx?.desktopApps) ? state.ctx.desktopApps : [];
 
   const scratchTemplate = {
     id: 'create-scratch',
@@ -284,12 +288,24 @@ function catalogItems() {
     installable: true,
   };
 
-  return [
+  const items = [
     normalizeItem(scratchTemplate, 'template'),
-    ...state.marketplace.map((item) => normalizeItem(item, 'marketplace')),
+    ...state.marketplace
+      .filter((item) => !moduleIds.has(item.module_id || item.id))
+      .map((item) => normalizeItem(item, 'marketplace')),
     ...templates.map((item) => normalizeItem(item, 'template')),
-    ...modules.map((item) => normalizeItem(item, moduleKind(item))),
-  ].sort(sortItems);
+    ...modules
+      .filter(isLaunchableModule)
+      .map((item) => normalizeItem(item, moduleKind(item))),
+    ...desktopApps
+      .filter((item) => item?.id && !moduleIds.has(item.id))
+      .map(normalizeDesktopAppItem),
+  ];
+  return uniqueCatalogItems(items).sort(sortItems);
+}
+
+function isLaunchableModule(item) {
+  return item?.id && item.id !== 'desktop' && item.id !== 'notizen' && item.install_scope !== 'internal';
 }
 
 function moduleKind(item) {
@@ -337,6 +353,7 @@ function normalizeItem(item, kind) {
     id,
     kind,
     status,
+    launch_kind: item.launch_kind || 'module',
     title: item.title || item.default_title || id,
     description: item.description || '',
     category: String(item.category || item.source || (item.core ? 'System' : 'Local')),
@@ -352,6 +369,31 @@ function normalizeItem(item, kind) {
     install_scope: item.install_scope || item.raw?.install_scope || '',
     permissions: item.permissions || item.collections || [],
     installable: item.installable !== false && item.store?.installable !== false,
+    raw: item,
+  };
+}
+
+function normalizeDesktopAppItem(item) {
+  return {
+    id: sanitizeId(item.id || ''),
+    kind: 'local',
+    status: 'local',
+    launch_kind: 'desktop-app',
+    title: item.title || item.id,
+    description: 'Packaged desktop utility available from the Business OS launcher.',
+    category: 'Desktop Apps',
+    version: 'v1',
+    developer: 'CTOX',
+    license: 'AGPL-3.0-only',
+    source: 'desktop-app',
+    repo: '',
+    download_url: '',
+    source_path: '',
+    manifest_url: '',
+    homepage: '',
+    install_scope: '',
+    permissions: [],
+    installable: false,
     raw: item,
   };
 }
@@ -375,11 +417,50 @@ function sourceLabel(item, kind) {
 }
 
 function filteredItems() {
-  return catalogItems().filter((item) => {
-    const matchesScope = state.scope === 'all' || item.kind === state.scope || item.status === state.scope;
+  return scopedCatalogItems(state.scope).filter((item) => {
     const haystack = `${item.title} ${item.description} ${item.category} ${item.repo} ${item.source}`.toLowerCase();
-    return matchesScope && (!state.query || haystack.includes(state.query));
+    return !state.query || haystack.includes(state.query);
   });
+}
+
+function scopedCatalogItems(scope) {
+  const items = catalogItems();
+  const scoped = scope === 'all'
+    ? items
+    : items.filter((item) => itemMatchesScope(item, scope));
+  return uniqueCatalogItems(scoped);
+}
+
+function itemMatchesScope(item, scope) {
+  return scope === 'all' || item.kind === scope || item.status === scope;
+}
+
+function uniqueCatalogItems(items) {
+  const byId = new Map();
+  for (const item of items) {
+    const key = item.id || item.module_id || item.title;
+    if (!key) continue;
+    byId.set(key, chooseCanonicalCatalogItem(byId.get(key), item));
+  }
+  return [...byId.values()].sort(sortItems);
+}
+
+function chooseCanonicalCatalogItem(existing, candidate) {
+  if (!existing) return candidate;
+  const rank = {
+    system: 0,
+    local: 1,
+    installed: 2,
+    starter: 3,
+    template: 4,
+    marketplace: 5,
+  };
+  const existingRank = rank[existing.kind] ?? 9;
+  const candidateRank = rank[candidate.kind] ?? 9;
+  if (candidateRank < existingRank) return candidate;
+  if (candidateRank > existingRank) return existing;
+  if (candidate.status === 'installed' && existing.status !== 'installed') return candidate;
+  return existing;
 }
 
 function render() {
@@ -388,11 +469,11 @@ function render() {
   renderMarketplaceState();
   renderMessage();
   if (els.title) els.title.textContent = scopeTitle(state.scope);
-  if (els.count) els.count.textContent = `${items.length} Apps`;
+  if (els.count) els.count.textContent = appCountLabel(items.length, state.scope, state.marketplaceStatus);
 
   if (els.grid) {
     els.grid.className = `store-card-grid ${state.viewMode === 'list' ? 'is-list-view' : ''}`;
-    els.grid.replaceChildren(...items.map(renderCard));
+    els.grid.replaceChildren(...renderCatalogBody(items));
   }
 
   if (els.viewToggle) {
@@ -406,9 +487,28 @@ function render() {
   }
 
   if (!items.some((item) => item.id === state.selectedId)) {
-    state.selectedId = items[0]?.id || '';
+    state.selectedId = items.length ? (items[0]?.id || '') : '';
   }
   renderDetails();
+}
+
+function renderCatalogBody(items) {
+  if (items.length) return items.map(renderCard);
+  return [renderEmptyCatalogState({
+    title: emptyCatalogTitle(state.scope, state.query, state.marketplaceStatus),
+    body: emptyCatalogBody(state.scope, state.query, state.marketplaceStatus, state.marketplaceMessage),
+  })];
+}
+
+function renderEmptyCatalogState({ title, body }) {
+  const empty = document.createElement('section');
+  empty.className = 'store-empty-state';
+  empty.setAttribute('role', 'status');
+  empty.innerHTML = `
+    <strong>${escapeHtml(title)}</strong>
+    <span>${escapeHtml(body)}</span>
+  `;
+  return empty;
 }
 
 function renderCard(item) {
@@ -428,7 +528,7 @@ function renderCard(item) {
       actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install">Installieren</button>`;
     }
     if (item.homepage) {
-      actionsHtml += `<button type="button" class="card-btn secondary" data-card-action="repository">GitHub</button>`;
+      actionsHtml += `<button type="button" class="card-btn secondary external" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
     }
   } else if (item.kind === 'template') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Erstellen</button>`;
@@ -471,11 +571,15 @@ function renderCard(item) {
 
 function renderDetails() {
   const item = catalogItems().find((candidate) => candidate.id === state.selectedId);
-  if (!item || !state.drawerOpen) {
+  if (!state.drawerOpen) {
     if (els.detail) els.detail.classList.remove('is-open');
     return;
   }
   if (els.detail) els.detail.classList.add('is-open');
+  if (!item) {
+    renderEmptyDetails();
+    return;
+  }
   if (els.detailIcon) els.detailIcon.textContent = iconForItem(item);
   if (els.detailTitle) els.detailTitle.textContent = item.title;
   if (els.detailVersion) els.detailVersion.textContent = item.version;
@@ -486,6 +590,23 @@ function renderDetails() {
   if (els.detailStatus) els.detailStatus.textContent = statusLabel(item.status);
   if (els.readme) {
     els.readme.replaceChildren(renderDocumentation(item));
+  }
+}
+
+function renderEmptyDetails() {
+  if (els.detailIcon) els.detailIcon.textContent = '?';
+  if (els.detailTitle) els.detailTitle.textContent = 'Keine App ausgewählt';
+  if (els.detailVersion) els.detailVersion.textContent = '-';
+  if (els.detailCategory) els.detailCategory.textContent = 'Empty';
+  if (els.detailDeveloper) els.detailDeveloper.textContent = '-';
+  if (els.detailLicense) els.detailLicense.textContent = '-';
+  if (els.detailSource) els.detailSource.textContent = 'App Store';
+  if (els.detailStatus) els.detailStatus.textContent = 'No selection';
+  if (els.readme) {
+    const empty = document.createElement('p');
+    empty.className = 'store-detail-empty';
+    empty.textContent = 'Wähle eine App oder ändere den Filter, um Details zu sehen.';
+    els.readme.replaceChildren(empty);
   }
 }
 
@@ -598,8 +719,11 @@ function setBusy(busy, text = '') {
   state.busy = busy;
   if (els.action) els.action.disabled = busy;
   if (els.secondaryAction) els.secondaryAction.disabled = busy;
-  if (els.loading) els.loading.hidden = !busy;
-  if (els.loadingText) els.loadingText.textContent = text;
+  const showLoading = busy || state.marketplaceStatus === 'loading';
+  if (els.loading) els.loading.hidden = !showLoading;
+  if (els.loadingText) {
+    els.loadingText.textContent = text || state.marketplaceMessage || 'GitHub Discovery wird synchronisiert.';
+  }
   if (els.refresh) els.refresh.disabled = busy || state.marketplaceStatus === 'loading';
 }
 
@@ -621,27 +745,44 @@ function updateScopeButtons() {
 }
 
 function countsByScope() {
-  const items = catalogItems();
-  // Mirror filteredItems(): a scope matches if either item.kind or item.status equals the scope.
-  // This keeps the sidebar counter ("Installed: N") in sync with the badge shown on the cards
-  // — marketplace items whose module_id matches an already-installed module carry status === 'installed'.
-  const matches = (item, scope) => item.kind === scope || item.status === scope;
   return {
-    all: items.length,
-    marketplace: items.filter((item) => matches(item, 'marketplace')).length,
-    template: items.filter((item) => matches(item, 'template')).length,
-    installed: items.filter((item) => matches(item, 'installed')).length,
-    starter: items.filter((item) => matches(item, 'starter')).length,
-    system: items.filter((item) => matches(item, 'system')).length,
-    local: items.filter((item) => matches(item, 'local')).length,
+    all: scopedCatalogItems('all').length,
+    marketplace: scopedCatalogItems('marketplace').length,
+    template: scopedCatalogItems('template').length,
+    installed: scopedCatalogItems('installed').length,
+    starter: scopedCatalogItems('starter').length,
+    system: scopedCatalogItems('system').length,
+    local: scopedCatalogItems('local').length,
   };
 }
 
 function renderMarketplaceState() {
   if (!els.marketplaceState) return;
-  els.marketplaceState.textContent = state.marketplaceMessage || `GitHub modules are loaded from ${CTOX_REPO}/${CTOX_APP_ROOT}/modules.`;
+  const counts = countsByScope();
+  els.marketplaceState.textContent = marketplaceStateLabel({
+    status: state.marketplaceStatus,
+    message: state.marketplaceMessage,
+    marketplaceCount: counts.marketplace,
+    installedCount: counts.installed,
+  });
   els.marketplaceState.dataset.state = state.marketplaceStatus;
-  if (els.refresh) els.refresh.disabled = state.marketplaceStatus === 'loading' || state.busy;
+  if (els.refresh) {
+    const refreshBusy = state.marketplaceStatus === 'loading' || state.busy;
+    els.refresh.disabled = refreshBusy;
+    els.refresh.textContent = state.marketplaceStatus === 'loading' ? 'Synchronisiere GitHub...' : 'Refresh GitHub';
+    els.refresh.title = refreshBusy
+      ? 'GitHub Discovery läuft bereits.'
+      : `GitHub Discovery aus ${CTOX_REPO} aktualisieren.`;
+  }
+  const showLoading = state.marketplaceStatus === 'loading' || state.busy;
+  if (els.loading) els.loading.hidden = !showLoading;
+  if (els.loadingText && showLoading) {
+    els.loadingText.textContent = state.marketplaceMessage || 'GitHub Discovery wird synchronisiert.';
+  }
+  if (state.ctx?.host) {
+    const root = state.ctx.host.querySelector('[data-app-store-root]');
+    root?.toggleAttribute('aria-busy', showLoading);
+  }
 }
 
 function renderMessage() {
@@ -659,6 +800,30 @@ function renderMessage() {
 function openModule(moduleId) {
   if (!moduleId) return;
   window.location.hash = moduleId;
+}
+
+function openCreatorFromStore({ mode = 'scratch', upgrade = '' } = {}) {
+  const hash = creatorHashFromStore({ mode, upgrade });
+  try {
+    sessionStorage.setItem('ctox.app-store.creatorReturnContext', JSON.stringify({
+      source: 'app-store',
+      return_hash: '#app-store',
+      mode,
+      upgrade,
+      created_at: new Date().toISOString(),
+    }));
+  } catch {}
+  openModule(hash);
+}
+
+function creatorHashFromStore({ mode = 'scratch', upgrade = '' } = {}) {
+  const params = new URLSearchParams({
+    source: 'app-store',
+    return: 'app-store',
+    mode,
+  });
+  if (upgrade) params.set('upgrade', upgrade);
+  return `creator?${params.toString()}`;
 }
 
 function installedIds() {
@@ -712,6 +877,41 @@ function statusLabel(status) {
   }[status] || status;
 }
 
+function appCountLabel(count, scope, marketplaceStatus) {
+  const suffix = count === 1 ? 'App' : 'Apps';
+  if (scope === 'marketplace' && marketplaceStatus === 'loading') {
+    return `${count} ${suffix} · Sync`;
+  }
+  return `${count} ${suffix}`;
+}
+
+function marketplaceStateLabel({ status, message, marketplaceCount, installedCount }) {
+  if (status === 'loading') return message || `GitHub Discovery läuft. Installierte Apps bleiben sichtbar.`;
+  if (status === 'ready') return message || `${marketplaceCount} GitHub Module gefunden. ${installedCount} installierte Apps lokal gezählt.`;
+  if (status === 'empty') return message || 'Keine GitHub Module gefunden. Installierte Apps bleiben lokal verfügbar.';
+  if (status === 'stale') return `GitHub Sync fehlgeschlagen. Zeige letzten Stand: ${message || 'Unbekannter Fehler'}`;
+  if (status === 'error') return `GitHub Sync fehlgeschlagen: ${message || 'Unbekannter Fehler'}`;
+  return `GitHub modules are loaded from ${CTOX_REPO}/${CTOX_APP_ROOT}/modules. Installed: ${installedCount}.`;
+}
+
+function emptyCatalogTitle(scope, query, marketplaceStatus) {
+  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'GitHub Discovery läuft';
+  if (scope === 'marketplace' && marketplaceStatus === 'error') return 'GitHub Discovery fehlgeschlagen';
+  if (query) return 'Keine Apps gefunden';
+  return 'Keine Apps in dieser Kategorie';
+}
+
+function emptyCatalogBody(scope, query, marketplaceStatus, marketplaceMessage = '') {
+  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Der Katalog wird gerade mit GitHub synchronisiert.';
+  if (scope === 'marketplace' && marketplaceStatus === 'error') return marketplaceMessage || 'Der letzte GitHub Refresh konnte nicht geladen werden.';
+  if (query) return `Kein Katalogeintrag passt zu "${query}".`;
+  return 'Wechsle die Kategorie oder aktualisiere GitHub Discovery.';
+}
+
+function externalLinkIcon() {
+  return '<svg class="external-link-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7"></path><path d="M8 7h9v9"></path></svg>';
+}
+
 function sourceShort(item) {
   if (item.repo) return item.repo.split('/').slice(-1)[0];
   return item.source || item.kind;
@@ -751,6 +951,19 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
 }
+
+export const __appStoreTestHooks = {
+  appCountLabel,
+  chooseCanonicalCatalogItem,
+  creatorHashFromStore,
+  emptyCatalogBody,
+  emptyCatalogTitle,
+  externalLinkIcon,
+  itemMatchesScope,
+  marketplaceStateLabel,
+  sanitizeId,
+  statusLabel,
+};
 
 function initAppStoreContextMenu(state) {
   state.contextMenu?.remove();

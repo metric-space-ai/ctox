@@ -2,8 +2,8 @@
   "overview": "Übersicht",
   "teamAndStatus": "Team & Status",
   "addEmployee": "Mitarbeiter hinzufügen",
-  "searchEmployees": "Mitarbeiter suchen...",
-  "searchEmployeesAria": "Mitarbeiter suchen",
+  "searchEmployees": "Mitarbeiter in Liste & Plan suchen...",
+  "searchEmployeesAria": "Mitarbeiter in Liste und Dienstplan suchen",
   "filterDepartment": "Abteilung filtern",
   "allDepartments": "Alle Abteilungen",
   "deptService": "Service",
@@ -25,7 +25,7 @@
   "nextWeek": "Nächste Woche",
   "employeeTimeline": "Mitarbeiter-Timeline",
   "projectTimeline": "Projekt-Timeline",
-  "publishSchedule": "📅 Dienstplan veröffentlichen",
+  "publishSchedule": "Dienstplan veröffentlichen",
   "employee": "Mitarbeiter",
   "projects": "Projekte",
   "timesheetsToolbarTitle": "Soll/Ist-Vergleich & Stundenfreigabe",
@@ -142,5 +142,11 @@
   "billingTitle": "Leistungsabrechnung & Aggregation",
   "autoPlannedNotes": "Automatisch geplant vom CTOX Assistenten",
   "invoiceDraftDownloadSuccess": "Rechnungsentwurf erfolgreich erstellt und heruntergeladen! 📝\n\nDu kannst diese Datei direkt im CTOX Rechnungs-Modul einlesen.",
-  "shift": "Dienst"
+  "shift": "Dienst",
+  "publishNoShifts": "Keine Schichten in dieser Woche.",
+  "publishAlreadyDone": "Woche ist bereits veröffentlicht.",
+  "confirmPublishSchedule": "Möchtest du {0} Schicht(en) für KW {1} veröffentlichen?",
+  "publishInProgress": "Veröffentliche...",
+  "publishSuccess": "{0} Schicht(en) veröffentlicht.",
+  "publishFailed": "Veröffentlichung fehlgeschlagen."
 }

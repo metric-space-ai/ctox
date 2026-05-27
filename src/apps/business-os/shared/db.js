@@ -1,8 +1,13 @@
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
+  publicName: 'CTOX DB',
   source: 'app-local',
   importPath: 'src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs',
   packageManager: 'none',
+  compatibility: 'ctox-db-api',
+  upstreamCompatible: false,
+  upstreamCompatibility: 'not-upstream-rxdb',
+  apiContract: 'ctox-db-business-os-v1',
 });
 
 const RXDB_OPEN_TIMEOUT_MS = 45000;
@@ -57,11 +62,11 @@ function isIndexedDbOpenStall(error) {
 async function createRxBusinessDb({ name }) {
   await prepareIndexedDbForRxdb(name);
   const rxdb = await loadRxdb();
-  const { createRxDatabase, getRxStorageDexie } = rxdb;
+  const { createRxDatabase, getCtoxIndexedDbStorage } = rxdb;
   const db = await Promise.race([
     createRxDatabase({
       name,
-      storage: getRxStorageDexie(),
+      storage: getCtoxIndexedDbStorage(),
       multiInstance: false,
       closeDuplicates: true,
     }),

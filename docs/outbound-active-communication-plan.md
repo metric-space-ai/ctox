@@ -19,8 +19,8 @@ Der Projektfortschritt wird ueber Wellengewichtung berechnet. Jede Welle hat ein
 | 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 65% |
 | 8. Scheduling & Terminfindung | 7% | Nicht begonnen | 0% |
 | 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 50% |
-| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 25% |
-| **Gesamt** | **100%** | **In Arbeit** | **61%** |
+| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 50% |
+| **Gesamt** | **100%** | **In Arbeit** | **62%** |
 
 Fortschritt je Welle:
 
@@ -622,7 +622,8 @@ Ziel: Die Loesung ist erprobt, testbar und im Betrieb nachvollziehbar.
 
 Aufgaben:
 
-- [ ] End-to-End Browser Smoke fuer kompletten Flow bauen.
+- [x] End-to-End Browser Smoke fuer Lead -> Assignment -> Draft -> Approval -> Mailserver-Queue bauen.
+- [ ] End-to-End Browser Smoke fuer Reply -> Scheduling -> Meeting bauen.
 - [ ] Backend-Tests fuer alle State-Uebergaenge bauen.
 - [ ] Approval-Gate Negativtests bauen.
 - [ ] Mailserver-Fehler-, Bounce- und Retrytests bauen.
@@ -731,3 +732,4 @@ Diese Aufgaben laufen parallel zu mehreren Wellen und duerfen nicht bis zum Ende
 | 2026-05-25 | Campaign-Aktivierungs-Gate teilweise deployed | `cto1.kunstmen.com` muss den neuen UI-Stand sofort ausliefern, waehrend die VPS-Instanz stabil bleiben muss | Vercel Production Deploy `dpl_wuro7HKv3cTVXU1T94fafcTHCAvm` liefert `20260525-outbound-activation-gate1`; VPS-Release `branch-main-20260525T184655Z` ist source-gepatcht und `ctox.service` aktiv, aber die neue Binary ist noch offen, weil wiederkehrende `upgrade --dev`/Build-Runner kontrollierte Builds gestoppt haben; Fortschritt bleibt 56% |
 | 2026-05-26 | E-Mail-Send-Gate an Mailserver-Queue angebunden | Nach Nutzerfreigabe darf E-Mail-Outbound nicht bei `queued_for_provider` ohne echten Queue-Auftrag stehenbleiben | `outbound.message.send_approved` queued freigegebene E-Mails in `stalwart_smtp_queue`, persistiert `provider_queue_id`, aktualisiert Conversations-Metadaten und zaehlt Sender-Limits idempotent hoch; Welle 6 steigt auf 75%, Gesamtfortschritt auf 57% |
 | 2026-05-27 | Review-Findings Scheduler, Message-Historie und Audit geschlossen | Aktive Drafts durften keine Message-IDs wiederverwenden, Scheduler musste echte Follow-up-Drafts erzeugen und Audit-/Skillbook-Konfiguration erhalten bleiben | UI erzeugt pro Draft eindeutige `msg_...` IDs; Scheduler schreibt approval-gated Follow-up-Drafts und stoppt bei Reply/Pause/Closure/Opt-out/Bounce; Skillbook-Save merged bestehende Felder; Audit exportiert Skillbooks und Briefvorlagen; Welle 9 steigt auf 50%, Welle 10 auf 25%, Gesamtfortschritt auf 61% |
+| 2026-05-27 | Aktiver Outbound-Mailpfad im Browser E2E gehaertet | Der erste echte Browser-Smoke zeigte, dass abhängige Outbound-Commands zu frueh nacheinander ausgeloest wurden und die UI nach `send_approved` auf verzögerte Pull-Replikation wartete | Active-Outreach-Commands warten jetzt auf native `business_commands`-Acks und projizieren Backend-Result-Records lokal; neuer Smoke `SMOKE_MODE=outbound-active-ui` prueft Lead Queue, Auto-Draft, Freigabe-Gate, Ready-to-Send, Mailserver-Queue und Conversations-Deep-Link mit 4 Screenshots; Welle 10 steigt auf 50%, Gesamtfortschritt auf 62% |

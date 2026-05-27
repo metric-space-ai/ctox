@@ -227,6 +227,9 @@
   flex: 1;
   max-width: 320px;
   position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
 }
 
 .fibu-search-input {
@@ -245,6 +248,13 @@
 .fibu-search-input:focus {
   border-color: var(--fibu-primary);
   box-shadow: 0 0 0 2px var(--fibu-glow-color);
+}
+
+.fibu-result-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
 }
 
 /* Dropzones */
@@ -347,17 +357,22 @@
   flex: 1;
   overflow-y: auto;
   padding: 16px 24px;
+  min-height: 0;
 }
 
 /* Fibu Tables (Fully Theme-Adaptive) */
 .fibu-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
   text-align: left;
 }
 
 .fibu-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: color-mix(in srgb, var(--surface-2) 70%, transparent);
   font-weight: 700;
   color: var(--text-strong);
@@ -387,6 +402,11 @@
 .fibu-table tr.selected td {
   background: var(--fibu-glow-color);
   border-bottom-color: var(--fibu-primary);
+  box-shadow: inset 3px 0 0 var(--fibu-primary);
+}
+
+.fibu-table tr[aria-selected="true"] td:first-child {
+  color: var(--text-strong);
 }
 
 .fibu-table tr.group-row td {
@@ -727,14 +747,17 @@
 }
 
 /* Bottom Slide-up Drawer Modal */
+.fibu-module .ctox-bottom-drawer,
 .fibu-bottom-drawer {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  height: 380px;
+  height: min(430px, calc(100% - 32px));
   background: var(--glass-bg);
   border-top: 1px solid var(--line);
+  border-top-left-radius: 14px;
+  border-top-right-radius: 14px;
   box-shadow: var(--shadow);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -743,10 +766,22 @@
   flex-direction: column;
   transform: translateY(100%);
   transition: transform 0.35s cubic-bezier(0.25, 0.8, 0.25, 1);
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
+.fibu-module .ctox-bottom-drawer.is-open,
 .fibu-bottom-drawer.open {
   transform: translateY(0);
+  visibility: visible;
+  pointer-events: auto;
+}
+
+body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
+  bottom: calc(var(--shell-taskbar-safe-area, 58px) + env(safe-area-inset-bottom, 0px));
+  max-height: min(430px, calc(100% - var(--shell-taskbar-safe-area, 58px) - 32px));
 }
 
 .fibu-drawer-handle {
@@ -799,6 +834,34 @@
   flex: 1;
   overflow-y: auto;
   padding: 24px 30px;
+  min-height: 0;
+}
+
+.fibu-drawer-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin: 20px -30px -24px;
+  padding: 14px 30px 18px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.fibu-validation-summary {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--fibu-danger);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.fibu-validation-summary.is-valid {
+  color: var(--fibu-success);
 }
 
 /* Edit split entry line item styles */

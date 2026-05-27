@@ -518,6 +518,17 @@ body.ctox-column-resizing {
   color: var(--ctox-accent);
 }
 
+.ctox-web-stack-diagnostic {
+  margin: 4px 0 0;
+  border: 1px solid color-mix(in srgb, var(--ctox-accent) 26%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ctox-accent) 7%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 5px 8px;
+}
+
 .ctox-inbound-list span,
 .ctox-inbound-list small {
   min-width: 0;
@@ -1051,6 +1062,16 @@ body.ctox-column-resizing {
   color: var(--ctox-accent);
 }
 
+.ctox-flow-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.ctox-flow-toolbar button:disabled:hover {
+  background: transparent;
+  color: var(--text);
+}
+
 .ctox-flow-toolbar span {
   min-width: 42px;
   color: var(--ctox-muted);
@@ -1324,6 +1345,15 @@ body.ctox-column-resizing {
   cursor: pointer;
 }
 
+.ctox-timeline-panel.is-disabled {
+  color: var(--ctox-muted);
+}
+
+.ctox-timeline-panel.is-disabled input[type="range"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .ctox-timeline-panel input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 999px;
@@ -1395,6 +1425,15 @@ body.ctox-column-resizing {
 .ctox-timeline-scale button:hover,
 .ctox-timeline-scale button.is-current {
   color: var(--ctox-accent);
+}
+
+.ctox-timeline-scale button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.ctox-timeline-scale button:disabled:hover {
+  color: inherit;
 }
 
 .ctox-timeline-scale span {

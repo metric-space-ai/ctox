@@ -77,6 +77,56 @@
       }
     },
     {
+      "id": "tickets",
+      "title": "Tickets",
+      "description": "Native CTOX ticket operations surface for synchronized tickets, routed cases, self-work, approvals, verification, and writeback evidence.",
+      "entry": "modules/tickets/index.html",
+      "collections": [
+        "ctox_ticket_items",
+        "ctox_ticket_events",
+        "ctox_ticket_event_routing_state",
+        "ctox_ticket_cases",
+        "ctox_ticket_self_work_items",
+        "ctox_ticket_self_work_notes",
+        "ctox_ticket_label_assignments",
+        "ctox_ticket_control_bundles",
+        "ctox_ticket_approvals",
+        "ctox_ticket_verifications",
+        "ctox_ticket_writebacks"
+      ],
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-tickets\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-tickets\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><path d=\"M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z\" fill=\"url(#grad-tickets)\" fill-opacity=\"0.12\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M15 3v5h5\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 12h8M8 16h6\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+        "left": "ticket inbox, source and state filters",
+        "center": "selected ticket timeline and case evidence",
+        "right": "case controls, self-work, approval, verification and writeback context"
+      },
+      "category": "Operations",
+      "version": "v1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "tickets",
+        "cases",
+        "approvals",
+        "support"
+      ],
+      "store": {
+        "summary": "Read-only CTOX ticket operations app over native RxDB/WebRTC ticket projections.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/tickets",
+        "installable": false,
+        "editable_after_install": false,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true,
+      "source": "core",
+      "core": true,
+      "editable": true,
+      "deletable": false
+    },
+    {
       "id": "documents",
       "title": "Documents",
       "description": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",

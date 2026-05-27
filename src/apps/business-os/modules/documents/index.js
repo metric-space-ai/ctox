@@ -419,9 +419,17 @@ async function refreshDocumentsFromLocal(state) {
 
 async function refreshDocuments(state) {
   const collection = state.ctx.db?.raw?.documents;
-  state.documents = collection
-    ? (await collection.find({ selector: { is_deleted: false }, sort: [{ updated_at_ms: 'desc' }] }).exec()).map((doc) => doc.toJSON())
+  const rawDocuments = collection
+    ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
     : [];
+  state.documents = rawDocuments
+    .map((doc) => normalizeDocumentRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+    .filter(isActiveDocumentRecord);
+
+  if (state.selectedId && !state.documents.some((record) => record.id === state.selectedId)) {
+    state.selectedId = state.documents[0]?.id || '';
+    state.selectedVersion = null;
+  }
   if (!state.selectedId && state.documents[0]) state.selectedId = state.documents[0].id;
 }
 
@@ -554,15 +562,17 @@ async function importDocumentFile(state, file, workflow = {}) {
 
 async function loadSelectedVersion(state) {
   const record = selectedRecord(state);
-  if (!record?.current_version_id) {
+  if (!record?.id) {
     state.selectedVersion = null;
     return null;
   }
-  let doc = await withTimeout(
-    state.ctx.db.raw.document_versions.findOne(record.current_version_id).exec(),
-    4500,
-    `Version ${record.current_version_id} konnte nicht geladen werden.`,
-  );
+  let doc = record.current_version_id
+    ? await withTimeout(
+      state.ctx.db.raw.document_versions.findOne(record.current_version_id).exec(),
+      4500,
+      `Version ${record.current_version_id} konnte nicht geladen werden.`,
+    )
+    : null;
   if (!doc) {
     const fallback = await withTimeout(
       state.ctx.db.raw.document_versions.find({
@@ -601,25 +611,25 @@ function renderLeft(state) {
         <div class="ctox-pane-actions documents-column-actions">
           <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" title="${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}" data-documents-new-markdown>${iconSvg('new')}</button>
           <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" title="${escapeHtml(state.t('importDocument', 'Dokument importieren'))}" data-documents-import-open>${iconSvg('import')}</button>
-          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
+          <button class="ctox-pane-icon documents-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewähltes Dokument exportieren'))}" data-documents-export ${canExportDocument(state) ? '' : 'disabled aria-disabled="true"'}>${iconSvg('export')}</button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
+      <div class="ctox-pane-tools documents-filter-bar">
         <input class="ctox-pane-search" type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Dokument suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Dokumente suchen'))}" data-documents-search value="${escapeHtml(state.searchQuery)}">
-        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort style="width: 70px; flex-shrink: 0;">
+        <select class="ctox-pane-filter documents-filter-control" aria-label="${escapeHtml(state.t('sortLabel', 'Dokumente sortieren'))}" data-documents-sort>
           <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
           <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status style="width: 60px; flex-shrink: 0;">
+        <select class="ctox-pane-sort documents-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Dokumentstatus filtern'))}" data-documents-status>
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
-        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag style="width: 60px; flex-shrink: 0;">
+        <select class="ctox-pane-sort documents-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Dokument-Tags filtern'))}" data-documents-tag>
           ${tagFilterOptions(state)}
         </select>
       </div>
@@ -757,7 +767,7 @@ function openManageDocumentDrawer(state, record) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>${escapeHtml(state.t('manageDocumentTitle', 'Dokument verwalten'))}</h2>
+        <h2 id="documents-manage-dialog-title">${escapeHtml(state.t('manageDocumentTitle', 'Dokument verwalten'))}</h2>
         <p>${escapeHtml(record.filename)} · ${escapeHtml(record.document_type === 'markdown_document' ? 'Markdown' : 'DOCX')}</p>
       </div>
       <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
@@ -788,7 +798,7 @@ function openManageDocumentDrawer(state, record) {
       </div>
     </form>
   `;
-  wireDrawerClose(state, body);
+  wireDrawerClose(state, body, { labelledBy: 'documents-manage-dialog-title' });
   body.querySelector('[data-documents-delete]')?.addEventListener('click', async () => {
     const confirmed = await showBusinessConfirm(state.t('deleteConfirmMessage', 'Dokument "{0}" löschen?', record.title), {
       title: state.t('deleteConfirmTitle', 'Dokument löschen'),
@@ -874,15 +884,15 @@ function openNewDocumentDrawer(state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>${escapeHtml(state.t('newDocumentTitle', 'Neues Dokument'))}</h2>
+        <h2 id="documents-new-dialog-title">${escapeHtml(state.t('newDocumentTitle', 'Neues Dokument'))}</h2>
         <p>${escapeHtml(state.t('newDocumentDescription', 'CTOX erstellt ein Word-Dokument per Research-/Report-Runbook.'))}</p>
       </div>
       <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
-    <form class="documents-drawer-form" data-documents-new-form>
+    <form class="documents-drawer-form" data-documents-new-form novalidate>
       <label>
         <span>${escapeHtml(state.t('title', 'Titel'))}</span>
-        <input name="title" value="Research-${new Date().toISOString().slice(0, 10)}" placeholder="${escapeHtml(state.t('title', 'Titel'))}">
+        <input name="title" value="Research-${new Date().toISOString().slice(0, 10)}" placeholder="${escapeHtml(state.t('title', 'Titel'))}" required>
       </label>
       <label>
         <span>${escapeHtml(state.t('documentType', 'Dokumenttyp'))}</span>
@@ -894,20 +904,26 @@ function openNewDocumentDrawer(state) {
       </label>
       <label>
         <span>${escapeHtml(state.t('prompt', 'Prompt'))}</span>
-        <textarea name="prompt" placeholder="${escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}"></textarea>
+        <textarea name="prompt" required placeholder="${escapeHtml(state.t('newDocumentPromptPlaceholder', 'Was soll CTOX recherchieren und als Word-Dokument ausarbeiten?'))}"></textarea>
       </label>
       <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
+      <p class="documents-form-status" role="status" data-documents-form-status></p>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit">${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
+        <button type="submit" disabled aria-disabled="true">${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
       </div>
     </form>
   `;
-  wireDrawerClose(state, body);
+  wireDrawerClose(state, body, { labelledBy: 'documents-new-dialog-title' });
   body.querySelector('[data-documents-open-knowledge]')?.addEventListener('click', () => openKnowledgeRunbooks(state));
-  body.querySelector('[data-documents-new-form]')?.addEventListener('submit', async (event) => {
+  const newForm = body.querySelector('[data-documents-new-form]');
+  updateNewDocumentSubmitState(state, newForm);
+  newForm?.addEventListener('input', () => updateNewDocumentSubmitState(state, newForm));
+  newForm?.addEventListener('change', () => updateNewDocumentSubmitState(state, newForm));
+  newForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
     const formElement = event.currentTarget;
+    if (!updateNewDocumentSubmitState(state, formElement)) return;
     const submit = formElement.querySelector('button[type="submit"]');
     const form = new FormData(event.currentTarget);
     try {
@@ -939,15 +955,15 @@ function openImportDrawer(state) {
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>${escapeHtml(state.t('importDocumentTitle', 'Dokument importieren'))}</h2>
+        <h2 id="documents-import-dialog-title">${escapeHtml(state.t('importDocumentTitle', 'Dokument importieren'))}</h2>
         <p>${escapeHtml(state.t('importDocumentDescription', 'Datei auswählen, Importmodus festlegen und optional direkt ein Runbook anwenden.'))}</p>
       </div>
       <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
     </header>
-    <form class="documents-drawer-form" data-documents-import-form>
+    <form class="documents-drawer-form" data-documents-import-form novalidate>
       <label>
         <span>${escapeHtml(state.t('file', 'Datei'))}</span>
-        <input type="file" name="file" accept=".docx,.md,.markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain">
+        <input type="file" name="file" required data-documents-import-file accept=".docx,.md,.markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/markdown,text/plain">
       </label>
       <label>
         <span>${escapeHtml(state.t('importMode', 'Import-Modus'))}</span>
@@ -969,21 +985,28 @@ function openImportDrawer(state) {
         <textarea name="prompt" data-documents-runbook-prompt disabled placeholder="${escapeHtml(state.t('runbookPromptPlaceholder', 'Optionaler Prompt für das Runbook beim Import'))}"></textarea>
       </label>
       <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('openKnowledge', 'CTOX Knowledge öffnen'))}</button>
+      <p class="documents-form-status" role="status" data-documents-form-status></p>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit">${escapeHtml(state.t('import', 'Importieren'))}</button>
+        <button type="submit" disabled aria-disabled="true">${escapeHtml(state.t('import', 'Importieren'))}</button>
       </div>
     </form>
   `;
-  wireDrawerClose(state, body);
+  wireDrawerClose(state, body, { labelledBy: 'documents-import-dialog-title' });
   body.querySelector('[data-documents-open-knowledge]')?.addEventListener('click', () => openKnowledgeRunbooks(state));
+  const importForm = body.querySelector('[data-documents-import-form]');
+  updateImportSubmitState(state, importForm);
   body.querySelector('[data-documents-import-mode]')?.addEventListener('change', (event) => {
     const enabled = event.currentTarget.value === 'runbook';
     body.querySelector('[data-documents-runbook-select]').disabled = !enabled;
     body.querySelector('[data-documents-runbook-prompt]').disabled = !enabled;
+    updateImportSubmitState(state, importForm);
   });
-  body.querySelector('[data-documents-import-form]')?.addEventListener('submit', async (event) => {
+  importForm?.addEventListener('change', () => updateImportSubmitState(state, importForm));
+  importForm?.addEventListener('input', () => updateImportSubmitState(state, importForm));
+  importForm?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!updateImportSubmitState(state, event.currentTarget)) return;
     const form = new FormData(event.currentTarget);
     const file = form.get('file');
     if (!(file instanceof File) || !file.name) {
@@ -1005,12 +1028,13 @@ function openImportDrawer(state) {
 
 function openExportDrawer(state) {
   const record = selectedRecord(state);
+  const canExport = canExportDocument(state);
   const body = document.createElement('div');
   body.className = 'drawer-body documents-action-drawer';
   body.innerHTML = `
     <header class="drawer-header-row">
       <div>
-        <h2>${escapeHtml(state.t('exportDocumentTitle', 'Dokument exportieren'))}</h2>
+        <h2 id="documents-export-dialog-title">${escapeHtml(state.t('exportDocumentTitle', 'Dokument exportieren'))}</h2>
         <p>${record ? escapeHtml(record.title) : escapeHtml(state.t('noDocumentSelected', 'Kein Dokument ausgewählt.'))}</p>
       </div>
       <button class="icon-button" type="button" data-documents-drawer-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
@@ -1018,32 +1042,68 @@ function openExportDrawer(state) {
     <form class="documents-drawer-form" data-documents-export-form>
       <label>
         <span>${escapeHtml(state.t('format', 'Format'))}</span>
-        <select name="format" ${record ? '' : 'disabled'}>
+        <select name="format" ${canExport ? '' : 'disabled'}>
           <option value="native">${record?.document_type === 'markdown_document' ? 'Markdown' : 'DOCX'} ${escapeHtml(state.t('export', 'Export starten'))}</option>
         </select>
       </label>
       <label>
         <span>${escapeHtml(state.t('filename', 'Dateiname'))}</span>
-        <input name="filename" value="${escapeHtml(record ? record.filename.replace(/\.(docx|md|markdown)$/i, '') + (record.document_type === 'markdown_document' ? '-edited.md' : '-edited.docx') : '')}" ${record ? '' : 'disabled'}>
+        <input name="filename" value="${escapeHtml(record ? record.filename.replace(/\.(docx|md|markdown)$/i, '') + (record.document_type === 'markdown_document' ? '-edited.md' : '-edited.docx') : '')}" ${canExport ? '' : 'disabled'}>
       </label>
       <div class="documents-drawer-actions">
         <button type="button" data-documents-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit" ${record ? '' : 'disabled'}>${escapeHtml(state.t('export', 'Export starten'))}</button>
+        <button type="submit" ${canExport ? '' : 'disabled aria-disabled="true"'}>${escapeHtml(state.t('export', 'Export starten'))}</button>
       </div>
     </form>
   `;
-  wireDrawerClose(state, body);
+  wireDrawerClose(state, body, { labelledBy: 'documents-export-dialog-title' });
   body.querySelector('[data-documents-export-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!canExportDocument(state)) return;
     await exportSelectedDocument(state, body.querySelector('[name="filename"]')?.value || '');
     state.ctx.closeDrawers();
   });
   state.ctx.openLeftDrawer(body);
 }
 
-function wireDrawerClose(state, body) {
-  body.querySelector('[data-documents-drawer-close]')?.addEventListener('click', state.ctx.closeDrawers);
-  body.querySelector('[data-documents-drawer-cancel]')?.addEventListener('click', state.ctx.closeDrawers);
+function wireDrawerClose(state, body, options = {}) {
+  body.setAttribute('role', 'dialog');
+  body.setAttribute('aria-modal', 'true');
+  body.tabIndex = -1;
+  if (options.labelledBy) body.setAttribute('aria-labelledby', options.labelledBy);
+  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  let cleaned = false;
+  const observer = new MutationObserver(() => {
+    if (!body.isConnected) cleanup();
+  });
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    observer.disconnect();
+    window.removeEventListener('keydown', onKeyDown, true);
+    if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
+  };
+  const close = () => {
+    cleanup();
+    state.ctx.closeDrawers();
+  };
+  function onKeyDown(event) {
+    if (!body.isConnected) {
+      cleanup();
+      return;
+    }
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    close();
+  }
+  body.querySelector('[data-documents-drawer-close]')?.addEventListener('click', close);
+  body.querySelector('[data-documents-drawer-cancel]')?.addEventListener('click', close);
+  observer.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener('keydown', onKeyDown, true);
+  requestAnimationFrame(() => {
+    if (!body.isConnected) return;
+    focusFirstDialogControl(body);
+  });
 }
 
 function renderWorkflowPanel(state) {
@@ -1157,6 +1217,118 @@ function bindWorkflowControls(state, wrap) {
   });
 }
 
+function normalizeDocumentRecord(record = {}) {
+  const title = String(record.title || record.filename || record.id || '').trim();
+  const filename = String(record.filename || (title ? ensureExtension(slugFilename(title), record.document_type === 'markdown_document' ? '.md' : '.docx') : '')).trim();
+  return {
+    ...record,
+    id: String(record.id || '').trim(),
+    title: title || stateLessTitleFallback(record),
+    filename: filename || 'document.docx',
+    status: normalizeDocumentStatus(record.status || 'Draft'),
+    document_type: record.document_type || (isMarkdownFilename(filename) ? 'markdown_document' : 'word_document'),
+    current_version_id: String(record.current_version_id || ''),
+    index_text: String(record.index_text || ''),
+    tags: normalizeTags(record.tags || []),
+    updated_at_ms: Number(record.updated_at_ms || record.created_at_ms || 0),
+  };
+}
+
+function stateLessTitleFallback(record = {}) {
+  return String(record.id || '').trim() || 'Neues Dokument';
+}
+
+function isActiveDocumentRecord(record = {}) {
+  return Boolean(record.id) && record.is_deleted !== true;
+}
+
+function canExportDocument(state) {
+  const record = selectedRecord(state);
+  return Boolean(record?.id && (state.selectedVersion?.id || record.current_version_id));
+}
+
+function readNewDocumentInput(form) {
+  const formData = new FormData(form);
+  return {
+    title: formData.get('title')?.toString() || '',
+    runbookId: formData.get('runbook')?.toString() || '',
+    prompt: formData.get('prompt')?.toString() || '',
+    tags: formData.get('tags')?.toString() || '',
+  };
+}
+
+function validateNewDocumentInput(input = {}) {
+  const title = String(input.title || '').trim();
+  const prompt = String(input.prompt || '').trim();
+  const runbookId = String(input.runbookId || '').trim();
+  if (!title) return { valid: false, key: 'validationTitleRequired', message: 'Titel fehlt.' };
+  if (!runbookId) return { valid: false, key: 'validationRunbookRequired', message: 'Runbook fehlt.' };
+  if (!prompt) return { valid: false, key: 'validationPromptRequired', message: 'Prompt erforderlich.' };
+  return { valid: true, message: '' };
+}
+
+function updateNewDocumentSubmitState(state, form) {
+  if (!form) return false;
+  const validation = validateNewDocumentInput(readNewDocumentInput(form));
+  const message = validation.valid ? '' : state.t(validation.key, validation.message);
+  setFormValidationState(form, validation.valid, message);
+  return validation.valid;
+}
+
+function readImportInput(form) {
+  const formData = new FormData(form);
+  const file = formData.get('file');
+  return {
+    file,
+    importMode: formData.get('importMode')?.toString() || 'direct',
+    runbookId: formData.get('runbook')?.toString() || '',
+  };
+}
+
+function validateImportInput(input = {}) {
+  const file = input.file;
+  if (!(file instanceof File) || !file.name) {
+    return { valid: false, key: 'validationFileRequired', message: 'Datei erforderlich.' };
+  }
+  if (!isSupportedDocumentFile(file)) {
+    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur DOCX oder Markdown.' };
+  }
+  if (input.importMode === 'runbook' && !String(input.runbookId || '').trim()) {
+    return { valid: false, key: 'validationRunbookRequired', message: 'Runbook fehlt.' };
+  }
+  return { valid: true, message: '' };
+}
+
+function updateImportSubmitState(state, form) {
+  if (!form) return false;
+  const validation = validateImportInput(readImportInput(form));
+  const message = validation.valid ? '' : state.t(validation.key, validation.message);
+  setFormValidationState(form, validation.valid, message);
+  return validation.valid;
+}
+
+function setFormValidationState(form, isValid, message = '') {
+  const submit = form.querySelector('button[type="submit"]');
+  const status = form.querySelector('[data-documents-form-status]');
+  if (submit) {
+    submit.disabled = !isValid;
+    submit.setAttribute('aria-disabled', String(!isValid));
+  }
+  if (status) {
+    status.textContent = isValid ? '' : message;
+    status.hidden = isValid || !message;
+  }
+}
+
+function focusFirstDialogControl(body) {
+  const target = body.querySelector('[autofocus], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
+  if (target instanceof HTMLElement) {
+    target.focus({ preventScroll: true });
+    return;
+  }
+  body.focus({ preventScroll: true });
+}
+
 function documentTags(record) {
   return normalizeTags(record?.tags || []);
 }
@@ -1238,27 +1410,28 @@ function visibleDocuments(state) {
 function renderRight(state) {
   const record = selectedRecord(state);
   const selectedRunbook = defaultRunbookId(state);
+  const canRunbook = Boolean(record?.id && selectedRunbook && (record.current_version_id || state.selectedVersion?.id));
   const wrap = document.createElement('div');
   wrap.className = 'documents-runbooks';
   wrap.innerHTML = `
     <div class="documents-panel-title"><span>Runbooks</span><strong>${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'none'))}</strong></div>
     <form class="documents-runbook-form" data-documents-runbook-form>
-      <select data-documents-runbook>
+      <select data-documents-runbook ${record ? '' : 'disabled'}>
         ${runbookOptions(state, selectedRunbook)}
       </select>
-      <textarea data-documents-prompt placeholder="${escapeHtml(state.t('promptPlaceholder', 'Prompt für dieses Dokument'))}"></textarea>
-      <button type="submit" ${record ? '' : 'disabled'}>${escapeHtml(state.t('runbookStart', 'Runbook starten'))}</button>
+      <textarea data-documents-prompt ${record ? '' : 'disabled'} placeholder="${escapeHtml(state.t('promptPlaceholder', 'Prompt für dieses Dokument'))}"></textarea>
+      <button type="submit" ${canRunbook ? '' : 'disabled aria-disabled="true"'}>${escapeHtml(state.t('runbookStart', 'Runbook starten'))}</button>
       <button class="documents-knowledge-link" type="button" data-documents-open-knowledge>${iconSvg('knowledge')} ${escapeHtml(state.t('manageRunbooks', 'Runbooks verwalten'))}</button>
     </form>
   `;
   wrap.querySelector('[data-documents-runbook-form]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!record) return;
+    if (!canRunbook) return;
     const runbook = wrap.querySelector('[data-documents-runbook]')?.value || defaultRunbookId(state);
     const prompt = wrap.querySelector('[data-documents-prompt]')?.value || '';
     await dispatchDocumentRunbook(state, {
       record,
-      versionId: record.current_version_id,
+      versionId: state.selectedVersion?.id || record.current_version_id,
       runbookId: runbook,
       prompt,
       sourceAction: 'manual_runbook',
@@ -1898,7 +2071,11 @@ async function saveDraftVersion(state, document) {
 
 async function exportSelectedDocument(state, requestedFilename = '') {
   const record = selectedRecord(state);
-  if (!record || !state.selectedVersion) return;
+  if (!record) return;
+  if (!state.selectedVersion && record.current_version_id) {
+    await loadSelectedVersion(state);
+  }
+  if (!state.selectedVersion) return;
   const formatModule = await ensureDocumentFormatModule(state);
   const isMarkdown = record.document_type === 'markdown_document' || record.mime_type === MARKDOWN_MIME;
   let data;
@@ -2039,7 +2216,12 @@ function isDocxFile(file) {
 }
 
 function isMarkdownFile(file) {
-  return /\.(md|markdown)$/i.test(file.name) || file.type === MARKDOWN_MIME || file.type === 'text/plain';
+  const hasMarkdownExtension = /\.(md|markdown)$/i.test(file.name);
+  return file.type === MARKDOWN_MIME || (hasMarkdownExtension && (!file.type || file.type === 'text/plain'));
+}
+
+function isMarkdownFilename(filename) {
+  return /\.(md|markdown)$/i.test(String(filename || ''));
 }
 
 function iconSvg(name) {
@@ -2131,6 +2313,14 @@ function ensureSuperDocStyles() {
   link.dataset.superdocStyle = 'true';
   document.head.append(link);
 }
+
+export const __documentsTestHooks = {
+  isActiveDocumentRecord,
+  normalizeDocumentRecord,
+  validateImportInput,
+  validateNewDocumentInput,
+  visibleDocuments,
+};
 
 function escapeHtml(value) {
   return String(value ?? '')

@@ -4850,3 +4850,160 @@ body[data-auth-state="locked"] .topbar {
   color: #fca5a5;
   margin-bottom: 12px;
 }
+
+/* Shared UI safety and consistency pass. Keep this low-specificity so module
+   CSS can opt into stronger local behavior without fighting the shell. */
+:root {
+  --shell-taskbar-safe-area: 58px;
+  --shell-focus-ring: 0 0 0 3px color-mix(in srgb, var(--accent) 24%, transparent);
+  --shell-danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  --shell-danger-line: color-mix(in srgb, var(--danger) 48%, var(--line));
+}
+
+:where(button, [role="button"], input, select, textarea):focus-visible,
+:where(.module-tab, .shell-taskbar-item, .shell-window-control, .shell-context-menu-item):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: var(--shell-focus-ring);
+}
+
+:where(button, input, select, textarea):disabled,
+:where(button, input, select, textarea)[aria-disabled="true"],
+:where([role="button"])[aria-disabled="true"] {
+  cursor: not-allowed !important;
+  opacity: 0.48;
+  filter: grayscale(0.22);
+  box-shadow: none !important;
+}
+
+:where(button, [role="button"]):where(:disabled, [aria-disabled="true"]):hover,
+:where(button, [role="button"]):where(:disabled, [aria-disabled="true"]):active {
+  transform: none !important;
+}
+
+:where(
+  .os-toolbar,
+  .ctox-toolbar,
+  [data-os-toolbar],
+  .module-appbar-actions,
+  .runtime-actions,
+  .settings-actions,
+  .module-admin-actions,
+  .documents-markdown-toolbar,
+  .browser-toolbar,
+  .outbound-unified-toolbar,
+  .outbound-research-toolbar,
+  .research-sources-shards-toolbar,
+  .shiftflow-timesheets-toolbar,
+  .shiftflow-scheduler-toolbar,
+  .shiftflow-billing-toolbar,
+  .fibu-panel-toolbar
+) {
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+:where(
+  .os-filter-bar,
+  .ctox-filter-bar,
+  [data-os-filters],
+  .reports-filters,
+  .outbound-filter,
+  .conv-channel-filters,
+  .conv-secondary-filters,
+  .shiftflow-pane-filters,
+  .research-sources-shards-filters
+) {
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+:where(
+  .os-toolbar,
+  .ctox-toolbar,
+  [data-os-toolbar],
+  .os-filter-bar,
+  .ctox-filter-bar,
+  [data-os-filters],
+  .reports-filters,
+  .outbound-filter,
+  .conv-channel-filters,
+  .conv-secondary-filters,
+  .shiftflow-pane-filters,
+  .research-sources-shards-filters
+) :where(button, .text-button, .icon-button, select, input) {
+  min-height: 30px;
+}
+
+:where(button, a):where(
+  .os-btn-danger,
+  .danger-button,
+  .btn-danger,
+  .fibu-btn-danger,
+  .documents-danger-button,
+  .ctox-task-delete,
+  .is-delete
+),
+:where(.card-btn.danger, .os-icon-btn.is-danger, .shell-window-control--close:hover) {
+  border-color: var(--shell-danger-line);
+  background: var(--shell-danger-soft);
+  color: var(--danger);
+}
+
+:where(button, a):where(
+  .os-btn-danger,
+  .danger-button,
+  .btn-danger,
+  .fibu-btn-danger,
+  .documents-danger-button,
+  .ctox-task-delete,
+  .is-delete
+):focus-visible {
+  outline-color: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+
+.empty-state {
+  align-items: center;
+  justify-items: center;
+}
+
+.empty-state > :where(strong, span, p) {
+  max-width: 44ch;
+  margin-inline: auto;
+}
+
+.empty-state strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.empty-state :where(span, p) {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.workspace-col-resizer:focus-visible,
+[data-resizer]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.workspace-col-resizer:focus-visible::before,
+[data-resizer]:focus-visible::before {
+  opacity: 1;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+body[data-shell-taskbar-open] .workspace-frame {
+  padding-bottom: calc(var(--shell-taskbar-safe-area) + env(safe-area-inset-bottom, 0px));
+}
+
+body[data-shell-taskbar-open] .drawer-bottom {
+  bottom: calc(var(--shell-taskbar-safe-area) + env(safe-area-inset-bottom, 0px));
+  max-height: min(420px, calc(80svh - var(--shell-taskbar-safe-area)));
+}

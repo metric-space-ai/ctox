@@ -75,8 +75,6 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: src/core/rxdb/js-fork/source/package-lock.json
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -121,7 +119,6 @@ jobs:
       - name: ctox-rxdb-js bundle provenance
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
-          npm --prefix src/core/rxdb/js-fork/source ci
           node --check src/core/rxdb/tools/assert_js_fork_dependency_audit.js
           node src/core/rxdb/tools/assert_js_fork_dependency_audit.js
           node src/scripts/vendor-builds/build-ctox-rxdb-js.mjs --artifact-dir runtime/build/ctox-rxdb-js --write-provenance
@@ -132,13 +129,8 @@ jobs:
         with:
           name: ctox-rxdb-js-bundle-evidence
           path: |
-            runtime/build/ctox-rxdb-js/rxdb-bundle.mjs
-            runtime/build/ctox-rxdb-js/rxdb-bundle.provenance.json
-            src/core/rxdb/js-fork/bundle-contract.json
-            src/core/rxdb/js-fork/dependency-audit-baseline.json
-            src/core/rxdb/js-fork/ctox-rxdb-js.manifest.json
-            src/core/rxdb/js-fork/source/package.json
-            src/core/rxdb/js-fork/source/package-lock.json
+            runtime/build/ctox-rxdb-js/ctox-rxdb-js.mjs
+            runtime/build/ctox-rxdb-js/ctox-rxdb-js.provenance.json
             src/apps/business-os/rxdb/manifest.json
             src/apps/business-os/rxdb/README.md
             src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs

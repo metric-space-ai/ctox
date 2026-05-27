@@ -17,6 +17,8 @@ const labels = {
     externalSources: 'Externe Quellen',
     newEvent: 'Neuer Termin',
     editEvent: 'Termin bearbeiten',
+    dataReady: 'Daten geladen',
+    noDatabase: 'Keine lokale Datenbank verbunden',
     save: 'Speichern',
     delete: 'Löschen',
     cancel: 'Abbrechen'
@@ -33,6 +35,8 @@ const labels = {
     externalSources: 'External Sources',
     newEvent: 'New Event',
     editEvent: 'Edit Event',
+    dataReady: 'Data loaded',
+    noDatabase: 'No local database connected',
     save: 'Save',
     delete: 'Delete',
     cancel: 'Cancel'
@@ -58,12 +62,14 @@ const state = {
   // Active editing item in Drawer
   editingType: null, // 'event' | 'bookingPage' | 'calendar'
   editingItem: null,
+  selectedBookingPageId: null,
 
   // Subscriptions & Cleanups
   rxSubscriptions: [],
   activeFormSubscription: null,
   calendarViewInstance: null,
-  renderTimer: null
+  renderTimer: null,
+  domHandlers: null
 };
 
 const els = {};
@@ -228,8 +234,10 @@ function bindElements(host) {
   els.bookingPagesList = host.querySelector('#bookingPagesListContainer');
   els.calendarTitle = host.querySelector('#calendarViewTitle');
   els.calendarRangeTitle = host.querySelector('#calendarRangeTitle');
+  els.calendarDataStatus = host.querySelector('#calendarDataStatus');
   els.eventCalendarMount = host.querySelector('#eventCalendarView');
 
+  els.bookingContext = host.querySelector('#bookingContext');
   els.bookingHoldsList = host.querySelector('#bookingHoldsList');
   els.bookingsList = host.querySelector('#bookingsList');
 
@@ -250,23 +258,44 @@ function bindElements(host) {
 }
 
 function wireEvents() {
-  els.btnNewEvent?.addEventListener('click', () => openEventForm());
-  els.btnPrev?.addEventListener('click', () => state.calendarViewInstance?.prev());
-  els.btnNext?.addEventListener('click', () => state.calendarViewInstance?.next());
-  els.btnToday?.addEventListener('click', () => state.calendarViewInstance?.today());
-  els.btnAddNewCalendar?.addEventListener('click', () => openCalendarForm());
-  els.btnAddBookingPage?.addEventListener('click', () => openBookingPageForm());
-  els.closeDrawerBtn?.addEventListener('click', closeDrawer);
+  state.domHandlers = {
+    newEvent: () => openEventForm(),
+    prev: () => state.calendarViewInstance?.prev(),
+    next: () => state.calendarViewInstance?.next(),
+    today: () => state.calendarViewInstance?.today(),
+    newCalendar: () => openCalendarForm(),
+    newBookingPage: () => openBookingPageForm(),
+    closeDrawer,
+    keydown: (event) => {
+      if (event.key === 'Escape' && els.drawer?.classList.contains('is-open')) {
+        event.preventDefault();
+        closeDrawer();
+      }
+    }
+  };
+
+  els.btnNewEvent?.addEventListener('click', state.domHandlers.newEvent);
+  els.btnPrev?.addEventListener('click', state.domHandlers.prev);
+  els.btnNext?.addEventListener('click', state.domHandlers.next);
+  els.btnToday?.addEventListener('click', state.domHandlers.today);
+  els.btnAddNewCalendar?.addEventListener('click', state.domHandlers.newCalendar);
+  els.btnAddBookingPage?.addEventListener('click', state.domHandlers.newBookingPage);
+  els.closeDrawerBtn?.addEventListener('click', state.domHandlers.closeDrawer);
+  document.addEventListener('keydown', state.domHandlers.keydown);
 }
 
 function unbindEvents() {
-  els.btnNewEvent?.removeEventListener('click', () => openEventForm());
-  els.btnPrev?.removeEventListener('click', () => state.calendarViewInstance?.prev());
-  els.btnNext?.removeEventListener('click', () => state.calendarViewInstance?.next());
-  els.btnToday?.removeEventListener('click', () => state.calendarViewInstance?.today());
-  els.btnAddNewCalendar?.removeEventListener('click', () => openCalendarForm());
-  els.btnAddBookingPage?.removeEventListener('click', () => openBookingPageForm());
-  els.closeDrawerBtn?.removeEventListener('click', closeDrawer);
+  const handlers = state.domHandlers;
+  if (!handlers) return;
+  els.btnNewEvent?.removeEventListener('click', handlers.newEvent);
+  els.btnPrev?.removeEventListener('click', handlers.prev);
+  els.btnNext?.removeEventListener('click', handlers.next);
+  els.btnToday?.removeEventListener('click', handlers.today);
+  els.btnAddNewCalendar?.removeEventListener('click', handlers.newCalendar);
+  els.btnAddBookingPage?.removeEventListener('click', handlers.newBookingPage);
+  els.closeDrawerBtn?.removeEventListener('click', handlers.closeDrawer);
+  document.removeEventListener('keydown', handlers.keydown);
+  state.domHandlers = null;
 }
 
 function setupResizers(host) {
@@ -453,6 +482,13 @@ async function loadDataFromDb() {
     state.holds = hlds.map(d => d.toJSON());
     state.bookings = bks.map(d => d.toJSON());
 
+    if (
+      state.selectedBookingPageId &&
+      !state.bookingPages.some(page => page.id === state.selectedBookingPageId)
+    ) {
+      state.selectedBookingPageId = null;
+    }
+
     // Set default selected calendars if none selected yet
     if (state.selectedCalendarIds.size === 0) {
       state.calendars.forEach(c => {
@@ -500,10 +536,23 @@ function renderAll() {
   renderCalendarsSidebar();
   renderBookingPagesSidebar();
   renderAuditingLists();
+  renderDataStatus();
 
   // Refresh Calendar adapter events
   const filteredEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
   state.calendarViewInstance?.setEvents(filteredEvents, state.calendars);
+}
+
+function renderDataStatus() {
+  if (!els.calendarDataStatus) return;
+  if (!state.ctx?.db?.raw) {
+    els.calendarDataStatus.textContent = state.t('noDatabase', labels[state.lang].noDatabase);
+    els.calendarDataStatus.dataset.state = 'error';
+    return;
+  }
+  const selectedEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
+  els.calendarDataStatus.textContent = `${selectedEvents.length} Termine · ${state.calendars.length} Kalender · ${state.bookingPages.length} Buchungsseiten`;
+  els.calendarDataStatus.dataset.state = selectedEvents.length > 0 ? 'ready' : 'empty';
 }
 
 // ----------------------------------------------------
@@ -521,15 +570,16 @@ function renderCalendarsSidebar() {
   let html = '';
   state.calendars.forEach(cal => {
     const checked = state.selectedCalendarIds.has(cal.id);
+    const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
     html += `
-      <div class="calendar-item" data-id="${cal.id}">
+      <div class="calendar-item" data-id="${escapeHtml(cal.id)}">
         <div class="calendar-item-left">
-          <input type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${cal.id}" ${checked ? 'checked' : ''} />
-          <span class="calendar-item-color-indicator" style="background-color: ${cal.color || '#3b82f6'}"></span>
-          <span class="calendar-item-title">${escapeHtml(cal.title)}</span>
+          <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
+          <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
+          <span class="calendar-item-title" id="${checkboxId}-label">${escapeHtml(cal.title)}</span>
         </div>
         <div class="calendar-item-actions">
-          <button class="icon-button" data-action="edit-cal" data-id="${cal.id}" style="font-size:11px;">⚙️</button>
+          <button type="button" class="icon-button calendar-row-action" data-action="edit-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} bearbeiten">Bearbeiten</button>
         </div>
       </div>
     `;
@@ -568,19 +618,21 @@ function renderBookingPagesSidebar() {
 
   let html = '';
   state.bookingPages.forEach(bp => {
-    const publicUrl = `${window.location.origin}/book/${bp.slug}`;
+    const safeSlug = normalizeSlug(bp.slug) || String(bp.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
+    const publicUrl = `${window.location.origin}/book/${encodeURIComponent(safeSlug)}`;
     const isActive = bp.status === 'active';
+    const isSelected = bp.id === state.selectedBookingPageId;
     html += `
-      <div class="booking-page-item" data-id="${bp.id}">
+      <div class="booking-page-item ${isSelected ? 'is-selected' : ''}" data-action="select-bp" data-id="${escapeHtml(bp.id)}" role="button" tabindex="0" aria-pressed="${isSelected ? 'true' : 'false'}">
         <div class="booking-page-item-left">
           <div class="booking-page-item-title">
             <span>${escapeHtml(bp.title)}</span>
-            <div class="booking-page-item-subtitle">${bp.duration_minutes} Min · /book/${bp.slug}</div>
+            <div class="booking-page-item-subtitle">${Number(bp.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)} · ${isActive ? 'Aktiv' : 'Inaktiv'}</div>
           </div>
         </div>
         <div class="booking-page-item-actions">
-          <a class="os-btn" href="${publicUrl}" target="_blank" title="Öffnen" style="padding: 4px 6px; font-size:11px;">🔗</a>
-          <button class="icon-button" data-action="edit-bp" data-id="${bp.id}" style="font-size:11px;">⚙️</button>
+          <a class="os-btn calendar-row-action" href="${publicUrl}" target="_blank" rel="noreferrer" title="Öffnen" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} öffnen" style="padding: 4px 6px; font-size:11px;">Öffnen</a>
+          <button type="button" class="icon-button calendar-row-action" data-action="edit-bp" data-id="${escapeHtml(bp.id)}" aria-label="${escapeHtml(bp.title || 'Buchungsseite')} bearbeiten">Bearbeiten</button>
         </div>
       </div>
     `;
@@ -588,19 +640,60 @@ function renderBookingPagesSidebar() {
 
   els.bookingPagesList.innerHTML = html;
 
+  els.bookingPagesList.querySelectorAll('[data-action="select-bp"]').forEach(el => {
+    const select = () => {
+      state.selectedBookingPageId = el.dataset.id || null;
+      scheduleRender();
+    };
+    el.addEventListener('click', (event) => {
+      if (event.target.closest('a, button')) return;
+      select();
+    });
+    el.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      select();
+    });
+  });
+
   els.bookingPagesList.querySelectorAll('[data-action="edit-bp"]').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
       openBookingPageForm(el.dataset.id);
     });
   });
 }
 
 function renderAuditingLists() {
+  const selectedPage = state.bookingPages.find(page => page.id === state.selectedBookingPageId) || null;
+  if (els.bookingContext) {
+    if (selectedPage) {
+      const safeSlug = normalizeSlug(selectedPage.slug) || String(selectedPage.slug || '').replace(/[^a-zA-Z0-9-_]/g, '');
+      els.bookingContext.innerHTML = `
+        <div class="calendar-booking-context-card">
+          <span class="calendar-context-kicker">Ausgewählte Buchungsseite</span>
+          <strong>${escapeHtml(selectedPage.title)}</strong>
+          <span>${Number(selectedPage.duration_minutes) || 0} Min · /book/${escapeHtml(safeSlug)}</span>
+          <button type="button" class="os-btn" data-action="clear-booking-selection">Alle Buchungen anzeigen</button>
+        </div>
+      `;
+      els.bookingContext.querySelector('[data-action="clear-booking-selection"]')?.addEventListener('click', () => {
+        state.selectedBookingPageId = null;
+        scheduleRender();
+      });
+    } else {
+      els.bookingContext.innerHTML = `<div class="calendar-booking-context-empty">Buchungsseite wählen, um Holds und Buchungen zu filtern.</div>`;
+    }
+  }
+
   // 1. Holds List
   if (els.bookingHoldsList) {
-    const activeHolds = state.holds.filter(h => h.status === 'active' && h.expires_at_ms > Date.now());
+    const activeHolds = state.holds.filter(h => {
+      const active = h.status === 'active' && h.expires_at_ms > Date.now();
+      return active && (!selectedPage || h.booking_page_id === selectedPage.id);
+    });
     if (activeHolds.length === 0) {
-      els.bookingHoldsList.innerHTML = `<div class="auditing-empty-state">Keine aktiven Holds.</div>`;
+      els.bookingHoldsList.innerHTML = `<div class="auditing-empty-state">${selectedPage ? 'Keine aktiven Holds für diese Buchungsseite.' : 'Keine aktiven Holds.'}</div>`;
     } else {
       els.bookingHoldsList.innerHTML = activeHolds.map(hold => {
         const bp = state.bookingPages.find(p => p.id === hold.booking_page_id);
@@ -622,9 +715,11 @@ function renderAuditingLists() {
 
   // 2. Bookings List
   if (els.bookingsList) {
-    const sortedBookings = [...state.bookings].sort((a, b) => b.slot_start_ms - a.slot_start_ms);
+    const sortedBookings = state.bookings
+      .filter(booking => !selectedPage || booking.booking_page_id === selectedPage.id)
+      .sort((a, b) => b.slot_start_ms - a.slot_start_ms);
     if (sortedBookings.length === 0) {
-      els.bookingsList.innerHTML = `<div class="auditing-empty-state">Keine bestätigten Buchungen.</div>`;
+      els.bookingsList.innerHTML = `<div class="auditing-empty-state">${selectedPage ? 'Keine bestätigten Buchungen für diese Buchungsseite.' : 'Keine bestätigten Buchungen.'}</div>`;
     } else {
       els.bookingsList.innerHTML = sortedBookings.map(bk => {
         const bp = state.bookingPages.find(p => p.id === bk.booking_page_id);
@@ -708,14 +803,24 @@ function initCalendarView() {
 
 function openDrawer(kicker, title, htmlContent) {
   if (!els.drawer) return;
+  if (state.activeFormSubscription) {
+    state.activeFormSubscription.unsubscribe();
+    state.activeFormSubscription = null;
+  }
   els.drawerKicker.textContent = kicker;
   els.drawerTitle.textContent = title;
   els.drawerContent.innerHTML = htmlContent;
   els.drawer.classList.add('is-open');
+  els.drawer.setAttribute('aria-hidden', 'false');
+  requestAnimationFrame(() => {
+    const firstField = els.drawer.querySelector('input:not([type="hidden"]), select, textarea, button');
+    (firstField || els.drawer).focus?.({ preventScroll: true });
+  });
 }
 
 function closeDrawer() {
   els.drawer?.classList.remove('is-open');
+  els.drawer?.setAttribute('aria-hidden', 'true');
   state.editingType = null;
   state.editingItem = null;
   if (state.activeFormSubscription) {
@@ -730,9 +835,13 @@ function openEventForm(eventId = null, defaults = null) {
   state.editingType = 'event';
   const dbEvent = eventId ? state.events.find(e => e.id === eventId) : null;
   state.editingItem = dbEvent;
+  const defaultCalendarId = dbEvent?.calendar_id
+    || [...state.selectedCalendarIds].find(id => state.calendars.some(c => c.id === id))
+    || state.calendars[0]?.id
+    || '';
 
   const calsOptions = state.calendars.map(c => `
-    <option value="${c.id}" ${dbEvent?.calendar_id === c.id ? 'selected' : ''}>${escapeHtml(c.title)}</option>
+    <option value="${escapeHtml(c.id)}" ${defaultCalendarId === c.id ? 'selected' : ''}>${escapeHtml(c.title)}</option>
   `).join('');
 
   const startVal = new Date(dbEvent?.start_time || defaults?.start_time || Date.now());
@@ -749,15 +858,17 @@ function openEventForm(eventId = null, defaults = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Titel</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" />
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" aria-describedby="event-title-error" />
+          <div class="calendar-field-error" id="event-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Kalender</label>
-            <select class="os-select" name="calendar_id" id="drawerEventCalendarSelect" required>
+            <select class="os-select" name="calendar_id" id="drawerEventCalendarSelect" required aria-describedby="event-calendar-error">
               ${calsOptions || '<option value="" disabled selected>Keine Kalender verfügbar</option>'}
             </select>
+            <div class="calendar-field-error" id="event-calendar-error" data-error-for="calendar_id"></div>
           </div>
           <div class="calendar-form-group">
             <label>Ort / Meeting URL</label>
@@ -768,11 +879,13 @@ function openEventForm(eventId = null, defaults = null) {
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Startzeit</label>
-            <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required />
+            <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required aria-describedby="event-start-error" />
+            <div class="calendar-field-error" id="event-start-error" data-error-for="start_time"></div>
           </div>
           <div class="calendar-form-group">
             <label>Endzeit</label>
-            <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required />
+            <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required aria-describedby="event-end-error" />
+            <div class="calendar-field-error" id="event-end-error" data-error-for="end_time"></div>
           </div>
         </div>
 
@@ -798,7 +911,7 @@ function openEventForm(eventId = null, defaults = null) {
         </div>
         <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -808,8 +921,12 @@ function openEventForm(eventId = null, defaults = null) {
 
   // Form Events
   const form = els.drawer.querySelector('#drawerEventForm');
+  const validate = () => validateEventFormValues(formToObject(form), state.calendars);
+  const updateValidity = installFormValidation(form, validate);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const validation = updateValidity({ focusFirstInvalid: true });
+    if (!validation.valid) return;
     const data = new FormData(form);
     const startMs = new Date(data.get('start_time')).getTime();
     const endMs = new Date(data.get('end_time')).getTime();
@@ -819,12 +936,12 @@ function openEventForm(eventId = null, defaults = null) {
 
     const fields = {
       calendar_id: data.get('calendar_id'),
-      title: data.get('title'),
-      location: data.get('location'),
+      title: String(data.get('title') || '').trim(),
+      location: String(data.get('location') || '').trim(),
       start_time: startMs,
       end_time: endMs,
       recurrence_rule: data.get('recurrence_rule') || null,
-      description: data.get('description'),
+      description: String(data.get('description') || '').trim(),
       updated_at_ms: Date.now()
     };
 
@@ -887,6 +1004,7 @@ function wireDrawerCalendarSelectLive(preferredCalendarId) {
     if (previous && cals.some(c => c.id === previous)) {
       select.value = previous;
     }
+    select.dispatchEvent(new Event('change', { bubbles: true }));
   };
 
   // Initial fill from cache, then live subscribe.
@@ -911,17 +1029,20 @@ function openBookingPageForm(bpId = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Titel des Buchungs-Links</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" />
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" aria-describedby="booking-title-error" />
+          <div class="calendar-field-error" id="booking-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-row">
           <div class="calendar-form-group">
             <label>Link-Kürzel (Slug)</label>
-            <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" />
+            <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" aria-describedby="booking-slug-error" />
+            <div class="calendar-field-error" id="booking-slug-error" data-error-for="slug"></div>
           </div>
           <div class="calendar-form-group">
             <label>Dauer (Minuten)</label>
-            <input type="number" class="os-input" name="duration_minutes" value="${dbBp?.duration_minutes || 30}" required />
+            <input type="number" class="os-input" name="duration_minutes" min="5" max="480" value="${dbBp?.duration_minutes || 30}" required aria-describedby="booking-duration-error" />
+            <div class="calendar-field-error" id="booking-duration-error" data-error-for="duration_minutes"></div>
           </div>
         </div>
 
@@ -977,7 +1098,7 @@ function openBookingPageForm(bpId = null) {
         </div>
         <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -986,17 +1107,21 @@ function openBookingPageForm(bpId = null) {
   openDrawer('Buchungsseite', dbBp ? 'Buchungsseite bearbeiten' : 'Neue Buchungsseite', html);
 
   const form = els.drawer.querySelector('#drawerBookingPageForm');
+  const validate = () => validateBookingPageFormValues(formToObject(form));
+  const updateValidity = installFormValidation(form, validate);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const validation = updateValidity({ focusFirstInvalid: true });
+    if (!validation.valid) return;
     const data = new FormData(form);
     const db = state.ctx.db?.raw;
     if (!db) return;
 
     // Slug clean up
-    const cleanSlug = data.get('slug').toLowerCase().replace(/[^a-z0-9-_]/g, '');
+    const cleanSlug = normalizeSlug(data.get('slug'));
 
     const fields = {
-      title: data.get('title'),
+      title: String(data.get('title') || '').trim(),
       slug: cleanSlug,
       duration_minutes: parseInt(data.get('duration_minutes'), 10),
       buffer_before_minutes: parseInt(data.get('buffer_before_minutes') || 0, 10),
@@ -1005,7 +1130,7 @@ function openBookingPageForm(bpId = null) {
       max_days_ahead: parseInt(data.get('max_days_ahead') || 30, 10),
       location_mode: data.get('location_mode'),
       status: data.get('status'),
-      description: data.get('description'),
+      description: String(data.get('description') || '').trim(),
       updated_at_ms: Date.now()
     };
 
@@ -1067,7 +1192,8 @@ function openCalendarForm(calId = null) {
       <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
           <label>Kalendertitel</label>
-          <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" />
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" aria-describedby="calendar-title-error" />
+          <div class="calendar-field-error" id="calendar-title-error" data-error-for="title"></div>
         </div>
 
         <div class="calendar-form-group">
@@ -1082,7 +1208,7 @@ function openCalendarForm(calId = null) {
         </div>
         <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
-          <button type="submit" class="os-btn os-btn-primary">Speichern</button>
+          <button type="submit" class="os-btn os-btn-primary" data-submit-action>Speichern</button>
         </div>
       </div>
     </form>
@@ -1091,14 +1217,18 @@ function openCalendarForm(calId = null) {
   openDrawer('Kalender', dbCal ? 'Kalender bearbeiten' : 'Neuer Kalender', html);
 
   const form = els.drawer.querySelector('#drawerCalendarForm');
+  const validate = () => validateCalendarFormValues(formToObject(form));
+  const updateValidity = installFormValidation(form, validate);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const validation = updateValidity({ focusFirstInvalid: true });
+    if (!validation.valid) return;
     const data = new FormData(form);
     const db = state.ctx.db?.raw;
     if (!db) return;
 
     const fields = {
-      title: data.get('title'),
+      title: String(data.get('title') || '').trim(),
       color: data.get('color'),
       updated_at_ms: Date.now()
     };
@@ -1233,6 +1363,108 @@ function openBookingDetail(bkId) {
 // UTILITIES
 // ----------------------------------------------------
 
+function formToObject(form) {
+  return Object.fromEntries(new FormData(form).entries());
+}
+
+function validateEventFormValues(values, calendars = []) {
+  const errors = {};
+  const title = String(values.title || '').trim();
+  const calendarId = String(values.calendar_id || '').trim();
+  const startMs = new Date(values.start_time).getTime();
+  const endMs = new Date(values.end_time).getTime();
+
+  if (!title) errors.title = 'Titel ist erforderlich.';
+  if (!calendarId || !calendars.some(calendar => calendar.id === calendarId)) {
+    errors.calendar_id = 'Wähle einen gültigen Kalender.';
+  }
+  if (!Number.isFinite(startMs)) errors.start_time = 'Startzeit ist erforderlich.';
+  if (!Number.isFinite(endMs)) {
+    errors.end_time = 'Endzeit ist erforderlich.';
+  } else if (Number.isFinite(startMs) && endMs <= startMs) {
+    errors.end_time = 'Endzeit muss nach der Startzeit liegen.';
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+function validateBookingPageFormValues(values) {
+  const errors = {};
+  const title = String(values.title || '').trim();
+  const slug = normalizeSlug(values.slug);
+  const duration = Number.parseInt(values.duration_minutes, 10);
+
+  if (!title) errors.title = 'Titel ist erforderlich.';
+  if (!slug) errors.slug = 'Slug ist erforderlich und darf nur Buchstaben, Zahlen und Bindestriche enthalten.';
+  if (!Number.isFinite(duration) || duration < 5 || duration > 480) {
+    errors.duration_minutes = 'Dauer muss zwischen 5 und 480 Minuten liegen.';
+  }
+
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+function validateCalendarFormValues(values) {
+  const title = String(values.title || '').trim();
+  const errors = title ? {} : { title: 'Kalendertitel ist erforderlich.' };
+  return { valid: Object.keys(errors).length === 0, errors };
+}
+
+function installFormValidation(form, validate) {
+  const submit = form.querySelector('[data-submit-action], [type="submit"]');
+  const update = ({ focusFirstInvalid = false } = {}) => {
+    const result = validate();
+    const errorEntries = Object.entries(result.errors);
+
+    form.querySelectorAll('[data-error-for]').forEach(errorNode => {
+      const field = errorNode.dataset.errorFor;
+      errorNode.textContent = result.errors[field] || '';
+      errorNode.hidden = !result.errors[field];
+    });
+
+    form.querySelectorAll('input, select, textarea').forEach(field => {
+      const hasError = Boolean(result.errors[field.name]);
+      field.setAttribute('aria-invalid', hasError ? 'true' : 'false');
+    });
+
+    if (submit) {
+      submit.disabled = !result.valid;
+      submit.setAttribute('aria-disabled', result.valid ? 'false' : 'true');
+    }
+
+    if (focusFirstInvalid && errorEntries.length > 0) {
+      [...form.querySelectorAll('input, select, textarea')]
+        .find(field => field.name === errorEntries[0][0])
+        ?.focus();
+    }
+
+    return result;
+  };
+
+  form.addEventListener('input', () => update());
+  form.addEventListener('change', () => update());
+  update();
+  return update;
+}
+
+function normalizeSlug(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function safeDomId(value) {
+  return String(value || 'item').replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function safeColor(value) {
+  const color = String(value || '').trim();
+  return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(color) ? color : '#3b82f6';
+}
+
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -1253,3 +1485,10 @@ function escapeHtml(value) {
     "'": '&#39;',
   })[char]);
 }
+
+export const __calendarTestHooks = {
+  normalizeSlug,
+  validateBookingPageFormValues,
+  validateCalendarFormValues,
+  validateEventFormValues,
+};

@@ -12,32 +12,32 @@
       </div>
     </header>
     <nav class="conv-channel-filters" data-conv-channel-filters aria-label="Channels">
-      <button type="button" class="conv-channel-chip is-active" data-channel="all">
+      <button type="button" class="conv-channel-chip is-active" data-channel="all" aria-pressed="true">
         <span class="conv-channel-dot"></span>
         <span data-channel-label>Alle</span>
         <span class="conv-channel-count" data-channel-count></span>
       </button>
-      <button type="button" class="conv-channel-chip" data-channel="whatsapp">
+      <button type="button" class="conv-channel-chip" data-channel="whatsapp" aria-pressed="false">
         <span class="conv-channel-dot" data-dot="whatsapp"></span>
         <span data-channel-label>WhatsApp</span>
         <span class="conv-channel-count" data-channel-count></span>
       </button>
-      <button type="button" class="conv-channel-chip" data-channel="email">
+      <button type="button" class="conv-channel-chip" data-channel="email" aria-pressed="false">
         <span class="conv-channel-dot" data-dot="email"></span>
         <span data-channel-label>E-Mail</span>
         <span class="conv-channel-count" data-channel-count></span>
       </button>
-      <button type="button" class="conv-channel-chip" data-channel="jami">
+      <button type="button" class="conv-channel-chip" data-channel="jami" aria-pressed="false">
         <span class="conv-channel-dot" data-dot="jami"></span>
         <span data-channel-label>Jami</span>
         <span class="conv-channel-count" data-channel-count></span>
       </button>
-      <button type="button" class="conv-channel-chip" data-channel="teams">
+      <button type="button" class="conv-channel-chip" data-channel="teams" aria-pressed="false">
         <span class="conv-channel-dot" data-dot="teams"></span>
         <span data-channel-label>Teams</span>
         <span class="conv-channel-count" data-channel-count></span>
       </button>
-      <button type="button" class="conv-channel-chip" data-channel="meeting">
+      <button type="button" class="conv-channel-chip" data-channel="meeting" aria-pressed="false">
         <span class="conv-channel-dot" data-dot="meeting"></span>
         <span data-channel-label>Meeting</span>
         <span class="conv-channel-count" data-channel-count></span>
@@ -58,6 +58,7 @@
         <option value="7d" data-date-label="7d">7 Tage</option>
         <option value="30d" data-date-label="30d">30 Tage</option>
       </select>
+      <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
     </div>
     <div class="conv-left-body">
       <div class="conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
@@ -95,6 +96,7 @@
   <aside class="conv-pane conv-right" aria-label="Conversation Context">
     <div class="conv-right-body">
       <div class="conv-right-empty" data-conv-right-empty>
+        <strong data-right-empty-title></strong>
         <span data-right-empty-body>Kontaktdaten und verknüpfte Datensätze erscheinen hier.</span>
       </div>
       <div class="conv-right-detail" data-conv-right-detail hidden>

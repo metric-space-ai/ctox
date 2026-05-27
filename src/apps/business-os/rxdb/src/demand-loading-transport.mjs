@@ -11,6 +11,11 @@ import { decodeChunk } from './chunk-decoder.mjs';
 import { CTOX_QUERY_RPC } from './protocol-contract.generated.mjs';
 
 const ACK_RESPONSE = Object.freeze({ ack: true });
+const SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStreams) || 4);
+const CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
+const QUERY_STREAM_LIMIT_RETRY_MS = 160;
+const QUERY_STREAM_LIMIT_RETRIES = 6;
+const GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for('ctox.rxdb.query-stream-state.v1');
 
 /// Build the request-handler map that should be merged into
 /// `createCtoxWebRtcNativePeer({ requestHandlers })`. The returned object
@@ -22,6 +27,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
 
   const queryCollectors = new Map();   // requestId -> { chunks, resolve, reject, decoded }
   const fileCollectors = new Map();    // requestId -> { chunks, resolve, reject }
+  const queryStreamState = getGlobalQueryStreamState();
 
   function routeQueryChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
@@ -75,6 +81,45 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   function attach(p) { peer = p; }
 
   async function requestQueryFetch(envelope) {
+    return withQueryStreamSlot(() => requestQueryFetchWithRetry(envelope));
+  }
+
+  function withQueryStreamSlot(fn) {
+    return new Promise((resolve, reject) => {
+      const run = () => {
+        queryStreamState.active += 1;
+        Promise.resolve()
+          .then(fn)
+          .then(resolve, reject)
+          .finally(() => {
+            queryStreamState.active = Math.max(0, queryStreamState.active - 1);
+            const next = queryStreamState.queue.shift();
+            if (next) queueMicrotask(next);
+          });
+      };
+      if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
+      else queryStreamState.queue.push(run);
+    });
+  }
+
+  async function requestQueryFetchWithRetry(envelope) {
+    const baseRequestId = envelope?.requestId;
+    let attempt = 0;
+    for (;;) {
+      const requestId = attempt === 0 ? baseRequestId : `${baseRequestId}|retry-${attempt}`;
+      try {
+        return await requestQueryFetchOnce({ ...envelope, requestId });
+      } catch (error) {
+        if (!isRetryableQueryStreamLimit(error) || attempt >= QUERY_STREAM_LIMIT_RETRIES) {
+          throw error;
+        }
+        attempt += 1;
+        await delay(QUERY_STREAM_LIMIT_RETRY_MS * attempt);
+      }
+    }
+  }
+
+  async function requestQueryFetchOnce(envelope) {
     if (!peer) throw new Error('demand transport has no peer attached');
     const peerId = getPeerId();
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
@@ -97,6 +142,16 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
       if (c.authoritativeRevision) authoritativeRevision = c.authoritativeRevision;
     }
     return { documents, authoritativeRevision };
+  }
+
+  function isRetryableQueryStreamLimit(error) {
+    const code = String(error?.code || '');
+    const message = String(error?.message || '');
+    return Boolean(error?.retryable) && (code === 'STREAM_LIMIT_EXCEEDED' || message.includes('STREAM_LIMIT_EXCEEDED'));
+  }
+
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   async function requestQueryCancel({ requestId }) {
@@ -134,7 +189,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     return chunks.map((c) => ({ sequence: c.sequence, bytesBase64: c.bytesBase64, hash: c.hash }));
   }
 
-  function pendingQueryCount() { return queryCollectors.size; }
+  function pendingQueryCount() { return queryCollectors.size + queryStreamState.queue.length; }
   function pendingFileCount() { return fileCollectors.size; }
 
   return {
@@ -146,4 +201,11 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     pendingQueryCount,
     pendingFileCount,
   };
+}
+
+function getGlobalQueryStreamState() {
+  if (!globalThis[GLOBAL_QUERY_STREAM_STATE_KEY]) {
+    globalThis[GLOBAL_QUERY_STREAM_STATE_KEY] = { active: 0, queue: [] };
+  }
+  return globalThis[GLOBAL_QUERY_STREAM_STATE_KEY];
 }

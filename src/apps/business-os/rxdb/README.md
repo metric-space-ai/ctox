@@ -1,15 +1,26 @@
-# ctox-rxdb-js
+# CTOX DB (`ctox-rxdb-js`)
 
-`ctox-rxdb-js` is the package-manager-free Browser-side RxDB hard fork
-for CTOX Business OS. It is intentionally parallel to the current
-`js-fork/source` bundle while the runtime is migrated off the dependency-based
-fork.
+`ctox-rxdb-js` is the package-manager-free Browser-side CTOX DB runtime for
+CTOX Business OS. It is derived from RxDB concepts and historical fork work,
+but it is not upstream RxDB and is not a drop-in replacement for the npm
+`rxdb` package.
+
+Business OS app code must treat this as **CTOX DB**:
+
+- public runtime name: `CTOX DB`;
+- package/runtime id: `ctox-rxdb-js`;
+- API contract: `ctox-db-business-os-v1`;
+- upstream compatibility: `not-upstream-rxdb`.
+
+Apps must not import `rxdb` or `rxdb/plugins/...`. They receive database and
+collection handles from the Business OS runtime and use the CTOX DB contract.
 
 Design constraints:
 
 - plain browser ESM, no install step, no lockfile, no vendored dependency tree;
-- native `indexedDB` storage instead of Dexie;
-- native `RTCPeerConnection` and `WebSocket` signaling instead of simple-peer;
+- native `indexedDB` storage through `getCtoxIndexedDbStorage()`;
+- native `RTCPeerConnection` and `WebSocket` signaling without third-party
+  peer packages;
 - protocol/schema contracts shared with `rxdb-rs`;
 - small, explicit surface that can be audited like `rxdb-rs`;
 - no feature gates, paid-tier checks, trial limits, or runtime add-on unlocks.

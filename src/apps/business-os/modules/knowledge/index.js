@@ -13,6 +13,9 @@ const labels = {
     detailEmptyHint: 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.',
     loading: 'Knowledge wird geladen',
     noItems: 'Keine Knowledge-Einträge gefunden.',
+    noResults: 'Keine passenden Knowledge-Einträge gefunden.',
+    noVisibleItems: 'Keine Knowledge-Einträge in dieser Ansicht.',
+    syncUnavailable: 'Knowledge Store ist noch nicht verbunden.',
     noRunbooks: 'Keine Runbooks vorhanden.',
     tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
     queued: 'Command angelegt',
@@ -28,6 +31,9 @@ const labels = {
     detailEmptyHint: 'Pick a knowledge entry on the left to view it here.',
     loading: 'Loading knowledge',
     noItems: 'No knowledge entries found.',
+    noResults: 'No matching knowledge entries found.',
+    noVisibleItems: 'No knowledge entries in this view.',
+    syncUnavailable: 'Knowledge store is not connected yet.',
     noRunbooks: 'No runbooks available.',
     tableUnavailable: 'This item has no table.',
     queued: 'Command queued',
@@ -60,6 +66,8 @@ const state = {
   resizeCleanup: null,
   localSubscriptionCleanup: null,
   refreshInFlight: false,
+  missingCollections: [],
+  loadError: '',
 };
 
 const els = {};
@@ -245,11 +253,20 @@ function wireEvents() {
 }
 
 async function loadKnowledgeFromLocal() {
-  const [items, runbooks, tables] = await Promise.all([
-    loadLocalKnowledgeRecords('knowledge_items'),
-    loadLocalKnowledgeRecords('knowledge_runbooks'),
-    loadLocalKnowledgeRecords('knowledge_tables'),
-  ]);
+  state.loadError = '';
+  state.missingCollections = [];
+  let items = [];
+  let runbooks = [];
+  let tables = [];
+  try {
+    [items, runbooks, tables] = await Promise.all([
+      loadLocalKnowledgeRecords('knowledge_items'),
+      loadLocalKnowledgeRecords('knowledge_runbooks'),
+      loadLocalKnowledgeRecords('knowledge_tables'),
+    ]);
+  } catch (error) {
+    state.loadError = error?.message || String(error);
+  }
   applyKnowledgeRecords({ items, runbooks, tables });
   renderKnowledgeList();
   renderRunbooks();
@@ -287,7 +304,10 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
 
 async function loadLocalKnowledgeRecords(collectionName) {
   const collection = state.ctx.db?.raw?.[collectionName];
-  if (!collection) return [];
+  if (!collection) {
+    state.missingCollections.push(collectionName);
+    return [];
+  }
   const docs = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
   return docs
     .map((doc) => {
@@ -323,6 +343,13 @@ function wireLocalRealtime() {
 
 function renderEmptyKnowledgeSelection() {
   const copy = state.messages || labels[state.lang];
+  state.selectedId = '';
+  state.selectedGroupId = '';
+  state.selectedSkillbookId = '';
+  state.selectedTableId = '';
+  state.selectedRunbookId = '';
+  state.editing = false;
+  state.activeTab = 'skill';
   // Right-column header is the detail-view, not a second "Knowledge" heading.
   // When no item is selected, show a neutral kicker/title that does not duplicate
   // the left-column "Knowledge" heading.
@@ -337,6 +364,9 @@ function renderEmptyKnowledgeSelection() {
   els.tableHost.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
   if (els.runbookView) els.runbookView.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.noRunbooks)}</strong></div>`;
+  syncMarkdownEditControls();
+  syncRunbookEditControls(false);
+  syncKnowledgeTabControls();
 }
 
 async function loadKnowledgeDocument(id) {
@@ -445,6 +475,18 @@ function buildKnowledgeBundles(items, runbooks, tables) {
       domain: key,
       entries,
       primaryItemId: entries[0]?.id,
+    }));
+  }
+
+  const remainingByDomain = groupBy(items.filter((item) => !used.has(item.id)), (item) => domainKeyFor(item));
+  for (const [key, entries] of Object.entries(remainingByDomain)) {
+    groups.push(makeGroup({
+      id: `knowledge/${key}`,
+      title: titleFromSlug(key),
+      domainLabel: domainLabelFor(entries[0]),
+      domain: key,
+      entries,
+      primaryItemId: entries.find((entry) => ['skillbook', 'skill'].includes(entry.kind))?.id || entries[0]?.id,
     }));
   }
 
@@ -576,23 +618,46 @@ function setupKnowledgeColumnResizing() {
   handle.dataset.resizer = 'left';
   root.append(handle);
 
+  const setLeftWidth = (width) => {
+    const next = clampKnowledgeLeftWidth(root, width);
+    root.style.setProperty('--knowledge-left-width', `${next}px`);
+    localStorage.setItem('ctox.knowledge.layout.leftWidth', String(next));
+    return next;
+  };
   const resizer = new CtoxResizer({
     resizerEl: handle,
     containerEl: root,
     cssVar: '--knowledge-left-width',
     side: 'left',
-    minWidth: 300,
-    maxWidth: 720,
-    onResize: (width) => localStorage.setItem('ctox.knowledge.layout.leftWidth', width)
+    minWidth: KNOWLEDGE_COL_MIN.left,
+    maxWidth: knowledgeLeftMaxForRoot(root),
+    onResize: setLeftWidth,
   });
 
   const leftWidth = localStorage.getItem('ctox.knowledge.layout.leftWidth') || '390';
-  root.style.setProperty('--knowledge-left-width', `${leftWidth}px`);
+  setLeftWidth(Number.parseFloat(leftWidth));
+  const resizeObserver = new ResizeObserver(() => {
+    resizer.maxWidth = knowledgeLeftMaxForRoot(root);
+    handle.setAttribute('aria-valuemax', String(resizer.maxWidth));
+    resizer.setWidth(clampKnowledgeLeftWidth(root, resizer.readCurrentWidth()));
+  });
+  resizeObserver.observe(root);
 
   return () => {
+    resizeObserver.disconnect();
     resizer.destroy();
     handle.remove();
   };
+}
+
+function knowledgeLeftMaxForRoot(root) {
+  const metrics = getKnowledgeGridMetrics(root);
+  const available = (metrics?.contentWidth || root?.clientWidth || 0) - 12 - KNOWLEDGE_COL_MIN.center;
+  return Math.max(KNOWLEDGE_COL_MIN.left, Math.min(KNOWLEDGE_COL_LEFT_MAX, available));
+}
+
+function clampKnowledgeLeftWidth(root, width) {
+  return clampNumber(Number(width) || KNOWLEDGE_COL_MIN.left, KNOWLEDGE_COL_MIN.left, knowledgeLeftMaxForRoot(root));
 }
 
 function getKnowledgeGridMetrics(root) {
@@ -765,10 +830,17 @@ function renderKnowledgeList() {
       return `${group.title} ${group.summary || ''} ${group.domain || ''} ${group.entries.map((entry) => `${entry.title} ${entry.subtitle || ''} ${entry.summary || ''}`).join(' ')}`.toLowerCase().includes(term);
     });
   if (!visibleGroups.length) {
-    els.list.innerHTML = `<div class="empty-state"><strong>${copy.noItems}</strong></div>`;
+    els.list.innerHTML = `<div class="empty-state"><strong>${escapeHtml(knowledgeEmptyStateMessage(copy, term))}</strong></div>`;
     return;
   }
   els.list.replaceChildren(...visibleGroups.map((group) => renderKnowledgeBundle(group)));
+}
+
+function knowledgeEmptyStateMessage(copy, term = '') {
+  if (state.loadError || state.missingCollections.length) return copy.syncUnavailable;
+  if (term) return copy.noResults;
+  if (state.items.length) return copy.noVisibleItems;
+  return copy.noItems;
 }
 
 function sourceScopeFor(entry) {
@@ -955,6 +1027,7 @@ async function selectKnowledge(id) {
   els.markdownEditor.value = doc.markdown || '';
   els.markdownView.innerHTML = markdownToHtml(doc.markdown || '');
   syncMarkdownEditControls();
+  syncKnowledgeTabControls();
   await renderActiveTab();
 }
 
@@ -972,6 +1045,7 @@ function setSourceScope(scope) {
     return;
   }
   renderKnowledgeList();
+  renderEmptyKnowledgeSelection();
 }
 
 function renderRunbooks() {
@@ -1021,18 +1095,17 @@ function fillRunbookForm(runbook) {
 
 function setTab(tab) {
   const nextTab = ({ book: 'skill', table: 'data' })[tab] || tab;
+  if (isKnowledgeTabDisabled(nextTab, state.selectedId)) {
+    syncKnowledgeTabControls();
+    return;
+  }
   state.activeTab = ['skill', 'runbooks', 'data'].includes(nextTab) ? nextTab : 'skill';
   state.editing = false;
   els.markdownEditor.hidden = true;
   els.markdownView.hidden = false;
   syncMarkdownEditControls();
   syncRunbookEditControls(false);
-  for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
-    button.setAttribute('aria-pressed', String(button.dataset.tab === state.activeTab));
-  }
-  for (const panel of state.ctx.host.querySelectorAll('[data-panel]')) {
-    panel.hidden = panel.dataset.panel !== state.activeTab;
-  }
+  syncKnowledgeTabControls();
   renderActiveTab();
 }
 
@@ -1042,6 +1115,11 @@ function setActionHidden(action, hidden) {
 }
 
 async function renderActiveTab() {
+  if (!hasKnowledgeSelection() && state.activeTab !== 'skill') {
+    state.activeTab = 'skill';
+    renderEmptyKnowledgeSelection();
+    return;
+  }
   if (state.activeTab === 'skill') {
     const context = skillbookContext();
     if (context.skill?.id && state.selectedId !== context.skill.id) {
@@ -1059,6 +1137,27 @@ async function renderActiveTab() {
     renderTableSwitcher();
     await renderTable();
   }
+}
+
+function syncKnowledgeTabControls() {
+  if (isKnowledgeTabDisabled(state.activeTab, state.selectedId)) state.activeTab = 'skill';
+  for (const button of state.ctx.host.querySelectorAll('[data-tab]')) {
+    const disabled = isKnowledgeTabDisabled(button.dataset.tab, state.selectedId);
+    button.disabled = disabled;
+    button.setAttribute('aria-disabled', String(disabled));
+    button.setAttribute('aria-pressed', String(button.dataset.tab === state.activeTab));
+  }
+  for (const panel of state.ctx.host.querySelectorAll('[data-panel]')) {
+    panel.hidden = panel.dataset.panel !== state.activeTab;
+  }
+}
+
+function isKnowledgeTabDisabled(tab, selectedId = state.selectedId) {
+  return ['runbooks', 'data'].includes(tab) && !selectedId;
+}
+
+function hasKnowledgeSelection() {
+  return Boolean(state.selectedId && state.items.some((entry) => entry.id === state.selectedId));
 }
 
 function renderSelectionHeader() {
@@ -1219,13 +1318,20 @@ function pageTable(direction) {
 
 function syncMarkdownEditControls(options = {}) {
   const isEditing = state.activeTab === 'skill' && state.editing;
+  const canEdit = canEditSelectedMarkdown();
   setActionHidden('edit-markdown', isEditing);
   setActionHidden('save-markdown', !isEditing);
   setActionHidden('cancel-markdown', !isEditing);
+  const editButton = state.ctx.host.querySelector('[data-action="edit-markdown"]');
+  if (editButton) {
+    editButton.disabled = !canEdit;
+    editButton.setAttribute('aria-disabled', String(!canEdit));
+  }
   if (els.skillStatus && !isEditing && !options.keepStatus) els.skillStatus.textContent = '';
 }
 
 function toggleMarkdownEditor() {
+  if (!canEditSelectedMarkdown()) return;
   state.editing = !state.editing;
   els.markdownEditor.hidden = !state.editing;
   els.markdownView.hidden = state.editing;
@@ -1240,6 +1346,7 @@ function cancelMarkdownEdit() {
 }
 
 async function queueMarkdownSave() {
+  if (!canEditSelectedMarkdown()) return;
   const item = state.items.find((entry) => entry.id === state.selectedId);
   const markdown = state.editing ? els.markdownEditor.value : els.markdownView.textContent;
   const result = await dispatchKnowledgeCommand({
@@ -1263,8 +1370,12 @@ async function queueMarkdownSave() {
   showCommandStatus(result);
 }
 
+function canEditSelectedMarkdown(selectedId = state.selectedId, items = state.items) {
+  return Boolean(selectedId && items.some((entry) => entry.id === selectedId));
+}
+
 function syncRunbookEditControls(isEditing = state.activeTab === 'runbooks' && state.editing, options = {}) {
-  const hasRunbook = Boolean(state.selectedRunbookId);
+  const hasRunbook = Boolean(state.selectedId && state.selectedRunbookId);
   setActionHidden('edit-runbook', isEditing || !hasRunbook);
   setActionHidden('save-runbook', !isEditing);
   setActionHidden('cancel-runbook', !isEditing);
@@ -1448,7 +1559,7 @@ function openExportKnowledgeBookDrawer() {
           <option value="parquet_manifest">Parquet Manifest</option>
         </select>
       </label>
-      <label>Zielpfad <input name="destination" placeholder="runtime/knowledge/exports/" /></label>
+      <label>Zielpfad <input name="destination" required placeholder="runtime/knowledge/exports/" /></label>
       <label>Export-Anweisung <textarea name="instruction" rows="5" placeholder="Optional: Filter, Namensschema oder Strukturvorgaben"></textarea></label>
     `,
     buildPayload: (data) => ({
@@ -1483,15 +1594,28 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
       <div class="knowledge-action-fields">${fields}</div>
       <footer class="knowledge-drawer-actions">
         <span data-command-status></span>
-        <button type="submit">${escapeHtml(actionLabel)}</button>
+        <button type="submit" disabled aria-disabled="true">${escapeHtml(actionLabel)}</button>
       </footer>
     </form>
   `;
   const form = body.querySelector('form');
   const status = body.querySelector('[data-command-status]');
+  const submitButton = form.querySelector('button[type="submit"]');
+  const requiredFields = Array.from(form.querySelectorAll('[required][name]')).map((input) => input.name);
+  const updateSubmitState = () => {
+    const valid = isKnowledgeActionFormReady(Object.fromEntries(new FormData(form).entries()), requiredFields) && form.checkValidity();
+    submitButton.disabled = !valid;
+    submitButton.setAttribute('aria-disabled', String(!valid));
+  };
   body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
+  form.addEventListener('input', updateSubmitState);
+  form.addEventListener('change', updateSubmitState);
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    if (!form.reportValidity()) {
+      updateSubmitState();
+      return;
+    }
     const data = Object.fromEntries(new FormData(form).entries());
     status.textContent = 'Sende...';
     const payload = buildPayload(data);
@@ -1514,6 +1638,7 @@ function knowledgeActionDrawer({ title, subtitle, fields, actionLabel, commandTy
     status.textContent = result?.ok ? `Task-ID: ${trackingId || 'angelegt'}` : 'Konnte nicht angelegt werden.';
     showCommandStatus(result);
   });
+  updateSubmitState();
   return body;
 }
 
@@ -1537,18 +1662,29 @@ async function openKnowledgeConfig() {
       <div><dt>Struktur</dt><dd>${escapeHtml(`${state.groups.length} Gruppen · ${state.items.length} Einträge · ${state.tables.length} Tabellen`)}</dd></div>
     </dl>
     <div class="knowledge-drawer-editor">
-      <textarea data-drawer-markdown aria-label="Knowledge Markdown bearbeiten">${escapeHtml(markdown)}</textarea>
+      <textarea data-drawer-markdown required aria-label="Knowledge Markdown bearbeiten">${escapeHtml(markdown)}</textarea>
     </div>
     <footer class="knowledge-drawer-actions">
-      <button type="button" data-drawer-save>An CTOX geben</button>
+      <button type="button" data-drawer-save disabled aria-disabled="true">An CTOX geben</button>
     </footer>
   `;
   body.querySelector('[data-close-drawer]').addEventListener('click', state.ctx.closeDrawers);
+  const configTextarea = body.querySelector('[data-drawer-markdown]');
+  const configSave = body.querySelector('[data-drawer-save]');
+  const updateConfigSubmit = () => {
+    const valid = Boolean(item?.id && configTextarea.value.trim());
+    configSave.disabled = !valid;
+    configSave.setAttribute('aria-disabled', String(!valid));
+  };
+  configTextarea.addEventListener('input', updateConfigSubmit);
   body.querySelector('[data-drawer-save]').addEventListener('click', async () => {
-    els.markdownEditor.value = body.querySelector('[data-drawer-markdown]').value;
+    updateConfigSubmit();
+    if (configSave.disabled) return;
+    els.markdownEditor.value = configTextarea.value;
     state.editing = true;
     await queueMarkdownSave();
   });
+  updateConfigSubmit();
   state.ctx.openLeftDrawer(body);
 }
 
@@ -2004,3 +2140,16 @@ function escapeHtml(value) {
     "'": '&#39;',
   })[char]);
 }
+
+function isKnowledgeActionFormReady(values, requiredFields = []) {
+  return requiredFields.every((name) => String(values?.[name] || '').trim().length > 0);
+}
+
+export const __knowledgeTestHooks = {
+  buildKnowledgeBundles,
+  canEditSelectedMarkdown,
+  isKnowledgeActionFormReady,
+  isKnowledgeTabDisabled,
+  knowledgeEmptyStateMessage,
+  sourceScopeFor,
+};

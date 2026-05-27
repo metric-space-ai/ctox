@@ -113,6 +113,16 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 
+.conv-left .ctox-pane-tools {
+  min-width: 0;
+}
+
+.conv-left .ctox-pane-search {
+  width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
 .conv-channel-filters {
   display: flex;
   flex-wrap: wrap;
@@ -211,6 +221,18 @@
 
 .conv-secondary-select:first-child {
   grid-column: 1 / -1;
+}
+
+.conv-filter-status {
+  grid-column: 1 / -1;
+  min-height: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.conv-filter-status[data-state="error"] {
+  color: var(--danger);
 }
 
 .conv-secondary-select:focus {
@@ -864,11 +886,21 @@ details[open] > .conv-message-details-summary::before {
 /* Right pane */
 .conv-right-empty {
   display: grid;
+  gap: 6px;
   place-content: center;
   padding: 24px;
   color: var(--muted);
   font-size: 12px;
   text-align: center;
+}
+
+.conv-right-empty strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.conv-right-empty span {
+  overflow-wrap: anywhere;
 }
 
 .conv-right-detail {

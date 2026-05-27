@@ -718,17 +718,25 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 
 
 .module-root[data-module-root="matching"] .app{
+  --matching-side-min:260px;
+  --matching-center-min:320px;
+  --matching-gutter:12px;
   display:grid;
   /* Spalten: [linke Liste] [12px Resizer] [Mitte] [12px Resizer] [rechte Detail].
    * CtoxResizer setzt --matching-left-width / --matching-right-width per drag
    * (siehe modules/matching/ui/index.js Zeilen ~2730-2756).
    */
-  grid-template-columns: minmax(220px, var(--matching-left-width, 280px)) 12px minmax(0, 1fr) 12px minmax(220px, var(--matching-right-width, 280px));
+  grid-template-columns:
+    minmax(var(--matching-side-min), var(--matching-left-width, 300px))
+    var(--matching-gutter)
+    minmax(var(--matching-center-min), 1fr)
+    var(--matching-gutter)
+    minmax(var(--matching-side-min), var(--matching-right-width, 300px));
   gap:0;
   height:100%;
   padding:12px;
   position:relative;
-  min-width:900px;
+  min-width:calc((var(--matching-side-min) * 2) + var(--matching-center-min) + (var(--matching-gutter) * 2) + 24px);
 }
 
 .module-root[data-module-root="matching"] #left {
@@ -744,18 +752,22 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 
 .module-root[data-module-root="matching"] .col-resizer{
-  position:absolute;
-  top:12px;
-  bottom:12px;
+  position:relative;
+  top:auto;
+  bottom:auto;
   width:12px;
-  transform:translateX(-50%);
+  min-width:12px;
+  transform:none;
   cursor:col-resize;
   z-index:30;
   display:none;
   align-items:center;
   justify-content:center;
+  align-self:stretch;
   touch-action:none;
 }
+.module-root[data-module-root="matching"] .col-resizer-left{ grid-column:2; grid-row:1; }
+.module-root[data-module-root="matching"] .col-resizer-right{ grid-column:4; grid-row:1; }
 .module-root[data-module-root="matching"] .col-resizer::before{
   content:"";
   width:4px;
@@ -773,7 +785,9 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   box-shadow:0 0 0 2px rgba(255,255,255,.05);
 }
 body.is-col-resizing .module-root[data-module-root="matching"],
-body.is-col-resizing .module-root[data-module-root="matching"] *{
+body.is-col-resizing .module-root[data-module-root="matching"] *,
+body.is-resizing .module-root[data-module-root="matching"],
+body.is-resizing .module-root[data-module-root="matching"] *{
   cursor:col-resize !important;
   user-select:none !important;
 }
@@ -785,7 +799,152 @@ body.is-col-resizing .module-root[data-module-root="matching"] *{
   overflow:hidden;
   display:flex;
   flex-direction:column;
+  min-width:0;
   min-height:0
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-header{
+  display:flex;
+  flex-direction:column;
+  flex:0 0 auto;
+  min-width:0;
+  border-bottom:1px solid var(--bo-border, var(--stroke));
+  background:var(--bo-surface, var(--panel));
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-title-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  min-width:0;
+  min-height:46px;
+  padding:8px 12px;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-titles{
+  display:flex;
+  flex-direction:column;
+  min-width:0;
+  gap:3px;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-kicker{
+  color:var(--bo-muted, var(--muted));
+  font-size:10px;
+  font-weight:760;
+  line-height:1;
+  text-transform:uppercase;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:5px;
+  flex:0 0 auto;
+  min-width:max-content;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-tools{
+  display:grid;
+  grid-template-columns:minmax(0, 1fr) minmax(110px, 132px) 32px;
+  gap:8px;
+  align-items:center;
+  min-width:0;
+  min-height:48px;
+  padding:8px 12px;
+  border-top:1px solid var(--bo-border, var(--stroke));
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-search,
+.module-root[data-module-root="matching"] .ctox-pane-filter{
+  width:100% !important;
+  min-width:0;
+  height:32px !important;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-icon{
+  display:inline-grid;
+  place-items:center;
+  flex:0 0 30px;
+  width:30px;
+  min-width:30px;
+  height:30px;
+  min-height:30px;
+  padding:0;
+  border:1px solid var(--bo-border, var(--stroke)) !important;
+  border-radius:var(--radius-control, 8px);
+  background:var(--bo-surface-muted, var(--panel-2)) !important;
+  color:var(--bo-muted, var(--muted)) !important;
+  box-shadow:none !important;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-icon svg{
+  width:15px;
+  height:15px;
+  fill:currentColor;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-icon:hover,
+.module-root[data-module-root="matching"] .ctox-pane-icon:focus-visible{
+  color:var(--bo-accent, var(--accent)) !important;
+  border-color:var(--bo-accent, var(--accent)) !important;
+  outline:none;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-tabs{
+  display:inline-flex;
+  align-items:center;
+  gap:2px;
+  min-width:max-content;
+  min-height:30px;
+  padding:2px;
+  border:1px solid var(--bo-border, var(--stroke));
+  border-radius:var(--radius-control, 8px);
+  background:var(--bo-surface-muted, var(--panel-2));
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-tab{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:54px;
+  height:24px;
+  padding:0 9px;
+  border:1px solid transparent;
+  border-radius:calc(var(--radius-control, 8px) - 2px);
+  color:var(--bo-muted, var(--muted));
+  font-size:11px;
+  font-weight:800;
+  line-height:1;
+  white-space:nowrap;
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-tab.active,
+.module-root[data-module-root="matching"] .ctox-pane-tab[aria-selected="true"]{
+  border-color:color-mix(in oklab, var(--bo-accent, var(--accent)) 48%, transparent);
+  background:color-mix(in oklab, var(--bo-accent, var(--accent)) 16%, var(--bo-surface, var(--panel)));
+  color:var(--bo-text, var(--text));
+}
+
+.module-root[data-module-root="matching"] .ctox-pane-tab:focus-visible{
+  outline:2px solid var(--bo-accent, var(--accent));
+  outline-offset:2px;
+}
+
+.module-root[data-module-root="matching"] .collection-empty-state{
+  padding:10px 12px;
+  line-height:1.45;
+}
+
+.module-root[data-module-root="matching"] .collection-diagnostic{
+  display:block;
+  margin-top:6px;
+  color:var(--bo-muted, var(--muted));
+  font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size:11px;
+  overflow-wrap:anywhere;
 }
 
 .module-root[data-module-root="matching"] .panel h2{

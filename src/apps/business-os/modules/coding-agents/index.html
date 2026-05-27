@@ -11,7 +11,7 @@
             <h2 class="ctox-pane-title">Workspaces</h2>
           </div>
           <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace">+</button>
+            <button type="button" class="ctox-pane-icon" id="add-workspace-btn" title="Add Workspace" aria-label="Add workspace">+</button>
           </div>
         </div>
       </header>
@@ -33,7 +33,7 @@
   </section>
 
   <!-- Left Resizer Handle -->
-  <div class="coding-agents-col-resizer" data-resizer="left" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+  <div class="coding-agents-col-resizer" data-resizer="left" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical" aria-label="Workspace-Spalte anpassen" tabindex="0"></div>
 
   <!-- Column 2: Center Pane (Workbench - Multi-turn Session View) -->
   <section class="coding-agents-pane coding-agents-center" aria-label="Coding Agents Workbench">
@@ -62,8 +62,9 @@
             <option value="">No Active Sessions</option>
           </select>
         </div>
-        <button type="button" class="fibu-btn fibu-btn-primary" id="new-session-btn" style="padding: 4px 10px; font-size:11px; height:24px;" disabled>+ New Session</button>
+        <button type="button" class="fibu-btn fibu-btn-primary" id="new-session-btn" style="padding: 4px 10px; font-size:11px; height:24px;" disabled aria-describedby="new-session-help">+ New Session</button>
       </div>
+      <div id="new-session-help" class="sr-only">Requires a selected workspace. Opens a confirmation dialog before creating a session.</div>
 
       <!-- Dynamic Chat History Logs -->
       <div class="session-chat-feed flex-fill" id="workbench-chat-feed" style="overflow-y:auto; padding: 20px; display:flex; flex-direction:column; gap: 16px;">
@@ -81,11 +82,11 @@
   </section>
 
   <!-- Overlay Modal: System Settings & Subscription -->
-  <div class="settings-modal-overlay" id="settings-modal" hidden>
+  <div class="settings-modal-overlay" id="settings-modal" hidden role="dialog" aria-modal="true" aria-labelledby="settings-modal-title">
     <div class="settings-container glass-panel">
       <header class="settings-header">
-        <h3>System Settings & Subscriptions</h3>
-        <button type="button" class="btn-close-settings" id="close-settings-btn">&times;</button>
+        <h3 id="settings-modal-title">System Settings & Subscriptions</h3>
+        <button type="button" class="btn-close-settings" id="close-settings-btn" aria-label="Close system settings">&times;</button>
       </header>
 
       <div class="settings-body" style="padding: 20px; overflow-y:auto; display:flex; flex-direction:column; gap: 24px;">
@@ -164,17 +165,36 @@
   </div>
 
   <!-- Overlay Modal: Add Workspace Path -->
-  <div class="settings-modal-overlay" id="add-workspace-modal" hidden>
+  <div class="settings-modal-overlay" id="add-workspace-modal" hidden role="dialog" aria-modal="true" aria-labelledby="add-workspace-title">
     <div class="settings-container glass-panel" style="max-width: 450px; min-height: 200px;">
       <header class="settings-header">
-        <h3>Add Workspace</h3>
-        <button type="button" class="btn-close-settings" id="close-add-workspace-btn">&times;</button>
+        <h3 id="add-workspace-title">Add Workspace</h3>
+        <button type="button" class="btn-close-settings" id="close-add-workspace-btn" aria-label="Close add workspace">&times;</button>
       </header>
       <div class="settings-body" style="padding: 16px 20px;">
         <form id="add-workspace-form" style="display:flex; flex-direction:column; gap: 14px;">
           <p class="section-desc">Enter the absolute directory path to authorize as a clean Coding Workspace.</p>
-          <input type="text" id="add-workspace-input" class="fibu-input" placeholder="e.g. /Users/michaelwelsch/Documents/my-project" required>
-          <button type="submit" class="fibu-btn fibu-btn-primary" style="justify-content:center;">Authorize & Add Workspace</button>
+          <input type="text" id="add-workspace-input" class="fibu-input" placeholder="e.g. /Users/michaelwelsch/Documents/my-project" required aria-describedby="add-workspace-error" autocomplete="off">
+          <div id="add-workspace-error" class="form-error" role="alert" hidden></div>
+          <button type="submit" class="fibu-btn fibu-btn-primary" id="add-workspace-submit" style="justify-content:center;" disabled>Authorize & Add Workspace</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overlay Modal: New Agent Session -->
+  <div class="settings-modal-overlay" id="new-session-modal" hidden role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+    <div class="settings-container glass-panel" style="max-width: 520px; min-height: 250px;">
+      <header class="settings-header">
+        <h3 id="new-session-title">New Coding Session</h3>
+        <button type="button" class="btn-close-settings" id="close-new-session-btn" aria-label="Close new session">&times;</button>
+      </header>
+      <div class="settings-body" style="padding: 16px 20px;">
+        <form id="new-session-form" style="display:flex; flex-direction:column; gap: 14px;">
+          <p class="section-desc" id="new-session-context">Select a workspace first, then describe the first task for the agent.</p>
+          <textarea id="new-session-prompt" class="fibu-input" rows="5" placeholder="Describe the initial task for this coding agent session..." required aria-describedby="new-session-error"></textarea>
+          <div id="new-session-error" class="form-error" role="alert" hidden></div>
+          <button type="submit" class="fibu-btn fibu-btn-primary" id="new-session-submit" style="justify-content:center;" disabled>Create Session</button>
         </form>
       </div>
     </div>

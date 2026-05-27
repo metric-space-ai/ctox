@@ -1535,6 +1535,7 @@ function wireEvents(root) {
     if (action === 'select-campaign') {
       state.selectedCampaignId = id;
       state.selectedCompanyId = currentCompanies()[0]?.id || '';
+      state.selectedPipelineId = currentPipeline()[0]?.id || '';
       render();
     }
     if (action === 'new-campaign') await createCampaign();
@@ -1553,6 +1554,14 @@ function wireEvents(root) {
     }
     if (action === 'save-campaign-edit') await saveCampaignInlineEdit(id || state.selectedCampaignId);
     if (action === 'delete-campaign') await deleteCampaign(id || state.selectedCampaignId);
+    if (action === 'select-company-row') {
+      const companyId = event.target.closest('[data-company-id]')?.dataset.companyId || id;
+      if (companyId) {
+        state.selectedCompanyId = companyId;
+        state.activeView = 'companies';
+        render();
+      }
+    }
     if (action === 'select-company') {
       state.selectedCompanyId = id;
       render();
@@ -2051,6 +2060,9 @@ function wireEvents(root) {
   });
 
   root.addEventListener('input', (event) => {
+    if (event.target.matches('[data-campaign-edit-field]')) {
+      updateCampaignEditSaveState(event.target.closest('.outbound-campaign-edit'));
+    }
     if (event.target.matches('[data-search]')) {
       state.search = event.target.value;
       scheduleCenterRenderPreservingInput(event.target);
@@ -2083,6 +2095,20 @@ function wireEvents(root) {
       handleActiveOutreachAction(aoAction, event.target).catch((error) =>
         console.warn('[outbound] active outreach change failed', error),
       );
+    }
+  });
+
+  root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    if (state.ctx?.host?.querySelector('.outbound-research-drawer')) {
+      event.preventDefault();
+      closeResearchSettingsDrawer();
+      return;
+    }
+    if (state.editingCampaignId && event.target.closest('.outbound-campaign-edit')) {
+      event.preventDefault();
+      state.editingCampaignId = '';
+      renderLeft();
     }
   });
 }
@@ -2194,28 +2220,50 @@ function inputImportStatusLabel(metrics) {
 }
 
 function renderCampaignEditItem(campaign) {
+  const subtitle = campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`;
+  const scope = campaign.payload?.scope || campaign.objective || '';
   return `
-    <article class="outbound-campaign-item outbound-campaign-edit" aria-current="${campaign.id === state.selectedCampaignId}" data-id="${escapeHtml(campaign.id)}">
+    <article
+      class="outbound-campaign-item outbound-campaign-edit"
+      aria-current="${campaign.id === state.selectedCampaignId}"
+      data-id="${escapeHtml(campaign.id)}"
+      data-original-name="${escapeHtml(campaign.name)}"
+      data-original-subtitle="${escapeHtml(subtitle)}"
+      data-original-scope="${escapeHtml(scope)}"
+    >
       <div class="outbound-campaign-edit-grid">
         <label>
           <span>${escapeHtml(t('title', 'Titel'))}</span>
-          <input data-campaign-edit-field="name" value="${escapeHtml(campaign.name)}" />
+          <input data-campaign-edit-field="name" value="${escapeHtml(campaign.name)}" required aria-required="true" />
         </label>
         <label>
           <span>${escapeHtml(t('subtitle', 'Untertitel'))}</span>
-          <input data-campaign-edit-field="subtitle" value="${escapeHtml(campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`)}" />
+          <input data-campaign-edit-field="subtitle" value="${escapeHtml(subtitle)}" />
         </label>
         <label>
           <span>${escapeHtml(t('scopeIcp', 'Scope / ICP'))}</span>
-          <textarea data-campaign-edit-field="scope" rows="3" placeholder="z.B. DACH SaaS, 50-500 MA, hoher Energieverbrauch, kaufkräftige Operations-Teams">${escapeHtml(campaign.payload?.scope || campaign.objective || '')}</textarea>
+          <textarea data-campaign-edit-field="scope" rows="3" placeholder="z.B. DACH SaaS, 50-500 MA, hoher Energieverbrauch, kaufkräftige Operations-Teams">${escapeHtml(scope)}</textarea>
         </label>
       </div>
       <div class="outbound-campaign-edit-actions">
         <button class="outbound-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
-        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('save', 'Speichern'))}</button>
+        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save disabled>${escapeHtml(t('save', 'Speichern'))}</button>
       </div>
     </article>
   `;
+}
+
+function updateCampaignEditSaveState(editor) {
+  if (!editor) return;
+  const saveButton = editor.querySelector('[data-campaign-edit-save]');
+  if (!saveButton) return;
+  const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || '';
+  const subtitle = editor.querySelector('[data-campaign-edit-field="subtitle"]')?.value?.trim() || '';
+  const scope = editor.querySelector('[data-campaign-edit-field="scope"]')?.value?.trim() || '';
+  const dirty = name !== (editor.dataset.originalName || '')
+    || subtitle !== (editor.dataset.originalSubtitle || '')
+    || scope !== (editor.dataset.originalScope || '');
+  saveButton.disabled = !name || !dirty;
 }
 
 function renderFunnelStage(campaign, filter, label, sublabel, value, openCount = 0, tone = '') {
@@ -2341,7 +2389,7 @@ function renderCenter(force = false) {
     // 3. Update research activity panel
     const activityContainer = root.querySelector('.outbound-research-activity-container');
     if (activityContainer) {
-      summaryContainer.innerHTML = renderResearchActivityPanel(campaign);
+      activityContainer.innerHTML = renderResearchActivityPanel(campaign);
     }
 
     // 4. Update Status/Tag selects and "Versteckte Firmen" count
@@ -2717,7 +2765,7 @@ function renderCRMCompanyRows(row) {
     const contactKey = row.item ? `${row.item.id}_0` : `${row.company.id}_0`;
 
     html += `
-      <tr${rowClass} data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="0">
     `;
 
     const contactCols = activeCols.filter(col => col.type === 'contact_people' || col.type === 'contact_field');
@@ -2796,7 +2844,7 @@ function renderCRMCompanyRows(row) {
     const activeNoteKey = state.activeNoteByContact.get(contactKey) || 'note_general';
 
     html += `
-      <tr${rowClass} data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}">
+      <tr${rowClass} data-action="select-company-row" data-company-id="${escapeHtml(row.company.id)}" data-contact-key="${escapeHtml(contactKey)}" data-id="${escapeHtml(row.item?.id || row.company.id)}" data-contact-index="${activeIndex}">
     `;
 
     activeCols.forEach(col => {
@@ -2954,7 +3002,9 @@ function renderQualificationSplit(campaign) {
   const settings = getCampaignResearchSettings(campaign);
   const activeCols = buildActiveTableColumns(settings, state.viewMode);
 
-  const rowsHtml = visibleRows.length ? visibleRows.map(row => renderCRMCompanyRows(row)).join('') : `
+  const rowsHtml = visibleRows.length
+    ? `${visibleRows.map(row => renderCRMCompanyRows(row)).join('')}${renderTableLimitRow(rows.length, activeCols.length)}`
+    : `
     <tr><td colspan="${activeCols.length}" class="outbound-table-empty" style="text-align:center; padding: 40px; color: var(--outbound-muted);">${escapeHtml(emptyCompanyMessage)}</td></tr>
   `;
   state.lastTbodyHtml = rowsHtml;
@@ -2968,19 +3018,25 @@ function renderQualificationSplit(campaign) {
   }).join('');
 
   return `
-    <div class="outbound-unified-workbench" data-view="${state.viewMode}">
-      <div class="outbound-table-scroll-unified">
-        <table class="crm-table">
-          <thead>
-            <tr>
-              ${headersHtml}
-            </tr>
-          </thead>
-          <tbody>
-            ${rowsHtml}
-          </tbody>
-        </table>
+    <div class="outbound-split-workbench" data-outbound-center-split>
+      <div class="outbound-unified-workbench" data-view="${state.viewMode}">
+        <div class="outbound-table-scroll-unified">
+          <table class="crm-table">
+            <thead>
+              <tr>
+                ${headersHtml}
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+        </div>
       </div>
+      <button class="outbound-center-resizer" type="button" data-outbound-center-resizer aria-label="${escapeHtml(t('resizeDetailsPane', 'Tabellen- und Detailbereich anpassen'))}"></button>
+      <aside class="outbound-pane outbound-right" aria-label="${escapeHtml(t('researchDetails', 'Research Details'))}">
+        ${state.activeView === 'pipeline' ? renderPipelineDetail() : renderCompanyDetail()}
+      </aside>
     </div>
   `;
 }
@@ -3063,8 +3119,9 @@ function researchActivityCounts(campaignId, rows = researchActivityRows(campaign
 }
 
 function researchActivityRows(campaignId) {
-  const companies = dedupeCompanies(state.companies.filter((item) => item.campaign_id === campaignId));
-  const pipeline = dedupePipelineItems(state.pipeline.filter((item) => item.campaign_id === campaignId));
+  const scoped = campaignScopedRows(state, campaignId);
+  const companies = dedupeCompanies(scoped.companies);
+  const pipeline = dedupePipelineItems(scoped.pipeline);
   const rows = [
     ...companies.map((company) => activityRowFromStatus(company.name, t('company', 'Company'), companyResearchStatus(company))),
     ...pipeline.map((item) => activityRowFromStatus(item.company_name, t('contact_status', 'Kontakt'), pipelineResearchStatus(item, 'contact_research'))),
@@ -3260,8 +3317,9 @@ function firstKnowledgeRowValue(rows, fieldId) {
 }
 
 function automationOpenRecords(campaignId, stage) {
-  const companies = dedupeCompanies(state.companies.filter((item) => item.campaign_id === campaignId));
-  const pipeline = dedupePipelineItems(state.pipeline.filter((item) => item.campaign_id === campaignId));
+  const scoped = campaignScopedRows(state, campaignId);
+  const companies = dedupeCompanies(scoped.companies);
+  const pipeline = dedupePipelineItems(scoped.pipeline);
   if (stage === 'company_research') {
     return companies.filter((company) => !isCompanyResearchDone(company) && !isQueuedStatus(company.research_status));
   }
@@ -3547,7 +3605,7 @@ function firstObjectValue(object, keys) {
 function pipelineItemForCompany(companyOrId) {
   const company = typeof companyOrId === 'object' ? companyOrId : state.companies.find((item) => item.id === companyOrId);
   const ids = new Set([typeof companyOrId === 'string' ? companyOrId : company?.id, ...(company?.duplicate_company_ids || [])].filter(Boolean));
-  return state.pipeline.find((item) => ids.has(item.company_id));
+  return currentPipeline().find((item) => ids.has(item.company_id)) || state.pipeline.find((item) => ids.has(item.company_id));
 }
 
 function openResearchSettingsDrawer() {
@@ -3826,6 +3884,7 @@ function renderResearchSettingsDrawer(campaign) {
   let footerHtml = `
     <footer class="outbound-research-footer">
       <span class="outbound-muted">${escapeHtml(t('settingsFooterHint', 'Gilt für diese Campaign. Änderungen an Spalten und Prompts werden direkt übernommen.'))}</span>
+      <button class="outbound-button" type="button" data-action="close-research-settings">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
       <button class="outbound-button primary" type="button" data-action="save-research-settings">${escapeHtml(t('save', 'Speichern'))}</button>
     </footer>
   `;
@@ -4185,7 +4244,7 @@ async function queueResearchForNewFields(campaignId, beforeSettings, nextSetting
 
 function visibleCampaigns() {
   const defaultCandidates = state.campaigns.filter((campaign) => campaign.name === DEFAULT_CAMPAIGN_NAME);
-  const emptyDefaultIds = new Set(defaultCandidates.filter((campaign) => !campaignHasData(campaign.id)).map((campaign) => campaign.id));
+  const emptyDefaultIds = new Set(defaultCandidates.filter((campaign) => !directCampaignHasData(campaign.id)).map((campaign) => campaign.id));
   const preferredDefault = defaultCandidates.find((campaign) => campaign.id === DEFAULT_CAMPAIGN_ID)
     || defaultCandidates.find((campaign) => !emptyDefaultIds.has(campaign.id))
     || defaultCandidates[0];
@@ -4196,17 +4255,23 @@ function visibleCampaigns() {
   });
 }
 
-function campaignHasData(campaignId) {
+function directCampaignHasData(campaignId) {
   return state.sources.some((item) => item.campaign_id === campaignId)
     || state.companies.some((item) => item.campaign_id === campaignId)
     || state.pipeline.some((item) => item.campaign_id === campaignId);
 }
 
+function campaignHasData(campaignId) {
+  const scoped = campaignScopedRows(state, campaignId);
+  return scoped.sources.length > 0 || scoped.companies.length > 0 || scoped.pipeline.length > 0;
+}
+
 function campaignFunnelMetrics(campaignId) {
-  const sources = state.sources.filter((item) => item.campaign_id === campaignId);
-  const rawCompanies = state.companies.filter((item) => item.campaign_id === campaignId);
+  const scoped = campaignScopedRows(state, campaignId);
+  const sources = scoped.sources;
+  const rawCompanies = scoped.companies;
   const companies = dedupeCompanies(rawCompanies);
-  const pipeline = dedupePipelineItems(state.pipeline.filter((item) => item.campaign_id === campaignId));
+  const pipeline = dedupePipelineItems(scoped.pipeline);
   const companySourceIds = new Set(rawCompanies.map((item) => item.source_id).filter(Boolean));
   const parsedSourceIds = new Set();
   const parsedSourceCount = sources.filter((source) => {
@@ -4494,6 +4559,9 @@ function renderCompanyDetail() {
   const company = selectedCompany();
   if (!company) return '<div class="outbound-empty">Firma auswählen.</div>';
   const runs = state.runs.filter((run) => run.company_id === company.id);
+  const source = state.sources.find((item) => item.id === company.source_id);
+  const item = pipelineItemForCompany(company);
+  const diagnostics = companyDiagnostics(company, source, item, runs);
   return `
     <header class="outbound-pane-header">
       <div><span>Company Research</span><h2>${escapeHtml(company.name)}</h2></div>
@@ -4505,6 +4573,7 @@ function renderCompanyDetail() {
           ${field('Ort', [company.city, company.country].filter(Boolean).join(', ') || 'offen')}
           ${field('Fit', `${labelQualification(company.qualification_status)} · ${company.fit_score || 0}/100`)}
           ${field('Pipeline', labelPipeline(company.pipeline_status))}
+          ${field('Importjob', source ? `${source.title || source.id} · ${source.status || 'offen'}` : 'keine Quelle verknüpft')}
         </div>
       </div>
       <div class="outbound-detail-block">
@@ -4523,6 +4592,10 @@ function renderCompanyDetail() {
         <div class="outbound-kicker">Research Runs</div>
         ${runs.map((run) => `<div class="outbound-muted">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
+      <div class="outbound-detail-block">
+        <div class="outbound-kicker">Diagnostik</div>
+        ${renderDiagnosticsList(diagnostics)}
+      </div>
     </div>
   `;
 }
@@ -4530,6 +4603,8 @@ function renderCompanyDetail() {
 function renderPipelineDetail() {
   const item = selectedPipelineItem();
   if (!item) return '<div class="outbound-empty">Pipeline-Eintrag auswählen.</div>';
+  const company = state.companies.find((entry) => entry.id === item.company_id);
+  const runs = state.runs.filter((run) => run.pipeline_id === item.id || run.company_id === item.company_id);
   return `
     <header class="outbound-pane-header">
       <div><span>Pipeline</span><h2>${escapeHtml(item.company_name)}</h2></div>
@@ -4547,7 +4622,40 @@ function renderPipelineDetail() {
         <div class="outbound-kicker">Kontakte</div>
         ${(item.contacts || []).map((contact) => `<div class="outbound-muted">${escapeHtml(contact.name || 'Kontakt')} · ${escapeHtml(contact.role || '')}</div>`).join('') || '<div class="outbound-muted">Kontakte werden erst in dieser Pipeline-Stufe recherchiert.</div>'}
       </div>
+      <div class="outbound-detail-block">
+        <div class="outbound-kicker">Diagnostik</div>
+        ${renderDiagnosticsList([
+          ['Firma', company?.name || item.company_name || 'offen'],
+          ['Pipeline-ID', item.id],
+          ['Kontakte', String((item.contacts || []).length)],
+          ['Letzter Run', runs[0] ? `${runs[0].run_type || 'Run'} · ${runs[0].status || 'offen'}` : 'kein Run'],
+        ])}
+      </div>
     </div>
+  `;
+}
+
+function companyDiagnostics(company, source, item, runs) {
+  const latestRun = runs
+    .slice()
+    .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0];
+  const sourceCommand = sourceImportCommandStatus(source);
+  return [
+    ['Company-ID', company.id],
+    ['Campaign-ID', company.campaign_id || 'nicht gesetzt'],
+    ['Datenquelle', source ? `${source.source_type || 'Quelle'} · ${source.status || 'offen'}` : 'keine Quelle'],
+    ['Import-Command', sourceCommand || source?.payload?.task_status || 'kein Status'],
+    ['Research-Status', companyResearchStatus(company) || company.research_status || 'nicht gestartet'],
+    ['Pipeline-Eintrag', item ? `${item.stage || 'Pipeline'} · ${item.contact_research_status || 'offen'}` : 'noch nicht übernommen'],
+    ['Letzter Run', latestRun ? `${latestRun.run_type || 'Run'} · ${latestRun.status || 'offen'}` : 'kein Run'],
+  ];
+}
+
+function renderDiagnosticsList(items) {
+  return `
+    <dl class="outbound-diagnostics">
+      ${items.map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || 'offen')}</dd></div>`).join('')}
+    </dl>
   `;
 }
 
@@ -4588,7 +4696,12 @@ async function saveCampaignInlineEdit(campaignId) {
   if (!campaign) return;
   const editor = state.ctx?.host?.querySelector(`.outbound-campaign-edit[data-id="${cssEscape(campaign.id)}"]`);
   if (!editor) return;
-  const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || campaign.name;
+  const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || '';
+  if (!name) {
+    updateCampaignEditSaveState(editor);
+    editor.querySelector('[data-campaign-edit-field="name"]')?.focus();
+    return;
+  }
   const subtitle = editor.querySelector('[data-campaign-edit-field="subtitle"]')?.value?.trim() || '';
   const scope = editor.querySelector('[data-campaign-edit-field="scope"]')?.value?.trim() || '';
   const payload = {
@@ -4632,7 +4745,7 @@ async function deleteCampaign(campaignId) {
 async function openCompanyImporter() {
   const campaign = selectedCampaign();
   if (!campaign) return;
-  await openUniversalImporter(state.ctx, {
+  const drawer = await openUniversalImporter(state.ctx, {
     side: 'left',
     moduleId: 'outbound',
     entityType: 'company_source',
@@ -4672,6 +4785,66 @@ async function openCompanyImporter() {
       return result;
     },
   });
+  attachOutboundImportValidation(drawer);
+}
+
+function attachOutboundImportValidation(drawer) {
+  if (!drawer) return;
+  const refresh = () => {
+    const validation = validateOutboundImportPayload(readOutboundImportDrawerState(drawer));
+    const button = drawer.querySelector('[data-action="submit-importer"]');
+    const status = drawer.querySelector('[data-import-status]');
+    if (button) button.disabled = !validation.valid;
+    if (status) status.textContent = validation.valid ? '' : validation.message;
+  };
+  drawer.addEventListener('input', refresh);
+  drawer.addEventListener('change', () => window.setTimeout(refresh, 0));
+  const stagedList = drawer.querySelector('[data-staged-files-list]');
+  const observer = stagedList ? new MutationObserver(refresh) : null;
+  observer?.observe(stagedList, { childList: true, subtree: true });
+  const cleanup = () => observer?.disconnect();
+  drawer.querySelector('[data-action="close-importer"]')?.addEventListener('click', cleanup, { once: true });
+  refresh();
+}
+
+function readOutboundImportDrawerState(drawer) {
+  return {
+    title: drawer?.querySelector('[data-import-title]')?.value || '',
+    source_type: drawer?.querySelector('[data-import-source]')?.value || 'text',
+    source: {
+      text: drawer?.querySelector('[data-import-text]')?.value || '',
+      url: drawer?.querySelector('[data-import-url]')?.value || '',
+      files: drawer?.stagedFiles || [],
+    },
+  };
+}
+
+function validateOutboundImportPayload(payload) {
+  const title = String(payload?.title || '').trim();
+  if (!title) return { valid: false, message: t('importValidationTitle', 'Bitte einen Titel eingeben.') };
+  const sourceType = String(payload?.source_type || 'text');
+  if (sourceType === 'text') {
+    return String(payload?.source?.text || '').trim()
+      ? { valid: true, message: '' }
+      : { valid: false, message: t('importValidationText', 'Bitte Text oder Zeilen einfügen.') };
+  }
+  if (sourceType === 'url') {
+    const url = String(payload?.source?.url || '').trim();
+    try {
+      const parsed = new URL(url);
+      return ['http:', 'https:'].includes(parsed.protocol)
+        ? { valid: true, message: '' }
+        : { valid: false, message: t('importValidationUrlHttp', 'Bitte eine HTTP(S)-URL angeben.') };
+    } catch {
+      return { valid: false, message: t('importValidationUrl', 'Bitte eine gültige URL angeben.') };
+    }
+  }
+  if (sourceType === 'document' || sourceType === 'excel') {
+    return (payload?.source?.files || []).length
+      ? { valid: true, message: '' }
+      : { valid: false, message: t('importValidationFile', 'Bitte mindestens eine Datei auswählen.') };
+  }
+  return { valid: true, message: '' };
 }
 
 async function importCompaniesFromPayload(campaign, payload) {
@@ -5353,15 +5526,15 @@ function selectedCampaign() {
 }
 
 function currentSources() {
-  return state.sources.filter((item) => item.campaign_id === state.selectedCampaignId);
+  return campaignScopedRows(state, state.selectedCampaignId).sources;
 }
 
 function currentCompanies() {
-  return dedupeCompanies(state.companies.filter((item) => item.campaign_id === state.selectedCampaignId));
+  return dedupeCompanies(campaignScopedRows(state, state.selectedCampaignId).companies);
 }
 
 function currentPipeline() {
-  return dedupePipelineItems(state.pipeline.filter((item) => item.campaign_id === state.selectedCampaignId));
+  return dedupePipelineItems(campaignScopedRows(state, state.selectedCampaignId).pipeline);
 }
 
 function selectedCompany() {
@@ -5369,7 +5542,41 @@ function selectedCompany() {
 }
 
 function selectedPipelineItem() {
-  return state.pipeline.find((item) => item.id === state.selectedPipelineId) || currentPipeline()[0] || null;
+  return currentPipeline().find((item) => item.id === state.selectedPipelineId) || currentPipeline()[0] || null;
+}
+
+function campaignScopedRows(data, campaignId) {
+  const campaigns = data.campaigns || [];
+  const sources = data.sources || [];
+  const companies = data.companies || [];
+  const pipeline = data.pipeline || [];
+  const directSources = sources.filter((item) => item.campaign_id === campaignId);
+  const directCompanies = companies.filter((item) => item.campaign_id === campaignId);
+  const directPipeline = pipeline.filter((item) => item.campaign_id === campaignId);
+  if (directCompanies.length || directPipeline.length) {
+    const companyIds = new Set(directCompanies.map((item) => item.id));
+    return {
+      sources: directSources,
+      companies: directCompanies,
+      pipeline: dedupePipelineItems([...directPipeline, ...pipeline.filter((item) => companyIds.has(item.company_id))]),
+      recovered: false,
+    };
+  }
+  const campaign = campaigns.find((item) => item.id === campaignId);
+  const recoverForCampaign = campaigns.length <= 1 || campaign?.name === DEFAULT_CAMPAIGN_NAME || campaign?.id === DEFAULT_CAMPAIGN_ID;
+  if (!campaignId || !recoverForCampaign) {
+    return { sources: [], companies: [], pipeline: [], recovered: false };
+  }
+  const knownCampaignIds = new Set(campaigns.map((item) => item.id).filter(Boolean));
+  const recoverable = (item) => !item.campaign_id || !knownCampaignIds.has(item.campaign_id) || campaigns.length <= 1;
+  const recoveredCompanies = companies.filter(recoverable);
+  const recoveredCompanyIds = new Set(recoveredCompanies.map((item) => item.id));
+  return {
+    sources: [...directSources, ...sources.filter((item) => item.campaign_id !== campaignId && recoverable(item))],
+    companies: recoveredCompanies,
+    pipeline: dedupePipelineItems(pipeline.filter((item) => recoverable(item) || recoveredCompanyIds.has(item.company_id))),
+    recovered: recoveredCompanies.length > 0 || sources.some(recoverable) || pipeline.some(recoverable),
+  };
 }
 
 function filteredCompanies() {
@@ -6633,3 +6840,8 @@ export function buildHiddenCompaniesPanel() {
   document.body.appendChild(panel);
   hiddenCompaniesPanelOpen = true;
 }
+
+export const __outboundTestHooks = {
+  campaignScopedRows,
+  validateOutboundImportPayload,
+};

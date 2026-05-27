@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { importTemplateToDb } from './templates/skr.js';
 import { CtoxResizer } from '../../shared/resizer.js';
+import { showBusinessConfirm } from '../../shared/dialogs.js';
 
 
 // --- Native ES Module Imports for Fibu Core Engines ---
@@ -66,6 +67,12 @@ const state = {
   // E2E Test Suite Results Cache
   uiTestResults: {}
 };
+
+const ASSETS_MOCK = [
+  { nr: 'ANL-2026-01', name: 'MacBook Pro 16 M3 Max', date: '2026-01-15', cost: 420000, life: 3, method: 'Lineaer', prev: 58333, book: 361667 },
+  { nr: 'ANL-2026-02', name: 'Herman Miller Aeron Chair', date: '2026-02-10', cost: 160000, life: 13, method: 'Lineaer', prev: 4102, book: 155898 },
+  { nr: 'ANL-2026-03', name: 'Premium Office Server Cluster', date: '2026-03-01', cost: 1200000, life: 5, method: 'Degressiv (20%)', prev: 200000, book: 1000000 }
+];
 
 // --- Labels for i18n ---
 const labels = {
@@ -218,6 +225,8 @@ function bindElements(host) {
     // Search fields
     searchAccounts: host.querySelector('[data-search-accounts]'),
     searchJournal: host.querySelector('[data-search-journal]'),
+    accountsCount: host.querySelector('[data-accounts-count]'),
+    journalCount: host.querySelector('[data-journal-count]'),
 
     // Reports sub-panels & tabs
     reportTabBtns: host.querySelectorAll('.fibu-report-tab-btn'),
@@ -682,10 +691,10 @@ function switchRightSubpanel(subId) {
 function renderActiveView() {
   switch (state.activeNav) {
     case 'skr':
-      renderAccountsList(state.accounts);
+      filterAccountsView(state.els.searchAccounts?.value?.toLowerCase().trim() || '');
       break;
     case 'journal':
-      renderJournalList();
+      filterJournalView(state.els.searchJournal?.value?.toLowerCase().trim() || '');
       break;
     case 'receipts':
       renderReceiptsList();
@@ -717,6 +726,7 @@ function renderActiveView() {
 function renderAccountsList(acctsArray) {
   const container = state.els.accountsList;
   if (!container) return;
+  updateListCount(state.els.accountsCount, acctsArray.length, state.accounts.length, 'Konten');
 
   if (acctsArray.length === 0) {
     container.innerHTML = `<tr><td colspan="6" class="fibu-empty-state">Keine Konten gefunden. Bitte initialisieren.</td></tr>`;
@@ -734,7 +744,7 @@ function renderAccountsList(acctsArray) {
     const taxRate = acct.tax_rate_id ? (acct.tax_rate_id === 'DE_19' ? '19% Vor/USt' : '7% Vor/USt') : '—';
 
     html += `
-      <tr class="${isGroup ? 'group-row' : 'regular-row'}" data-account-click-id="${acct.id}">
+      <tr class="${isGroup ? 'group-row' : 'regular-row'} ${state.selectedAccountId === acct.id ? 'selected' : ''}" data-account-click-id="${acct.id}" aria-selected="${state.selectedAccountId === acct.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${acct.code}</span></td>
         <td>
           <span style="padding-left: ${acct.parent_id ? '16px' : '0px'};">
@@ -768,9 +778,20 @@ function renderAccountsList(acctsArray) {
   container.querySelectorAll('tr').forEach(tr => {
     tr.addEventListener('click', () => {
       const id = tr.getAttribute('data-account-click-id');
-      openAccountLedgerDrawer(id);
+      selectAccount(id);
+    });
+    tr.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectAccount(tr.getAttribute('data-account-click-id'));
     });
   });
+}
+
+function selectAccount(id) {
+  state.selectedAccountId = id;
+  setSelectedRow(state.els.accountsList, 'data-account-click-id', id);
+  openAccountLedgerDrawer(id);
 }
 
 function filterAccountsView(query) {
@@ -790,7 +811,18 @@ async function forceReInitSKR() {
   const db = state.ctx.db?.raw;
   if (!db) return;
 
-  if (confirm(`Möchtest du den Kontenrahmen ${state.skrName} wirklich zurücksetzen und neu laden? Alle Konten werden überschrieben.`)) {
+  const confirmed = await showBusinessConfirm(
+    `Der Kontenrahmen ${state.skrName} wird gelöscht und aus der Vorlage neu aufgebaut.\n\nAlle lokalen Konten dieses Kontenrahmens werden überschrieben. Journalbuchungen bleiben bestehen, können danach aber auf geänderte Konten verweisen.`,
+    {
+      title: `${state.skrName} neu initialisieren`,
+      confirmLabel: 'Kontenrahmen neu initialisieren',
+      cancelLabel: 'Abbrechen',
+      requireText: state.skrName,
+      kind: 'danger'
+    }
+  );
+
+  if (confirmed) {
     // Delete existing
     const existing = await db.accounting_accounts.find({ selector: { skr: state.skrName } }).exec();
     for (const doc of existing) {
@@ -808,16 +840,21 @@ async function forceReInitSKR() {
 // 📖 Rendering View: Journal & Ledger
 // =========================================================================
 function renderJournalList() {
+  renderJournalRows(state.journalEntries);
+}
+
+function renderJournalRows(entries) {
   const container = state.els.journalList;
   if (!container) return;
+  updateListCount(state.els.journalCount, entries.length, state.journalEntries.length, 'Buchungen');
 
-  if (state.journalEntries.length === 0) {
+  if (entries.length === 0) {
     container.innerHTML = `<tr><td colspan="7" class="fibu-empty-state">Keine Buchungen im Journal vorhanden.</td></tr>`;
     return;
   }
 
   let html = '';
-  state.journalEntries.forEach(entry => {
+  entries.forEach(entry => {
     const isPosted = !!entry.posted_at;
     const isStorno = !!entry.reversed_by_id || entry.type === 'storno';
 
@@ -831,7 +868,7 @@ function renderJournalList() {
     const receiptLabel = receipt ? `📄 ${receipt.filename}` : '—';
 
     html += `
-      <tr class="${isStorno ? 'fibu-storno-indicator' : ''}" data-entry-click-id="${entry.id}">
+      <tr class="${isStorno ? 'fibu-storno-indicator' : ''} ${state.selectedEntryId === entry.id ? 'selected' : ''}" data-entry-click-id="${entry.id}" aria-selected="${state.selectedEntryId === entry.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${entry.posting_date}</span></td>
         <td><span class="fibu-mono">${entry.number || 'Entwurf'}</span></td>
         <td>${escapeHtml(entry.narration || 'Unbenannte Buchung')}</td>
@@ -854,46 +891,34 @@ function renderJournalList() {
   container.querySelectorAll('tr').forEach(tr => {
     tr.addEventListener('click', () => {
       const id = tr.getAttribute('data-entry-click-id');
-      openJournalEntryDrawer(id);
+      selectJournalEntry(id);
+    });
+    tr.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectJournalEntry(tr.getAttribute('data-entry-click-id'));
     });
   });
 }
 
+function selectJournalEntry(id) {
+  state.selectedEntryId = id;
+  setSelectedRow(state.els.journalList, 'data-entry-click-id', id);
+  openJournalEntryDrawer(id);
+}
+
 function filterJournalView(query) {
   if (!query) {
-    loadAllFibuData().then(() => renderJournalList());
+    renderJournalRows(state.journalEntries);
     return;
   }
   const filtered = state.journalEntries.filter(e =>
     (e.narration && e.narration.toLowerCase().includes(query)) ||
     (e.number && e.number.toLowerCase().includes(query)) ||
-    e.posting_date.includes(query)
+    (e.posting_date && e.posting_date.includes(query))
   );
 
-  const container = state.els.journalList;
-  if (!container) return;
-
-  let html = '';
-  filtered.forEach(entry => {
-    const isPosted = !!entry.posted_at;
-    const isStorno = !!entry.reversed_by_id || entry.type === 'storno';
-    const lines = state.journalEntryLines.filter(l => l.journal_entry_id === entry.id);
-    const totalDebitCents = lines.reduce((acc, curr) => acc + (curr.debit || 0), 0);
-    html += `
-      <tr class="${isStorno ? 'fibu-storno-indicator' : ''}" data-entry-click-id="${entry.id}">
-        <td><span class="fibu-mono">${entry.posting_date}</span></td>
-        <td><span class="fibu-mono">${entry.number || 'Entwurf'}</span></td>
-        <td>${escapeHtml(entry.narration || '')}</td>
-        <td>—</td>
-        <td style="text-align: right;">${formatCents(totalDebitCents)}</td>
-        <td style="text-align: center;">
-          <span class="fibu-badge ${isPosted ? 'status-posted' : 'status-draft'}">${isPosted ? 'Posted 🔒' : 'Entwurf'}</span>
-        </td>
-        <td style="text-align: center;">—</td>
-      </tr>
-    `;
-  });
-  container.innerHTML = html;
+  renderJournalRows(filtered);
 }
 
 // =========================================================================
@@ -916,7 +941,7 @@ function renderReceiptsList() {
     const suggestedLabel = suggestedAcct ? `${suggestedAcct.code} ${suggestedAcct.name}` : '—';
 
     html += `
-      <tr data-receipt-click-id="${r.id}">
+      <tr class="${state.selectedReceiptId === r.id ? 'selected' : ''}" data-receipt-click-id="${r.id}" aria-selected="${state.selectedReceiptId === r.id ? 'true' : 'false'}" tabindex="0">
         <td style="font-weight: 500; color: var(--text-strong);">📄 ${escapeHtml(r.filename)}</td>
         <td>${escapeHtml(r.supplier_name || 'Unbekannt')}</td>
         <td><span class="fibu-mono">${r.invoice_date || '—'}</span></td>
@@ -941,6 +966,11 @@ function renderReceiptsList() {
       const id = tr.getAttribute('data-receipt-click-id');
       selectReceipt(id);
     });
+    tr.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectReceipt(tr.getAttribute('data-receipt-click-id'));
+    });
   });
 }
 
@@ -952,8 +982,10 @@ function selectReceipt(id) {
   // Highlight row in Center
   state.els.receiptsList.querySelectorAll('tr').forEach(tr => {
     tr.classList.remove('selected');
+    tr.setAttribute('aria-selected', 'false');
     if (tr.getAttribute('data-receipt-click-id') === id) {
       tr.classList.add('selected');
+      tr.setAttribute('aria-selected', 'true');
     }
   });
 
@@ -1053,7 +1085,7 @@ function renderBankingList() {
     const proposedLabel = matchedReceipt ? `📄 Vorschlag: ${matchedReceipt.filename}` : 'Keine Belegübereinstimmung';
 
     html += `
-      <tr data-bankline-click-id="${line.id}">
+      <tr class="${state.selectedBankLineId === line.id ? 'selected' : ''}" data-bankline-click-id="${line.id}" aria-selected="${state.selectedBankLineId === line.id ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${line.value_date}</span></td>
         <td>
           <div style="font-weight:600; color:var(--text-strong);">${escapeHtml(line.counterparty_name || 'Unbekannter Empfänger')}</div>
@@ -1087,9 +1119,20 @@ function renderBankingList() {
   container.querySelectorAll('tr').forEach(tr => {
     tr.addEventListener('click', () => {
       const id = tr.getAttribute('data-bankline-click-id');
-      openBankReconciliationDrawer(id);
+      selectBankLine(id);
+    });
+    tr.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectBankLine(tr.getAttribute('data-bankline-click-id'));
     });
   });
+}
+
+function selectBankLine(id) {
+  state.selectedBankLineId = id;
+  setSelectedRow(state.els.bankingList, 'data-bankline-click-id', id);
+  openBankReconciliationDrawer(id);
 }
 
 // =========================================================================
@@ -1456,19 +1499,12 @@ function renderAssetsList() {
   const container = state.els.assetsList;
   if (!container) return;
 
-  // Hardcoded premium asset register for beautiful initial workbench state
-  const assetsMock = [
-    { nr: 'ANL-2026-01', name: 'MacBook Pro 16 M3 Max', date: '2026-01-15', cost: 420000, life: 3, method: 'Lineaer', prev: 58333, book: 361667 },
-    { nr: 'ANL-2026-02', name: 'Herman Miller Aeron Chair', date: '2026-02-10', cost: 160000, life: 13, method: 'Lineaer', prev: 4102, book: 155898 },
-    { nr: 'ANL-2026-03', name: 'Premium Office Server Cluster', date: '2026-03-01', cost: 1200000, life: 5, method: 'Degressiv (20%)', prev: 200000, book: 1000000 }
-  ];
-
   let html = '';
-  assetsMock.forEach(as => {
+  ASSETS_MOCK.forEach(as => {
     html += `
-      <tr data-asset-click-nr="${as.nr}">
+      <tr class="${state.selectedAssetId === as.nr ? 'selected' : ''}" data-asset-click-nr="${as.nr}" aria-selected="${state.selectedAssetId === as.nr ? 'true' : 'false'}" tabindex="0">
         <td><span class="fibu-mono">${as.nr}</span></td>
-        <td style="font-weight: 500; color: var(--text-strong);">🏢 ${as.name}</td>
+        <td style="font-weight: 500; color: var(--text-strong);">🏢 ${escapeHtml(as.name)}</td>
         <td><span class="fibu-mono">${as.date}</span></td>
         <td style="text-align: right;">${formatCents(as.cost)}</td>
         <td style="text-align: center;">${as.life}</td>
@@ -1476,13 +1512,37 @@ function renderAssetsList() {
         <td style="text-align: right;" class="fibu-text-credit">${formatCents(as.prev)}</td>
         <td style="text-align: right;" class="fibu-text-debit">${formatCents(as.book)}</td>
         <td style="text-align: center;">
-          <button class="fibu-btn fibu-btn-secondary" style="padding:4px 8px; font-size:11px;" onclick="event.stopPropagation(); openAssetDrawer('${as.nr}', '${as.name}', ${as.cost}, ${as.life})">Plan</button>
+          <button type="button" class="fibu-btn fibu-btn-secondary" style="padding:4px 8px; font-size:11px;" data-asset-plan="${as.nr}">Plan</button>
         </td>
       </tr>
     `;
   });
 
   container.innerHTML = html;
+
+  container.querySelectorAll('tr').forEach(tr => {
+    tr.addEventListener('click', () => selectAsset(tr.getAttribute('data-asset-click-nr')));
+    tr.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectAsset(tr.getAttribute('data-asset-click-nr'));
+    });
+  });
+
+  container.querySelectorAll('[data-asset-plan]').forEach(btn => {
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      selectAsset(btn.getAttribute('data-asset-plan'));
+    });
+  });
+}
+
+function selectAsset(nr) {
+  const asset = ASSETS_MOCK.find(as => as.nr === nr);
+  if (!asset) return;
+  state.selectedAssetId = nr;
+  setSelectedRow(state.els.assetsList, 'data-asset-click-nr', nr);
+  openAssetDrawer(asset.nr, asset.name, asset.cost, asset.life);
 }
 
 // =========================================================================
@@ -1490,10 +1550,16 @@ function renderAssetsList() {
 // =========================================================================
 function openDrawer() {
   state.els.drawer?.classList.add('is-open');
+  state.els.drawer?.setAttribute('aria-hidden', 'false');
+  window.requestAnimationFrame(() => {
+    const focusTarget = state.els.drawer?.querySelector('input, select, textarea, button, [tabindex]:not([tabindex="-1"])') || state.els.drawer;
+    focusTarget?.focus?.();
+  });
 }
 
 function closeDrawer() {
   state.els.drawer?.classList.remove('is-open');
+  state.els.drawer?.setAttribute('aria-hidden', 'true');
 }
 
 function openAccountLedgerDrawer(accountId) {
@@ -1819,55 +1885,67 @@ function openManualJournalDrawer() {
   state.els.drawerTitle.textContent = `Neue manuelle Journalbuchung`;
   openDrawer();
 
+  const defaults = getManualEntryDefaultAccountIds();
   let html = `
-    <form id="fibu-new-entry-form" onsubmit="event.preventDefault(); saveManualEntry();">
+    <form id="fibu-new-entry-form" novalidate>
       <div class="fibu-form-row">
         <div class="fibu-form-group">
-          <label>Belegdatum</label>
-          <input type="date" id="new-entry-date" class="fibu-input" value="2026-05-22" required />
+          <label for="new-entry-date">Belegdatum</label>
+          <input type="date" id="new-entry-date" class="fibu-input" value="2026-05-22" required aria-describedby="new-entry-validation" />
         </div>
         <div class="fibu-form-group" style="flex:2;">
-          <label>Buchungstext</label>
+          <label for="new-entry-narration">Buchungstext</label>
           <input type="text" id="new-entry-narration" class="fibu-input" placeholder="z.B. Miete Büroräume Mai" required />
         </div>
       </div>
 
       <div class="fibu-form-row">
         <div class="fibu-form-group">
-          <label>Soll-Konto (Debit)</label>
-          <select id="new-entry-soll" class="fibu-select">
-            ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}
+          <label for="new-entry-soll">Soll-Konto (Debit)</label>
+          <select id="new-entry-soll" class="fibu-select" required>
+            ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.soll ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
         <div class="fibu-form-group">
-          <label>Haben-Konto (Credit)</label>
-          <select id="new-entry-haben" class="fibu-select">
-            ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}">${a.code} ${a.name}</option>`).join('')}
+          <label for="new-entry-haben">Haben-Konto (Credit)</label>
+          <select id="new-entry-haben" class="fibu-select" required>
+            ${state.accounts.filter(a => !a.is_group).map(a => `<option value="${a.id}" ${a.id === defaults.haben ? 'selected' : ''}>${a.code} ${escapeHtml(a.name)}</option>`).join('')}
           </select>
         </div>
         <div class="fibu-form-group">
-          <label>Betrag (Netto in EUR)</label>
-          <input type="number" step="0.01" id="new-entry-amount" class="fibu-input" placeholder="0.00" required />
+          <label for="new-entry-amount">Betrag (Netto in EUR)</label>
+          <input type="number" step="0.01" min="0.01" id="new-entry-amount" class="fibu-input" placeholder="0.00" required />
         </div>
       </div>
 
-      <div style="margin-top:20px; display:flex; justify-content:flex-end; gap:10px;">
-        <button type="submit" class="fibu-btn fibu-btn-primary">💾 Als Entwurf buchen</button>
+      <div id="new-entry-validation" class="fibu-validation-summary" role="status" aria-live="polite"></div>
+
+      <div class="fibu-drawer-actions">
+        <button type="submit" id="new-entry-submit" class="fibu-btn fibu-btn-primary" disabled aria-disabled="true">💾 Als Entwurf buchen</button>
       </div>
     </form>
   `;
 
   state.els.drawerContent.innerHTML = html;
+  const form = document.getElementById('fibu-new-entry-form');
+  form?.addEventListener('input', validateManualEntryForm);
+  form?.addEventListener('change', validateManualEntryForm);
+  form?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!validateManualEntryForm()) return;
+    window.saveManualEntry();
+  });
+  validateManualEntryForm();
 
   // Wire save button
   window.saveManualEntry = async () => {
     const date = document.getElementById('new-entry-date').value;
-    const narration = document.getElementById('new-entry-narration').value;
+    const narration = document.getElementById('new-entry-narration').value.trim();
     const soll = document.getElementById('new-entry-soll').value;
     const haben = document.getElementById('new-entry-haben').value;
     const valAmount = parseFloat(document.getElementById('new-entry-amount').value);
 
-    if (isNaN(valAmount) || valAmount <= 0) return;
+    if (!validateManualEntryForm()) return;
 
     const cents = Math.round(valAmount * 100);
     const db = state.ctx.db?.raw;
@@ -1909,6 +1987,45 @@ function openManualJournalDrawer() {
     closeDrawer();
     switchView('journal');
   };
+}
+
+function getManualEntryDefaultAccountIds() {
+  const leafAccounts = state.accounts.filter(a => !a.is_group);
+  const soll = leafAccounts.find(a => ['expense', 'fixed_asset'].includes(a.account_type)) || leafAccounts[0];
+  const haben = leafAccounts.find(a => a.id !== soll?.id && ['bank', 'cash', 'payable'].includes(a.account_type))
+    || leafAccounts.find(a => a.id !== soll?.id)
+    || null;
+  return { soll: soll?.id || '', haben: haben?.id || '' };
+}
+
+function validateManualEntryForm() {
+  const date = document.getElementById('new-entry-date')?.value || '';
+  const narration = document.getElementById('new-entry-narration')?.value.trim() || '';
+  const soll = document.getElementById('new-entry-soll')?.value || '';
+  const haben = document.getElementById('new-entry-haben')?.value || '';
+  const amountValue = document.getElementById('new-entry-amount')?.value || '';
+  const amount = Number.parseFloat(amountValue);
+
+  const errors = [];
+  if (!date) errors.push('Belegdatum fehlt.');
+  if (!narration) errors.push('Buchungstext fehlt.');
+  if (!soll) errors.push('Soll-Konto fehlt.');
+  if (!haben) errors.push('Haben-Konto fehlt.');
+  if (soll && haben && soll === haben) errors.push('Soll und Haben müssen unterschiedliche Konten sein.');
+  if (!Number.isFinite(amount) || amount <= 0) errors.push('Betrag muss größer als 0,00 € sein.');
+
+  const submit = document.getElementById('new-entry-submit');
+  const summary = document.getElementById('new-entry-validation');
+  const valid = errors.length === 0;
+  if (submit) {
+    submit.disabled = !valid;
+    submit.setAttribute('aria-disabled', String(!valid));
+  }
+  if (summary) {
+    summary.textContent = valid ? 'Buchung ist vollständig und ausgeglichen.' : errors.join(' ');
+    summary.classList.toggle('is-valid', valid);
+  }
+  return valid;
 }
 
 // =========================================================================
@@ -2763,7 +2880,23 @@ function formatCents(cents) {
 
 function escapeHtml(str) {
   if (!str) return '';
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function updateListCount(el, visible, total, label) {
+  if (!el) return;
+  el.textContent = visible === total
+    ? `${total} ${label}`
+    : `${visible} / ${total} ${label}`;
+}
+
+function setSelectedRow(container, attrName, selectedId) {
+  if (!container) return;
+  container.querySelectorAll('tr').forEach(tr => {
+    const isSelected = tr.getAttribute(attrName) === selectedId;
+    tr.classList.toggle('selected', isSelected);
+    tr.setAttribute('aria-selected', String(isSelected));
+  });
 }
 
 // =========================================================================

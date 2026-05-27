@@ -17,6 +17,7 @@ const MODULES = [
   'app-store',
   'matching',
   'reports',
+  'tickets',
 ];
 
 const OUTPUT_PATH = new URL('../../business_os/business_os_schema_contract.json', import.meta.url);

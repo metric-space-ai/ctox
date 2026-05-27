@@ -90,7 +90,8 @@
       <div class="fibu-view-panel" data-panel="skr">
         <div class="fibu-panel-toolbar">
           <div class="fibu-search-wrapper">
-            <input type="search" class="fibu-search-input" data-search-accounts placeholder="Konto oder Code suchen..." />
+            <input type="search" class="fibu-search-input" data-search-accounts placeholder="Konto oder Code suchen..." aria-describedby="accounts-count" />
+            <span id="accounts-count" class="fibu-result-count" data-accounts-count>0 Konten</span>
           </div>
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="init-skr">
             🔄 Kontenrahmen neu initialisieren
@@ -119,7 +120,8 @@
       <div class="fibu-view-panel" data-panel="journal" hidden>
         <div class="fibu-panel-toolbar">
           <div class="fibu-search-wrapper">
-            <input type="search" class="fibu-search-input" data-search-journal placeholder="Journal durchsuchen..." />
+            <input type="search" class="fibu-search-input" data-search-journal placeholder="Journal durchsuchen..." aria-describedby="journal-count" />
+            <span id="journal-count" class="fibu-result-count" data-journal-count>0 Buchungen</span>
           </div>
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-entry">
             ➕ Neue manuelle Buchung
@@ -452,11 +454,11 @@
     </div>
 
     <!-- Elegant Slide-up Bottom Drawer (For details and edits, maintaining uncluttered center view) -->
-    <div class="ctox-bottom-drawer" data-drawer>
+    <div class="ctox-bottom-drawer" data-drawer role="dialog" aria-modal="false" aria-labelledby="fibu-drawer-title" aria-hidden="true" tabindex="-1">
       <div class="fibu-drawer-handle" data-drawer-toggle>
         <div class="fibu-drawer-handle-bar"></div>
-        <span class="fibu-drawer-title" data-drawer-header-title>Buchungszeilen-Editor</span>
-        <button type="button" class="fibu-drawer-close-btn" data-action="close-drawer">✕</button>
+        <span class="fibu-drawer-title" id="fibu-drawer-title" data-drawer-header-title>Buchungszeilen-Editor</span>
+        <button type="button" class="fibu-drawer-close-btn" data-action="close-drawer" aria-label="Buchungseditor schließen">✕</button>
       </div>
       <div class="fibu-drawer-content" data-drawer-content-body>
         <!-- Content will be injected dynamically -->

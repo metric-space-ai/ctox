@@ -1,13 +1,14 @@
 import { collections } from './schema.js';
 import { showBusinessConfirm } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
 const NODE_WIDTH = 136;
 const NODE_HEIGHT = 76;
 const DEFAULT_ZOOM = 1;
+const MIN_ZOOM = 0.72;
+const MAX_ZOOM = 1.8;
 const LEFT_COLUMN_WIDTH_KEY = 'ctox.businessOs.ctox.leftColumnWidth';
 const LEFT_COLUMN_MIN = 220;
 const LEFT_COLUMN_MAX = 560;
@@ -125,14 +126,19 @@ const labels = {
     webStackAuthAssist: 'Login im Browser',
     webStackRxdbOnly: 'Browser-Stream über RxDB, Secrets im CTOX Secret Store.',
     webStackLoading: 'Web Stack Projektion wird geladen…',
-    webStackConnecting: 'Verbindung zum CTOX-Backend wird hergestellt…',
+    webStackConnecting: 'RxDB ist verbunden, die CTOX Web-Stack-Projektion fehlt noch.',
     webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
+    webStackSyncRequired: 'Sync-Diagnose erforderlich',
+    webStackProjectionMissing: 'Keine Web-Stack-Projektion in RxDB. Aktualisieren prüft erneut; Credentials bleiben außerhalb von RxDB.',
     webStackCredentialSaved: 'Credential gespeichert.',
     webStackAuthQueued: 'Browser-Login angefordert.',
     webStackRecentCaptures: 'Letzte Captures',
     webStackNoCaptures: 'Noch keine Browser-Captures.',
     webStackRecentExtracts: 'Letzte Extracts',
     webStackNoExtracts: 'Noch keine Browser-Extracts.',
+    timelineUnavailable: 'Keine Timeline-Ereignisse verfügbar',
+    timelineUnavailableDetail: 'Der Regler ist deaktiviert, bis CTOX mehr als einen Schritt projiziert.',
+    flowProjectionMissing: 'RxDB verbunden, CTOX Flow-Projektion fehlt',
   },
   en: {
     now: 'Now',
@@ -243,14 +249,19 @@ const labels = {
     webStackAuthAssist: 'Login in Browser',
     webStackRxdbOnly: 'Browser stream over RxDB, secrets in CTOX Secret Store.',
     webStackLoading: 'Loading Web Stack projection…',
-    webStackConnecting: 'Connecting to the CTOX backend…',
+    webStackConnecting: 'RxDB is connected, but the CTOX Web Stack projection is still missing.',
     webStackUnavailable: 'Web Stack is currently unreachable.',
+    webStackSyncRequired: 'Sync diagnostics required',
+    webStackProjectionMissing: 'No Web Stack projection in RxDB. Refresh checks again; credentials stay outside RxDB.',
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
     webStackRecentCaptures: 'Recent captures',
     webStackNoCaptures: 'No browser captures yet.',
     webStackRecentExtracts: 'Recent extracts',
     webStackNoExtracts: 'No browser extracts yet.',
+    timelineUnavailable: 'No timeline events available',
+    timelineUnavailableDetail: 'The scrubber is disabled until CTOX projects more than one step.',
+    flowProjectionMissing: 'RxDB connected, CTOX flow projection missing',
   },
 };
 
@@ -356,6 +367,7 @@ export async function mount(ctx) {
     selectedStepIndex: 0,
     selectedTaskStepIndex: 0,
     selectedTaskId: null,
+    selectedNodeId: '',
     zoom: DEFAULT_ZOOM,
     statusMessage: '',
     runtimeStatus: 'Loading status',
@@ -541,20 +553,87 @@ function wireColumnResize(state) {
   const handle = state.ctx.host.querySelector('[data-ctox-column-resizer]');
   if (!harness || !handle) return () => {};
 
-  const resizer = new CtoxResizer({
-    resizerEl: handle,
-    containerEl: harness,
-    cssVar: '--ctox-left-width',
-    side: 'left',
-    minWidth: LEFT_COLUMN_MIN,
-    maxWidth: LEFT_COLUMN_MAX,
-    onResize: (width) => {
-      localStorage.setItem(LEFT_COLUMN_WIDTH_KEY, String(Math.round(width)));
+  let drag = null;
+  let raf = 0;
+  const readWidth = () => {
+    const cssWidth = Number.parseFloat(window.getComputedStyle(harness).getPropertyValue('--ctox-left-width'));
+    if (Number.isFinite(cssWidth)) return clampMetric(cssWidth, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX);
+    const left = state.ctx.host.querySelector('[data-ctox-left]');
+    return clampMetric(left?.getBoundingClientRect?.().width || 340, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX);
+  };
+  const setWidth = (width) => {
+    const next = Math.round(clampMetric(width, LEFT_COLUMN_MIN, LEFT_COLUMN_MAX));
+    harness.style.setProperty('--ctox-left-width', `${next}px`);
+    handle.setAttribute('aria-valuenow', String(next));
+    handle.setAttribute('aria-valuetext', `${next} px`);
+    localStorage.setItem(LEFT_COLUMN_WIDTH_KEY, String(next));
+    return next;
+  };
+  const stopDrag = (event) => {
+    if (raf) window.cancelAnimationFrame(raf);
+    raf = 0;
+    if (drag?.pointerId !== undefined) {
+      try { handle.releasePointerCapture(drag.pointerId); } catch {}
     }
-  });
+    drag = null;
+    handle.classList.remove('is-dragging');
+    document.body.classList.remove('ctox-column-resizing');
+    event?.preventDefault?.();
+  };
+  const moveDrag = (event) => {
+    if (!drag) return;
+    event.preventDefault();
+    if (raf) window.cancelAnimationFrame(raf);
+    const clientX = event.clientX;
+    raf = window.requestAnimationFrame(() => {
+      raf = 0;
+      setWidth(drag.startWidth + (clientX - drag.startX));
+    });
+  };
+  const startDrag = (event) => {
+    if (event.button !== undefined && event.button !== 0) return;
+    event.preventDefault();
+    drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: readWidth(),
+    };
+    handle.setPointerCapture?.(event.pointerId);
+    handle.classList.add('is-dragging');
+    document.body.classList.add('ctox-column-resizing');
+  };
+  const onKeyDown = (event) => {
+    const current = readWidth();
+    const step = event.shiftKey ? 48 : 24;
+    let next = null;
+    if (event.key === 'ArrowLeft') next = current - step;
+    if (event.key === 'ArrowRight') next = current + step;
+    if (event.key === 'Home') next = LEFT_COLUMN_MIN;
+    if (event.key === 'End') next = LEFT_COLUMN_MAX;
+    if (next === null) return;
+    event.preventDefault();
+    setWidth(next);
+  };
+
+  handle.setAttribute('role', 'separator');
+  handle.setAttribute('tabindex', '0');
+  handle.setAttribute('aria-orientation', 'vertical');
+  handle.setAttribute('aria-valuemin', String(LEFT_COLUMN_MIN));
+  handle.setAttribute('aria-valuemax', String(LEFT_COLUMN_MAX));
+  setWidth(readWidth());
+  handle.addEventListener('pointerdown', startDrag);
+  handle.addEventListener('pointermove', moveDrag);
+  handle.addEventListener('pointerup', stopDrag);
+  handle.addEventListener('pointercancel', stopDrag);
+  handle.addEventListener('keydown', onKeyDown);
 
   return () => {
-    resizer.destroy();
+    stopDrag();
+    handle.removeEventListener('pointerdown', startDrag);
+    handle.removeEventListener('pointermove', moveDrag);
+    handle.removeEventListener('pointerup', stopDrag);
+    handle.removeEventListener('pointercancel', stopDrag);
+    handle.removeEventListener('keydown', onKeyDown);
   };
 }
 
@@ -743,20 +822,27 @@ function webStackPanel(state) {
   `).join('');
 
   const friendlyStatus = friendlyWebStackStatus(webStack, t);
+  const projectionMissing = webStackProjectionMissing(webStack);
+  const headerSummary = webStack.loading
+    ? t.webStackLoading
+    : projectionMissing
+      ? t.webStackSyncRequired
+      : `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`;
   const statusTone = webStack.error ? 'is-status' : (webStack.notice ? 'is-notice' : '');
   return `
     <section class="ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
       <header>
         <div>
           <span>${escapeHtml(t.webStack)}</span>
-          <strong>${webStack.loading ? escapeHtml(t.webStackLoading) : escapeHtml(`${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`)}</strong>
+          <strong>${escapeHtml(headerSummary)}</strong>
         </div>
-        <button type="button" data-webstack-refresh aria-label="${escapeAttr(t.webStack)} aktualisieren">↻</button>
+        <button type="button" data-webstack-refresh aria-label="${escapeAttr(`${t.webStack} aktualisieren`)}" title="${escapeAttr(`${t.webStack} aktualisieren`)}">↻</button>
       </header>
       <p class="ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</p>
-      ${sourceOptions ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
+      ${projectionMissing ? `<p class="ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</p>` : ''}
+      ${sourceOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
       <div class="ctox-web-stack-source-list">
-        ${rows || `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}</small>`}
+        ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
       </div>
       <div class="ctox-web-stack-capture-list">
         <span>${escapeHtml(t.webStackRecentCaptures)}</span>
@@ -780,6 +866,11 @@ function friendlyWebStackStatus(webStack, t) {
   if (lower.includes('command bus')) return t.webStackConnecting;
   // Unknown error shape — never surface raw stack/projection error text in the UI.
   return t.webStackUnavailable;
+}
+
+function webStackProjectionMissing(webStack) {
+  const raw = String(webStack?.error || '').trim().toLowerCase();
+  return Boolean(raw && (raw.includes('projection is not available') || raw.includes('ctox_runtime_settings') || raw.includes('rxdb')));
 }
 
 function recentWebStackBrowserCaptures(state) {
@@ -972,12 +1063,16 @@ function renderMain(state) {
   const timelineIndex = clampIndex(state.selectedStepIndex, model.timeline.length);
   const selectedTask = getSelectedTask(state);
   const taskStepView = selectedTask ? selectedTaskStepView(selectedTask, state) : null;
-  const selectedNode = taskStepView
-    ? taskStepView.node
-    : model.timeline[timelineIndex] || model.nodes.find((node) => node.id === model.activeNodeId) || model.nodes[0];
-  const visibleTrace = taskStepView
-    ? buildVisibleTraceFromSteps(model, taskStepView.steps, taskStepView.index)
-    : buildVisibleTrace(model.timeline, timelineIndex);
+  const selectedNodeOverride = state.selectedNodeId ? model.nodeMap.get(state.selectedNodeId) : null;
+  const selectedNode = selectedNodeOverride
+    || (taskStepView
+      ? taskStepView.node
+      : model.timeline[timelineIndex] || model.nodes.find((node) => node.id === model.activeNodeId) || model.nodes[0]);
+  const visibleTrace = selectedNodeOverride
+    ? buildVisibleTraceWindow([selectedNodeOverride])
+    : taskStepView
+      ? buildVisibleTraceFromSteps(model, taskStepView.steps, taskStepView.index)
+      : buildVisibleTrace(model.timeline, timelineIndex);
   const metricSubject = metricSubjectTask(state, selectedTask);
   const live = isLiveMetricSubject(metricSubject, state);
   const metrics = metricSubject ? aggregateFlowMetrics(state.flow) : emptyMetrics();
@@ -1006,10 +1101,10 @@ function renderMain(state) {
     </section>
     <div class="ctox-canvas-container">
       <div class="ctox-flow-toolbar" aria-label="Flow chart controls" data-flow-control>
-        <button type="button" data-zoom="-">-</button>
+        <button type="button" data-zoom="-" aria-label="Zoom out" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}>-</button>
         <span>${Math.round(state.zoom * 100)}%</span>
-        <button type="button" data-zoom="+">+</button>
-        <button type="button" data-zoom="reset">Reset</button>
+        <button type="button" data-zoom="+" aria-label="Zoom in" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>+</button>
+        <button type="button" data-zoom="reset" aria-label="Reset zoom" ${state.zoom === DEFAULT_ZOOM ? 'disabled' : ''}>Reset</button>
       </div>
       <div class="ctox-flow-canvas" data-flow-canvas>
         <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
@@ -1021,10 +1116,11 @@ function renderMain(state) {
   `;
   restoreFlowViewport(state, previousViewport);
   main.querySelectorAll('[data-zoom]').forEach((button) => {
-    button.addEventListener('click', () => {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
       const action = button.dataset.zoom;
-      setFlowZoom(state, action === 'reset' ? DEFAULT_ZOOM : state.zoom + (action === '+' ? 0.12 : -0.12));
-      renderMain(state);
+      zoomFlowFromControl(state, action);
     });
   });
   main.querySelectorAll('[data-timeline-step]').forEach((button) => {
@@ -1049,9 +1145,12 @@ function renderMain(state) {
   });
   main.querySelectorAll('[data-node-id]').forEach((node) => {
     node.addEventListener('click', () => {
-      const nextIndex = findLastTimelineIndex(model.timeline, node.dataset.nodeId);
-      state.detailDrawer = { type: 'node', nodeId: node.dataset.nodeId };
-      setTimelineStep(state, nextIndex, { center: false });
+      selectFlowNode(state, node.dataset.nodeId, { drawer: true });
+    });
+    node.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectFlowNode(state, node.dataset.nodeId, { drawer: true });
     });
   });
   wireCanvasDrag(main.querySelector('[data-flow-canvas]'));
@@ -1067,21 +1166,22 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
   if (!selectedTask) {
     const max = Math.max(state.model.timeline.length - 1, 0);
     const value = clampIndex(state.selectedStepIndex, state.model.timeline.length);
+    const hasRange = max > 0;
     return `
-      <section class="ctox-timeline-panel" aria-label="Activity timeline" style="--timeline-progress:${escapeAttr(progressPercent(value, max))}%">
+      <section class="ctox-timeline-panel ${hasRange ? '' : 'is-disabled'}" aria-label="Activity timeline" style="--timeline-progress:${escapeAttr(progressPercent(value, max))}%">
         <div class="ctox-timeline-head">
           <div>
             <span>${escapeHtml(t.timeline)}</span>
             ${timelineLiveStatusMarkup(selectedTask, selectedNode, state)}
           </div>
-          <strong>${escapeHtml(selectedNode?.label || '')}</strong>
+          <strong>${escapeHtml(hasRange ? (selectedNode?.label || '') : t.timelineUnavailable)}</strong>
         </div>
         <div class="ctox-timeline-scrub">
-          <input aria-label="Select activity event" max="${max}" min="0" step="1" type="range" value="${value}" data-timeline-range />
+          <input aria-label="Select activity event" max="${max}" min="0" step="1" type="range" value="${value}" data-timeline-range ${hasRange ? '' : 'disabled aria-disabled="true"'} />
         </div>
         <div class="ctox-timeline-detail">
-          <span>${escapeHtml(selectedNode?.phase || '')}</span>
-          <p>${escapeHtml(selectedNode?.lines?.[0] || 'No detail is available for this event yet.')}</p>
+          <span>${escapeHtml(hasRange ? (selectedNode?.phase || '') : t.notLive)}</span>
+          <p>${escapeHtml(hasRange ? (selectedNode?.lines?.[0] || 'No detail is available for this event yet.') : t.timelineUnavailableDetail)}</p>
           <small>${escapeHtml(selectedNode ? metricsLabel(selectedNode, state.lang) : '')}</small>
         </div>
       </section>
@@ -1094,20 +1194,21 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
     : Math.max(0, steps.findIndex((step) => step.active));
   const current = steps[activeStepIndex] || steps.find((step) => step.active) || steps.at(-1);
   const max = Math.max(steps.length - 1, 0);
+  const hasRange = max > 0;
   return `
-    <section class="ctox-timeline-panel is-task-timeline" aria-label="${escapeAttr(t.taskSteps)}" style="--timeline-progress:${escapeAttr(progressPercent(activeStepIndex, max))}%">
+    <section class="ctox-timeline-panel is-task-timeline ${hasRange ? '' : 'is-disabled'}" aria-label="${escapeAttr(t.taskSteps)}" style="--timeline-progress:${escapeAttr(progressPercent(activeStepIndex, max))}%">
       <div class="ctox-timeline-head">
         <div>
           <span>${escapeHtml(t.timeline)}</span>
           ${timelineLiveStatusMarkup(selectedTask, current, state)}
         </div>
-        <strong>${escapeHtml(selectedTask.title)}</strong>
+        <strong>${escapeHtml(hasRange ? selectedTask.title : t.timelineUnavailable)}</strong>
       </div>
       <div class="ctox-timeline-scrub">
-        <input aria-label="${escapeAttr(t.taskSteps)}" max="${max}" min="0" step="1" type="range" value="${activeStepIndex}" data-timeline-range data-task-timeline-range="true" />
-        <div class="ctox-timeline-scale" role="list">
+        <input aria-label="${escapeAttr(t.taskSteps)}" max="${max}" min="0" step="1" type="range" value="${activeStepIndex}" data-timeline-range data-task-timeline-range="true" ${hasRange ? '' : 'disabled aria-disabled="true"'} />
+        <div class="ctox-timeline-scale" role="list" ${hasRange ? '' : 'aria-disabled="true"'}>
           ${steps.map((step, index) => `
-            <button type="button" role="listitem" class="${index < activeStepIndex ? 'is-done' : ''} ${index === activeStepIndex ? 'is-current' : ''}" data-task-step-index="${index}">
+            <button type="button" role="listitem" class="${index < activeStepIndex ? 'is-done' : ''} ${index === activeStepIndex ? 'is-current' : ''}" data-task-step-index="${index}" ${hasRange ? '' : 'disabled'}>
               <span>${String(index + 1).padStart(2, '0')}</span>
               <strong>${escapeHtml(step.label)}</strong>
               <small>${escapeHtml(stepMetaLabel(step, state))}</small>
@@ -1116,8 +1217,8 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
         </div>
       </div>
       <div class="ctox-timeline-detail">
-        <span>${escapeHtml(current?.label || t.currentStep)}</span>
-        <p>${escapeHtml(current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork)}</p>
+        <span>${escapeHtml(hasRange ? (current?.label || t.currentStep) : t.notLive)}</span>
+        <p>${escapeHtml(hasRange ? (current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork) : t.timelineUnavailableDetail)}</p>
         <small>${escapeHtml(current ? `${stepMetaLabel(current, state)} · ${current.metrics || ''}` : selectedNode ? metricsLabel(selectedNode, state.lang) : '')}</small>
       </div>
     </section>
@@ -1647,6 +1748,7 @@ function reconcileSelection(state) {
   const previousTaskId = state.selectedTaskId;
   const previousStepIndex = state.selectedStepIndex;
   state.selectedTaskId = resolveSelectedTaskId(state.model, state.focusTask, state.selectedTaskId);
+  if (state.selectedNodeId && !state.model?.nodeMap?.has?.(state.selectedNodeId)) state.selectedNodeId = '';
   const selectedTaskChanged = previousTaskId !== state.selectedTaskId;
   if (state.userNavigatedTimeline && !selectedTaskChanged && Number.isFinite(previousStepIndex)) {
     state.selectedStepIndex = clampIndex(previousStepIndex, state.model?.timeline?.length || 1);
@@ -1680,6 +1782,7 @@ function activeTaskStepIndex(task, state) {
 function selectTask(state, taskId, options = {}) {
   if (!taskId) return;
   state.selectedTaskId = taskId;
+  state.selectedNodeId = '';
   state.userNavigatedTimeline = false;
   const task = getSelectedTask(state);
   const groupKey = groupKeyForTask(task);
@@ -1694,6 +1797,7 @@ function selectTask(state, taskId, options = {}) {
 }
 
 function setTimelineStep(state, nextIndex, options = {}) {
+  state.selectedNodeId = '';
   state.selectedStepIndex = clampIndex(nextIndex, state.model?.timeline?.length || 1);
   state.userNavigatedTimeline = true;
   render(state);
@@ -1705,10 +1809,29 @@ function setTaskTimelineStep(state, nextIndex, options = {}) {
   const task = getSelectedTask(state);
   if (!task) return;
   const steps = taskSteps(task, state);
+  state.selectedNodeId = '';
   state.selectedTaskStepIndex = clampMetric(nextIndex, 0, Math.max(steps.length - 1, 0));
   state.userNavigatedTimeline = true;
   render(state);
   if (options.center) centerSelectedNode(state);
+  syncDetailDrawer(state);
+}
+
+function selectFlowNode(state, nodeId, options = {}) {
+  if (!nodeId || !state.model?.nodeMap?.has?.(nodeId)) return;
+  const nextIndex = findLastTimelineIndex(state.model.timeline, nodeId);
+  state.selectedNodeId = nodeId;
+  state.selectedStepIndex = nextIndex;
+  state.userNavigatedTimeline = true;
+  const task = getSelectedTask(state);
+  if (task) {
+    const steps = taskSteps(task, state);
+    const stepIndex = steps.findIndex((step) => step.id === nodeId);
+    if (stepIndex >= 0) state.selectedTaskStepIndex = stepIndex;
+  }
+  if (options.drawer) state.detailDrawer = { type: 'node', nodeId };
+  render(state);
+  if (options.center !== false) centerSelectedNode(state);
   syncDetailDrawer(state);
 }
 
@@ -1720,8 +1843,8 @@ function syncDetailDrawer(state) {
     return;
   }
   if (state.detailDrawer.type === 'node') {
-    const node = state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model.timeline.length)]
-      || state.model?.nodeMap?.get(state.detailDrawer.nodeId);
+    const node = state.model?.nodeMap?.get(state.detailDrawer.nodeId)
+      || state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model.timeline.length)];
     if (node) state.ctx.openLeftDrawer(flowNodeDrawer(node, getSelectedTask(state), state));
   }
 }
@@ -2827,8 +2950,29 @@ function wireCanvasDrag(scroller) {
   }, { passive: false });
 }
 
+function zoomFlowFromControl(state, action) {
+  const scroller = state.ctx.host.querySelector('[data-flow-canvas]');
+  const previousZoom = state.zoom;
+  const nextZoom = action === 'reset'
+    ? DEFAULT_ZOOM
+    : state.zoom + (action === '+' ? 0.12 : -0.12);
+  setFlowZoom(state, nextZoom);
+  if (state.zoom === previousZoom) return;
+  const viewport = readFlowViewport(state);
+  if (scroller) {
+    const anchorX = scroller.clientWidth / 2;
+    const anchorY = scroller.clientHeight / 2;
+    const ratio = state.zoom / previousZoom;
+    state.flowViewport = {
+      left: Math.max(0, (viewport.left + anchorX) * ratio - anchorX),
+      top: Math.max(0, (viewport.top + anchorY) * ratio - anchorY),
+    };
+  }
+  renderMain(state);
+}
+
 function setFlowZoom(state, value) {
-  state.zoom = clampMetric(Math.round(value * 100) / 100, 0.72, 1.8);
+  state.zoom = clampMetric(Math.round(value * 100) / 100, MIN_ZOOM, MAX_ZOOM);
 }
 
 function readFlowViewport(state) {
@@ -2853,7 +2997,8 @@ function restoreFlowViewport(state, viewport) {
 
 function centerSelectedNode(state) {
   const selectedTask = getSelectedTask(state);
-  const node = selectedTaskStepView(selectedTask, state)?.node
+  const node = (state.selectedNodeId ? state.model?.nodeMap?.get(state.selectedNodeId) : null)
+    || selectedTaskStepView(selectedTask, state)?.node
     || state.model.timeline[clampIndex(state.selectedStepIndex, state.model.timeline.length)];
   const scroller = state.ctx.host.querySelector('[data-flow-canvas]');
   if (!node || !scroller) return;
@@ -2933,7 +3078,7 @@ function flowSourceView(state) {
   if (state.flow?.ok === false && state.ctx?.sync?.mode === 'webrtc') {
     return {
       mode: state.runtimeStatus || displayFlowMode('rxdb-webrtc'),
-      status: t.connected,
+      status: t.flowProjectionMissing,
     };
   }
   // Suppress the placeholder "Unavailable / unavailable" pair: when no flow data
@@ -3321,3 +3466,15 @@ function escapeHtml(value) {
 function escapeAttr(value) {
   return escapeHtml(value).replace(/'/g, '&#39;');
 }
+
+export const __ctoxTestHooks = {
+  clampMetric,
+  flowSourceView,
+  friendlyWebStackStatus,
+  labels,
+  progressPercent,
+  setFlowZoom,
+  taskSteps,
+  timelinePanel,
+  webStackProjectionMissing,
+};

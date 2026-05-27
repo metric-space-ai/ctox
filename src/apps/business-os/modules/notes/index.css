@@ -84,6 +84,33 @@
   transition: background 0.25s, border-color 0.25s;
 }
 
+.notes-resizer {
+  width: 6px;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 8;
+  touch-action: none;
+}
+
+.notes-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.notes-resizer:hover::after,
+.notes-resizer.is-active::after,
+.notes-resizer:focus-visible::after {
+  background: var(--nn-accent);
+}
+
 /* 2. Middle List Pane */
 .notes-list-pane {
   width: var(--notes-list-w);
@@ -320,6 +347,7 @@
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid var(--nn-border);
+  min-width: 0;
 }
 
 .nn-kicker {
@@ -597,12 +625,16 @@
   justify-content: space-between;
   align-items: center;
   flex-shrink: 0;
+  gap: 10px;
+  min-width: 0;
 }
 
 .nn-note-meta-left {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .nn-meta-select-wrap {
@@ -730,6 +762,9 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 .nn-action-btn {
@@ -755,6 +790,15 @@
 .nn-action-btn:hover {
   background: var(--nn-hover);
   color: var(--nn-text-strong);
+}
+
+.nn-action-btn:disabled,
+.nn-meta-btn:disabled,
+.nn-toolbar-btn:disabled,
+.nn-new-note-trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .nn-action-btn.active {
@@ -1116,7 +1160,8 @@
   border-radius: 8px;
   border: 1px solid var(--nn-border);
   max-width: 100%;
-  overflow-x: auto;
+  overflow: visible;
+  flex-wrap: wrap;
 }
 
 .nn-toolbar-btn {
@@ -1161,6 +1206,104 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+}
+
+.nn-empty-state {
+  padding: 30px 20px;
+  font-size: 12px;
+  color: var(--nn-text-muted);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nn-empty-state strong {
+  color: var(--nn-text-strong);
+  font-size: 13px;
+}
+
+.nn-empty-state-diagnostic {
+  color: #b45309;
+}
+
+.nn-draft-banner,
+.nn-restore-banner {
+  background: rgba(0, 136, 55, 0.08);
+  border-bottom: 1px solid var(--nn-border);
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  color: var(--nn-accent);
+  margin-bottom: 10px;
+  border-radius: 4px;
+}
+
+.nn-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nn-banner-actions button,
+.nn-draft-banner button,
+.nn-restore-banner button {
+  background: var(--nn-accent);
+  color: white;
+  border: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.nn-action-toast {
+  position: absolute;
+  right: 18px;
+  bottom: 46px;
+  z-index: 2200;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(420px, calc(100% - 36px));
+  padding: 10px 12px;
+  border: 1px solid var(--nn-border);
+  border-radius: 8px;
+  background: var(--nn-panel-bg);
+  color: var(--nn-text-strong);
+  box-shadow: var(--nn-shadow);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.nn-action-toast button {
+  border: 0;
+  background: var(--nn-accent-hover);
+  color: var(--nn-accent);
+  border-radius: 5px;
+  padding: 5px 8px;
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 1120px) {
+  .nn-editor-head {
+    align-items: flex-start;
+  }
+
+  .nn-note-meta-left,
+  .nn-editor-controls {
+    max-width: 100%;
+  }
+
+  .nn-new-note-trigger {
+    min-width: auto;
+    padding: 0 10px;
+  }
 }
 
 /* --- Editor Status Footer --- */

@@ -81,8 +81,10 @@ export function createWindowManager({
     const persisted = ownerId && persistence?.load ? persistence.load(ownerId) : null;
     const restored = persisted && (persisted.width || persisted.height || persisted.x != null || persisted.y != null);
 
-    const width = Math.max(CONST.MIN_WIDTH, parseInt(persisted?.width ?? options.width, 10) || 520);
-    const height = Math.max(CONST.MIN_HEIGHT, parseInt(persisted?.height ?? options.height, 10) || 360);
+    const maxInitialWidth = Math.max(CONST.MIN_WIDTH, vp.w);
+    const maxInitialHeight = Math.max(CONST.MIN_HEIGHT, vp.h - vp.top - vp.bottom);
+    const width = Math.min(maxInitialWidth, Math.max(CONST.MIN_WIDTH, parseInt(persisted?.width ?? options.width, 10) || 520));
+    const height = Math.min(maxInitialHeight, Math.max(CONST.MIN_HEIGHT, parseInt(persisted?.height ?? options.height, 10) || 360));
     winEl.style.width = `${width}px`;
     winEl.style.height = `${height}px`;
 
@@ -90,9 +92,9 @@ export function createWindowManager({
     let baseX = parseInt(persisted?.x ?? options.x ?? 80 + cascadeOffset, 10);
     let baseY = parseInt(persisted?.y ?? options.y ?? 60 + cascadeOffset, 10);
     const maxX = Math.max(0, vp.w - 100);
-    const maxY = Math.max(0, vp.h - 100);
+    const maxY = Math.max(vp.top, vp.h - vp.bottom - 100);
     if (!Number.isFinite(baseX) || baseX < 0 || baseX > maxX) baseX = 24;
-    if (!Number.isFinite(baseY) || baseY < 0 || baseY > maxY) baseY = 24;
+    if (!Number.isFinite(baseY) || baseY < vp.top || baseY > maxY) baseY = Math.max(vp.top, 24);
     winEl.style.left = `${baseX}px`;
     winEl.style.top = `${baseY}px`;
 
@@ -592,6 +594,10 @@ export function createWindowManager({
               newTop = Math.max(insets.top, startTop + (startHeight - candidateHeight));
               newHeight = candidateHeight;
             }
+            const maxHeightFromTop = Math.max(CONST.MIN_HEIGHT, vp.h - insets.bottom - newTop);
+            const maxWidthFromLeft = Math.max(CONST.MIN_WIDTH, vp.w - newLeft);
+            newHeight = Math.min(newHeight, maxHeightFromTop);
+            newWidth = Math.min(newWidth, maxWidthFromLeft);
             el.style.width = `${newWidth}px`;
             el.style.height = `${newHeight}px`;
             if (direction.includes('w')) el.style.left = `${newLeft}px`;

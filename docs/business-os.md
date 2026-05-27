@@ -19,21 +19,24 @@ CTOX App (Rust Daemon Host)
 
 CTOX Business OS Web App (Browser Client)
   -> Statically served HTML/JS/CSS (vanilla runtime)
-  -> Local RxDB data store (browser IndexedDB via Dexie)
-  -> WebRTC P2P sync peer (rxdb-bundle.mjs)
+  -> Local CTOX DB data store (browser IndexedDB)
+  -> WebRTC P2P sync peer (ctox-rxdb-js)
 ```
 
 To support setups behind NAT, residential firewalls, or private networks, the Business OS **does not require the CTOX instance to expose a public inbound IP address**. The client and daemon replicate collections peer-to-peer using WebRTC paired signaling rooms.
 
 ---
 
-## 2. Sync Architecture (RxDB WebRTC)
+## 2. Sync Architecture (CTOX DB / RxDB WebRTC)
 
-Replication between the client browser (IndexedDB) and the daemon (SQLite) is handled by the **RxDB WebRTC replication contract**:
+Replication between the client browser (IndexedDB) and the daemon (SQLite) is
+handled by the **CTOX DB WebRTC replication contract**. CTOX DB is the
+Business OS runtime id for the CTOX-owned RxDB-derived implementation; it is
+not a drop-in replacement for upstream npm `rxdb`.
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>rxdb-bundle.mjs<br/>IndexedDB"] -- "RxDB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```
@@ -69,6 +72,11 @@ Durable, auditable lifecycle actions use `business_commands`:
 - `browser.back`
 - `browser.forward`
 - `browser.reset`
+
+The same command/projection pattern is used by the core Tickets app. Browser
+actions write `ctox.ticket.*` command documents into `business_commands`; CTOX
+executes the native ticket capability and republishes ticket state through
+`ctox_ticket_*` collections over the existing WebRTC data path.
 
 High-churn browser data uses dedicated replicated collections:
 

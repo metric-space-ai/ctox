@@ -15,6 +15,8 @@ const state = {
   sessions: [],
   activeSession: null,
   activeSessionApp: null,
+  workspaceLoadState: 'loading',
+  workspaceLoadError: '',
   isAutomating: false,
   isRefreshing: false
 };
@@ -117,6 +119,9 @@ const INITIAL_LOAD_TIMEOUT_MS = 10000;
 
 function startInitialLoadWithTimeout() {
   state.initialLoadDone = false;
+  state.workspaceLoadState = 'loading';
+  state.workspaceLoadError = '';
+  renderWorkspaces();
   if (state.initialLoadTimer) clearTimeout(state.initialLoadTimer);
 
   state.initialLoadTimer = setTimeout(() => {
@@ -136,27 +141,8 @@ function startInitialLoadWithTimeout() {
 }
 
 function showWorkspacesTimeoutState() {
-  const box = els.workspacesListBox;
-  if (!box) return;
-  // If the user already has workspaces rendered, don't clobber them.
-  if (box.querySelector('.workspace-item')) return;
-
-  box.innerHTML = '';
-  const wrap = document.createElement('div');
-  wrap.className = 'empty-list-placeholder';
-  wrap.style.display = 'flex';
-  wrap.style.flexDirection = 'column';
-  wrap.style.gap = '10px';
-  wrap.style.alignItems = 'stretch';
-  wrap.innerHTML = `
-    <div>Workspaces konnten nicht geladen werden (Backend antwortet nicht).</div>
-    <button type="button" class="fibu-btn fibu-btn-secondary" data-coding-agents-retry style="justify-content:center;">Erneut versuchen</button>
-  `;
-  box.appendChild(wrap);
-  wrap.querySelector('[data-coding-agents-retry]')?.addEventListener('click', () => {
-    box.innerHTML = '<div class="empty-list-placeholder">Loading workspaces...</div>';
-    startInitialLoadWithTimeout();
-  });
+  if (els.workspacesListBox?.querySelector('.workspace-item')) return;
+  setWorkspaceLoadState('error', 'Backend antwortet nicht innerhalb von 10 Sekunden.');
 }
 
 async function loadModuleMarkup() {
@@ -193,6 +179,8 @@ function bindElements(root) {
   els.addWorkspaceModal = root.querySelector('#add-workspace-modal');
   els.addWorkspaceForm = root.querySelector('#add-workspace-form');
   els.addWorkspaceInput = root.querySelector('#add-workspace-input');
+  els.addWorkspaceSubmit = root.querySelector('#add-workspace-submit');
+  els.addWorkspaceError = root.querySelector('#add-workspace-error');
   els.closeAddWorkspaceBtn = root.querySelector('#close-add-workspace-btn');
 
   // System Settings Modal elements
@@ -211,6 +199,13 @@ function bindElements(root) {
   // Direct multi-turn sessions logs/chat feed in center pane
   els.sessionSelect = root.querySelector('#workbench-session-select');
   els.newSessionBtn = root.querySelector('#new-session-btn');
+  els.newSessionModal = root.querySelector('#new-session-modal');
+  els.newSessionForm = root.querySelector('#new-session-form');
+  els.newSessionPrompt = root.querySelector('#new-session-prompt');
+  els.newSessionSubmit = root.querySelector('#new-session-submit');
+  els.newSessionError = root.querySelector('#new-session-error');
+  els.newSessionContext = root.querySelector('#new-session-context');
+  els.closeNewSessionBtn = root.querySelector('#close-new-session-btn');
   els.chatFeed = root.querySelector('#workbench-chat-feed');
   els.promptForm = root.querySelector('#workbench-prompt-form');
   els.promptInput = root.querySelector('#workbench-prompt-input');
@@ -229,56 +224,95 @@ function wireEvents() {
   // Modal open/close listeners
   if (els.openSettingsBtn) {
     els.openSettingsBtn.addEventListener('click', () => {
-      els.settingsModal.removeAttribute('hidden');
+      openModal(els.settingsModal, els.closeSettingsBtn);
     });
   }
   if (els.closeSettingsBtn) {
     els.closeSettingsBtn.addEventListener('click', () => {
-      els.settingsModal.setAttribute('hidden', '');
+      closeModal(els.settingsModal, els.openSettingsBtn);
     });
   }
   if (els.addWorkspaceBtn) {
     els.addWorkspaceBtn.addEventListener('click', () => {
       if (els.addWorkspaceModal) {
-        els.addWorkspaceModal.removeAttribute('hidden');
-        // Focus the input so the user can immediately type a path.
-        requestAnimationFrame(() => els.addWorkspaceInput?.focus?.());
+        syncWorkspaceFormState();
+        openModal(els.addWorkspaceModal, els.addWorkspaceInput);
       }
     });
   }
   if (els.closeAddWorkspaceBtn) {
     els.closeAddWorkspaceBtn.addEventListener('click', () => {
-      els.addWorkspaceModal.setAttribute('hidden', '');
+      closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
     });
+  }
+  if (els.addWorkspaceInput) {
+    els.addWorkspaceInput.addEventListener('input', syncWorkspaceFormState);
   }
   // Click-outside-to-close for the Add Workspace modal so it always has an
   // escape hatch even if the close button isn't visible.
   if (els.addWorkspaceModal) {
     els.addWorkspaceModal.addEventListener('click', (event) => {
       if (event.target === els.addWorkspaceModal) {
-        els.addWorkspaceModal.setAttribute('hidden', '');
+        closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
       }
     });
   }
+  if (els.settingsModal) {
+    els.settingsModal.addEventListener('click', (event) => {
+      if (event.target === els.settingsModal) {
+        closeModal(els.settingsModal, els.openSettingsBtn);
+      }
+    });
+  }
+  if (els.newSessionModal) {
+    els.newSessionModal.addEventListener('click', (event) => {
+      if (event.target === els.newSessionModal) {
+        closeModal(els.newSessionModal, els.newSessionBtn);
+      }
+    });
+  }
+  if (els.closeNewSessionBtn) {
+    els.closeNewSessionBtn.addEventListener('click', () => {
+      closeModal(els.newSessionModal, els.newSessionBtn);
+    });
+  }
+  if (els.newSessionPrompt) {
+    els.newSessionPrompt.addEventListener('input', syncNewSessionFormState);
+  }
+  els.root.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const openDialogs = [els.newSessionModal, els.addWorkspaceModal, els.settingsModal].filter((modal) => modal && !modal.hidden);
+    const topDialog = openDialogs[0];
+    if (!topDialog) return;
+    event.preventDefault();
+    const restore = topDialog === els.newSessionModal ? els.newSessionBtn : topDialog === els.addWorkspaceModal ? els.addWorkspaceBtn : els.openSettingsBtn;
+    closeModal(topDialog, restore);
+  });
 
   // Handle Workspace creation form submission
   if (els.addWorkspaceForm) {
     els.addWorkspaceForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const folderPath = els.addWorkspaceInput.value.trim();
-      if (!folderPath) return;
+      const validation = validateWorkspacePath(els.addWorkspaceInput.value);
+      setFormError(els.addWorkspaceInput, els.addWorkspaceError, validation.error);
+      if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = !validation.valid;
+      if (!validation.valid) return;
+      const folderPath = validation.path;
 
       appendTerminalPrompt(`config grant "${folderPath}"`);
-      appendTerminalOutput(`🛡 Granting permissions for workspace: ${folderPath}...`);
+      appendTerminalOutput(`Granting permissions for workspace: ${folderPath}...`);
+      if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = true;
 
       const res = await dispatchAgyCommand(['config', 'grant', folderPath]);
       if (res && res.ok) {
-        appendTerminalOutput(`✔ Path successfully authorized.`);
+        appendTerminalOutput(`Path successfully authorized.`);
         els.addWorkspaceInput.value = '';
-        els.addWorkspaceModal.setAttribute('hidden', '');
+        syncWorkspaceFormState();
+        closeModal(els.addWorkspaceModal, els.addWorkspaceBtn);
         await refreshBypassData();
       } else {
-        appendTerminalOutput(`❌ Failed to authorize path:\n${res?.stderr || 'Unknown error'}`);
+        appendTerminalOutput(`Failed to authorize path:\n${res?.stderr || 'Unknown error'}`);
+        syncWorkspaceFormState();
         showBusinessAlert(`Failed to authorize workspace path: ${res?.stderr || 'Error'}`);
       }
     });
@@ -307,7 +341,7 @@ function wireEvents() {
       userBubble.className = 'feed-chat-bubble user';
       userBubble.innerHTML = `
         <span class="bubble-sender">USER</span>
-        <div>${promptText}</div>
+        <div>${escapeHtml(promptText)}</div>
         <span class="bubble-time">just now</span>
       `;
       feedBox.appendChild(userBubble);
@@ -333,20 +367,40 @@ function wireEvents() {
 
   // Create new session via [+] button
   if (els.newSessionBtn) {
-    els.newSessionBtn.addEventListener('click', async () => {
+    els.newSessionBtn.addEventListener('click', () => {
       if (!state.activeWorkspace) return;
-      const prompt = window.prompt(`Spin up a new Remote Session for ${state.activeApp.toUpperCase()} with initial instructions:`, '');
-      if (!prompt) return;
+      if (els.newSessionContext) {
+        els.newSessionContext.textContent = `Workspace: ${state.activeWorkspace}. Agent: ${state.activeApp.toUpperCase()}.`;
+      }
+      if (els.newSessionPrompt) els.newSessionPrompt.value = '';
+      syncNewSessionFormState();
+      openModal(els.newSessionModal, els.newSessionPrompt);
+    });
+  }
+
+  if (els.newSessionForm) {
+    els.newSessionForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!state.activeWorkspace) return;
+      const validation = validateNewSessionPrompt(els.newSessionPrompt?.value || '');
+      setFormError(els.newSessionPrompt, els.newSessionError, validation.error);
+      if (els.newSessionSubmit) els.newSessionSubmit.disabled = !validation.valid;
+      if (!validation.valid) return;
+      const prompt = validation.prompt;
 
       appendTerminalPrompt(`session create -p "${state.activeWorkspace}" "${prompt}"`);
-      appendTerminalOutput(`💬 Spawning new ${state.activeApp.toUpperCase()} workspace session...`);
+      appendTerminalOutput(`Spawning new ${state.activeApp.toUpperCase()} workspace session...`);
+      if (els.newSessionSubmit) els.newSessionSubmit.disabled = true;
 
       const res = await dispatchAgyCommand(['session', 'create', '-p', state.activeWorkspace, prompt]);
       if (res && res.ok) {
-        appendTerminalOutput(`✔ Session sparked successfully!`);
+        appendTerminalOutput(`Session created successfully.`);
+        if (els.newSessionPrompt) els.newSessionPrompt.value = '';
+        closeModal(els.newSessionModal, els.newSessionBtn);
         await refreshSessions();
       } else {
-        appendTerminalOutput(`❌ Failed to spark session:\n${res?.stderr || ''}`);
+        syncNewSessionFormState();
+        appendTerminalOutput(`Failed to create session:\n${res?.stderr || ''}`);
         showBusinessAlert(`Failed to create session: ${res?.stderr || 'Error'}`);
       }
     });
@@ -381,7 +435,7 @@ function wireEvents() {
   if (els.legacyRightTabSubscription) {
     els.legacyRightTabSubscription.addEventListener('click', () => {
       // Legacy trigger opens our settings modal overlay directly!
-      els.settingsModal.removeAttribute('hidden');
+      openModal(els.settingsModal, els.closeSettingsBtn);
     });
   }
 
@@ -541,6 +595,138 @@ function wireEvents() {
   }
 }
 
+function openModal(modal, focusTarget) {
+  if (!modal) return;
+  modal.removeAttribute('hidden');
+  requestAnimationFrame(() => focusTarget?.focus?.());
+}
+
+function closeModal(modal, restoreFocus) {
+  if (!modal) return;
+  modal.setAttribute('hidden', '');
+  restoreFocus?.focus?.();
+}
+
+function setWorkspaceLoadState(status, error = '') {
+  state.workspaceLoadState = status;
+  state.workspaceLoadError = error;
+  renderWorkspaces();
+}
+
+function createWorkspaceStateNode(status, error = '') {
+  const wrap = document.createElement('div');
+  wrap.className = `workspace-load-state ${status === 'error' ? 'error' : ''}`;
+
+  const title = document.createElement('strong');
+  const body = document.createElement('span');
+
+  if (status === 'loading') {
+    title.textContent = 'Loading workspaces...';
+    body.textContent = 'Command-Bus und Workspace-Grants werden geprüft.';
+  } else if (status === 'error') {
+    title.textContent = 'Workspaces konnten nicht geladen werden';
+    body.textContent = error || 'Backend oder Command-Bus antwortet nicht.';
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'fibu-btn fibu-btn-secondary';
+    retry.textContent = 'Erneut versuchen';
+    retry.addEventListener('click', () => startInitialLoadWithTimeout());
+    wrap.append(title, body, retry);
+    return wrap;
+  } else {
+    title.textContent = 'No workspaces authorized yet';
+    body.textContent = 'Add a workspace with an absolute path before creating sessions.';
+  }
+
+  wrap.append(title, body);
+  return wrap;
+}
+
+function renderNoWorkspaceSelected(message) {
+  state.activeWorkspace = null;
+  state.activeSession = null;
+  if (els.activeAppTitle) els.activeAppTitle.textContent = 'Coding Agent Workbench';
+  if (els.activeAppDesc) els.activeAppDesc.textContent = 'Select a Workspace';
+  if (els.newSessionBtn) els.newSessionBtn.disabled = true;
+  if (els.sessionSelect) {
+    els.sessionSelect.innerHTML = `<option value="">No workspace selected</option>`;
+    els.sessionSelect.disabled = true;
+  }
+  if (els.promptInput) els.promptInput.disabled = true;
+  if (els.promptSubmit) els.promptSubmit.disabled = true;
+  if (els.chatFeed) {
+    els.chatFeed.innerHTML = `<div class="workbench-empty-state"><strong>No workspace selected.</strong><span>${escapeHtml(message)}</span></div>`;
+  }
+}
+
+function workspaceLoadErrorFromResult(result) {
+  if (!result) return 'Command-Bus nicht verfügbar oder keine Antwort vom Backend.';
+  const stderr = String(result.stderr || '').trim();
+  if (stderr) return stderr.slice(0, 260);
+  if (result.status && result.status !== 'completed') return `Command status: ${result.status}`;
+  return 'Backend hat keine gültige Workspace-Antwort geliefert.';
+}
+
+function validateWorkspacePath(input) {
+  const path = String(input || '').trim();
+  if (!path) return { valid: false, path: '', error: 'Bitte einen absoluten Workspace-Pfad eingeben.' };
+  if (!isAbsoluteWorkspacePath(path)) {
+    return { valid: false, path, error: 'Workspace-Pfad muss absolut sein, z.B. /Users/name/project.' };
+  }
+  if (/[\n\r]/.test(path)) {
+    return { valid: false, path, error: 'Workspace-Pfad darf nur eine Zeile enthalten.' };
+  }
+  return { valid: true, path, error: '' };
+}
+
+function isAbsoluteWorkspacePath(path) {
+  return path.startsWith('/') || path.startsWith('~/') || /^[A-Za-z]:[\\/]/.test(path);
+}
+
+function validateNewSessionPrompt(input) {
+  const prompt = String(input || '').trim();
+  if (!prompt) return { valid: false, prompt: '', error: 'Bitte eine Startanweisung für die neue Session eingeben.' };
+  if (prompt.length < 8) return { valid: false, prompt, error: 'Die Startanweisung ist zu kurz.' };
+  return { valid: true, prompt, error: '' };
+}
+
+function syncWorkspaceFormState() {
+  const validation = validateWorkspacePath(els.addWorkspaceInput?.value || '');
+  setFormError(els.addWorkspaceInput, els.addWorkspaceError, validation.error);
+  if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = !validation.valid;
+}
+
+function syncNewSessionFormState() {
+  const validation = validateNewSessionPrompt(els.newSessionPrompt?.value || '');
+  setFormError(els.newSessionPrompt, els.newSessionError, validation.error);
+  if (els.newSessionSubmit) els.newSessionSubmit.disabled = !validation.valid || !state.activeWorkspace;
+}
+
+function setFormError(inputEl, errorEl, message) {
+  if (inputEl) inputEl.setAttribute('aria-invalid', message ? 'true' : 'false');
+  if (!errorEl) return;
+  errorEl.textContent = message || '';
+  errorEl.hidden = !message;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value);
+}
+
+function cssEscape(value) {
+  if (globalThis.CSS?.escape) return globalThis.CSS.escape(value);
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
 function updateUI() {
   const diag = state.diagnostics[state.activeApp];
 
@@ -639,9 +825,11 @@ function parseDiagnosticsStdout(stdout) {
 async function refreshBypassData() {
   const res = await dispatchAgyCommand(['config', 'get-grants']);
 
-  if (res && res.ok && res.stdout) {
-    const grants = parseGrantsStdout(res.stdout);
+  if (res && res.ok) {
+    const grants = parseGrantsStdout(res.stdout || '');
     state.trustedPaths = grants;
+    state.workspaceLoadState = 'ready';
+    state.workspaceLoadError = '';
 
     // Update bypass toggle check state
     let isBypassed = false;
@@ -654,6 +842,8 @@ async function refreshBypassData() {
   } else {
     state.trustedPaths = [];
     if (els.bypassToggle) els.bypassToggle.checked = false;
+    state.workspaceLoadState = 'error';
+    state.workspaceLoadError = workspaceLoadErrorFromResult(res);
     renderWorkspaces();
   }
 }
@@ -663,7 +853,10 @@ function parseGrantsStdout(stdout) {
   const grants = [];
   lines.forEach(line => {
     if (line.includes('•')) {
-      const clean = line.replace(/•|\s|\x1B\[[0-9;]*[a-zA-Z]/g, '').trim();
+      const clean = line
+        .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
+        .replace(/^.*?•\s*/, '')
+        .trim();
       if (clean) grants.push(clean);
     }
   });
@@ -675,6 +868,18 @@ function renderWorkspaces() {
   if (!box) return;
   box.innerHTML = '';
 
+  if (state.workspaceLoadState === 'loading') {
+    box.appendChild(createWorkspaceStateNode('loading'));
+    renderNoWorkspaceSelected('Workspace-Daten werden geladen. Session-Aktionen bleiben deaktiviert.');
+    return;
+  }
+
+  if (state.workspaceLoadState === 'error') {
+    box.appendChild(createWorkspaceStateNode('error', state.workspaceLoadError));
+    renderNoWorkspaceSelected('Workspaces konnten nicht geladen werden. Prüfe Backend/Command-Bus und versuche es erneut.');
+    return;
+  }
+
   // Extract workspaces paths (starts with / and contains no parenthesis)
   const workspaces = state.trustedPaths.filter(g => g.startsWith('/') && !g.includes('(') && !g.includes(')'));
 
@@ -685,8 +890,8 @@ function renderWorkspaces() {
       const pBadge = document.createElement('div');
       pBadge.className = 'path-badge';
       pBadge.innerHTML = `
-        <span class="path-text">${path}</span>
-        <button class="btn-remove-path" data-path="${path}">&times;</button>
+        <span class="path-text">${escapeHtml(path)}</span>
+        <button class="btn-remove-path" data-path="${escapeAttr(path)}" aria-label="Remove workspace ${escapeAttr(path)}">&times;</button>
       `;
       pBadge.querySelector('.btn-remove-path').addEventListener('click', async () => {
         await dispatchAgyCommand(['config', 'revoke', path]);
@@ -697,17 +902,8 @@ function renderWorkspaces() {
   }
 
   if (workspaces.length === 0) {
-    box.innerHTML = `<div class="empty-list-placeholder">No workspaces authorized yet. Click "+" above.</div>`;
-    // Clean workbench placeholder
-    state.activeWorkspace = null;
-    els.activeAppTitle.textContent = 'Coding Agent Workbench';
-    els.activeAppDesc.textContent = 'Select a Workspace';
-    els.newSessionBtn.disabled = true;
-    els.chatFeed.innerHTML = `<div class="empty-list-placeholder">Please select or add a workspace on the left to start coding.</div>`;
-    els.sessionSelect.innerHTML = `<option value="">No Active Sessions</option>`;
-    els.sessionSelect.disabled = true;
-    els.promptInput.disabled = true;
-    els.promptSubmit.disabled = true;
+    box.appendChild(createWorkspaceStateNode('empty'));
+    renderNoWorkspaceSelected('Noch kein Workspace autorisiert. Öffne „Add workspace“ und gib einen absoluten Pfad an.');
     return;
   }
 
@@ -723,16 +919,16 @@ function renderWorkspaces() {
 
     el.innerHTML = `
       <div class="workspace-info">
-        <span class="workspace-name">${shortName}</span>
-        <span class="workspace-path" title="${path}">${path}</span>
+        <span class="workspace-name">${escapeHtml(shortName)}</span>
+        <span class="workspace-path" title="${escapeAttr(path)}">${escapeHtml(path)}</span>
       </div>
       <div class="workspace-actions">
-        <select class="workspace-agent-select" style="pointer-events: auto;">
+        <select class="workspace-agent-select" aria-label="Coding agent for ${escapeAttr(shortName)}" style="pointer-events: auto;">
           <option value="antigravity" ${mappedApp === 'antigravity' ? 'selected' : ''}>Antigravity</option>
           <option value="claude" ${mappedApp === 'claude' ? 'selected' : ''}>Claude</option>
           <option value="codex" ${mappedApp === 'codex' ? 'selected' : ''}>Codex</option>
         </select>
-        <button type="button" class="btn-remove-workspace" title="Remove Workspace">&times;</button>
+        <button type="button" class="btn-remove-workspace" title="Remove Workspace" aria-label="Remove workspace ${escapeAttr(path)}">&times;</button>
       </div>
     `;
 
@@ -757,16 +953,16 @@ function renderWorkspaces() {
     el.querySelector('.btn-remove-workspace').addEventListener('click', async (evt) => {
       evt.stopPropagation();
       appendTerminalPrompt(`config revoke "${path}"`);
-      appendTerminalOutput(`🛡 Revoking permissions for workspace: ${path}...`);
+      appendTerminalOutput(`Revoking permissions for workspace: ${path}...`);
       const res = await dispatchAgyCommand(['config', 'revoke', path]);
       if (res && res.ok) {
-        appendTerminalOutput(`✔ Workspace permissions revoked.`);
+        appendTerminalOutput(`Workspace permissions revoked.`);
         if (state.activeWorkspace === path) {
           state.activeWorkspace = null;
         }
         await refreshBypassData();
       } else {
-        appendTerminalOutput(`❌ Failed to revoke permissions:\n${res?.stderr || ''}`);
+        appendTerminalOutput(`Failed to revoke permissions:\n${res?.stderr || ''}`);
         showBusinessAlert(`Failed to revoke workspace: ${res?.stderr || 'Error'}`);
       }
     });
@@ -786,7 +982,7 @@ function renderWorkspaces() {
     selectWorkspace(defaultPath, defaultApp);
   } else if (state.activeWorkspace) {
     // Keep active workspace styled
-    const activeItem = box.querySelector(`[data-workspace="${state.activeWorkspace}"]`);
+    const activeItem = box.querySelector(`[data-workspace="${cssEscape(state.activeWorkspace)}"]`);
     if (activeItem) {
       activeItem.classList.add('active');
     } else {
@@ -860,13 +1056,23 @@ function renderSessions() {
   if (!select) return;
   select.innerHTML = '';
 
+  if (!state.activeWorkspace) {
+    select.innerHTML = `<option value="">No workspace selected</option>`;
+    select.disabled = true;
+    if (els.newSessionBtn) els.newSessionBtn.disabled = true;
+    if (els.promptInput) els.promptInput.disabled = true;
+    if (els.promptSubmit) els.promptSubmit.disabled = true;
+    renderNoWorkspaceSelected('Bitte zuerst einen Workspace auswählen oder autorisieren.');
+    return;
+  }
+
   // Mirror sessions to legacy selector for Playwright context if exists
   if (els.legacySessionsListBox) {
     els.legacySessionsListBox.innerHTML = '';
     state.sessions.forEach(sess => {
       const el = document.createElement('div');
       el.className = 'session-item-card';
-      el.innerHTML = `<div class="session-item-prompt">${sess.prompt}</div>`;
+      el.innerHTML = `<div class="session-item-prompt">${escapeHtml(sess.prompt)}</div>`;
       el.addEventListener('click', () => {
         state.activeSession = sess.id;
         select.value = sess.id;
@@ -879,9 +1085,10 @@ function renderSessions() {
   if (state.sessions.length === 0) {
     select.innerHTML = `<option value="">No Active Sessions</option>`;
     select.disabled = true;
+    if (els.newSessionBtn) els.newSessionBtn.disabled = false;
     els.promptInput.disabled = true;
     els.promptSubmit.disabled = true;
-    els.chatFeed.innerHTML = `<div class="empty-list-placeholder">No active sessions found for this workspace. Click "+ New Session" above to start.</div>`;
+    els.chatFeed.innerHTML = `<div class="workbench-empty-state"><strong>No active sessions for this workspace.</strong><span>Use "+ New Session" to create one with an initial instruction.</span></div>`;
     return;
   }
 
@@ -898,6 +1105,7 @@ function renderSessions() {
   });
 
   select.disabled = false;
+  if (els.newSessionBtn) els.newSessionBtn.disabled = false;
 
   // Set default active session
   const exists = state.sessions.some(s => s.id === state.activeSession);
@@ -941,25 +1149,25 @@ async function loadSessionDetails(sessionId, app) {
         el.className = 'feed-chat-bubble user';
         el.innerHTML = `
           <span class="bubble-sender">USER</span>
-          <div>${item.text}</div>
-          <span class="bubble-time">${item.time}</span>
+          <div>${escapeHtml(item.text)}</div>
+          <span class="bubble-time">${escapeHtml(item.time)}</span>
         `;
         feedBox.appendChild(el);
       } else if (item.type === 'assistant') {
         const el = document.createElement('div');
         el.className = 'feed-chat-bubble assistant';
         el.innerHTML = `
-          <span class="bubble-sender">${app.toUpperCase()} ASSISTANT</span>
-          <div>${item.text}</div>
-          <span class="bubble-time">${item.time}</span>
+          <span class="bubble-sender">${escapeHtml(app.toUpperCase())} ASSISTANT</span>
+          <div>${escapeHtml(item.text)}</div>
+          <span class="bubble-time">${escapeHtml(item.time)}</span>
         `;
         feedBox.appendChild(el);
       } else if (item.type === 'tool') {
         const el = document.createElement('div');
         el.className = 'feed-tool-log';
         el.innerHTML = `
-          <span class="tool-log-indicator ${item.status}">${item.status === 'success' ? '✔' : '✖'}</span>
-          <span class="tool-log-text">Tool Run: <span class="tool-name-highlight">${item.name}</span></span>
+          <span class="tool-log-indicator ${escapeAttr(item.status)}">${item.status === 'success' ? 'OK' : 'FAIL'}</span>
+          <span class="tool-log-text">Tool Run: <span class="tool-name-highlight">${escapeHtml(item.name)}</span></span>
         `;
         feedBox.appendChild(el);
       }
@@ -967,7 +1175,7 @@ async function loadSessionDetails(sessionId, app) {
 
     feedBox.scrollTop = feedBox.scrollHeight;
   } else {
-    feedBox.innerHTML = `<div class="empty-list-placeholder text-red">Failed to read SQLite logs from host: ${res?.stderr || 'Timeout'}</div>`;
+    feedBox.innerHTML = `<div class="empty-list-placeholder text-red">Failed to read SQLite logs from host: ${escapeHtml(res?.stderr || 'Timeout')}</div>`;
   }
 }
 
@@ -978,21 +1186,21 @@ function parseSessionGetStdout(stdout) {
     const cleanLine = line.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim();
     if (!cleanLine) return;
 
-    const userMatch = line.match(/\[([^\]]+)\]\s+👤?\s*User:\s*(.*)/i);
+    const userMatch = cleanLine.match(/\[([^\]]+)\]\s+(?:👤\s*)?User:\s*(.*)/i);
     if (userMatch) {
       items.push({ type: 'user', time: userMatch[1], text: userMatch[2] });
       return;
     }
 
-    const astMatch = line.match(/\[([^\]]+)\]\s+🤖?\s*Assistant:\s*(.*)/i);
+    const astMatch = cleanLine.match(/\[([^\]]+)\]\s+(?:🤖\s*)?Assistant:\s*(.*)/i);
     if (astMatch) {
       items.push({ type: 'assistant', time: astMatch[1], text: astMatch[2] });
       return;
     }
 
-    const toolMatch = line.match(/(✔|✖)\s+Tool Run:\s*([^\x1b]+)/i);
+    const toolMatch = cleanLine.match(/(✔|✖|OK|FAIL)\s+Tool Run:\s*([^\x1b]+)/i);
     if (toolMatch) {
-      const isSuccess = toolMatch[1] === '✔';
+      const isSuccess = toolMatch[1] === '✔' || toolMatch[1].toUpperCase() === 'OK';
       const toolName = toolMatch[2].replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').trim();
       items.push({
         type: 'tool',
@@ -1090,3 +1298,14 @@ function appendBrowserLog(text, cssClass = '') {
 function showBusinessAlert(msg) {
   alert(msg);
 }
+
+export const __codingAgentsTestHooks = {
+  parseDiagnosticsStdout,
+  parseGrantsStdout,
+  parseSessionsStdout,
+  parseSessionGetStdout,
+  validateWorkspacePath,
+  validateNewSessionPrompt,
+  workspaceLoadErrorFromResult,
+  escapeHtml
+};

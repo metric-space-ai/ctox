@@ -6,6 +6,7 @@ const CSV_MIME = 'text/csv';
 const JSON_MIME = 'application/json';
 const CHUNK_SIZE = 256000;
 const SPREADSHEET_RENDER_DEBOUNCE_MS = 80;
+const SUPPORTED_IMPORT_EXTENSIONS = ['.csv', '.json'];
 
 const DEFAULT_GRID_DATA = [
   ['Produkt', 'Q1 Sales', 'Q2 Sales', 'Q3 Sales', 'Q4 Sales', 'Gesamt'],
@@ -123,6 +124,11 @@ export async function mount(ctx) {
   } catch (error) {
     console.warn('[spreadsheets] refreshSpreadsheets failed', error);
   }
+  if (state.selectedId) {
+    await loadSelectedVersion(state).catch((error) => {
+      console.warn('[spreadsheets] initial selected version load failed', error);
+    });
+  }
 
   renderLeft(state);
   renderRight(state);
@@ -202,9 +208,17 @@ async function refreshSpreadsheetsFromLocal(state) {
 
 async function refreshSpreadsheets(state) {
   const collection = state.ctx.db?.raw?.spreadsheets;
-  state.spreadsheets = collection
-    ? (await collection.find({ selector: { is_deleted: false }, sort: [{ updated_at_ms: 'desc' }] }).exec()).map((doc) => doc.toJSON())
+  const rawSpreadsheets = collection
+    ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
     : [];
+  state.spreadsheets = rawSpreadsheets
+    .map((doc) => normalizeSpreadsheetRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
+    .filter(isActiveSpreadsheetRecord);
+
+  if (state.selectedId && !state.spreadsheets.some((record) => record.id === state.selectedId)) {
+    state.selectedId = state.spreadsheets[0]?.id || '';
+    state.selectedVersion = null;
+  }
   if (!state.selectedId && state.spreadsheets[0]) state.selectedId = state.spreadsheets[0].id;
 }
 
@@ -240,6 +254,7 @@ function selectedRecord(state) {
 async function createNewSpreadsheet(state, input = {}) {
   requireSpreadsheetPersistence(state.ctx);
   const title = sanitizeTitle(input.title || `${state.t('newDocumentTitle', 'Neue Tabelle')} - ${new Date().toISOString().slice(0, 10)}`);
+  if (!title) throw new Error(state.t('validationTitleRequired', 'Titel fehlt.'));
   const filename = ensureExtension(slugFilename(title), '.csv');
   const documentId = `sheet_${crypto.randomUUID()}`;
   const versionId = `${documentId}_v1`;
@@ -301,6 +316,7 @@ async function createNewSpreadsheet(state, input = {}) {
   });
 
   state.selectedId = documentId;
+  revealSelectedSpreadsheetInList(state);
   await refreshSpreadsheets(state);
   await loadSelectedVersion(state);
   renderLeft(state);
@@ -310,6 +326,10 @@ async function createNewSpreadsheet(state, input = {}) {
 
 async function importSpreadsheetFile(state, file, tags = []) {
   requireSpreadsheetPersistence(state.ctx);
+  const validation = validateImportInput({ file });
+  if (!validation.valid) {
+    throw new Error(state.t(validation.key, validation.message));
+  }
   const isJson = file.name.endsWith('.json') || file.type === JSON_MIME;
   const bytes = new Uint8Array(await file.arrayBuffer());
   const fileText = new TextDecoder().decode(bytes);
@@ -340,6 +360,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
       }
     } catch (err) {
       console.warn('Failed parsing JSON spreadsheet. Reverting to empty grid.', err);
+      throw new Error(state.t('validationInvalidJson', 'JSON konnte nicht gelesen werden.'));
     }
   } else {
     // Parse CSV
@@ -349,11 +370,18 @@ async function importSpreadsheetFile(state, file, tags = []) {
         modelJson.data = rows;
         const colCount = Math.max(...rows.map(r => r.length), 1);
         modelJson.columns = Array.from({ length: colCount }, (_, i) => ({ type: 'text', title: String.fromCharCode(65 + i), width: '120px' }));
+      } else {
+        throw new Error(state.t('validationEmptySpreadsheet', 'Die Datei enthält keine Tabellenzeilen.'));
       }
     } catch (err) {
-      console.warn('Failed parsing CSV spreadsheet. Reverting to empty grid.', err);
+      console.warn('Failed parsing CSV spreadsheet.', err);
+      throw err;
     }
   }
+  if (!Array.isArray(modelJson.data) || modelJson.data.length === 0) {
+    throw new Error(state.t('validationEmptySpreadsheet', 'Die Datei enthält keine Tabellenzeilen.'));
+  }
+  modelJson = normalizeSpreadsheetModel(modelJson);
 
   await saveBlobChunks(state.ctx, {
     blobId,
@@ -398,6 +426,7 @@ async function importSpreadsheetFile(state, file, tags = []) {
   });
 
   state.selectedId = documentId;
+  revealSelectedSpreadsheetInList(state);
   await refreshSpreadsheets(state);
   await loadSelectedVersion(state);
   renderLeft(state);
@@ -442,16 +471,18 @@ function parseCSVContent(text) {
 
 async function loadSelectedVersion(state) {
   const record = selectedRecord(state);
-  if (!record?.current_version_id) {
+  if (!record) {
     state.selectedVersion = null;
     return null;
   }
   try {
-    let doc = await withTimeout(
-      state.ctx.db.raw.spreadsheet_versions.findOne(record.current_version_id).exec(),
-      4500,
-      `Version ${record.current_version_id} konnte nicht geladen werden.`,
-    );
+    let doc = record.current_version_id
+      ? await withTimeout(
+        state.ctx.db.raw.spreadsheet_versions.findOne(record.current_version_id).exec(),
+        4500,
+        `Version ${record.current_version_id} konnte nicht geladen werden.`,
+      )
+      : null;
     if (!doc) {
       const fallback = await withTimeout(
         state.ctx.db.raw.spreadsheet_versions.find({
@@ -533,12 +564,13 @@ function renderLeft(state) {
 function populateSpreadsheetList(state, list, records = visibleSpreadsheets(state)) {
   list.replaceChildren();
   if (records.length === 0) {
+    const hasRecords = state.spreadsheets.length > 0;
     const empty = document.createElement('div');
     empty.className = 'spreadsheets-empty';
     empty.style.padding = '30px 10px';
     empty.innerHTML = `
-      <strong>${escapeHtml(state.t('noDocuments', 'Keine Tabellen'))}</strong>
-      <span>${escapeHtml(state.t('importPrompt', 'Über das Import-Icon CSV oder JSON hinzufügen.'))}</span>
+      <strong>${escapeHtml(hasRecords ? state.t('noMatches', 'Keine Treffer') : state.t('noDocuments', 'Keine Tabellen'))}</strong>
+      <span>${escapeHtml(hasRecords ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('importPrompt', 'Über das Import-Icon CSV oder JSON hinzufügen.'))}</span>
     `;
     list.append(empty);
     return;
@@ -567,6 +599,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
         <span class="badge" style="background: var(--accent, #2b6f73); color: #fff; font-size: 10px; padding: 2px 4px; border-radius: 4px;">${escapeHtml(record.status)}</span>
         ${tagsHtml}
       </div>
+      <small class="spreadsheets-card-diagnostics">${escapeHtml(spreadsheetDiagnosticsLabel(state, record))}</small>
       <small style="margin-top: 6px; font-size: 10px; color: var(--muted, #687684); display: block;">Updated: ${new Date(record.updated_at_ms).toLocaleString()}</small>
     `;
 
@@ -584,7 +617,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
 
 function bindLeftControls(state, wrap) {
   wrap.querySelector('[data-spreadsheets-new]').addEventListener('click', () => {
-    createNewSpreadsheet(state);
+    openNewSpreadsheetDrawer(state);
   });
 
   wrap.querySelector('[data-spreadsheets-import-open]').addEventListener('click', () => {
@@ -653,6 +686,84 @@ function tagFilterOptions(state) {
   return html;
 }
 
+function normalizeSpreadsheetRecord(record = {}) {
+  const title = sanitizeTitle(record.title || record.filename || record.id || '');
+  const filename = String(record.filename || ensureExtension(slugFilename(title || record.id || 'spreadsheet'), '.csv')).trim();
+  return {
+    ...record,
+    id: String(record.id || '').trim(),
+    title: title || stateLessSpreadsheetTitleFallback(record),
+    filename: filename || 'spreadsheet.csv',
+    mime_type: record.mime_type || (filename.toLowerCase().endsWith('.json') ? JSON_MIME : CSV_MIME),
+    status: normalizeSpreadsheetStatus(record.status || 'Draft'),
+    spreadsheet_type: record.spreadsheet_type || 'jspreadsheet',
+    current_version_id: String(record.current_version_id || ''),
+    row_count: Number(record.row_count || 0),
+    col_count: Number(record.col_count || 0),
+    diagnostics_count: Number(record.diagnostics_count || 0),
+    index_text: String(record.index_text || ''),
+    tags: normalizeTags(record.tags || []),
+    updated_at_ms: Number(record.updated_at_ms || record.created_at_ms || 0),
+  };
+}
+
+function stateLessSpreadsheetTitleFallback(record = {}) {
+  return String(record.id || '').trim() || 'Neue Tabelle';
+}
+
+function normalizeSpreadsheetStatus(status) {
+  const value = String(status || '').trim();
+  return ['Draft', 'Imported', 'Review', 'Final'].includes(value) ? value : 'Draft';
+}
+
+function isActiveSpreadsheetRecord(record = {}) {
+  return Boolean(record.id) && record.is_deleted !== true;
+}
+
+function normalizeSpreadsheetModel(model = {}) {
+  const data = Array.isArray(model.data) && model.data.length
+    ? model.data.map((row) => Array.isArray(row) ? row : [String(row ?? '')])
+    : DEFAULT_GRID_DATA;
+  const maxColumns = Math.max(...data.map((row) => Array.isArray(row) ? row.length : 0), 1);
+  const columns = Array.isArray(model.columns) && model.columns.length
+    ? model.columns
+    : Array.from({ length: maxColumns }, (_, i) => ({ type: 'text', title: String.fromCharCode(65 + i), width: '120px' }));
+  return {
+    data,
+    columns,
+    nestedHeaders: model.nestedHeaders || null,
+    mergeCells: model.mergeCells || null,
+    style: model.style || null,
+  };
+}
+
+function hasActiveListFilters(state) {
+  return Boolean(
+    state.searchQuery.trim()
+    || state.statusFilter !== 'all'
+    || state.tagFilter !== 'all'
+  );
+}
+
+function revealSelectedSpreadsheetInList(state) {
+  state.searchQuery = '';
+  state.statusFilter = 'all';
+  state.tagFilter = 'all';
+}
+
+function spreadsheetDiagnosticsLabel(state, record) {
+  const rows = Number(record.row_count || 0);
+  const cols = Number(record.col_count || 0);
+  const diagnostics = Number(record.diagnostics_count || 0);
+  const size = rows && cols
+    ? state.t('spreadsheetSizeLabel', '{0} Zeilen · {1} Spalten', rows, cols)
+    : state.t('spreadsheetSizeUnknown', 'Größe unbekannt');
+  const diagnosticLabel = diagnostics > 0
+    ? state.t('diagnosticsCountLabel', '{0} Diagnosen', diagnostics)
+    : state.t('noDiagnosticsLabel', 'Keine Diagnosen');
+  return `${size} · ${diagnosticLabel}`;
+}
+
 function visibleSpreadsheets(state) {
   let result = [...state.spreadsheets];
   const query = state.searchQuery.trim().toLowerCase();
@@ -690,10 +801,11 @@ async function renderCenter(state) {
   if (!shell) return;
 
   if (!record) {
+    const hasFilters = hasActiveListFilters(state);
     shell.innerHTML = `
       <div class="spreadsheets-empty">
-        <strong>${escapeHtml(state.t('noDocumentSelected', 'Keine Tabelle ausgewählt.'))}</strong>
-        <span>${escapeHtml(state.t('noDocumentSelectedPrompt', 'Links eine Tabelle importieren oder auswählen.'))}</span>
+        <strong>${escapeHtml(hasFilters ? state.t('noMatches', 'Keine Treffer') : state.t('noDocumentSelected', 'Keine Tabelle ausgewählt.'))}</strong>
+        <span>${escapeHtml(hasFilters ? state.t('adjustSearchFilter', 'Suche oder Filter anpassen.') : state.t('noDocumentSelectedPrompt', 'Links eine Tabelle importieren oder auswählen.'))}</span>
       </div>
     `;
     return;
@@ -749,7 +861,17 @@ async function renderCenter(state) {
     canvas.appendChild(container);
     state.spreadsheetContainer = container;
 
-    const versionData = state.selectedVersion?.model_json || { data: DEFAULT_GRID_DATA, columns: DEFAULT_GRID_COLUMNS };
+    if (!state.selectedVersion?.model_json) {
+      canvas.innerHTML = `
+        <div class="spreadsheets-error">
+          <strong>${escapeHtml(state.t('noSavedVersionFound', 'Zu dieser Tabelle wurde keine gespeicherte Version gefunden.'))}</strong>
+          <span>${escapeHtml(state.t('loadVersionRepairPrompt', 'Bitte erneut importieren oder den Datensatz verwalten.'))}</span>
+        </div>
+      `;
+      return;
+    }
+
+    const versionData = normalizeSpreadsheetModel(state.selectedVersion.model_json);
 
     const worksheet = await new Promise((resolve, reject) => {
       const gridConfig = {
@@ -1054,6 +1176,17 @@ function renderRight(state) {
   `;
 
   // Bind right runbook controls
+  wrap.addEventListener('pointerdown', (event) => {
+    if (event.target.closest('[data-spreadsheets-prompt], .spreadsheets-runbook-card, [data-spreadsheets-send]')) {
+      relinquishSpreadsheetGridFocus(state);
+    }
+  }, { capture: true });
+  wrap.addEventListener('focusin', (event) => {
+    if (event.target.closest('[data-spreadsheets-prompt]')) {
+      relinquishSpreadsheetGridFocus(state);
+    }
+  });
+
   const runbookCards = wrap.querySelectorAll('.spreadsheets-runbook-card');
   let selectedRunbookId = SYSTEMATIC_SPREADSHEET_RUNBOOKS[0].id;
 
@@ -1117,6 +1250,15 @@ function renderRight(state) {
   state.ctx.right.replaceChildren(wrap);
 }
 
+function relinquishSpreadsheetGridFocus(state) {
+  try { state.editorHandle?.closeEditor?.(); } catch {}
+  try { state.editorHandle?.resetSelection?.(); } catch {}
+  const active = document.activeElement;
+  if (active && state.ctx.host.contains(active) && active.closest?.('[data-spreadsheets-canvas]')) {
+    active.blur?.();
+  }
+}
+
 async function dispatchSpreadsheetRunbook(state, input) {
   const runbook = state.runbooks.find(r => r.id === input.runbookId);
   return state.ctx.commandBus.dispatch({
@@ -1140,22 +1282,105 @@ async function dispatchSpreadsheetRunbook(state, input) {
   });
 }
 
-function openImportModal(state) {
+function readNewSpreadsheetInput(form) {
+  const formData = new FormData(form);
+  return {
+    title: formData.get('title')?.toString() || '',
+    tags: formData.get('tags')?.toString() || '',
+  };
+}
+
+function validateNewSpreadsheetInput(input = {}) {
+  const title = sanitizeTitle(input.title || '');
+  if (!title) return { valid: false, key: 'validationTitleRequired', message: 'Titel fehlt.' };
+  return { valid: true, message: '' };
+}
+
+function updateNewSpreadsheetSubmitState(state, form) {
+  if (!form) return false;
+  const validation = validateNewSpreadsheetInput(readNewSpreadsheetInput(form));
+  const message = validation.valid ? '' : state.t(validation.key, validation.message);
+  setFormValidationState(form, validation.valid, message);
+  return validation.valid;
+}
+
+function readImportInput(form) {
+  const fileInput = form?.querySelector('[data-import-file]');
+  return {
+    file: fileInput?.files?.[0] || null,
+  };
+}
+
+function validateImportInput(input = {}) {
+  const file = input.file;
+  if (!isFileLike(file)) {
+    return { valid: false, key: 'validationFileRequired', message: 'Datei erforderlich.' };
+  }
+  if (!isSupportedSpreadsheetFile(file)) {
+    return { valid: false, key: 'validationUnsupportedFile', message: 'Nur CSV oder JSON.' };
+  }
+  return { valid: true, message: '' };
+}
+
+function updateImportSubmitState(state, form) {
+  if (!form) return false;
+  const validation = validateImportInput(readImportInput(form));
+  const message = validation.valid ? '' : state.t(validation.key, validation.message);
+  setFormValidationState(form, validation.valid, message);
+  return validation.valid;
+}
+
+function setFormValidationState(form, isValid, message = '') {
+  const submit = form.querySelector('button[type="submit"]');
+  const status = form.querySelector('[data-spreadsheets-form-status]');
+  if (submit) {
+    submit.disabled = !isValid;
+    submit.setAttribute('aria-disabled', String(!isValid));
+  }
+  if (status) {
+    status.textContent = isValid ? '' : message;
+    status.hidden = isValid || !message;
+  }
+}
+
+function isFileLike(file) {
+  return Boolean(file && typeof file.name === 'string' && file.name.trim());
+}
+
+function isSupportedSpreadsheetFile(file) {
+  if (!isFileLike(file)) return false;
+  const name = file.name.toLowerCase();
+  return SUPPORTED_IMPORT_EXTENSIONS.some((ext) => name.endsWith(ext))
+    || file.type === CSV_MIME
+    || file.type === JSON_MIME;
+}
+
+function focusFirstDrawerControl(wrapper) {
+  const target = wrapper.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
+  if (target instanceof HTMLElement) {
+    requestAnimationFrame(() => target.focus({ preventScroll: true }));
+  }
+}
+
+function openNewSpreadsheetDrawer(state) {
   const wrapper = document.createElement('div');
   wrapper.className = 'spreadsheets-drawer-form';
   wrapper.innerHTML = `
-    <form data-spreadsheets-import-form>
+    <h3>${escapeHtml(state.t('newDocumentTitle', 'Neue Tabelle'))}</h3>
+    <p class="spreadsheets-drawer-copy">${escapeHtml(state.t('newSpreadsheetDescription', 'Erstellt einen gespeicherten Tabellenentwurf mit Beispielstruktur.'))}</p>
+    <form data-spreadsheets-new-form novalidate>
       <label>
-        <span>${escapeHtml(state.t('file', 'Datei auswählen (CSV oder JSON)'))}</span>
-        <input type="file" accept=".csv,.json" required data-import-file>
+        <span>${escapeHtml(state.t('title', 'Titel'))}</span>
+        <input name="title" type="text" value="${escapeHtml(`${state.t('newDocumentTitle', 'Neue Tabelle')} - ${new Date().toISOString().slice(0, 10)}`)}" required data-new-title>
       </label>
       <label style="margin-top: 8px;">
         <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
-        <input type="text" placeholder="Sales, Q2, Forecast" data-import-tags>
+        <input name="tags" type="text" placeholder="Budget, Forecast" data-new-tags>
       </label>
+      <p class="spreadsheets-form-status" role="status" data-spreadsheets-form-status></p>
       <div class="spreadsheets-drawer-actions">
         <button type="button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
-        <button type="submit">${escapeHtml(state.t('import', 'Importieren'))}</button>
+        <button type="submit">${escapeHtml(state.t('createDraft', 'Entwurf erstellen'))}</button>
       </div>
     </form>
   `;
@@ -1164,8 +1389,65 @@ function openImportModal(state) {
     state.ctx.closeDrawers();
   });
 
-  wrapper.querySelector('form').addEventListener('submit', async (e) => {
+  const form = wrapper.querySelector('[data-spreadsheets-new-form]');
+  updateNewSpreadsheetSubmitState(state, form);
+  form.addEventListener('input', () => updateNewSpreadsheetSubmitState(state, form));
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (!updateNewSpreadsheetSubmitState(state, form)) return;
+    const submit = form.querySelector('button[type="submit"]');
+    const input = readNewSpreadsheetInput(form);
+    try {
+      if (submit) {
+        submit.disabled = true;
+        submit.setAttribute('aria-disabled', 'true');
+        submit.textContent = state.t('creatingDraft', 'Entwurf wird erstellt...');
+      }
+      state.ctx.closeDrawers();
+      await createNewSpreadsheet(state, input);
+      state.ctx.notifications?.success(state.t('draftCreated', 'Tabellenentwurf erstellt.'));
+    } catch (err) {
+      console.error(err);
+      state.ctx.notifications?.error(`Fehler beim Erstellen: ${err.message}`);
+    }
+  });
+
+  state.ctx.openLeftDrawer(wrapper);
+  focusFirstDrawerControl(wrapper);
+}
+
+function openImportModal(state) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'spreadsheets-drawer-form';
+  wrapper.innerHTML = `
+    <form data-spreadsheets-import-form novalidate>
+      <label>
+        <span>${escapeHtml(state.t('file', 'Datei auswählen (CSV oder JSON)'))}</span>
+        <input type="file" accept=".csv,.json" required data-import-file>
+      </label>
+      <label style="margin-top: 8px;">
+        <span>${escapeHtml(state.t('tags', 'Tags (kommagetrennt)'))}</span>
+        <input type="text" placeholder="Sales, Q2, Forecast" data-import-tags>
+      </label>
+      <p class="spreadsheets-form-status" role="status" data-spreadsheets-form-status></p>
+      <div class="spreadsheets-drawer-actions">
+        <button type="button" data-drawer-cancel>${escapeHtml(state.t('cancel', 'Abbrechen'))}</button>
+        <button type="submit" disabled aria-disabled="true">${escapeHtml(state.t('import', 'Importieren'))}</button>
+      </div>
+    </form>
+  `;
+
+  wrapper.querySelector('[data-drawer-cancel]').addEventListener('click', () => {
+    state.ctx.closeDrawers();
+  });
+
+  const form = wrapper.querySelector('form');
+  updateImportSubmitState(state, form);
+  form.addEventListener('change', () => updateImportSubmitState(state, form));
+  form.addEventListener('input', () => updateImportSubmitState(state, form));
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!updateImportSubmitState(state, form)) return;
     const fileInput = wrapper.querySelector('[data-import-file]');
     const file = fileInput.files[0];
     if (!file) return;
@@ -1184,6 +1466,7 @@ function openImportModal(state) {
   });
 
   state.ctx.openLeftDrawer(wrapper);
+  focusFirstDrawerControl(wrapper);
 }
 
 function openExportModal(state) {
@@ -1491,7 +1774,7 @@ async function dispatchSpreadsheetsContextChat(state, context, message, mode = '
     if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
-  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
+  if (status) status.textContent = state.t('chatOpening', 'Öffne Chat...');
   const title = `${safeMode === 'app' ? 'Spreadsheets App modifizieren' : 'Spreadsheet bearbeiten'} · ${context.label || 'Spreadsheets'}`;
   const instruction = safeMode === 'app'
     ? `Modifiziere die Spreadsheets-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Tabellendaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
@@ -1819,6 +2102,16 @@ async function withTimeout(promise, ms, message) {
   });
   return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
+
+export const __spreadsheetsTestHooks = {
+  hasActiveListFilters,
+  isActiveSpreadsheetRecord,
+  normalizeSpreadsheetRecord,
+  normalizeSpreadsheetModel,
+  validateImportInput,
+  validateNewSpreadsheetInput,
+  visibleSpreadsheets,
+};
 
 function iconSvg(name) {
   const SVGS = {

@@ -43,6 +43,7 @@
   transition: opacity 120ms ease, background 120ms ease;
 }
 
+.creator-module[data-creator-root] > .ctox-column-resizer:focus-visible::before,
 .creator-module[data-creator-root] > .ctox-column-resizer:hover::before {
   opacity: 1;
   background: var(--accent);
@@ -290,6 +291,26 @@
   line-height: 1.5;
 }
 
+.creator-spec-diagnostics {
+  margin: 8px 0 0;
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.creator-spec-diagnostics[data-state="ready"] {
+  color: var(--success);
+}
+
+.creator-spec-diagnostics[data-state="pending"] {
+  color: var(--warning);
+}
+
+.creator-spec-diagnostics[data-state="blocked"] {
+  color: var(--muted);
+}
+
 .os-input:focus, .os-select:focus, .os-textarea:focus {
   outline: none;
   border-color: var(--accent);
@@ -327,6 +348,17 @@
   transition: color 0.2s ease;
 }
 
+.accordion-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.accordion-label svg {
+  flex: 0 0 auto;
+}
+
 .accordion-trigger:hover {
   color: var(--text);
 }
@@ -345,6 +377,8 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
   animation: accordion-expand 0.25s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
@@ -428,9 +462,23 @@
   transform: scale(0.98);
 }
 
+.os-btn:disabled,
+.os-btn[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.48;
+  box-shadow: none;
+  transform: none;
+}
+
 .os-btn:hover {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--surface-3) 90%, transparent);
+}
+
+.os-btn:disabled:hover,
+.os-btn[aria-disabled="true"]:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--surface-2) 80%, transparent);
 }
 
 .os-btn.is-primary {
@@ -442,6 +490,13 @@
 
 .os-btn.is-primary:hover {
   box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.os-btn.is-primary:disabled,
+.os-btn.is-primary[aria-disabled="true"] {
+  background: color-mix(in srgb, var(--surface-3) 70%, var(--line));
+  border-color: var(--line);
+  color: var(--muted);
 }
 
 .os-btn.is-accent {
@@ -485,6 +540,17 @@
   width: 8px;
   height: 8px;
   border-radius: 99px;
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+.sync-dot.is-blocked {
+  background: var(--muted);
+  box-shadow: none;
+  opacity: 0.55;
+}
+
+.sync-dot.is-ready {
   background: var(--success);
   box-shadow: 0 0 8px var(--success);
 }
