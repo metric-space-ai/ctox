@@ -10,7 +10,8 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD}, Engine as _};
+use sha2::{Digest, Sha256};
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use reqwest::Client;
@@ -1540,7 +1541,25 @@ fn effective_signaling_token(auth_token: &str, password: &str) -> String {
     if !explicit.is_empty() {
         return explicit.to_owned();
     }
-    password.trim().to_owned()
+    // Browser derives the signaling token via SHA-256(password) → URL-safe
+    // base64 → first 32 chars (siehe
+    // src/apps/business-os/shared/sync.js::signalingTokenFromRoomPassword,
+    // sowie der Reference-Code in src/apps/desktop/src/app.rs::short_sha256).
+    // Vorher wurde das Password hier als plain text als Token versendet, was
+    // mit dem Hub-Auth-Schema kollidiert und die Signaling-Connection
+    // schlieЯlich sofort schloss (siehe build_signal_url in signaling.rs für
+    // den Discovery-Param-Teil derselben Klasse von Symptomen).
+    let trimmed = password.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    short_sha256(trimmed, 32)
+}
+
+fn short_sha256(value: &str, len: usize) -> String {
+    let digest = Sha256::digest(value.as_bytes());
+    let encoded = URL_SAFE_NO_PAD.encode(digest);
+    encoded.chars().take(len).collect()
 }
 
 fn viewer_client_id(client_name: &str) -> String {
