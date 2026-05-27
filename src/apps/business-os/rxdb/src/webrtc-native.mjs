@@ -999,6 +999,19 @@ export class CtoxWebRtcNativePeer {
       pendingAcks: this.pendingFrameAcks.size,
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
+      connectionCount: this.connections.size,
+      connectionStates: [...this.connections.values()].map((connection) => ({
+        peerId: connection.remotePeerId,
+        peerConnectionState: connection.peer?.connectionState || '',
+        iceConnectionState: connection.peer?.iceConnectionState || '',
+        iceGatheringState: connection.peer?.iceGatheringState || '',
+        signalingState: connection.peer?.signalingState || '',
+        channelState: connection.channel?.readyState || '',
+        channelLabel: connection.channel?.label || '',
+        pendingCandidates: Array.isArray(connection.pendingCandidates)
+          ? connection.pendingCandidates.length
+          : 0,
+      })),
     };
   }
 

@@ -43,6 +43,7 @@ use frame_contract_generated::{
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
+const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
 
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
@@ -66,7 +67,7 @@ impl WebRTCRsConfig {
                 ..Default::default()
             }],
             data_channel_label: "rxdb".to_string(),
-            udp_bind_addr: "127.0.0.1:0".to_string(),
+            udp_bind_addr: DEFAULT_UDP_BIND_ADDR.to_string(),
         }
     }
 }
@@ -234,7 +235,7 @@ pub struct WebRTCRsConnectionHandler {
 impl WebRTCRsConnectionHandler {
     /// Empty handler useful for unit tests or callers that install peers later.
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::empty(None, Vec::new(), "rxdb", "127.0.0.1:0"))
+        Arc::new(Self::empty(None, Vec::new(), "rxdb", DEFAULT_UDP_BIND_ADDR))
     }
 
     pub async fn new_with_signaling(config: WebRTCRsConfig) -> RxResult<Arc<Self>> {
@@ -1811,6 +1812,12 @@ mod tests {
         assert_eq!(json.get("pendingAcks").and_then(Value::as_u64), Some(1));
         assert_eq!(json.get("sentFrames").and_then(Value::as_u64), Some(1));
         assert_eq!(json.get("receivedFrames").and_then(Value::as_u64), Some(1));
+    }
+
+    #[test]
+    fn native_webrtc_default_udp_bind_is_not_loopback() {
+        let handler = WebRTCRsConnectionHandler::new();
+        assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
     }
 
     #[test]
