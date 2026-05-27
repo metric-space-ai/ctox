@@ -516,6 +516,21 @@ function settingsTemplate({
 }
 
 function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
+  if (runtimeLoading && !runtimeSettings) {
+    return `
+      <section class="settings-section">
+        <header><h3>Model Runtime</h3><span>Status wird gelesen.</span></header>
+        <div class="runtime-status-strip">
+          ${runtimePill('Modelle', 'Status wird gelesen.', false)}
+          ${runtimePill('Autorisierung', 'Status wird gelesen.', false)}
+          ${runtimePill('CTOX Service', 'Status wird gelesen.', false)}
+        </div>
+      </section>
+      <section class="settings-section">
+        <header><h3>Queue Policy</h3><span>Operative Arbeit läuft über CTOX Tasks.</span></header>
+      </section>
+    `;
+  }
   const runtime = runtimeSettings?.runtime || {};
   const auth = runtimeSettings?.auth || {};
   const diagnostics = runtimeSettings?.diagnostics || {};
@@ -1125,16 +1140,34 @@ async function saveUser(payload, { commandBus, db, session } = {}) {
 }
 
 async function loadRuntimeSettings({ db } = {}) {
-  const coll = db?.collection?.('ctox_runtime_settings');
-  if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
-  const doc = await coll.findOne('runtime-settings').exec();
-  const data = doc?.toJSON?.();
-  if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
-  return data;
+  let lastError = null;
+  try {
+    return await fetchBusinessOsApi('/api/business-os/ctox/runtime-settings');
+  } catch (error) {
+    lastError = error;
+  }
+  try {
+    const coll = db?.collection?.('ctox_runtime_settings');
+    if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
+    const doc = await coll.findOne('runtime-settings').exec();
+    const data = doc?.toJSON?.();
+    if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
+    return data;
+  } catch {
+    throw lastError || new Error('Runtime-Status noch nicht synchronisiert.');
+  }
 }
 
 async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {
   const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
+  try {
+    return await fetchBusinessOsApi('/api/business-os/ctox/runtime-settings', {
+      method: 'POST',
+      body: payload,
+    });
+  } catch {
+    // Older/local deployments may not expose the direct API yet.
+  }
   await dispatchModuleCommand({
     commandBus,
     db,
@@ -1175,6 +1208,21 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
 }
 
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
+  try {
+    return await fetchBusinessOsApi('/api/business-os/ctox/subscription-auth/start', {
+      method: 'POST',
+      body: {
+        provider: 'openai',
+        auth_mode: 'chatgpt_subscription',
+        callback_url: new URL(
+          '/api/business-os/ctox/subscription-auth/callback',
+          window.location.origin,
+        ).toString(),
+      },
+    });
+  } catch {
+    // Older/local deployments may not expose the direct API yet.
+  }
   const command = await dispatchModuleCommand({
     commandBus,
     db,
@@ -1187,6 +1235,39 @@ async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
     source: 'business-os-settings',
   });
   return command.result || command;
+}
+
+async function fetchBusinessOsApi(path, options = {}) {
+  if (typeof window === 'undefined' || !window.location?.origin) {
+    throw new Error('Business-OS API ist in dieser Umgebung nicht verfügbar.');
+  }
+  const method = options.method || 'GET';
+  const init = {
+    method,
+    credentials: 'include',
+    headers: {
+      Accept: 'application/json',
+    },
+  };
+  if (options.body !== undefined) {
+    init.headers['Content-Type'] = 'application/json';
+    init.body = JSON.stringify(options.body);
+  }
+  const response = await fetch(new URL(path, window.location.origin).toString(), init);
+  const text = await response.text();
+  let payload = null;
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = null;
+    }
+  }
+  if (!response.ok || payload?.ok === false) {
+    const message = payload?.error || payload?.message || text || `Business-OS API ${response.status}`;
+    throw new Error(message);
+  }
+  return payload || { ok: true };
 }
 
 function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {
