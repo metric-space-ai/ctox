@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260527-peer-filter4';
+const APP_BUILD = '20260527-peer-filter5';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -188,7 +188,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260527-peer-filter4', 'business db')
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260527-peer-filter5', 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -199,7 +199,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260527-peer-filter4', 'business sync')
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260527-peer-filter5', 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -5445,6 +5445,7 @@ function readUrlPairingConfig() {
     sync_mode: 'p2p-first',
     instance_id: instanceId || syncRoom.replace(/^ctox-business-os:/, '').split(':')[0],
     peer_id: params.get('peer_id') || params.get('peerId') || '',
+    native_peer_id: params.get('native_peer_id') || params.get('nativePeerId') || '',
     peer_role: 'browser',
     sync_room: syncRoom,
     signaling_room_password: roomPassword || '',
@@ -5496,6 +5497,8 @@ function scrubPairingConfigFromUrl() {
       'signalingRoomPassword',
       'peer_id',
       'peerId',
+      'native_peer_id',
+      'nativePeerId',
     ];
     let changed = false;
     for (const key of sensitiveKeys) {
@@ -5630,6 +5633,7 @@ async function normalizeBusinessOsLaunchConfig(config) {
     sync_mode: config.sync_mode || config.syncMode || 'p2p-first',
     instance_id: instanceId || syncRoom.replace(/^ctox-business-os:/, '').split(':')[0],
     peer_id: config.peer_id || config.peerId || '',
+    native_peer_id: config.native_peer_id || config.nativePeerId || '',
     peer_role: config.peer_role || config.peerRole || 'browser',
     sync_room: syncRoom,
     signaling_room_password: roomPassword,
