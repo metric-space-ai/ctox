@@ -2345,7 +2345,7 @@ fn write_launch_wrapper(
         ensure_dir(parent)?;
     }
     let script = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nunset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH\nunset NO_COLOR\nif [[ \"${{TERM:-}}\" == \"dumb\" || -z \"${{TERM:-}}\" ]]; then\n  export TERM=xterm-256color\nfi\nexport CTOX_ROOT=\"{}\"\nexport CTOX_STATE_ROOT=\"{}\"\nexport CTOX_INSTALL_ROOT=\"{}\"\nexec \"{}\" \"$@\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nunset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH\nunset NO_COLOR\nif [[ \"${{TERM:-}}\" == \"dumb\" || -z \"${{TERM:-}}\" ]]; then\n  export TERM=xterm-256color\nfi\nif [[ -f \"${{HOME}}/.config/ctox/business-bridge.env\" ]]; then\n  set -a\n  # shellcheck disable=SC1091\n  source \"${{HOME}}/.config/ctox/business-bridge.env\"\n  set +a\nfi\nexport CTOX_ROOT=\"{}\"\nexport CTOX_STATE_ROOT=\"{}\"\nexport CTOX_INSTALL_ROOT=\"{}\"\nexec \"{}\" \"$@\"\n",
         current_root.display(),
         state_root.display(),
         install_root.display(),

@@ -1167,6 +1167,12 @@ unset NO_COLOR
 if [[ "\${TERM:-}" == "dumb" || -z "\${TERM:-}" ]]; then
   export TERM=xterm-256color
 fi
+if [[ -f "\${HOME}/.config/ctox/business-bridge.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "\${HOME}/.config/ctox/business-bridge.env"
+  set +a
+fi
 export CTOX_ROOT="$wrapper_root"
 export CTOX_STATE_ROOT="$STATE_ROOT"
 export CTOX_INSTALL_ROOT="$INSTALL_ROOT"
