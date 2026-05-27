@@ -4553,6 +4553,23 @@ function isPendingCtoxHealthError(error) {
 }
 
 async function loadShellCtoxHealth() {
+  try {
+    const response = await fetch('/api/business-os/ctox/runtime-settings', {
+      cache: 'no-store',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    const payload = await response.json().catch(() => null);
+    if (response.ok && payload?.ok !== false) {
+      return {
+        ok: true,
+        ctox_service: payload?.service || null,
+        runtime_settings: payload || null,
+      };
+    }
+  } catch {
+    // Fall back to the replicated projection for local/offline builds.
+  }
   const coll = state.db?.collection?.('ctox_runtime_settings');
   if (!coll) throw new Error('ctox_runtime_settings collection is required for shell health');
   await state.sync?.startCollection?.('ctox_runtime_settings');
