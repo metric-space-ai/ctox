@@ -5139,8 +5139,12 @@ function ensureCtoxSmokeBinary() {
         }), 15000, 'queued engagement visible');
         await capture('outbound-active-04-queued-engagement');
 
-        const engagement = (await jsonDocs(rawDb.outbound_engagements))
-          .find((doc) => doc.campaign_id === campaignId && doc.payload?.pipeline_id === pipelineId);
+        const finalQueuedMessage = (await rawDb.outbound_messages.findOne(messageId).exec())?.toJSON?.();
+        const engagementId = finalQueuedMessage?.engagement_id || '';
+        const engagement = engagementId
+          ? (await rawDb.outbound_engagements.findOne(engagementId).exec())?.toJSON?.()
+          : (await jsonDocs(rawDb.outbound_engagements))
+            .find((doc) => doc.campaign_id === campaignId && doc.payload?.pipeline_id === pipelineId);
         const approval = (await jsonDocs(rawDb.outbound_approvals))
           .find((doc) => doc.message_id === messageId);
         if (!engagement?.id) {
