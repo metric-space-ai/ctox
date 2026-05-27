@@ -61,6 +61,7 @@ const state = {
 
   // Subscriptions & Cleanups
   rxSubscriptions: [],
+  activeFormSubscription: null,
   calendarViewInstance: null,
   renderTimer: null
 };
@@ -104,6 +105,10 @@ export async function mount(ctx) {
     if (state.renderTimer) clearTimeout(state.renderTimer);
     state.rxSubscriptions.forEach(sub => sub.unsubscribe());
     state.rxSubscriptions = [];
+    if (state.activeFormSubscription) {
+      state.activeFormSubscription.unsubscribe();
+      state.activeFormSubscription = null;
+    }
     if (state.calendarViewInstance) {
       state.calendarViewInstance.destroy();
       state.calendarViewInstance = null;
@@ -113,76 +118,93 @@ export async function mount(ctx) {
   };
 }
 
-function ensureAssetsLoaded() {
+async function ensureAssetsLoaded() {
+  // 1. Module stylesheet
+  await loadStylesheetOnce({
+    selector: 'link[data-module-styles="calendar"]',
+    href: new URL('./index.css', import.meta.url).href,
+    dataset: { moduleStyles: 'calendar' }
+  });
+
+  // 2. EventCalendar CSS
+  await loadStylesheetOnce({
+    selector: 'link[data-vendor-style="event-calendar"]',
+    href: new URL('../../vendor/event-calendar/event-calendar.min.css', import.meta.url).href,
+    dataset: { vendorStyle: 'event-calendar' }
+  });
+
+  // 3. EventCalendar JS (classic script — must NOT be type=module, otherwise it does not expose `window.EventCalendar`).
+  await loadClassicScriptOnce({
+    selector: 'script[data-vendor-script="event-calendar"]',
+    href: new URL('../../vendor/event-calendar/event-calendar.min.js', import.meta.url).href,
+    globalCheck: () => typeof window.EventCalendar !== 'undefined',
+    dataset: { vendorScript: 'event-calendar' },
+    label: 'EventCalendar'
+  });
+
+  // 4. RRule JS
+  await loadClassicScriptOnce({
+    selector: 'script[data-vendor-script="rrule"]',
+    href: new URL('../../vendor/rrule/rrule.min.js', import.meta.url).href,
+    globalCheck: () => typeof window.RRule !== 'undefined' || !!(window.rrule && window.rrule.RRule),
+    dataset: { vendorScript: 'rrule' },
+    label: 'RRule'
+  });
+}
+
+function loadStylesheetOnce({ selector, href, dataset }) {
+  if (document.querySelector(selector)) return Promise.resolve();
   return new Promise((resolve) => {
-    let loaded = 0;
-    const total = 4;
-    let resolved = false;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    Object.entries(dataset || {}).forEach(([k, v]) => { link.dataset[k] = v; });
+    const done = () => resolve();
+    link.addEventListener('load', done, { once: true });
+    link.addEventListener('error', done, { once: true });
+    document.head.appendChild(link);
+  });
+}
 
-    function check() {
-      if (resolved) return;
-      loaded++;
-      if (loaded === total) {
-        resolved = true;
-        resolve();
+function loadClassicScriptOnce({ selector, href, globalCheck, dataset, label }) {
+  // Already loaded (either globally available or tag already injected and resolved)
+  if (typeof globalCheck === 'function' && globalCheck()) return Promise.resolve();
+  const existing = document.querySelector(selector);
+  if (existing && existing.dataset.loaded === '1') return Promise.resolve();
+
+  return new Promise((resolve) => {
+    const script = existing || document.createElement('script');
+    // Explicitly classic — type=module would NOT expose the IIFE's `var EventCalendar` on window.
+    script.type = 'text/javascript';
+    script.async = false;
+    if (!existing) {
+      script.src = href;
+      Object.entries(dataset || {}).forEach(([k, v]) => { script.dataset[k] = v; });
+    }
+    const finalize = () => {
+      script.dataset.loaded = '1';
+      if (typeof globalCheck === 'function' && !globalCheck()) {
+        // Poll briefly in case the global is assigned asynchronously after onload.
+        let attempts = 0;
+        const poll = () => {
+          if (globalCheck()) return resolve();
+          if (attempts++ > 40) {
+            console.error(`[calendar] ${label} script loaded from ${href} but global is not defined`);
+            return resolve();
+          }
+          setTimeout(poll, 25);
+        };
+        poll();
+        return;
       }
-    }
-
-    // Safety fallback timeout: 3 seconds to avoid infinite loading screens if script/stylesheet loads are blocked
-    const timeoutId = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        console.warn('[calendar] ensureAssetsLoaded took too long, forcing resolution');
-        resolve();
-      }
-    }, 3000);
-
-    // 1. Check & Load App Stylesheet (index.css)
-    if (!document.querySelector('link[data-module-styles="calendar"]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = new URL('./index.css', import.meta.url).href;
-      link.dataset.moduleStyles = 'calendar';
-      link.onload = check;
-      link.onerror = check;
-      document.head.appendChild(link);
-    } else {
-      check();
-    }
-
-    // 2. Check & Load EventCalendar CSS
-    if (!document.querySelector('link[href*="event-calendar.min.css"]')) {
-      const link = document.createElement('link');
-      link.rel = 'stylesheet';
-      link.href = new URL('../../vendor/event-calendar/event-calendar.min.css', import.meta.url).href;
-      link.onload = check;
-      link.onerror = check;
-      document.head.appendChild(link);
-    } else {
-      check();
-    }
-
-    // 3. Check & Load EventCalendar JS
-    if (!window.EventCalendar) {
-      const script = document.createElement('script');
-      script.src = new URL('../../vendor/event-calendar/event-calendar.min.js', import.meta.url).href;
-      script.onload = check;
-      script.onerror = check;
-      document.head.appendChild(script);
-    } else {
-      check();
-    }
-
-    // 4. Check & Load RRule JS
-    if (!window.RRule && !(window.rrule && window.rrule.RRule)) {
-      const script = document.createElement('script');
-      script.src = new URL('../../vendor/rrule/rrule.min.js', import.meta.url).href;
-      script.onload = check;
-      script.onerror = check;
-      document.head.appendChild(script);
-    } else {
-      check();
-    }
+      resolve();
+    };
+    script.addEventListener('load', finalize, { once: true });
+    script.addEventListener('error', () => {
+      console.error(`[calendar] Failed to load ${label} from ${href}`);
+      resolve();
+    }, { once: true });
+    if (!existing) document.head.appendChild(script);
   });
 }
 
@@ -696,6 +718,10 @@ function closeDrawer() {
   els.drawer?.classList.remove('is-open');
   state.editingType = null;
   state.editingItem = null;
+  if (state.activeFormSubscription) {
+    state.activeFormSubscription.unsubscribe();
+    state.activeFormSubscription = null;
+  }
 }
 
 // 1. EVENT FORM
@@ -719,56 +745,58 @@ function openEventForm(eventId = null, defaults = null) {
   };
 
   const html = `
-    <form id="drawerEventForm" style="padding: 16px;">
-      <div class="calendar-form-group">
-        <label>Titel</label>
-        <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" />
-      </div>
-
-      <div class="calendar-form-row">
+    <form id="drawerEventForm">
+      <div class="calendar-drawer-form-inner">
         <div class="calendar-form-group">
-          <label>Kalender</label>
-          <select class="os-select" name="calendar_id" required>
-            ${calsOptions}
+          <label>Titel</label>
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbEvent?.title || '')}" required placeholder="z. B. Weekly Sync" />
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Kalender</label>
+            <select class="os-select" name="calendar_id" id="drawerEventCalendarSelect" required>
+              ${calsOptions || '<option value="" disabled selected>Keine Kalender verfügbar</option>'}
+            </select>
+          </div>
+          <div class="calendar-form-group">
+            <label>Ort / Meeting URL</label>
+            <input type="text" class="os-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
+          </div>
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Startzeit</label>
+            <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required />
+          </div>
+          <div class="calendar-form-group">
+            <label>Endzeit</label>
+            <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required />
+          </div>
+        </div>
+
+        <div class="calendar-form-group">
+          <label>Wiederholung</label>
+          <select class="os-select" name="recurrence_rule">
+            <option value="" ${!dbEvent?.recurrence_rule ? 'selected' : ''}>Keine</option>
+            <option value="FREQ=DAILY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('DAILY') ? 'selected' : ''}>Täglich</option>
+            <option value="FREQ=WEEKLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('WEEKLY') ? 'selected' : ''}>Wöchentlich</option>
+            <option value="FREQ=MONTHLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('MONTHLY') ? 'selected' : ''}>Monatlich</option>
           </select>
         </div>
+
         <div class="calendar-form-group">
-          <label>Ort / Meeting URL</label>
-          <input type="text" class="os-input" name="location" value="${escapeHtml(dbEvent?.location || '')}" placeholder="Physisch oder Online Link" />
+          <label>Beschreibung</label>
+          <textarea class="os-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
         </div>
       </div>
 
-      <div class="calendar-form-row">
-        <div class="calendar-form-group">
-          <label>Startzeit</label>
-          <input type="datetime-local" class="os-input" name="start_time" value="${formatDateTimeLocal(startVal)}" required />
-        </div>
-        <div class="calendar-form-group">
-          <label>Endzeit</label>
-          <input type="datetime-local" class="os-input" name="end_time" value="${formatDateTimeLocal(endVal)}" required />
-        </div>
-      </div>
-
-      <div class="calendar-form-group">
-        <label>Wiederholung</label>
-        <select class="os-select" name="recurrence_rule">
-          <option value="" ${!dbEvent?.recurrence_rule ? 'selected' : ''}>Keine</option>
-          <option value="FREQ=DAILY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('DAILY') ? 'selected' : ''}>Täglich</option>
-          <option value="FREQ=WEEKLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('WEEKLY') ? 'selected' : ''}>Wöchentlich</option>
-          <option value="FREQ=MONTHLY;INTERVAL=1" ${dbEvent?.recurrence_rule?.includes('MONTHLY') ? 'selected' : ''}>Monatlich</option>
-        </select>
-      </div>
-
-      <div class="calendar-form-group">
-        <label>Beschreibung</label>
-        <textarea class="os-textarea" name="description" rows="3" placeholder="Notizen...">${escapeHtml(dbEvent?.description || '')}</textarea>
-      </div>
-
-      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+      <div class="calendar-drawer-actions">
         <div>
           ${dbEvent ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteEvent">Termin löschen</button>' : ''}
         </div>
-        <div style="display:flex; gap: 8px;">
+        <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
           <button type="submit" class="os-btn os-btn-primary">Speichern</button>
         </div>
@@ -828,6 +856,47 @@ function openEventForm(eventId = null, defaults = null) {
   });
 
   els.drawer.querySelector('#btnCancelDrawer')?.addEventListener('click', closeDrawer);
+
+  // Keep the calendar dropdown in sync with the live RxDB calendar list so the
+  // select is populated even if calendars arrive after the form was opened
+  // (e.g. during the initial sync window with 30 calendars).
+  wireDrawerCalendarSelectLive(dbEvent?.calendar_id);
+}
+
+function wireDrawerCalendarSelectLive(preferredCalendarId) {
+  if (state.activeFormSubscription) {
+    state.activeFormSubscription.unsubscribe();
+    state.activeFormSubscription = null;
+  }
+  const db = state.ctx?.db?.raw;
+  if (!db || !db.calendar_calendars) return;
+
+  const renderOptions = (cals) => {
+    const select = els.drawer?.querySelector('#drawerEventCalendarSelect');
+    if (!select) return;
+    const previous = select.value || preferredCalendarId || '';
+    if (!cals || cals.length === 0) {
+      select.innerHTML = '<option value="" disabled selected>Keine Kalender verfügbar</option>';
+      return;
+    }
+    select.innerHTML = cals.map(c => {
+      const selected = (c.id === previous) ? 'selected' : '';
+      return `<option value="${c.id}" ${selected}>${escapeHtml(c.title || c.id)}</option>`;
+    }).join('');
+    // Restore selection if possible; otherwise leave first option active.
+    if (previous && cals.some(c => c.id === previous)) {
+      select.value = previous;
+    }
+  };
+
+  // Initial fill from cache, then live subscribe.
+  db.calendar_calendars.find().exec()
+    .then(docs => renderOptions(docs.map(d => d.toJSON())))
+    .catch(err => console.warn('[calendar] initial calendar fetch failed', err));
+
+  state.activeFormSubscription = db.calendar_calendars.find().$.subscribe(docs => {
+    renderOptions(docs.map(d => d.toJSON()));
+  });
 }
 
 // 2. BOOKING PAGE FORM
@@ -838,73 +907,75 @@ function openBookingPageForm(bpId = null) {
   state.editingItem = dbBp;
 
   const html = `
-    <form id="drawerBookingPageForm" style="padding: 16px;">
-      <div class="calendar-form-group">
-        <label>Titel des Buchungs-Links</label>
-        <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" />
+    <form id="drawerBookingPageForm">
+      <div class="calendar-drawer-form-inner">
+        <div class="calendar-form-group">
+          <label>Titel des Buchungs-Links</label>
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbBp?.title || '')}" required placeholder="z. B. 30 Min. Erstgespräch" />
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Link-Kürzel (Slug)</label>
+            <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" />
+          </div>
+          <div class="calendar-form-group">
+            <label>Dauer (Minuten)</label>
+            <input type="number" class="os-input" name="duration_minutes" value="${dbBp?.duration_minutes || 30}" required />
+          </div>
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Puffer Davor (Minuten)</label>
+            <input type="number" class="os-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
+          </div>
+          <div class="calendar-form-group">
+            <label>Puffer Danach (Minuten)</label>
+            <input type="number" class="os-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
+          </div>
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Mindestvorlauf (Minuten)</label>
+            <input type="number" class="os-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
+          </div>
+          <div class="calendar-form-group">
+            <label>Max. Tage im Voraus</label>
+            <input type="number" class="os-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
+          </div>
+        </div>
+
+        <div class="calendar-form-row">
+          <div class="calendar-form-group">
+            <label>Standort-Typ</label>
+            <select class="os-select" name="location_mode">
+              <option value="link" ${dbBp?.location_mode === 'link' ? 'selected' : ''}>Online-Meeting Link</option>
+              <option value="phone" ${dbBp?.location_mode === 'phone' ? 'selected' : ''}>Telefonnummer</option>
+              <option value="physical" ${dbBp?.location_mode === 'physical' ? 'selected' : ''}>Physischer Ort</option>
+            </select>
+          </div>
+          <div class="calendar-form-group">
+            <label>Status</label>
+            <select class="os-select" name="status">
+              <option value="active" ${dbBp?.status === 'active' ? 'selected' : ''}>Aktiv</option>
+              <option value="inactive" ${dbBp?.status === 'inactive' ? 'selected' : ''}>Inaktiv</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="calendar-form-group">
+          <label>Beschreibung</label>
+          <textarea class="os-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
+        </div>
       </div>
 
-      <div class="calendar-form-row">
-        <div class="calendar-form-group">
-          <label>Link-Kürzel (Slug)</label>
-          <input type="text" class="os-input" name="slug" value="${escapeHtml(dbBp?.slug || '')}" required placeholder="z. B. erstgespraech" />
-        </div>
-        <div class="calendar-form-group">
-          <label>Dauer (Minuten)</label>
-          <input type="number" class="os-input" name="duration_minutes" value="${dbBp?.duration_minutes || 30}" required />
-        </div>
-      </div>
-
-      <div class="calendar-form-row">
-        <div class="calendar-form-group">
-          <label>Puffer Davor (Minuten)</label>
-          <input type="number" class="os-input" name="buffer_before_minutes" value="${dbBp?.buffer_before_minutes || 5}" />
-        </div>
-        <div class="calendar-form-group">
-          <label>Puffer Danach (Minuten)</label>
-          <input type="number" class="os-input" name="buffer_after_minutes" value="${dbBp?.buffer_after_minutes || 10}" />
-        </div>
-      </div>
-
-      <div class="calendar-form-row">
-        <div class="calendar-form-group">
-          <label>Mindestvorlauf (Minuten)</label>
-          <input type="number" class="os-input" name="min_notice_minutes" value="${dbBp?.min_notice_minutes || 120}" />
-        </div>
-        <div class="calendar-form-group">
-          <label>Max. Tage im Voraus</label>
-          <input type="number" class="os-input" name="max_days_ahead" value="${dbBp?.max_days_ahead || 30}" />
-        </div>
-      </div>
-
-      <div class="calendar-form-row">
-        <div class="calendar-form-group">
-          <label>Standort-Typ</label>
-          <select class="os-select" name="location_mode">
-            <option value="link" ${dbBp?.location_mode === 'link' ? 'selected' : ''}>Online-Meeting Link</option>
-            <option value="phone" ${dbBp?.location_mode === 'phone' ? 'selected' : ''}>Telefonnummer</option>
-            <option value="physical" ${dbBp?.location_mode === 'physical' ? 'selected' : ''}>Physischer Ort</option>
-          </select>
-        </div>
-        <div class="calendar-form-group">
-          <label>Status</label>
-          <select class="os-select" name="status">
-            <option value="active" ${dbBp?.status === 'active' ? 'selected' : ''}>Aktiv</option>
-            <option value="inactive" ${dbBp?.status === 'inactive' ? 'selected' : ''}>Inaktiv</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="calendar-form-group">
-        <label>Beschreibung</label>
-        <textarea class="os-textarea" name="description" rows="3" placeholder="Beschreibung für den Kunden...">${escapeHtml(dbBp?.description || '')}</textarea>
-      </div>
-
-      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+      <div class="calendar-drawer-actions">
         <div>
           ${dbBp ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteBp">Löschen</button>' : ''}
         </div>
-        <div style="display:flex; gap: 8px;">
+        <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
           <button type="submit" class="os-btn os-btn-primary">Speichern</button>
         </div>
@@ -992,22 +1063,24 @@ function openCalendarForm(calId = null) {
   state.editingItem = dbCal;
 
   const html = `
-    <form id="drawerCalendarForm" style="padding: 16px;">
-      <div class="calendar-form-group">
-        <label>Kalendertitel</label>
-        <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" />
+    <form id="drawerCalendarForm">
+      <div class="calendar-drawer-form-inner">
+        <div class="calendar-form-group">
+          <label>Kalendertitel</label>
+          <input type="text" class="os-input" name="title" value="${escapeHtml(dbCal?.title || '')}" required placeholder="z. B. Privat" />
+        </div>
+
+        <div class="calendar-form-group">
+          <label>Farbe</label>
+          <input type="color" class="os-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
+        </div>
       </div>
 
-      <div class="calendar-form-group">
-        <label>Farbe</label>
-        <input type="color" class="os-input" name="color" value="${dbCal?.color || '#3b82f6'}" style="height:38px; padding:2px;" />
-      </div>
-
-      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
+      <div class="calendar-drawer-actions">
         <div>
           ${dbCal ? '<button type="button" class="os-btn os-btn-danger" id="btnDeleteCal">Kalender löschen</button>' : ''}
         </div>
-        <div style="display:flex; gap: 8px;">
+        <div class="calendar-drawer-actions-right">
           <button type="button" class="os-btn" id="btnCancelDrawer">Abbrechen</button>
           <button type="submit" class="os-btn os-btn-primary">Speichern</button>
         </div>
@@ -1086,7 +1159,7 @@ function openBookingDetail(bkId) {
   const endStr = new Date(bk.slot_end_ms).toLocaleTimeString();
 
   const html = `
-    <div style="padding: 16px; display:flex; flex-direction:column; gap: 12px;">
+    <div class="calendar-drawer-form-inner" style="gap: 12px;">
       <div>
         <strong style="color: var(--muted); font-size:11px; text-transform:uppercase;">Kunde</strong>
         <div style="font-size:16px; font-weight:700; color: var(--text-strong);">${escapeHtml(bk.attendee_name)}</div>
@@ -1114,14 +1187,14 @@ function openBookingDetail(bkId) {
           <span class="auditing-badge badge-${bk.status === 'confirmed' ? 'confirmed' : 'cancelled'}">${bk.status === 'confirmed' ? 'Bestätigt' : 'Storniert'}</span>
         </div>
       </div>
+    </div>
 
-      <div style="display:flex; justify-content: space-between; margin-top: 20px;">
-        <div>
-          ${bk.status === 'confirmed' ? '<button type="button" class="os-btn os-btn-danger" id="btnCancelBooking">Termin Stornieren</button>' : ''}
-        </div>
-        <div>
-          <button type="button" class="os-btn os-btn-primary" id="btnCancelDrawer">Schließen</button>
-        </div>
+    <div class="calendar-drawer-actions">
+      <div>
+        ${bk.status === 'confirmed' ? '<button type="button" class="os-btn os-btn-danger" id="btnCancelBooking">Termin Stornieren</button>' : ''}
+      </div>
+      <div class="calendar-drawer-actions-right">
+        <button type="button" class="os-btn os-btn-primary" id="btnCancelDrawer">Schließen</button>
       </div>
     </div>
   `;

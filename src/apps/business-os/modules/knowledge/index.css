@@ -16,8 +16,11 @@
   --knowledge-icon-import: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z'/%3E%3C/svg%3E");
   --knowledge-icon-export: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z'/%3E%3C/svg%3E");
   display: grid;
-  grid-template-columns: minmax(390px, 0.88fr) minmax(620px, 1.62fr);
-  gap: 12px;
+  /* Spalten: [linke Liste] [12px Resizer] [rechtes Detail]. CtoxResizer
+   * setzt --knowledge-left-width per drag (siehe modules/knowledge/index.js).
+   */
+  grid-template-columns: minmax(300px, var(--knowledge-left-width, 390px)) 12px minmax(0, 1fr);
+  gap: 0;
   height: 100%;
   min-height: 0;
   overflow: hidden;

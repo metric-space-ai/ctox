@@ -27,6 +27,11 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  // Reset volatile state on every mount so a remount can't leak a stale
+  // selectedId/renderedDetailId from a previous host element.
+  state.selectedId = '';
+  state.renderedDetailId = '';
+  state.renderKey = '';
   await ensureStyles();
 
   // Load localizations
@@ -142,6 +147,7 @@ function applyStaticLabels(host, t) {
 
 function wireUi() {
   const root = state.ctx.host.querySelector('[data-reports-root]');
+  if (!root) return;
   root.querySelector('[data-refresh-reports]')?.addEventListener('click', () => refreshReports());
   root.querySelector('[data-report-search]')?.addEventListener('input', (event) => {
     state.search = event.target.value || '';
@@ -153,6 +159,27 @@ function wireUi() {
   });
   root.querySelector('[data-report-status]')?.addEventListener('change', (event) => {
     state.status = event.target.value || 'all';
+    render();
+  });
+  // Use event delegation on the list container so the click handler survives
+  // every renderList() innerHTML rewrite. Previously the per-button listeners
+  // were re-attached inside renderList(), but a missed re-attach (or a
+  // mid-flight rerender from realtime subscriptions) could orphan them and
+  // leave the detail panel blank when a row was clicked.
+  const list = root.querySelector('[data-reports-list]');
+  list?.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const button = target?.closest('[data-report-id]');
+    if (!button || !list.contains(button)) return;
+    const reportId = button.getAttribute('data-report-id') || '';
+    if (!reportId || reportId === state.selectedId) {
+      // Still re-render the detail in case it was previously cleared by a
+      // refresh race — selecting the already-selected item should not be a no-op.
+      state.selectedId = reportId;
+      renderDetail();
+      return;
+    }
+    state.selectedId = reportId;
     render();
   });
 }
@@ -234,6 +261,7 @@ function rememberDetailScroll() {
 
 function renderList() {
   const list = state.ctx.host.querySelector('[data-reports-list]');
+  if (!list) return;
   const items = filteredReports();
   if (!items.length) {
     list.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('noReports', 'Keine Reports gefunden.'))}</p>`;
@@ -250,21 +278,33 @@ function renderList() {
       <small>${escapeHtml(report.moduleId)} · ${escapeHtml(formatDate(report.updatedAt || report.createdAt))}</small>
     </button>
   `).join('');
-  list.querySelectorAll('[data-report-id]').forEach((button) => {
-    button.addEventListener('click', () => {
-      state.selectedId = button.dataset.reportId || '';
-      render();
-    });
-  });
+  // Click handling is wired once via event delegation in wireUi(); re-binding
+  // per-button on every renderList() is no longer needed.
 }
 
 function renderDetail() {
-  const detail = state.ctx.host.querySelector('[data-reports-detail]');
+  const detail = state.ctx.host?.querySelector('[data-reports-detail]');
+  if (!detail) {
+    // Container not mounted yet (or mount() was torn down) — bail gracefully
+    // rather than throwing into nothing. A later refreshReports()/render()
+    // will pick the report up once the DOM exists.
+    return;
+  }
   rememberDetailScroll();
-  const report = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0];
+  // Look the selected report up against the unfiltered list as well — if the
+  // user clicked a row while a filter was being narrowed, the selection must
+  // still resolve to the clicked entry instead of silently falling back to
+  // the first visible row (which left the panel looking blank/stale).
+  const normalized = normalizedReports();
+  const filtered = filteredReports();
+  const report = filtered.find((item) => item.id === state.selectedId)
+    || normalized.find((item) => item.id === state.selectedId)
+    || filtered[0]
+    || normalized[0]
+    || null;
   if (!report) {
     state.renderedDetailId = '';
-    detail.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('selectReport', 'Waehle links einen Report aus.'))}</p>`;
+    detail.innerHTML = `<p class="reports-empty">${escapeHtml(state.t('selectReport', 'Wähle links einen Report aus.'))}</p>`;
     return;
   }
   const previousRenderedId = state.renderedDetailId;
@@ -284,9 +324,11 @@ function renderDetail() {
         <h3>${escapeHtml(state.t('report', 'Report'))}</h3>
         <div class="reports-facts">
           ${fact(state.t('module', 'Modul'), report.moduleId)}
+          ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
           ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
           ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
           ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
+          ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
         </div>
       </section>
       <section class="reports-section">
@@ -298,7 +340,7 @@ function renderDetail() {
         <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
       </section>
       <section class="reports-section">
-        <h3>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geaendert hat'))}</h3>
+        <h3>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</h3>
         <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
       </section>
       ${attachment ? `
@@ -313,7 +355,7 @@ function renderDetail() {
       <section class="reports-section">
         <h3>${escapeHtml(state.t('rollback', 'Rollback'))}</h3>
         <div class="reports-rollback">
-          <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Waehle eine gespeicherte Modulversion und rolle das betroffene Modul zurueck.') : state.t('noReleaseFound', 'Fuer dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
+          <p>${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
           <div class="reports-rollback-actions">
             <select class="os-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
               ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
@@ -432,7 +474,7 @@ async function rollbackSelectedRelease(report) {
   const status = detail.querySelector('[data-rollback-status]');
   const versionId = detail.querySelector('[data-rollback-version]')?.value || report.rollbackVersionId || '';
   if (!versionId) return;
-  status.textContent = state.t('rollbackRunning', 'Rollback laeuft...');
+  status.textContent = state.t('rollbackRunning', 'Rollback läuft...');
   try {
     await dispatchModuleCommand({
       commandType: 'ctox.module.rollback',
@@ -441,7 +483,7 @@ async function rollbackSelectedRelease(report) {
       payload: { module_id: report.moduleId, version_id: versionId },
       source: 'business-os-reports',
     });
-    status.textContent = state.t('rollbackExecuted', 'Rollback ausgefuehrt.');
+    status.textContent = state.t('rollbackExecuted', 'Rollback ausgeführt.');
     await refreshReports();
   } catch (error) {
     status.textContent = error.message || String(error);

@@ -100,7 +100,7 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <!-- Mittlere Spalte: Workbench / Editor & Live Terminal -->
   <section class="creator-pane creator-center" aria-label="Build & Deployment Workbench">
@@ -140,6 +140,34 @@
           <div class="console-log-entry info">[SYSTEM] App Creator initialisiert. Bereit zur Prompt-Eingabe...</div>
         </div>
       </footer>
+    </div>
+  </section>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+
+  <!-- Rechte Spalte: Bestehende Custom-Apps & CTOX-Generator-Prompts -->
+  <section class="creator-pane creator-right" aria-label="Installierte Custom-Apps und CTOX-Prompts">
+    <header class="ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">Installiert</span>
+          <h2 class="ctox-pane-title">Custom-Apps</h2>
+        </div>
+      </div>
+    </header>
+    <div class="creator-right-body">
+      <section class="creator-right-block">
+        <span class="ctox-pane-kicker">Bestehende Apps</span>
+        <div class="creator-right-empty">
+          Noch keine eigenen Apps installiert. Sobald über den Generator eine App erstellt wurde, erscheint sie hier zum erneuten Öffnen oder Upgrade.
+        </div>
+      </section>
+      <section class="creator-right-block">
+        <span class="ctox-pane-kicker">CTOX-Generator-Prompts</span>
+        <div class="creator-right-empty">
+          Lass CTOX über die Chatleiste eine neue App-Spezifikation entwerfen — Prompts und Vorschläge erscheinen hier als Vorlage für den Generator links.
+        </div>
+      </section>
     </div>
   </section>
 </main>

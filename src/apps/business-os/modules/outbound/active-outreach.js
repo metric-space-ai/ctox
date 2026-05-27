@@ -139,7 +139,7 @@ function countLeadQueue(campaignId) {
 
 export function renderActiveOutreachShell(campaign) {
   if (!campaign) {
-    return `<div class="outbound-outreach-empty">${escapeFn(translate('selectCampaignFirst', 'Bitte zuerst eine Campaign waehlen.'))}</div>`;
+    return `<div class="outbound-outreach-empty">${escapeFn(translate('selectCampaignFirst', 'Bitte zuerst eine Campaign wählen.'))}</div>`;
   }
   const counts = activeOutreachCounts(campaign.id);
   const view = stateRef.activeOutreach.view || 'lead_queue';
@@ -153,7 +153,7 @@ export function renderActiveOutreachShell(campaign) {
     { key: 'settings', label: translate('skillSettings', 'Skills & Vorlagen'), count: (stateRef.outboundSkillbooks?.length || 0) + (stateRef.outboundLetterTemplates?.length || 0) },
   ];
   const errorBanner = stateRef.activeOutreach.error
-    ? `<div class="outbound-outreach-error" role="alert" aria-live="assertive">${escapeFn(stateRef.activeOutreach.error)} <button type="button" data-action="ao-dismiss-error" aria-label="${escapeFn(translate('cancel', 'Schliessen'))}">×</button></div>`
+    ? `<div class="outbound-outreach-error" role="alert" aria-live="assertive">${escapeFn(stateRef.activeOutreach.error)} <button type="button" data-action="ao-dismiss-error" aria-label="${escapeFn(translate('cancel', 'Schließen'))}">×</button></div>`
     : '';
   return `
     <section class="outbound-outreach" data-outreach-campaign="${escapeFn(campaign.id)}">
@@ -164,7 +164,7 @@ export function renderActiveOutreachShell(campaign) {
         </div>
         <div class="outbound-outreach-head-actions">
           <button type="button" class="outbound-button" data-action="ao-reconcile-provider" title="${escapeFn(translate('reconcileProviderHint', 'Status der Mailserver-Queue mit Outbound-Messages abgleichen'))}">${escapeFn(translate('reconcileProvider', 'Provider-Status abgleichen'))}</button>
-          <button type="button" class="outbound-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Faellige Engagements verarbeiten: Drafts vorbereiten, Suppressed schliessen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
+          <button type="button" class="outbound-button" data-action="ao-scheduler-tick" title="${escapeFn(translate('schedulerTickHint', 'Fällige Engagements verarbeiten: Drafts vorbereiten, Suppressed schließen'))}">${escapeFn(translate('schedulerTick', 'Scheduler-Tick'))}</button>
           <button type="button" class="outbound-button" data-action="ao-audit-export" title="${escapeFn(translate('auditExportHint', 'Vollstaendigen JSON-Export der Outbound-Daten dieser Campaign laden'))}">${escapeFn(translate('auditExport', 'Audit-Export'))}</button>
         </div>
       </header>
@@ -236,7 +236,7 @@ function renderSkillSettings(campaign) {
         <button type="button" class="outbound-button" data-action="ao-new-letter-template" data-campaign-id="${escapeFn(campaign.id)}">${escapeFn(translate('newTemplate', 'Neue Vorlage'))}</button>
       </header>
       ${templates.length === 0
-        ? `<p class="outbound-outreach-muted">${escapeFn(translate('noLetterTemplatesYet', 'Noch keine Briefvorlagen fuer diese Campaign.'))}</p>`
+        ? `<p class="outbound-outreach-muted">${escapeFn(translate('noLetterTemplatesYet', 'Noch keine Briefvorlagen für diese Campaign.'))}</p>`
         : templates.map((tpl) => renderLetterTemplateEditor(tpl)).join('')}
     </section>
   `;
@@ -405,7 +405,7 @@ function renderEngagementListItem(engagement, isSelected) {
 }
 
 function renderEngagementDetail(campaign, engagement) {
-  if (!engagement) return `<div class="outbound-outreach-empty">${escapeFn(translate('selectEngagement', 'Engagement waehlen'))}</div>`;
+  if (!engagement) return `<div class="outbound-outreach-empty">${escapeFn(translate('selectEngagement', 'Engagement wählen'))}</div>`;
   const messages = stateRef.engagementMessages
     .filter((m) => m.engagement_id === engagement.id)
     .sort((a, b) => (a.created_at_ms || 0) - (b.created_at_ms || 0));
@@ -432,7 +432,7 @@ function renderEngagementDetail(campaign, engagement) {
     <section class="outbound-outreach-detail-section outbound-outreach-detail-next">
       <h5>${escapeFn(translate('nextStep', 'Nächster Schritt'))}</h5>
       <p>${escapeFn(nextStep.label)}</p>
-      ${engagement.next_action_at_ms ? `<p class="outbound-outreach-muted">${escapeFn(translate('whyNow', 'Geplant fuer'))} ${escapeFn(formatTimestamp(engagement.next_action_at_ms))}</p>` : ''}
+      ${engagement.next_action_at_ms ? `<p class="outbound-outreach-muted">${escapeFn(translate('whyNow', 'Geplant für'))} ${escapeFn(formatTimestamp(engagement.next_action_at_ms))}</p>` : ''}
       <div class="outbound-outreach-detail-actions">
         ${nextStep.actions.map((action) => renderActionButton(action, engagement, lastMessage)).join('')}
         ${paused ? '' : `<button type="button" class="outbound-button" data-action="ao-pause-engagement" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('pause', 'Pausieren'))}</button>`}
@@ -441,7 +441,7 @@ function renderEngagementDetail(campaign, engagement) {
         <button type="button" class="outbound-button" data-action="ao-open-sender" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('changeSender', 'Sender ändern'))}</button>
       </div>
     </section>
-    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section outbound-outreach-sequence-warning"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement laeuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="outbound-button primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
+    ${sequenceMismatch ? `<section class="outbound-outreach-detail-section outbound-outreach-sequence-warning"><h5>${escapeFn(translate('sequenceUpdated', 'Sequenz wurde aktualisiert'))}</h5><p>${escapeFn(translate('sequenceMismatchDescription', 'Dieses Engagement läuft mit Sequenz-Version {0}. Aktuelle Version: {1}.', sequenceMismatch.current, sequenceMismatch.latest))}</p><button type="button" class="outbound-button primary" data-action="ao-reapply-sequence" data-id="${escapeFn(engagement.id)}">${escapeFn(translate('reapplySequence', 'Aktuelle Sequenz anwenden'))}</button></section>` : ''}
     ${renderSkillbookSnapshotSection(lastMessage)}
     ${replyClass ? `<section class="outbound-outreach-detail-section"><h5>${escapeFn(translate('replyClass', 'Antwort-Klassifikation'))}</h5><p><strong>${escapeFn(prettyReplyClass(replyClass))}</strong></p></section>` : ''}
     <section class="outbound-outreach-detail-section">
@@ -467,7 +467,7 @@ function renderActionButton(action, engagement, lastMessage) {
         : '';
     case 'review_draft':
       return lastMessage
-        ? `<button type="button" class="outbound-button" data-action="ao-view-message" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('reviewDraft', 'Draft pruefen'))}</button>`
+        ? `<button type="button" class="outbound-button" data-action="ao-view-message" data-message-id="${escapeFn(lastMessage.id)}">${escapeFn(translate('reviewDraft', 'Draft prüfen'))}</button>`
         : '';
     default:
       return '';
@@ -1148,7 +1148,7 @@ async function newLetterTemplate(campaignId) {
       campaign_id: campaignId,
       title,
       salutation: 'Sehr geehrte Damen und Herren,',
-      closing: 'Mit freundlichen Gruessen',
+      closing: 'Mit freundlichen Grüßen',
       body_template: '',
     });
     await loadActiveOutreachData();

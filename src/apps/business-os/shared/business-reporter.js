@@ -341,7 +341,7 @@ function openReporterDialog(state) {
           <strong>Bug oder Feature an CTOX</strong>
           <span>${escapeHtml(module.title || module.id || 'Business OS')}</span>
         </div>
-        <button type="button" class="ctox-report-close" data-close aria-label="Schliessen">x</button>
+        <button type="button" class="ctox-report-close" data-close aria-label="Schließen">x</button>
       </header>
       <div class="ctox-report-grid">
         <label>
@@ -352,7 +352,7 @@ function openReporterDialog(state) {
           </select>
         </label>
         <label>
-          <span>Prioritaet</span>
+          <span>Priorität</span>
           <select name="severity">
             <option value="medium">Mittel</option>
             <option value="high">Hoch</option>
@@ -370,11 +370,11 @@ function openReporterDialog(state) {
       </label>
       <label>
         <span>Erwartung</span>
-        <textarea name="expected" rows="3" placeholder="Was sollte CTOX tun oder pruefen?"></textarea>
+        <textarea name="expected" rows="3" placeholder="Was sollte CTOX tun oder prüfen?"></textarea>
       </label>
       <div class="ctox-report-actions">
         <button type="button" class="ctox-report-secondary" data-markup>${screenIconSvg()}<span>Screenshot + Kritzeln</span></button>
-        <button type="button" class="ctox-report-secondary" data-open-reports>Bugs & Features oeffnen</button>
+        <button type="button" class="ctox-report-secondary" data-open-reports>Bugs & Features öffnen</button>
       </div>
       <div class="ctox-report-attachment" data-attachment hidden>
         <div>
@@ -656,12 +656,12 @@ function renderMarkupOverlay(state) {
   overlay.className = 'ctox-report-markup-overlay';
   overlay.innerHTML = `
     <div class="ctox-report-markup-toolbar" data-toolbar>
-      <strong>Bereich auswaehlen und markieren</strong>
+      <strong>Bereich auswählen und markieren</strong>
       <span>Ziehe einen Bereich auf. Danach kannst du mit dem Stift darauf zeichnen.</span>
       <div>
         <button type="button" data-toolbar-action="cancel">Abbrechen</button>
-        <button type="button" data-toolbar-action="clear" hidden>Loeschen</button>
-        <button type="button" data-toolbar-action="save" hidden>Uebernehmen</button>
+        <button type="button" data-toolbar-action="clear" hidden>Löschen</button>
+        <button type="button" data-toolbar-action="save" hidden>Übernehmen</button>
       </div>
     </div>
     <div class="ctox-report-markup-selection" data-selection hidden></div>

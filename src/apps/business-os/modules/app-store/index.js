@@ -622,14 +622,18 @@ function updateScopeButtons() {
 
 function countsByScope() {
   const items = catalogItems();
+  // Mirror filteredItems(): a scope matches if either item.kind or item.status equals the scope.
+  // This keeps the sidebar counter ("Installed: N") in sync with the badge shown on the cards
+  // — marketplace items whose module_id matches an already-installed module carry status === 'installed'.
+  const matches = (item, scope) => item.kind === scope || item.status === scope;
   return {
     all: items.length,
-    marketplace: items.filter((item) => item.kind === 'marketplace').length,
-    template: items.filter((item) => item.kind === 'template').length,
-    installed: items.filter((item) => item.kind === 'installed').length,
-    starter: items.filter((item) => item.kind === 'starter').length,
-    system: items.filter((item) => item.kind === 'system').length,
-    local: items.filter((item) => item.kind === 'local').length,
+    marketplace: items.filter((item) => matches(item, 'marketplace')).length,
+    template: items.filter((item) => matches(item, 'template')).length,
+    installed: items.filter((item) => matches(item, 'installed')).length,
+    starter: items.filter((item) => matches(item, 'starter')).length,
+    system: items.filter((item) => matches(item, 'system')).length,
+    local: items.filter((item) => matches(item, 'local')).length,
   };
 }
 

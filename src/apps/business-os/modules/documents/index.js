@@ -11,10 +11,10 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.auto',
     document_type: 'word_document',
     title: 'Deep Research Word-Bericht',
-    description: 'CTOX waehlt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.',
+    description: 'CTOX wählt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.',
     command_type: 'research.systematic.report.create',
     report_type: 'auto',
-    prompt_template: 'Nutze den systematic-research Skill. Erstelle ein hochwertiges Word-Dokument (.docx), nicht Markdown. Fuehre Deep Research aus, nutze belastbare Quellen, baue sinnvolle Tabellen und Abbildungen ein und rendere das Ergebnis als DOCX.',
+    prompt_template: 'Nutze den systematic-research Skill. Erstelle ein hochwertiges Word-Dokument (.docx), nicht Markdown. Führe Deep Research aus, nutze belastbare Quellen, baue sinnvolle Tabellen und Abbildungen ein und rendere das Ergebnis als DOCX.',
   },
   {
     id: 'research.report.feasibility_study',
@@ -29,7 +29,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.market_research',
     document_type: 'word_document',
     title: 'Marktanalyse',
-    description: 'Marktgroesse, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.',
+    description: 'Marktgröße, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.',
     command_type: 'research.systematic.report.create',
     report_type: 'market_research',
     prompt_template: 'Erstelle eine Marktanalyse als Word-Dokument via ctox report report_type=market_research.',
@@ -38,7 +38,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.competitive_analysis',
     document_type: 'word_document',
     title: 'Wettbewerbsanalyse',
-    description: 'Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Luecken und Empfehlung.',
+    description: 'Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Lücken und Empfehlung.',
     command_type: 'research.systematic.report.create',
     report_type: 'competitive_analysis',
     prompt_template: 'Erstelle eine Wettbewerbsanalyse als Word-Dokument via ctox report report_type=competitive_analysis.',
@@ -47,7 +47,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.technology_screening',
     document_type: 'word_document',
     title: 'Technologie-Screening',
-    description: 'Optioneninventar, Kriterien, Shortlist und naechste Schritte.',
+    description: 'Optioneninventar, Kriterien, Shortlist und nächste Schritte.',
     command_type: 'research.systematic.report.create',
     report_type: 'technology_screening',
     prompt_template: 'Erstelle ein Technologie-Screening als Word-Dokument via ctox report report_type=technology_screening.',
@@ -65,7 +65,7 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.literature_review',
     document_type: 'word_document',
     title: 'Stand der Technik',
-    description: 'Literature Review mit Themen, Synthese, Luecken und offenen Fragen.',
+    description: 'Literature Review mit Themen, Synthese, Lücken und offenen Fragen.',
     command_type: 'research.systematic.report.create',
     report_type: 'literature_review',
     prompt_template: 'Erstelle eine Literature Review als Word-Dokument via ctox report report_type=literature_review.',
@@ -83,10 +83,10 @@ const SYSTEMATIC_REPORT_RUNBOOKS = [
     id: 'research.report.project_description',
     document_type: 'word_document',
     title: 'Projektbeschreibung / Fördervorhaben',
-    description: 'Unternehmens- und Projektbeschreibung fuer Innovations- und Foerdervorhaben.',
+    description: 'Unternehmens- und Projektbeschreibung für Innovations- und Fördervorhaben.',
     command_type: 'research.systematic.report.create',
     report_type: 'project_description',
-    prompt_template: 'Erstelle eine Projektbeschreibung/Foerdervorhabenbeschreibung als Word-Dokument via ctox report report_type=project_description.',
+    prompt_template: 'Erstelle eine Projektbeschreibung/Fördervorhabenbeschreibung als Word-Dokument via ctox report report_type=project_description.',
   },
   {
     id: 'research.report.source_review',
@@ -571,7 +571,7 @@ async function loadSelectedVersion(state) {
         limit: 1,
       }).exec(),
       4500,
-      `Keine Versionen fuer ${record.id} gefunden.`,
+      `Keine Versionen für ${record.id} gefunden.`,
     );
     doc = fallback[0] || null;
     if (doc) {
@@ -1296,7 +1296,7 @@ async function dispatchDocumentRunbook(state, input) {
 async function dispatchNewDocumentReport(state, input = {}) {
   const prompt = String(input.prompt || '').trim();
   if (!prompt) {
-    throw new Error('Prompt fehlt. CTOX braucht einen Auftrag fuer das Word-Dokument.');
+    throw new Error('Prompt fehlt. CTOX braucht einen Auftrag für das Word-Dokument.');
   }
   const title = sanitizeDocumentTitle(input.title || 'Research Document');
   const runbookId = input.runbookId || 'research.report.auto';
@@ -1315,7 +1315,7 @@ async function dispatchNewDocumentReport(state, input = {}) {
     'Halte die Knowledge-Lookup-Pflicht aus dem systematic-research Skill ein.',
     reportType && reportType !== 'auto'
       ? `Verwende report_type_id=${reportType}.`
-      : 'Waehle den passenden report_type_id aus den CTOX Report-Blueprints.',
+      : 'Wähle den passenden report_type_id aus den CTOX Report-Blueprints.',
     'Erzeuge ein solides .docx-Dokument mit sauberer Struktur, Quellen/Evidenz, Tabellen und sinnvollen Abbildungen/Diagrammen, wo sie fachlich tragen.',
     'Wende den Documents-Skill-Workflow an: Design-Preset, echte Word-Styles, echte Listen/Tabellengeometrie, DOCX-Render/QA soweit die lokale Runtime es erlaubt.',
     'Erzeuge kein Markdown als Endartefakt. Das finale Artefakt muss ein Word-Dokument sein.',

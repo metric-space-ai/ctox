@@ -326,7 +326,7 @@ export async function openReactSettings({
         render();
         try {
           settingsState.governance = await assignFounder(moduleId, userId, true, { commandBus, db, session });
-          settingsState.commandStatus = `${userId} ist Founder fuer ${moduleId}.`;
+          settingsState.commandStatus = `${userId} ist Founder für ${moduleId}.`;
         } catch (error) {
           settingsState.commandStatus = String(error?.message || error);
         }
@@ -340,7 +340,7 @@ export async function openReactSettings({
         render();
         try {
           settingsState.governance = await releaseModule(moduleId, { commandBus, db, session });
-          settingsState.commandStatus = `Version fuer ${moduleId} gespeichert.`;
+          settingsState.commandStatus = `Version für ${moduleId} gespeichert.`;
         } catch (error) {
           settingsState.commandStatus = String(error?.message || error);
         }
@@ -356,7 +356,7 @@ export async function openReactSettings({
         render();
         try {
           settingsState.governance = await rollbackModule(moduleId, versionId, { commandBus, db, session });
-          settingsState.commandStatus = `Rollback fuer ${moduleId} angewendet.`;
+          settingsState.commandStatus = `Rollback für ${moduleId} angewendet.`;
           await refreshManagedModules();
           await onModulesChanged?.();
         } catch (error) {

@@ -937,6 +937,15 @@ let rxdb = null;
 let sources = [];
 let objects = [];
 let matches = [];
+const rawDocCounts = { sources: 0, requirements: 0, objects: 0, matches: 0 };
+
+function hasUnsyncedMatchingData() {
+  // True when the RxDB collections hold records but the aggregated UI arrays
+  // are still empty. This is the classic "data is there but not yet projected"
+  // state — show a sync placeholder instead of "empty database".
+  return (rawDocCounts.sources > 0 || rawDocCounts.requirements > 0)
+    && sources.length === 0;
+}
 
 // requirement matching view globals
 const pendingMatchKeys = new Set(); // Schlüssel: `${requirementId}|${objectId}`
@@ -1319,6 +1328,13 @@ async function loadFromRxdb(){
     const objectsJson = objectDocs.map(d => d.toJSON());
     const requirementSourcesJson   = requirementSourceDocs.map(d => d.toJSON());
     const matchesJson    = matchDocs.map(d => d.toJSON());
+
+    // Track raw doc counts so the UI can distinguish "really empty" from
+    // "data is in the database but hasn't been projected into UI shape yet".
+    rawDocCounts.sources = sourcesJson.length;
+    rawDocCounts.requirements = requirementsJson.length;
+    rawDocCounts.objects = objectsJson.length;
+    rawDocCounts.matches = matchesJson.length;
 
     const requirementsBySource = new Map();
     requirementsJson.forEach(j => {
@@ -4880,7 +4896,15 @@ function renderSources(){
   grid.innerHTML = '';
 
   if (!sources.length){
-    grid.innerHTML = '<div class="muted" style="padding:8px">Keine Anforderungen in der Datenbank gefunden.</div>';
+    // If the underlying RxDB collection actually has documents but the
+    // aggregation produced none yet, we're mid-sync (peer data arrived but
+    // hasn't been projected into the UI shape). Show a sync state instead of
+    // the misleading "empty database" message.
+    if (hasUnsyncedMatchingData()) {
+      grid.innerHTML = '<div class="muted" style="padding:8px">Daten werden synchronisiert…</div>';
+    } else {
+      grid.innerHTML = '<div class="muted" style="padding:8px">Keine Anforderungen in der Datenbank gefunden.</div>';
+    }
     return;
   }
 
@@ -6397,7 +6421,7 @@ function toggleRequirementAndObject(requirement, objectId){
 }
 
 // ✅ DROP-IN: Nachname statt Vorname sortieren
-// Hilfsfunktionen fuer die Matching-Ansicht
+// Hilfsfunktionen für die Matching-Ansicht
 // und danach die .sort(...) Anforderungn 1:1 ersetzen (siehe unten).
 
 function _normalizeSortStr(v) {
@@ -8439,6 +8463,7 @@ export async function mountMatchingDashboard(ctx = {}){
   renderObjects();
   renderMap();
   persistMatchingRuntimeState();
+  bindCreateRequirementButton();
 
   // ✅ Live UI Sync: reagiert auf Background-Sync/Replication automatisch
   try {
@@ -8446,6 +8471,141 @@ export async function mountMatchingDashboard(ctx = {}){
   } catch (e) {
     console.warn('[rxdb-live] setup failed:', e);
   }
+}
+
+function bindCreateRequirementButton() {
+  const root = matchingModuleHost || document;
+  const btn = root.querySelector('#createRequirementBtn');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    openCreateRequirementForm();
+  });
+}
+
+function openCreateRequirementForm() {
+  // Lightweight modal, styled to match the existing column-drawer/business
+  // dialog look so it fits the column design without depending on the
+  // bottom-drawer flow.
+  const layer = document.createElement('div');
+  layer.className = 'business-dialog-layer is-info is-open';
+  layer.style.zIndex = '260';
+  layer.innerHTML = `
+    <section class="business-dialog" role="dialog" aria-modal="true" aria-labelledby="createRequirementDialogTitle">
+      <div class="business-dialog-copy">
+        <h2 id="createRequirementDialogTitle">Neue Anforderung anlegen</h2>
+        <p>Hinterlege Titel und Beschreibung. Eine zugehörige Quelle wird automatisch angelegt, falls nicht ausgewählt.</p>
+      </div>
+      <label style="display:grid;gap:4px;margin-top:12px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
+        Quelle
+        <input class="business-dialog-input" data-field="sourceName" placeholder="z. B. Firmenname" style="text-transform:none;letter-spacing:0;font-weight:500;">
+      </label>
+      <label style="display:grid;gap:4px;margin-top:10px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
+        Titel der Anforderung
+        <input class="business-dialog-input" data-field="title" placeholder="z. B. Senior Backend Engineer" required style="text-transform:none;letter-spacing:0;font-weight:500;">
+      </label>
+      <label style="display:grid;gap:4px;margin-top:10px;font-size:11.5px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.04em;">
+        Beschreibung
+        <textarea class="business-dialog-input" data-field="description" rows="4" placeholder="Kurze Beschreibung der Anforderung…" style="text-transform:none;letter-spacing:0;font-weight:500;resize:vertical;min-height:90px;"></textarea>
+      </label>
+      <div class="business-dialog-actions" style="margin-top:14px;">
+        <button class="business-dialog-secondary" type="button" data-action="cancel">Abbrechen</button>
+        <button class="business-dialog-primary" type="button" data-action="save">Anlegen</button>
+      </div>
+    </section>
+  `;
+  document.body.append(layer);
+
+  const close = () => {
+    layer.classList.remove('is-open');
+    layer.classList.add('is-closing');
+    setTimeout(() => layer.remove(), 120);
+  };
+
+  layer.addEventListener('pointerdown', (event) => {
+    if (event.target === layer) close();
+  });
+
+  layer.querySelector('[data-action="cancel"]')?.addEventListener('click', close);
+
+  layer.querySelector('[data-action="save"]')?.addEventListener('click', async () => {
+    const titleEl = layer.querySelector('[data-field="title"]');
+    const sourceEl = layer.querySelector('[data-field="sourceName"]');
+    const descEl = layer.querySelector('[data-field="description"]');
+    const title = String(titleEl?.value || '').trim();
+    if (!title) {
+      titleEl?.focus?.();
+      return;
+    }
+    const sourceName = String(sourceEl?.value || '').trim() || 'Manuelle Anforderung';
+    const description = String(descEl?.value || '').trim();
+
+    try {
+      await createRequirementFromForm({ sourceName, title, description });
+      close();
+      await loadFromRxdb();
+      renderSources();
+      renderRequirements();
+      renderMap();
+    } catch (err) {
+      console.error('[matching] createRequirementFromForm failed', err);
+      if (typeof showBusinessAlert === 'function') {
+        showBusinessAlert(`Anforderung konnte nicht angelegt werden: ${err?.message || err}`);
+      }
+    }
+  });
+
+  requestAnimationFrame(() => layer.querySelector('[data-field="title"]')?.focus?.());
+}
+
+async function createRequirementFromForm({ sourceName, title, description }) {
+  if (!rxdb || !rxdb.sources || !rxdb.requirements) {
+    await loadFromRxdb();
+  }
+  if (!rxdb?.sources || !rxdb?.requirements) {
+    throw new Error('RxDB collections sind nicht bereit.');
+  }
+  const now = Date.now();
+  const sourceId = `manualsrc_${now}_${Math.random().toString(16).slice(2, 8)}`;
+  const requirementId = `manualreq_${now}_${Math.random().toString(16).slice(2, 8)}`;
+
+  await rxdb.sources.upsert({
+    id: sourceId,
+    name: sourceName,
+    legalName: sourceName,
+    industry: '',
+    website: '',
+    locations: [],
+    hasRelation: false,
+    active: true,
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    status: 'active',
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+
+  await rxdb.requirements.upsert({
+    id: requirementId,
+    sourceId,
+    title,
+    aboutRole: description,
+    aboutSource: '',
+    objectRequirements: '',
+    responsibilities: [],
+    requirements: [],
+    benefits: [],
+    closingNotes: '',
+    locationIds: [],
+    workModel: 'Vollzeit',
+    rawText: description,
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    status: 'active',
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
 }
 
 if (!document.querySelector('[data-matching-module="native"]')) {

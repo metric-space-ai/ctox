@@ -9,6 +9,8 @@ const labels = {
     sources: 'Quellen',
     runbooks: 'Runbooks',
     selected: 'Ausgewählt',
+    noSelection: 'Kein Eintrag ausgewählt',
+    detailEmptyHint: 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.',
     loading: 'Knowledge wird geladen',
     noItems: 'Keine Knowledge-Einträge gefunden.',
     noRunbooks: 'Keine Runbooks vorhanden.',
@@ -22,6 +24,8 @@ const labels = {
     sources: 'Sources',
     runbooks: 'Runbooks',
     selected: 'Selected',
+    noSelection: 'No entry selected',
+    detailEmptyHint: 'Pick a knowledge entry on the left to view it here.',
     loading: 'Loading knowledge',
     noItems: 'No knowledge entries found.',
     noRunbooks: 'No runbooks available.',
@@ -131,8 +135,8 @@ function documentTemplate() {
         <header class="ctox-pane-header knowledge-center-head">
           <div class="ctox-pane-title-row">
             <div class="ctox-pane-titles">
-              <span class="ctox-pane-kicker" data-selected-kind>Knowledge</span>
-              <h2 class="ctox-pane-title" data-selected-title>Knowledge</h2>
+              <span class="ctox-pane-kicker" data-selected-kind>${escapeHtml(copy.selected)}</span>
+              <h2 class="ctox-pane-title" data-selected-title>${escapeHtml(copy.noSelection)}</h2>
             </div>
             <div class="ctox-pane-actions">
               <div class="ctox-pane-tabs segmented" role="tablist" aria-label="Knowledge Ansicht">
@@ -319,12 +323,17 @@ function wireLocalRealtime() {
 
 function renderEmptyKnowledgeSelection() {
   const copy = state.messages || labels[state.lang];
-  els.selectedKind.textContent = 'Knowledge';
-  els.selectedTitle.textContent = 'Knowledge';
+  // Right-column header is the detail-view, not a second "Knowledge" heading.
+  // When no item is selected, show a neutral kicker/title that does not duplicate
+  // the left-column "Knowledge" heading.
+  els.selectedKind.textContent = copy.selected || 'Selected';
+  els.selectedTitle.textContent = copy.noSelection || (state.lang === 'en' ? 'No entry selected' : 'Kein Eintrag ausgewählt');
   els.markdownEditor.hidden = true;
   els.markdownView.hidden = false;
   els.markdownEditor.value = '';
-  els.markdownView.innerHTML = `<p>${escapeHtml(copy.noItems)}</p>`;
+  // The list-pane on the left already shows the "no entries" empty-state.
+  // Don't repeat it inside the detail-view; show a brief hint instead.
+  els.markdownView.innerHTML = `<p>${escapeHtml(copy.detailEmptyHint || (state.lang === 'en' ? 'Pick a knowledge entry on the left to view it here.' : 'Wähle links einen Knowledge-Eintrag, um ihn hier anzuzeigen.'))}</p>`;
   els.tableHost.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.tableUnavailable)}</strong></div>`;
   if (els.runbookSwitcher) els.runbookSwitcher.innerHTML = '';
   if (els.runbookView) els.runbookView.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.noRunbooks)}</strong></div>`;
@@ -387,7 +396,7 @@ function buildKnowledgeBundles(items, runbooks, tables) {
       title: 'Drone Bearing Loads',
       domainLabel: 'Research / Drone Design',
       domain: 'drone_design',
-      summary: 'Skill, Skillbook, Runbook und DataFrames fuer Drone-Bearing-Load-Recherche.',
+      summary: 'Skill, Skillbook, Runbook und DataFrames für Drone-Bearing-Load-Recherche.',
       entries: droneEntries,
       runbookIds: runbooks.filter(isDroneBearingKnowledge).map((runbook) => `runbook:${runbook.id}`),
       primaryItemId: droneEntries.find((entry) => entry.kind === 'skillbook')?.id || droneEntries[0]?.id,
@@ -1362,7 +1371,7 @@ function openCreateKnowledgeBookDrawer() {
           <option value="imported">Imported</option>
         </select>
       </label>
-      <label>Beschreibung <textarea name="summary" rows="3" placeholder="Wofuer dieses Knowledge Book genutzt wird"></textarea></label>
+      <label>Beschreibung <textarea name="summary" rows="3" placeholder="Wofür dieses Knowledge Book genutzt wird"></textarea></label>
       <label>Initialer Inhalt <textarea name="markdown" rows="8" placeholder="# Titel&#10;&#10;Skill, Runbooks und Datenanforderungen beschreiben"></textarea></label>
     `,
     buildPayload: (data) => ({
@@ -1383,7 +1392,7 @@ function openCreateKnowledgeBookDrawer() {
 function openImportKnowledgeBookDrawer() {
   const body = knowledgeActionDrawer({
     title: 'Knowledge Book importieren',
-    subtitle: 'Markdown, Ordner, URL oder bestehende Runtime-Quelle in Knowledge uebernehmen',
+    subtitle: 'Markdown, Ordner, URL oder bestehende Runtime-Quelle in Knowledge übernehmen',
     actionLabel: 'Import starten',
     commandType: 'ctox.knowledge.book.import',
     recordId: 'knowledge:import',
@@ -1418,7 +1427,7 @@ function openImportKnowledgeBookDrawer() {
 function openExportKnowledgeBookDrawer() {
   const body = knowledgeActionDrawer({
     title: 'Knowledge Books exportieren',
-    subtitle: 'Ausgewaehlte Knowledge-Struktur als Datei oder Bundle erzeugen',
+    subtitle: 'Ausgewählte Knowledge-Struktur als Datei oder Bundle erzeugen',
     actionLabel: 'Export starten',
     commandType: 'ctox.knowledge.book.export',
     recordId: state.selectedSkillbookId || state.selectedGroupId || 'knowledge:export',

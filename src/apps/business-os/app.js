@@ -6238,8 +6238,8 @@ function showGlobalCtoxContextMenu(context, x, y) {
     <form class="ctox-context-chat-form" novalidate>
       <header style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 2px;">
         <div style="min-width: 0; flex: 1;">
-          <strong style="display: block; color: var(--text-strong, var(--text, #18222d)); font-size: 13px; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(titleText)}</strong>
-          <span style="display: block; color: var(--text-muted, var(--muted, #64747c)); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(subtitle)}</span>
+          <strong style="display: block; color: var(--text-strong, var(--text, #18222d)); font-size: 13px; font-weight: 800; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(titleText)}</strong>
+          <span style="display: block; color: var(--text-muted, var(--muted, #64747c)); font-size: 11px; font-weight: 600; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(subtitle)}</span>
         </div>
         <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}" style="width: 28px; height: 28px; line-height: 24px; text-align: center; font-size: 20px; border: none; background: none; color: var(--text-muted, var(--muted, #64747c)); cursor: pointer; transition: color 0.2s ease; padding: 0;">×</button>
       </header>

@@ -19,6 +19,8 @@
   "notCreated": "not created",
   "task": "Task",
   "created": "Created",
+  "updated": "Updated",
+  "severity": "Severity",
   "description": "Description",
   "noDescription": "No description provided.",
   "expectation": "Expectation",

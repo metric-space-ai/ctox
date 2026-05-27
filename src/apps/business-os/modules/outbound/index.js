@@ -7,6 +7,7 @@ import {
 } from '../../shared/universal-importer.js';
 import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 import {
   configureActiveOutreach,
   loadActiveOutreachData,
@@ -103,7 +104,7 @@ const RESEARCH_FIELD_DEFS = Object.freeze([
   ['country', 'Land'],
   ['postal_code', 'PLZ'],
   ['city', 'Ort'],
-  ['street', 'Strasse'],
+  ['street', 'Straße'],
   ['registry_court', 'Firmenbuchgericht'],
   ['registry_id', 'Register-ID'],
   ['status', 'Status'],
@@ -132,11 +133,11 @@ const DEFAULT_RESEARCH_FIELD_IDS_COMPACT = Object.freeze([
 ]);
 const CONTACT_FIELD_DEFS = Object.freeze([
   ['contact.people', 'Ansprechpartner', 'Gefundene relevante Personen, Rollen und kurze Einordnung.'],
-  ['contact.role', 'Rolle', 'Funktion, Senioritaet und Verantwortungsbereich der wichtigsten Ansprechpartner.'],
-  ['contact.email', 'E-Mail', 'Oeffentlich belegbare E-Mail-Adressen der Ansprechpartner.'],
-  ['contact.linkedin', 'LinkedIn', 'Oeffentlich belegbare LinkedIn- oder Profil-URLs.'],
-  ['contact.phone', 'Telefon', 'Oeffentlich belegbare Direktwahl oder zentrale Telefonnummer fuer den Kontakt.'],
-  ['contact.fit', 'Kontakt Fit', 'Warum diese Person fuer den Campaign Scope relevant ist.'],
+  ['contact.role', 'Rolle', 'Funktion, Seniorität und Verantwortungsbereich der wichtigsten Ansprechpartner.'],
+  ['contact.email', 'E-Mail', 'Öffentlich belegbare E-Mail-Adressen der Ansprechpartner.'],
+  ['contact.linkedin', 'LinkedIn', 'Öffentlich belegbare LinkedIn- oder Profil-URLs.'],
+  ['contact.phone', 'Telefon', 'Öffentlich belegbare Direktwahl oder zentrale Telefonnummer für den Kontakt.'],
+  ['contact.fit', 'Kontakt Fit', 'Warum diese Person für den Campaign Scope relevant ist.'],
   ['contact.status', 'Kontakt', 'Status der Ansprechpartner-Qualifizierung.'],
   ['lead.reason', 'Lead Grund', 'Warum der Ansprechpartner als Lead qualifiziert oder abgelehnt wurde.'],
   ['lead.status', 'Lead', 'Status der Lead-Qualifizierung.'],
@@ -662,7 +663,7 @@ async function ensureCampaignKnowledge(campaign) {
     '--id', refs.skillbookId,
     '--title', 'Business OS Outbound Campaigns',
     '--version', 'v1',
-    '--mission', 'Outbound Campaigns fuehren Firmenquellen ueber Unternehmensqualifikation, Ansprechpartner-Recherche und Lead-Qualifikation.',
+    '--mission', 'Outbound Campaigns führen Firmenquellen über Unternehmensqualifikation, Ansprechpartner-Recherche und Lead-Qualifikation.',
     '--runtime-policy', 'Nutze Knowledge DataFrames als einzige record-shaped Wissensquelle. Outbound speichert nur Workflow-State und Referenzen.',
     '--workflow-backbone', 'source-import,company-research,pipeline-contact-research,lead-qualification',
     '--linked-runbooks', refs.runbookId,
@@ -4639,7 +4640,7 @@ async function openCompanyImporter() {
     title: t('importJob', 'Importjob anlegen'),
     kicker: 'Outbound Import',
     defaultTitle: `${campaign.name} Import`,
-    helperText: t('importerHelperText', 'URL, PDF, Text oder Excel liefern Unternehmen fuer den Input-Funnel. Der Importer extrahiert daraus Unternehmen; Personen werden erst spaeter in der Pipeline recherchiert.'),
+    helperText: t('importerHelperText', 'URL, PDF, Text oder Excel liefern Unternehmen für den Input-Funnel. Der Importer extrahiert daraus Unternehmen; Personen werden erst später in der Pipeline recherchiert.'),
     filterPromptLabel: t('importFilter', 'Importfilter'),
     filterPromptPlaceholder: t('filterPromptPlaceholder', 'z.B. nur Firmen mit Sitz in Deutschland'),
     defaultFilterPrompt: t('defaultFilterPrompt', 'Nur Firmen mit Sitz in Deutschland importieren.'),
@@ -5041,8 +5042,8 @@ async function queueCompanyResearch(companyId, options = {}) {
     payload: {
       title: t('researchCompanyDataTitle', 'Unternehmensdaten recherchieren: {0}', company.name),
       instruction: options.reason === 'custom_fields_added'
-        ? t('researchCompanyDataNew', 'Recherchiere die neu hinzugefuegten Unternehmensdaten-Kategorien fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.')
-        : t('researchCompanyDataStandard', 'Recherchiere nur Unternehmensdaten fuer die Outbound-Qualifizierung. Schreibe das Ergebnis ausschliesslich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'),
+        ? t('researchCompanyDataNew', 'Recherchiere die neu hinzugefügten Unternehmensdaten-Kategorien für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.')
+        : t('researchCompanyDataStandard', 'Recherchiere nur Unternehmensdaten für die Outbound-Qualifizierung. Schreibe das Ergebnis ausschließlich in den angegebenen Knowledge DataFrame. Keine Personen adressieren und keine Outreach-Nachricht erstellen.'),
       research_request: {
         tool: 'ctox web research',
         mode: 'new_record',
@@ -5127,7 +5128,7 @@ async function queueContactResearch(pipelineId) {
     inbound_channel: 'business_os.outbound',
     payload: {
       title: `Ansprechpartner recherchieren: ${item.company_name}`,
-      instruction: 'Jetzt beginnt die Pipeline-Stufe: Recherchiere relevante oeffentlich belegbare Ansprechpartner und Rollen fuer eine spaetere Ansprache. Schreibe Kontakte ausschliesslich in den angegebenen Knowledge Contacts DataFrame.',
+      instruction: 'Jetzt beginnt die Pipeline-Stufe: Recherchiere relevante öffentlich belegbare Ansprechpartner und Rollen für eine spätere Ansprache. Schreibe Kontakte ausschließlich in den angegebenen Knowledge Contacts DataFrame.',
       company_id: item.company_id,
       pipeline_id: item.id,
       contact_fields: contactFields,
@@ -5201,7 +5202,7 @@ async function queueLeadQualification(pipelineId) {
     inbound_channel: 'business_os.outbound',
     payload: {
       title: `Lead qualifizieren: ${item.company_name}`,
-      instruction: 'Qualifiziere die recherchierten Ansprechpartner gegen den Campaign Scope/ICP. Schreibe die Lead-Qualifikation ausschliesslich in den Knowledge Contacts DataFrame. Keine Outreach-Nachricht senden.',
+      instruction: 'Qualifiziere die recherchierten Ansprechpartner gegen den Campaign Scope/ICP. Schreibe die Lead-Qualifikation ausschließlich in den Knowledge Contacts DataFrame. Keine Outreach-Nachricht senden.',
       company_id: item.company_id,
       pipeline_id: item.id,
       campaign: { id: campaign.id, name: campaign.name, objective: campaign.objective, scope: campaign.payload?.scope || '' },
@@ -5645,109 +5646,47 @@ function setupOutboundColumnResizing() {
   const root = state.ctx?.host?.querySelector?.('[data-outbound-root]');
   if (!root) return null;
 
-  const handle = document.createElement('div');
-  handle.className = 'outbound-col-resizer';
-  handle.dataset.resizer = 'left';
-  handle.setAttribute('role', 'separator');
-  handle.setAttribute('aria-orientation', 'vertical');
-  handle.setAttribute('aria-label', 'Spaltenbreite anpassen');
-  root.append(handle);
+  const handle = root.querySelector('[data-outbound-column-resizer]');
+  if (!handle) return null;
 
-  let activeWidths = null;
-  let persistedRatios = readOutboundColumnLayout();
-  let dragState = null;
-  let resizeRaf = 0;
-
-  const applyWidths = (widths) => {
-    if (!widths) return;
-    root.style.gridTemplateColumns = `${widths.left}px ${widths.center}px`;
-    root.dataset.leftCompact = widths.left <= 360 ? 'true' : 'false';
-  };
-  const placeHandle = (metrics, widths) => {
-    if (!metrics || !widths) return;
-    handle.style.left = `${Math.round(widths.left + (metrics.gap / 2) + metrics.padLeft)}px`;
-  };
-  const persistCurrentLayout = () => {
-    const ratios = columnPixelsToRatios(activeWidths);
-    if (!ratios) return;
-    persistedRatios = ratios;
-    writeOutboundColumnLayout(ratios);
-  };
-  const syncLayout = () => {
-    const metrics = getOutboundGridMetrics(root);
-    if (!metrics || metrics.trackTotal < OUTBOUND_COL_MIN.left + OUTBOUND_COL_MIN.center) {
-      root.style.removeProperty('grid-template-columns');
-      delete root.dataset.leftCompact;
-      handle.hidden = true;
-      return;
-    }
-    let nextWidths = persistedRatios ? columnRatiosToPixels(persistedRatios, metrics.trackTotal) : null;
-    if (!nextWidths) nextWidths = clampOutboundColumns(readOutboundGridTrackPixels(root), metrics.trackTotal);
-    if (!nextWidths) return;
-    activeWidths = nextWidths;
-    applyWidths(activeWidths);
-    placeHandle(metrics, activeWidths);
-    handle.hidden = false;
-  };
-  const stopDrag = () => {
-    if (!dragState) return;
-    dragState = null;
-    handle.classList.remove('is-active');
-    document.body.classList.remove('is-outbound-col-resizing');
-    persistCurrentLayout();
-  };
-  const startDrag = (event) => {
-    const metrics = getOutboundGridMetrics(root);
-    if (!metrics || metrics.trackTotal < OUTBOUND_COL_MIN.left + OUTBOUND_COL_MIN.center) return;
-    const initial = activeWidths || clampOutboundColumns(readOutboundGridTrackPixels(root), metrics.trackTotal);
-    if (!initial) return;
-    activeWidths = initial;
-    dragState = {
-      appRect: root.getBoundingClientRect(),
-      metrics,
-      widths: { ...initial },
-    };
-    handle.classList.add('is-active');
-    document.body.classList.add('is-outbound-col-resizing');
-    event.preventDefault();
-  };
-  const handleDragMove = (event) => {
-    if (!dragState) return;
-    const { appRect, metrics } = dragState;
-    const pointerX = event.clientX - appRect.left - metrics.padLeft;
-    const rawLeft = clampNumber(pointerX - (metrics.gap / 2), OUTBOUND_COL_MIN.left, metrics.trackTotal - OUTBOUND_COL_MIN.center);
-    const left = clampNumber(rawLeft, OUTBOUND_COL_MIN.left, Math.min(OUTBOUND_COL_LEFT_MAX, metrics.trackTotal - OUTBOUND_COL_MIN.center));
-    activeWidths = clampOutboundColumns({ left, center: metrics.trackTotal - left }, metrics.trackTotal);
-    if (!activeWidths) return;
-    applyWidths(activeWidths);
-    placeHandle(metrics, activeWidths);
-  };
-  const handleResize = () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0;
-      syncLayout();
-    });
+  const applyCompact = (widthPx) => {
+    root.dataset.leftCompact = widthPx <= 360 ? 'true' : 'false';
   };
 
-  handle.addEventListener('pointerdown', startDrag);
-  window.addEventListener('pointermove', handleDragMove);
-  window.addEventListener('pointerup', stopDrag);
-  window.addEventListener('pointercancel', stopDrag);
-  window.addEventListener('blur', stopDrag);
-  window.addEventListener('resize', handleResize);
-  syncLayout();
+  // Hydrate persisted width.
+  let initialWidth = null;
+  try {
+    const raw = window.localStorage.getItem(OUTBOUND_LAYOUT_KEY);
+    const stored = Number(raw);
+    if (Number.isFinite(stored) && stored > 0) initialWidth = stored;
+  } catch {
+    /* storage unavailable */
+  }
+  if (!Number.isFinite(initialWidth)) initialWidth = 360;
+  const clampedInitial = clampNumber(initialWidth, OUTBOUND_COL_MIN.left, OUTBOUND_COL_LEFT_MAX);
+  root.style.setProperty('--outbound-left-width', `${clampedInitial}px`);
+  applyCompact(clampedInitial);
+
+  const resizer = new CtoxResizer({
+    resizerEl: handle,
+    containerEl: root,
+    cssVar: '--outbound-left-width',
+    side: 'left',
+    minWidth: OUTBOUND_COL_MIN.left,
+    maxWidth: OUTBOUND_COL_LEFT_MAX,
+    onResize: (width) => {
+      applyCompact(width);
+      try {
+        window.localStorage.setItem(OUTBOUND_LAYOUT_KEY, String(Math.round(width)));
+      } catch {
+        /* storage unavailable */
+      }
+    },
+  });
 
   return () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    window.removeEventListener('pointermove', handleDragMove);
-    window.removeEventListener('pointerup', stopDrag);
-    window.removeEventListener('pointercancel', stopDrag);
-    window.removeEventListener('blur', stopDrag);
-    window.removeEventListener('resize', handleResize);
-    document.body.classList.remove('is-outbound-col-resizing');
+    resizer.destroy();
     delete root.dataset.leftCompact;
-    handle.remove();
   };
 }
 
@@ -5875,85 +5814,6 @@ function readCenterSplitRatio() {
 function writeCenterSplitRatio(value) {
   try {
     if (Number.isFinite(value)) window.localStorage.setItem(OUTBOUND_CENTER_SPLIT_KEY, String(value));
-  } catch {
-    // Ignore unavailable storage.
-  }
-}
-
-function getOutboundGridMetrics(root) {
-  if (!root) return null;
-  const cs = getComputedStyle(root);
-  const gap = Number.parseFloat(cs.columnGap || cs.gap || '0') || 0;
-  const padLeft = Number.parseFloat(cs.paddingLeft || '0') || 0;
-  const padRight = Number.parseFloat(cs.paddingRight || '0') || 0;
-  const contentWidth = Math.max(0, root.clientWidth - padLeft - padRight);
-  const trackTotal = Math.max(0, contentWidth - gap);
-  return { gap, padLeft, contentWidth, trackTotal };
-}
-
-function readOutboundGridTrackPixels(root) {
-  if (!root) return null;
-  const tracks = String(getComputedStyle(root).gridTemplateColumns || '')
-    .split(/\s+/)
-    .map((part) => Number.parseFloat(part))
-    .filter((number) => Number.isFinite(number) && number > 0);
-  if (tracks.length < 2) return null;
-  return { left: tracks[0], center: tracks[1] };
-}
-
-function clampOutboundColumns(widths, trackTotal) {
-  if (!widths || !Number.isFinite(trackTotal) || trackTotal <= 0) return null;
-  if (trackTotal < OUTBOUND_COL_MIN.left + OUTBOUND_COL_MIN.center) return null;
-  const maxLeft = Math.max(OUTBOUND_COL_MIN.left, Math.min(OUTBOUND_COL_LEFT_MAX, trackTotal - OUTBOUND_COL_MIN.center));
-  const left = Math.round(clampNumber(Number(widths.left) || OUTBOUND_COL_MIN.left, OUTBOUND_COL_MIN.left, maxLeft));
-  const center = Math.round(trackTotal - left);
-  if (center < OUTBOUND_COL_MIN.center) return null;
-  return { left, center };
-}
-
-function columnPixelsToRatios(widths) {
-  if (!widths) return null;
-  const left = Number(widths.left) || 0;
-  const center = Number(widths.center) || 0;
-  const sum = left + center;
-  if (sum <= 0) return null;
-  return {
-    left: Number((left / sum).toFixed(6)),
-    center: Number((center / sum).toFixed(6)),
-  };
-}
-
-function sanitizeOutboundColumnLayout(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const left = Number(raw.left);
-  const center = Number(raw.center);
-  if (![left, center].every(Number.isFinite)) return null;
-  if (left <= 0 || center <= 0) return null;
-  const sum = left + center;
-  if (sum <= 0) return null;
-  return { left: left / sum, center: center / sum };
-}
-
-function columnRatiosToPixels(ratios, trackTotal) {
-  const safe = sanitizeOutboundColumnLayout(ratios);
-  if (!safe) return null;
-  return clampOutboundColumns({
-    left: safe.left * trackTotal,
-    center: safe.center * trackTotal,
-  }, trackTotal);
-}
-
-function readOutboundColumnLayout() {
-  try {
-    return sanitizeOutboundColumnLayout(JSON.parse(window.localStorage.getItem(OUTBOUND_LAYOUT_KEY) || 'null'));
-  } catch {
-    return null;
-  }
-}
-
-function writeOutboundColumnLayout(ratios) {
-  try {
-    window.localStorage.setItem(OUTBOUND_LAYOUT_KEY, JSON.stringify(ratios));
   } catch {
     // Ignore unavailable storage.
   }

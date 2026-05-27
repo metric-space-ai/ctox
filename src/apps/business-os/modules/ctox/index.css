@@ -497,6 +497,27 @@ body.ctox-column-resizing {
   background: color-mix(in srgb, var(--ctox-accent) 8%, var(--ctox-surface-2));
 }
 
+.ctox-web-stack-status {
+  display: block;
+  margin: 4px 0 0;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--ctox-surface-2) 80%, transparent);
+  color: var(--ctox-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.ctox-web-stack-status.is-status {
+  background: color-mix(in srgb, var(--ctox-accent) 8%, var(--ctox-surface-2));
+  color: var(--text);
+}
+
+.ctox-web-stack-status.is-notice {
+  background: color-mix(in srgb, var(--ctox-accent) 10%, transparent);
+  color: var(--ctox-accent);
+}
+
 .ctox-inbound-list span,
 .ctox-inbound-list small {
   min-width: 0;

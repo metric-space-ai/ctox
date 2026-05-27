@@ -12,7 +12,6 @@ const DEFAULT_GRID_DATA = [
   ['Premium Widget', '12500', '14200', '15800', '18900', '=SUM(B2:E2)'],
   ['Standard Gadget', '8400', '9100', '9800', '10500', '=SUM(B3:E3)'],
   ['Basic Service', '2300', '2500', '2900', '3100', '=SUM(B4:E4)'],
-  ['', '', '', '', '', ''],
   ['Total', '=SUM(B2:B4)', '=SUM(C2:C4)', '=SUM(D2:D4)', '=SUM(E2:E4)', '=SUM(F2:F4)']
 ];
 
@@ -22,7 +21,7 @@ const DEFAULT_GRID_COLUMNS = [
   { type: 'numeric', title: 'C', width: '100px', mask: '$ #.##0,00' },
   { type: 'numeric', title: 'D', width: '100px', mask: '$ #.##0,00' },
   { type: 'numeric', title: 'E', width: '100px', mask: '$ #.##0,00' },
-  { type: 'text', title: 'F', width: '120px' }
+  { type: 'numeric', title: 'F', width: '120px', mask: '$ #.##0,00' }
 ];
 
 const SYSTEMATIC_SPREADSHEET_RUNBOOKS = [
@@ -30,23 +29,23 @@ const SYSTEMATIC_SPREADSHEET_RUNBOOKS = [
     id: 'spreadsheet.summarize',
     document_type: 'spreadsheet',
     title: 'Tabelle zusammenfassen',
-    description: 'Fasse das ausgewaehlte Spreadsheet strukturiert zusammen, analysiere Gesamtsummen und identifiziere Trends.',
+    description: 'Fasse das ausgewählte Spreadsheet strukturiert zusammen, analysiere Gesamtsummen und identifiziere Trends.',
     command_type: 'spreadsheet.summarize',
-    prompt_template: 'Fasse das ausgewaehlte Spreadsheet strukturiert zusammen. Analysiere Gesamtsummen, identifiziere Trends, beschreibe Ausreisser und erstelle eine managementtaugliche Zusammenfassung.'
+    prompt_template: 'Fasse das ausgewählte Spreadsheet strukturiert zusammen. Analysiere Gesamtsummen, identifiziere Trends, beschreibe Ausreißer und erstelle eine managementtaugliche Zusammenfassung.'
   },
   {
     id: 'spreadsheet.audit-formulas',
     document_type: 'spreadsheet',
     title: 'Formeln auditieren',
-    description: 'Finde saemtliche Formeln in dieser Tabelle und pruefe sie auf Fehler, Zirkelbezuege oder logische Inkonsistenzen.',
+    description: 'Finde sämtliche Formeln in dieser Tabelle und prüfe sie auf Fehler, Zirkelbezüge oder logische Inkonsistenzen.',
     command_type: 'spreadsheet.audit-formulas',
-    prompt_template: 'Scanne diese Tabelle nach allen Formeln. Analysiere sie auf syntaktische Fehler, logische Inkonsistenzen, unvollstaendige Summenbereiche, fehlende oder fehlerhafte Referenzen und liefere Korrekturempfehlungen.'
+    prompt_template: 'Scanne diese Tabelle nach allen Formeln. Analysiere sie auf syntaktische Fehler, logische Inkonsistenzen, unvollständige Summenbereiche, fehlende oder fehlerhafte Referenzen und liefere Korrekturempfehlungen.'
   },
   {
     id: 'spreadsheet.risk-review',
     document_type: 'spreadsheet',
     title: 'Finanzielle Risikoanalyse',
-    description: 'Identifiziere finanzielle Risiken, unplausible Kennzahlen, starke Margenabweichungen und auffaellige Transaktionen.',
+    description: 'Identifiziere finanzielle Risiken, unplausible Kennzahlen, starke Margenabweichungen und auffällige Transaktionen.',
     command_type: 'spreadsheet.risk-review',
     prompt_template: 'Führe ein finanzielles Review dieser Daten aus. Suche nach auffälligen Margensprüngen, ungewöhnlichen Datenmustern, Budgetüberschreitungen und potenziellen betriebswirtschaftlichen Risiken. Gib konkrete Handlungsempfehlungen.'
   }
@@ -461,7 +460,7 @@ async function loadSelectedVersion(state) {
           limit: 1,
         }).exec(),
         4500,
-        `Keine Versionen fuer ${record.id} gefunden.`,
+        `Keine Versionen für ${record.id} gefunden.`,
       );
       doc = fallback[0] || null;
       if (doc) {
@@ -830,6 +829,7 @@ function recalculateSpreadsheet(state) {
 
   try {
     const rawData = state.editorHandle.getData();
+    const columns = state.editorHandle.options?.columns || [];
     // Rebuild HyperFormula using the raw data containing formulas
     const hf = HyperFormula.buildFromArray(rawData);
 
@@ -840,7 +840,9 @@ function recalculateSpreadsheet(state) {
           const calcVal = hf.getCellValue({ sheet: 0, col: c, row: r });
           const cellElement = state.editorHandle.getCell(c, r);
           if (cellElement) {
-            cellElement.textContent = calcVal !== null ? calcVal : '';
+            const colDef = columns[c] || {};
+            const displayVal = formatCellForDisplay(calcVal, colDef);
+            cellElement.textContent = displayVal;
             if (String(calcVal).startsWith('#')) {
               cellElement.classList.add('formula-error');
             } else {
@@ -860,6 +862,41 @@ function recalculateSpreadsheet(state) {
   } finally {
     state.isRecalculating = false;
   }
+}
+
+// Apply the column's numeric mask (e.g. "$ #.##0,00") to a calculated value so
+// formula results in numeric columns render with the same formatting as the
+// typed numeric cells above them. Mirrors jSuites' mask conventions: '.' is the
+// thousands separator and ',' is the decimal separator.
+function formatCellForDisplay(value, colDef) {
+  if (value === null || value === undefined || value === '') return '';
+  const type = colDef?.type;
+  const mask = colDef?.mask;
+  if (type !== 'numeric' || !mask) {
+    return String(value);
+  }
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+
+  // Detect prefix/suffix around the numeric template.
+  const numericTemplateMatch = mask.match(/[0#.,]+/);
+  if (!numericTemplateMatch) return String(num);
+  const template = numericTemplateMatch[0];
+  const prefix = mask.slice(0, numericTemplateMatch.index);
+  const suffix = mask.slice(numericTemplateMatch.index + template.length);
+
+  // Determine decimal precision from the template's fractional part.
+  const decimalIdx = template.lastIndexOf(',');
+  const decimals = decimalIdx >= 0 ? template.length - decimalIdx - 1 : 0;
+
+  const fixed = num.toFixed(decimals);
+  const [intPartRaw, fracPart = ''] = fixed.split('.');
+  const sign = intPartRaw.startsWith('-') ? '-' : '';
+  const intDigits = sign ? intPartRaw.slice(1) : intPartRaw;
+  const intWithGroups = intDigits.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const body = decimals > 0 ? `${intWithGroups},${fracPart}` : intWithGroups;
+
+  return `${prefix}${sign}${body}${suffix}`;
 }
 
 function markSpreadsheetAsDirty(state) {
@@ -1109,7 +1146,7 @@ function openImportModal(state) {
   wrapper.innerHTML = `
     <form data-spreadsheets-import-form>
       <label>
-        <span>${escapeHtml(state.t('file', 'Datei auswaehlen (CSV oder JSON)'))}</span>
+        <span>${escapeHtml(state.t('file', 'Datei auswählen (CSV oder JSON)'))}</span>
         <input type="file" accept=".csv,.json" required data-import-file>
       </label>
       <label style="margin-top: 8px;">

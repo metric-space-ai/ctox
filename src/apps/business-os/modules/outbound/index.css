@@ -15,9 +15,10 @@
   --outbound-icon-runbook: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M5 4.5A2.5 2.5 0 0 1 7.5 2H20v17H7.5A2.5 2.5 0 0 0 5 21.5v-17ZM7.5 4a.5.5 0 0 0-.5.5v13.1c.2 0 .3-.1.5-.1H18V4H7.5ZM9 7h7v2H9V7Zm0 4h6v2H9v-2Z'/%3E%3C/svg%3E");
   --outbound-icon-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19.4 13.5c.1-.5.1-1 .1-1.5s0-1-.1-1.5l2-1.5-2-3.5-2.4 1a8 8 0 0 0-2.6-1.5L14 2h-4l-.4 2.5A8 8 0 0 0 7 6L4.6 5l-2 3.5 2 1.5A9 9 0 0 0 4.5 12c0 .5 0 1 .1 1.5l-2 1.5 2 3.5 2.4-1a8 8 0 0 0 2.6 1.5L10 22h4l.4-2.5A8 8 0 0 0 17 18l2.4 1 2-3.5-2-1.5ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z'/%3E%3C/svg%3E");
   --outbound-icon-export: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 20h2v-8.2l2.9 2.9 1.4-1.4L12 8l-5.3 5.3 1.4 1.4 2.9-2.9V20ZM6 4v3h2V6h8v1h2V4H6Z'/%3E%3C/svg%3E");
+  --outbound-left-width: 360px;
   display: grid;
-  grid-template-columns: minmax(260px, 0.82fr) minmax(680px, 1.55fr);
-  gap: 12px;
+  grid-template-columns: var(--outbound-left-width) 12px minmax(0, 1fr);
+  gap: 0;
   height: 100%;
   min-height: 0;
   padding: 12px;
@@ -26,50 +27,6 @@
   background: var(--outbound-bg);
   color: var(--outbound-text);
   font: 14px/1.5 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
-}
-
-.outbound-col-resizer {
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  width: 12px;
-  transform: translateX(-50%);
-  cursor: col-resize;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-
-.outbound-col-resizer[hidden] {
-  display: none;
-}
-
-.outbound-col-resizer::before {
-  content: "";
-  width: 4px;
-  height: 48px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--line);
-  opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.outbound-col-resizer:hover::before,
-.outbound-col-resizer.is-active::before {
-  opacity: 1;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--outbound-accent) 18%, transparent);
-}
-
-body.is-outbound-col-resizing,
-body.is-outbound-col-resizing *,
-body.is-outbound-center-resizing,
-body.is-outbound-center-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
 }
 
 .outbound-pane {
@@ -97,11 +54,26 @@ body.is-outbound-center-resizing * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  /* flex-wrap so the action cluster ("Outreach ▶" + "+") drops below the title in
+     narrow left panes instead of overlapping the "Campaigns" h2. */
+  flex-wrap: wrap;
+  gap: 8px 10px;
   min-height: 50px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--outbound-line);
   background: var(--outbound-surface);
+}
+
+.outbound-pane-header > div:first-child {
+  /* Title block claims its natural width first so the action cluster wraps,
+     never the reverse (which would push the title off-screen). */
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.outbound-pane-header .outbound-actions {
+  flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .outbound-pane-header span,
@@ -578,12 +550,15 @@ body.is-outbound-center-resizing * {
 
 .outbound-funnel-stage b {
   display: block;
-  overflow: hidden;
   font-size: 11px;
   font-weight: 830;
   line-height: 1.1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Allow long German labels (Unternehmen, Ansprechpartner, Reservierung) to wrap
+     instead of being truncated to "Unter…" / "Anspr…". Hyphenate where possible
+     to keep narrow columns readable. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  hyphens: auto;
 }
 
 .outbound-funnel-stage small {
@@ -593,9 +568,9 @@ body.is-outbound-center-resizing * {
   font-size: 10px;
   font-weight: 760;
   line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  hyphens: auto;
 }
 
 .outbound-funnel-stage i {

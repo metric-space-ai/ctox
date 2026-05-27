@@ -19,6 +19,8 @@
   "notCreated": "nicht angelegt",
   "task": "Task",
   "created": "Angelegt",
+  "updated": "Aktualisiert",
+  "severity": "Prioritaet",
   "description": "Beschreibung",
   "noDescription": "Keine Beschreibung hinterlegt.",
   "expectation": "Erwartung",

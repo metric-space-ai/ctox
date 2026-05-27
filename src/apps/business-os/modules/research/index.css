@@ -9,9 +9,11 @@
   --research-good: oklch(0.56 0.11 153);
   --research-warn: oklch(0.68 0.12 78);
   --research-risk: oklch(0.56 0.14 28);
+  --research-left-width: 320px;
+  --research-right-width: 300px;
   display: grid;
-  grid-template-columns: minmax(300px, 0.95fr) minmax(560px, 1.75fr) minmax(280px, 0.8fr);
-  gap: 12px;
+  grid-template-columns: var(--research-left-width) 12px minmax(0, 1fr) 12px var(--research-right-width);
+  gap: 0;
   height: 100%;
   min-height: 0;
   padding: 12px;
@@ -20,48 +22,6 @@
   background: var(--research-bg);
   color: var(--research-text);
   font: 14px/1.45 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
-}
-
-.research-col-resizer {
-  position: absolute;
-  top: 12px;
-  bottom: 12px;
-  width: 12px;
-  transform: translateX(-50%);
-  cursor: col-resize;
-  z-index: 30;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  touch-action: none;
-}
-
-.research-col-resizer[hidden] {
-  display: none;
-}
-
-.research-col-resizer::before {
-  content: "";
-  width: 4px;
-  height: 48px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--line);
-  opacity: 0.5;
-  transition: opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.research-col-resizer:hover::before,
-.research-col-resizer.is-active::before {
-  opacity: 1;
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--research-accent) 18%, transparent);
-}
-
-body.is-research-col-resizing,
-body.is-research-col-resizing * {
-  cursor: col-resize !important;
-  user-select: none !important;
 }
 
 .research-pane {

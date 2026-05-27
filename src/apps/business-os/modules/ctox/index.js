@@ -124,7 +124,9 @@ const labels = {
     webStackVerifyCredential: 'Prüfen',
     webStackAuthAssist: 'Login im Browser',
     webStackRxdbOnly: 'Browser-Stream über RxDB, Secrets im CTOX Secret Store.',
-    webStackLoading: 'Web Stack wird geladen.',
+    webStackLoading: 'Web Stack Projektion wird geladen…',
+    webStackConnecting: 'Verbindung zum CTOX-Backend wird hergestellt…',
+    webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
     webStackCredentialSaved: 'Credential gespeichert.',
     webStackAuthQueued: 'Browser-Login angefordert.',
     webStackRecentCaptures: 'Letzte Captures',
@@ -240,7 +242,9 @@ const labels = {
     webStackVerifyCredential: 'Verify',
     webStackAuthAssist: 'Login in Browser',
     webStackRxdbOnly: 'Browser stream over RxDB, secrets in CTOX Secret Store.',
-    webStackLoading: 'Loading Web Stack.',
+    webStackLoading: 'Loading Web Stack projection…',
+    webStackConnecting: 'Connecting to the CTOX backend…',
+    webStackUnavailable: 'Web Stack is currently unreachable.',
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
     webStackRecentCaptures: 'Recent captures',
@@ -738,6 +742,8 @@ function webStackPanel(state) {
     </article>
   `).join('');
 
+  const friendlyStatus = friendlyWebStackStatus(webStack, t);
+  const statusTone = webStack.error ? 'is-status' : (webStack.notice ? 'is-notice' : '');
   return `
     <section class="ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
       <header>
@@ -747,7 +753,7 @@ function webStackPanel(state) {
         </div>
         <button type="button" data-webstack-refresh aria-label="${escapeAttr(t.webStack)} aktualisieren">↻</button>
       </header>
-      <p>${escapeHtml(webStack.error || webStack.notice || t.webStackRxdbOnly)}</p>
+      <p class="ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</p>
       ${sourceOptions ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
       <div class="ctox-web-stack-source-list">
         ${rows || `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}</small>`}
@@ -762,6 +768,18 @@ function webStackPanel(state) {
       </div>
     </section>
   `;
+}
+
+function friendlyWebStackStatus(webStack, t) {
+  if (webStack?.loading) return t.webStackLoading;
+  const raw = String(webStack?.error || '').trim();
+  if (!raw) return webStack?.notice || t.webStackRxdbOnly;
+  const lower = raw.toLowerCase();
+  if (lower.includes('projection is not available') || lower.includes('rxdb')) return t.webStackConnecting;
+  if (lower.includes('not available') || lower.includes('unavailable')) return t.webStackUnavailable;
+  if (lower.includes('command bus')) return t.webStackConnecting;
+  // Unknown error shape — never surface raw stack/projection error text in the UI.
+  return t.webStackUnavailable;
 }
 
 function recentWebStackBrowserCaptures(state) {
@@ -2447,7 +2465,7 @@ async function verifyWebStackCredential(state, sourceId, secretName) {
     error: '',
     notice: configured
       ? `${secretName || sourceId}: Credential ist im CTOX Secret Store vorhanden.`
-      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgruenden ausserhalb von RxDB.`,
+      : `${secretName || sourceId}: Credential fehlt im CTOX Secret Store. Hinterlegen bleibt aus Datenschutzgründen außerhalb von RxDB.`,
   };
   renderLeft(state);
 }
@@ -2918,8 +2936,13 @@ function flowSourceView(state) {
       status: t.connected,
     };
   }
+  // Suppress the placeholder "Unavailable / unavailable" pair: when no flow data
+  // is available, show the CTOX core mode with a clear "not live" status instead
+  // of leaking the raw 'unavailable' enum value into the UI.
+  const rawMode = state.flow?.mode || 'ctox_core';
+  const mode = rawMode === 'unavailable' ? displayFlowMode('ctox_core') : displayFlowMode(rawMode);
   return {
-    mode: displayFlowMode(state.flow?.mode || 'ctox_core'),
+    mode,
     status: state.flow?.ok ? t.connected : t.notLive,
   };
 }

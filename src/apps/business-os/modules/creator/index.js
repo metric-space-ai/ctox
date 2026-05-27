@@ -579,14 +579,15 @@ function generateAllFiles() {
 }
 
 .${appId}-layout {
-  display: flex;
+  --${appId}-left-width: 300px;
+  display: grid;
+  grid-template-columns: var(--${appId}-left-width) 12px minmax(0, 1fr);
   width: 100%;
   height: 100%;
 }
 
 .${appId}-left {
-  width: 300px;
-  flex: 0 0 300px;
+  min-width: 0;
   border-right: 1px solid var(--line);
   display: flex;
   flex-direction: column;
@@ -594,7 +595,7 @@ function generateAllFiles() {
 }
 
 .${appId}-center {
-  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg-1);
@@ -659,6 +660,7 @@ function generateAllFiles() {
 
   // 5. index.js
   state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const labels = {
   de: {
@@ -802,55 +804,30 @@ function applyTranslations(root, t) {
 }
 
 function setupResizers(host) {
-  const leftPane = host.querySelector('.${appId}-left');
-  const resizer = host.querySelector('[data-resizer="left"]');
-  if (!leftPane || !resizer) return () => {};
+  const containerEl = host.querySelector('.${appId}-layout') || host;
+  const resizerEl = host.querySelector('[data-resizer="left"]');
+  if (!resizerEl) return () => {};
 
-  let leftWidth = parseInt(localStorage.getItem('ctox.${appId}.leftWidth') || '300', 10);
-  const applyWidth = () => {
-    leftPane.style.width = \`\${leftWidth}px\`;
-    leftPane.style.flex = \`0 0 \${leftWidth}px\`;
-  };
-  applyWidth();
+  const storageKey = 'ctox.${appId}.leftWidth';
+  const cssVar = '--${appId}-left-width';
 
-  let activeDrag = false;
-  let startX = 0;
-  let startWidth = 0;
+  const saved = parseInt(localStorage.getItem(storageKey) || '300', 10);
+  containerEl.style.setProperty(cssVar, \`\${saved}px\`);
 
-  const onPointerDown = (e) => {
-    activeDrag = true;
-    startX = e.clientX;
-    startWidth = leftWidth;
-    resizer.classList.add('is-dragging');
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-    e.preventDefault();
-  };
-
-  const onPointerMove = (e) => {
-    if (!activeDrag) return;
-    const deltaX = e.clientX - startX;
-    leftWidth = Math.min(550, Math.max(220, startWidth + deltaX));
-    applyWidth();
-  };
-
-  const onPointerUp = () => {
-    if (!activeDrag) return;
-    activeDrag = false;
-    resizer.classList.remove('is-dragging');
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    localStorage.setItem('ctox.${appId}.leftWidth', leftWidth);
-  };
-
-  resizer.addEventListener('pointerdown', onPointerDown);
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
+  const resizer = new CtoxResizer({
+    resizerEl,
+    containerEl,
+    cssVar,
+    side: 'left',
+    minWidth: 220,
+    maxWidth: 550,
+    onResize: (width) => {
+      localStorage.setItem(storageKey, String(Math.round(width)));
+    },
+  });
 
   return () => {
-    resizer.removeEventListener('pointerdown', onPointerDown);
-    window.removeEventListener('pointermove', onPointerMove);
-    window.removeEventListener('pointerup', onPointerUp);
+    resizer.destroy();
   };
 }
 

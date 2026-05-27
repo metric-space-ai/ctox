@@ -93,8 +93,10 @@ export async function mount(ctx) {
   // Set initial diagnostics state
   updateUI();
 
-  // Run initial diagnostic refresh
-  refreshAllData();
+  // Run initial diagnostic refresh with a timeout safety net so the
+  // "Loading workspaces..." placeholder cannot hang indefinitely when the
+  // backend is unreachable.
+  startInitialLoadWithTimeout();
 
   // Polling loop for active diagnostic status
   const intervalId = setInterval(() => {
@@ -105,9 +107,56 @@ export async function mount(ctx) {
 
   return () => {
     clearInterval(intervalId);
+    if (state.initialLoadTimer) clearTimeout(state.initialLoadTimer);
     resizers.forEach(r => r.destroy());
     styleLink.remove();
   };
+}
+
+const INITIAL_LOAD_TIMEOUT_MS = 10000;
+
+function startInitialLoadWithTimeout() {
+  state.initialLoadDone = false;
+  if (state.initialLoadTimer) clearTimeout(state.initialLoadTimer);
+
+  state.initialLoadTimer = setTimeout(() => {
+    if (state.initialLoadDone) return;
+    showWorkspacesTimeoutState();
+  }, INITIAL_LOAD_TIMEOUT_MS);
+
+  refreshAllData()
+    .catch((err) => console.warn('[coding-agents] initial refresh failed', err))
+    .finally(() => {
+      state.initialLoadDone = true;
+      if (state.initialLoadTimer) {
+        clearTimeout(state.initialLoadTimer);
+        state.initialLoadTimer = null;
+      }
+    });
+}
+
+function showWorkspacesTimeoutState() {
+  const box = els.workspacesListBox;
+  if (!box) return;
+  // If the user already has workspaces rendered, don't clobber them.
+  if (box.querySelector('.workspace-item')) return;
+
+  box.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'empty-list-placeholder';
+  wrap.style.display = 'flex';
+  wrap.style.flexDirection = 'column';
+  wrap.style.gap = '10px';
+  wrap.style.alignItems = 'stretch';
+  wrap.innerHTML = `
+    <div>Workspaces konnten nicht geladen werden (Backend antwortet nicht).</div>
+    <button type="button" class="fibu-btn fibu-btn-secondary" data-coding-agents-retry style="justify-content:center;">Erneut versuchen</button>
+  `;
+  box.appendChild(wrap);
+  wrap.querySelector('[data-coding-agents-retry]')?.addEventListener('click', () => {
+    box.innerHTML = '<div class="empty-list-placeholder">Loading workspaces...</div>';
+    startInitialLoadWithTimeout();
+  });
 }
 
 async function loadModuleMarkup() {
@@ -190,12 +239,25 @@ function wireEvents() {
   }
   if (els.addWorkspaceBtn) {
     els.addWorkspaceBtn.addEventListener('click', () => {
-      els.addWorkspaceModal.removeAttribute('hidden');
+      if (els.addWorkspaceModal) {
+        els.addWorkspaceModal.removeAttribute('hidden');
+        // Focus the input so the user can immediately type a path.
+        requestAnimationFrame(() => els.addWorkspaceInput?.focus?.());
+      }
     });
   }
   if (els.closeAddWorkspaceBtn) {
     els.closeAddWorkspaceBtn.addEventListener('click', () => {
       els.addWorkspaceModal.setAttribute('hidden', '');
+    });
+  }
+  // Click-outside-to-close for the Add Workspace modal so it always has an
+  // escape hatch even if the close button isn't visible.
+  if (els.addWorkspaceModal) {
+    els.addWorkspaceModal.addEventListener('click', (event) => {
+      if (event.target === els.addWorkspaceModal) {
+        els.addWorkspaceModal.setAttribute('hidden', '');
+      }
     });
   }
 

@@ -1,4 +1,5 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { CtoxResizer } from '../../shared/resizer.js';
 
 const BUILD = '20260519-research-dynamic-scoring1';
 const DEFAULT_AXIS_X = 'evidence_strength';
@@ -1525,7 +1526,7 @@ async function runSelectedResearch() {
   const existingTables = new Set((base?.tables || []).map((table) => table.table_key));
   const missingTables = Object.keys(tableContract).filter((key) => !existingTables.has(key));
   const instruction = [
-    `Fuehre systematic-research fuer das Business-OS Web Research Dashboard "${task.title}" fort.`,
+    `Führe systematic-research für das Business-OS Web Research Dashboard "${task.title}" fort.`,
     `Research Task ID: ${task.id}`,
     `Knowledge domain: ${task.knowledge_domain}`,
     `Source catalog: ctox knowledge data describe --domain ${task.knowledge_domain} --key ${task.source_catalog_key || 'source_catalog'}`,
@@ -1683,246 +1684,70 @@ function setupResearchColumnResizing() {
   const root = state.ctx.host.querySelector('[data-research-root]');
   if (!root) return null;
 
-  const leftHandle = researchResizeHandle('left', 'Linke Spaltenbreite anpassen');
-  const rightHandle = researchResizeHandle('right', 'Rechte Spaltenbreite anpassen');
-  root.append(leftHandle, rightHandle);
+  const leftHandle = root.querySelector('[data-resizer="left"]');
+  const rightHandle = root.querySelector('[data-resizer="right"]');
+  if (!leftHandle || !rightHandle) return null;
 
-  let activeWidths = null;
-  let persistedRatios = readResearchColumnLayout();
-  let dragState = null;
-  let resizeRaf = 0;
+  const widths = readResearchColumnLayout();
+  const leftPx = clampNumber(widths.left, RESEARCH_COL_MIN.left, RESEARCH_COL_MAX.left);
+  const rightPx = clampNumber(widths.right, RESEARCH_COL_MIN.right, RESEARCH_COL_MAX.right);
+  root.style.setProperty('--research-left-width', `${Math.round(leftPx)}px`);
+  root.style.setProperty('--research-right-width', `${Math.round(rightPx)}px`);
 
-  const applyWidths = (widths) => {
-    if (!widths) return;
-    root.style.gridTemplateColumns = `${widths.left}px ${widths.center}px ${widths.right}px`;
-  };
-
-  const placeHandles = (metrics, widths) => {
-    if (!metrics || !widths) return;
-    leftHandle.style.left = `${Math.round(widths.left + (metrics.gap / 2))}px`;
-    rightHandle.style.left = `${Math.round(widths.left + metrics.gap + widths.center + (metrics.gap / 2))}px`;
-  };
-
-  const setHandlesHidden = (hidden) => {
-    leftHandle.hidden = hidden;
-    rightHandle.hidden = hidden;
-  };
-
-  const persistCurrentLayout = () => {
-    const ratios = researchColumnPixelsToRatios(activeWidths);
-    if (!ratios) return;
-    persistedRatios = ratios;
-    writeResearchColumnLayout(ratios);
-  };
-
-  const syncLayout = () => {
-    const metrics = getResearchGridMetrics(root);
-    if (!metrics || metrics.trackTotal < RESEARCH_COL_MIN.left + RESEARCH_COL_MIN.center + RESEARCH_COL_MIN.right) {
-      root.style.removeProperty('grid-template-columns');
-      setHandlesHidden(true);
-      return;
+  const persistWidths = () => {
+    try {
+      const leftStr = root.style.getPropertyValue('--research-left-width') || `${leftPx}px`;
+      const rightStr = root.style.getPropertyValue('--research-right-width') || `${rightPx}px`;
+      window.localStorage.setItem(RESEARCH_LAYOUT_KEY, JSON.stringify({
+        left: Number.parseFloat(leftStr),
+        right: Number.parseFloat(rightStr),
+      }));
+    } catch (_) {
+      /* storage unavailable */
     }
-
-    let nextWidths = persistedRatios
-      ? researchColumnRatiosToPixels(persistedRatios, metrics.trackTotal)
-      : null;
-    if (!nextWidths) nextWidths = clampResearchColumns(readResearchGridTrackPixels(root), metrics.trackTotal);
-    if (!nextWidths) {
-      setHandlesHidden(true);
-      return;
-    }
-
-    activeWidths = nextWidths;
-    applyWidths(activeWidths);
-    placeHandles(metrics, activeWidths);
-    setHandlesHidden(false);
   };
 
-  const stopDrag = () => {
-    if (!dragState) return;
-    const handle = dragState.handle;
-    dragState = null;
-    handle?.classList.remove('is-active');
-    document.body.classList.remove('is-research-col-resizing');
-    persistCurrentLayout();
-  };
+  const resizerL = new CtoxResizer({
+    resizerEl: leftHandle,
+    containerEl: root,
+    cssVar: '--research-left-width',
+    side: 'left',
+    minWidth: RESEARCH_COL_MIN.left,
+    maxWidth: RESEARCH_COL_MAX.left,
+    onResize: persistWidths,
+  });
 
-  const startDrag = (event) => {
-    const handle = event.currentTarget;
-    const side = handle?.dataset.researchResizer;
-    const metrics = getResearchGridMetrics(root);
-    if (!side || !metrics || metrics.trackTotal < RESEARCH_COL_MIN.left + RESEARCH_COL_MIN.center + RESEARCH_COL_MIN.right) return;
-
-    const initial = activeWidths || clampResearchColumns(readResearchGridTrackPixels(root), metrics.trackTotal);
-    if (!initial) return;
-
-    activeWidths = initial;
-    dragState = {
-      side,
-      handle,
-      appRect: root.getBoundingClientRect(),
-      metrics,
-      widths: { ...initial },
-    };
-
-    handle.classList.add('is-active');
-    document.body.classList.add('is-research-col-resizing');
-    event.preventDefault();
-  };
-
-  const handleDragMove = (event) => {
-    if (!dragState) return;
-    const { appRect, metrics, side, widths } = dragState;
-    const pointerX = event.clientX - appRect.left - metrics.padLeft;
-    const leftBoundary = pointerX - (metrics.gap / 2);
-    const rightBoundary = pointerX - (metrics.gap * 1.5);
-    let nextWidths = widths;
-
-    if (side === 'left') {
-      const right = widths.right;
-      const maxLeft = Math.min(RESEARCH_COL_MAX.left, metrics.trackTotal - right - RESEARCH_COL_MIN.center);
-      const left = clampNumber(leftBoundary, RESEARCH_COL_MIN.left, Math.max(RESEARCH_COL_MIN.left, maxLeft));
-      nextWidths = { left, center: metrics.trackTotal - left - right, right };
-    } else {
-      const left = widths.left;
-      const minBoundary = left + RESEARCH_COL_MIN.center;
-      const maxBoundary = metrics.trackTotal - RESEARCH_COL_MIN.right;
-      const boundary = clampNumber(rightBoundary, minBoundary, maxBoundary);
-      const right = clampNumber(metrics.trackTotal - boundary, RESEARCH_COL_MIN.right, Math.min(RESEARCH_COL_MAX.right, metrics.trackTotal - left - RESEARCH_COL_MIN.center));
-      nextWidths = { left, center: metrics.trackTotal - left - right, right };
-    }
-
-    activeWidths = clampResearchColumns(nextWidths, metrics.trackTotal);
-    if (!activeWidths) return;
-    applyWidths(activeWidths);
-    placeHandles(metrics, activeWidths);
-  };
-
-  const handleResize = () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0;
-      syncLayout();
-    });
-  };
-
-  leftHandle.addEventListener('pointerdown', startDrag);
-  rightHandle.addEventListener('pointerdown', startDrag);
-  window.addEventListener('pointermove', handleDragMove);
-  window.addEventListener('pointerup', stopDrag);
-  window.addEventListener('pointercancel', stopDrag);
-  window.addEventListener('blur', stopDrag);
-  window.addEventListener('resize', handleResize);
-
-  syncLayout();
+  const resizerR = new CtoxResizer({
+    resizerEl: rightHandle,
+    containerEl: root,
+    cssVar: '--research-right-width',
+    side: 'right',
+    minWidth: RESEARCH_COL_MIN.right,
+    maxWidth: RESEARCH_COL_MAX.right,
+    onResize: persistWidths,
+  });
 
   return () => {
-    if (resizeRaf) cancelAnimationFrame(resizeRaf);
-    window.removeEventListener('pointermove', handleDragMove);
-    window.removeEventListener('pointerup', stopDrag);
-    window.removeEventListener('pointercancel', stopDrag);
-    window.removeEventListener('blur', stopDrag);
-    window.removeEventListener('resize', handleResize);
-    document.body.classList.remove('is-research-col-resizing');
-    leftHandle.remove();
-    rightHandle.remove();
+    resizerL.destroy();
+    resizerR.destroy();
   };
-}
-
-function researchResizeHandle(side, label) {
-  const handle = document.createElement('div');
-  handle.className = `research-col-resizer research-col-resizer-${side}`;
-  handle.dataset.researchResizer = side;
-  handle.dataset.resizer = side;
-  handle.setAttribute('role', 'separator');
-  handle.setAttribute('aria-orientation', 'vertical');
-  handle.setAttribute('aria-label', label);
-  return handle;
-}
-
-function getResearchGridMetrics(root) {
-  if (!root) return null;
-  const cs = getComputedStyle(root);
-  const gap = Number.parseFloat(cs.columnGap || cs.gap || '0') || 0;
-  const padLeft = Number.parseFloat(cs.paddingLeft || '0') || 0;
-  const padRight = Number.parseFloat(cs.paddingRight || '0') || 0;
-  const contentWidth = Math.max(0, root.clientWidth - padLeft - padRight);
-  const trackTotal = Math.max(0, contentWidth - (gap * 2));
-  return { gap, padLeft, contentWidth, trackTotal };
-}
-
-function readResearchGridTrackPixels(root) {
-  if (!root) return null;
-  const tracks = String(getComputedStyle(root).gridTemplateColumns || '')
-    .split(/\s+/)
-    .map((part) => Number.parseFloat(part))
-    .filter((number) => Number.isFinite(number) && number > 0);
-  if (tracks.length < 3) return null;
-  return { left: tracks[0], center: tracks[1], right: tracks[2] };
-}
-
-function clampResearchColumns(widths, trackTotal) {
-  if (!widths || !Number.isFinite(trackTotal) || trackTotal <= 0) return null;
-  if (trackTotal < RESEARCH_COL_MIN.left + RESEARCH_COL_MIN.center + RESEARCH_COL_MIN.right) return null;
-  const maxLeft = Math.max(RESEARCH_COL_MIN.left, Math.min(RESEARCH_COL_MAX.left, trackTotal - RESEARCH_COL_MIN.center - RESEARCH_COL_MIN.right));
-  const left = Math.round(clampNumber(Number(widths.left) || RESEARCH_COL_MIN.left, RESEARCH_COL_MIN.left, maxLeft));
-  const maxRight = Math.max(RESEARCH_COL_MIN.right, Math.min(RESEARCH_COL_MAX.right, trackTotal - left - RESEARCH_COL_MIN.center));
-  const right = Math.round(clampNumber(Number(widths.right) || RESEARCH_COL_MIN.right, RESEARCH_COL_MIN.right, maxRight));
-  const center = Math.round(trackTotal - left - right);
-  if (center < RESEARCH_COL_MIN.center) return null;
-  return { left, center, right };
-}
-
-function researchColumnPixelsToRatios(widths) {
-  if (!widths) return null;
-  const left = Number(widths.left) || 0;
-  const center = Number(widths.center) || 0;
-  const right = Number(widths.right) || 0;
-  const sum = left + center + right;
-  if (sum <= 0) return null;
-  return {
-    left: Number((left / sum).toFixed(6)),
-    center: Number((center / sum).toFixed(6)),
-    right: Number((right / sum).toFixed(6)),
-  };
-}
-
-function sanitizeResearchColumnLayout(raw) {
-  if (!raw || typeof raw !== 'object') return null;
-  const left = Number(raw.left);
-  const center = Number(raw.center);
-  const right = Number(raw.right);
-  if (![left, center, right].every(Number.isFinite)) return null;
-  if (left <= 0 || center <= 0 || right <= 0) return null;
-  const sum = left + center + right;
-  if (sum <= 0) return null;
-  return { left: left / sum, center: center / sum, right: right / sum };
-}
-
-function researchColumnRatiosToPixels(ratios, trackTotal) {
-  const safe = sanitizeResearchColumnLayout(ratios);
-  if (!safe) return null;
-  return clampResearchColumns({
-    left: safe.left * trackTotal,
-    center: safe.center * trackTotal,
-    right: safe.right * trackTotal,
-  }, trackTotal);
 }
 
 function readResearchColumnLayout() {
   try {
-    return sanitizeResearchColumnLayout(JSON.parse(window.localStorage.getItem(RESEARCH_LAYOUT_KEY) || 'null'));
+    const raw = JSON.parse(window.localStorage.getItem(RESEARCH_LAYOUT_KEY) || 'null');
+    if (raw && typeof raw === 'object') {
+      const left = Number(raw.left);
+      const right = Number(raw.right);
+      return {
+        left: Number.isFinite(left) && left > 0 ? left : 320,
+        right: Number.isFinite(right) && right > 0 ? right : 300,
+      };
+    }
   } catch (_) {
-    return null;
+    /* storage unavailable */
   }
-}
-
-function writeResearchColumnLayout(ratios) {
-  try {
-    window.localStorage.setItem(RESEARCH_LAYOUT_KEY, JSON.stringify(ratios));
-  } catch (_) {
-    // Ignore unavailable storage.
-  }
+  return { left: 320, right: 300 };
 }
 
 function initResearchContextMenu() {

@@ -719,9 +719,12 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 
 .module-root[data-module-root="matching"] .app{
   display:grid;
-  /* schmalere Seiten, breitere Mitte */
-  grid-template-columns: minmax(260px, 0.7fr) minmax(320px, 1.6fr) minmax(260px, 0.7fr);
-  gap:12px;
+  /* Spalten: [linke Liste] [12px Resizer] [Mitte] [12px Resizer] [rechte Detail].
+   * CtoxResizer setzt --matching-left-width / --matching-right-width per drag
+   * (siehe modules/matching/ui/index.js Zeilen ~2730-2756).
+   */
+  grid-template-columns: minmax(220px, var(--matching-left-width, 280px)) 12px minmax(0, 1fr) 12px minmax(220px, var(--matching-right-width, 280px));
+  gap:0;
   height:100%;
   padding:12px;
   position:relative;
