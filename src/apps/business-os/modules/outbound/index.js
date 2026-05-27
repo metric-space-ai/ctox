@@ -15,9 +15,9 @@ import {
   handleActiveOutreachAction,
   handleActiveOutreachInput,
   activeOutreachCounts,
-} from './active-outreach.js?v=20260527-outbound-active-e2e1';
+} from './active-outreach.js?v=20260527-outbound-scheduling-e2e2';
 
-const BUILD = '20260527-outbound-active-e2e1';
+const BUILD = '20260527-outbound-scheduling-e2e2';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {

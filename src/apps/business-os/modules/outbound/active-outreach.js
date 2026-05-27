@@ -1474,6 +1474,7 @@ async function prepareDraft(engagementId, draftKind) {
     || campaign?.payload?.active_outreach?.default_channel
     || campaign?.channel
     || 'email';
+  const lastMessage = lastMessageForEngagement(engagementId);
   return withBusyEngagement(engagementId, async () => {
     const payload = {
       engagement_id: engagementId,
@@ -1484,10 +1485,18 @@ async function prepareDraft(engagementId, draftKind) {
     if (channel === 'physical_letter') {
       payload.recipient_address_text = engagement.payload?.contact_address_text
         || engagement.payload?.recipient_address_text
+        || engagement.recipient_address_text
+        || lastMessage?.recipient_address_text
+        || lastMessage?.payload?.recipient_address_text
         || '';
     } else {
       payload.sender_account_id = engagement.sender_account_id;
-      payload.recipient_email = engagement.payload?.contact_email || '';
+      payload.recipient_email = engagement.payload?.contact_email
+        || engagement.contact_email
+        || engagement.recipient_email
+        || lastMessage?.recipient_email
+        || lastMessage?.payload?.recipient_email
+        || '';
     }
     if (draftKind === 'scheduling') {
       payload.duration_minutes = engagement.payload?.meeting_duration_minutes || campaign?.payload?.active_outreach?.meeting_duration_minutes || 30;

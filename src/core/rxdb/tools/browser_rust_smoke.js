@@ -5202,21 +5202,22 @@ function ensureCtoxSmokeBinary() {
 
         const originalPrompt = window.prompt;
         window.prompt = () => 'https://meet.example.com/outbound-smoke';
+        let booked;
         try {
           click(`[data-action="ao-book-slot"][data-meeting-request-id="${css(meetingRequestId)}"]`, 'book proposed slot button');
+          booked = await waitFor(async () => {
+            const request = (await rawDb.outbound_meeting_requests.findOne(meetingRequestId).exec())?.toJSON?.();
+            const updatedEngagement = (await rawDb.outbound_engagements.findOne(engagement.id).exec())?.toJSON?.();
+            return {
+              ok: request?.status === 'booked' && updatedEngagement?.status === 'meeting_booked',
+              request_status: request?.status || '',
+              meeting_url: request?.meeting_url || '',
+              engagement_status: updatedEngagement?.status || '',
+            };
+          }, 60000, 'meeting request booked from proposed slot');
         } finally {
           window.prompt = originalPrompt;
         }
-        const booked = await waitFor(async () => {
-          const request = (await rawDb.outbound_meeting_requests.findOne(meetingRequestId).exec())?.toJSON?.();
-          const updatedEngagement = (await rawDb.outbound_engagements.findOne(engagement.id).exec())?.toJSON?.();
-          return {
-            ok: request?.status === 'booked' && updatedEngagement?.status === 'meeting_booked',
-            request_status: request?.status || '',
-            meeting_url: request?.meeting_url || '',
-            engagement_status: updatedEngagement?.status || '',
-          };
-        }, 60000, 'meeting request booked from proposed slot');
         click('[data-action="ao-view"][data-view="done"]', 'done tab');
         await waitFor(async () => ({
           ok: /Termin gebucht|meeting_booked/.test(document.querySelector('[data-outbound-root]')?.innerText || ''),

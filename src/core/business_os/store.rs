@@ -5680,6 +5680,24 @@ fn handle_outbound_active_command(
             {
                 outbound_put_string(&mut message, "reply_to_message_id", previous);
             }
+            if draft_kind == "scheduling" {
+                let request_id = outbound_string(&command.payload, &["meeting_request_id"])
+                    .unwrap_or_else(|| format!("meeting_{message_id}"));
+                outbound_payload_insert(
+                    &mut message,
+                    "meeting_request_id",
+                    Value::String(request_id),
+                );
+                outbound_payload_insert(
+                    &mut message,
+                    "proposed_slots",
+                    command
+                        .payload
+                        .get("proposed_slots")
+                        .cloned()
+                        .unwrap_or_else(|| serde_json::json!([])),
+                );
+            }
             let revision_id = outbound_message_revision(&message);
             outbound_put_string(&mut message, "revision_id", revision_id);
             outbound_put_default_i64(&mut message, "created_at_ms", now);
@@ -5691,6 +5709,7 @@ fn handle_outbound_active_command(
                 now,
                 message.clone(),
             )?;
+            let mut meeting_request_result = Value::Null;
             if draft_kind == "scheduling" {
                 let request_id = outbound_string(&command.payload, &["meeting_request_id"])
                     .unwrap_or_else(|| format!("meeting_{message_id}"));
@@ -5719,12 +5738,14 @@ fn handle_outbound_active_command(
                     now,
                     request.clone(),
                 )?;
+                meeting_request_result = request;
             }
             outbound_update_engagement_status(&conn, &engagement_id, "awaiting_approval", now)?;
             Ok(serde_json::json!({
                 "ok": true,
                 "collection": "outbound_messages",
                 "message": message,
+                "meeting_request": meeting_request_result,
                 "approval_required": true,
                 "provider_send_executed": false
             }))
@@ -11095,7 +11116,10 @@ mod tests {
                     "engagement_id": "eng_auto",
                     "draft_kind": "scheduling",
                     "duration_minutes": 45,
-                    "slot_hint": "drei Slots in der kommenden Woche"
+                    "slot_hint": "drei Slots in der kommenden Woche",
+                    "proposed_slots": [
+                        {"start_iso":"2026-06-02T10:00:00Z","end_iso":"2026-06-02T10:45:00Z"}
+                    ]
                 },
                 "client_context": actor
             }),
@@ -11112,6 +11136,25 @@ mod tests {
                 .and_then(Value::as_str),
             Some("awaiting_approval")
         );
+        assert_eq!(
+            scheduling
+                .pointer("/result/message/payload/meeting_request_id")
+                .and_then(Value::as_str),
+            Some("meeting_msg_auto_scheduling")
+        );
+        assert_eq!(
+            scheduling
+                .pointer("/result/message/payload/proposed_slots")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            scheduling
+                .pointer("/result/meeting_request/id")
+                .and_then(Value::as_str),
+            Some("meeting_msg_auto_scheduling")
+        );
 
         let conn = open_store(root)?;
         let meeting = outbound_load_required(
@@ -11127,6 +11170,13 @@ mod tests {
         assert_eq!(
             meeting.get("duration_minutes").and_then(Value::as_i64),
             Some(45)
+        );
+        assert_eq!(
+            meeting
+                .get("proposed_slots")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1)
         );
 
         Ok(())

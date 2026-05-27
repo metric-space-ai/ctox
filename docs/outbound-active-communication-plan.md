@@ -16,11 +16,11 @@ Der Projektfortschritt wird ueber Wellengewichtung berechnet. Jede Welle hat ein
 | 4. Campaign Settings, Strategie & Sequenz-Simulation | 10% | In Arbeit | 75% |
 | 5. CTOX Skills, Runbooks & Draft Automation | 10% | In Arbeit | 25% |
 | 6. Kommunikationskanaele, Mailserver, Sender Accounts & Deliverability | 10% | In Arbeit | 75% |
-| 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 65% |
-| 8. Scheduling & Terminfindung | 7% | Nicht begonnen | 0% |
+| 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 75% |
+| 8. Scheduling & Terminfindung | 7% | In Arbeit | 50% |
 | 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 50% |
-| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 50% |
-| **Gesamt** | **100%** | **In Arbeit** | **62%** |
+| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 75% |
+| **Gesamt** | **100%** | **In Arbeit** | **68%** |
 
 Fortschritt je Welle:
 
@@ -535,7 +535,7 @@ Aufgaben:
 - [x] Eingehende Mail per Message-ID/In-Reply-To/Adresse/Lead matchen.
 - [x] Engagement bei Antwort auf `reply_received` setzen.
 - [x] Reply-Klassifikation implementieren: positiv, negativ, objection, out-of-office, referral, unsubscribe, unclear.
-- [ ] CTOX erstellt Antwortentwurf oder Scheduling-Entwurf.
+- [x] CTOX erstellt Antwortentwurf oder Scheduling-Entwurf.
 - [x] Follow-up Scheduler stoppt bei Antwort automatisch.
 - [ ] UI zeigt Antwort prominent in Timeline und Approval Inbox.
 - [x] Outbound zeigt Antwort nur als Status-/CTA-Zusammenfassung und verlinkt fuer Details in Conversations.
@@ -545,7 +545,7 @@ Akzeptanzkriterien:
 
 - [x] Antwort auf gesendete Mail landet im richtigen Engagement.
 - [x] Antwort ist in Conversations im Kampagnen-Postfach sichtbar und mit Outbound verlinkt.
-- [ ] Positive Antwort erzeugt Scheduling- oder Reply-Draft.
+- [x] Positive Antwort erzeugt Scheduling- oder Reply-Draft.
 - [ ] Unsubscribe erzeugt Suppression und stoppt Engagement.
 - [ ] Out-of-office erzeugt neue Warte-/Retry-Planung, aber keinen Versand ohne Approval.
 
@@ -579,17 +579,17 @@ Aufgaben:
 - [ ] Meeting Settings pro Campaign definieren.
 - [ ] Kalender-/Availability-Anbindung pruefen und abstrahieren.
 - [ ] Slot-Auswahlstrategie implementieren.
-- [ ] Scheduling-Draft fuer konkrete Slots oder Terminlink erzeugen.
-- [ ] Meeting Confirmation erkennen oder manuell markieren.
-- [ ] `outbound_meeting_requests` Status pflegen.
-- [ ] UI fuer Slot-Vorschau, Approval und gebuchte Termine bauen.
+- [x] Scheduling-Draft fuer konkrete Slots oder Terminlink erzeugen.
+- [x] Meeting Confirmation erkennen oder manuell markieren.
+- [x] `outbound_meeting_requests` Status pflegen.
+- [x] UI fuer Slot-Vorschau, Approval und gebuchte Termine bauen.
 
 Akzeptanzkriterien:
 
-- [ ] Positive Antwort kann in Scheduling ueberfuehrt werden.
-- [ ] CTOX bereitet konkrete Terminvorschlaege vor.
+- [x] Positive Antwort kann in Scheduling ueberfuehrt werden.
+- [x] CTOX bereitet konkrete Terminvorschlaege vor.
 - [ ] Nutzer kann Scheduling-Nachricht freigeben oder bearbeiten.
-- [ ] Gebuchter Termin schliesst Engagement sauber ab oder markiert naechsten Schritt.
+- [x] Gebuchter Termin schliesst Engagement sauber ab oder markiert naechsten Schritt.
 
 ## Welle 9: Automation Scheduler, Limits & Stop-Regeln
 
@@ -623,12 +623,12 @@ Ziel: Die Loesung ist erprobt, testbar und im Betrieb nachvollziehbar.
 Aufgaben:
 
 - [x] End-to-End Browser Smoke fuer Lead -> Assignment -> Draft -> Approval -> Mailserver-Queue bauen.
-- [ ] End-to-End Browser Smoke fuer Reply -> Scheduling -> Meeting bauen.
+- [x] End-to-End Browser Smoke fuer Reply -> Scheduling -> Meeting bauen.
 - [ ] Backend-Tests fuer alle State-Uebergaenge bauen.
 - [ ] Approval-Gate Negativtests bauen.
 - [ ] Mailserver-Fehler-, Bounce- und Retrytests bauen.
 - [ ] Reply Matching Tests bauen.
-- [ ] Scheduling Tests bauen.
+- [x] Scheduling Tests bauen.
 - [x] Audit-Export oder Debug-Panel bauen.
 - [ ] Observability: Command IDs, Task IDs, Message IDs und Engagement IDs verlinken.
 - [ ] Observability: Outbound-IDs und Communication-IDs sind beidseitig verlinkt und im Debug-/Statuspfad sichtbar.
@@ -637,7 +637,7 @@ Aufgaben:
 
 Akzeptanzkriterien:
 
-- [ ] Komplettfluss funktioniert: Lead -> Assignment -> Draft -> Approval -> Send -> Reply -> Scheduling -> Meeting.
+- [x] Komplettfluss funktioniert lokal im Browser-Smoke: Lead -> Assignment -> Draft -> Approval -> Send -> Reply -> Scheduling -> Meeting.
 - [ ] Kein automatisierter Test kann ungeprueften Versand ausloesen.
 - [ ] Alle kritischen Fehler sind in UI und Logs diagnostizierbar.
 - [ ] Release-Gate laeuft in CI oder als dokumentierter lokaler Check.
@@ -733,3 +733,4 @@ Diese Aufgaben laufen parallel zu mehreren Wellen und duerfen nicht bis zum Ende
 | 2026-05-26 | E-Mail-Send-Gate an Mailserver-Queue angebunden | Nach Nutzerfreigabe darf E-Mail-Outbound nicht bei `queued_for_provider` ohne echten Queue-Auftrag stehenbleiben | `outbound.message.send_approved` queued freigegebene E-Mails in `stalwart_smtp_queue`, persistiert `provider_queue_id`, aktualisiert Conversations-Metadaten und zaehlt Sender-Limits idempotent hoch; Welle 6 steigt auf 75%, Gesamtfortschritt auf 57% |
 | 2026-05-27 | Review-Findings Scheduler, Message-Historie und Audit geschlossen | Aktive Drafts durften keine Message-IDs wiederverwenden, Scheduler musste echte Follow-up-Drafts erzeugen und Audit-/Skillbook-Konfiguration erhalten bleiben | UI erzeugt pro Draft eindeutige `msg_...` IDs; Scheduler schreibt approval-gated Follow-up-Drafts und stoppt bei Reply/Pause/Closure/Opt-out/Bounce; Skillbook-Save merged bestehende Felder; Audit exportiert Skillbooks und Briefvorlagen; Welle 9 steigt auf 50%, Welle 10 auf 25%, Gesamtfortschritt auf 61% |
 | 2026-05-27 | Aktiver Outbound-Mailpfad im Browser E2E gehaertet | Der erste echte Browser-Smoke zeigte, dass abhängige Outbound-Commands zu frueh nacheinander ausgeloest wurden und die UI nach `send_approved` auf verzögerte Pull-Replikation wartete | Active-Outreach-Commands warten jetzt auf native `business_commands`-Acks und projizieren Backend-Result-Records lokal; neuer Smoke `SMOKE_MODE=outbound-active-ui` prueft Lead Queue, Auto-Draft, Freigabe-Gate, Ready-to-Send, Mailserver-Queue und Conversations-Deep-Link mit 4 Screenshots; Welle 10 steigt auf 50%, Gesamtfortschritt auf 62% |
+| 2026-05-27 | Reply-zu-Scheduling-zu-Meeting im Browser-Smoke gehaertet | Der erweiterte E2E zeigte fehlende Empfaenger-Fallbacks, fehlende Slot-/Meeting-Request-Projektion in Scheduling-Drafts und zu frueh zurueckgesetzte Prompt-Mocks beim Buchen | Scheduling-Drafts uebernehmen Empfaenger aus Engagement oder letzter Message, erzeugen drei konkrete Default-Slots, liefern `meeting_request` im Command-Result, markieren gebuchte Termine mit aktualisiertem Engagement und werden im Browser-Smoke bis `meeting_booked` getestet; Welle 7 steigt auf 75%, Welle 8 auf 50%, Welle 10 auf 75%, Gesamtfortschritt auf 68% |
