@@ -34,13 +34,38 @@ pub fn build_signal_url(raw_url: &str, auth_token: &str, client_id: &str) -> Res
     if url.scheme() != "wss" {
         anyhow::bail!("signaling URL must use wss://: {raw_url}");
     }
-    if !auth_token.trim().is_empty() {
-        url.query_pairs_mut()
-            .append_pair("token", auth_token.trim());
-    }
-    if !client_id.trim().is_empty() {
-        url.query_pairs_mut()
-            .append_pair("client", client_id.trim());
+    // CTOX-RXDB-Discovery-Params: müssen mit `src/apps/business-os/shared/sync.js`
+    // konsistent sein. Browser sendet (siehe signalingUrlWithBrowserMetadata,
+    // Zeile 1392-1418) `role=browser` + `protocol=ctox-rxdb-protocol-v1` +
+    // `instance_id=<sync_room>` + `cap=...`. Ohne `role=ctox_instance`
+    // klassifiziert der Hub diesen Peer als role="unknown", schließt die
+    // Signaling-Connection sofort (siehe Reconnect-Loop in
+    // /tmp/ctox-desktop-host.log mit 19.5k closed sessions) und die
+    // Browser-RxDB-Replikation startet nie — Symptom: alle
+    // `WebRTC replication failed for ...`-Errors plus permanent rotes
+    // "CTOX ARBEITET NICHT" im Header. Der Browser-seitige
+    // `hasNativePeerProtocolEvidence` (shared/sync.js:895-913) verlangt
+    // zusätzlich beide ctox-peer-session-v1 und ctox-checkpoint-epoch-v1
+    // Capabilities im Peer-Handshake-Set.
+    {
+        let mut query = url.query_pairs_mut();
+        if !auth_token.trim().is_empty() {
+            query.append_pair("token", auth_token.trim());
+        }
+        if !client_id.trim().is_empty() {
+            query.append_pair("client", client_id.trim());
+        }
+        query.append_pair("role", "ctox_instance");
+        query.append_pair("protocol", "ctox-rxdb-protocol-v1");
+        if !client_id.trim().is_empty() {
+            query.append_pair("instance_id", client_id.trim());
+        }
+        query.append_pair("cap", "ctox-control-plane-v1");
+        query.append_pair("cap", "ctox-rxdb-browser-v1");
+        query.append_pair("cap", "ctox-file-chunks-v1");
+        query.append_pair("cap", "ctox-schema-hash-v1");
+        query.append_pair("cap", "ctox-peer-session-v1");
+        query.append_pair("cap", "ctox-checkpoint-epoch-v1");
     }
     Ok(url)
 }
