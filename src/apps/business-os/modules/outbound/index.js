@@ -15,9 +15,9 @@ import {
   handleActiveOutreachAction,
   handleActiveOutreachInput,
   activeOutreachCounts,
-} from './active-outreach.js';
+} from './active-outreach.js?v=20260527-outbound-review-fixes1';
 
-const BUILD = '20260526-outbound-active-outreach1';
+const BUILD = '20260527-outbound-review-fixes1';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {

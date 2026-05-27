@@ -1276,7 +1276,9 @@ async function regenerateSlots(meetingRequestId, messageId) {
       proposed_slots: [],
     });
     if (messageId) {
-      await dispatchOutboundCommand('outbound.draft.prepare', messageId, {
+      const regeneratedMessageId = `msg_${crypto.randomUUID()}`;
+      await dispatchOutboundCommand('outbound.draft.prepare', regeneratedMessageId, {
+        message_id: regeneratedMessageId,
         engagement_id: stateRef.engagementMessages.find((m) => m.id === messageId)?.engagement_id || '',
         draft_kind: 'scheduling',
         meeting_request_id: meetingRequestId,
@@ -1376,7 +1378,9 @@ async function startEngagementFromLead(leadId, campaign, { autoDraft }) {
         draftPayload.sender_account_id = mailboxKey;
         draftPayload.recipient_email = lead.contact_email || lead.payload?.contact_email || '';
       }
-      await dispatchOutboundCommand('outbound.draft.prepare', engagementId, draftPayload);
+      const messageId = `msg_${crypto.randomUUID()}`;
+      draftPayload.message_id = messageId;
+      await dispatchOutboundCommand('outbound.draft.prepare', messageId, draftPayload);
     }
     await loadActiveOutreachData();
     stateRef.activeOutreach.view = autoDraft ? 'approval_inbox' : 'engagements';
@@ -1411,7 +1415,9 @@ async function prepareDraft(engagementId, draftKind) {
       payload.sender_account_id = engagement.sender_account_id;
       payload.recipient_email = engagement.payload?.contact_email || '';
     }
-    await dispatchOutboundCommand('outbound.draft.prepare', engagementId, payload);
+    const messageId = `msg_${crypto.randomUUID()}`;
+    payload.message_id = messageId;
+    await dispatchOutboundCommand('outbound.draft.prepare', messageId, payload);
     await loadActiveOutreachData();
     stateRef.activeOutreach.view = 'approval_inbox';
     triggerRender();

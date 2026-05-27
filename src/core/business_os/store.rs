@@ -5421,7 +5421,10 @@ fn handle_outbound_active_command(
             let channel = outbound_first_string(&[
                 outbound_string(&command.payload, &["channel"]),
                 outbound_string(&engagement, &["payload", "channel"]),
-                outbound_string(&engagement, &["payload", "active_outreach", "default_channel"]),
+                outbound_string(
+                    &engagement,
+                    &["payload", "active_outreach", "default_channel"],
+                ),
                 outbound_string(&engagement, &["channel"]),
             ])
             .unwrap_or_else(|| "email".to_string());
@@ -5435,9 +5438,7 @@ fn handle_outbound_active_command(
                         outbound_string(&engagement, &["payload", "contact_address_text"]),
                         outbound_string(&engagement, &["payload", "recipient_address_text"]),
                     ])
-                    .context(
-                        "recipient_address_text is required for physical_letter drafts",
-                    )?;
+                    .context("recipient_address_text is required for physical_letter drafts")?;
                     let sender = outbound_first_string(&[
                         outbound_string(&command.payload, &["sender_account_id"]),
                         outbound_string(&engagement, &["sender_account_id"]),
@@ -5837,12 +5838,7 @@ fn handle_outbound_active_command(
                     message.clone(),
                 )?;
                 if let Some(engagement_id) = outbound_string(&message, &["engagement_id"]) {
-                    outbound_update_engagement_status(
-                        &conn,
-                        &engagement_id,
-                        "sent",
-                        now,
-                    )?;
+                    outbound_update_engagement_status(&conn, &engagement_id, "sent", now)?;
                 }
                 return Ok(serde_json::json!({
                     "ok": true,
@@ -6222,17 +6218,13 @@ fn handle_outbound_active_command(
         "outbound.campaign.mailbox.link" => {
             outbound_handle_campaign_mailbox_link(root, &conn, command, now)
         }
-        "outbound.campaign.status.set" => {
-            outbound_handle_campaign_status_set(&conn, command, now)
-        }
+        "outbound.campaign.status.set" => outbound_handle_campaign_status_set(&conn, command, now),
         "outbound.reply.match" => outbound_handle_reply_match(root, &conn, command, now),
         "outbound.provider.reconcile" => {
             outbound_handle_provider_reconcile(root, &conn, command, now)
         }
         "outbound.skillbook.save" => outbound_handle_skillbook_save(&conn, command, now),
-        "outbound.skillbook.seed_defaults" => {
-            outbound_handle_skillbook_seed_defaults(&conn, now)
-        }
+        "outbound.skillbook.seed_defaults" => outbound_handle_skillbook_seed_defaults(&conn, now),
         "outbound.letter_template.save" => {
             outbound_handle_letter_template_save(&conn, command, now)
         }
@@ -6256,8 +6248,8 @@ fn outbound_handle_campaign_mailbox_link(
     now: i64,
 ) -> anyhow::Result<Value> {
     let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
-    let mailbox_address =
-        outbound_required_string(&command.payload, &["mailbox_address"]).or_else(|_| {
+    let mailbox_address = outbound_required_string(&command.payload, &["mailbox_address"])
+        .or_else(|_| {
             outbound_required_string(&command.payload, &["communication_account_address"])
         })?;
     let mailbox_address = mailbox_address.trim().to_string();
@@ -6271,8 +6263,8 @@ fn outbound_handle_campaign_mailbox_link(
         Some(format!("email:{}", mailbox_address.to_ascii_lowercase())),
     ])
     .unwrap_or_else(|| format!("email:{}", mailbox_address.to_ascii_lowercase()));
-    let channel = outbound_string(&command.payload, &["channel"])
-        .unwrap_or_else(|| "email".to_string());
+    let channel =
+        outbound_string(&command.payload, &["channel"]).unwrap_or_else(|| "email".to_string());
     let provider = outbound_string(&command.payload, &["provider"])
         .unwrap_or_else(|| "business-os.outbound".to_string());
     let mailbox_status = outbound_string(&command.payload, &["mailbox_status"])
@@ -6304,7 +6296,11 @@ fn outbound_handle_campaign_mailbox_link(
     let mut campaign = outbound_load_record(conn, "outbound_campaigns", &campaign_id)?
         .unwrap_or_else(|| serde_json::json!({ "id": campaign_id.clone() }));
     outbound_put_string(&mut campaign, "id", campaign_id.clone());
-    outbound_put_string(&mut campaign, "communication_account_key", account_key.clone());
+    outbound_put_string(
+        &mut campaign,
+        "communication_account_key",
+        account_key.clone(),
+    );
     outbound_put_string(
         &mut campaign,
         "communication_account_address",
@@ -6329,7 +6325,13 @@ fn outbound_handle_campaign_mailbox_link(
     );
     outbound_put_default_i64(&mut campaign, "created_at_ms", now);
     outbound_put_i64(&mut campaign, "updated_at_ms", now);
-    upsert_business_record(conn, "outbound_campaigns", &campaign_id, now, campaign.clone())?;
+    upsert_business_record(
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
 
     let mut limit = outbound_load_record(conn, "outbound_account_limits", &account_key)?
         .unwrap_or_else(|| {
@@ -6359,7 +6361,13 @@ fn outbound_handle_campaign_mailbox_link(
     }
     outbound_put_default_i64(&mut limit, "created_at_ms", now);
     outbound_put_i64(&mut limit, "updated_at_ms", now);
-    upsert_business_record(conn, "outbound_account_limits", &account_key, now, limit.clone())?;
+    upsert_business_record(
+        conn,
+        "outbound_account_limits",
+        &account_key,
+        now,
+        limit.clone(),
+    )?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -6394,7 +6402,10 @@ fn outbound_handle_campaign_status_set(
     )?;
     let default_channel = outbound_first_string(&[
         outbound_string(&command.payload, &["channel"]),
-        outbound_string(&campaign, &["payload", "active_outreach", "default_channel"]),
+        outbound_string(
+            &campaign,
+            &["payload", "active_outreach", "default_channel"],
+        ),
         outbound_string(&campaign, &["channel"]),
         Some("email".to_string()),
     ])
@@ -6455,7 +6466,13 @@ fn outbound_handle_campaign_status_set(
         Value::String(default_channel.clone()),
     );
     outbound_put_i64(&mut campaign, "updated_at_ms", now);
-    upsert_business_record(conn, "outbound_campaigns", &campaign_id, now, campaign.clone())?;
+    upsert_business_record(
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -6472,8 +6489,8 @@ fn outbound_handle_skillbook_save(
     command: &BusinessCommand,
     now: i64,
 ) -> anyhow::Result<Value> {
-    let skillbook_id =
-        outbound_required_string(&command.payload, &["skillbook_id", "id"]).or_else(|_| {
+    let skillbook_id = outbound_required_string(&command.payload, &["skillbook_id", "id"])
+        .or_else(|_| {
             command
                 .record_id
                 .as_deref()
@@ -6485,7 +6502,13 @@ fn outbound_handle_skillbook_save(
         .as_ref()
         .and_then(|v| v.get("version_number").and_then(Value::as_i64))
         .unwrap_or(0);
-    let mut record = outbound_object_payload(&command.payload);
+    let mut record = prior.clone().unwrap_or_else(|| serde_json::json!({}));
+    let incoming = outbound_object_payload(&command.payload);
+    if let (Some(target), Some(source)) = (record.as_object_mut(), incoming.as_object()) {
+        for (key, value) in source {
+            target.insert(key.clone(), value.clone());
+        }
+    }
     outbound_put_string(&mut record, "id", skillbook_id.clone());
     outbound_put_string(&mut record, "skillbook_id", skillbook_id.clone());
     outbound_put_default_string(&mut record, "title", "");
@@ -6505,7 +6528,13 @@ fn outbound_handle_skillbook_save(
     outbound_put_default_i64(&mut record, "created_at_ms", now);
     outbound_put_i64(&mut record, "updated_at_ms", now);
     outbound_put_i64(&mut record, "version_number", prior_version + 1);
-    upsert_business_record(conn, "outbound_skillbooks", &skillbook_id, now, record.clone())?;
+    upsert_business_record(
+        conn,
+        "outbound_skillbooks",
+        &skillbook_id,
+        now,
+        record.clone(),
+    )?;
     Ok(serde_json::json!({
         "ok": true,
         "skillbook": record,
@@ -6610,7 +6639,10 @@ fn outbound_handle_letter_template_save(
 
 /// Audit export: dump every outbound record linked to a campaign (or all
 /// campaigns if campaign_id is empty) so operators can produce GDPR / SLA proof.
-fn outbound_handle_audit_export(conn: &Connection, command: &BusinessCommand) -> anyhow::Result<Value> {
+fn outbound_handle_audit_export(
+    conn: &Connection,
+    command: &BusinessCommand,
+) -> anyhow::Result<Value> {
     let campaign_filter = outbound_string(&command.payload, &["campaign_id"]).unwrap_or_default();
     let collections = [
         "outbound_campaigns",
@@ -6622,6 +6654,8 @@ fn outbound_handle_audit_export(conn: &Connection, command: &BusinessCommand) ->
         "outbound_meeting_requests",
         "outbound_suppression_entries",
         "outbound_account_limits",
+        "outbound_skillbooks",
+        "outbound_letter_templates",
     ];
     let mut export = serde_json::Map::new();
     for collection in collections {
@@ -6703,16 +6737,27 @@ fn outbound_handle_scheduler_tick(
          WHERE collection = 'outbound_engagements' AND deleted = 0",
     )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut engagements = Vec::new();
     for row in rows {
         let Ok(raw) = row else { continue };
-        let Ok(engagement) = serde_json::from_str::<Value>(&raw) else {
-            continue;
-        };
-        let status =
-            outbound_string(&engagement, &["status"]).unwrap_or_else(|| "".to_string());
+        if let Ok(engagement) = serde_json::from_str::<Value>(&raw) {
+            engagements.push(engagement);
+        }
+    }
+    drop(stmt);
+
+    for engagement in engagements {
+        let status = outbound_string(&engagement, &["status"]).unwrap_or_else(|| "".to_string());
         if matches!(
             status.as_str(),
-            "closed" | "cancelled" | "meeting_booked" | "paused"
+            "closed"
+                | "cancelled"
+                | "meeting_booked"
+                | "paused"
+                | "reply_received"
+                | "bounced"
+                | "unsubscribed"
+                | "suppressed"
         ) {
             continue;
         }
@@ -6734,11 +6779,22 @@ fn outbound_handle_scheduler_tick(
         let Some(engagement_id) = outbound_string(&engagement, &["id"]) else {
             continue;
         };
-        actions.push(serde_json::json!({
-            "kind": "followup_due",
-            "engagement_id": engagement_id,
-            "due_at_ms": next_action,
-        }));
+        if dry_run {
+            actions.push(serde_json::json!({
+                "kind": "followup_due",
+                "engagement_id": engagement_id,
+                "due_at_ms": next_action,
+            }));
+            continue;
+        }
+        match outbound_prepare_due_followup_draft(conn, engagement, command, now) {
+            Ok(action) => actions.push(action),
+            Err(error) => actions.push(serde_json::json!({
+                "kind": "followup_prepare_failed",
+                "engagement_id": engagement_id,
+                "error": error.to_string(),
+            })),
+        }
     }
 
     Ok(serde_json::json!({
@@ -6747,6 +6803,184 @@ fn outbound_handle_scheduler_tick(
         "actions": actions,
         "dry_run": dry_run,
         "reconciled": reconcile.get("updated").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
+    }))
+}
+
+fn outbound_prepare_due_followup_draft(
+    conn: &Connection,
+    mut engagement: Value,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let engagement_id = outbound_required_string(&engagement, &["id"])?;
+    let campaign_id = outbound_required_string(&engagement, &["campaign_id"])?;
+    let draft_kind = outbound_first_string(&[
+        outbound_string(&command.payload, &["draft_kind"]),
+        outbound_string(&engagement, &["payload", "next_draft_kind"]),
+    ])
+    .unwrap_or_else(|| "followup".to_string());
+    let channel = outbound_first_string(&[
+        outbound_string(&command.payload, &["channel"]),
+        outbound_string(&engagement, &["payload", "channel"]),
+        outbound_string(&engagement, &["channel"]),
+    ])
+    .unwrap_or_else(|| "email".to_string());
+
+    let previous_messages = outbound_load_records_by_string_field(
+        conn,
+        "outbound_messages",
+        "engagement_id",
+        &engagement_id,
+    )?;
+    if previous_messages.iter().any(|message| {
+        let approval = outbound_string(message, &["approval_status"]).unwrap_or_default();
+        let send = outbound_string(message, &["send_status"]).unwrap_or_default();
+        let message_type = outbound_string(message, &["message_type"]).unwrap_or_default();
+        approval == "awaiting_approval"
+            && !matches!(send.as_str(), "cancelled" | "blocked")
+            && (message_type == draft_kind || message_type.starts_with("followup"))
+    }) {
+        outbound_put_i64(&mut engagement, "next_action_at_ms", 0);
+        outbound_payload_insert(
+            &mut engagement,
+            "scheduler_last_skip_reason",
+            Value::String("draft_already_awaiting_approval".to_string()),
+        );
+        outbound_put_i64(&mut engagement, "updated_at_ms", now);
+        upsert_business_record(
+            conn,
+            "outbound_engagements",
+            &engagement_id,
+            now,
+            engagement,
+        )?;
+        return Ok(serde_json::json!({
+            "kind": "followup_skipped_existing_draft",
+            "engagement_id": engagement_id,
+        }));
+    }
+
+    let (sender_account_id, recipient_email, recipient_address_text) =
+        if channel == "physical_letter" {
+            let address = outbound_first_string(&[
+                outbound_string(&command.payload, &["recipient_address_text"]),
+                outbound_string(&engagement, &["payload", "contact_address_text"]),
+                outbound_string(&engagement, &["payload", "recipient_address_text"]),
+            ])
+            .context("recipient_address_text is required for physical_letter scheduler drafts")?;
+            let sender = outbound_first_string(&[
+                outbound_string(&command.payload, &["sender_account_id"]),
+                outbound_string(&engagement, &["sender_account_id"]),
+            ])
+            .unwrap_or_default();
+            let email = outbound_first_string(&[
+                outbound_string(&command.payload, &["recipient_email"]),
+                outbound_string(&engagement, &["payload", "contact_email"]),
+            ])
+            .unwrap_or_default();
+            (sender, email, address)
+        } else {
+            let sender = outbound_first_string(&[
+                outbound_string(&command.payload, &["sender_account_id"]),
+                outbound_string(&engagement, &["sender_account_id"]),
+            ])
+            .context("sender_account_id is required for scheduler draft")?;
+            let email = outbound_first_string(&[
+                outbound_string(&command.payload, &["recipient_email"]),
+                outbound_string(&engagement, &["payload", "contact_email"]),
+            ])
+            .context("recipient_email is required for scheduler draft")?;
+            anyhow::ensure!(
+                !outbound_recipient_suppressed(conn, &email)?,
+                "recipient is suppressed for outbound communication"
+            );
+            (sender, email, String::new())
+        };
+
+    let latest_message = outbound_latest_message(&previous_messages);
+    let generated = outbound_generate_automated_draft(
+        &engagement,
+        latest_message.as_ref(),
+        &command.payload,
+        &draft_kind,
+    );
+    let subject = outbound_first_string(&[
+        outbound_string(&command.payload, &["subject"]),
+        outbound_string(&generated, &["subject"]),
+    ])
+    .context("generated subject is required")?;
+    let body_text = outbound_first_string(&[
+        outbound_string(&command.payload, &["body_text"]),
+        outbound_string(&generated, &["body_text"]),
+    ])
+    .context("generated body_text is required")?;
+    let message_id = format!("msg_{}", Uuid::new_v4().simple());
+    let mut message = outbound_object_payload(&command.payload);
+    outbound_put_string(&mut message, "id", message_id.clone());
+    outbound_put_string(&mut message, "engagement_id", engagement_id.clone());
+    outbound_put_string(&mut message, "campaign_id", campaign_id);
+    outbound_put_string(&mut message, "message_type", draft_kind.clone());
+    outbound_put_string(&mut message, "channel", channel);
+    outbound_put_string(&mut message, "direction", "outbound");
+    outbound_put_string(&mut message, "sender_account_id", sender_account_id);
+    outbound_put_string(&mut message, "recipient_email", recipient_email);
+    if !recipient_address_text.is_empty() {
+        outbound_put_string(
+            &mut message,
+            "recipient_address_text",
+            recipient_address_text,
+        );
+    }
+    outbound_put_string(&mut message, "subject", subject);
+    outbound_put_string(&mut message, "body_text", body_text);
+    outbound_put_string(&mut message, "draft_status", "ready_for_review");
+    outbound_put_string(&mut message, "approval_status", "awaiting_approval");
+    outbound_put_string(&mut message, "send_status", "awaiting_approval");
+    outbound_put_default_object(&mut message, "payload");
+    outbound_payload_insert(
+        &mut message,
+        "draft_engine",
+        Value::String("business-os.outbound.scheduler.v1".to_string()),
+    );
+    outbound_payload_insert(&mut message, "generated_draft", generated);
+    if let Some(previous) = latest_message
+        .as_ref()
+        .and_then(|message| outbound_string(message, &["id"]))
+    {
+        outbound_put_string(&mut message, "reply_to_message_id", previous);
+    }
+    let revision_id = outbound_message_revision(&message);
+    outbound_put_string(&mut message, "revision_id", revision_id);
+    outbound_put_default_i64(&mut message, "created_at_ms", now);
+    outbound_put_i64(&mut message, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_messages", &message_id, now, message.clone())?;
+
+    outbound_put_string(&mut engagement, "status", "awaiting_approval");
+    outbound_put_i64(&mut engagement, "next_action_at_ms", 0);
+    outbound_payload_insert(
+        &mut engagement,
+        "scheduler_last_message_id",
+        Value::String(message_id.clone()),
+    );
+    outbound_payload_insert(
+        &mut engagement,
+        "scheduler_last_run_at_ms",
+        Value::Number(serde_json::Number::from(now)),
+    );
+    outbound_put_i64(&mut engagement, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_engagements",
+        &engagement_id,
+        now,
+        engagement,
+    )?;
+
+    Ok(serde_json::json!({
+        "kind": "followup_draft_prepared",
+        "engagement_id": engagement_id,
+        "message_id": message_id,
+        "draft_kind": draft_kind,
     }))
 }
 
@@ -6823,7 +7057,11 @@ fn outbound_handle_engagement_reapply_sequence(
         &sequence_id,
         "sequence not found",
     )?;
-    outbound_payload_insert(&mut engagement, "sequence_id", Value::String(sequence_id.clone()));
+    outbound_payload_insert(
+        &mut engagement,
+        "sequence_id",
+        Value::String(sequence_id.clone()),
+    );
     outbound_payload_insert(&mut engagement, "sequence_snapshot", sequence.clone());
     outbound_payload_insert(
         &mut engagement,
@@ -6873,7 +7111,13 @@ fn outbound_handle_scheduling_update_slots(
         }
     }
     outbound_put_i64(&mut request, "updated_at_ms", now);
-    upsert_business_record(conn, "outbound_meeting_requests", &request_id, now, request.clone())?;
+    upsert_business_record(
+        conn,
+        "outbound_meeting_requests",
+        &request_id,
+        now,
+        request.clone(),
+    )?;
     Ok(serde_json::json!({
         "ok": true,
         "meeting_request": request,
@@ -6931,12 +7175,16 @@ fn outbound_handle_provider_reconcile(
             outbound_string(&message, &["payload", "provider_queue_id"]),
             outbound_string(&message, &["payload", "provider_message_id"]),
         ]);
-        let Some(provider_id) = provider_id else { continue };
+        let Some(provider_id) = provider_id else {
+            continue;
+        };
         let Some(message_id) = outbound_string(&message, &["id"]) else {
             continue;
         };
         checked += 1;
-        let Some(ref log_conn) = log_conn else { continue };
+        let Some(ref log_conn) = log_conn else {
+            continue;
+        };
         let outcome: Option<(String, Option<String>, i64)> = log_conn
             .query_row(
                 "SELECT outcome, error_text, completed_at
@@ -7044,8 +7292,12 @@ fn outbound_handle_reply_match(
         engagement.clone(),
     )?;
 
-    let pending_messages =
-        outbound_load_records_by_string_field(conn, "outbound_messages", "engagement_id", &engagement_id)?;
+    let pending_messages = outbound_load_records_by_string_field(
+        conn,
+        "outbound_messages",
+        "engagement_id",
+        &engagement_id,
+    )?;
     let mut cancelled = Vec::new();
     for mut message in pending_messages {
         let send_status =
@@ -7055,7 +7307,10 @@ fn outbound_handle_reply_match(
         if direction != "outbound" {
             continue;
         }
-        if matches!(send_status.as_str(), "sent" | "delivered" | "queued_for_provider") {
+        if matches!(
+            send_status.as_str(),
+            "sent" | "delivered" | "queued_for_provider"
+        ) {
             continue;
         }
         if matches!(send_status.as_str(), "cancelled" | "paused") {
@@ -7120,7 +7375,8 @@ fn annotate_communication_message_with_outbound(
     let Some(metadata_text) = row else {
         return Ok(());
     };
-    let mut metadata: Value = serde_json::from_str(&metadata_text).unwrap_or_else(|_| serde_json::json!({}));
+    let mut metadata: Value =
+        serde_json::from_str(&metadata_text).unwrap_or_else(|_| serde_json::json!({}));
     let object = metadata.as_object_mut().ok_or_else(|| {
         anyhow::anyhow!("communication_messages.metadata_json is not an object for {message_key}")
     })?;
@@ -7589,8 +7845,9 @@ fn outbound_increment_account_send_count(
 ) -> anyhow::Result<()> {
     let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
         .unwrap_or_else(|| sender_account_id.to_string());
-    let existing = outbound_load_record(conn, "outbound_account_limits", &canonical)?
-        .or(outbound_load_record(conn, "outbound_account_limits", sender_account_id)?);
+    let existing = outbound_load_record(conn, "outbound_account_limits", &canonical)?.or(
+        outbound_load_record(conn, "outbound_account_limits", sender_account_id)?,
+    );
     let Some(mut limit) = existing else {
         return Ok(());
     };
@@ -8012,8 +8269,9 @@ fn outbound_enforce_account_limit(
     // bypassing the gate.
     let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
         .unwrap_or_else(|| sender_account_id.to_string());
-    let limit = outbound_load_record(conn, "outbound_account_limits", &canonical)?
-        .or(outbound_load_record(conn, "outbound_account_limits", sender_account_id)?);
+    let limit = outbound_load_record(conn, "outbound_account_limits", &canonical)?.or(
+        outbound_load_record(conn, "outbound_account_limits", sender_account_id)?,
+    );
     let Some(limit) = limit else {
         return Ok(());
     };
@@ -8025,8 +8283,7 @@ fn outbound_enforce_account_limit(
         !blocked,
         "sender account is blocked for outbound communication"
     );
-    let status =
-        outbound_string(&limit, &["status"]).unwrap_or_else(|| "active".to_string());
+    let status = outbound_string(&limit, &["status"]).unwrap_or_else(|| "active".to_string());
     anyhow::ensure!(
         !matches!(
             status.as_str(),
@@ -10996,7 +11253,10 @@ mod tests {
         );
         // And the text/plain fallback must not be empty.
         assert!(
-            body.contains("Hello") && !body.contains("text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\r\n"),
+            body.contains("Hello")
+                && !body.contains(
+                    "text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n\r\n"
+                ),
             "expected non-empty text/plain fallback, got: {body}"
         );
         Ok(())
@@ -11201,7 +11461,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_bare_email_sender_normalizes_to_email_prefix_for_limit_lookup() -> anyhow::Result<()> {
+    fn outbound_bare_email_sender_normalizes_to_email_prefix_for_limit_lookup() -> anyhow::Result<()>
+    {
         let temp = tempdir()?;
         let root = temp.path();
         // Pre-seed an account_limits row with canonical key.
@@ -11224,7 +11485,10 @@ mod tests {
         )?;
         // Now run the limit check against a bare email — should hit the canonical row.
         let result = outbound_enforce_account_limit(&conn, "s@example.com");
-        assert!(result.is_err(), "bare email must resolve to canonical limit row");
+        assert!(
+            result.is_err(),
+            "bare email must resolve to canonical limit row"
+        );
         assert!(result.unwrap_err().to_string().contains("blocked"));
         Ok(())
     }
@@ -11300,6 +11564,58 @@ mod tests {
     }
 
     #[test]
+    fn outbound_skillbook_save_preserves_unsent_fields() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_preserve_seed","command_id":"sk_preserve_seed","module":"outbound",
+                "command_type":"outbound.skillbook.seed_defaults","record_id":"",
+                "status":"pending_sync","payload":{},"client_context":actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"sk_preserve_save","command_id":"sk_preserve_save","module":"outbound",
+                "command_type":"outbound.skillbook.save","record_id":"business-os.outbound.message_drafting.v1",
+                "status":"pending_sync",
+                "payload":{
+                    "skillbook_id":"business-os.outbound.message_drafting.v1",
+                    "mission":"Updated mission only"
+                },
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let stored = outbound_load_required(
+            &conn,
+            "outbound_skillbooks",
+            "business-os.outbound.message_drafting.v1",
+            "skillbook",
+        )?;
+        assert_eq!(
+            outbound_string(&stored, &["title"]).as_deref(),
+            Some("Initial- und Follow-up-Drafts vorbereiten")
+        );
+        assert!(
+            stored
+                .get("stop_rules")
+                .and_then(Value::as_array)
+                .map(|items| !items.is_empty())
+                .unwrap_or(false),
+            "stop_rules must survive partial saves"
+        );
+        assert_eq!(
+            outbound_string(&stored, &["mission"]).as_deref(),
+            Some("Updated mission only")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn outbound_letter_template_save_persists_record() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -11319,7 +11635,10 @@ mod tests {
         );
         let conn = open_store(root)?;
         let stored = outbound_load_required(&conn, "outbound_letter_templates", "tpl_x", "t")?;
-        assert_eq!(outbound_string(&stored, &["salutation"]).as_deref(), Some("Hi"));
+        assert_eq!(
+            outbound_string(&stored, &["salutation"]).as_deref(),
+            Some("Hi")
+        );
         Ok(())
     }
 
@@ -11368,6 +11687,15 @@ mod tests {
             engagements[0].pointer("/id").and_then(Value::as_str),
             Some("e1")
         );
+        assert!(
+            r.pointer("/result/export/outbound_skillbooks").is_some(),
+            "audit export must include skillbook configuration"
+        );
+        assert!(
+            r.pointer("/result/export/outbound_letter_templates")
+                .is_some(),
+            "audit export must include letter template configuration"
+        );
         Ok(())
     }
 
@@ -11399,10 +11727,141 @@ mod tests {
                 "client_context":actor.clone()
             }),
         )?;
-        assert_eq!(
-            r.pointer("/result/ok").and_then(Value::as_bool),
-            Some(true)
+        assert_eq!(r.pointer("/result/ok").and_then(Value::as_bool), Some(true));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_tick_prepares_due_followup_draft() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_due",
+                1000,
+                serde_json::json!({
+                    "id":"eng_due",
+                    "campaign_id":"camp_due",
+                    "sender_account_id":"email:scheduler@example.com",
+                    "status":"sent",
+                    "next_action_at_ms":1,
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"Scheduler GmbH",
+                        "contact_email":"lead@example.com"
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_due","command_id":"tick_due","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let actions = r
+            .pointer("/result/actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            actions.iter().any(|action| {
+                action.get("kind").and_then(Value::as_str) == Some("followup_draft_prepared")
+            }),
+            "scheduler must create a follow-up draft, actions={actions:?}"
         );
+        let conn = open_store(root)?;
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_due",
+        )?;
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            outbound_string(&messages[0], &["approval_status"]).as_deref(),
+            Some("awaiting_approval")
+        );
+        assert_ne!(
+            outbound_string(&messages[0], &["id"]).as_deref(),
+            Some("eng_due"),
+            "scheduler-created message must not reuse the engagement id"
+        );
+        let engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_due", "engagement")?;
+        assert_eq!(
+            engagement.get("next_action_at_ms").and_then(Value::as_i64),
+            Some(0)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_tick_does_not_follow_up_after_reply() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_reply_stop",
+                1000,
+                serde_json::json!({
+                    "id":"eng_reply_stop",
+                    "campaign_id":"camp_due",
+                    "sender_account_id":"email:scheduler@example.com",
+                    "status":"reply_received",
+                    "next_action_at_ms":1,
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"Scheduler GmbH",
+                        "contact_email":"lead@example.com",
+                        "reply_classification":"positive"
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_reply_stop","command_id":"tick_reply_stop","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let actions = r
+            .pointer("/result/actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !actions.iter().any(|action| {
+                action.get("kind").and_then(Value::as_str) == Some("followup_draft_prepared")
+            }),
+            "scheduler must not create follow-ups after reply, actions={actions:?}"
+        );
+        let conn = open_store(root)?;
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_reply_stop",
+        )?;
+        assert!(messages.is_empty());
         Ok(())
     }
 
@@ -11420,10 +11879,7 @@ mod tests {
                 "client_context":actor.clone()
             }),
         )?;
-        assert_eq!(
-            r.pointer("/result/count").and_then(Value::as_i64),
-            Some(4)
-        );
+        assert_eq!(r.pointer("/result/count").and_then(Value::as_i64), Some(4));
         Ok(())
     }
 
@@ -11911,10 +12367,7 @@ mod tests {
             }),
         )
         .expect_err("send must be blocked by suppression");
-        assert!(
-            blocked.to_string().contains("suppressed"),
-            "{blocked}"
-        );
+        assert!(blocked.to_string().contains("suppressed"), "{blocked}");
         Ok(())
     }
 
@@ -12028,7 +12481,9 @@ mod tests {
             }),
         )?;
         assert_eq!(
-            second.pointer("/result/idempotent").and_then(Value::as_bool),
+            second
+                .pointer("/result/idempotent")
+                .and_then(Value::as_bool),
             Some(true)
         );
         assert_eq!(
@@ -12157,10 +12612,7 @@ mod tests {
             }),
         )
         .expect_err("activation must require a linked mailbox");
-        assert!(
-            blocked.to_string().contains("linked mailbox"),
-            "{blocked}"
-        );
+        assert!(blocked.to_string().contains("linked mailbox"), "{blocked}");
 
         // Link mailbox + activate must succeed
         accept_rxdb_business_command(
@@ -12309,10 +12761,7 @@ mod tests {
             .cloned()
             .unwrap_or_default();
         assert_eq!(cancelled_ids.len(), 1);
-        assert_eq!(
-            cancelled_ids[0].as_str(),
-            Some("msg_followup")
-        );
+        assert_eq!(cancelled_ids[0].as_str(), Some("msg_followup"));
 
         let conn = open_store(root)?;
         let engagement =

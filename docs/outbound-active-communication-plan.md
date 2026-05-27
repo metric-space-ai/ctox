@@ -1,6 +1,6 @@
 # Business OS Outbound: Active Communication Implementation Plan
 
-Status: Planungsstand 2026-05-25
+Status: Planungsstand 2026-05-27
 Ziel: Die bestehende Outbound-App wird von Research/Pipeline-Vorbereitung zu einer vollstaendigen, approval-gesteuerten Kommunikationsloesung erweitert. CTOX darf Kommunikation, Follow-ups, Reply Handling und Terminfindung automatisch vorbereiten, aber keine ausgehende Nachricht ohne explizite Freigabe senden.
 
 ## Fortschrittsmodell
@@ -18,9 +18,9 @@ Der Projektfortschritt wird ueber Wellengewichtung berechnet. Jede Welle hat ein
 | 6. Kommunikationskanaele, Mailserver, Sender Accounts & Deliverability | 10% | In Arbeit | 75% |
 | 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 65% |
 | 8. Scheduling & Terminfindung | 7% | Nicht begonnen | 0% |
-| 9. Automation Scheduler, Limits & Stop-Regeln | 6% | Nicht begonnen | 0% |
-| 10. End-to-End Hardening, Observability & Release Gates | 5% | Nicht begonnen | 0% |
-| **Gesamt** | **100%** | **In Arbeit** | **57%** |
+| 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 50% |
+| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 25% |
+| **Gesamt** | **100%** | **In Arbeit** | **61%** |
 
 Fortschritt je Welle:
 
@@ -599,18 +599,18 @@ Ziel: CTOX bereitet Folgeaktionen automatisch zum richtigen Zeitpunkt vor, ohne 
 
 Aufgaben:
 
-- [ ] Scheduler fuer `next_action_at_ms` implementieren.
-- [ ] Follow-up-Drafts automatisch vorbereiten.
+- [x] Scheduler fuer `next_action_at_ms` implementieren.
+- [x] Follow-up-Drafts automatisch vorbereiten.
 - [ ] Scheduler beachtet Werktage, Sendefenster und Campaign-Zeitzone.
-- [ ] Scheduler beachtet Replies, Bounces, Opt-outs, Pausen und Closures.
+- [x] Scheduler beachtet Replies, Bounces, Opt-outs, Pausen und Closures.
 - [ ] Scheduler beachtet Account- und Campaign-Limits.
 - [ ] UI zeigt "Warum jetzt?" fuer vorbereitete Aktionen.
 - [ ] Reapply-Strategie fuer geaenderte Campaign Settings bauen.
 
 Akzeptanzkriterien:
 
-- [ ] Scheduler erzeugt nur Drafts, keine Sends.
-- [ ] Kein Follow-up nach Antwort, Bounce, Opt-out oder Pause.
+- [x] Scheduler erzeugt nur Drafts, keine Sends.
+- [x] Kein Follow-up nach Antwort, Bounce, Opt-out oder Pause.
 - [ ] Drafts werden nachvollziehbar mit Sequenzversion erzeugt.
 - [ ] Nutzer kann Automation pro Engagement und Campaign pausieren.
 
@@ -628,7 +628,7 @@ Aufgaben:
 - [ ] Mailserver-Fehler-, Bounce- und Retrytests bauen.
 - [ ] Reply Matching Tests bauen.
 - [ ] Scheduling Tests bauen.
-- [ ] Audit-Export oder Debug-Panel bauen.
+- [x] Audit-Export oder Debug-Panel bauen.
 - [ ] Observability: Command IDs, Task IDs, Message IDs und Engagement IDs verlinken.
 - [ ] Observability: Outbound-IDs und Communication-IDs sind beidseitig verlinkt und im Debug-/Statuspfad sichtbar.
 - [ ] Performance bei grossen Campaigns pruefen.
@@ -730,3 +730,4 @@ Diese Aufgaben laufen parallel zu mehreren Wellen und duerfen nicht bis zum Ende
 | 2026-05-25 | Campaign-Aktivierungs-Gate umgesetzt | Aktive Campaigns duerfen nicht stillschweigend ohne E-Mail-Postfach oder bewusst manuellen Briefkanal laufen | Neuer Command `outbound.campaign.status.set`, UI-Statusauswahl und Readiness-Badges; Welle 6 steigt auf 70%, Gesamtfortschritt auf 56% |
 | 2026-05-25 | Campaign-Aktivierungs-Gate teilweise deployed | `cto1.kunstmen.com` muss den neuen UI-Stand sofort ausliefern, waehrend die VPS-Instanz stabil bleiben muss | Vercel Production Deploy `dpl_wuro7HKv3cTVXU1T94fafcTHCAvm` liefert `20260525-outbound-activation-gate1`; VPS-Release `branch-main-20260525T184655Z` ist source-gepatcht und `ctox.service` aktiv, aber die neue Binary ist noch offen, weil wiederkehrende `upgrade --dev`/Build-Runner kontrollierte Builds gestoppt haben; Fortschritt bleibt 56% |
 | 2026-05-26 | E-Mail-Send-Gate an Mailserver-Queue angebunden | Nach Nutzerfreigabe darf E-Mail-Outbound nicht bei `queued_for_provider` ohne echten Queue-Auftrag stehenbleiben | `outbound.message.send_approved` queued freigegebene E-Mails in `stalwart_smtp_queue`, persistiert `provider_queue_id`, aktualisiert Conversations-Metadaten und zaehlt Sender-Limits idempotent hoch; Welle 6 steigt auf 75%, Gesamtfortschritt auf 57% |
+| 2026-05-27 | Review-Findings Scheduler, Message-Historie und Audit geschlossen | Aktive Drafts durften keine Message-IDs wiederverwenden, Scheduler musste echte Follow-up-Drafts erzeugen und Audit-/Skillbook-Konfiguration erhalten bleiben | UI erzeugt pro Draft eindeutige `msg_...` IDs; Scheduler schreibt approval-gated Follow-up-Drafts und stoppt bei Reply/Pause/Closure/Opt-out/Bounce; Skillbook-Save merged bestehende Felder; Audit exportiert Skillbooks und Briefvorlagen; Welle 9 steigt auf 50%, Welle 10 auf 25%, Gesamtfortschritt auf 61% |
