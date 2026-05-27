@@ -1585,10 +1585,11 @@ var CtoxWebRtcNativePeer = class {
   shouldConnectToRemotePeer(remotePeerId) {
     const peerId = String(remotePeerId || "");
     if (!peerId || peerId === this.options.clientId) return false;
-    const metadata = this.peerMetadata.get(peerId);
-    if (!metadata?.role) {
-      return peerId.startsWith("ctox-business-os-native") || peerId.startsWith("ctox-core-");
+    if (peerId.startsWith("ctox-business-os-native") || peerId.startsWith("ctox-core-")) {
+      return true;
     }
+    const metadata = this.peerMetadata.get(peerId);
+    if (!metadata?.role) return false;
     return metadata.role === "ctox_instance";
   }
   rejectPendingForPeer(peerId, error) {

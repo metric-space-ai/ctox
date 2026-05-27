@@ -205,6 +205,10 @@ try {
   if (peer.connections.has('stale-browser-peer')) {
     throw new Error('browser peer must ignore signaling peers without native role metadata');
   }
+  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers: [{ peerId: 'ctox-core-live', role: 'ctox_instance_webserver' }] }));
+  if (!peer.connections.has('ctox-core-live')) {
+    throw new Error('ctox-core native peer ids must be accepted even when signaling role metadata is not exact');
+  }
   const firstConnection = peer.connections.get('ctox-peer');
   peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
   const secondConnection = peer.connections.get('ctox-peer');
