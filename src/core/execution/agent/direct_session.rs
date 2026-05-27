@@ -197,8 +197,10 @@ fn use_openai_chatgpt_subscription_auth(
     settings: &BTreeMap<String, String>,
     selected_api_provider: Option<&str>,
 ) -> bool {
-    selected_api_provider.is_some_and(|provider| provider.eq_ignore_ascii_case("openai"))
-        && openai_chatgpt_subscription_auth_enabled(settings)
+    let provider_is_openai = selected_api_provider
+        .map(|provider| provider.eq_ignore_ascii_case("openai"))
+        .unwrap_or(true);
+    provider_is_openai && openai_chatgpt_subscription_auth_enabled(settings)
 }
 
 fn restore_chatgpt_subscription_auth_from_instance(
@@ -1270,11 +1272,11 @@ mod tests {
             &settings,
             Some("openai")
         ));
+        assert!(use_openai_chatgpt_subscription_auth(&settings, None));
         assert!(!use_openai_chatgpt_subscription_auth(
             &settings,
             Some("anthropic")
         ));
-        assert!(!use_openai_chatgpt_subscription_auth(&settings, None));
     }
 
     #[test]

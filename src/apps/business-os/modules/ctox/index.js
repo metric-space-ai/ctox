@@ -433,7 +433,7 @@ async function renderFromLocalCache(state) {
     notice: state.webStack?.notice || '',
     data: webStack?.ok ? webStack : state.webStack?.data,
   };
-  state.flow = state.flow || emptyHarnessFlow();
+  state.flow = await loadHarnessFlowSnapshot().catch(() => emptyHarnessFlow('harness_flow_unavailable'));
   const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
   const metrics = aggregateFlowMetrics(state.flow);
   state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
@@ -475,11 +475,12 @@ async function refresh(state) {
   if (state.refreshInFlight) return;
   state.refreshInFlight = true;
   try {
-    const [commands, queueTasks, bugReports, webStack] = await Promise.all([
+    const [commands, queueTasks, bugReports, webStack, harnessFlow] = await Promise.all([
       loadLocalCommands(state.ctx).catch(() => []),
       loadLocalQueueTasks(state.ctx).catch(() => []),
       loadLocalBugReports(state.ctx).catch(() => []),
       loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
+      loadHarnessFlowSnapshot().catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     ]);
     state.webStack = {
       loading: false,
@@ -487,7 +488,7 @@ async function refresh(state) {
       notice: state.webStack?.notice || '',
       data: webStack?.ok ? webStack : state.webStack?.data,
     };
-    const nextFlow = emptyHarnessFlow('rxdb_flow_projection_unavailable');
+    const nextFlow = harnessFlow?.ok ? harnessFlow : emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
     state.flow = nextFlow;
     const metrics = aggregateFlowMetrics(nextFlow);
@@ -941,6 +942,7 @@ function wireWebStackPanel(state, root) {
 }
 
 function taskSteps(task, state) {
+  if (!task) return [];
   if (isExactCommunicationFlow(task, state)) return communicationTaskSteps(task, state);
   const timeline = state.model?.timeline || [];
   if (timeline.length && taskMatchesHarnessFlow(task, state)) {
@@ -2550,6 +2552,22 @@ async function loadLocalBugReports(ctx) {
   return loadLocalCollection(ctx, 'ctox_bug_reports');
 }
 
+async function loadHarnessFlowSnapshot() {
+  if (typeof window === 'undefined' || !window.location?.origin) {
+    throw new Error('Harness Flow API is not available.');
+  }
+  const response = await fetch(new URL('/api/business-os/ctox/harness-flow', window.location.origin).toString(), {
+    cache: 'no-store',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+  });
+  const payload = await response.json().catch(() => null);
+  if (!response.ok || payload?.ok === false) {
+    throw new Error(payload?.error || `Harness Flow API ${response.status}`);
+  }
+  return payload;
+}
+
 async function loadLocalWebStackOverview(ctx) {
   const collection = ctx.db?.raw?.ctox_runtime_settings;
   if (!collection) return { ok: false, error: 'ctox_runtime_settings collection is not available' };
@@ -2563,12 +2581,7 @@ async function loadLocalWebStackOverview(ctx) {
 async function refreshWebStackPanel(state) {
   try {
     const data = await loadLocalWebStackOverview(state.ctx);
-    state.webStack = {
-      loading: false,
-      error: data.ok ? '' : 'Web Stack status unavailable',
-      notice: state.webStack?.notice || '',
-      data: data.ok ? data : state.webStack?.data,
-    };
+    state.webStack = webStackStateFromRefreshResult(state.webStack, data);
   } catch (error) {
     state.webStack = {
       ...(state.webStack || {}),
@@ -2577,6 +2590,15 @@ async function refreshWebStackPanel(state) {
     };
   }
   renderLeft(state);
+}
+
+function webStackStateFromRefreshResult(previous, data) {
+  return {
+    loading: false,
+    error: data?.ok ? '' : (data?.error || 'Web Stack status unavailable'),
+    notice: previous?.notice || '',
+    data: data?.ok ? data : previous?.data,
+  };
 }
 
 async function verifyWebStackCredential(state, sourceId, secretName) {
@@ -3476,5 +3498,6 @@ export const __ctoxTestHooks = {
   setFlowZoom,
   taskSteps,
   timelinePanel,
+  webStackStateFromRefreshResult,
   webStackProjectionMissing,
 };
