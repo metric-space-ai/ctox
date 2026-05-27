@@ -534,6 +534,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     push: isReadOnlyProjectionCollection(collection) ? undefined : { batchSize },
     retryTime: 5000,
     ctox: {
+      expectedNativePeerId: config?.native_peer_id || config?.nativePeerId || '',
       onPeerProtocol(info) {
         const remoteCapabilities = Array.isArray(info?.capabilities) ? info.capabilities : [];
         const remoteCheckpoint = sanitizeRemoteCheckpoint(info?.checkpoint || null);

@@ -205,15 +205,36 @@ try {
   if (peer.connections.has('stale-browser-peer')) {
     throw new Error('browser peer must ignore signaling peers without native role metadata');
   }
-  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers: [{ peerId: 'ctox-core-live', role: 'ctox_instance_webserver' }] }));
-  if (!peer.connections.has('ctox-core-live')) {
-    throw new Error('ctox-core native peer ids must be accepted even when signaling role metadata is not exact');
-  }
   const firstConnection = peer.connections.get('ctox-peer');
   peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
   const secondConnection = peer.connections.get('ctox-peer');
   if (!firstConnection || !secondConnection || firstConnection === secondConnection || closedConnections.length !== 1) {
     throw new Error('rejoined native peer must replace stale RTC connections');
+  }
+  const prefixedPeer = createCtoxWebRtcNativePeer({
+    signalingUrl: 'ws://127.0.0.1:19998',
+    room: 'ctox-business-os:test:ctox_runtime_settings',
+    clientId: 'browser-prefixed',
+  });
+  prefixedPeer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers: [{ peerId: 'ctox-core-live', role: 'ctox_instance_webserver' }] }));
+  if (!prefixedPeer.connections.has('ctox-core-live')) {
+    throw new Error('ctox-core native peer ids must be accepted even when signaling role metadata is not exact');
+  }
+  const targetedPeer = createCtoxWebRtcNativePeer({
+    signalingUrl: 'ws://127.0.0.1:19998',
+    room: 'ctox-business-os:test:business_commands',
+    clientId: 'browser-targeted',
+    expectedNativePeerId: 'ctox-core-current',
+  });
+  targetedPeer.handleSignalingMessage(JSON.stringify({
+    type: 'joined',
+    peers: [
+      { peerId: 'ctox-core-stale', role: 'ctox_instance' },
+      { peerId: 'ctox-core-current', role: 'ctox_instance_webserver' },
+    ],
+  }));
+  if (targetedPeer.connections.has('ctox-core-stale') || !targetedPeer.connections.has('ctox-core-current')) {
+    throw new Error('expected native peer id must prevent stale native peer fan-out');
   }
 } finally {
   globalThis.WebSocket = originalWebSocket;

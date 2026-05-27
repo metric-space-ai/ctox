@@ -34,6 +34,7 @@ export class CtoxWebRtcNativePeer {
     capabilities = [],
     iceServers = [],
     storageToken = randomId('storage'),
+    expectedNativePeerId = '',
     protocolPayload = null,
     requestHandlers = {},
   } = {}) {
@@ -56,6 +57,7 @@ export class CtoxWebRtcNativePeer {
       capabilities,
       iceServers,
       storageToken,
+      expectedNativePeerId,
       protocolPayload,
       requestHandlers,
     };
@@ -875,12 +877,31 @@ export class CtoxWebRtcNativePeer {
   shouldConnectToRemotePeer(remotePeerId) {
     const peerId = String(remotePeerId || '');
     if (!peerId || peerId === this.options.clientId) return false;
+    const expectedNativePeerId = String(this.options.expectedNativePeerId || '');
+    if (expectedNativePeerId) return peerId === expectedNativePeerId;
+    if (this.nativeCandidateConnectionCount(peerId) > 0) return false;
     if (peerId.startsWith('ctox-business-os-native') || peerId.startsWith('ctox-core-')) {
       return true;
     }
     const metadata = this.peerMetadata.get(peerId);
     if (!metadata?.role) return false;
     return metadata.role === 'ctox_instance';
+  }
+
+  nativeCandidateConnectionCount(excludePeerId = '') {
+    let count = 0;
+    for (const peerId of this.connections.keys()) {
+      if (peerId === excludePeerId) continue;
+      const metadata = this.peerMetadata.get(peerId);
+      if (
+        peerId.startsWith('ctox-business-os-native')
+        || peerId.startsWith('ctox-core-')
+        || metadata?.role === 'ctox_instance'
+      ) {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   rejectPendingForPeer(peerId, error) {

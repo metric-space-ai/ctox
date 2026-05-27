@@ -102,6 +102,7 @@ class CtoxWebRtcReplicationState {
       role: 'browser',
       capabilities: BROWSER_CAPABILITIES,
       iceServers,
+      expectedNativePeerId: this.ctox?.expectedNativePeerId || '',
       protocolPayload: async () => {
         const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(schemaHashValue);
         return buildProtocolPayload({
