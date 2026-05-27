@@ -17,6 +17,7 @@ const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const SEND_PRIORITIES = ['high', 'normal', 'low'];
 const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 8;
 const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
+const RTC_HANDSHAKE_TIMEOUT_MS = 30_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
 const SHELL_CRITICAL_COLLECTIONS = new Set([
@@ -378,7 +379,19 @@ export class CtoxWebRtcNativePeer {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`Timed out waiting for WebRTC response ${method}`));
+        const error = new Error(`Timed out waiting for WebRTC response ${method}`);
+        const peerId = String(remotePeerId || '');
+        const connection = this.connections.get(peerId);
+        if (connection) {
+          this.recordConnectionEvent(connection, 'request-timeout', { method });
+          this.removeConnection(peerId, `request-timeout-${method}`);
+          setTimeout(() => {
+            if (!this.closed && this.shouldConnectToRemotePeer(peerId)) {
+              this.ensureConnection(peerId);
+            }
+          }, 250 + Math.floor(Math.random() * 500));
+        }
+        reject(error);
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
       const sent = this.send(remotePeerId, { id, method, params });
@@ -530,8 +543,28 @@ export class CtoxWebRtcNativePeer {
       signalStats: createPeerSignalStats(),
       localCandidateTypes: {},
       remoteCandidateTypes: {},
+      handshakeTimer: null,
     };
     this.connections.set(remotePeerId, connection);
+    connection.handshakeTimer = setTimeout(() => {
+      const current = this.connections.get(remotePeerId);
+      if (this.closed || current !== connection) return;
+      if (connection.channel?.readyState === 'open') return;
+      this.recordConnectionEvent(connection, 'handshake-timeout', {
+        ageMs: Date.now() - connection.createdAtMs,
+        connectionState: peer.connectionState || '',
+        iceConnectionState: peer.iceConnectionState || '',
+        iceGatheringState: peer.iceGatheringState || '',
+        signalingState: peer.signalingState || '',
+      });
+      this.events.emit('peer-state', { peerId: remotePeerId, state: 'handshake-timeout' });
+      this.removeConnection(remotePeerId, 'rtc-handshake-timeout');
+      setTimeout(() => {
+        if (!this.closed && this.shouldConnectToRemotePeer(remotePeerId)) {
+          this.ensureConnection(remotePeerId);
+        }
+      }, 250 + Math.floor(Math.random() * 500));
+    }, RTC_HANDSHAKE_TIMEOUT_MS);
     this.recordConnectionEvent(connection, 'created', { state: peer.connectionState || 'new' });
 
     peer.onicecandidate = (event) => {
@@ -678,6 +711,10 @@ export class CtoxWebRtcNativePeer {
   attachChannel(connection, channel) {
     connection.channel = channel;
     channel.onopen = () => {
+      if (connection.handshakeTimer) {
+        clearTimeout(connection.handshakeTimer);
+        connection.handshakeTimer = null;
+      }
       markCriticalRtcPeerConnectionOpened(connection.rtcPoolSlot);
       drainRtcPeerConnectionQueue('critical-peer-opened');
       this.recordConnectionEvent(connection, 'datachannel-open', { readyState: channel.readyState || 'open' });
@@ -1005,6 +1042,10 @@ export class CtoxWebRtcNativePeer {
     if (!connection) return;
     this.connections.delete(peerId);
     this.connectionRequests.delete(peerId);
+    if (connection.handshakeTimer) {
+      clearTimeout(connection.handshakeTimer);
+      connection.handshakeTimer = null;
+    }
     try { connection.channel?.close?.(); } catch {}
     try { connection.peer?.close?.(); } catch {}
     releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
@@ -1347,7 +1388,10 @@ function acquireRtcPeerConnectionSlot(owner, remotePeerId) {
   const pool = getRtcPeerConnectionPool();
   const key = rtcPeerConnectionOwnerKey(owner, remotePeerId);
   const existingQueued = pool.queue.find((entry) => entry.key === key);
-  if (existingQueued) return existingQueued.promise;
+  if (existingQueued) {
+    scheduleRtcPeerConnectionQueueDrain('existing-slot-request');
+    return existingQueued.promise;
+  }
   let resolve;
   let reject;
   const promise = new Promise((promiseResolve, promiseReject) => {
@@ -1372,6 +1416,7 @@ function acquireRtcPeerConnectionSlot(owner, remotePeerId) {
   pool.queue.push(entry);
   sortRtcPeerConnectionQueue(pool);
   owner?.events?.emit?.('peer-state', { peerId: remotePeerId, state: 'queued' });
+  scheduleRtcPeerConnectionQueueDrain('slot-request-queued');
   return promise;
 }
 
@@ -1400,6 +1445,19 @@ function drainRtcPeerConnectionQueue(reason = 'slot-released') {
     entry.owner?.events?.emit?.('peer-state', { peerId: entry.remotePeerId, state: 'slot-granted', reason });
     entry.resolve(slot);
   }
+}
+
+function scheduleRtcPeerConnectionQueueDrain(reason = 'slot-drain-scheduled') {
+  const pool = getRtcPeerConnectionPool();
+  if (pool.drainScheduled) return;
+  pool.drainScheduled = true;
+  const schedule = typeof queueMicrotask === 'function'
+    ? queueMicrotask
+    : (callback) => Promise.resolve().then(callback);
+  schedule(() => {
+    pool.drainScheduled = false;
+    drainRtcPeerConnectionQueue(reason);
+  });
 }
 
 function removeQueuedRtcPeerConnection(entry) {
@@ -1444,6 +1502,7 @@ function getRtcPeerConnectionPool() {
       active: new Map(),
       queue: [],
       criticalOpened: new Set(),
+      drainScheduled: false,
     };
   } else if (root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive < MAX_GLOBAL_RTC_PEER_CONNECTIONS) {
     root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive = MAX_GLOBAL_RTC_PEER_CONNECTIONS;
