@@ -380,15 +380,26 @@ export class CtoxWebRtcNativePeer {
       this.events.emit('error', { code: 'ctox_signaling_invalid_json', message: error.message });
       return;
     }
-    if (message.type === 'init' || message.type === 'joined') {
+    if (message.type === 'init' || message.type === 'joined' || message.type === 'ctoxPresence') {
       const ownPeerId = message.yourPeerId || message.peerId || this.options.clientId;
       if (ownPeerId && ownPeerId !== this.options.clientId) {
         this.options.clientId = String(ownPeerId);
       }
-      for (const descriptor of signalingPeerDescriptors(message)) {
+      const descriptors = signalingPeerDescriptors(message);
+      for (const descriptor of descriptors) {
+        if (descriptor.peerId) this.rememberPeerMetadata(descriptor.peerId, descriptor);
+      }
+      const expectedNativePeerId = String(this.options.expectedNativePeerId || '').trim();
+      const hasExpectedDescriptor = Boolean(expectedNativePeerId) && descriptors.some((descriptor) => (
+        this.peerMatchesExpectedNativePeerId(descriptor.peerId, descriptor)
+      ));
+      for (const descriptor of descriptors) {
         const remotePeerId = descriptor.peerId;
         if (!remotePeerId) continue;
-        this.rememberPeerMetadata(remotePeerId, descriptor);
+        if (hasExpectedDescriptor && !this.peerMatchesExpectedNativePeerId(remotePeerId, descriptor)) {
+          this.removeConnection(remotePeerId, 'signaling-non-target-native-peer');
+          continue;
+        }
         if (message.type === 'joined' && remotePeerId !== this.options.clientId && this.connections.has(remotePeerId)) {
           this.removeConnection(remotePeerId, 'signaling-peer-rejoined');
         }
@@ -877,15 +888,31 @@ export class CtoxWebRtcNativePeer {
   shouldConnectToRemotePeer(remotePeerId) {
     const peerId = String(remotePeerId || '');
     if (!peerId || peerId === this.options.clientId) return false;
-    const expectedNativePeerId = String(this.options.expectedNativePeerId || '');
-    if (expectedNativePeerId) return peerId === expectedNativePeerId;
+    const metadata = this.peerMetadata.get(peerId);
+    if (this.peerMatchesExpectedNativePeerId(peerId, metadata)) return true;
     if (this.nativeCandidateConnectionCount(peerId) > 0) return false;
     if (peerId.startsWith('ctox-business-os-native') || peerId.startsWith('ctox-core-')) {
       return true;
     }
-    const metadata = this.peerMetadata.get(peerId);
     if (!metadata?.role) return false;
     return metadata.role === 'ctox_instance';
+  }
+
+  peerMatchesExpectedNativePeerId(peerId, metadata = {}) {
+    const expectedNativePeerId = String(this.options.expectedNativePeerId || '').trim();
+    if (!expectedNativePeerId) return false;
+    const candidates = [
+      peerId,
+      metadata?.peerId,
+      metadata?.nativePeerId,
+      metadata?.native_peer_id,
+      metadata?.corePeerId,
+      metadata?.core_peer_id,
+      metadata?.clientId,
+      metadata?.client_id,
+      metadata?.client,
+    ];
+    return candidates.some((candidate) => String(candidate || '').trim() === expectedNativePeerId);
   }
 
   nativeCandidateConnectionCount(excludePeerId = '') {
