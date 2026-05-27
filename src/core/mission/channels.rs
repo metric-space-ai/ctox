@@ -2340,6 +2340,15 @@ fn enforce_queue_task_spawn(
                 format!("queue-task:message:{parent_message_key}"),
                 64,
             )
+        } else if let Some(command_id) = metadata_string_value(metadata, "business_os_command_id") {
+            (
+                "ControlPlane".to_string(),
+                format!("business-os-command:{command_id}"),
+                "queue-task".to_string(),
+                "create_business_os_command_queue_task".to_string(),
+                format!("queue-task:business-os-command:{command_id}"),
+                1,
+            )
         } else {
             (
                 "Thread".to_string(),
