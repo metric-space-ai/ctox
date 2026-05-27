@@ -51,6 +51,14 @@ pub fn build_signal_url(raw_url: &str, auth_token: &str, client_id: &str) -> Res
         let mut query = url.query_pairs_mut();
         if !auth_token.trim().is_empty() {
             query.append_pair("token", auth_token.trim());
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            // 24-Stunden-Fenster wie der Browser-Pfad
+            // (business-os/shared/sync.js:1407-1410).
+            query.append_pair("token_iat", &now.to_string());
+            query.append_pair("token_exp", &(now + 24 * 60 * 60).to_string());
         }
         if !client_id.trim().is_empty() {
             query.append_pair("client", client_id.trim());
