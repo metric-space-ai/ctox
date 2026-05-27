@@ -227,7 +227,7 @@ async function loadCoreSchemaModules() {
 
 async function loadReactSettingsModule() {
   if (!reactSettingsModulePromise) {
-    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260527-frontend-repairs1', 'react settings');
+    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260527-subscription-rest1', 'react settings');
   }
   return reactSettingsModulePromise;
 }
