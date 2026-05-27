@@ -1489,6 +1489,11 @@ async function prepareDraft(engagementId, draftKind) {
       payload.sender_account_id = engagement.sender_account_id;
       payload.recipient_email = engagement.payload?.contact_email || '';
     }
+    if (draftKind === 'scheduling') {
+      payload.duration_minutes = engagement.payload?.meeting_duration_minutes || campaign?.payload?.active_outreach?.meeting_duration_minutes || 30;
+      payload.slot_hint = translate('defaultSlotHint', 'drei konkrete Zeitfenster in den naechsten Tagen');
+      payload.proposed_slots = buildDefaultMeetingSlots(payload.duration_minutes);
+    }
     const messageId = `msg_${crypto.randomUUID()}`;
     payload.message_id = messageId;
     await dispatchOutboundCommand('outbound.draft.prepare', messageId, payload);
@@ -1496,6 +1501,31 @@ async function prepareDraft(engagementId, draftKind) {
     stateRef.activeOutreach.view = 'approval_inbox';
     triggerRender();
   });
+}
+
+function buildDefaultMeetingSlots(durationMinutes = 30) {
+  const durationMs = Math.max(15, Number(durationMinutes) || 30) * 60 * 1000;
+  const base = new Date();
+  base.setSeconds(0, 0);
+  const slots = [];
+  for (let offset = 1; slots.length < 3 && offset < 10; offset += 1) {
+    const day = new Date(base.getTime() + offset * 24 * 60 * 60 * 1000);
+    const weekday = day.getDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const hour = slots.length === 0 ? 10 : slots.length === 1 ? 14 : 11;
+    const start = new Date(day);
+    start.setHours(hour, slots.length === 2 ? 30 : 0, 0, 0);
+    const end = new Date(start.getTime() + durationMs);
+    slots.push({
+      start_iso: start.toISOString(),
+      end_iso: end.toISOString(),
+      start_ms: start.getTime(),
+      end_ms: end.getTime(),
+      available: true,
+      source: 'outbound_default_scheduler',
+    });
+  }
+  return slots;
 }
 
 async function requestApproval(messageId) {

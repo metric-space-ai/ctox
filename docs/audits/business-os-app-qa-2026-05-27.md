@@ -1239,3 +1239,52 @@ Acceptance criteria:
 12. Add automated registry consistency tests: Desktop, Start menu, App Store categories, installed badges, app tabs, routes, and icons must agree for every app.
 13. Add destructive-action safety rules for all apps: create/import/delete/install/publish actions must have validation, confirmation, undo, or disabled states as appropriate.
 14. Add an action-state contract: disabled controls must be semantically disabled and visually disabled; enabled-looking primary buttons must always be actionable and valid for the current state.
+
+## Remediation Wave 2026-05-27
+
+Status: first implementation wave completed with one subagent per Business-OS app, plus separate platform/shared/RxDB workers.
+
+Scope covered:
+
+- Platform/registry: Desktop, Start menu, App Store, taskbar launch targets now use a deduped registry path. The QA harness reports 19 unique launch targets and Start menu entries for all expected apps, including Files, Source Editor, and App Creator.
+- RxDB/core data path: generic `business_records` projections are materialized for Business-OS collections, and pull now falls back to versioned CTOX DB tables. This addresses the main cause of apps rendering false empty states while SQLite contained test data.
+- Shared UI safety: dialog semantics, resizer ARIA/keyboard basics, safe taskbar spacing, and destructive-action guardrails were tightened without moving app-specific UX into global code.
+- Per-app fixes: all 18 audited apps received app-specific fixes or verification patches from a dedicated subagent.
+
+Per-app remediation summary:
+
+| App | Fixed / hardened |
+|---|---|
+| CTOX | Data-flow diagnostics, WebRTC status honesty, zoom/timeline disabled states. |
+| Bugs & Features | Bug report projection fallback, report merging, type/status/search filters. |
+| Documents | `is_deleted` handling, create/import validation, visible filter/empty states. |
+| Knowledge | Unknown-record grouping, source filters, disabled runbook/data actions without selection, validated dialogs. |
+| Web Research | Create/run validation, selected-domain gating, sync diagnostics. |
+| Matching | Canonical requirement normalization and missing-pull diagnostics. |
+| Conversations | Sync-vs-filter empty states, account/message diagnostics, scoped bucket filters. |
+| Outbound | Campaign scoping, import validation, campaign-row safety. |
+| Einsatzplanung | Department/search reset, pressed state, publish-week bounds. |
+| Spreadsheets | `is_deleted` handling, draft creation, import gating, filter reset after create/import, grid focus safety, resizer polish. |
+| Notizen | Draft-first creation, delete confirmation/undo, favorite undo, lock safety, dropdown close behavior, local resizers. |
+| App Store | Catalog dedupe/scope alignment, stale/loading counts, external GitHub markers, Creator return context. |
+| Buchhaltung | Manual booking validation, selected row ARIA, booking drawer semantics, sticky headers, reset confirmation. |
+| Kalender | Recurring event selection, event/calendar/booking validation, cancel/escape behavior, booking selection and diagnostics. |
+| Coding Agents | Workspace load/error states, validated add-workspace/new-session dialogs, safe disabled states, log text escaping. |
+| Files | Folder/rename/upload/delete validation, clear file data diagnostics, stable row click bounds, disabled unimplemented icon mode. |
+| Source Editor | Editable-app catalog dedupe, deleted-file filtering, search normalization, dirty/writable action gating. |
+| App Creator | Empty/stale prompt gating, install confirmation, visible spec/install diagnostics, resizer ARIA, advanced settings scroll, collection-remove confirmation. |
+
+Verification artifacts:
+
+- Local Business-OS server: `cargo run -q -- business-os serve --addr 127.0.0.1:18765`
+- Browser QA report: `/Users/michaelwelsch/Documents/ctox.nosync/output/playwright/business-os-qa-baseline-2026-05-27T11-48-59-892Z/business-os-qa-baseline.md`
+- Browser screenshots: `/Users/michaelwelsch/Documents/ctox.nosync/output/playwright/business-os-qa-baseline-2026-05-27T11-48-59-892Z/`
+- Automated browser result: 18/18 apps opened, Desktop/Start menu/App Store surfaces captured, screenshots written for every app.
+- Node app tests: 51 tests passed in the grouped app test run, plus legacy app-specific tests for CTOX, Reports, Knowledge, Shiftflow, Buchhaltung, and Kalender.
+- Core checks: CTOX DB schema-hash smoke passed, no-package-manager import smoke passed, schema contract current, targeted RxDB fallback Cargo test passed.
+
+Remaining risks:
+
+- The local browser run is render/launch green, but not console-clean. Console events are dominated by local WebRTC signaling socket failures to `127.0.0.1:19102`; this is expected when the local standalone server is not paired with a running native signaling peer, but it must still be separated from app-specific console regressions in future QA.
+- The global `ctox` binary on this machine is older and does not know `business-os serve`; verification used the repo-local Cargo binary instead.
+- VPS inspection found `/home/ubuntu/workspace/ctox-upgrade-runtime` on branch `codex/official-upgrade-and-mission-runtime` at `2a34ccd987fde094a70ef9ecf62904febb9f32cc`, and that checkout does not contain `src/apps/business-os`. Public `51.210.246.120:8765` was not reachable during this wave. The VPS therefore still needs deployment/runtime alignment with this fixed local `main` worktree before it can be called up to date.

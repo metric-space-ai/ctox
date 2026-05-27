@@ -4913,6 +4913,50 @@ function ensureCtoxSmokeBinary() {
         const queueBridge = bridges[outboundCollections.indexOf('ctox_queue_tasks')];
         if (commandBridge) await waitForNativePeerOpen(commandBridge, 'business_commands');
         if (queueBridge) await waitForNativePeerOpen(queueBridge, 'ctox_queue_tasks');
+        const projectCommandResult = async (result) => {
+          const projections = [
+            ['outbound_engagements', result?.engagement],
+            ['outbound_messages', result?.message],
+            ['outbound_approvals', result?.approval],
+            ['outbound_sender_assignments', result?.assignment],
+            ['outbound_sequences', result?.sequence],
+            ['outbound_meeting_requests', result?.meeting_request || result?.request],
+          ];
+          for (const [collectionName, record] of projections) {
+            if (!record?.id || !rawDb[collectionName]) continue;
+            await upsert(rawDb[collectionName], record);
+          }
+        };
+        const dispatchNativeOutboundCommand = async (type, recordId, payload, label) => {
+          const commandId = `cmd_${type.replaceAll('.', '_')}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+          await rawDb.business_commands.insert({
+            id: commandId,
+            command_id: commandId,
+            module: 'outbound',
+            command_type: type,
+            record_id: recordId || '',
+            status: 'pending_sync',
+            inbound_channel: 'outbound',
+            payload,
+            client_context: { source: 'outbound-active-ui-smoke' },
+            updated_at_ms: Date.now(),
+          });
+          await bounded(commandBridge?.awaitInSync?.(), 25000);
+          const command = await waitFor(async () => {
+            const doc = (await rawDb.business_commands.findOne(commandId).exec())?.toJSON?.();
+            return {
+              ok: Boolean(doc && doc.status && doc.status !== 'pending_sync'),
+              command: doc,
+              status: doc?.status || '',
+              error: doc?.error || '',
+            };
+          }, 60000, label || type);
+          if (command.command?.status === 'failed') {
+            throw new Error(`${label || type} failed: ${command.command.error || 'unknown error'}`);
+          }
+          await projectCommandResult(command.command?.result);
+          return command.command;
+        };
 
         if (!/#outbound(?:$|[?&])/.test(location.hash)) {
           location.hash = '#outbound';
@@ -5099,6 +5143,82 @@ function ensureCtoxSmokeBinary() {
           .find((doc) => doc.campaign_id === campaignId && doc.payload?.pipeline_id === pipelineId);
         const approval = (await jsonDocs(rawDb.outbound_approvals))
           .find((doc) => doc.message_id === messageId);
+        if (!engagement?.id) {
+          throw new Error('queued outbound message did not produce an engagement');
+        }
+        const replyMessageKey = `email:${recipientEmail}:inbound:${suffix}`;
+        const replyCommand = await dispatchNativeOutboundCommand('outbound.reply.match', engagement.id, {
+          engagement_id: engagement.id,
+          reply_message_id: replyMessageKey,
+          outbound_message_id: messageId,
+          classification: 'positive',
+        }, 'positive reply matched to engagement');
+        await waitFor(async () => {
+          const doc = (await rawDb.outbound_engagements.findOne(engagement.id).exec())?.toJSON?.();
+          return {
+            ok: doc?.status === 'reply_received' && doc?.payload?.reply_classification === 'positive',
+            status: doc?.status || '',
+            classification: doc?.payload?.reply_classification || '',
+          };
+        }, 60000, 'positive reply visible in outbound engagement');
+        click('[data-action="ao-view"][data-view="replies"]', 'replies tab');
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="ao-draft-scheduling"][data-id="${css(engagement.id)}"]`)),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 900) || '',
+        }), 15000, 'positive reply scheduling action rendered');
+        await capture('outbound-active-05-positive-reply');
+
+        click(`[data-action="ao-draft-scheduling"][data-id="${css(engagement.id)}"]`, 'prepare scheduling draft button');
+        const schedulingReady = await waitFor(async () => {
+          const messages = await jsonDocs(rawDb.outbound_messages);
+          const message = messages
+            .filter((doc) => doc.engagement_id === engagement.id && doc.message_type === 'scheduling')
+            .sort((a, b) => (b.created_at_ms || 0) - (a.created_at_ms || 0))[0];
+          const slots = Array.isArray(message?.payload?.proposed_slots) ? message.payload.proposed_slots : [];
+          return {
+            ok: Boolean(message && message.approval_status === 'awaiting_approval' && slots.length >= 1 && message.payload?.meeting_request_id),
+            message: message ? {
+              id: message.id,
+              approval_status: message.approval_status,
+              send_status: message.send_status,
+              meeting_request_id: message.payload?.meeting_request_id || '',
+              slots: slots.length,
+            } : null,
+            count: messages.length,
+          };
+        }, 60000, 'scheduling draft with proposed slots');
+        const schedulingMessageId = schedulingReady.message.id;
+        const meetingRequestId = schedulingReady.message.meeting_request_id;
+        await waitFor(async () => ({
+          ok: Boolean(document.querySelector(`[data-action="ao-book-slot"][data-meeting-request-id="${css(meetingRequestId)}"]`))
+            && Boolean(document.querySelector(`[data-action="ao-approve"][data-message-id="${css(schedulingMessageId)}"]`)),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 1000) || '',
+        }), 15000, 'scheduling approval card with bookable slot');
+        await capture('outbound-active-06-scheduling-draft');
+
+        const originalPrompt = window.prompt;
+        window.prompt = () => 'https://meet.example.com/outbound-smoke';
+        try {
+          click(`[data-action="ao-book-slot"][data-meeting-request-id="${css(meetingRequestId)}"]`, 'book proposed slot button');
+        } finally {
+          window.prompt = originalPrompt;
+        }
+        const booked = await waitFor(async () => {
+          const request = (await rawDb.outbound_meeting_requests.findOne(meetingRequestId).exec())?.toJSON?.();
+          const updatedEngagement = (await rawDb.outbound_engagements.findOne(engagement.id).exec())?.toJSON?.();
+          return {
+            ok: request?.status === 'booked' && updatedEngagement?.status === 'meeting_booked',
+            request_status: request?.status || '',
+            meeting_url: request?.meeting_url || '',
+            engagement_status: updatedEngagement?.status || '',
+          };
+        }, 60000, 'meeting request booked from proposed slot');
+        click('[data-action="ao-view"][data-view="done"]', 'done tab');
+        await waitFor(async () => ({
+          ok: /Termin gebucht|meeting_booked/.test(document.querySelector('[data-outbound-root]')?.innerText || ''),
+          text: document.querySelector('[data-outbound-root]')?.innerText?.slice(0, 900) || '',
+        }), 15000, 'booked engagement visible as done');
+        await capture('outbound-active-07-meeting-booked');
         const conversationLink = document.querySelector('.outbound-outreach-conv-link')?.getAttribute('href') || '';
         return {
           mode: smokeMode,
@@ -5106,11 +5226,17 @@ function ensureCtoxSmokeBinary() {
           pipelineId,
           engagementId: engagement?.id || '',
           messageId,
+          schedulingMessageId,
+          meetingRequestId,
           approvalId: approval?.id || '',
           approvalGateVerified: true,
           finalSendStatus: queued.send_status,
           providerMessageId: queued.provider_message_id,
           communicationMessageKey: queued.communication_message_key,
+          replyMessageKey,
+          replyClassification: replyCommand?.result?.classification || '',
+          meetingStatus: booked.request_status,
+          meetingUrl: booked.meeting_url,
           conversationLink,
           screenshotPaths,
           advancedStatusVersion,
@@ -6269,11 +6395,17 @@ function ensureCtoxSmokeBinary() {
       console.log(`outbound_active_ui_pipeline_id=${result.pipelineId}`);
       console.log(`outbound_active_ui_engagement_id=${result.engagementId}`);
       console.log(`outbound_active_ui_message_id=${result.messageId}`);
+      console.log(`outbound_active_ui_scheduling_message_id=${result.schedulingMessageId || ''}`);
+      console.log(`outbound_active_ui_meeting_request_id=${result.meetingRequestId || ''}`);
       console.log(`outbound_active_ui_approval_id=${result.approvalId}`);
       console.log(`outbound_active_ui_approval_gate_verified=${result.approvalGateVerified ? 1 : 0}`);
       console.log(`outbound_active_ui_final_send_status=${result.finalSendStatus || ''}`);
       console.log(`outbound_active_ui_provider_message_id=${result.providerMessageId || ''}`);
       console.log(`outbound_active_ui_communication_message_key=${result.communicationMessageKey || ''}`);
+      console.log(`outbound_active_ui_reply_message_key=${result.replyMessageKey || ''}`);
+      console.log(`outbound_active_ui_reply_classification=${result.replyClassification || ''}`);
+      console.log(`outbound_active_ui_meeting_status=${result.meetingStatus || ''}`);
+      console.log(`outbound_active_ui_meeting_url=${result.meetingUrl || ''}`);
       console.log(`outbound_active_ui_conversation_link=${result.conversationLink || ''}`);
       console.log(`outbound_active_ui_screenshots=${(result.screenshotPaths || []).join(',')}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);

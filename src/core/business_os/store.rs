@@ -6342,10 +6342,21 @@ fn handle_outbound_active_command(
                 now,
                 request.clone(),
             )?;
+            let mut engagement_result = Value::Null;
             if let Some(engagement_id) = outbound_string(&request, &["engagement_id"]) {
                 outbound_update_engagement_status(&conn, &engagement_id, "meeting_booked", now)?;
+                engagement_result = outbound_load_required(
+                    &conn,
+                    "outbound_engagements",
+                    &engagement_id,
+                    "engagement not found",
+                )?;
             }
-            Ok(serde_json::json!({ "ok": true, "meeting_request": request }))
+            Ok(serde_json::json!({
+                "ok": true,
+                "meeting_request": request,
+                "engagement": engagement_result
+            }))
         }
         "outbound.campaign.mailbox.link" => {
             outbound_handle_campaign_mailbox_link(root, &conn, command, now)
