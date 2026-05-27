@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260527-ctox-harness-flow1';
+const APP_BUILD = '20260527-shell-health-rxdb1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -4563,6 +4563,7 @@ async function loadShellCtoxHealth() {
     if (response.ok && payload?.ok !== false) {
       return {
         ok: true,
+        source: 'server',
         ctox_service: payload?.service || null,
         runtime_settings: payload || null,
       };
@@ -4580,6 +4581,7 @@ async function loadShellCtoxHealth() {
   }
   return {
     ok: runtime.ok !== false,
+    source: 'rxdb',
     ctox_service: runtime.service || null,
     runtime_settings: runtime,
   };
@@ -4609,7 +4611,10 @@ function shellCtoxHealthProblem(status) {
   }
   const service = status.ctox_service;
   if (!service) return shellText('ctoxStatusUnavailable');
-  if (service.running === false) return shellText('ctoxStopped');
+  if (service.running === false) {
+    if (status.source === 'rxdb') return '';
+    return shellText('ctoxStopped');
+  }
   const lastError = String(service.last_error || '').trim();
   if (lastError) return `${shellText('ctoxLastError')}: ${lastError}`;
   return '';
