@@ -11,12 +11,20 @@ const CTOX_BROWSER_CAPABILITIES = [
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
+const HTTP_BRIDGE_PULL_PATH = '/api/business-os/rxdb/pull';
+const HTTP_BRIDGE_PUSH_PATH = '/api/business-os/rxdb/push';
+const HTTP_BRIDGE_PULL_LIMIT = 2000;
+const HTTP_BRIDGE_TIMEOUT_MS = 12000;
+const HTTP_BRIDGE_PUSH_DEBOUNCE_MS = 350;
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
 
 export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
+  const httpBridges = new Map();
+  const httpHydratingCollections = new Set();
+  const httpPushQueues = new Map();
   const activeCollections = new Set();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
@@ -24,10 +32,12 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   let suspensionReason = '';
   let stopped = false;
   const useWebrtc = nativeRxdbPeerReady(config, db);
-  if (!useWebrtc) {
+  const useHttpBridge = sameOriginHttpBridgeAvailable(config, db);
+  if (!useWebrtc && !useHttpBridge) {
     throw new Error('Business OS requires RxDB WebRTC sync; unsupported sync contract.');
   }
-  const diagnostics = createDiagnostics(config);
+  const runtimeMode = useWebrtc && useHttpBridge ? 'webrtc+http' : (useWebrtc ? 'webrtc' : 'http');
+  const diagnostics = createDiagnostics(config, runtimeMode);
   const emitDiagnostic = (updates = {}) => {
     if (updates.lastError !== undefined) diagnostics.lastError = updates.lastError;
     if (updates.lastLifecycleEvent !== undefined) diagnostics.lastLifecycleEvent = updates.lastLifecycleEvent;
@@ -80,6 +90,20 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         try { await withTimeout(state.value?.stop?.(), 3000); } catch {}
       }
     }
+  };
+  const stopAllHttpBridges = async () => {
+    const httpBridgePromises = [...httpBridges.values()];
+    httpBridges.clear();
+    const states = await Promise.allSettled(httpBridgePromises);
+    for (const state of states) {
+      if (state.status === 'fulfilled') {
+        try { await withTimeout(state.value?.stop?.(), 3000); } catch {}
+      }
+    }
+    for (const queue of httpPushQueues.values()) {
+      if (queue.timer) clearTimeout(queue.timer);
+    }
+    httpPushQueues.clear();
   };
   const collectionNeedsRestart = (collection) => {
     const current = diagnostics.collections[collection] || {};
@@ -138,7 +162,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   const syncRuntime = {
     db,
     config,
-    mode: 'webrtc',
+    mode: runtimeMode,
     diagnostics,
     async startModule(moduleManifest) {
       const collections = moduleManifest?.collections || [];
@@ -170,6 +194,34 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           mode: 'pending',
           collection,
           reason: suspensionReason || 'sync-suspended',
+          state: null,
+          stop: async () => {},
+        };
+      }
+      let httpBridge = null;
+      if (useHttpBridge) {
+        try {
+          httpBridge = await ensureHttpBridgeCollection({
+            db,
+            collection,
+            recordCollection,
+            httpBridges,
+            httpHydratingCollections,
+            httpPushQueues,
+            isStopped: () => stopped,
+          });
+        } catch (error) {
+          recordCollection(collection, {
+            httpBridgeStatus: 'error',
+            httpBridgeLastError: serializeError(error),
+          });
+        }
+      }
+      if (!useWebrtc) {
+        return httpBridge || {
+          mode: 'pending',
+          collection,
+          reason: 'http-bridge-unavailable',
           state: null,
           stop: async () => {},
         };
@@ -343,10 +395,222 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         window.removeEventListener('online', onlineListener);
       }
       await stopAllBridges();
+      await stopAllHttpBridges();
       emitDiagnostic({ phase: 'stopped' });
     },
   };
   return syncRuntime;
+}
+
+function sameOriginHttpBridgeAvailable(config, db) {
+  if (db?.mode !== 'rxdb') return false;
+  if (typeof window === 'undefined' || typeof window.fetch !== 'function') return false;
+  const protocol = String(window.location?.protocol || '');
+  if (protocol !== 'http:' && protocol !== 'https:') return false;
+  if (config?.http_bridge === false || config?.httpBridge === false) return false;
+  return true;
+}
+
+async function ensureHttpBridgeCollection({
+  db,
+  collection,
+  recordCollection,
+  httpBridges,
+  httpHydratingCollections,
+  httpPushQueues,
+  isStopped,
+}) {
+  if (httpBridges.has(collection)) {
+    const bridge = await withTimeout(httpBridges.get(collection), 1000);
+    if (bridge) return bridge;
+    return httpBridges.get(collection);
+  }
+  const bridgePromise = startHttpBridgeCollection({
+    db,
+    collection,
+    recordCollection,
+    httpHydratingCollections,
+    httpPushQueues,
+    isStopped,
+  });
+  httpBridges.set(collection, bridgePromise);
+  try {
+    return await bridgePromise;
+  } catch (error) {
+    httpBridges.delete(collection);
+    throw error;
+  }
+}
+
+async function startHttpBridgeCollection({
+  db,
+  collection,
+  recordCollection,
+  httpHydratingCollections,
+  httpPushQueues,
+  isStopped,
+}) {
+  const rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
+  if (!rxCollection) {
+    recordCollection?.(collection, {
+      httpBridgeStatus: 'pending',
+      httpBridgeReason: 'collection-not-registered',
+    });
+    return { mode: 'http', collection, reason: 'collection-not-registered', stop: async () => {} };
+  }
+
+  let stopped = false;
+  let checkpointMs = 0;
+  let unsubscribe = null;
+  const pullNow = async ({ full = false } = {}) => {
+    if (stopped || isStopped?.()) return { count: 0, checkpointMs };
+    const sinceMs = full ? 0 : checkpointMs;
+    recordCollection?.(collection, {
+      httpBridgeStatus: 'pulling',
+      httpBridgeSinceMs: sinceMs,
+      httpBridgeLastError: null,
+    });
+    const result = await pullHttpCollection(collection, sinceMs);
+    const documents = Array.isArray(result?.documents) ? result.documents : [];
+    const maxUpdatedAt = maxUpdatedAtMs(documents, sinceMs);
+    if (documents.length) {
+      httpHydratingCollections.add(collection);
+      try {
+        await rxCollection.bulkUpsert(documents);
+      } finally {
+        httpHydratingCollections.delete(collection);
+      }
+    }
+    checkpointMs = Math.max(checkpointMs, maxUpdatedAt + 1);
+    recordCollection?.(collection, {
+      httpBridgeStatus: 'ready',
+      httpBridgeDocuments: documents.length,
+      httpBridgeCheckpointMs: checkpointMs,
+      httpBridgePulledAt: new Date().toISOString(),
+      httpBridgeSource: result?.source || 'business_records',
+      httpBridgeLastError: null,
+    });
+    return { count: documents.length, checkpointMs };
+  };
+
+  if (!isReadOnlyProjectionCollection(collection)) {
+    unsubscribe = rxCollection.observe?.((event) => {
+      if (stopped || isStopped?.() || httpHydratingCollections.has(collection)) return;
+      const documents = Object.values(event?.detail?.success || {});
+      if (!documents.length) return;
+      queueHttpPush({ collection, documents, recordCollection, httpPushQueues, isStopped });
+    });
+  }
+
+  await pullNow({ full: true });
+  return {
+    mode: 'http',
+    collection,
+    pullNow,
+    flush: async () => flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }),
+    async stop() {
+      stopped = true;
+      try { unsubscribe?.(); } catch {}
+      await flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped });
+    },
+  };
+}
+
+async function pullHttpCollection(collection, sinceMs = 0) {
+  const url = new URL(HTTP_BRIDGE_PULL_PATH, window.location.href);
+  url.searchParams.set('collection', collection);
+  url.searchParams.set('since_ms', String(Math.max(0, Number(sinceMs) || 0)));
+  url.searchParams.set('limit', String(HTTP_BRIDGE_PULL_LIMIT));
+  return fetchJsonWithTimeout(url.toString(), {
+    method: 'GET',
+    credentials: 'same-origin',
+    cache: 'no-store',
+  }, HTTP_BRIDGE_TIMEOUT_MS);
+}
+
+function queueHttpPush({ collection, documents, recordCollection, httpPushQueues, isStopped }) {
+  if (isReadOnlyProjectionCollection(collection)) return;
+  let queue = httpPushQueues.get(collection);
+  if (!queue) {
+    queue = { documents: new Map(), timer: null };
+    httpPushQueues.set(collection, queue);
+  }
+  for (const document of documents) {
+    const id = document?.id || document?._id || document?.command_id;
+    if (!id) continue;
+    queue.documents.set(String(id), document);
+  }
+  if (queue.timer) clearTimeout(queue.timer);
+  queue.timer = setTimeout(() => {
+    queue.timer = null;
+    flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }).catch((error) => {
+      recordCollection?.(collection, {
+        httpBridgePushStatus: 'error',
+        httpBridgeLastError: serializeError(error),
+      });
+    });
+  }, HTTP_BRIDGE_PUSH_DEBOUNCE_MS);
+}
+
+async function flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }) {
+  const queue = httpPushQueues.get(collection);
+  if (!queue || !queue.documents.size || isStopped?.()) return { count: 0 };
+  if (queue.timer) {
+    clearTimeout(queue.timer);
+    queue.timer = null;
+  }
+  const documents = [...queue.documents.values()];
+  queue.documents.clear();
+  recordCollection?.(collection, {
+    httpBridgePushStatus: 'pushing',
+    httpBridgePushDocuments: documents.length,
+    httpBridgeLastError: null,
+  });
+  const result = await fetchJsonWithTimeout(HTTP_BRIDGE_PUSH_PATH, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ collection, documents }),
+  }, HTTP_BRIDGE_TIMEOUT_MS);
+  recordCollection?.(collection, {
+    httpBridgePushStatus: 'ready',
+    httpBridgePushDocuments: Number(result?.count || documents.length),
+    httpBridgePushedAt: new Date().toISOString(),
+    httpBridgeLastError: null,
+  });
+  return result;
+}
+
+async function fetchJsonWithTimeout(url, options, timeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} while syncing ${urlPathForError(url)}`);
+    }
+    return response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function maxUpdatedAtMs(documents, fallback = 0) {
+  let max = Math.max(0, Number(fallback) || 0);
+  for (const document of documents || []) {
+    const value = Number(document?.updated_at_ms || document?.updatedAtMs || document?._meta?.lwt || 0);
+    if (Number.isFinite(value)) max = Math.max(max, value);
+  }
+  return max;
+}
+
+function urlPathForError(value) {
+  try {
+    const url = new URL(value, window.location.href);
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return String(value || '');
+  }
 }
 
 function peerSessionKey(value) {
@@ -929,10 +1193,10 @@ function isFatalPeerStormError(error) {
     || haystack.includes('Still in CONNECTING state');
 }
 
-function createDiagnostics(config) {
+function createDiagnostics(config, mode = 'webrtc') {
   const iceServers = iceServersFromConfig(config);
   return {
-    mode: 'webrtc',
+    mode,
     phase: 'initializing',
     startedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
