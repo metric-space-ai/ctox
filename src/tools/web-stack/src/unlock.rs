@@ -294,14 +294,25 @@ pub fn run_probe(root: &Path, probe: &Probe) -> Result<ProbeOutcome> {
     let source = std::fs::read_to_string(&script_path)
         .with_context(|| format!("failed to read probe script {}", script_path.display()))?;
     let started = Instant::now();
-    let raw = run_browser_automation(
-        root,
-        &BrowserAutomationRequest {
-            dir: None,
-            timeout_ms: Some(probe.timeout_ms),
-            source,
-        },
-    )?;
+    let raw = if let Some(parser_kind) = probe.parser_kind.strip_suffix("_fixture") {
+        let result: Value = serde_json::from_str(&source)
+            .with_context(|| format!("failed to parse fixture {}", script_path.display()))?;
+        json!({
+            "ok": true,
+            "tool": "ctox_web_unlock_fixture",
+            "parser_kind": parser_kind,
+            "result": result,
+        })
+    } else {
+        run_browser_automation(
+            root,
+            &BrowserAutomationRequest {
+                dir: None,
+                timeout_ms: Some(probe.timeout_ms),
+                source,
+            },
+        )?
+    };
     let duration_ms = started.elapsed().as_millis() as u64;
     let (passed, failed_count, failed_tests, notes) = evaluate_outcome(&probe.parser_kind, &raw);
     let excerpt = raw.get("result").cloned().unwrap_or(Value::Null);
@@ -319,7 +330,7 @@ pub fn run_probe(root: &Path, probe: &Probe) -> Result<ProbeOutcome> {
 fn evaluate_outcome(parser_kind: &str, raw: &Value) -> (bool, usize, Vec<String>, Option<String>) {
     let result = raw.get("result").unwrap_or(&Value::Null);
     match parser_kind {
-        "sannysoft" => {
+        "sannysoft" | "sannysoft_fixture" => {
             let failed = result
                 .get("failed")
                 .and_then(Value::as_array)
@@ -1334,6 +1345,50 @@ mod tests {
         assert!(!passed);
         assert_eq!(count, 1);
         assert_eq!(list, vec!["User Agent (Old)".to_string()]);
+    }
+
+    #[test]
+    fn run_probe_fixture_uses_json_without_browser_runtime() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-web-unlock-fixture-test-{}",
+            std::process::id()
+        ));
+        let fixture_dir = root.join("runtime/web_unlock_e2e");
+        std::fs::create_dir_all(&fixture_dir).unwrap();
+        let fixture_path = fixture_dir.join("probe.json");
+        std::fs::write(
+            &fixture_path,
+            r#"{
+              "failed": [
+                {"name": "synthetic.test.alpha"},
+                {"name": "synthetic.test.beta"}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let probe = Probe {
+            probe_id: "fixture-probe".to_string(),
+            site_name: "fixture".to_string(),
+            probe_url: "data:,".to_string(),
+            script_path: "runtime/web_unlock_e2e/probe.json".to_string(),
+            parser_kind: "sannysoft_fixture".to_string(),
+            expected_baseline_json: "{}".to_string(),
+            timeout_ms: 1_000,
+            enabled: true,
+        };
+
+        let outcome = run_probe(&root, &probe).unwrap();
+        assert!(!outcome.passed_baseline);
+        assert_eq!(outcome.failed_count, 2);
+        assert_eq!(
+            outcome.failed_tests,
+            vec![
+                "synthetic.test.alpha".to_string(),
+                "synthetic.test.beta".to_string()
+            ]
+        );
+
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

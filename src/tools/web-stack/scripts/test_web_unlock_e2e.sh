@@ -99,21 +99,21 @@ run_stage1() {
   local SCRIPT_PATH="$SCRIPT_DIR/probe_failing_${stamp}.js"
   mkdir -p "$SCRIPT_DIR"
 
-  # Always-failing probe — produces the shape the 'sannysoft' parser_kind reads
+  # Always-failing probe fixture — produces the shape the 'sannysoft' parser reads.
+  # Stage 1 verifies the registry / repair lifecycle and should not depend on
+  # browser runtime readiness; Stage 2 exercises the real browser path.
   cat > "$SCRIPT_PATH" <<EOF
-// Synthetic always-failing probe for the web-unlock e2e test.
-// Returns a result that the 'sannysoft' parser_kind will treat as 2 failures.
-return {
-  site: 'e2e-synthetic',
-  url: 'data:,',
-  title: 'e2e',
-  totals: { headless: 0, fingerprint: 0, failed: 2 },
-  failed: [
-    { name: 'synthetic.test.alpha', cls: 'result failed' },
-    { name: 'synthetic.test.beta',  cls: 'result failed' }
+{
+  "site": "e2e-synthetic",
+  "url": "data:,",
+  "title": "e2e",
+  "totals": { "headless": 0, "fingerprint": 0, "failed": 2 },
+  "failed": [
+    { "name": "synthetic.test.alpha", "cls": "result failed" },
+    { "name": "synthetic.test.beta",  "cls": "result failed" }
   ],
-  results: { headless: [], fingerprint: [] }
-};
+  "results": { "headless": [], "fingerprint": [] }
+}
 EOF
 
   # Register the probe directly via SQL — we don't yet have a `unlock add-probe`
@@ -124,7 +124,7 @@ EOF
        expected_baseline_json, timeout_ms, enabled, created_at, updated_at)
     VALUES
       ('$PROBE_ID', 'e2e-synthetic', 'data:,',
-       'runtime/web_unlock_e2e/probe_failing_${stamp}.js', 'sannysoft',
+       'runtime/web_unlock_e2e/probe_failing_${stamp}.js', 'sannysoft_fixture',
        '{\"failed_max\":0}', 30000, 1, datetime('now'), datetime('now'));
   "
 
