@@ -71,6 +71,20 @@ ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<
    - `ctox ticket knowledge-list --system "<system>" --limit 20`
    If the source is only running in local fallback or partial monitoring mode, say so explicitly and handle the work as knowledge/onboarding correction, not mature ticket execution.
 
+When a concrete ticket cannot proceed because the requester or owner must supply a missing value, create a durable clarification request instead of leaving only a prose blocker:
+
+```sh
+ctox ticket clarification-request --case-id "<case_id>" --question "<exact question>" --target-type requester --target-channel ticket --missing-inputs "<csv>"
+```
+
+If the clarification is asked through the ticket system, publish only after the exact question has passed the relevant communication/review check:
+
+```sh
+ctox ticket clarification-request --case-id "<case_id>" --question "<exact question>" --target-type requester --target-channel ticket --missing-inputs "<csv>" --publish-reviewed --review-summary "<why this is safe and sufficient>"
+```
+
+Inbound ticket comments after a published clarification are linked back to the open clarification by ticket sync. Once resolved, the case returns to executable state so CTOX can continue from durable runtime state.
+
 ## Important Boundaries
 
 - Do not treat remote ticket fields as durable truth when CTOX knowledge already contradicts them.

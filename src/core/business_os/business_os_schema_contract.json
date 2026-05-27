@@ -1199,6 +1199,31 @@
     ],
     "additionalProperties": true
   },
+  "ctox_ticket_clarification_requests": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 512
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "ctox_ticket_control_bundles": {
     "version": 0,
     "primaryKey": "id",

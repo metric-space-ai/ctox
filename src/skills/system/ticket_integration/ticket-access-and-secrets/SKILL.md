@@ -77,6 +77,14 @@ ctox ticket access-request-put --system "<system>" --title "<title>" --body "<te
 4. If the secret already entered CTOX memory, prefer `ctox secret intake` so storage and memory rewrite happen as one visible operation.
 5. Refer back to the secret by scope and name in follow-up ticket work; do not paste the value into tickets or knowledge entries.
 
+If the blocking access question belongs to an existing ticket case, anchor it with a ticket clarification request as well as any access-request/self-work record:
+
+```sh
+ctox ticket clarification-request --case-id "<case_id>" --question "<exact safe request>" --target-type owner --target-channel tui --missing-inputs "<scope-or-secret-ref>"
+```
+
+Do not put raw secret values in the clarification request. Ask for a local secret-store intake path or approval, then resolve the clarification only after the secret reference exists in CTOX runtime state.
+
 ## Important Boundaries
 
 - Do not store raw secrets in ticket metadata.

@@ -32,6 +32,16 @@ const labels = {
     noEvents: 'Keine Events vorhanden.',
     noCase: 'Kein Case für dieses Ticket.',
     noSelfWork: 'Kein Self-work verknüpft.',
+    clarifications: 'Rückfragen',
+    noClarifications: 'Keine offenen Rückfragen.',
+    requestClarification: 'Rückfrage',
+    publishClarification: 'Geprüft senden',
+    resolveClarification: 'Antwort erfassen',
+    promptQuestion: 'Rückfrage',
+    promptMissingInputs: 'Fehlende Werte (kommagetrennt)',
+    promptReviewSummary: 'Prüfnotiz',
+    promptResponseKey: 'Antwort-Referenz',
+    promptResponseBody: 'Antwortinhalt',
     commandPending: 'Befehl wird über RxDB synchronisiert...',
     commandDone: 'Befehl abgeschlossen.',
     commandUnavailable: 'business_commands ist für Ticket-Aktionen erforderlich.',
@@ -71,6 +81,16 @@ const labels = {
     noEvents: 'No events available.',
     noCase: 'No case for this ticket.',
     noSelfWork: 'No linked self-work.',
+    clarifications: 'Clarifications',
+    noClarifications: 'No open clarifications.',
+    requestClarification: 'Clarify',
+    publishClarification: 'Send reviewed',
+    resolveClarification: 'Record answer',
+    promptQuestion: 'Clarification question',
+    promptMissingInputs: 'Missing values (comma-separated)',
+    promptReviewSummary: 'Review note',
+    promptResponseKey: 'Answer reference',
+    promptResponseBody: 'Answer body',
     commandPending: 'Command is syncing through RxDB...',
     commandDone: 'Command completed.',
     commandUnavailable: 'business_commands is required for ticket actions.',
@@ -98,6 +118,7 @@ const collectionNames = [
   'ctox_ticket_approvals',
   'ctox_ticket_verifications',
   'ctox_ticket_writebacks',
+  'ctox_ticket_clarification_requests',
 ];
 
 const state = {
@@ -179,6 +200,12 @@ function wireUi() {
   });
   root.querySelector('[data-ticket-context]')?.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : null;
+    const clarificationAction = target?.closest('[data-clarification-action]');
+    if (clarificationAction) {
+      runClarificationAction(clarificationAction)
+        .catch((error) => setCommandStatus(error?.message || String(error), true));
+      return;
+    }
     const action = target?.closest('[data-ticket-action]');
     if (!action) return;
     runCaseAction(action).catch((error) => setCommandStatus(error?.message || String(error), true));
@@ -369,6 +396,7 @@ function renderContext() {
   }
   const cases = casesForTicket(ticket.ticket_key);
   const selfWork = selfWorkForTicket(ticket.ticket_key);
+  const clarifications = clarificationsForTicket(ticket.ticket_key);
   const bundles = state.data.ctox_ticket_control_bundles;
   context.innerHTML = `
     <header class="ctox-pane-header">
@@ -387,6 +415,10 @@ function renderContext() {
       <section class="tickets-section">
         <h3>${escapeHtml(state.t('selfWork', 'Self-work'))}</h3>
         ${selfWork.length ? selfWork.map(renderSelfWork).join('') : `<p class="tickets-empty">${escapeHtml(state.t('noSelfWork', 'Kein Self-work verknüpft.'))}</p>`}
+      </section>
+      <section class="tickets-section">
+        <h3>${escapeHtml(state.t('clarifications', 'Rückfragen'))}</h3>
+        ${clarifications.length ? clarifications.map(renderClarification).join('') : `<p class="tickets-empty">${escapeHtml(state.t('noClarifications', 'Keine offenen Rückfragen.'))}</p>`}
       </section>
       <section class="tickets-section">
         <h3>Runbooks</h3>
@@ -412,6 +444,7 @@ function renderCase(item) {
   const approvals = state.data.ctox_ticket_approvals.filter((approval) => approval.case_id === item.case_id);
   const verifications = state.data.ctox_ticket_verifications.filter((verification) => verification.case_id === item.case_id);
   const writebacks = state.data.ctox_ticket_writebacks.filter((writeback) => writeback.case_id === item.case_id);
+  const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   return `
     <article class="tickets-context-item">
       <span>${escapeHtml(item.state || 'case')} · ${escapeHtml(item.risk_level || '')}</span>
@@ -421,6 +454,7 @@ function renderCase(item) {
         ${fact(state.t('approvals', 'Approvals'), String(approvals.length))}
         ${fact(state.t('verification', 'Verification'), verifications[0]?.status || '')}
         ${fact(state.t('writebacks', 'Writebacks'), String(writebacks.length))}
+        ${fact(state.t('clarifications', 'Rückfragen'), String(clarifications.length))}
       </dl>
       ${renderCaseActions(item)}
     </article>
@@ -443,19 +477,27 @@ function renderCaseActions(item) {
 
 function actionsForCase(item) {
   const stateValue = String(item.state || '').toLowerCase();
+  const actions = [];
   if (['approval_pending', 'needs_approval', 'pending_approval'].includes(stateValue)) {
-    return [{ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' }];
+    actions.push({ id: 'approve', label: 'Approve' }, { id: 'reject', label: 'Reject' });
   }
-  if (stateValue === 'executable') return [{ id: 'execute', label: 'Execute' }];
-  if (stateValue === 'executing') return [{ id: 'verify', label: 'Verify' }];
+  if (stateValue === 'executable') actions.push({ id: 'execute', label: 'Execute' });
+  if (stateValue === 'executing') actions.push({ id: 'verify', label: 'Verify' });
   if (stateValue === 'writeback_pending') {
-    return [
+    actions.push(
       { id: 'internal-note', label: 'Internal note' },
       { id: 'public-reply', label: 'Reply' },
       { id: 'close', label: 'Close' },
-    ];
+    );
   }
-  return [];
+  const hasOpenClarification = state.data.ctox_ticket_clarification_requests.some((clarification) => (
+    clarification.case_id === item.case_id
+    && !['resolved', 'cancelled'].includes(String(clarification.status || '').toLowerCase())
+  ));
+  if (!hasOpenClarification && !['closed', 'done', 'completed', 'verified', 'writeback_pending'].includes(stateValue)) {
+    actions.push({ id: 'request-clarification', label: state.t('requestClarification', 'Rückfrage') });
+  }
+  return actions;
 }
 
 async function createLocalTicket() {
@@ -486,6 +528,20 @@ async function runCaseAction(actionEl) {
   } else if (action === 'verify') {
     const summary = await promptText(state.t('promptEvidence', 'Nachweis'));
     await dispatchTicketCommand('ctox.ticket.verify', caseId, { case_id: caseId, status: 'passed', summary });
+  } else if (action === 'request-clarification') {
+    const question = await promptText(state.t('promptQuestion', 'Rückfrage'), '', true);
+    if (!question?.trim()) return;
+    const missingCsv = await promptText(state.t('promptMissingInputs', 'Fehlende Werte (kommagetrennt)'));
+    await dispatchTicketCommand('ctox.ticket.request_clarification', caseId, {
+      case_id: caseId,
+      question,
+      missing_inputs: parseCsvInput(missingCsv || ''),
+      target_type: 'requester',
+      target_channel: 'ticket',
+      unblock_criteria: missingCsv?.trim()
+        ? `Requester supplies: ${missingCsv.trim()}`
+        : 'Requester supplies the missing information.',
+    });
   } else if (action === 'internal-note' || action === 'public-reply') {
     const body = await promptText(
       action === 'internal-note'
@@ -613,6 +669,70 @@ function renderSelfWork(item) {
   `;
 }
 
+function renderClarification(item) {
+  const status = String(item.status || '').toLowerCase();
+  const canPublish = ['draft', 'send_failed'].includes(status)
+    && item.target_type === 'requester'
+    && item.target_channel === 'ticket';
+  const canResolve = !['resolved', 'cancelled'].includes(status);
+  const missing = Array.isArray(item.missing_inputs) ? item.missing_inputs.join(', ') : '';
+  return `
+    <article class="tickets-context-item">
+      <span>${escapeHtml([item.status, item.target_type, item.target_channel].filter(Boolean).join(' · '))}</span>
+      <strong>${escapeHtml(item.question || item.clarification_id)}</strong>
+      <small>${escapeHtml(missing || item.unblock_criteria || item.outbound_message_key || '')}</small>
+      ${item.inbound_response_body ? `<p class="tickets-note">${escapeHtml(item.inbound_response_body)}</p>` : ''}
+      ${canPublish || canResolve ? `
+        <div class="tickets-action-row">
+          ${canPublish ? `
+            <button type="button" class="tickets-command-button"
+              data-clarification-action="publish"
+              data-clarification-id="${escapeAttr(item.clarification_id)}">
+              ${escapeHtml(state.t('publishClarification', 'Geprüft senden'))}
+            </button>
+          ` : ''}
+          ${canResolve ? `
+          <button type="button" class="tickets-command-button"
+            data-clarification-action="resolve"
+            data-clarification-id="${escapeAttr(item.clarification_id)}">
+            ${escapeHtml(state.t('resolveClarification', 'Antwort erfassen'))}
+          </button>
+          ` : ''}
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
+async function runClarificationAction(actionEl) {
+  const action = actionEl.getAttribute('data-clarification-action');
+  const clarificationId = actionEl.getAttribute('data-clarification-id');
+  if (!clarificationId) return;
+  if (action === 'publish') {
+    const reviewSummary = await promptText(
+      state.t('promptReviewSummary', 'Prüfnotiz'),
+      'Clarification question reviewed for this ticket.',
+      true,
+    );
+    if (!reviewSummary?.trim()) return;
+    await dispatchTicketCommand('ctox.ticket.publish_clarification', clarificationId, {
+      clarification_id: clarificationId,
+      reviewed_by: state.ctx?.session?.user?.id || 'business-os',
+      review_summary: reviewSummary,
+    });
+    return;
+  }
+  if (action !== 'resolve') return;
+  const responseKey = await promptText(state.t('promptResponseKey', 'Antwort-Referenz'), `manual:${Date.now()}`, true);
+  if (!responseKey?.trim()) return;
+  const body = await promptText(state.t('promptResponseBody', 'Antwortinhalt'));
+  await dispatchTicketCommand('ctox.ticket.resolve_clarification', clarificationId, {
+    clarification_id: clarificationId,
+    response_key: responseKey,
+    body: body || '',
+  });
+}
+
 function renderBundle(item) {
   return `
     <article class="tickets-context-item is-compact">
@@ -647,6 +767,12 @@ function selfWorkForTicket(ticketKey) {
     .sort((left, right) => Number(right.updated_at_ms || 0) - Number(left.updated_at_ms || 0));
 }
 
+function clarificationsForTicket(ticketKey) {
+  return state.data.ctox_ticket_clarification_requests
+    .filter((item) => item.ticket_key === ticketKey)
+    .sort((left, right) => Number(right.updated_at_ms || 0) - Number(left.updated_at_ms || 0));
+}
+
 function labelForTicket(ticketKey) {
   return state.data.ctox_ticket_label_assignments.find((item) => item.ticket_key === ticketKey) || null;
 }
@@ -660,6 +786,13 @@ function displayStatus(value) {
   return String(value || '')
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function parseCsvInput(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function formatDate(value) {

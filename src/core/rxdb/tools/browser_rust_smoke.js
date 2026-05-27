@@ -18,6 +18,7 @@
  *   SMOKE_MODE=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=tickets-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=tickets-clarification-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
@@ -54,6 +55,7 @@
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=workspace-large-file-viewer-restart-rust-to-browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=command-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=tickets-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=tickets-clarification-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html#browser SMOKE_MODE=browser-lifecycle-ui node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html#browser SMOKE_MODE=browser-handoff-ui node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_PAGE_PATH=/index.html SMOKE_MODE=migration-version-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke.js
@@ -176,6 +178,7 @@ if (![
   'workspace-large-file-viewer-restart-rust-to-browser',
   'command-browser-to-rust',
   'tickets-browser-to-rust',
+  'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
   'business-os-ui-regression',
   'browser-lifecycle-ui',
@@ -206,6 +209,7 @@ if (![
 }
 if ([
   'tickets-browser-to-rust',
+  'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
   'signaling-error-browser-status',
   'peer-lifecycle-browser-status',
@@ -3401,11 +3405,13 @@ function ensureCtoxSmokeBinary() {
       let appQueueReplicationState = null;
       let appTicketItemReplicationState = null;
       let appTicketEventReplicationState = null;
+      let appTicketClarificationReplicationState = null;
       let ownsDb = false;
       let advancedStatusVersion = advancedStatusEvidenceVersion || '';
       let advancedStatusRuntime = advancedStatusEvidenceRuntime || null;
       const replicationStates = [];
-      const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust';
+      const ticketClarificationSmokeMode = smokeMode === 'tickets-clarification-browser-to-rust';
+      const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust' || ticketClarificationSmokeMode;
       const outboundActiveUiSmokeMode = smokeMode === 'outbound-active-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
@@ -3453,17 +3459,18 @@ function ensureCtoxSmokeBinary() {
             bodyClass: document.body?.className || '',
           })}`);
         }
-        if (needsTicketCollections
-          && (!appState.db.raw?.ctox_ticket_items || !appState.db.raw?.ctox_ticket_events)) {
-          const ticketSchemaMod = await import('/modules/tickets/schema.js');
-          const ticketCollections = {};
-          if (!appState.db.raw?.ctox_ticket_items) {
-            ticketCollections.ctox_ticket_items = { schema: ticketSchemaMod.collections.ctox_ticket_items };
+        if (needsTicketCollections) {
+          const requiredTicketCollections = ['ctox_ticket_items', 'ctox_ticket_events'];
+          if (ticketClarificationSmokeMode) requiredTicketCollections.push('ctox_ticket_clarification_requests');
+          const missingTicketCollections = requiredTicketCollections.filter((name) => !appState.db.raw?.[name]);
+          if (missingTicketCollections.length) {
+            const ticketSchemaMod = await import('/modules/tickets/schema.js');
+            const ticketCollections = {};
+            for (const name of missingTicketCollections) {
+              ticketCollections[name] = { schema: ticketSchemaMod.collections[name] };
+            }
+            await appState.db.raw.addCollections(ticketCollections);
           }
-          if (!appState.db.raw?.ctox_ticket_events) {
-            ticketCollections.ctox_ticket_events = { schema: ticketSchemaMod.collections.ctox_ticket_events };
-          }
-          await appState.db.raw.addCollections(ticketCollections);
         }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
@@ -3501,16 +3508,26 @@ function ensureCtoxSmokeBinary() {
           const ticketCollectionsStartedAt = Date.now();
           const ticketItemBridge = await appState.sync.startCollection('ctox_ticket_items');
           const ticketEventBridge = await appState.sync.startCollection('ctox_ticket_events');
+          const ticketClarificationBridge = ticketClarificationSmokeMode
+            ? await appState.sync.startCollection('ctox_ticket_clarification_requests')
+            : null;
           ticketItemBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_ticket_items replication error', error));
           ticketEventBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_ticket_events replication error', error));
+          ticketClarificationBridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError('app ctox_ticket_clarification_requests replication error', error));
           appTicketItemReplicationState = ticketItemBridge?.state || null;
           appTicketEventReplicationState = ticketEventBridge?.state || null;
+          appTicketClarificationReplicationState = ticketClarificationBridge?.state || null;
           await bounded(appTicketItemReplicationState?.awaitInitialReplication?.(), 15000);
           await bounded(appTicketEventReplicationState?.awaitInitialReplication?.(), 15000);
+          await bounded(appTicketClarificationReplicationState?.awaitInitialReplication?.(), 15000);
           await bounded(appTicketItemReplicationState?.awaitInSync?.(), 15000);
           await bounded(appTicketEventReplicationState?.awaitInSync?.(), 15000);
+          await bounded(appTicketClarificationReplicationState?.awaitInSync?.(), 15000);
           await waitForNativePeerOpen(appTicketItemReplicationState, 'ctox_ticket_items');
           await waitForNativePeerOpen(appTicketEventReplicationState, 'ctox_ticket_events');
+          if (ticketClarificationSmokeMode) {
+            await waitForNativePeerOpen(appTicketClarificationReplicationState, 'ctox_ticket_clarification_requests');
+          }
           setupPhaseTimings.ticketCollectionsReadyMs = Date.now() - ticketCollectionsStartedAt;
         }
         db = appState.db.raw;
@@ -5288,6 +5305,144 @@ function ensureCtoxSmokeBinary() {
           const ticketDocs = (await db.ctox_ticket_items.find().exec()).map((doc) => doc.toJSON?.() || doc);
           const ticket = ticketDocs.find((doc) => doc.title === title && doc.source_system === 'local');
           if (command && command.status === 'completed' && ticket) {
+            if (ticketClarificationSmokeMode) {
+              const clarificationNow = Date.now();
+              const clarificationCommandId = `ticket_clarification_command_smoke_${clarificationNow}`;
+              const question = `Welche Kundennummer gehoert zu ${ticket.ticket_key}?`;
+              await db.business_commands.insert({
+                id: clarificationCommandId,
+                command_id: clarificationCommandId,
+                module: 'tickets',
+                command_type: 'ctox.ticket.request_clarification',
+                record_id: ticket.ticket_key || '',
+                status: 'pending_sync',
+                inbound_channel: 'tickets',
+                payload: {
+                  ticket_key: ticket.ticket_key,
+                  target_type: 'requester',
+                  target_channel: 'ticket',
+                  question,
+                  missing_inputs: ['customer_id', 'approval_context'],
+                  unblock_criteria: 'Requester supplies customer_id and approval_context.',
+                },
+                client_context: { source: 'rxdb-ticket-clarification-smoke' },
+                updated_at_ms: clarificationNow,
+              });
+              await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
+              await bounded(appTicketClarificationReplicationState?.awaitInSync?.(), 25000);
+              const clarificationDeadline = Date.now() + 60000;
+              while (Date.now() < clarificationDeadline) {
+                const clarificationCommandDoc = await db.business_commands.findOne(clarificationCommandId).exec();
+                const clarificationCommand = clarificationCommandDoc?.toJSON?.();
+                const clarificationDocs = (await db.ctox_ticket_clarification_requests.find().exec()).map((doc) => doc.toJSON?.() || doc);
+                const clarification = clarificationDocs.find((doc) => doc.ticket_key === ticket.ticket_key && doc.question === question);
+                if (clarificationCommand?.status === 'completed' && clarification?.status) {
+                  if (clarification.status === 'waiting_for_response') {
+                    await Promise.all(replicationStates.map((state) => state.cancel?.()));
+                    if (ownsDb) await db.close();
+                    return {
+                      mode: smokeMode,
+                      createCommandId: id,
+                      clarificationCommandId,
+                      createStatus: command.status,
+                      clarificationStatus: clarificationCommand.status,
+                      publishStatus: 'already_waiting',
+                      ticketKey: ticket.ticket_key || '',
+                      clarificationId: clarification.clarification_id || '',
+                      clarificationRequestStatus: clarification.status || '',
+                      missingInputCount: Array.isArray(clarification.missing_inputs)
+                        ? clarification.missing_inputs.length
+                        : 0,
+                    };
+                  }
+                  if (clarification.status === 'draft') {
+                    const publishNow = Date.now();
+                    const publishCommandId = `ticket_clarification_publish_smoke_${publishNow}`;
+                    await db.business_commands.insert({
+                      id: publishCommandId,
+                      command_id: publishCommandId,
+                      module: 'tickets',
+                      command_type: 'ctox.ticket.publish_clarification',
+                      record_id: clarification.clarification_id || '',
+                      status: 'pending_sync',
+                      inbound_channel: 'tickets',
+                      payload: {
+                        clarification_id: clarification.clarification_id,
+                        reviewed_by: 'rxdb-ticket-clarification-smoke',
+                        review_summary: 'Clarification question reviewed by browser smoke.',
+                      },
+                      client_context: { source: 'rxdb-ticket-clarification-smoke' },
+                      updated_at_ms: publishNow,
+                    });
+                    await bounded(appCommandReplicationState?.awaitInSync?.(), 25000);
+                    await bounded(appTicketClarificationReplicationState?.awaitInSync?.(), 25000);
+                    const publishDeadline = Date.now() + 60000;
+                    while (Date.now() < publishDeadline) {
+                      await bounded(appCommandReplicationState?.awaitInSync?.(), 5000);
+                      await bounded(appTicketClarificationReplicationState?.awaitInSync?.(), 5000);
+                      const publishCommandDoc = await db.business_commands.findOne(publishCommandId).exec();
+                      const publishCommand = publishCommandDoc?.toJSON?.();
+                      let latestClarification = (await db.ctox_ticket_clarification_requests.findOne(clarification.clarification_id).exec())?.toJSON?.();
+                      if (
+                        publishCommand?.status === 'completed'
+                        && latestClarification?.status !== 'waiting_for_response'
+                        && globalThis.ctoxBusinessOsSmoke?.state?.sync?.restartCollection
+                      ) {
+                        const refreshedBridge = await globalThis.ctoxBusinessOsSmoke.state.sync.restartCollection('ctox_ticket_clarification_requests');
+                        appTicketClarificationReplicationState = refreshedBridge?.state || appTicketClarificationReplicationState;
+                        await bounded(appTicketClarificationReplicationState?.awaitInitialReplication?.(), 10000);
+                        await bounded(appTicketClarificationReplicationState?.awaitInSync?.(), 10000);
+                        latestClarification = (await db.ctox_ticket_clarification_requests.findOne(clarification.clarification_id).exec())?.toJSON?.();
+                      }
+                      const publishedClarification = publishCommand?.result?.clarification || latestClarification || null;
+                      if (publishCommand?.status === 'completed' && publishedClarification?.status === 'waiting_for_response') {
+                        await Promise.all(replicationStates.map((state) => state.cancel?.()));
+                        if (ownsDb) await db.close();
+                        return {
+                          mode: smokeMode,
+                          createCommandId: id,
+                          clarificationCommandId,
+                          publishCommandId,
+                          createStatus: command.status,
+                          clarificationStatus: clarificationCommand.status,
+                          publishStatus: publishCommand.status,
+                          ticketKey: ticket.ticket_key || '',
+                          clarificationId: publishedClarification.clarification_id || '',
+                          clarificationRequestStatus: publishedClarification.status || '',
+                          projectionStatus: latestClarification?.status || '',
+                          outboundMessageKey: publishedClarification.outbound_message_key || '',
+                          missingInputCount: Array.isArray(publishedClarification.missing_inputs)
+                            ? publishedClarification.missing_inputs.length
+                            : 0,
+                        };
+                      }
+                      await delay(500);
+                    }
+                    const publishCommandDoc = await db.business_commands.findOne(publishCommandId).exec();
+                    const latestClarification = (await db.ctox_ticket_clarification_requests.findOne(clarification.clarification_id).exec())?.toJSON?.();
+                    throw new Error(`ticket clarification publish command ${publishCommandId} was not completed via RxDB/WebRTC: ${JSON.stringify({
+                      command: publishCommandDoc?.toJSON?.() || null,
+                      clarification: latestClarification || null,
+                      syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
+                    })}`);
+                  }
+                }
+                await delay(500);
+              }
+              const clarificationCommandDoc = await db.business_commands.findOne(clarificationCommandId).exec();
+              const clarificationDocs = (await db.ctox_ticket_clarification_requests.find({ limit: 10 }).exec()).map((doc) => doc.toJSON?.() || doc);
+              throw new Error(`ticket clarification command ${clarificationCommandId} was not completed via RxDB/WebRTC: ${JSON.stringify({
+                command: clarificationCommandDoc?.toJSON?.() || null,
+                clarificationCount: clarificationDocs.length,
+                clarifications: clarificationDocs.map((doc) => ({
+                  clarification_id: doc.clarification_id || '',
+                  ticket_key: doc.ticket_key || '',
+                  status: doc.status || '',
+                  question: doc.question || '',
+                })),
+                syncMode: globalThis.ctoxBusinessOsSmoke?.state?.sync?.mode || '',
+              })}`);
+            }
             await Promise.all(replicationStates.map((state) => state.cancel?.()));
             if (ownsDb) await db.close();
             return {
@@ -6456,6 +6611,19 @@ function ensureCtoxSmokeBinary() {
       console.log(`ticket_key=${result.ticketKey}`);
       console.log(`ticket_source=${result.ticketSource}`);
       console.log(`ticket_title=${result.ticketTitle}`);
+    } else if (result.mode === 'tickets-clarification-browser-to-rust') {
+      console.log(`create_command_id=${result.createCommandId}`);
+      console.log(`clarification_command_id=${result.clarificationCommandId}`);
+      console.log(`publish_command_id=${result.publishCommandId || ''}`);
+      console.log(`create_status=${result.createStatus}`);
+      console.log(`clarification_status=${result.clarificationStatus}`);
+      console.log(`publish_status=${result.publishStatus || ''}`);
+      console.log(`ticket_key=${result.ticketKey}`);
+      console.log(`clarification_id=${result.clarificationId}`);
+      console.log(`clarification_request_status=${result.clarificationRequestStatus}`);
+      console.log(`clarification_projection_status=${result.projectionStatus || ''}`);
+      console.log(`outbound_message_key=${result.outboundMessageKey || ''}`);
+      console.log(`missing_input_count=${result.missingInputCount}`);
     } else {
       if (result.readinessPayload !== rustSeed.content) {
         throw new Error(`browser readiness payload mismatch: ${result.readinessPayload}`);

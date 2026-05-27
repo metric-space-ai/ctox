@@ -123,6 +123,7 @@ This check prevents "unanchored proactive resends" — the reviewer treats those
 - For a blocked owner-visible task, explicitly say how the owner can unblock it:
   - reply to the current email with the exact requested values when email is safe for that case
   - or switch to TUI when the topic is critical, risky, or secret-bearing
+- If the blocked work is anchored to a CTOX ticket case, create or reuse a `ctox ticket clarification-request` record before treating the owner message as the durable blocker. The communication is not complete unless the clarification has a ticket/case/work anchor and later owner input can be linked back to that anchor.
 - If a task is blocked specifically because the sender lacks sudo authority or admin authority for the requested action, say that plainly.
 - Do not imply that the owner should discover or complete hidden manual setup steps on their own. State exactly what CTOX still needs.
 - If the blocker is an external approval URL, device-login confirmation, Vercel claim URL, or access-grant link, include the exact link in the owner message and ask explicitly for approval/confirmation. Do not paraphrase the link away.

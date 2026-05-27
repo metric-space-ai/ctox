@@ -204,6 +204,14 @@
   line-height: 1.45;
 }
 
+.tickets-note {
+  margin: 2px 0 0;
+  color: var(--ctox-text, #101828);
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .tickets-context-item {
   margin-bottom: 8px;
 }

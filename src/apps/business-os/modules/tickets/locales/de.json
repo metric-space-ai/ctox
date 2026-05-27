@@ -22,5 +22,15 @@
   "updated": "Aktualisiert",
   "noEvents": "Keine Events vorhanden.",
   "noCase": "Kein Case für dieses Ticket.",
-  "noSelfWork": "Kein Self-work verknüpft."
+  "noSelfWork": "Kein Self-work verknüpft.",
+  "clarifications": "Rückfragen",
+  "noClarifications": "Keine offenen Rückfragen.",
+  "requestClarification": "Rückfrage",
+  "publishClarification": "Geprüft senden",
+  "resolveClarification": "Antwort erfassen",
+  "promptQuestion": "Rückfrage",
+  "promptMissingInputs": "Fehlende Werte (kommagetrennt)",
+  "promptReviewSummary": "Prüfnotiz",
+  "promptResponseKey": "Antwort-Referenz",
+  "promptResponseBody": "Antwortinhalt"
 }

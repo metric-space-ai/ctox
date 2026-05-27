@@ -24,6 +24,7 @@ export const collections = {
   ctox_ticket_approvals: projectionSchema,
   ctox_ticket_verifications: projectionSchema,
   ctox_ticket_writebacks: projectionSchema,
+  ctox_ticket_clarification_requests: projectionSchema,
 };
 
 export const migrationStrategies = {
@@ -38,4 +39,5 @@ export const migrationStrategies = {
   ctox_ticket_approvals: {},
   ctox_ticket_verifications: {},
   ctox_ticket_writebacks: {},
+  ctox_ticket_clarification_requests: {},
 };

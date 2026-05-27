@@ -198,6 +198,30 @@ pub struct TicketCaseView {
     pub closed_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TicketClarificationRequestView {
+    pub clarification_id: String,
+    pub ticket_key: String,
+    pub case_id: Option<String>,
+    pub work_id: Option<String>,
+    pub target_type: String,
+    pub target_channel: String,
+    pub question: String,
+    pub missing_inputs: Vec<String>,
+    pub unblock_criteria: Option<String>,
+    pub status: String,
+    pub outbound_message_key: Option<String>,
+    pub inbound_response_key: Option<String>,
+    pub inbound_response_body: Option<String>,
+    pub resume_state: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub sent_at: Option<String>,
+    pub resolved_at: Option<String>,
+    pub metadata: Value,
+}
+
 #[derive(Debug, Clone)]
 struct EffectiveControlResolution {
     approval_mode: String,
@@ -507,6 +531,7 @@ pub(crate) const BUSINESS_OS_TICKET_COLLECTIONS: &[&str] = &[
     "ctox_ticket_approvals",
     "ctox_ticket_verifications",
     "ctox_ticket_writebacks",
+    "ctox_ticket_clarification_requests",
 ];
 
 #[derive(Debug, Clone)]
@@ -1138,6 +1163,72 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
                 record_verification(root, case_id, status, find_flag_value(args, "--summary"))?;
             print_json(&json!({"ok": true, "case": case}))
         }
+        "clarification-request" => {
+            let case_id = required_flag_value(args, "--case-id").context(
+                "usage: ctox ticket clarification-request --case-id <id> --question <text> [--target-type requester|owner|internal] [--target-channel ticket|email|jami|tui] [--missing-inputs <csv>] [--publish-reviewed]",
+            )?;
+            let question = required_flag_value(args, "--question").context(
+                "usage: ctox ticket clarification-request --case-id <id> --question <text> [--target-type requester|owner|internal] [--target-channel ticket|email|jami|tui] [--missing-inputs <csv>] [--publish-reviewed]",
+            )?;
+            let request = create_ticket_clarification_request(
+                root,
+                TicketClarificationRequestInput {
+                    case_id: Some(case_id.to_string()),
+                    ticket_key: None,
+                    work_id: find_flag_value(args, "--work-id").map(ToOwned::to_owned),
+                    target_type: find_flag_value(args, "--target-type")
+                        .unwrap_or("requester")
+                        .to_string(),
+                    target_channel: find_flag_value(args, "--target-channel")
+                        .unwrap_or("ticket")
+                        .to_string(),
+                    question: question.to_string(),
+                    missing_inputs: find_flag_value(args, "--missing-inputs")
+                        .map(parse_domain_csv)
+                        .unwrap_or_default(),
+                    unblock_criteria: find_flag_value(args, "--unblock-criteria")
+                        .map(ToOwned::to_owned),
+                    resume_state: find_flag_value(args, "--resume-state")
+                        .unwrap_or("executable")
+                        .to_string(),
+                    created_by: find_flag_value(args, "--created-by")
+                        .unwrap_or("ctox")
+                        .to_string(),
+                    metadata: find_flag_value(args, "--metadata-json")
+                        .map(parse_json_value)
+                        .transpose()?
+                        .unwrap_or_else(|| json!({})),
+                },
+            )?;
+            let clarification = if flag_present(args, "--publish-reviewed") {
+                publish_ticket_clarification_request(
+                    root,
+                    &request.clarification_id,
+                    find_flag_value(args, "--reviewed-by").unwrap_or("ctox-review"),
+                    find_flag_value(args, "--review-summary")
+                        .unwrap_or("Clarification question reviewed for this ticket."),
+                )?
+            } else {
+                request
+            };
+            print_json(&json!({"ok": true, "clarification": clarification}))
+        }
+        "clarification-resolve" => {
+            let clarification_id = required_flag_value(args, "--clarification-id").context(
+                "usage: ctox ticket clarification-resolve --clarification-id <id> --response-key <key> [--body <text>]",
+            )?;
+            let response_key = required_flag_value(args, "--response-key").context(
+                "usage: ctox ticket clarification-resolve --clarification-id <id> --response-key <key> [--body <text>]",
+            )?;
+            let clarification = resolve_ticket_clarification_request(
+                root,
+                clarification_id,
+                response_key,
+                find_flag_value(args, "--body"),
+                find_flag_value(args, "--resolved-by").unwrap_or("ctox"),
+            )?;
+            print_json(&json!({"ok": true, "clarification": clarification}))
+        }
         "learn-candidate-create" => {
             let case_id = required_flag_value(args, "--case-id").context(
                 "usage: ctox ticket learn-candidate-create --case-id <id> --summary <text> [--actions <json-array>] [--evidence-json <json>]",
@@ -1220,7 +1311,7 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
         }
         "local" => crate::mission::ticket_local_native::handle_local_command(root, &args[1..]),
         _ => anyhow::bail!(
-            "usage:\n  ctox ticket init\n  ctox ticket sync --system <local|zammad>\n  ctox ticket test --system <local|zammad>\n  ctox ticket capabilities --system <name>\n  ctox ticket sources\n  ctox ticket source-skills [--system <name>]\n  ctox ticket source-skill-set --system <name> --skill <name> [--archetype <value>] [--status <active|inactive>] [--origin <value>] [--artifact-path <path>] [--notes <text>]\n  ctox ticket source-skill-show --system <name>\n  ctox ticket source-skill-query --system <name> --query <text> [--top-k <n>]\n  ctox ticket source-skill-import-bundle --system <name> --bundle-dir <path> [--embedding-model <model>] [--skip-embeddings]\n  ctox ticket source-skill-resolve (--ticket-key <key> | --case-id <id>) [--top-k <n>]\n  ctox ticket source-skill-compose-reply (--ticket-key <key> | --case-id <id>) [--send-policy <suggestion|draft|send>] [--subject <text>] [--body-only]\n  ctox ticket source-skill-review-note (--ticket-key <key> | --case-id <id>) --body <text> [--top-k <n>]\n  ctox ticket history-export --system <name> --output <path>\n  ctox ticket knowledge-bootstrap --system <name>\n  ctox ticket knowledge-list [--system <name>] [--domain <name>] [--status <value>] [--limit <n>]\n  ctox ticket knowledge-show --system <name> --domain <name> --key <value>\n  ctox ticket knowledge-load --ticket-key <key> [--domains <csv>]\n  ctox ticket monitoring-ingest --system <name> --snapshot-json <json> [--key <value>] [--title <text>] [--summary <text>] [--status <value>]\n  ctox ticket access-request-put --system <name> --title <title> --body <text> [--required-scopes <csv>] [--secret-refs <csv>] [--channels <csv>] [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-show --work-id <id>\n  ctox ticket self-work-publish --work-id <id>\n  ctox ticket self-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]\n  ctox ticket self-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]\n  ctox ticket self-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]\n  ctox ticket self-work-list [--system <name>] [--state <value>] [--limit <n>]\n  ctox ticket take [--lease-owner <owner>] [--limit <n>]\n  ctox ticket ack --status <handled|failed|duplicate|blocked> <event-key>...\n  ctox ticket list [--system <name>] [--limit <n>]\n  ctox ticket show --ticket-key <key>\n  ctox ticket history --ticket-key <key> [--limit <n>]\n  ctox ticket label-set --ticket-key <key> --label <label> [--assigned-by <actor>] [--rationale <text>] [--evidence-json <json>]\n  ctox ticket label-show --ticket-key <key>\n  ctox ticket bundle-put --label <label> --runbook-id <id> --policy-id <id> [--runbook-version <v>] [--policy-version <v>] [--approval-mode <mode>] [--autonomy-level <level>] [--verification-profile-id <id>] [--writeback-profile-id <id>] [--support-mode <mode>] [--risk-level <level>] [--actions <json-array>] [--notes <text>]\n  ctox ticket bundle-list\n  ctox ticket autonomy-grant-set --label <label> --approval-mode <mode> --autonomy-level <level> [--bundle-version <n>] [--approved-by <actor>] [--candidate-id <id>] [--rationale <text>]\n  ctox ticket autonomy-grant-list\n  ctox ticket dry-run --ticket-key <key> [--understanding <text>] [--risk-level <level>]\n  ctox ticket cases [--ticket-key <key>] [--limit <n>]\n  ctox ticket case-show --case-id <id>\n  ctox ticket approve --case-id <id> --status <approved|rejected> [--decided-by <actor>] [--rationale <text>]\n  ctox ticket execute --case-id <id> --summary <text>\n  ctox ticket verify --case-id <id> --status <passed|failed> [--summary <text>]\n  ctox ticket learn-candidate-create --case-id <id> --summary <text> [--actions <json-array>] [--evidence-json <json>]\n  ctox ticket learn-candidate-list [--label <label>] [--status <value>] [--limit <n>]\n  ctox ticket learn-candidate-decide --candidate-id <id> --status <approved|rejected> [--decided-by <actor>] [--notes <text>] [--promote-autonomy-level <level>]\n  ctox ticket writeback-comment --case-id <id> --body <text> [--internal]\n  ctox ticket writeback-transition --case-id <id> --state <value> [--body <text>] [--internal]\n  ctox ticket close --case-id <id> [--summary <text>]\n  ctox ticket audit [--ticket-key <key>] [--limit <n>]\n  ctox ticket local <subcommand> ..."
+            "usage:\n  ctox ticket init\n  ctox ticket sync --system <local|zammad>\n  ctox ticket test --system <local|zammad>\n  ctox ticket capabilities --system <name>\n  ctox ticket sources\n  ctox ticket source-skills [--system <name>]\n  ctox ticket source-skill-set --system <name> --skill <name> [--archetype <value>] [--status <active|inactive>] [--origin <value>] [--artifact-path <path>] [--notes <text>]\n  ctox ticket source-skill-show --system <name>\n  ctox ticket source-skill-query --system <name> --query <text> [--top-k <n>]\n  ctox ticket source-skill-import-bundle --system <name> --bundle-dir <path> [--embedding-model <model>] [--skip-embeddings]\n  ctox ticket source-skill-resolve (--ticket-key <key> | --case-id <id>) [--top-k <n>]\n  ctox ticket source-skill-compose-reply (--ticket-key <key> | --case-id <id>) [--send-policy <suggestion|draft|send>] [--subject <text>] [--body-only]\n  ctox ticket source-skill-review-note (--ticket-key <key> | --case-id <id>) --body <text> [--top-k <n>]\n  ctox ticket history-export --system <name> --output <path>\n  ctox ticket knowledge-bootstrap --system <name>\n  ctox ticket knowledge-list [--system <name>] [--domain <name>] [--status <value>] [--limit <n>]\n  ctox ticket knowledge-show --system <name> --domain <name> --key <value>\n  ctox ticket knowledge-load --ticket-key <key> [--domains <csv>]\n  ctox ticket monitoring-ingest --system <name> --snapshot-json <json> [--key <value>] [--title <text>] [--summary <text>] [--status <value>]\n  ctox ticket access-request-put --system <name> --title <title> --body <text> [--required-scopes <csv>] [--secret-refs <csv>] [--channels <csv>] [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-show --work-id <id>\n  ctox ticket self-work-publish --work-id <id>\n  ctox ticket self-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]\n  ctox ticket self-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]\n  ctox ticket self-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]\n  ctox ticket self-work-list [--system <name>] [--state <value>] [--limit <n>]\n  ctox ticket take [--lease-owner <owner>] [--limit <n>]\n  ctox ticket ack --status <handled|failed|duplicate|blocked> <event-key>...\n  ctox ticket list [--system <name>] [--limit <n>]\n  ctox ticket show --ticket-key <key>\n  ctox ticket history --ticket-key <key> [--limit <n>]\n  ctox ticket label-set --ticket-key <key> --label <label> [--assigned-by <actor>] [--rationale <text>] [--evidence-json <json>]\n  ctox ticket label-show --ticket-key <key>\n  ctox ticket bundle-put --label <label> --runbook-id <id> --policy-id <id> [--runbook-version <v>] [--policy-version <v>] [--approval-mode <mode>] [--autonomy-level <level>] [--verification-profile-id <id>] [--writeback-profile-id <id>] [--support-mode <mode>] [--risk-level <level>] [--actions <json-array>] [--notes <text>]\n  ctox ticket bundle-list\n  ctox ticket autonomy-grant-set --label <label> --approval-mode <mode> --autonomy-level <level> [--bundle-version <n>] [--approved-by <actor>] [--candidate-id <id>] [--rationale <text>]\n  ctox ticket autonomy-grant-list\n  ctox ticket dry-run --ticket-key <key> [--understanding <text>] [--risk-level <level>]\n  ctox ticket cases [--ticket-key <key>] [--limit <n>]\n  ctox ticket case-show --case-id <id>\n  ctox ticket approve --case-id <id> --status <approved|rejected> [--decided-by <actor>] [--rationale <text>]\n  ctox ticket execute --case-id <id> --summary <text>\n  ctox ticket verify --case-id <id> --status <passed|failed> [--summary <text>]\n  ctox ticket clarification-request --case-id <id> --question <text> [--target-type requester|owner|internal] [--target-channel ticket|email|jami|tui] [--missing-inputs <csv>] [--publish-reviewed]\n  ctox ticket clarification-resolve --clarification-id <id> --response-key <key> [--body <text>]\n  ctox ticket learn-candidate-create --case-id <id> --summary <text> [--actions <json-array>] [--evidence-json <json>]\n  ctox ticket learn-candidate-list [--label <label>] [--status <value>] [--limit <n>]\n  ctox ticket learn-candidate-decide --candidate-id <id> --status <approved|rejected> [--decided-by <actor>] [--notes <text>] [--promote-autonomy-level <level>]\n  ctox ticket writeback-comment --case-id <id> --body <text> [--internal]\n  ctox ticket writeback-transition --case-id <id> --state <value> [--body <text>] [--internal]\n  ctox ticket close --case-id <id> [--summary <text>]\n  ctox ticket audit [--ticket-key <key>] [--limit <n>]\n  ctox ticket local <subcommand> ..."
         ),
     }
 }
@@ -1240,6 +1331,21 @@ struct ControlBundleInput {
     default_risk_level: String,
     execution_actions: Vec<String>,
     notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct TicketClarificationRequestInput {
+    case_id: Option<String>,
+    ticket_key: Option<String>,
+    work_id: Option<String>,
+    target_type: String,
+    target_channel: String,
+    question: String,
+    missing_inputs: Vec<String>,
+    unblock_criteria: Option<String>,
+    resume_state: String,
+    created_by: String,
+    metadata: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -1280,6 +1386,8 @@ pub(crate) fn sync_ticket_system(root: &Path, system: &str) -> Result<Value> {
     };
     let batch = adapter.sync_batch(root)?;
     let applied = ticket_translation::apply_ticket_sync_batch(root, &batch)?;
+    let resolved_clarification_count =
+        resolve_waiting_clarifications_from_inbound_events(root, &applied.system)?;
     let observed_knowledge = refresh_observed_ticket_knowledge(root, &applied.system)?;
     let self_work_count =
         list_ticket_self_work_items(root, Some(&applied.system), None, 10_000)?.len();
@@ -1292,6 +1400,7 @@ pub(crate) fn sync_ticket_system(root: &Path, system: &str) -> Result<Value> {
         "source_control": applied.source_control,
         "knowledge_count": observed_knowledge.len(),
         "self_work_count": self_work_count,
+        "resolved_clarification_count": resolved_clarification_count,
         "metadata": batch.metadata,
     }))
 }
@@ -6166,6 +6275,10 @@ pub(crate) fn business_os_ticket_projection_documents(
         "ctox_ticket_writebacks".to_string(),
         list_ticket_writebacks_for_business_os(&conn, limit)?,
     );
+    documents.insert(
+        "ctox_ticket_clarification_requests".to_string(),
+        list_ticket_clarification_requests_for_business_os(&conn, limit)?,
+    );
 
     Ok(documents)
 }
@@ -6394,8 +6507,60 @@ fn list_ticket_writebacks_for_business_os(conn: &Connection, limit: usize) -> Re
         .map_err(anyhow::Error::from)
 }
 
+fn list_ticket_clarification_requests_for_business_os(
+    conn: &Connection,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT clarification_id, ticket_key, case_id, work_id, target_type, target_channel,
+               question, missing_inputs_json, unblock_criteria, status, outbound_message_key,
+               inbound_response_key, inbound_response_body, resume_state, created_by,
+               created_at, updated_at, sent_at, resolved_at, metadata_json
+        FROM ticket_clarification_requests
+        ORDER BY updated_at DESC
+        LIMIT ?1
+        "#,
+    )?;
+    let rows = statement.query_map(params![limit as i64], |row| {
+        let item = map_ticket_clarification_row(row)?;
+        let updated_at_ms = iso_to_epoch_ms(&item.updated_at);
+        Ok(json!({
+            "id": item.clarification_id.clone(),
+            "clarification_id": item.clarification_id,
+            "ticket_key": item.ticket_key,
+            "case_id": item.case_id,
+            "work_id": item.work_id,
+            "target_type": item.target_type,
+            "target_channel": item.target_channel,
+            "question": item.question,
+            "missing_inputs": item.missing_inputs,
+            "unblock_criteria": item.unblock_criteria,
+            "status": item.status,
+            "outbound_message_key": item.outbound_message_key,
+            "inbound_response_key": item.inbound_response_key,
+            "inbound_response_body": item.inbound_response_body,
+            "resume_state": item.resume_state,
+            "created_by": item.created_by,
+            "created_at": item.created_at,
+            "updated_at": item.updated_at,
+            "updated_at_ms": updated_at_ms,
+            "sent_at": item.sent_at,
+            "resolved_at": item.resolved_at,
+            "metadata": item.metadata,
+            "is_deleted": false
+        }))
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
 fn parse_json_or_empty(raw: &str) -> Value {
     serde_json::from_str(raw).unwrap_or_else(|_| json!({}))
+}
+
+fn parse_json_string_array_lossy(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw).unwrap_or_default()
 }
 
 fn set_ticket_label(
@@ -7037,6 +7202,28 @@ fn load_case(root: &Path, case_id: &str) -> Result<Option<TicketCaseView>> {
     .map_err(anyhow::Error::from)
 }
 
+fn load_ticket_clarification_request(
+    root: &Path,
+    clarification_id: &str,
+) -> Result<Option<TicketClarificationRequestView>> {
+    let conn = open_ticket_db(root)?;
+    conn.query_row(
+        r#"
+        SELECT clarification_id, ticket_key, case_id, work_id, target_type, target_channel,
+               question, missing_inputs_json, unblock_criteria, status, outbound_message_key,
+               inbound_response_key, inbound_response_body, resume_state, created_by,
+               created_at, updated_at, sent_at, resolved_at, metadata_json
+        FROM ticket_clarification_requests
+        WHERE clarification_id = ?1
+        LIMIT 1
+        "#,
+        params![clarification_id],
+        map_ticket_clarification_row,
+    )
+    .optional()
+    .map_err(anyhow::Error::from)
+}
+
 fn load_latest_dry_run_for_case(root: &Path, case_id: &str) -> Result<Option<DryRunRecordView>> {
     let conn = open_ticket_db(root)?;
     conn.query_row(
@@ -7223,6 +7410,428 @@ fn record_verification(
         },
     )?;
     load_case(root, case_id)?.context("failed to load case after verification")
+}
+
+fn create_ticket_clarification_request(
+    root: &Path,
+    input: TicketClarificationRequestInput,
+) -> Result<TicketClarificationRequestView> {
+    let mut conn = open_ticket_db(root)?;
+    let case = match input.case_id.as_deref() {
+        Some(case_id) => Some(load_case(root, case_id)?.context("ticket case not found")?),
+        None => None,
+    };
+    let ticket_key = match (&case, input.ticket_key.as_deref()) {
+        (Some(case), Some(ticket_key)) if case.ticket_key != ticket_key => {
+            anyhow::bail!(
+                "clarification ticket_key {} does not match case {} ticket_key {}",
+                ticket_key,
+                case.case_id,
+                case.ticket_key
+            );
+        }
+        (Some(case), _) => case.ticket_key.clone(),
+        (None, Some(ticket_key)) => ticket_key.to_string(),
+        (None, None) => anyhow::bail!("case_id or ticket_key is required for clarification"),
+    };
+    let ticket = load_ticket(root, &ticket_key)?.context("ticket not found for clarification")?;
+    let target_type = canonical_clarification_target_type(&input.target_type)?;
+    let target_channel = canonical_clarification_target_channel(&input.target_channel)?;
+    let resume_state = canonical_clarification_resume_state(&input.resume_state)?;
+    let question = input.question.trim();
+    anyhow::ensure!(!question.is_empty(), "clarification question is required");
+    let missing_inputs = normalize_clarification_inputs(input.missing_inputs);
+    let now = now_iso_string();
+    let clarification_id = format!(
+        "clarification:{}:{}",
+        ticket_key,
+        stable_digest(&(question.to_string() + &now))
+    );
+    if let Some(case) = case.as_ref() {
+        ensure_case_can_request_clarification(case)?;
+        enforce_ticket_case_state_transition(
+            &conn,
+            case,
+            "blocked_needs_clarification",
+            "clarification_engine",
+            "missing_info_request",
+        )?;
+    }
+    conn.execute(
+        r#"
+        INSERT INTO ticket_clarification_requests (
+            clarification_id, ticket_key, case_id, work_id, target_type, target_channel,
+            question, missing_inputs_json, unblock_criteria, status, outbound_message_key,
+            inbound_response_key, inbound_response_body, resume_state, created_by,
+            metadata_json, created_at, updated_at, sent_at, resolved_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'draft', NULL, NULL, NULL, ?10, ?11, ?12, ?13, ?13, NULL, NULL)
+        "#,
+        params![
+            clarification_id,
+            ticket_key,
+            case.as_ref().map(|case| case.case_id.as_str()),
+            input.work_id.as_deref().map(str::trim),
+            &target_type,
+            &target_channel,
+            question,
+            serde_json::to_string(&missing_inputs)?,
+            input.unblock_criteria.as_deref().map(str::trim),
+            &resume_state,
+            input.created_by.trim(),
+            serde_json::to_string(&input.metadata)?,
+            now,
+        ],
+    )?;
+    if let Some(case) = case.as_ref() {
+        conn.execute(
+            "UPDATE ticket_cases SET state = 'blocked_needs_clarification', updated_at = ?2 WHERE case_id = ?1",
+            params![case.case_id, now],
+        )?;
+    }
+    record_audit(
+        &mut conn,
+        AuditRequest {
+            ticket_key: &ticket.ticket_key,
+            case_id: case.as_ref().map(|case| case.case_id.as_str()),
+            actor_type: "clarification_engine",
+            action_type: "clarification_requested",
+            label: case.as_ref().map(|case| case.label.as_str()),
+            bundle_label: case.as_ref().map(|case| case.bundle_label.as_str()),
+            bundle_version: case.as_ref().map(|case| case.bundle_version),
+            details: json!({
+                "clarification_id": clarification_id,
+                "target_type": target_type,
+                "target_channel": target_channel,
+                "question": question,
+                "missing_inputs": missing_inputs,
+                "unblock_criteria": input.unblock_criteria.as_deref().map(str::trim),
+            }),
+        },
+    )?;
+    load_ticket_clarification_request(root, &clarification_id)?
+        .context("failed to load ticket clarification after create")
+}
+
+fn publish_ticket_clarification_request(
+    root: &Path,
+    clarification_id: &str,
+    reviewed_by: &str,
+    review_summary: &str,
+) -> Result<TicketClarificationRequestView> {
+    let mut conn = open_ticket_db(root)?;
+    let clarification = load_ticket_clarification_request(root, clarification_id)?
+        .context("ticket clarification not found")?;
+    anyhow::ensure!(
+        matches!(clarification.status.as_str(), "draft" | "send_failed"),
+        "clarification {} cannot be published from status {}",
+        clarification.clarification_id,
+        clarification.status
+    );
+    anyhow::ensure!(
+        !reviewed_by.trim().is_empty() && !review_summary.trim().is_empty(),
+        "publishing a clarification requires reviewed_by and review_summary"
+    );
+    anyhow::ensure!(
+        clarification.target_type == "requester" && clarification.target_channel == "ticket",
+        "automatic clarification publish currently supports requester ticket comments only"
+    );
+    let ticket = load_ticket(root, &clarification.ticket_key)?
+        .context("ticket not found for clarification")?;
+    let Some(adapter) = ticket_adapters::adapter_for_system(&ticket.source_system) else {
+        anyhow::bail!(
+            "unsupported ticket system for clarification publish: {}",
+            ticket.source_system
+        );
+    };
+    let capabilities = adapter.capabilities();
+    anyhow::ensure!(
+        capabilities.can_comment_writeback && capabilities.can_public_comments,
+        "ticket system {} does not support public clarification comments",
+        ticket.source_system
+    );
+    let result = match adapter.writeback_comment(
+        root,
+        ticket_protocol::TicketCommentWritebackRequest {
+            remote_ticket_id: &ticket.remote_ticket_id,
+            body: &clarification.question,
+            internal: false,
+        },
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            let error = err.to_string();
+            let now = now_iso_string();
+            conn.execute(
+                r#"
+                UPDATE ticket_clarification_requests
+                SET status = 'send_failed',
+                    metadata_json = ?2,
+                    updated_at = ?3
+                WHERE clarification_id = ?1
+                "#,
+                params![
+                    clarification_id,
+                    serde_json::to_string(&json!({
+                        "previous": clarification.metadata,
+                        "send_error": collapse_inline(&error, 1000),
+                    }))?,
+                    now,
+                ],
+            )?;
+            anyhow::bail!("{}", error);
+        }
+    };
+    mark_remote_events_outbound(root, &ticket.source_system, &result.remote_event_ids)?;
+    if let Err(err) = sync_ticket_system(root, &ticket.source_system) {
+        let _ = record_ticket_sync_failure(root, &ticket.source_system, &err.to_string());
+    }
+    let response_baseline_event_keys =
+        list_inbound_ticket_event_keys(&conn, &clarification.ticket_key)?;
+    let now = now_iso_string();
+    let writeback_id = format!(
+        "clarification-writeback:{}:{}",
+        clarification_id,
+        stable_digest(&now)
+    );
+    conn.execute(
+        r#"
+        INSERT INTO ticket_writebacks (
+            writeback_id, case_id, ticket_key, operation, payload_json, status, created_at
+        ) VALUES (?1, ?2, ?3, 'clarification_request', ?4, 'ok', ?5)
+        "#,
+        params![
+            writeback_id,
+            clarification.case_id.as_deref().unwrap_or(""),
+            &clarification.ticket_key,
+            serde_json::to_string(&json!({
+                "clarification_id": clarification.clarification_id,
+                "body": clarification.question,
+                "reviewed_by": reviewed_by.trim(),
+                "review_summary": review_summary.trim(),
+                "remote_event_ids": result.remote_event_ids.clone(),
+            }))?,
+            now,
+        ],
+    )?;
+    let outbound_message_key = result
+        .remote_event_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| writeback_id.clone());
+    conn.execute(
+        r#"
+        UPDATE ticket_clarification_requests
+        SET status = 'waiting_for_response',
+            outbound_message_key = ?2,
+            metadata_json = ?3,
+            updated_at = ?4,
+            sent_at = ?4
+        WHERE clarification_id = ?1
+        "#,
+        params![
+            clarification_id,
+            outbound_message_key,
+            serde_json::to_string(&json!({
+                "previous": clarification.metadata.clone(),
+                "reviewed_by": reviewed_by.trim(),
+                "review_summary": review_summary.trim(),
+                "writeback_id": writeback_id,
+                "response_baseline_event_keys": response_baseline_event_keys,
+            }))?,
+            now,
+        ],
+    )?;
+    record_audit(
+        &mut conn,
+        AuditRequest {
+            ticket_key: &ticket.ticket_key,
+            case_id: clarification.case_id.as_deref(),
+            actor_type: "clarification_engine",
+            action_type: "clarification_published",
+            label: None,
+            bundle_label: None,
+            bundle_version: None,
+            details: json!({
+                "clarification_id": clarification_id,
+                "reviewed_by": reviewed_by.trim(),
+                "review_summary": review_summary.trim(),
+                "outbound_message_key": outbound_message_key,
+            }),
+        },
+    )?;
+    load_ticket_clarification_request(root, clarification_id)?
+        .context("failed to load ticket clarification after publish")
+}
+
+fn resolve_ticket_clarification_request(
+    root: &Path,
+    clarification_id: &str,
+    response_key: &str,
+    response_body: Option<&str>,
+    resolved_by: &str,
+) -> Result<TicketClarificationRequestView> {
+    let mut conn = open_ticket_db(root)?;
+    let clarification = load_ticket_clarification_request(root, clarification_id)?
+        .context("ticket clarification not found")?;
+    let now = now_iso_string();
+    conn.execute(
+        r#"
+        UPDATE ticket_clarification_requests
+        SET status = 'resolved',
+            inbound_response_key = ?2,
+            inbound_response_body = ?3,
+            updated_at = ?4,
+            resolved_at = ?4,
+            metadata_json = ?5
+        WHERE clarification_id = ?1
+        "#,
+        params![
+            clarification_id,
+            response_key.trim(),
+            response_body.map(str::trim),
+            now,
+            serde_json::to_string(&json!({
+                "previous": clarification.metadata.clone(),
+                "resolved_by": resolved_by.trim(),
+            }))?,
+        ],
+    )?;
+    if let Some(case_id) = clarification.case_id.as_deref() {
+        if let Some(case) = load_case(root, case_id)? {
+            if matches!(
+                case.state.as_str(),
+                "blocked" | "blocked_needs_clarification"
+            ) {
+                enforce_ticket_case_state_transition(
+                    &conn,
+                    &case,
+                    &clarification.resume_state,
+                    "clarification_engine",
+                    "clarification_resolved",
+                )?;
+                conn.execute(
+                    "UPDATE ticket_cases SET state = ?2, updated_at = ?3 WHERE case_id = ?1",
+                    params![case_id, clarification.resume_state, now],
+                )?;
+            }
+        }
+    }
+    record_audit(
+        &mut conn,
+        AuditRequest {
+            ticket_key: &clarification.ticket_key,
+            case_id: clarification.case_id.as_deref(),
+            actor_type: "clarification_engine",
+            action_type: "clarification_resolved",
+            label: None,
+            bundle_label: None,
+            bundle_version: None,
+            details: json!({
+                "clarification_id": clarification_id,
+                "response_key": response_key.trim(),
+                "resolved_by": resolved_by.trim(),
+            }),
+        },
+    )?;
+    load_ticket_clarification_request(root, clarification_id)?
+        .context("failed to load ticket clarification after resolve")
+}
+
+fn resolve_waiting_clarifications_from_inbound_events(root: &Path, system: &str) -> Result<usize> {
+    let conn = open_ticket_db(root)?;
+    let mut statement = conn.prepare(
+        r#"
+        SELECT c.clarification_id, c.ticket_key, COALESCE(c.sent_at, c.created_at), c.metadata_json
+        FROM ticket_clarification_requests c
+        JOIN ticket_items t ON t.ticket_key = c.ticket_key
+        WHERE t.source_system = ?1
+          AND c.status = 'waiting_for_response'
+        ORDER BY c.created_at ASC
+        "#,
+    )?;
+    let rows = statement.query_map(params![system], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+        ))
+    })?;
+    let waiting = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)?;
+    drop(statement);
+    drop(conn);
+
+    let mut resolved = 0usize;
+    for (clarification_id, ticket_key, since, metadata_raw) in waiting {
+        let response_baseline_event_keys =
+            clarification_response_baseline_event_keys(&parse_json_or_empty(&metadata_raw));
+        let conn = open_ticket_db(root)?;
+        let mut response_statement = conn.prepare(
+            r#"
+                SELECT event_key, body_text
+                FROM ticket_events
+                WHERE ticket_key = ?1
+                  AND direction = 'inbound'
+                  AND observed_at >= ?2
+                  AND trim(body_text) <> ''
+                ORDER BY external_created_at ASC, observed_at ASC, event_key ASC
+                "#,
+        )?;
+        let response_rows = response_statement.query_map(params![ticket_key, since], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let response = response_rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(anyhow::Error::from)?
+            .into_iter()
+            .find(|(event_key, _)| !response_baseline_event_keys.contains(event_key));
+        drop(response_statement);
+        drop(conn);
+        if let Some((event_key, body_text)) = response {
+            resolve_ticket_clarification_request(
+                root,
+                &clarification_id,
+                &event_key,
+                Some(&body_text),
+                "ticket-sync",
+            )?;
+            resolved += 1;
+        }
+    }
+    Ok(resolved)
+}
+
+fn list_inbound_ticket_event_keys(conn: &Connection, ticket_key: &str) -> Result<Vec<String>> {
+    let mut statement = conn.prepare(
+        r#"
+        SELECT event_key
+        FROM ticket_events
+        WHERE ticket_key = ?1
+          AND direction = 'inbound'
+        ORDER BY external_created_at ASC, observed_at ASC, event_key ASC
+        "#,
+    )?;
+    let rows = statement.query_map(params![ticket_key], |row| row.get::<_, String>(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
+fn clarification_response_baseline_event_keys(metadata: &Value) -> BTreeSet<String> {
+    metadata
+        .get("response_baseline_event_keys")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn writeback_comment(
@@ -7575,6 +8184,100 @@ pub(crate) fn run_business_os_ticket_command(
             )?;
             Ok(json!({ "case": case, "case_id": case.case_id, "ticket_key": case.ticket_key }))
         }
+        "ctox.ticket.request_clarification" => {
+            let case_id = payload_string(payload, "case_id");
+            let ticket_key = payload_string(payload, "ticket_key");
+            let question = required_payload_string(payload, "question")?;
+            let missing_inputs = payload
+                .get("missing_inputs")
+                .and_then(Value::as_array)
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(ToOwned::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| {
+                    payload_string(payload, "missing_inputs_csv")
+                        .map(|value| parse_domain_csv(&value))
+                        .unwrap_or_default()
+                });
+            let clarification = create_ticket_clarification_request(
+                root,
+                TicketClarificationRequestInput {
+                    case_id,
+                    ticket_key,
+                    work_id: payload_string(payload, "work_id"),
+                    target_type: payload_string(payload, "target_type")
+                        .unwrap_or_else(|| "requester".to_string()),
+                    target_channel: payload_string(payload, "target_channel")
+                        .unwrap_or_else(|| "ticket".to_string()),
+                    question,
+                    missing_inputs,
+                    unblock_criteria: payload_string(payload, "unblock_criteria"),
+                    resume_state: payload_string(payload, "resume_state")
+                        .unwrap_or_else(|| "executable".to_string()),
+                    created_by: payload_string(payload, "created_by")
+                        .unwrap_or_else(|| "business-os".to_string()),
+                    metadata: payload
+                        .get("metadata")
+                        .cloned()
+                        .unwrap_or_else(|| json!({})),
+                },
+            )?;
+            let clarification_id = clarification.clarification_id.clone();
+            let case_id = clarification.case_id.clone();
+            let ticket_key = clarification.ticket_key.clone();
+            Ok(json!({
+                "clarification": clarification,
+                "clarification_id": clarification_id,
+                "case_id": case_id,
+                "ticket_key": ticket_key
+            }))
+        }
+        "ctox.ticket.publish_clarification" => {
+            let clarification_id = required_payload_string(payload, "clarification_id")?;
+            let reviewed_by =
+                payload_string(payload, "reviewed_by").unwrap_or_else(|| "business-os".to_string());
+            let review_summary = payload_string(payload, "review_summary")
+                .unwrap_or_else(|| "Clarification question reviewed for this ticket.".to_string());
+            let clarification = publish_ticket_clarification_request(
+                root,
+                &clarification_id,
+                &reviewed_by,
+                &review_summary,
+            )?;
+            let case_id = clarification.case_id.clone();
+            let ticket_key = clarification.ticket_key.clone();
+            Ok(json!({
+                "clarification": clarification,
+                "clarification_id": clarification_id,
+                "case_id": case_id,
+                "ticket_key": ticket_key
+            }))
+        }
+        "ctox.ticket.resolve_clarification" => {
+            let clarification_id = required_payload_string(payload, "clarification_id")?;
+            let response_key = required_payload_string(payload, "response_key")?;
+            let clarification = resolve_ticket_clarification_request(
+                root,
+                &clarification_id,
+                &response_key,
+                payload_string(payload, "body").as_deref(),
+                payload_string(payload, "resolved_by")
+                    .as_deref()
+                    .unwrap_or("business-os"),
+            )?;
+            let case_id = clarification.case_id.clone();
+            let ticket_key = clarification.ticket_key.clone();
+            Ok(json!({
+                "clarification": clarification,
+                "clarification_id": clarification_id,
+                "case_id": case_id,
+                "ticket_key": ticket_key
+            }))
+        }
         "ctox.ticket.writeback_comment" => {
             let case_id = required_payload_string(payload, "case_id")?;
             let body = required_payload_string(payload, "body")?;
@@ -7787,7 +8490,7 @@ fn ticket_case_core_state(raw: &str) -> Result<CoreState> {
         "awaiting_verification" | "verification" => Ok(CoreState::AwaitingVerification),
         "verified" | "writeback_pending" => Ok(CoreState::Verified),
         "closed" | "done" | "completed" => Ok(CoreState::Closed),
-        "blocked" => Ok(CoreState::Blocked),
+        "blocked" | "blocked_needs_clarification" => Ok(CoreState::Blocked),
         other => anyhow::bail!("ticket case state is not mapped to core state machine: {other}"),
     }
 }
@@ -7802,7 +8505,7 @@ fn ticket_case_core_event(state: &str) -> CoreEvent {
         "awaiting_verification" | "verification" => CoreEvent::Verify,
         "verified" | "writeback_pending" => CoreEvent::Verify,
         "closed" | "done" | "completed" => CoreEvent::Close,
-        "blocked" => CoreEvent::Block,
+        "blocked" | "blocked_needs_clarification" => CoreEvent::Block,
         _ => CoreEvent::CreateTicket,
     }
 }
@@ -8038,6 +8741,17 @@ fn ensure_case_is_executable(case: &TicketCaseView) -> Result<()> {
     }
 }
 
+fn ensure_case_can_request_clarification(case: &TicketCaseView) -> Result<()> {
+    match case.state.as_str() {
+        "closed" | "done" | "completed" | "verified" | "writeback_pending" => anyhow::bail!(
+            "case {} cannot request clarification from terminal/writeback state {}",
+            case.case_id,
+            case.state
+        ),
+        _ => Ok(()),
+    }
+}
+
 fn ensure_case_ready_for_writeback(case: &TicketCaseView) -> Result<()> {
     match case.state.as_str() {
         "writeback_pending" | "verifying" => Ok(()),
@@ -8047,6 +8761,47 @@ fn ensure_case_ready_for_writeback(case: &TicketCaseView) -> Result<()> {
             other
         ),
     }
+}
+
+fn canonical_clarification_target_type(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "requester" | "customer" | "ticket_requester" => Ok("requester".to_string()),
+        "owner" | "founder" | "admin" => Ok("owner".to_string()),
+        "internal" | "team" | "operator" => Ok("internal".to_string()),
+        other => anyhow::bail!(
+            "unsupported clarification target_type '{other}' (expected requester|owner|internal)"
+        ),
+    }
+}
+
+fn canonical_clarification_target_channel(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "ticket" | "email" | "jami" | "tui" | "teams" | "whatsapp" => {
+            Ok(raw.trim().to_ascii_lowercase())
+        }
+        other => anyhow::bail!(
+            "unsupported clarification target_channel '{other}' (expected ticket|email|jami|tui|teams|whatsapp)"
+        ),
+    }
+}
+
+fn canonical_clarification_resume_state(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "planned" | "ready" | "executable" => Ok("executable".to_string()),
+        other => {
+            anyhow::bail!("unsupported clarification resume_state '{other}' (expected executable)")
+        }
+    }
+}
+
+fn normalize_clarification_inputs(values: Vec<String>) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .filter(|value| seen.insert(value.to_ascii_lowercase()))
+        .collect()
 }
 
 fn record_failed_writeback(
@@ -8525,6 +9280,35 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
             status TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS ticket_clarification_requests (
+            clarification_id TEXT PRIMARY KEY,
+            ticket_key TEXT NOT NULL,
+            case_id TEXT,
+            work_id TEXT,
+            target_type TEXT NOT NULL,
+            target_channel TEXT NOT NULL,
+            question TEXT NOT NULL,
+            missing_inputs_json TEXT NOT NULL,
+            unblock_criteria TEXT,
+            status TEXT NOT NULL,
+            outbound_message_key TEXT,
+            inbound_response_key TEXT,
+            inbound_response_body TEXT,
+            resume_state TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            sent_at TEXT,
+            resolved_at TEXT
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_clarifications_ticket_status
+            ON ticket_clarification_requests(ticket_key, status, updated_at DESC);
+
+        CREATE INDEX IF NOT EXISTS idx_ticket_clarifications_case_status
+            ON ticket_clarification_requests(case_id, status, updated_at DESC);
 
         CREATE TABLE IF NOT EXISTS ticket_sync_runs (
             run_id TEXT PRIMARY KEY,
@@ -9189,6 +9973,35 @@ fn map_case_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TicketCaseView> {
     })
 }
 
+fn map_ticket_clarification_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<TicketClarificationRequestView> {
+    let missing_inputs_raw: String = row.get(7)?;
+    let metadata_raw: String = row.get(19)?;
+    Ok(TicketClarificationRequestView {
+        clarification_id: row.get(0)?,
+        ticket_key: row.get(1)?,
+        case_id: row.get(2)?,
+        work_id: row.get(3)?,
+        target_type: row.get(4)?,
+        target_channel: row.get(5)?,
+        question: row.get(6)?,
+        missing_inputs: parse_json_string_array_lossy(&missing_inputs_raw),
+        unblock_criteria: row.get(8)?,
+        status: row.get(9)?,
+        outbound_message_key: row.get(10)?,
+        inbound_response_key: row.get(11)?,
+        inbound_response_body: row.get(12)?,
+        resume_state: row.get(13)?,
+        created_by: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+        sent_at: row.get(17)?,
+        resolved_at: row.get(18)?,
+        metadata: parse_json_column(metadata_raw),
+    })
+}
+
 fn map_audit_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TicketAuditRecord> {
     Ok(TicketAuditRecord {
         audit_id: row.get(0)?,
@@ -9728,6 +10541,200 @@ mod tests {
             .iter()
             .any(|item| item.action_type == "writeback_record"));
         assert!(audit.iter().any(|item| item.action_type == "case_closed"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn clarification_request_round_trips_through_business_os_projection() -> Result<()> {
+        let root = temp_root("ticket-clarification-business-os");
+        std::fs::create_dir_all(&root)?;
+
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Missing VPN target",
+            "Please connect me, but the VPN endpoint is not included.",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        let ticket_key = format!("local:{}", remote.ticket_id);
+
+        put_control_bundle(
+            &root,
+            ControlBundleInput {
+                label: "support/vpn".to_string(),
+                runbook_id: "rb-vpn".to_string(),
+                runbook_version: "v1".to_string(),
+                policy_id: "pol-vpn".to_string(),
+                policy_version: "v1".to_string(),
+                approval_mode: "direct_execute_allowed".to_string(),
+                autonomy_level: "A1".to_string(),
+                verification_profile_id: "verify-vpn".to_string(),
+                writeback_profile_id: "writeback-comment".to_string(),
+                support_mode: "support_case".to_string(),
+                default_risk_level: "low".to_string(),
+                execution_actions: default_execution_actions(),
+                notes: Some("Clarification workflow test bundle".to_string()),
+            },
+        )?;
+        set_ticket_label(
+            &root,
+            &ticket_key,
+            "support/vpn",
+            "test",
+            Some("route to VPN support"),
+            json!({}),
+        )?;
+        let dry_run = create_dry_run(&root, &ticket_key, Some("VPN request needs endpoint"), None)?;
+
+        let requested = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.request_clarification",
+            &json!({
+                "case_id": dry_run.case_id,
+                "question": "Which VPN endpoint should CTOX use?",
+                "missing_inputs": ["vpn_endpoint"],
+                "unblock_criteria": "Requester supplies the exact VPN endpoint.",
+            }),
+        )?;
+        let clarification_id = requested
+            .get("clarification_id")
+            .and_then(Value::as_str)
+            .context("clarification id missing")?
+            .to_string();
+        assert_eq!(
+            requested
+                .pointer("/clarification/status")
+                .and_then(Value::as_str),
+            Some("draft")
+        );
+        let blocked_case = load_case(&root, &dry_run.case_id)?.context("case missing")?;
+        assert_eq!(blocked_case.state, "blocked_needs_clarification");
+
+        let projection = business_os_ticket_projection_documents(&root, 50)?;
+        let clarification_docs = projection
+            .get("ctox_ticket_clarification_requests")
+            .context("clarification projection missing")?;
+        assert!(clarification_docs.iter().any(|doc| {
+            doc.get("clarification_id").and_then(Value::as_str) == Some(clarification_id.as_str())
+                && doc.get("status").and_then(Value::as_str) == Some("draft")
+        }));
+
+        let resolved = run_business_os_ticket_command(
+            &root,
+            "ctox.ticket.resolve_clarification",
+            &json!({
+                "clarification_id": clarification_id,
+                "response_key": "manual:test-response",
+                "body": "Use vpn.example.test.",
+            }),
+        )?;
+        assert_eq!(
+            resolved
+                .pointer("/clarification/status")
+                .and_then(Value::as_str),
+            Some("resolved")
+        );
+        let resumed_case = load_case(&root, &dry_run.case_id)?.context("case missing")?;
+        assert_eq!(resumed_case.state, "executable");
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn published_clarification_resolves_from_later_inbound_ticket_comment() -> Result<()> {
+        let root = temp_root("ticket-clarification-inbound");
+        std::fs::create_dir_all(&root)?;
+
+        let remote = ticket_local_native::create_local_ticket(
+            &root,
+            "Printer setup missing model",
+            "Please configure the printer.",
+            Some("open"),
+            Some("normal"),
+        )?;
+        sync_ticket_system(&root, "local")?;
+        let ticket_key = format!("local:{}", remote.ticket_id);
+        put_control_bundle(
+            &root,
+            ControlBundleInput {
+                label: "support/printer".to_string(),
+                runbook_id: "rb-printer".to_string(),
+                runbook_version: "v1".to_string(),
+                policy_id: "pol-printer".to_string(),
+                policy_version: "v1".to_string(),
+                approval_mode: "direct_execute_allowed".to_string(),
+                autonomy_level: "A1".to_string(),
+                verification_profile_id: "verify-printer".to_string(),
+                writeback_profile_id: "writeback-comment".to_string(),
+                support_mode: "support_case".to_string(),
+                default_risk_level: "low".to_string(),
+                execution_actions: default_execution_actions(),
+                notes: Some("Clarification auto-resolver test bundle".to_string()),
+            },
+        )?;
+        set_ticket_label(
+            &root,
+            &ticket_key,
+            "support/printer",
+            "test",
+            Some("route to printer support"),
+            json!({}),
+        )?;
+        let dry_run = create_dry_run(
+            &root,
+            &ticket_key,
+            Some("Printer request needs model"),
+            None,
+        )?;
+        let clarification = create_ticket_clarification_request(
+            &root,
+            TicketClarificationRequestInput {
+                case_id: Some(dry_run.case_id.clone()),
+                ticket_key: None,
+                work_id: None,
+                target_type: "requester".to_string(),
+                target_channel: "ticket".to_string(),
+                question: "Which printer model should CTOX configure?".to_string(),
+                missing_inputs: vec!["printer_model".to_string()],
+                unblock_criteria: Some("Requester supplies the printer model.".to_string()),
+                resume_state: "executable".to_string(),
+                created_by: "ctox-test".to_string(),
+                metadata: json!({}),
+            },
+        )?;
+        let waiting = publish_ticket_clarification_request(
+            &root,
+            &clarification.clarification_id,
+            "review-test",
+            "Question is bounded and safe for requester.",
+        )?;
+        assert_eq!(waiting.status, "waiting_for_response");
+
+        ticket_local_native::add_local_comment(
+            &root,
+            &remote.ticket_id,
+            "The model is LaserJet 4100.",
+        )?;
+        let sync = sync_ticket_system(&root, "local")?;
+        assert_eq!(
+            sync.get("resolved_clarification_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        let resolved = load_ticket_clarification_request(&root, &clarification.clarification_id)?
+            .context("clarification missing")?;
+        assert_eq!(resolved.status, "resolved");
+        assert!(resolved
+            .inbound_response_body
+            .as_deref()
+            .unwrap_or_default()
+            .contains("LaserJet 4100"));
+        let resumed_case = load_case(&root, &dry_run.case_id)?.context("case missing")?;
+        assert_eq!(resumed_case.state, "executable");
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())

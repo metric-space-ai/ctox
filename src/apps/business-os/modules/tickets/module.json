@@ -14,7 +14,8 @@
     "ctox_ticket_control_bundles",
     "ctox_ticket_approvals",
     "ctox_ticket_verifications",
-    "ctox_ticket_writebacks"
+    "ctox_ticket_writebacks",
+    "ctox_ticket_clarification_requests"
   ],
   "layout": {
     "shell": "full-workspace",

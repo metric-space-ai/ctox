@@ -22,5 +22,15 @@
   "updated": "Updated",
   "noEvents": "No events available.",
   "noCase": "No case for this ticket.",
-  "noSelfWork": "No linked self-work."
+  "noSelfWork": "No linked self-work.",
+  "clarifications": "Clarifications",
+  "noClarifications": "No open clarifications.",
+  "requestClarification": "Clarify",
+  "publishClarification": "Send reviewed",
+  "resolveClarification": "Record answer",
+  "promptQuestion": "Clarification question",
+  "promptMissingInputs": "Missing values (comma-separated)",
+  "promptReviewSummary": "Review note",
+  "promptResponseKey": "Answer reference",
+  "promptResponseBody": "Answer body"
 }
