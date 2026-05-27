@@ -731,6 +731,18 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   min-width:900px;
 }
 
+.module-root[data-module-root="matching"] #left {
+  grid-column: 1;
+}
+
+.module-root[data-module-root="matching"] #center {
+  grid-column: 3;
+}
+
+.module-root[data-module-root="matching"] #right {
+  grid-column: 5;
+}
+
 .module-root[data-module-root="matching"] .col-resizer{
   position:absolute;
   top:12px;

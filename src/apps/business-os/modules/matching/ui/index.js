@@ -2607,6 +2607,13 @@ function _readGridTrackPixels(appEl) {
     .split(/\s+/)
     .map(part => Number.parseFloat(part))
     .filter(n => Number.isFinite(n) && n > 0);
+  if (tracks.length >= 5) {
+    return {
+      left: tracks[0],
+      center: tracks[2],
+      right: tracks[4]
+    };
+  }
   if (tracks.length < 3) return null;
   return {
     left: tracks[0],

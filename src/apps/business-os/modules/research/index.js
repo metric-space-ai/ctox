@@ -762,6 +762,7 @@ function render() {
 
 function renderLeft() {
   const root = pane('left');
+  if (!root) return;
   const task = selectedTask();
   root.innerHTML = `
     <header class="research-pane-header">
@@ -821,6 +822,7 @@ function renderRankingRow(source) {
 
 function renderCenter() {
   const root = pane('center');
+  if (!root) return;
   const task = selectedTask();
   if (!task) {
     root.innerHTML = `<div class="research-empty-state"><strong>${escapeHtml(state.t('noResearchTask', 'Keine Research-Aufgabe'))}</strong><span>${escapeHtml(state.t('createTaskBase', 'Lege eine Aufgabe auf Basis einer Knowledge Base an.'))}</span></div>`;
@@ -1302,6 +1304,7 @@ function renderKnowledgeTables(task) {
 
 function renderRight() {
   const root = pane('right');
+  if (!root) return;
   const task = selectedTask();
   const source = selectedSource();
   const latestRun = latestRunForTask(task?.id);

@@ -111,9 +111,13 @@ pub const QUERY_FETCH_ERROR_UNAUTHORIZED: &str = "UNAUTHORIZED";
 pub const QUERY_FETCH_ERROR_RATE_LIMITED: &str = "RATE_LIMITED";
 pub const QUERY_FETCH_ERROR_FEATURE_DISABLED: &str = "FEATURE_DISABLED";
 
-/// Per-peer rate-limit token bucket. Refill rate matches CTOX_QUERY_MAX_RUNTIME_MS
-/// — i.e. ~1 fetch per second sustained, with a burst of MAX_IN_FLIGHT_STREAMS.
+/// Per-peer rate-limit token bucket. This intentionally does not mirror the
+/// concurrent stream limit: a browser startup may legitimately open many
+/// short demand-load windows, while only a few streams run at the same time.
 const RATE_BUCKET_REFILL_INTERVAL: Duration = Duration::from_secs(1);
+const RATE_BUCKET_MIN_BURST: u32 = 32;
+const RATE_BUCKET_BURST_MULTIPLIER: u32 = 8;
+const RATE_BUCKET_REFILL_PER_SECOND: u32 = 16;
 
 /// Authorization callback. The dispatcher calls this with the peer-identity
 /// (opaque string from the connection handler) and the requested collection;
@@ -126,17 +130,26 @@ struct PeerRateBucket {
     last_refill: Instant,
     tokens: u32,
     max_tokens: u32,
+    refill_per_second: u32,
 }
 
 impl PeerRateBucket {
-    fn new(max_tokens: u32) -> Self {
-        Self { last_refill: Instant::now(), tokens: max_tokens, max_tokens }
+    fn new(max_tokens: u32, refill_per_second: u32) -> Self {
+        Self {
+            last_refill: Instant::now(),
+            tokens: max_tokens,
+            max_tokens,
+            refill_per_second: refill_per_second.max(1),
+        }
     }
+
     fn try_consume(&mut self) -> bool {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill);
         if elapsed >= RATE_BUCKET_REFILL_INTERVAL {
-            let refill = (elapsed.as_secs() as u32).min(self.max_tokens);
+            let refill = (elapsed.as_secs() as u32)
+                .saturating_mul(self.refill_per_second)
+                .min(self.max_tokens);
             self.tokens = (self.tokens + refill).min(self.max_tokens);
             self.last_refill = now;
         }
@@ -160,6 +173,7 @@ pub struct QueryFetchRegistry {
     max_inflight: u64,
     peer_rate_buckets: Mutex<HashMap<String, PeerRateBucket>>,
     rate_burst: u32,
+    rate_refill_per_second: u32,
     feature_enabled: AtomicBool,
     auth_check: Mutex<Option<Arc<AuthCheckFn>>>,
 }
@@ -172,13 +186,15 @@ impl Default for QueryFetchRegistry {
 
 impl QueryFetchRegistry {
     pub fn new(max_inflight: u64) -> Self {
+        let stream_based_burst = (max_inflight as u32).saturating_mul(RATE_BUCKET_BURST_MULTIPLIER);
         Self {
             inner: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashMap::new()),
             inflight_count: AtomicU64::new(0),
             max_inflight,
             peer_rate_buckets: Mutex::new(HashMap::new()),
-            rate_burst: (max_inflight as u32).max(2),
+            rate_burst: stream_based_burst.max(RATE_BUCKET_MIN_BURST),
+            rate_refill_per_second: RATE_BUCKET_REFILL_PER_SECOND,
             feature_enabled: AtomicBool::new(true),
             auth_check: Mutex::new(None),
         }
@@ -210,7 +226,7 @@ impl QueryFetchRegistry {
         let mut map = self.peer_rate_buckets.lock();
         let entry = map
             .entry(peer_identity.to_string())
-            .or_insert_with(|| PeerRateBucket::new(self.rate_burst));
+            .or_insert_with(|| PeerRateBucket::new(self.rate_burst, self.rate_refill_per_second));
         entry.try_consume()
     }
 
@@ -351,20 +367,6 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
         return Ok(());
     }
 
-    if !registry.try_rate_consume(&peer_identity) {
-        send_error(
-            handler.as_ref(),
-            &peer,
-            &message.id,
-            &request.request_id,
-            QUERY_FETCH_ERROR_RATE_LIMITED,
-            "per-peer query-fetch rate limit reached",
-            true,
-        )
-        .await;
-        return Ok(());
-    }
-
     let collection = match registry.get(&request.collection_name) {
         Some(c) => c,
         None => {
@@ -381,6 +383,20 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
             return Ok(());
         }
     };
+
+    if !registry.try_rate_consume(&peer_identity) {
+        send_error(
+            handler.as_ref(),
+            &peer,
+            &message.id,
+            &request.request_id,
+            QUERY_FETCH_ERROR_RATE_LIMITED,
+            "per-peer query-fetch rate limit reached",
+            true,
+        )
+        .await;
+        return Ok(());
+    }
 
     let cancel_flag = match registry.try_acquire(&request.request_id) {
         Some(flag) => flag,
@@ -1143,10 +1159,11 @@ mod tests {
         let collection = seeded_collection(1).await;
         let registry = Arc::new(QueryFetchRegistry::new(2));
         registry.register(Arc::clone(&collection));
-        // Exhaust the bucket: each call consumes one token. With max_inflight=2
-        // the burst is 2, so the 3rd call must be RATE_LIMITED.
+        // Exhaust the bucket: each accepted call consumes one token. The burst
+        // is intentionally larger than max_inflight, but finite.
         let handler = Arc::new(MockHandler::new());
-        for i in 0..3 {
+        let burst = registry.rate_burst;
+        for i in 0..=burst {
             let msg = make_request(&format!("rate-{i}"), "business_records", 0);
             run_query_fetch(
                 Arc::clone(&registry),
@@ -1163,13 +1180,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn normal_startup_burst_is_not_rate_limited() {
+        let collection = seeded_collection(1).await;
+        let registry = Arc::new(QueryFetchRegistry::new(4));
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+        for i in 0..16 {
+            let msg = make_request(&format!("startup-{i}"), "business_records", 0);
+            run_query_fetch(
+                Arc::clone(&registry),
+                Arc::clone(&handler),
+                MockPeer("p1"),
+                "p1".to_string(),
+                msg,
+            )
+            .await
+            .unwrap();
+        }
+        let frames = handler.sent.lock();
+        assert!(
+            !error_code_emitted(&frames, QUERY_FETCH_ERROR_RATE_LIMITED),
+            "legitimate startup demand-load fanout must not be rate-limited"
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_collection_does_not_consume_rate_tokens() {
+        let collection = seeded_collection(1).await;
+        let registry = Arc::new(QueryFetchRegistry::new(2));
+        registry.register(Arc::clone(&collection));
+        let handler = Arc::new(MockHandler::new());
+
+        for i in 0..registry.rate_burst {
+            let msg = make_request(&format!("unsupported-{i}"), "unsupported_records", 0);
+            run_query_fetch(
+                Arc::clone(&registry),
+                Arc::clone(&handler),
+                MockPeer("p1"),
+                "p1".to_string(),
+                msg,
+            )
+            .await
+            .unwrap();
+        }
+        handler.sent.lock().clear();
+
+        let msg = make_request("supported-after-unsupported", "business_records", 0);
+        run_query_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".to_string(),
+            msg,
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(
+            !error_code_emitted(&frames, QUERY_FETCH_ERROR_RATE_LIMITED),
+            "unsupported probes must not spend query-fetch tokens"
+        );
+    }
+
+    #[tokio::test]
     async fn rate_limit_is_per_peer_not_global() {
         let collection = seeded_collection(1).await;
         let registry = Arc::new(QueryFetchRegistry::new(2));
         registry.register(Arc::clone(&collection));
         let handler = Arc::new(MockHandler::new());
         // peer1 burns its bucket
-        for i in 0..3 {
+        for i in 0..=registry.rate_burst {
             let _ = run_query_fetch(
                 Arc::clone(&registry),
                 Arc::clone(&handler),
