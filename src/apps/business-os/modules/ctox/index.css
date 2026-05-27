@@ -30,6 +30,7 @@
   --ctox-ok: #4f7f35;
   --ctox-blocked: #b74333;
   --ctox-left-width: 340px;
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: var(--ctox-left-width) 10px minmax(0, 1fr);
   gap: 6px;

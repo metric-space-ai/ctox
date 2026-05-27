@@ -14,7 +14,7 @@ const LEFT_COLUMN_MIN = 220;
 const LEFT_COLUMN_MAX = 560;
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
-const CTOX_STYLE_BUILD = '20260519-rxdb-only1';
+const CTOX_STYLE_BUILD = '20260527-harness-layout1';
 
 const labels = {
   de: {
