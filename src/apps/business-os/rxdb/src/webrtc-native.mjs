@@ -876,7 +876,9 @@ export class CtoxWebRtcNativePeer {
     const peerId = String(remotePeerId || '');
     if (!peerId || peerId === this.options.clientId) return false;
     const metadata = this.peerMetadata.get(peerId);
-    if (!metadata?.role) return true;
+    if (!metadata?.role) {
+      return peerId.startsWith('ctox-business-os-native') || peerId.startsWith('ctox-core-');
+    }
     return metadata.role === 'ctox_instance';
   }
 

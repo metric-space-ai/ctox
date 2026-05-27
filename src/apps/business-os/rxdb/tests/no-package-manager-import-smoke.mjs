@@ -199,9 +199,14 @@ try {
     room: 'ctox-business-os:test:desktop_file_chunks',
     clientId: 'browser-peer',
   });
-  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', otherPeerIds: ['browser-peer', 'ctox-peer'] }));
+  const peers = [{ peerId: 'browser-peer', role: 'browser' }, { peerId: 'ctox-peer', role: 'ctox_instance' }];
+  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
+  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', otherPeerIds: ['stale-browser-peer'] }));
+  if (peer.connections.has('stale-browser-peer')) {
+    throw new Error('browser peer must ignore signaling peers without native role metadata');
+  }
   const firstConnection = peer.connections.get('ctox-peer');
-  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', otherPeerIds: ['browser-peer', 'ctox-peer'] }));
+  peer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers }));
   const secondConnection = peer.connections.get('ctox-peer');
   if (!firstConnection || !secondConnection || firstConnection === secondConnection || closedConnections.length !== 1) {
     throw new Error('rejoined native peer must replace stale RTC connections');
