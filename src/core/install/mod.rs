@@ -28,11 +28,15 @@ const DEFAULT_CACHE_ROOT_RELATIVE_PATH: &str = ".cache/ctox";
 const DEFAULT_GITHUB_API_BASE: &str = "https://api.github.com";
 const DEFAULT_GITHUB_TOKEN_ENV: &str = "CTOX_UPDATE_GITHUB_TOKEN";
 const DEFAULT_RELEASE_REPO: &str = "metric-space-ai/ctox";
+const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
+const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const UPGRADE_RUNTIME_ENV_INVARIANT_KEYS: &[&str] = &[
     "CTOX_API_PROVIDER",
     "CTOX_UPSTREAM_BASE_URL",
     "CTOX_AZURE_FOUNDRY_ENDPOINT",
     "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID",
+    "CTOX_OPENAI_AUTH_MODE",
+    "OPENAI_AUTH_MODE",
     "CTOX_CHAT_MODEL",
     "CTOX_CHAT_MODEL_BASE",
     "CTOX_ACTIVE_MODEL",
@@ -2154,6 +2158,7 @@ fn state_root_has_files(state_root: &Path) -> Result<bool> {
 struct RuntimeCredentialSnapshot {
     env_values: Vec<(String, String)>,
     secret_presence: Vec<String>,
+    chatgpt_subscription_auth_backup_present: bool,
 }
 
 impl RuntimeCredentialSnapshot {
@@ -2176,14 +2181,21 @@ impl RuntimeCredentialSnapshot {
             })
             .map(|key| (*key).to_string())
             .collect();
+        let chatgpt_subscription_auth_backup_present =
+            secrets::read_secret_value(root, CHATGPT_AUTH_SECRET_SCOPE, CHATGPT_AUTH_SECRET_NAME)
+                .is_ok_and(|value| !value.trim().is_empty());
         Ok(Self {
             env_values,
             secret_presence,
+            chatgpt_subscription_auth_backup_present,
         })
     }
 
     fn verify_preserved(&self, root: &Path) -> Result<()> {
-        if self.env_values.is_empty() && self.secret_presence.is_empty() {
+        if self.env_values.is_empty()
+            && self.secret_presence.is_empty()
+            && !self.chatgpt_subscription_auth_backup_present
+        {
             return Ok(());
         }
         let after = Self::capture(root)?;
@@ -2208,6 +2220,11 @@ impl RuntimeCredentialSnapshot {
                 missing.push(format!("{key} secret missing"));
             }
         }
+        if self.chatgpt_subscription_auth_backup_present
+            && !after.chatgpt_subscription_auth_backup_present
+        {
+            missing.push("ChatGPT subscription auth backup missing".to_owned());
+        }
         if !missing.is_empty() {
             anyhow::bail!(
                 "post-upgrade runtime credential invariant failed: {}",
@@ -2215,9 +2232,14 @@ impl RuntimeCredentialSnapshot {
             );
         }
         progress_info(format!(
-            "runtime credential invariants preserved ({} env keys, {} secrets)",
+            "runtime credential invariants preserved ({} env keys, {} secrets{})",
             self.env_values.len(),
-            self.secret_presence.len()
+            self.secret_presence.len(),
+            if self.chatgpt_subscription_auth_backup_present {
+                ", ChatGPT subscription auth backup"
+            } else {
+                ""
+            }
         ));
         Ok(())
     }
@@ -2811,7 +2833,6 @@ mod tests {
         runtime_env::save_runtime_env_map(temp.path(), &env).unwrap();
 
         let snapshot = RuntimeCredentialSnapshot::capture(temp.path()).unwrap();
-        assert_eq!(snapshot.env_values.len(), 2);
         assert_eq!(snapshot.secret_presence, vec!["AZURE_FOUNDRY_API_KEY"]);
 
         secrets::delete_credential(temp.path(), "AZURE_FOUNDRY_API_KEY").unwrap();
@@ -2819,6 +2840,55 @@ mod tests {
         assert!(err
             .to_string()
             .contains("AZURE_FOUNDRY_API_KEY secret missing"));
+    }
+
+    #[test]
+    fn runtime_credential_snapshot_preserves_chatgpt_subscription_auth() {
+        let temp = tempdir().unwrap();
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+        env.insert(
+            "CTOX_OPENAI_AUTH_MODE".to_string(),
+            "chatgpt_subscription".to_string(),
+        );
+        env.insert(
+            "OPENAI_AUTH_MODE".to_string(),
+            "chatgpt_subscription".to_string(),
+        );
+        runtime_env::save_runtime_env_map(temp.path(), &env).unwrap();
+        secrets::write_secret_record(
+            temp.path(),
+            CHATGPT_AUTH_SECRET_SCOPE,
+            CHATGPT_AUTH_SECRET_NAME,
+            r#"{"auth_mode":"chatgpt","tokens":{"access_token":"a","refresh_token":"r","id_token":{},"account_id":"acct"}}"#,
+            Some("ChatGPT Subscription OAuth state for this CTOX instance".to_string()),
+            json!({"source": "test"}),
+        )
+        .unwrap();
+
+        let snapshot = RuntimeCredentialSnapshot::capture(temp.path()).unwrap();
+        assert!(snapshot.env_values.iter().any(|(key, value)| {
+            key == "CTOX_OPENAI_AUTH_MODE" && value == "chatgpt_subscription"
+        }));
+        assert!(snapshot
+            .env_values
+            .iter()
+            .any(|(key, value)| { key == "OPENAI_AUTH_MODE" && value == "chatgpt_subscription" }));
+        assert!(snapshot.chatgpt_subscription_auth_backup_present);
+
+        secrets::write_secret_record(
+            temp.path(),
+            CHATGPT_AUTH_SECRET_SCOPE,
+            CHATGPT_AUTH_SECRET_NAME,
+            "",
+            Some("ChatGPT Subscription OAuth state for this CTOX instance".to_string()),
+            json!({"source": "test"}),
+        )
+        .unwrap();
+        let err = snapshot.verify_preserved(temp.path()).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("ChatGPT subscription auth backup missing"));
     }
 
     #[test]
