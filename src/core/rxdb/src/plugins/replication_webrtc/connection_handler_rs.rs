@@ -44,6 +44,7 @@ const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
 const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
+const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
 
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
@@ -67,7 +68,7 @@ impl WebRTCRsConfig {
                 ..Default::default()
             }],
             data_channel_label: "rxdb".to_string(),
-            udp_bind_addr: DEFAULT_UDP_BIND_ADDR.to_string(),
+            udp_bind_addr: default_udp_bind_addr(),
         }
     }
 }
@@ -1559,6 +1560,14 @@ fn classify_send_priority(frame: &WebRTCWireFrame, text: &str) -> SendPriority {
             _ => SendPriority::Normal,
         },
     }
+}
+
+fn default_udp_bind_addr() -> String {
+    std::env::var(UDP_BIND_ADDR_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_UDP_BIND_ADDR.to_string())
 }
 
 fn now_ms() -> u64 {

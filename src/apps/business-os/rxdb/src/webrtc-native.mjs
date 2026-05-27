@@ -15,6 +15,20 @@ const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const SEND_PRIORITIES = ['high', 'normal', 'low'];
+const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 5;
+const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
+const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
+const RECENT_RTC_EVENT_LIMIT = 40;
+const SHELL_CRITICAL_COLLECTIONS = new Set([
+  'ctox_runtime_settings',
+  'business_module_catalog',
+  'business_commands',
+  'ctox_queue_tasks',
+  'desktop_files',
+]);
+const DEFERRED_FILE_COLLECTIONS = new Set([
+  'desktop_file_chunks',
+]);
 
 export function createCtoxWebRtcNativePeer(options = {}) {
   return new CtoxWebRtcNativePeer(options);
@@ -105,6 +119,8 @@ export class CtoxWebRtcNativePeer {
       updatedAtMs: Date.now(),
     };
     this.lastControlPlaneError = null;
+    this.recentConnectionEvents = [];
+    this.connectionRequests = new Map();
     this.closed = false;
   }
 
@@ -129,6 +145,8 @@ export class CtoxWebRtcNativePeer {
 
   close() {
     this.closed = true;
+    cancelRtcPeerConnectionRequestsForOwner(this, 'peer-close');
+    this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {
       this.removeConnection(peerId, 'peer-close');
     }
@@ -454,17 +472,94 @@ export class CtoxWebRtcNativePeer {
     if (connection) {
       return connection;
     }
-    const peer = new RTCPeerConnection({ iceServers: this.options.iceServers });
-    connection = { peer, channel: null, remotePeerId, pendingCandidates: [] };
+    const slot = tryAcquireRtcPeerConnectionSlot(this, remotePeerId);
+    if (!slot) {
+      this.queueConnection(remotePeerId).catch((error) => {
+        this.events.emit('error', normalizePeerSignalError(error, remotePeerId));
+      });
+      return undefined;
+    }
+    return this.createConnection(remotePeerId, slot);
+  }
+
+  queueConnection(remotePeerId) {
+    if (this.closed || !this.shouldConnectToRemotePeer(remotePeerId)) {
+      return Promise.resolve(undefined);
+    }
+    const existing = this.connections.get(remotePeerId);
+    if (existing) return Promise.resolve(existing);
+    const pending = this.connectionRequests.get(remotePeerId);
+    if (pending) return pending;
+    const request = acquireRtcPeerConnectionSlot(this, remotePeerId)
+      .then((slot) => {
+        if (this.closed || !this.shouldConnectToRemotePeer(remotePeerId)) {
+          releaseRtcPeerConnectionSlot(slot, 'queued-peer-abandoned');
+          return undefined;
+        }
+        const current = this.connections.get(remotePeerId);
+        if (current) {
+          releaseRtcPeerConnectionSlot(slot, 'queued-peer-existing');
+          return current;
+        }
+        return this.createConnection(remotePeerId, slot);
+      })
+      .finally(() => {
+        this.connectionRequests.delete(remotePeerId);
+      });
+    this.connectionRequests.set(remotePeerId, request);
+    return request;
+  }
+
+  createConnection(remotePeerId, rtcPoolSlot = null) {
+    let peer;
+    try {
+      peer = new RTCPeerConnection({ iceServers: this.options.iceServers });
+    } catch (error) {
+      releaseRtcPeerConnectionSlot(rtcPoolSlot, 'rtc-constructor-failed');
+      throw error;
+    }
+    const connection = {
+      peer,
+      channel: null,
+      remotePeerId,
+      pendingCandidates: [],
+      rtcPoolSlot,
+      createdAtMs: Date.now(),
+      lastStateChangeAtMs: Date.now(),
+      lastError: null,
+      signalStats: createPeerSignalStats(),
+      localCandidateTypes: {},
+      remoteCandidateTypes: {},
+    };
     this.connections.set(remotePeerId, connection);
+    this.recordConnectionEvent(connection, 'created', { state: peer.connectionState || 'new' });
 
     peer.onicecandidate = (event) => {
       if (event.candidate) {
+        recordCandidateType(connection.localCandidateTypes, event.candidate?.candidate);
+        connection.signalStats.candidateSent += 1;
+        connection.signalStats.lastLocalCandidateType = candidateTypeFromLine(event.candidate?.candidate);
+        connection.signalStats.lastSignalAtMs = Date.now();
         this.sendSignal(remotePeerId, { type: 'candidate', candidate: event.candidate.toJSON() });
+        return;
       }
+      connection.signalStats.localCandidateComplete = true;
+      connection.signalStats.lastSignalAtMs = Date.now();
+      this.recordConnectionEvent(connection, 'local-candidates-complete', { state: peer.connectionState || '' });
+    };
+    peer.oniceconnectionstatechange = () => {
+      this.recordConnectionEvent(connection, 'ice-connection-state', {
+        state: peer.iceConnectionState || '',
+      });
+    };
+    peer.onicegatheringstatechange = () => {
+      this.recordConnectionEvent(connection, 'ice-gathering-state', {
+        state: peer.iceGatheringState || '',
+      });
     };
     peer.onconnectionstatechange = () => {
       const state = peer.connectionState;
+      this.recordConnectionEvent(connection, 'connection-state', { state });
       this.events.emit('peer-state', { peerId: remotePeerId, state });
       if (['closed', 'failed', 'disconnected'].includes(state)) {
         this.removeConnection(remotePeerId, `peer-${state}`);
@@ -490,6 +585,12 @@ export class CtoxWebRtcNativePeer {
     const offer = await peer.createOffer();
     if (this.closed || peer.signalingState === 'closed') return;
     await peer.setLocalDescription(offer);
+    const connection = this.connections.get(remotePeerId);
+    if (connection) {
+      connection.signalStats.offerSent += 1;
+      connection.signalStats.lastSignalAtMs = Date.now();
+      this.recordConnectionEvent(connection, 'offer-sent', { signalingState: peer.signalingState });
+    }
     this.sendSignal(remotePeerId, { type: offer.type, sdp: offer.sdp });
   }
 
@@ -499,10 +600,17 @@ export class CtoxWebRtcNativePeer {
     const peer = connection.peer;
     const data = typeof signal === 'string' ? JSON.parse(signal) : signal;
     if (data.type === 'candidate') {
+      recordCandidateType(connection.remoteCandidateTypes, data.candidate?.candidate);
+      connection.signalStats.candidateReceived += 1;
+      connection.signalStats.lastRemoteCandidateType = candidateTypeFromLine(data.candidate?.candidate);
+      connection.signalStats.lastSignalAtMs = Date.now();
       await this.addIceCandidateWhenReady(connection, data.candidate);
       return;
     }
     if (data.type === 'offer') {
+      connection.signalStats.offerReceived += 1;
+      connection.signalStats.lastSignalAtMs = Date.now();
+      this.recordConnectionEvent(connection, 'offer-received', { signalingState: peer.signalingState });
       if (peer.signalingState !== 'stable') {
         if (this.shouldInitiate(remotePeerId)) {
           return;
@@ -513,10 +621,16 @@ export class CtoxWebRtcNativePeer {
       await this.flushPendingIceCandidates(connection);
       const answer = await peer.createAnswer();
       await peer.setLocalDescription(answer);
+      connection.signalStats.answerSent += 1;
+      connection.signalStats.lastSignalAtMs = Date.now();
+      this.recordConnectionEvent(connection, 'answer-sent', { signalingState: peer.signalingState });
       this.sendSignal(remotePeerId, { type: answer.type, sdp: answer.sdp });
       return;
     }
     if (data.type === 'answer') {
+      connection.signalStats.answerReceived += 1;
+      connection.signalStats.lastSignalAtMs = Date.now();
+      this.recordConnectionEvent(connection, 'answer-received', { signalingState: peer.signalingState });
       if (peer.signalingState !== 'have-local-offer') {
         return;
       }
@@ -531,15 +645,19 @@ export class CtoxWebRtcNativePeer {
     if (!peer || peer.signalingState === 'closed') return;
     if (!peer.remoteDescription) {
       connection.pendingCandidates.push(candidate);
+      this.recordConnectionEvent(connection, 'candidate-queued', { pendingCandidates: connection.pendingCandidates.length });
       return;
     }
     try {
       await peer.addIceCandidate(candidate);
+      this.recordConnectionEvent(connection, 'candidate-added', { pendingCandidates: connection.pendingCandidates.length });
     } catch (error) {
       if (!peer.remoteDescription && isMissingRemoteDescriptionIceError(error)) {
         connection.pendingCandidates.push(candidate);
+        this.recordConnectionEvent(connection, 'candidate-queued', { pendingCandidates: connection.pendingCandidates.length });
         return;
       }
+      connection.lastError = normalizePeerSignalError(error, connection.remotePeerId);
       throw error;
     }
   }
@@ -560,6 +678,9 @@ export class CtoxWebRtcNativePeer {
   attachChannel(connection, channel) {
     connection.channel = channel;
     channel.onopen = () => {
+      markCriticalRtcPeerConnectionOpened(connection.rtcPoolSlot);
+      drainRtcPeerConnectionQueue('critical-peer-opened');
+      this.recordConnectionEvent(connection, 'datachannel-open', { readyState: channel.readyState || 'open' });
       this.events.emit('peer-open', { peerId: connection.remotePeerId });
     };
     channel.onmessage = (event) => {
@@ -571,8 +692,15 @@ export class CtoxWebRtcNativePeer {
       }
       this.handleDataChannelFrame(connection.remotePeerId, payload);
     };
-    channel.onerror = () => this.events.emit('error', { code: 'ctox_data_channel_error', peerId: connection.remotePeerId });
-    channel.onclose = () => this.removeConnection(connection.remotePeerId, 'channel-close');
+    channel.onerror = () => {
+      connection.lastError = { code: 'ctox_data_channel_error', peerId: connection.remotePeerId };
+      this.recordConnectionEvent(connection, 'datachannel-error', { readyState: channel.readyState || '' });
+      this.events.emit('error', connection.lastError);
+    };
+    channel.onclose = () => {
+      this.recordConnectionEvent(connection, 'datachannel-close', { readyState: channel.readyState || 'closed' });
+      this.removeConnection(connection.remotePeerId, 'channel-close');
+    };
   }
 
   async handleDataChannelFrame(peerId, payload) {
@@ -876,8 +1004,10 @@ export class CtoxWebRtcNativePeer {
     const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
+    this.connectionRequests.delete(peerId);
     try { connection.channel?.close?.(); } catch {}
     try { connection.peer?.close?.(); } catch {}
+    releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
     this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
     this.events.emit('peer-close', { peerId, reason });
   }
@@ -999,6 +1129,9 @@ export class CtoxWebRtcNativePeer {
       pendingAcks: this.pendingFrameAcks.size,
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
+      rtcConnectionPool: rtcPeerConnectionPoolSnapshot(),
+      rtcConnections: [...this.connections.values()].map((connection) => peerConnectionSnapshot(connection)),
+      recentRtcEvents: this.recentConnectionEvents.slice(-RECENT_RTC_EVENT_LIMIT),
       connectionCount: this.connections.size,
       connectionStates: [...this.connections.values()].map((connection) => ({
         peerId: connection.remotePeerId,
@@ -1013,6 +1146,23 @@ export class CtoxWebRtcNativePeer {
           : 0,
       })),
     };
+  }
+
+  recordConnectionEvent(connection, event, detail = {}) {
+    if (!connection) return;
+    connection.lastStateChangeAtMs = Date.now();
+    const entry = {
+      atMs: connection.lastStateChangeAtMs,
+      event,
+      peerId: connection.remotePeerId,
+      collection: collectionNameFromTopic(this.options.room),
+      ...detail,
+    };
+    this.recentConnectionEvents.push(entry);
+    if (this.recentConnectionEvents.length > RECENT_RTC_EVENT_LIMIT) {
+      this.recentConnectionEvents.splice(0, this.recentConnectionEvents.length - RECENT_RTC_EVENT_LIMIT);
+    }
+    this.events.emit('transport-status', this.getTransportStatus());
   }
 
   recordSentTransportFrame(payload, channel) {
@@ -1175,6 +1325,226 @@ function serializeFrameError(error, method = '') {
   };
 }
 
+function tryAcquireRtcPeerConnectionSlot(owner, remotePeerId) {
+  const pool = getRtcPeerConnectionPool();
+  const key = rtcPeerConnectionOwnerKey(owner, remotePeerId);
+  const existing = pool.active.get(key);
+  if (existing) return existing;
+  const priority = rtcPeerConnectionPriority(owner);
+  if (priority > 0 && isBrowserRuntime() && isBusinessOsRoom(owner?.options?.room) && !criticalRtcPeerConnectionsReady(pool)) {
+    return null;
+  }
+  if (priority === 0) preemptOptionalRtcPeerConnectionSlot(pool);
+  if (pool.active.size >= pool.maxActive) return null;
+  const slot = createRtcPeerConnectionSlot(owner, remotePeerId, key);
+  pool.active.set(key, slot);
+  return slot;
+}
+
+function acquireRtcPeerConnectionSlot(owner, remotePeerId) {
+  const immediate = tryAcquireRtcPeerConnectionSlot(owner, remotePeerId);
+  if (immediate) return Promise.resolve(immediate);
+  const pool = getRtcPeerConnectionPool();
+  const key = rtcPeerConnectionOwnerKey(owner, remotePeerId);
+  const existingQueued = pool.queue.find((entry) => entry.key === key);
+  if (existingQueued) return existingQueued.promise;
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  const entry = {
+    key,
+    owner,
+    remotePeerId,
+    priority: rtcPeerConnectionPriority(owner),
+    enqueuedAt: Date.now(),
+    resolve,
+    reject,
+    promise,
+    timer: null,
+  };
+  entry.timer = setTimeout(() => {
+    removeQueuedRtcPeerConnection(entry);
+    reject(new Error(`Timed out waiting for browser WebRTC connection budget for ${remotePeerId}`));
+  }, RTC_CONNECTION_QUEUE_TIMEOUT_MS);
+  pool.queue.push(entry);
+  sortRtcPeerConnectionQueue(pool);
+  owner?.events?.emit?.('peer-state', { peerId: remotePeerId, state: 'queued' });
+  return promise;
+}
+
+function releaseRtcPeerConnectionSlot(slot, reason = 'closed') {
+  if (!slot?.key) return;
+  const pool = getRtcPeerConnectionPool();
+  pool.active.delete(slot.key);
+  drainRtcPeerConnectionQueue(reason);
+}
+
+function drainRtcPeerConnectionQueue(reason = 'slot-released') {
+  const pool = getRtcPeerConnectionPool();
+  sortRtcPeerConnectionQueue(pool);
+  while (pool.active.size < pool.maxActive && pool.queue.length) {
+    const entryIndex = nextGrantableRtcPeerConnectionQueueIndex(pool);
+    if (entryIndex < 0) break;
+    const [entry] = pool.queue.splice(entryIndex, 1);
+    if (entry.timer) clearTimeout(entry.timer);
+    if (entry.owner?.closed) continue;
+    if (pool.active.has(entry.key)) {
+      entry.resolve(pool.active.get(entry.key));
+      continue;
+    }
+    const slot = createRtcPeerConnectionSlot(entry.owner, entry.remotePeerId, entry.key);
+    pool.active.set(entry.key, slot);
+    entry.owner?.events?.emit?.('peer-state', { peerId: entry.remotePeerId, state: 'slot-granted', reason });
+    entry.resolve(slot);
+  }
+}
+
+function removeQueuedRtcPeerConnection(entry) {
+  const pool = getRtcPeerConnectionPool();
+  const index = pool.queue.indexOf(entry);
+  if (index >= 0) pool.queue.splice(index, 1);
+  if (entry?.timer) clearTimeout(entry.timer);
+}
+
+function cancelRtcPeerConnectionRequestsForOwner(owner, reason = 'owner-closed') {
+  const pool = getRtcPeerConnectionPool();
+  const queued = pool.queue.filter((entry) => entry.owner === owner);
+  for (const entry of queued) {
+    removeQueuedRtcPeerConnection(entry);
+    entry.reject(new Error(`Cancelled browser WebRTC connection budget request: ${reason}`));
+  }
+}
+
+function sortRtcPeerConnectionQueue(pool) {
+  pool.queue.sort((left, right) => {
+    if (left.priority !== right.priority) return left.priority - right.priority;
+    return left.enqueuedAt - right.enqueuedAt;
+  });
+}
+
+function createRtcPeerConnectionSlot(owner, remotePeerId, key = rtcPeerConnectionOwnerKey(owner, remotePeerId)) {
+  return {
+    key,
+    owner,
+    remotePeerId: String(remotePeerId || ''),
+    room: String(owner?.options?.room || ''),
+    priority: rtcPeerConnectionPriority(owner),
+    acquiredAtMs: Date.now(),
+  };
+}
+
+function getRtcPeerConnectionPool() {
+  const root = globalThis || {};
+  if (!root[GLOBAL_RTC_CONNECTION_POOL_KEY]) {
+    root[GLOBAL_RTC_CONNECTION_POOL_KEY] = {
+      maxActive: MAX_GLOBAL_RTC_PEER_CONNECTIONS,
+      active: new Map(),
+      queue: [],
+      criticalOpened: new Set(),
+    };
+  }
+  return root[GLOBAL_RTC_CONNECTION_POOL_KEY];
+}
+
+function rtcPeerConnectionPoolSnapshot() {
+  const pool = getRtcPeerConnectionPool();
+  return {
+    maxActive: pool.maxActive,
+    active: pool.active.size,
+    queued: pool.queue.length,
+    activeCritical: activeCriticalRtcPeerConnectionCount(pool),
+    queuedCritical: queuedCriticalRtcPeerConnectionNames(pool).length,
+    criticalOpened: [...pool.criticalOpened].sort(),
+    criticalReady: criticalRtcPeerConnectionsReady(pool),
+    activeConnections: [...pool.active.values()].map((slot) => rtcPeerConnectionSlotSnapshot(slot)),
+    queuedConnections: pool.queue.map((entry) => ({
+      collection: collectionNameFromTopic(entry.owner?.options?.room || ''),
+      priority: entry.priority,
+      queuedForMs: Date.now() - entry.enqueuedAt,
+    })),
+  };
+}
+
+function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
+  return `${String(owner?.options?.room || '')}|${String(owner?.options?.clientId || '')}|${String(remotePeerId || '')}`;
+}
+
+function rtcPeerConnectionPriority(owner) {
+  const collection = collectionNameFromTopic(owner?.options?.room || '');
+  if (SHELL_CRITICAL_COLLECTIONS.has(collection)) return 0;
+  if (DEFERRED_FILE_COLLECTIONS.has(collection)) return 5;
+  return 10;
+}
+
+function criticalRtcPeerConnectionsReady(pool) {
+  for (const collection of SHELL_CRITICAL_COLLECTIONS) {
+    if (!pool.criticalOpened?.has(collection)) return false;
+  }
+  return true;
+}
+
+function queuedCriticalRtcPeerConnectionNames(pool) {
+  const queuedCriticalRooms = new Set();
+  for (const entry of pool.queue) {
+    const collection = collectionNameFromTopic(entry?.owner?.options?.room || '');
+    if (SHELL_CRITICAL_COLLECTIONS.has(collection)) queuedCriticalRooms.add(collection);
+  }
+  return [...queuedCriticalRooms].sort();
+}
+
+function activeCriticalRtcPeerConnectionCount(pool) {
+  let count = 0;
+  for (const slot of pool.active.values()) {
+    if (SHELL_CRITICAL_COLLECTIONS.has(collectionNameFromTopic(slot.room))) count += 1;
+  }
+  return count;
+}
+
+function preemptOptionalRtcPeerConnectionSlot(pool) {
+  if (pool.active.size < pool.maxActive) return false;
+  for (const slot of pool.active.values()) {
+    const collection = collectionNameFromTopic(slot.room);
+    if (SHELL_CRITICAL_COLLECTIONS.has(collection)) continue;
+    try {
+      slot.owner?.removeConnection?.(slot.remotePeerId, 'rtc-preempted-for-shell-critical');
+    } catch {}
+    return true;
+  }
+  return false;
+}
+
+function nextGrantableRtcPeerConnectionQueueIndex(pool) {
+  for (let index = 0; index < pool.queue.length; index += 1) {
+    const entry = pool.queue[index];
+    if (!entry) continue;
+    if (entry.priority === 0 || !isBrowserRuntime() || !isBusinessOsRoom(entry.owner?.options?.room)) {
+      return index;
+    }
+    if (criticalRtcPeerConnectionsReady(pool)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function markCriticalRtcPeerConnectionOpened(slot) {
+  if (!slot || slot.priority !== 0 || !isBusinessOsRoom(slot.room)) return;
+  const collection = collectionNameFromTopic(slot.room);
+  if (!SHELL_CRITICAL_COLLECTIONS.has(collection)) return;
+  getRtcPeerConnectionPool().criticalOpened.add(collection);
+}
+
+function rtcPeerConnectionSlotSnapshot(slot) {
+  return {
+    collection: collectionNameFromTopic(slot.room),
+    priority: slot.priority,
+    activeForMs: Date.now() - slot.acquiredAtMs,
+  };
+}
+
 function signalingPeerDescriptors(message = {}) {
   const descriptors = [];
   const append = (entry) => {
@@ -1217,6 +1587,69 @@ function peerJoinedAtChanged(previous = {}, next = {}) {
   if (previous.joinedAt === null || previous.joinedAt === undefined) return false;
   if (next.joinedAt === null || next.joinedAt === undefined) return false;
   return String(previous.joinedAt) !== String(next.joinedAt);
+}
+
+function createPeerSignalStats() {
+  return {
+    offerSent: 0,
+    offerReceived: 0,
+    answerSent: 0,
+    answerReceived: 0,
+    candidateSent: 0,
+    candidateReceived: 0,
+    localCandidateComplete: false,
+    lastLocalCandidateType: '',
+    lastRemoteCandidateType: '',
+    lastSignalAtMs: 0,
+  };
+}
+
+function peerConnectionSnapshot(connection) {
+  const peer = connection?.peer;
+  const channel = connection?.channel;
+  return {
+    peerId: connection?.remotePeerId || '',
+    collection: collectionNameFromTopic(connection?.rtcPoolSlot?.room || ''),
+    createdAtMs: connection?.createdAtMs || 0,
+    ageMs: connection?.createdAtMs ? Date.now() - connection.createdAtMs : 0,
+    signalingState: peer?.signalingState || '',
+    iceConnectionState: peer?.iceConnectionState || '',
+    iceGatheringState: peer?.iceGatheringState || '',
+    connectionState: peer?.connectionState || '',
+    channelReadyState: channel?.readyState || '',
+    pendingCandidates: Array.isArray(connection?.pendingCandidates) ? connection.pendingCandidates.length : 0,
+    hasLocalDescription: Boolean(peer?.localDescription),
+    hasRemoteDescription: Boolean(peer?.remoteDescription),
+    localCandidateTypes: { ...(connection?.localCandidateTypes || {}) },
+    remoteCandidateTypes: { ...(connection?.remoteCandidateTypes || {}) },
+    signal: { ...(connection?.signalStats || {}) },
+    lastError: connection?.lastError || null,
+    lastStateChangeAtMs: connection?.lastStateChangeAtMs || 0,
+  };
+}
+
+function recordCandidateType(target, candidateLine) {
+  const type = candidateTypeFromLine(candidateLine);
+  if (!type) return;
+  target[type] = Number(target[type] || 0) + 1;
+}
+
+function candidateTypeFromLine(candidateLine) {
+  const match = String(candidateLine || '').match(/\styp\s+([a-z0-9-]+)/i);
+  return match?.[1] ? match[1].toLowerCase() : '';
+}
+
+function isBusinessOsRoom(room) {
+  return String(room || '').startsWith('ctox-business-os:');
+}
+
+function isBrowserRuntime() {
+  return typeof window === 'object' && typeof document === 'object';
+}
+
+function collectionNameFromTopic(topic) {
+  const parts = String(topic || '').split(':').filter(Boolean);
+  return parts.length ? parts[parts.length - 1] : '';
 }
 
 function buildSignalingUrl(options) {
