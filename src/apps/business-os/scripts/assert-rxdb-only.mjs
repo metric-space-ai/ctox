@@ -42,6 +42,7 @@ assertSyncWarmupDoesNotBlockBoot();
 assertConnectionSmokeRequiresAdvancedStatusBootBudget();
 assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
+assertBusinessOsServerHttpDataApisAreGated();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
@@ -97,6 +98,21 @@ function contentForForbiddenHttpScan(file, content) {
   }
 
   return scanned;
+}
+
+function assertBusinessOsServerHttpDataApisAreGated() {
+  const serverPath = join(repoRoot, 'src/core/business_os/server.rs');
+  const server = readFileSync(serverPath, 'utf8');
+  if (!/path\.starts_with\("\/api\/business-os"\)\s*&&\s*!is_subscription_auth_path\(path\)/.test(server)) {
+    offenders.push('src/core/business_os/server.rs: /api/business-os data APIs must be hard-gated behind the ChatGPT subscription-auth exception');
+  }
+  if (!/Business OS HTTP data APIs are disabled; use RxDB\/WebRTC\./.test(server)) {
+    offenders.push('src/core/business_os/server.rs: HTTP data API gate must return the RxDB/WebRTC-only contract message');
+  }
+  const runtimeSettingsRoute = /"\/api\/business-os\/ctox\/runtime-settings"/;
+  if (runtimeSettingsRoute.test(server)) {
+    offenders.push('src/core/business_os/server.rs: runtime settings must not be exposed as an HTTP route');
+  }
 }
 
 function assertLoginDoesNotDefaultToAdmin() {

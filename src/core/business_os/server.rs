@@ -11,7 +11,6 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fs;
@@ -43,13 +42,6 @@ const CHATGPT_AUTH_SCOPE: &str =
     "openid profile email offline_access api.connectors.read api.connectors.invoke";
 const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
-
-#[derive(Debug, Default)]
-struct ChatgptSubscriptionAuthStatus {
-    configured: bool,
-    account_email: Option<String>,
-    plan: Option<String>,
-}
 
 #[derive(Clone)]
 struct PendingChatgptSubscriptionLogin {
@@ -153,24 +145,6 @@ struct SaveModuleSourceRequest {
     content: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-struct RuntimeSettingsRequest {
-    #[serde(default)]
-    provider: String,
-    #[serde(default)]
-    auth_mode: String,
-    #[serde(default)]
-    chat_model: String,
-    #[serde(default)]
-    preset: String,
-    #[serde(default)]
-    context: String,
-    #[serde(default)]
-    max_run_secs: Option<u64>,
-    #[serde(default)]
-    api_key: String,
-}
-
 #[derive(Debug, Default, Clone, Deserialize)]
 struct SubscriptionAuthStartRequest {
     #[serde(default)]
@@ -225,30 +199,17 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         respond_options(request)?;
         return Ok(());
     }
+    if path.starts_with("/api/business-os") && !is_subscription_auth_path(path) {
+        respond_status(
+            request,
+            410,
+            "Business OS HTTP data APIs are disabled; use RxDB/WebRTC.",
+        )?;
+        return Ok(());
+    }
     match (method.clone(), path) {
         (Method::Get, "/api/business-os/status") => {
             respond_json(request, &store::status(root)?)?;
-        }
-        (Method::Get, "/api/business-os/ctox/runtime-settings") => {
-            let session = request_session(&request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                respond_json_value(request, runtime_settings_payload(root, &session)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/ctox/runtime-settings") => {
-            let session = request_session(&request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation: RuntimeSettingsRequest = serde_json::from_value(body)?;
-                save_runtime_settings(root, mutation)?;
-                respond_json_value(request, runtime_settings_payload(root, &session)?)?;
-            }
         }
         (Method::Post, "/api/business-os/ctox/subscription-auth/start") => {
             let session = request_session(&request);
@@ -709,6 +670,14 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     Ok(())
 }
 
+fn is_subscription_auth_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/api/business-os/ctox/subscription-auth/start"
+            | "/api/business-os/ctox/subscription-auth/callback"
+    )
+}
+
 fn request_session(request: &Request) -> store::BusinessOsSession {
     let auth_header =
         header_value(request, "Authorization").or_else(|| login_cookie_auth_header(request));
@@ -722,206 +691,6 @@ fn query_param(url_raw: &str, key: &str) -> Option<String> {
         .query_pairs()
         .find(|(name, _)| name == key)
         .map(|(_, value)| value.into_owned())
-}
-
-fn runtime_settings_payload(
-    root: &Path,
-    session: &store::BusinessOsSession,
-) -> anyhow::Result<Value> {
-    let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-        .unwrap_or_else(|_| BTreeMap::new());
-    let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
-        .ok()
-        .flatten();
-    let provider = runtime_state
-        .as_ref()
-        .map(crate::inference::runtime_state::api_provider_for_runtime_state)
-        .map(str::to_owned)
-        .unwrap_or_else(|| {
-            crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map)
-        });
-    let source = runtime_state
-        .as_ref()
-        .map(|state| state.source.as_env_value().to_owned())
-        .unwrap_or_else(|| {
-            env_map
-                .get("CTOX_CHAT_SOURCE")
-                .cloned()
-                .unwrap_or_else(|| "local".to_owned())
-        });
-    let preset = runtime_settings_preset(runtime_state.as_ref(), &env_map);
-    let context =
-        runtime_settings_context(env_map.get("CTOX_CHAT_MODEL_MAX_CONTEXT").cloned().or_else(
-            || {
-                runtime_state.as_ref().and_then(|state| {
-                    state
-                        .configured_context_tokens
-                        .map(|value| value.to_string())
-                })
-            },
-        ));
-    let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
-    let key_configured = crate::secrets::get_credential(root, key_name).is_some();
-    let configured_auth_mode = env_map
-        .get("CTOX_OPENAI_AUTH_MODE")
-        .or_else(|| env_map.get("OPENAI_AUTH_MODE"))
-        .cloned()
-        .unwrap_or_else(|| "api_key".to_owned());
-    let auth_mode = if provider.eq_ignore_ascii_case("local") {
-        "local".to_owned()
-    } else {
-        configured_auth_mode
-    };
-    let service = store::cheap_ctox_service_status(root);
-    let service_running = service
-        .get("running")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let service_last_error = service
-        .get("last_error")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_default();
-    let subscription_selected = provider.eq_ignore_ascii_case("openai")
-        && matches!(
-            auth_mode.trim().to_ascii_lowercase().as_str(),
-            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
-        );
-    let subscription_auth = if subscription_selected {
-        chatgpt_subscription_auth_status(root)
-    } else {
-        ChatgptSubscriptionAuthStatus::default()
-    };
-    let auth_configured = provider.eq_ignore_ascii_case("local")
-        || key_configured
-        || (subscription_selected && subscription_auth.configured);
-    let service_needs_attention = !service_running || !service_last_error.trim().is_empty();
-    let auth_needs_attention = !auth_configured;
-    let needs_attention = service_needs_attention || auth_needs_attention;
-    let auth_message = runtime_auth_message(
-        provider.as_str(),
-        key_name,
-        key_configured,
-        subscription_selected,
-        &subscription_auth,
-    );
-    Ok(serde_json::json!({
-        "ok": true,
-        "can_manage": store::session_can_manage_all(session),
-        "runtime": {
-            "source": source,
-            "provider": provider,
-            "chat_model": env_map.get("CTOX_CHAT_MODEL")
-                .or_else(|| env_map.get("CTOX_CHAT_MODEL_BASE"))
-                .cloned()
-                .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
-                .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
-                .unwrap_or_default(),
-            "preset": preset,
-            "context": context,
-            "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(1800),
-            "upstream_base_url": runtime_state.as_ref()
-                .filter(|state| !state.source.is_local())
-                .map(|state| state.upstream_base_url.clone())
-                .unwrap_or_default()
-        },
-        "auth": {
-            "mode": auth_mode,
-            "api_key_name": key_name,
-            "api_key_configured": key_configured,
-            "subscription_selected": subscription_selected,
-            "subscription_session_configured": subscription_auth.configured,
-            "subscription_account_email": subscription_auth.account_email,
-            "subscription_plan": subscription_auth.plan,
-            "configured": auth_configured
-        },
-        "service": service,
-        "diagnostics": {
-            "needs_attention": needs_attention,
-            "service_needs_attention": service_needs_attention,
-            "auth_needs_attention": auth_needs_attention,
-            "service_message": if service_needs_attention {
-                if !service_running {
-                    "CTOX Service läuft nicht.".to_owned()
-                } else {
-                    format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
-                }
-            } else {
-                "CTOX Service läuft.".to_owned()
-            },
-            "auth_message": auth_message,
-            "last_error": service_last_error,
-            "message": if needs_attention {
-                if !service_running {
-                    "CTOX Service läuft nicht.".to_owned()
-                } else if !service_last_error.trim().is_empty() {
-                    format!("CTOX kann Aufgaben nicht ausführen: {service_last_error}")
-                } else {
-                    auth_message
-                }
-            } else {
-                auth_message
-            }
-        }
-    }))
-}
-
-fn chatgpt_subscription_auth_status(root: &Path) -> ChatgptSubscriptionAuthStatus {
-    let Ok(codex_home) = ctox_core::config::find_codex_home() else {
-        return ChatgptSubscriptionAuthStatus::default();
-    };
-    let _ = restore_chatgpt_subscription_auth_from_instance(root, &codex_home);
-    let auth_manager = ctox_core::AuthManager::new(
-        codex_home.clone(),
-        false,
-        ctox_core::auth::AuthCredentialsStoreMode::default(),
-    );
-    let Some(auth) = auth_manager.auth_cached() else {
-        return ChatgptSubscriptionAuthStatus::default();
-    };
-    if !auth.is_chatgpt_auth() {
-        return ChatgptSubscriptionAuthStatus::default();
-    }
-    ChatgptSubscriptionAuthStatus {
-        configured: true,
-        account_email: auth.get_account_email(),
-        plan: auth.account_plan_type().map(|plan| format!("{plan:?}")),
-    }
-}
-
-fn runtime_auth_message(
-    provider: &str,
-    key_name: &str,
-    key_configured: bool,
-    subscription_selected: bool,
-    subscription_auth: &ChatgptSubscriptionAuthStatus,
-) -> String {
-    if provider.eq_ignore_ascii_case("local") {
-        return "Lokale CTOX Runtime ausgewählt; keine API-Autorisierung nötig.".to_owned();
-    }
-    if subscription_selected {
-        return if subscription_auth.configured {
-            match (
-                subscription_auth.account_email.as_deref(),
-                subscription_auth.plan.as_deref(),
-            ) {
-                (Some(email), Some(plan)) => {
-                    format!("ChatGPT Subscription autorisiert: {email} ({plan}).")
-                }
-                (Some(email), None) => format!("ChatGPT Subscription autorisiert: {email}."),
-                _ => "ChatGPT Subscription autorisiert.".to_owned(),
-            }
-        } else {
-            "ChatGPT Subscription ausgewählt, aber keine ChatGPT-Session im Codex/CTOX Auth-Store gefunden.".to_owned()
-        };
-    }
-    if key_configured {
-        format!("{key_name} ist im CTOX Secret Store vorhanden.")
-    } else {
-        format!("{key_name} fehlt im CTOX Secret Store.")
-    }
 }
 
 fn subscription_auth_start_payload(
@@ -1473,41 +1242,6 @@ fn persist_chatgpt_subscription_auth(
     Ok(())
 }
 
-fn restore_chatgpt_subscription_auth_from_instance(
-    root: &Path,
-    codex_home: &Path,
-) -> anyhow::Result<bool> {
-    let auth_manager = ctox_core::AuthManager::new(
-        codex_home.to_path_buf(),
-        false,
-        ctox_core::auth::AuthCredentialsStoreMode::default(),
-    );
-    if auth_manager
-        .auth_cached()
-        .as_ref()
-        .is_some_and(|auth| auth.is_chatgpt_auth())
-    {
-        return Ok(false);
-    }
-    let serialized = crate::secrets::read_secret_value(
-        root,
-        CHATGPT_AUTH_SECRET_SCOPE,
-        CHATGPT_AUTH_SECRET_NAME,
-    )
-    .context("no instance ChatGPT auth backup")?;
-    let auth: ctox_core::auth::AuthDotJson =
-        serde_json::from_str(&serialized).context("instance ChatGPT auth backup is invalid")?;
-    if auth.tokens.is_none() {
-        anyhow::bail!("instance ChatGPT auth backup has no tokens");
-    }
-    ctox_core::auth::save_auth(
-        codex_home,
-        &auth,
-        ctox_core::auth::AuthCredentialsStoreMode::File,
-    )?;
-    Ok(true)
-}
-
 fn chatgpt_account_id_from_jwt(jwt: &str) -> Option<String> {
     let mut parts = jwt.split('.');
     let (_header, payload, _signature) = (parts.next()?, parts.next()?, parts.next()?);
@@ -1525,102 +1259,6 @@ fn chatgpt_account_id_from_jwt(jwt: &str) -> Option<String> {
 
 fn urlencoding_encode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
-}
-
-fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow::Result<()> {
-    let provider = crate::inference::runtime_state::normalize_api_provider(&request.provider);
-    let mut env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-        .unwrap_or_else(|_| BTreeMap::new());
-    let chat_model = request.chat_model.trim();
-    let preset = request.preset.trim();
-    let context = request.context.trim();
-    if provider.eq_ignore_ascii_case("local") {
-        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
-        env_map.remove("CTOX_API_PROVIDER");
-        env_map.remove("CTOX_UPSTREAM_BASE_URL");
-        env_map.remove("OPENAI_AUTH_MODE");
-        env_map.remove("CTOX_OPENAI_AUTH_MODE");
-    } else {
-        env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned());
-        env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
-        env_map.insert(
-            "CTOX_UPSTREAM_BASE_URL".to_owned(),
-            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
-                .to_owned(),
-        );
-    }
-    if !chat_model.is_empty() {
-        env_map.insert("CTOX_CHAT_MODEL".to_owned(), chat_model.to_owned());
-        env_map.insert("CTOX_CHAT_MODEL_BASE".to_owned(), chat_model.to_owned());
-    }
-    if let Some(preset) = normalize_runtime_preset(preset) {
-        env_map.insert("CTOX_CHAT_LOCAL_PRESET".to_owned(), preset.to_owned());
-    }
-    if !context.is_empty() {
-        env_map.insert("CTOX_CHAT_MODEL_MAX_CONTEXT".to_owned(), context.to_owned());
-    }
-    if let Some(max_run_secs) = request.max_run_secs.filter(|value| *value > 0) {
-        env_map.insert(
-            "CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(),
-            max_run_secs.to_string(),
-        );
-    }
-    let auth_mode = request.auth_mode.trim().to_ascii_lowercase();
-    if provider.eq_ignore_ascii_case("openai")
-        && matches!(
-            auth_mode.as_str(),
-            "chatgpt_subscription" | "subscription" | "codex_subscription" | "chatgpt"
-        )
-    {
-        env_map.insert(
-            "OPENAI_AUTH_MODE".to_owned(),
-            "chatgpt_subscription".to_owned(),
-        );
-        env_map.insert(
-            "CTOX_OPENAI_AUTH_MODE".to_owned(),
-            "chatgpt_subscription".to_owned(),
-        );
-    } else {
-        env_map.insert("OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
-        env_map.insert("CTOX_OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
-    }
-    let api_key = request.api_key.trim();
-    if !api_key.is_empty() {
-        let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(provider);
-        env_map.insert(key_name.to_owned(), api_key.to_owned());
-    }
-    crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
-}
-
-fn runtime_settings_preset(
-    runtime_state: Option<&crate::inference::runtime_state::InferenceRuntimeState>,
-    env_map: &BTreeMap<String, String>,
-) -> String {
-    runtime_state
-        .and_then(|state| state.local_preset.as_deref())
-        .or_else(|| env_map.get("CTOX_CHAT_LOCAL_PRESET").map(String::as_str))
-        .and_then(normalize_runtime_preset)
-        .unwrap_or("Quality")
-        .to_owned()
-}
-
-fn normalize_runtime_preset(value: &str) -> Option<&'static str> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "quality" => Some("Quality"),
-        "performance" => Some("Performance"),
-        _ => None,
-    }
-}
-
-fn runtime_settings_context(value: Option<String>) -> String {
-    let Some(value) = value else {
-        return "256k".to_owned();
-    };
-    match value.trim().to_ascii_lowercase().as_str() {
-        "131072" | "128000" | "128k" => "128k".to_owned(),
-        "262144" | "256000" | "256k" => "256k".to_owned(),
-        _ => value,
-    }
 }
 
 fn latest_harness_flow_payload(root: &Path) -> Value {
