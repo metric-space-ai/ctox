@@ -294,6 +294,17 @@ pub struct ModuleRollbackRequest {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct ModuleVersionListRequest {
+    pub module_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ModuleVersionRollbackRequest {
+    pub module_id: String,
+    pub version_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct BusinessOsReportMutation {
     pub module_id: String,
     #[serde(default)]
@@ -1540,6 +1551,7 @@ pub fn upsert_module_manifest_command(
 }
 
 pub fn install_template_module_command(
+    root: &Path,
     app_root: &Path,
     session: &BusinessOsSession,
     request: ModuleInstallTemplateRequest,
@@ -1549,6 +1561,15 @@ pub fn install_template_module_command(
         "chef or admin role required"
     );
     let manifest = install_template_module(app_root, request)?;
+    let created_by = session_user_id(session).unwrap_or("").to_string();
+    record_module_version(
+        root,
+        app_root,
+        &manifest.id,
+        "install",
+        "Installed from template",
+        &created_by,
+    )?;
     Ok(serde_json::json!({
         "ok": true,
         "module_id": manifest.id,
@@ -2381,6 +2402,14 @@ pub fn record_module_release(
         ],
     )?;
     let release_ids = sync_module_release_records(&conn, module_id, now)?;
+    record_module_version(
+        root,
+        app_root,
+        module_id,
+        "manual_release",
+        &format!("Release v{next_version}"),
+        created_by,
+    )?;
     let mut governance = module_governance_map(root, session)?;
     if let Some(object) = governance.as_object_mut() {
         object.insert(
@@ -2766,6 +2795,10 @@ pub fn save_module_source_record(
         now_ms() as i64,
         file,
     )?;
+    drop(conn);
+    if changed {
+        record_module_version(root, &app_root, &module_id, "edit", "", "")?;
+    }
     Ok(serde_json::json!({
         "ok": true,
         "module_id": module_id,
@@ -3682,6 +3715,341 @@ pub fn rollback_module_source_snapshot(
     Ok(outcome)
 }
 
+struct ModuleBundle {
+    /// Sorted `[{path, sha256, content}]` over all editable source files.
+    files: Vec<Value>,
+    /// Deterministic hash over `(path, per-file sha256)` pairs.
+    sha256: String,
+}
+
+fn compute_module_bundle(app_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
+    let module_root = resolve_module_source_root(app_root, module_id)?;
+    let mut raw = Vec::new();
+    collect_module_source_files(module_id, &module_root, &module_root, &mut raw)?;
+    let mut files: Vec<Value> = raw
+        .into_iter()
+        .map(|doc| {
+            serde_json::json!({
+                "path": doc.get("path").and_then(Value::as_str).unwrap_or_default(),
+                "sha256": doc.get("sha256").and_then(Value::as_str).unwrap_or_default(),
+                "content": doc.get("content").and_then(Value::as_str).unwrap_or_default(),
+            })
+        })
+        .collect();
+    files.sort_by(|a, b| {
+        a.get("path")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .cmp(b.get("path").and_then(Value::as_str).unwrap_or_default())
+    });
+    let mut digest_input = String::new();
+    for file in &files {
+        digest_input.push_str(file.get("path").and_then(Value::as_str).unwrap_or_default());
+        digest_input.push('\0');
+        digest_input.push_str(file.get("sha256").and_then(Value::as_str).unwrap_or_default());
+        digest_input.push('\n');
+    }
+    let sha256 = hex_sha256(digest_input.as_bytes());
+    Ok(ModuleBundle { files, sha256 })
+}
+
+fn version_summary_row(conn: &Connection, version_id: &str) -> anyhow::Result<Value> {
+    let (vid, module_id, seq, origin, label, sha, sealed, created_by, created_at, updated_at, files_json): (
+        String,
+        String,
+        i64,
+        String,
+        String,
+        String,
+        i64,
+        String,
+        i64,
+        i64,
+        String,
+    ) = conn.query_row(
+        "SELECT version_id, module_id, seq, origin, label, bundle_sha256, sealed,
+                created_by, created_at_ms, updated_at_ms, files_json
+         FROM business_module_versions WHERE version_id = ?1",
+        params![version_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+            ))
+        },
+    )?;
+    let file_count = serde_json::from_str::<Value>(&files_json)
+        .ok()
+        .and_then(|value| value.as_array().map(|arr| arr.len()))
+        .unwrap_or(0);
+    Ok(serde_json::json!({
+        "version_id": vid,
+        "module_id": module_id,
+        "seq": seq,
+        "origin": origin,
+        "label": label,
+        "bundle_sha256": sha,
+        "sealed": sealed != 0,
+        "created_by": created_by,
+        "created_at_ms": created_at,
+        "updated_at_ms": updated_at,
+        "file_count": file_count
+    }))
+}
+
+fn sync_module_version_records(
+    conn: &Connection,
+    module_id: &str,
+    updated_at_ms: i64,
+) -> anyhow::Result<()> {
+    let mut stmt = conn.prepare(
+        "SELECT version_id FROM business_module_versions WHERE module_id = ?1 ORDER BY seq DESC",
+    )?;
+    let ids = stmt
+        .query_map(params![module_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    for id in ids {
+        let mut doc = version_summary_row(conn, &id)?;
+        let rec_updated =
+            next_business_record_updated_at(conn, "business_module_versions", &id, updated_at_ms)?;
+        if let Some(object) = doc.as_object_mut() {
+            object.insert("id".to_string(), Value::String(id.clone()));
+            object.insert("updated_at_ms".to_string(), Value::from(rec_updated));
+        }
+        upsert_business_record(conn, "business_module_versions", &id, rec_updated, doc)?;
+    }
+    Ok(())
+}
+
+/// Capture a full-bundle restore point for a module.
+///
+/// `origin == "edit"` coalesces into the single open working version (so a burst
+/// of agent edits is one rolling restore point); any other origin is a sealed
+/// boundary (install, manual_release, rollback, creator_deploy).
+fn record_module_version(
+    root: &Path,
+    app_root: &Path,
+    module_id: &str,
+    origin: &str,
+    label: &str,
+    created_by: &str,
+) -> anyhow::Result<Option<Value>> {
+    let module_id = source_sanitize_slug(module_id);
+    if module_id.is_empty() {
+        return Ok(None);
+    }
+    let bundle = compute_module_bundle(app_root, &module_id)?;
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let is_boundary = origin != "edit";
+
+    let latest: Option<(String, String, i64)> = conn
+        .query_row(
+            "SELECT version_id, bundle_sha256, sealed FROM business_module_versions
+             WHERE module_id = ?1 ORDER BY seq DESC LIMIT 1",
+            params![module_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+
+    if !is_boundary {
+        if let Some((latest_id, latest_sha, latest_sealed)) = latest.as_ref() {
+            if latest_sha == &bundle.sha256 {
+                return Ok(None);
+            }
+            if *latest_sealed == 0 {
+                conn.execute(
+                    "UPDATE business_module_versions
+                     SET bundle_sha256 = ?2, files_json = ?3, updated_at_ms = ?4,
+                         label = CASE WHEN ?5 <> '' THEN ?5 ELSE label END
+                     WHERE version_id = ?1",
+                    params![
+                        latest_id,
+                        bundle.sha256,
+                        serde_json::to_string(&bundle.files)?,
+                        now,
+                        label
+                    ],
+                )?;
+                sync_module_version_records(&conn, &module_id, now)?;
+                return Ok(Some(version_summary_row(&conn, latest_id)?));
+            }
+        }
+    } else {
+        conn.execute(
+            "UPDATE business_module_versions SET sealed = 1, updated_at_ms = ?2
+             WHERE module_id = ?1 AND sealed = 0",
+            params![module_id, now],
+        )?;
+        if origin == "install" {
+            if let Some((latest_id, latest_sha, _)) = latest.as_ref() {
+                if latest_sha == &bundle.sha256 {
+                    sync_module_version_records(&conn, &module_id, now)?;
+                    return Ok(Some(version_summary_row(&conn, latest_id)?));
+                }
+            }
+        }
+    }
+
+    let next_seq: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM business_module_versions WHERE module_id = ?1",
+        params![module_id],
+        |row| row.get(0),
+    )?;
+    let version_id = format!("modver_{}_{}_{}", module_id, next_seq, Uuid::new_v4());
+    let sealed = i64::from(is_boundary);
+    conn.execute(
+        "INSERT INTO business_module_versions
+            (version_id, module_id, seq, origin, label, bundle_sha256, files_json,
+             sealed, created_by, created_at_ms, updated_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+        params![
+            version_id,
+            module_id,
+            next_seq,
+            origin,
+            label,
+            bundle.sha256,
+            serde_json::to_string(&bundle.files)?,
+            sealed,
+            created_by,
+            now
+        ],
+    )?;
+    sync_module_version_records(&conn, &module_id, now)?;
+    Ok(Some(version_summary_row(&conn, &version_id)?))
+}
+
+pub fn list_module_versions(
+    root: &Path,
+    request: ModuleVersionListRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT version_id FROM business_module_versions WHERE module_id = ?1 ORDER BY seq DESC",
+    )?;
+    let ids = stmt
+        .query_map(params![module_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    let mut versions = Vec::with_capacity(ids.len());
+    for id in &ids {
+        versions.push(version_summary_row(&conn, id)?);
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "versions": versions
+    }))
+}
+
+pub fn rollback_module_to_version(
+    root: &Path,
+    app_root: &Path,
+    session: &BusinessOsSession,
+    request: ModuleVersionRollbackRequest,
+) -> anyhow::Result<Value> {
+    let module_id = source_sanitize_slug(&request.module_id);
+    let version_id = request.version_id.trim().to_string();
+    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+    anyhow::ensure!(!version_id.is_empty(), "version_id is required");
+    anyhow::ensure!(
+        session_can_modify_module(root, session, &module_id)?,
+        "module modification rights required"
+    );
+
+    let files_json: String = {
+        let conn = open_store(root)?;
+        conn.query_row(
+            "SELECT files_json FROM business_module_versions
+             WHERE module_id = ?1 AND version_id = ?2",
+            params![module_id, version_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .context("version not found for module")?
+    };
+    let target_files: Vec<Value> = serde_json::from_str(&files_json).unwrap_or_default();
+
+    let mut target_paths = std::collections::BTreeSet::new();
+    let mut restored = 0usize;
+    for file in &target_files {
+        let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
+        let content = file.get("content").and_then(Value::as_str).unwrap_or_default();
+        if path.is_empty() {
+            continue;
+        }
+        target_paths.insert(path.to_string());
+        save_module_source_record(
+            root,
+            ModuleSourceSaveMutation {
+                module_id: module_id.clone(),
+                path: path.to_string(),
+                content: content.to_string(),
+            },
+        )?;
+        restored += 1;
+    }
+
+    // Remove editable source files that were added after the target version,
+    // snapshotting each one first so the removal is itself reversible.
+    let mut removed = 0usize;
+    let current = compute_module_bundle(app_root, &module_id)?;
+    let module_root = resolve_module_source_root(app_root, &module_id)?;
+    for file in &current.files {
+        let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
+        if path.is_empty() || target_paths.contains(path) {
+            continue;
+        }
+        let Ok(rel) = normalize_source_relative_path(path) else {
+            continue;
+        };
+        if !is_allowed_source_path(&rel) {
+            continue;
+        }
+        let abs = module_root.join(&rel);
+        if let Ok(content) = fs::read_to_string(&abs) {
+            let prev_sha = hex_sha256(content.as_bytes());
+            let _ = write_module_source_snapshot(root, &module_id, &rel, &content, Some(&prev_sha));
+        }
+        if abs.is_file() {
+            fs::remove_file(&abs)
+                .with_context(|| format!("failed to remove {}", abs.display()))?;
+            removed += 1;
+        }
+    }
+
+    let created_by = session_user_id(session).unwrap_or("").to_string();
+    record_module_version(
+        root,
+        app_root,
+        &module_id,
+        "rollback",
+        &format!("Rolled back to {version_id}"),
+        &created_by,
+    )?;
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "module_id": module_id,
+        "rolled_back_to": version_id,
+        "restored_files": restored,
+        "removed_files": removed
+    }))
+}
+
 fn find_module_json_dir_for_install(
     dir: &Path,
     module_id: &str,
@@ -3749,7 +4117,7 @@ fn find_module_json_dir_by_id(dir: &Path, module_id: &str) -> anyhow::Result<Opt
 }
 
 pub fn install_app_module(
-    _root: &Path,
+    root: &Path,
     app_root: &Path,
     session: &BusinessOsSession,
     request: AppStoreInstallRequest,
@@ -3868,6 +4236,16 @@ pub fn install_app_module(
 
     // Clean up temporary directory
     let _ = fs::remove_dir_all(&temp_dir);
+
+    let created_by = session_user_id(session).unwrap_or("").to_string();
+    record_module_version(
+        root,
+        app_root,
+        &module_id,
+        "install",
+        "Installed from store",
+        &created_by,
+    )?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -5556,7 +5934,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                     .context("invalid ctox.module.install_template payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = install_template_module_command(&app_root, &session, mutation)?;
+            let outcome = install_template_module_command(root, &app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -5573,6 +5951,36 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = rollback_module_release(root, &app_root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.list_versions" => {
+            let request: ModuleVersionListRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.list_versions payload")?;
+            let outcome = list_module_versions(root, request)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.module.rollback_version" => {
+            let request: ModuleVersionRollbackRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.module.rollback_version payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let app_root = resolve_business_os_app_root(root)?;
+            let outcome = rollback_module_to_version(root, &app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -12710,6 +13118,22 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_business_module_releases_module
             ON business_module_releases(module_id, version DESC);
 
+        CREATE TABLE IF NOT EXISTS business_module_versions (
+            version_id TEXT PRIMARY KEY,
+            module_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            origin TEXT NOT NULL,
+            label TEXT NOT NULL DEFAULT '',
+            bundle_sha256 TEXT NOT NULL,
+            files_json TEXT NOT NULL DEFAULT '[]',
+            sealed INTEGER NOT NULL DEFAULT 0,
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_module_versions_module
+            ON business_module_versions(module_id, seq DESC);
+
         CREATE TABLE IF NOT EXISTS business_module_reports (
             report_id TEXT PRIMARY KEY,
             module_id TEXT NOT NULL,
@@ -12900,6 +13324,141 @@ fn room_secret_id(value: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn chef_session() -> BusinessOsSession {
+        BusinessOsSession {
+            ok: true,
+            authenticated: true,
+            auth_required: false,
+            user: Some(BusinessOsSessionUser {
+                id: "tester".to_string(),
+                display_name: "Tester".to_string(),
+                role: "chef".to_string(),
+                is_admin: true,
+            }),
+            login_url: None,
+            reason: None,
+        }
+    }
+
+    fn write_widget_module(app_root: &Path, js: &str) -> anyhow::Result<()> {
+        let module_dir = app_root.join("modules").join("widget");
+        fs::create_dir_all(&module_dir)?;
+        fs::write(
+            module_dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": "widget",
+                "title": "Widget",
+                "entry": "modules/widget/index.html"
+            }))?,
+        )?;
+        fs::write(module_dir.join("index.js"), js.as_bytes())?;
+        Ok(())
+    }
+
+    fn save_widget_source(root: &Path, path: &str, content: &str) -> anyhow::Result<()> {
+        save_module_source_record(
+            root,
+            ModuleSourceSaveMutation {
+                module_id: "widget".to_string(),
+                path: path.to_string(),
+                content: content.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn module_versions_record_rollback_and_remove_added_files() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+
+        // Install baseline (v0): sealed boundary.
+        let v0 = record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
+            .expect("install version recorded");
+        let v0_id = v0
+            .get("version_id")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        assert_eq!(v0.get("origin").and_then(Value::as_str), Some("install"));
+        assert_eq!(v0.get("sealed").and_then(Value::as_bool), Some(true));
+        let baseline_sha = v0
+            .get("bundle_sha256")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+
+        // Two edits coalesce into a single open working version.
+        save_widget_source(root, "index.js", "export const v = 2;\n")?;
+        save_widget_source(root, "index.js", "export const v = 3;\n")?;
+        let listed = list_module_versions(
+            root,
+            ModuleVersionListRequest {
+                module_id: "widget".to_string(),
+            },
+        )?;
+        let versions = listed.get("versions").and_then(Value::as_array).unwrap();
+        assert_eq!(versions.len(), 2, "install + one coalesced edit version");
+        assert_ne!(
+            baseline_sha,
+            compute_module_bundle(&app_root, "widget")?.sha256,
+            "edits change the bundle hash"
+        );
+
+        // A brand new source file added after the baseline.
+        save_widget_source(root, "extra.js", "export const extra = true;\n")?;
+        assert!(app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
+
+        // Roll back to the install baseline.
+        let session = chef_session();
+        let result = rollback_module_to_version(
+            root,
+            &app_root,
+            &session,
+            ModuleVersionRollbackRequest {
+                module_id: "widget".to_string(),
+                version_id: v0_id,
+            },
+        )?;
+        assert_eq!(result.get("ok").and_then(Value::as_bool), Some(true));
+
+        // index.js restored to baseline; extra.js removed; bundle hash matches baseline.
+        let restored =
+            fs::read_to_string(app_root.join("modules").join("widget").join("index.js"))?;
+        assert_eq!(restored, "export const v = 1;\n");
+        assert!(!app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
+        assert_eq!(baseline_sha, compute_module_bundle(&app_root, "widget")?.sha256);
+
+        // A sealed rollback boundary is now the newest version.
+        let listed = list_module_versions(
+            root,
+            ModuleVersionListRequest {
+                module_id: "widget".to_string(),
+            },
+        )?;
+        let versions = listed.get("versions").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            versions
+                .first()
+                .and_then(|version| version.get("origin"))
+                .and_then(Value::as_str),
+            Some("rollback")
+        );
+        Ok(())
+    }
 
     #[test]
     fn rotate_sync_room_password_changes_persisted_room_secret() -> anyhow::Result<()> {
