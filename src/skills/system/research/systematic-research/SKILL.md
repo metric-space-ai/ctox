@@ -208,6 +208,42 @@ will skew toward Tier 3, the catalog will miss the Tier 1 measurement
 data the deliverable actually needs, and the result will not be
 durable.
 
+### Breadth before depth — facet the query, never settle for one pull
+
+A single `ctox web deep-research --query "<topic>"` returns one ranked
+envelope. Ranking favors well-cited, canonical sources, so a single broad
+query converges on the obvious references and leaves the long tail of
+niche Tier-1 sources below the `--max-sources` cutoff — they never surface.
+One pull is a starting point, not a complete discovery. Treat discovery as
+a serial sweep, not a single call:
+
+1. **Facet the topic into orthogonal sub-queries.** Decompose the topic
+   into independent angles that each surface a different ranked list —
+   e.g. by source-class, by sub-phenomenon, by data type, by methodology,
+   or by regime/region. Each facet is its own `ctox web deep-research`
+   call. Run them **one after another in the same turn** — CTOX has no
+   parallel sub-agents; decomposition is serial. If the sweep needs to
+   span turns, persist a self-work item and resume. Vary the query string
+   between calls; re-issuing the same query just returns the same top hits.
+
+2. **Exclude what you already hold.** The source-catalog table you are
+   appending to *is* your exclusion list. Before each new facet, steer the
+   wording away from the source-classes and specific sources already
+   captured, so ranking is pushed off the canonical hits and into
+   unexplored niches. A query that does not steer away from what you
+   already have will re-return the same top entries.
+
+3. **Stop on saturation, not on first results.** Discovery is done when
+   consecutive new facets return only sources already in the catalog — not
+   when the catalog merely has entries. If two or three orthogonal facets
+   in a row surface no new Tier-1 source, the space is saturated and you
+   can move to schema/blueprint inference. Until then, keep faceting.
+
+This breadth pass is what separates a catalog that captured only the
+obvious references from one that is actually near-complete. A catalog built
+from a single query will systematically miss the Tier-1 sources that ranked
+just below the cutoff.
+
 ### Append as you discover — never batch at the end
 
 Write each `ctox web deep-research` / `ctox web scholarly search`
