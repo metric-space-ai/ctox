@@ -2462,7 +2462,11 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         last_agent_outcome,
         worker_active_count,
         worker_phase,
-        business_os: Some(business_os_health_snapshot(root)),
+        // Keep the daemon IPC status path cheap. The CLI/web callers enrich
+        // the returned service state with Business OS health after the socket
+        // response, so RxDB/SQLite diagnostics cannot make the daemon miss
+        // its short control-plane timeout while an agent turn is busy.
+        business_os: None,
         work_hours: crate::service::working_hours::snapshot(root),
     })
 }
@@ -15842,6 +15846,16 @@ mod tests {
             status.current_goal_preview.as_deref(),
             Some("Finalize queue work")
         );
+    }
+
+    #[test]
+    fn live_service_status_omits_expensive_business_os_snapshot() {
+        let root = temp_root("status-no-business-os-health");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let status = status_from_shared_state(&root, &state).expect("status should load");
+
+        assert!(status.business_os.is_none());
     }
 
     #[cfg(unix)]
