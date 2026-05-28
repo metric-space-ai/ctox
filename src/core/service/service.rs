@@ -8190,13 +8190,32 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         );
         return Ok(());
     }
-    route_assigned_ticket_self_work(root, state)?;
+    if let Err(err) = route_assigned_ticket_self_work(root, state) {
+        if !handle_channel_router_guard_block(root, state, "assigned-ticket-self-work", &err) {
+            return Err(err.context("failed to route assigned ticket self-work"));
+        }
+    }
     let settings = live_service_settings(root);
     let ticket_preflight_issues = run_ticket_dispatch_preflight(root, state, &settings);
     let ticket_dispatch_allowed = ticket_preflight_issues
         .iter()
         .all(|issue| issue.severity != "error");
-    let repaired_founder_messages = repair_stalled_founder_communications(root, state, &settings)?;
+    let repaired_founder_messages =
+        match repair_stalled_founder_communications(root, state, &settings) {
+            Ok(repaired) => repaired,
+            Err(err) => {
+                if handle_channel_router_guard_block(
+                    root,
+                    state,
+                    "founder-communication-repair",
+                    &err,
+                ) {
+                    0
+                } else {
+                    return Err(err.context("failed to repair stalled founder communications"));
+                }
+            }
+        };
     if repaired_founder_messages > 0 {
         push_event(
             state,
@@ -8206,7 +8225,19 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             ),
         );
     }
-    let scheduled = schedule::emit_due_tasks(root)?;
+    let scheduled = match schedule::emit_due_tasks(root) {
+        Ok(scheduled) => scheduled,
+        Err(err) => {
+            if handle_channel_router_guard_block(root, state, "scheduled-task-emission", &err) {
+                schedule::EmitDueSummary {
+                    emitted_count: 0,
+                    emitted_runs: Vec::new(),
+                }
+            } else {
+                return Err(err.context("failed to emit due scheduled tasks"));
+            }
+        }
+    };
     if scheduled.emitted_count > 0 {
         push_event(
             state,
@@ -8464,9 +8495,59 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "pending");
     }
     if ticket_dispatch_allowed && !ticket_sync_allowed_sources.is_empty() {
-        route_ticket_events(root, state, &ticket_sync_allowed_sources)?;
+        if let Err(err) = route_ticket_events(root, state, &ticket_sync_allowed_sources) {
+            if !handle_channel_router_guard_block(root, state, "ticket-event-routing", &err) {
+                return Err(err.context("failed to route ticket events"));
+            }
+        }
     }
     Ok(())
+}
+
+fn handle_channel_router_guard_block(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    stage: &str,
+    err: &anyhow::Error,
+) -> bool {
+    if !is_core_workflow_guard_error(err) {
+        return false;
+    }
+    let reason = clip_text(&err.to_string(), 240);
+    let idempotence_key = format!(
+        "channel-router-guard:{}:{}",
+        stage,
+        normalize_token(&reason)
+    );
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "channel_router_core_guard",
+            conversation_id: None,
+            severity: "warning",
+            reason: &reason,
+            action_taken:
+                "kept channel router alive and skipped this guarded background routing stage",
+            details: serde_json::json!({
+                "stage": stage,
+            }),
+            idempotence_key: Some(&idempotence_key),
+        },
+    );
+    push_event(
+        state,
+        format!(
+            "Channel router skipped guarded background stage {stage}: {}",
+            clip_text(&reason, 160)
+        ),
+    );
+    true
+}
+
+fn is_core_workflow_guard_error(err: &anyhow::Error) -> bool {
+    let text = err.to_string();
+    text.contains("abgesicherte Arbeitsablauf")
+        || text.contains("ctox process-mining guidance --limit 50")
 }
 
 fn maybe_take_next_queued_prompt_for_idle_dispatch(
@@ -20427,6 +20508,17 @@ Use shell tools to create or update these files."
             "different-thread inbound must produce a second self-work-item"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn channel_router_guard_classifier_only_matches_core_workflow_guard() {
+        let guard = anyhow::anyhow!(
+            "Diese Aktion wurde noch nicht ausgefuehrt, weil der abgesicherte Arbeitsablauf unvollstaendig ist. Bleib im aktuellen Prozess und nutze zuerst: ctox process-mining guidance --limit 50"
+        );
+        assert!(is_core_workflow_guard_error(&guard));
+
+        let database_error = anyhow::anyhow!("database is locked");
+        assert!(!is_core_workflow_guard_error(&database_error));
     }
 
     #[test]
