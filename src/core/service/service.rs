@@ -9530,6 +9530,15 @@ fn repair_stalled_founder_communications(
             .unwrap_or(0);
             continue;
         }
+        if founder_subject_has_later_reviewed_send_to_sender(root, &message)? {
+            repaired += channels::ack_leased_messages(
+                root,
+                std::slice::from_ref(&message.message_key),
+                "cancelled",
+            )
+            .unwrap_or(0);
+            continue;
+        }
         let rework_changed = ensure_founder_communication_rework_runnable(
             root,
             &message,
@@ -9623,6 +9632,25 @@ fn repair_stalled_founder_communications(
             )?;
             continue;
         }
+        if founder_subject_has_later_reviewed_send_to_sender(root, &message)? {
+            repaired += channels::ack_leased_messages(
+                root,
+                std::slice::from_ref(&message.message_key),
+                "cancelled",
+            )
+            .unwrap_or(0);
+            repaired += close_open_founder_communication_self_work_for_inbound(
+                root,
+                &message.message_key,
+                "Founder communication was superseded by a later reviewed send with the same subject and recipient.",
+            )?;
+            repaired += cancel_open_founder_communication_rework_queue_for_inbound(
+                root,
+                &message.message_key,
+                "Superseded by later reviewed founder reply with same subject and recipient.",
+            )?;
+            continue;
+        }
         if founder_thread_has_newer_founder_or_owner_inbound(root, settings, &message)? {
             repaired += channels::ack_leased_messages(
                 root,
@@ -9690,6 +9718,49 @@ fn founder_thread_has_later_reviewed_send(
     )
         "#,
         params![message.thread_key, message.external_created_at],
+        |row| row.get(0),
+    )?;
+    Ok(exists != 0)
+}
+
+fn founder_subject_has_later_reviewed_send_to_sender(
+    root: &Path,
+    message: &channels::RoutedInboundMessage,
+) -> Result<bool> {
+    let sender = message.sender_address.trim().to_ascii_lowercase();
+    if sender.is_empty()
+        || message.subject.trim().is_empty()
+        || message.external_created_at.trim().is_empty()
+    {
+        return Ok(false);
+    }
+    let subject = message.subject.trim();
+    let reply_subject = if subject.to_ascii_lowercase().starts_with("re:") {
+        subject.to_string()
+    } else {
+        format!("Re: {subject}")
+    };
+    let db_path = crate::paths::core_db(&root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let exists: i64 = conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1
+            FROM communication_founder_reply_reviews
+            WHERE sent_at IS NOT NULL
+              AND sent_at > ?1
+              AND COALESCE(json_extract(send_result_json, '$.synthetic'), 0) != 1
+              AND COALESCE(json_extract(send_result_json, '$.status'), '') != 'no-send-recorded'
+              AND lower(COALESCE(json_extract(action_json, '$.subject'), '')) = lower(?2)
+              AND EXISTS (
+                  SELECT 1
+                  FROM json_each(COALESCE(json_extract(action_json, '$.to'), '[]'))
+                  WHERE lower(COALESCE(value, '')) = ?3
+              )
+            LIMIT 1
+        )
+        "#,
+        params![message.external_created_at, reply_subject, sender],
         |row| row.get(0),
     )?;
     Ok(exists != 0)
