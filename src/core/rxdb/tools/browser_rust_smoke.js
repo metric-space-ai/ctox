@@ -186,6 +186,7 @@ if (![
   'business-os-ui-regression',
   'browser-lifecycle-ui',
   'browser-handoff-ui',
+  'browser-responsive-ui',
   'migration-version-browser-to-rust',
   'command-burst-browser-to-rust',
   'command-reload-browser-to-rust',
@@ -1245,6 +1246,43 @@ function addQueryParam(urlPath, key, value) {
   params.set(key, value);
   const nextQuery = params.toString();
   return `${pathname}${nextQuery ? `?${nextQuery}` : ''}${hash ? `#${hash}` : ''}`;
+}
+
+async function assertNoVisibleBrowserDebugText(page) {
+  const forbidden = await page.evaluate(() => {
+    const root = document.querySelector('[data-browser-root]');
+    if (!root) return [];
+    const terms = [
+      'Waiting for the next RxDB frame',
+      'pending_command',
+      'browser.session',
+      'RxDB',
+      'Command',
+      'Seq',
+    ];
+    const visibleText = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest('[hidden], .browser-diagnostics, script, style')) return NodeFilter.FILTER_REJECT;
+        const style = getComputedStyle(parent);
+        if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    while (walker.nextNode()) {
+      const text = walker.currentNode.nodeValue || '';
+      if (text.trim()) visibleText.push(text);
+    }
+    const body = visibleText.join(' ').replace(/\s+/g, ' ');
+    return terms.filter((term) => body.includes(term));
+  });
+  if (forbidden.length) {
+    throw new Error(`Browser UI exposes debug text: ${forbidden.join(', ')}`);
+  }
 }
 
 function seedRustSideFile(source) {
@@ -2702,10 +2740,123 @@ function ensureCtoxSmokeBinary() {
         advancedStatusEvidenceVersion = resumedStatus.version || advancedStatusEvidenceVersion;
         advancedStatusEvidenceRuntime = resumedStatus.rxdbRuntime || advancedStatusEvidenceRuntime;
       }
+      if (smokeMode === 'browser-responsive-ui') {
+        if (!/#browser(?:$|[?&])/.test(page.url())) {
+          const browserUrl = new URL(page.url());
+          browserUrl.pathname = '/index.html';
+          browserUrl.searchParams.set('rxdbSmoke', '1');
+          if (useAppDb && smokeDbId) browserUrl.searchParams.set('smokeDbId', smokeDbId);
+          browserUrl.hash = '#browser';
+          await page.goto(browserUrl.toString(), { waitUntil: 'domcontentloaded' });
+        }
+        await page.waitForFunction(() => Boolean(document.querySelector('[data-browser-root]')), null, { timeout: 60000 });
+        await page.waitForFunction(() => {
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          return Boolean(state?.sync?.startCollection && state?.db?.raw?.browser_frames);
+        }, null, { timeout: 60000 });
+        // Render a synthetic frame so the page area looks like a real browser viewport.
+        await page.evaluate(async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          for (const collection of ['browser_sessions', 'browser_tabs', 'browser_frames', 'browser_input_events', 'business_commands']) {
+            const bridge = await state.sync.startCollection(collection);
+            await Promise.race([bridge?.state?.awaitInitialReplication?.().catch(() => {}) || delay(0), delay(8000)]);
+          }
+          const root = document.querySelector('[data-browser-root]');
+          const address = root.querySelector('[data-browser-address]');
+          if (address) {
+            address.value = 'https://example.com';
+            address.dispatchEvent(new Event('input', { bubbles: true }));
+          }
+          root.querySelector('[data-browser-seed]')?.click();
+          await delay(1500);
+          root.querySelector('[data-browser-refresh]')?.click();
+          await delay(1200);
+        });
+
+        const measureChrome = async (label) => {
+          const probe = await page.evaluate((forceAuth) => {
+            const root = document.querySelector('[data-browser-root]');
+            const rectOf = (sel) => {
+              const el = root.querySelector(sel);
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              const visible = r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+              return { x: r.x, y: r.y, w: r.width, h: r.height, top: r.top, bottom: r.bottom, visible };
+            };
+            // Auth-assist must remain laid out (not display:none) at any width.
+            const authEl = root.querySelector('[data-browser-auth-assist]');
+            let authDisplayWhenShown = 'n/a';
+            if (authEl) {
+              const wasHidden = authEl.hidden;
+              const prevHtml = authEl.innerHTML;
+              authEl.hidden = false;
+              if (!prevHtml.trim()) authEl.innerHTML = '<div><strong>probe</strong></div>';
+              authDisplayWhenShown = getComputedStyle(authEl).display;
+              authEl.hidden = wasHidden;
+              authEl.innerHTML = prevHtml;
+            }
+            return {
+              innerWidth: window.innerWidth,
+              innerHeight: window.innerHeight,
+              scrollWidth: document.documentElement.scrollWidth,
+              clientWidth: document.documentElement.clientWidth,
+              address: rectOf('[data-browser-address]'),
+              back: rectOf('[data-browser-back]'),
+              forward: rectOf('[data-browser-forward]'),
+              reload: rectOf('[data-browser-reload]'),
+              start: rectOf('[data-browser-start]'),
+              canvas: rectOf('[data-browser-canvas]'),
+              statusChip: rectOf('[data-browser-status-chip]'),
+              authDisplayWhenShown,
+              canvasHasFrame: !root.querySelector('[data-browser-empty]') || Boolean(root.querySelector('[data-browser-empty]')?.hidden),
+            };
+          });
+          await assertNoVisibleBrowserDebugText(page);
+          const problems = [];
+          const need = ['address', 'back', 'forward', 'reload', 'start', 'canvas'];
+          for (const key of need) {
+            if (!probe[key] || !probe[key].visible) problems.push(`${key} not visible`);
+          }
+          if (probe.scrollWidth > probe.clientWidth + 2) {
+            problems.push(`horizontal overflow scrollWidth=${probe.scrollWidth} clientWidth=${probe.clientWidth}`);
+          }
+          if (probe.address && probe.canvas && probe.address.bottom > probe.canvas.top + 4) {
+            problems.push(`address bar not above page area (address.bottom=${probe.address.bottom} canvas.top=${probe.canvas.top})`);
+          }
+          if (probe.authDisplayWhenShown === 'none') {
+            problems.push('auth-assist banner is display:none when shown');
+          }
+          if (problems.length) {
+            throw new Error(`Browser responsive layout failed at ${label}: ${problems.join('; ')} ${JSON.stringify(probe)}`);
+          }
+          const saved = await page.evaluate((name) => globalThis.__ctoxCaptureSmokeScreenshot?.(name), `browser-responsive-${label}`);
+          console.log(`browser_responsive_${label}_ok=1 innerWidth=${probe.innerWidth} canvasHasFrame=${probe.canvasHasFrame ? 1 : 0} screenshot=${saved || '-'}`);
+          return probe;
+        };
+
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await page.waitForTimeout(400);
+        await measureChrome('desktop');
+
+        await page.setViewportSize({ width: 414, height: 896 });
+        await page.waitForTimeout(500);
+        await measureChrome('mobile');
+
+        console.log('browser_responsive_ui_ok=1');
+        emitBrowserDiagnostics();
+        return;
+      }
       if (smokeMode === 'browser-lifecycle-ui') {
         if (!/#browser(?:$|[?&])/.test(page.url())) {
-          await page.goto(`http://127.0.0.1:${businessPort}/index.html#browser`, { waitUntil: 'domcontentloaded' });
+          const browserUrl = new URL(page.url());
+          browserUrl.pathname = '/index.html';
+          browserUrl.searchParams.set('rxdbSmoke', '1');
+          if (useAppDb && smokeDbId) browserUrl.searchParams.set('smokeDbId', smokeDbId);
+          browserUrl.hash = '#browser';
+          await page.goto(browserUrl.toString(), { waitUntil: 'domcontentloaded' });
           await page.waitForFunction(() => Boolean(document.querySelector('[data-browser-root]')), null, { timeout: 60000 });
+          await assertNoVisibleBrowserDebugText(page);
           await page.waitForFunction(() => {
             const state = globalThis.ctoxBusinessOsSmoke?.state;
             return Boolean(state?.sync?.startCollection && state?.db?.raw?.business_commands);
@@ -2807,7 +2958,7 @@ function ensureCtoxSmokeBinary() {
             let renderedSession = false;
             while (Date.now() < deadline) {
               const text = root.querySelector('[data-browser-session-card]')?.textContent || '';
-              if (text.includes('browser.session.start') || text.includes('Remote Browser') || text.includes('requested')) {
+              if (text.includes('Browser') && text.includes('https://example.com') && !text.includes('pending_command')) {
                 renderedSession = true;
                 break;
               }
@@ -2886,9 +3037,39 @@ function ensureCtoxSmokeBinary() {
       }
       if (smokeMode === 'browser-handoff-ui') {
         if (!/#browser(?:$|[?&])/.test(page.url())) {
-          await page.goto(`http://127.0.0.1:${businessPort}/index.html#browser`, { waitUntil: 'domcontentloaded' });
+          const browserUrl = new URL(page.url());
+          browserUrl.pathname = '/index.html';
+          browserUrl.searchParams.set('rxdbSmoke', '1');
+          if (useAppDb && smokeDbId) browserUrl.searchParams.set('smokeDbId', smokeDbId);
+          browserUrl.hash = '#browser';
+          await page.goto(browserUrl.toString(), { waitUntil: 'domcontentloaded' });
         }
-        await page.waitForFunction(() => Boolean(document.querySelector('[data-browser-root]')), null, { timeout: 60000 });
+        await page.waitForFunction(() => Boolean(document.querySelector('[data-browser-root]')), null, { timeout: 60000 }).catch(async (error) => {
+          const diagnostics = await page.evaluate(() => {
+            const state = globalThis.ctoxBusinessOsSmoke?.state;
+            return {
+              url: location.href,
+              hash: location.hash,
+              title: document.title,
+              bodyText: (document.body?.textContent || '').replace(/\s+/g, ' ').slice(0, 500),
+              activeModule: state?.activeModule?.id || null,
+              modules: (state?.modules || []).map((mod) => ({
+                id: mod.id,
+                launch_kind: mod.launch_kind || null,
+                shell: mod.layout?.shell || null,
+              })),
+              windows: Array.from(document.querySelectorAll('.shell-window')).map((win) => ({
+                title: win.querySelector('[data-window-title]')?.textContent?.trim() || '',
+                owner: win.getAttribute('data-owner-id') || win.dataset.ownerId || '',
+                text: (win.textContent || '').replace(/\s+/g, ' ').slice(0, 180),
+              })),
+              hasCtoxRoot: Boolean(document.querySelector('[data-ctox-root]')),
+              hasBrowserRoot: Boolean(document.querySelector('[data-browser-root]')),
+            };
+          }).catch((diagError) => ({ diagnosticError: diagError?.message || String(diagError) }));
+          throw new Error(`Browser handoff UI did not render Browser root: ${error.message}; diagnostics=${JSON.stringify(diagnostics)}`);
+        });
+        await assertNoVisibleBrowserDebugText(page);
         await page.waitForFunction(() => {
           const state = globalThis.ctoxBusinessOsSmoke?.state;
           return Boolean(state?.sync?.startCollection && state?.commandBus?.dispatch && state?.db?.raw?.business_commands);

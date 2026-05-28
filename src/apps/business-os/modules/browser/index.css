@@ -121,6 +121,16 @@
   opacity: 0.72;
 }
 
+.browser-kicker {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
 .browser-muted {
   color: var(--muted);
 }
@@ -362,13 +372,16 @@
     flex-wrap: wrap;
   }
 
-  .browser-auth-assist,
-  .browser-notice {
-    display: none;
-  }
-
   .browser-actions {
     flex-wrap: wrap;
     align-self: center;
+  }
+
+  .browser-address-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .browser-session-item {
+    width: min(220px, 60vw);
   }
 }
