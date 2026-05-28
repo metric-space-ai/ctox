@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-rxdb-native1';
+const APP_BUILD = '20260528-data-plane-ready1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -60,6 +60,11 @@ const state = {
   navTransitioning: false,
   activeUnmount: null,
   db: null,
+  dataPlaneReady: null,
+  dataPlaneReadyStatus: 'idle',
+  dataPlaneReadyReason: '',
+  dataPlaneReadyResolve: null,
+  dataPlaneReadyReject: null,
   dataPlaneGeneration: 0,
   sync: null,
   syncConfig: null,
@@ -95,6 +100,53 @@ const state = {
   shellCatalogMergedIds: new Set(),
   initialModuleOpened: false,
 };
+
+function resetDataPlaneReady(reason = 'startup') {
+  state.dataPlaneReadyStatus = 'pending';
+  state.dataPlaneReadyReason = reason;
+  state.dataPlaneReady = new Promise((resolve, reject) => {
+    state.dataPlaneReadyResolve = resolve;
+    state.dataPlaneReadyReject = reject;
+  });
+}
+
+function resolveDataPlaneReady() {
+  state.dataPlaneReadyStatus = 'ready';
+  state.dataPlaneReadyReason = '';
+  const resolve = state.dataPlaneReadyResolve;
+  state.dataPlaneReadyResolve = null;
+  state.dataPlaneReadyReject = null;
+  if (resolve) resolve(true);
+}
+
+function rejectDataPlaneReady(error) {
+  state.dataPlaneReadyStatus = 'failed';
+  state.dataPlaneReadyReason = String(error?.message || error || 'Datenspeicher konnte nicht gestartet werden');
+  const reject = state.dataPlaneReadyReject;
+  state.dataPlaneReadyResolve = null;
+  state.dataPlaneReadyReject = null;
+  if (reject) reject(error);
+}
+
+async function waitForDataPlaneReady(timeoutMs = 30000) {
+  if (state.db?.collection?.('ctox_runtime_settings') && state.sync && state.commandBus) {
+    return true;
+  }
+  const readiness = state.dataPlaneReady;
+  if (!readiness) {
+    throw new Error('Business OS Datenspeicher wird noch vorbereitet.');
+  }
+  await Promise.race([
+    readiness,
+    new Promise((_, reject) => {
+      window.setTimeout(() => reject(new Error('Business OS Datenspeicher ist noch nicht bereit.')), timeoutMs);
+    }),
+  ]);
+  if (!state.db?.collection?.('ctox_runtime_settings')) {
+    throw new Error('ctox_runtime_settings collection is not registered after data-plane startup');
+  }
+  return true;
+}
 
 function installAdvancedStatusInterface() {
   const api = {
@@ -411,6 +463,7 @@ bootstrap().catch(async (error) => {
 });
 
 async function bootstrap() {
+  resetDataPlaneReady('bootstrap');
   if (!globalThis.crypto?.subtle) {
     throw new Error('WebCrypto is missing (Insecure Origin on Safari 127.0.0.1). Please use http://localhost:8765/');
   }
@@ -430,6 +483,8 @@ async function bootstrap() {
   state.session = session;
   renderAccountButton(session);
   if (!session.authenticated) {
+    state.dataPlaneReadyStatus = 'idle';
+    state.dataPlaneReadyReason = 'login-required';
     const loginFailed = session.reason === 'invalid_credentials'
       || new URLSearchParams(location.search).has('loginFailed');
     clearStoredBrowserAuth();
@@ -566,51 +621,58 @@ async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
 }
 
 async function openBusinessDataPlane(syncConfig) {
+  resetDataPlaneReady('open-business-data-plane');
   setStartupProgress(51, 'Datenspeicher-Konfiguration wird vorbereitet...');
-  state.syncConfig = syncConfig;
-  const dbName = businessDbName(syncConfig);
+  try {
+    state.syncConfig = syncConfig;
+    const dbName = businessDbName(syncConfig);
 
-  setStartupProgress(54, 'Lokaler Speicher wird geöffnet...');
-  const { createBusinessDb } = await loadBusinessDbModule();
-  state.db = await createBusinessDb({ name: dbName });
+    setStartupProgress(54, 'Lokaler Speicher wird geöffnet...');
+    const { createBusinessDb } = await loadBusinessDbModule();
+    state.db = await createBusinessDb({ name: dbName });
 
-  setStartupProgress(58, 'Systemdatenstrukturen werden aufgebaut...');
-  await registerCoreCollections();
+    setStartupProgress(58, 'Systemdatenstrukturen werden aufgebaut...');
+    await registerCoreCollections();
 
-  setStartupProgress(62, 'Desktop-Layout wird geladen...');
-  await hydrateTaskbarPinsFromDesktopLayout();
-  renderTabs();
+    setStartupProgress(62, 'Desktop-Layout wird geladen...');
+    await hydrateTaskbarPinsFromDesktopLayout();
+    renderTabs();
 
-  setStartupProgress(66, 'Echtzeit-Synchronisierung wird gestartet...');
-  const { createSyncRuntime } = await loadSyncModule();
-  state.sync = createSyncRuntime({
-    db: state.db,
-    config: syncConfig,
-    onDiagnostic: updateSyncDiagnostics,
-  });
-
-  setStartupProgress(69, 'Dienste werden gestartet...');
-  const { createCommandBus } = await loadCommandBusModule();
-  state.commandBus = createCommandBus({
-    db: () => state.db,
-    config: syncConfig,
-  });
-  startShellCtoxHealthMonitor();
-
-  if (state.catalogSubscription) {
-    try { state.catalogSubscription.unsubscribe(); } catch (e) {}
-    state.catalogSubscription = null;
-  }
-  const catalogColl = state.db?.collection?.('business_module_catalog');
-  if (catalogColl) {
-    state.catalogSubscription = catalogColl.findOne('module-catalog').$.subscribe(async (doc) => {
-      const data = doc?.toJSON?.();
-      if (data && data._deleted !== true && data.is_deleted !== true) {
-        const fingerprint = moduleCatalogFingerprint(data);
-        if (fingerprint && fingerprint === state.moduleCatalogFingerprint) return;
-        scheduleCatalogRefresh('database-sync');
-      }
+    setStartupProgress(66, 'Echtzeit-Synchronisierung wird gestartet...');
+    const { createSyncRuntime } = await loadSyncModule();
+    state.sync = createSyncRuntime({
+      db: state.db,
+      config: syncConfig,
+      onDiagnostic: updateSyncDiagnostics,
     });
+
+    setStartupProgress(69, 'Dienste werden gestartet...');
+    const { createCommandBus } = await loadCommandBusModule();
+    state.commandBus = createCommandBus({
+      db: () => state.db,
+      config: syncConfig,
+    });
+    startShellCtoxHealthMonitor();
+
+    if (state.catalogSubscription) {
+      try { state.catalogSubscription.unsubscribe(); } catch (e) {}
+      state.catalogSubscription = null;
+    }
+    const catalogColl = state.db?.collection?.('business_module_catalog');
+    if (catalogColl) {
+      state.catalogSubscription = catalogColl.findOne('module-catalog').$.subscribe(async (doc) => {
+        const data = doc?.toJSON?.();
+        if (data && data._deleted !== true && data.is_deleted !== true) {
+          const fingerprint = moduleCatalogFingerprint(data);
+          if (fingerprint && fingerprint === state.moduleCatalogFingerprint) return;
+          scheduleCatalogRefresh('database-sync');
+        }
+      });
+    }
+    resolveDataPlaneReady();
+  } catch (error) {
+    rejectDataPlaneReady(error);
+    throw error;
   }
 }
 
@@ -650,6 +712,7 @@ async function runQueuedCatalogRefresh() {
 
 async function repairBusinessDataPlane(syncConfig) {
   state.dataPlaneGeneration += 1;
+  resetDataPlaneReady('repair-business-data-plane');
   clearSyncRecoveryRepairTimer();
   if (state.catalogRefreshTimer) {
     window.clearTimeout(state.catalogRefreshTimer);
@@ -1145,6 +1208,35 @@ window.openModuleSourceEditor = openModuleSourceEditor;
 async function openSettingsDrawer(options = {}) {
   els.rightDrawer.classList.remove('account-popover');
   els.rightDrawer.classList.add('settings-drawer-open');
+  showBackdrop();
+  if (state.dataPlaneReadyStatus !== 'ready') {
+    els.rightDrawer.replaceChildren();
+    const loading = document.createElement('div');
+    loading.className = 'drawer-body settings-drawer';
+    loading.innerHTML = `
+      <h2>CTOX Settings</h2>
+      <p>Datenspeicher wird vorbereitet...</p>
+      <button type="button" class="ghost" data-close-settings>Schließen</button>
+    `;
+    loading.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
+    els.rightDrawer.append(loading);
+  }
+  try {
+    await waitForDataPlaneReady();
+  } catch (error) {
+    els.rightDrawer.replaceChildren();
+    const failed = document.createElement('div');
+    failed.className = 'drawer-body settings-drawer';
+    failed.innerHTML = `
+      <h2>CTOX Settings</h2>
+      <p>Datenspeicher ist noch nicht bereit.</p>
+      <p class="muted">${escapeHtml(String(error?.message || error || 'Unbekannter Fehler'))}</p>
+      <button type="button" class="ghost" data-close-settings>Schließen</button>
+    `;
+    failed.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
+    els.rightDrawer.append(failed);
+    return;
+  }
   const { openReactSettings } = await loadReactSettingsModule();
   openReactSettings({
     mount: els.rightDrawer,
@@ -1160,7 +1252,6 @@ async function openSettingsDrawer(options = {}) {
     onClose: closeDrawers,
     onModulesChanged: refreshModules,
   });
-  showBackdrop();
 }
 
 function isVolatileSyncTransportError(error) {
