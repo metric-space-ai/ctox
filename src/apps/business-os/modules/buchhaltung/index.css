@@ -123,6 +123,7 @@
   width: 100%;
   display: flex;
   align-items: center;
+  gap: 10px;
   padding: 8px 14px;
   border-radius: var(--control-radius, 10px);
   border: 1px solid transparent;
@@ -150,8 +151,63 @@
 }
 
 .fibu-nav-icon {
-  margin-right: 10px;
-  font-size: 14px;
+  width: 24px;
+  min-width: 24px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface-2) 68%, transparent);
+  color: var(--text-strong);
+  font-family: var(--fibu-font-mono);
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.fibu-nav-icon::before,
+.fibu-action-icon::before,
+.fibu-tab-icon::before {
+  content: attr(data-icon);
+}
+
+.fibu-summary-icon {
+  width: 22px;
+  min-width: 22px;
+  height: 20px;
+}
+
+.fibu-action-icon,
+.fibu-tab-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  font-family: var(--fibu-font-mono);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0;
+  line-height: 1;
+}
+
+.fibu-action-icon {
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  opacity: 0.86;
+}
+
+.fibu-tab-icon {
+  min-width: 24px;
+  height: 20px;
+  margin-right: 8px;
+  color: inherit;
+  opacity: 0.9;
 }
 
 .fibu-sidebar-footer {
@@ -217,6 +273,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--surface-2) 20%, transparent);
@@ -288,7 +345,24 @@
 }
 
 .dropzone-icon {
-  font-size: 24px;
+  min-width: 34px;
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+  color: var(--text-strong);
+  font-family: var(--fibu-font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.dropzone-icon::before {
+  content: attr(data-icon);
 }
 
 .dropzone-text {
@@ -301,6 +375,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   padding: 8px 16px;
   border-radius: var(--control-radius, 10px);
   font-size: 13px;
@@ -355,7 +430,7 @@
 /* Scrollable Tables Container */
 .fibu-scrollable-container {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: 16px 24px;
   min-height: 0;
 }
@@ -363,6 +438,7 @@
 /* Fibu Tables (Fully Theme-Adaptive) */
 .fibu-table {
   width: 100%;
+  min-width: 760px;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 13px;
@@ -403,6 +479,12 @@
   background: var(--fibu-glow-color);
   border-bottom-color: var(--fibu-primary);
   box-shadow: inset 3px 0 0 var(--fibu-primary);
+}
+
+.fibu-table td.fibu-empty-state {
+  display: table-cell;
+  height: auto;
+  padding: 36px 20px;
 }
 
 .fibu-table tr[aria-selected="true"] td:first-child {
@@ -489,12 +571,15 @@
 .fibu-report-tabs {
   padding: 16px 24px 0 24px;
   display: flex;
+  overflow-x: auto;
   gap: 6px;
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
 }
 
 .fibu-report-tab-btn {
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -505,6 +590,7 @@
   cursor: pointer;
   transition: all 0.2s;
   font-family: inherit;
+  white-space: nowrap;
 }
 
 .fibu-report-tab-btn:hover {
@@ -518,7 +604,7 @@
 
 .fibu-report-workspace-content {
   flex: 1;
-  overflow-y: auto;
+  overflow: auto;
   padding: 24px;
 }
 
@@ -895,15 +981,18 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* Right Pane: OCR / Chat Companion */
 .fibu-right-tabs {
-  padding: 16px 20px 0 20px;
+  padding: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 0;
   flex-shrink: 0;
-  background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+  background: transparent;
 }
 
 .fibu-right-tab-btn {
+  display: inline-flex;
+  align-items: center;
   background: transparent;
   border: 0;
   border-bottom: 2px solid transparent;
@@ -914,6 +1003,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   cursor: pointer;
   transition: all 0.2s;
   font-family: inherit;
+  white-space: nowrap;
 }
 
 .fibu-right-tab-btn:hover {
@@ -1056,7 +1146,10 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 }
 
 .chat-message .avatar {
-  font-size: 20px;
+  font-size: 10px;
+  font-family: var(--fibu-font-mono);
+  font-weight: 800;
+  letter-spacing: 0;
   background: var(--surface-2);
   width: 28px;
   height: 28px;
@@ -1136,6 +1229,10 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   display: flex;
   align-items: center;
   justify-content: center;
+  font-family: var(--fibu-font-mono);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
   transition: all 0.2s;
 }
 
@@ -1194,7 +1291,8 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-details-summary {
   display: flex !important;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   cursor: pointer;
   outline: none;
   user-select: none;
@@ -1226,6 +1324,17 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .fibu-nav-details .fibu-nav-item {
   margin-left: 6px;
   width: calc(100% - 6px);
+}
+
+.fibu-right .ctox-pane-title-row {
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fibu-right .ctox-pane-actions {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Glowing Debit & Credit Typography - High contrast in both light and dark modes */
@@ -1505,4 +1614,160 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 .ocr-copy-btn:active {
   transform: scale(0.95);
+}
+
+@media (max-width: 1100px) {
+  .fibu-module[data-fibu-root] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+    gap: 10px;
+    padding: 8px;
+    overflow-y: auto;
+    align-content: start;
+  }
+
+  .fibu-col-resizer {
+    display: none !important;
+  }
+
+  .fibu-pane {
+    height: auto;
+    min-height: 280px;
+    border-radius: 12px;
+  }
+
+  .fibu-left {
+    max-height: 320px;
+  }
+
+  .fibu-center {
+    min-height: 560px;
+  }
+
+  .fibu-right {
+    min-height: 360px;
+  }
+
+  .fibu-nav-list {
+    padding: 10px;
+  }
+
+  .fibu-sidebar-footer {
+    padding: 12px;
+  }
+
+  .fibu-bilanz-tree-wrapper {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .fibu-bilanz-divider {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .fibu-module[data-fibu-root] {
+    padding: 6px;
+    gap: 8px;
+  }
+
+  .fibu-pane {
+    min-height: 240px;
+    border-radius: 10px;
+  }
+
+  .fibu-left {
+    max-height: 360px;
+  }
+
+  .fibu-center {
+    min-height: 520px;
+  }
+
+  .fibu-panel-toolbar {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .fibu-search-wrapper,
+  .fibu-toolbar-actions,
+  .fibu-btn {
+    width: 100%;
+    max-width: none;
+  }
+
+  .fibu-scrollable-container,
+  .fibu-report-workspace-content {
+    padding: 12px;
+  }
+
+  .fibu-table {
+    min-width: 680px;
+    font-size: 12.5px;
+  }
+
+  .fibu-table th,
+  .fibu-table td {
+    padding: 10px 12px;
+  }
+
+  .fibu-report-tabs {
+    padding: 10px 12px 0;
+  }
+
+  .fibu-report-tab-btn {
+    padding: 8px 10px;
+    font-size: 12px;
+  }
+
+  .fibu-ustva-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fibu-ustva-card.total {
+    grid-column: auto;
+  }
+
+  .fibu-datev-exporter-box {
+    padding: 18px;
+  }
+
+  .fibu-form-row,
+  .fibu-form-row.inline {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  #mileage-dashboard-summary,
+  .mileage-dash-wrapper,
+  .mileage-dash-shares {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .fibu-right .ctox-pane-title-row {
+    display: block;
+  }
+
+  .fibu-right-tabs {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 2px;
+    margin-top: 8px;
+  }
+
+  .fibu-right-tab-btn {
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .fibu-module .ctox-bottom-drawer,
+  .fibu-bottom-drawer {
+    height: min(520px, calc(100% - 18px));
+  }
+
+  .fibu-drawer-content {
+    padding: 18px;
+  }
 }

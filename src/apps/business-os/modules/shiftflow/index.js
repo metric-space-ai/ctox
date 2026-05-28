@@ -2,7 +2,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
-const MOD_BUILD = '20260520-shiftflow-v2';
+const MOD_BUILD = '20260527-shiftflow-ui-fixes1';
 
 let activeSubscriptions = [];
 let currentWeekStart = getMondayOfCurrentWeek();
@@ -906,7 +906,7 @@ function renderSchedulerGrid(employees, projects, shifts, els, ctx) {
 
     const rows = filteredProjects.map(proj => {
       const rowHeader = `
-        <div class="row-employee-cell" style="border-left: 4px solid ${proj.color || '#6366f1'}; padding-left: 8px;">
+        <div class="row-employee-cell" style="border-color: color-mix(in srgb, ${proj.color || '#6366f1'} 45%, var(--shiftflow-line)); background: color-mix(in srgb, ${proj.color || '#6366f1'} 8%, transparent);">
           <div class="emp-info">
             <div class="emp-name" style="font-weight:800;">${escapeHtml(proj.name)}</div>
             <div class="emp-meta">${escapeHtml(proj.client)}</div>
@@ -2607,7 +2607,7 @@ function exportInvoiceDraftPayload() {
   a.click();
   URL.revokeObjectURL(url);
 
-  alert(t('invoiceDraftDownloadSuccess', 'Rechnungsentwurf erfolgreich erstellt und heruntergeladen! 📝\n\nDu kannst diese Datei direkt im CTOX Rechnungs-Modul einlesen.'));
+  alert(t('invoiceDraftDownloadSuccess', 'Rechnungsentwurf erfolgreich erstellt und heruntergeladen.\n\nDu kannst diese Datei direkt im CTOX Rechnungs-Modul einlesen.'));
 }
 
 // -------------------------------------------------------------

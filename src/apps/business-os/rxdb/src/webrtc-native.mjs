@@ -15,9 +15,9 @@ const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const SEND_PRIORITIES = ['high', 'normal', 'low'];
-const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 8;
+const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 16;
 const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
-const RTC_HANDSHAKE_TIMEOUT_MS = 30_000;
+const RTC_HANDSHAKE_TIMEOUT_MS = 5_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
 const SHELL_CRITICAL_COLLECTIONS = new Set([
@@ -26,7 +26,10 @@ const SHELL_CRITICAL_COLLECTIONS = new Set([
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
-  'desktop_file_chunks',
+  'browser_sessions',
+  'browser_tabs',
+  'browser_frames',
+  'browser_input_events',
 ]);
 
 export function createCtoxWebRtcNativePeer(options = {}) {
@@ -120,6 +123,7 @@ export class CtoxWebRtcNativePeer {
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
     this.connectionRequests = new Map();
+    this.forceInitiatorPeers = new Set();
     this.closed = false;
   }
 
@@ -382,10 +386,15 @@ export class CtoxWebRtcNativePeer {
         const connection = this.connections.get(peerId);
         if (connection) {
           this.recordConnectionEvent(connection, 'request-timeout', { method });
+          this.forceInitiatorPeers.add(peerId);
           this.removeConnection(peerId, `request-timeout-${method}`);
           setTimeout(() => {
             if (!this.closed && this.shouldConnectToRemotePeer(peerId)) {
-              this.ensureConnection(peerId);
+              try {
+                this.ensureConnection(peerId);
+              } catch (reconnectError) {
+                this.events.emit('error', normalizePeerSignalError(reconnectError, peerId));
+              }
             }
           }, 250 + Math.floor(Math.random() * 500));
         }
@@ -542,6 +551,7 @@ export class CtoxWebRtcNativePeer {
       localCandidateTypes: {},
       remoteCandidateTypes: {},
       handshakeTimer: null,
+      forceInitiator: this.forceInitiatorPeers.has(remotePeerId),
     };
     this.connections.set(remotePeerId, connection);
     connection.handshakeTimer = setTimeout(() => {
@@ -556,10 +566,15 @@ export class CtoxWebRtcNativePeer {
         signalingState: peer.signalingState || '',
       });
       this.events.emit('peer-state', { peerId: remotePeerId, state: 'handshake-timeout' });
+      this.forceInitiatorPeers.add(remotePeerId);
       this.removeConnection(remotePeerId, 'rtc-handshake-timeout');
       setTimeout(() => {
         if (!this.closed && this.shouldConnectToRemotePeer(remotePeerId)) {
-          this.ensureConnection(remotePeerId);
+          try {
+            this.ensureConnection(remotePeerId);
+          } catch (reconnectError) {
+            this.events.emit('error', normalizePeerSignalError(reconnectError, remotePeerId));
+          }
         }
       }, 250 + Math.floor(Math.random() * 500));
     }, RTC_HANDSHAKE_TIMEOUT_MS);
@@ -598,7 +613,7 @@ export class CtoxWebRtcNativePeer {
     };
     peer.ondatachannel = (event) => this.attachChannel(connection, event.channel);
 
-    if (this.shouldInitiate(remotePeerId)) {
+    if (this.shouldInitiate(remotePeerId, connection)) {
       this.attachChannel(connection, peer.createDataChannel('ctox-rxdb'));
       this.createOffer(remotePeerId, peer).catch((error) => {
         this.events.emit('error', normalizePeerSignalError(error, remotePeerId));
@@ -607,7 +622,8 @@ export class CtoxWebRtcNativePeer {
     return connection;
   }
 
-  shouldInitiate(remotePeerId) {
+  shouldInitiate(remotePeerId, connection = null) {
+    if (connection?.forceInitiator) return true;
     return String(this.options.clientId) < String(remotePeerId);
   }
 
@@ -714,6 +730,7 @@ export class CtoxWebRtcNativePeer {
         connection.handshakeTimer = null;
       }
       markCriticalRtcPeerConnectionOpened(connection.rtcPoolSlot);
+      this.forceInitiatorPeers.delete(connection.remotePeerId);
       drainRtcPeerConnectionQueue('critical-peer-opened');
       this.recordConnectionEvent(connection, 'datachannel-open', { readyState: channel.readyState || 'open' });
       this.events.emit('peer-open', { peerId: connection.remotePeerId });

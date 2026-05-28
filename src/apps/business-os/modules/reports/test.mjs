@@ -1,5 +1,23 @@
 import assert from 'node:assert/strict';
-import { filterReportItems, normalizeReportItems } from './index.js';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
+
+import { build } from 'esbuild';
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+}
+
+const { filterReportItems, normalizeReportItems } = await importBrowserBundle('./index.js');
 
 const t = (_key, fallback) => fallback;
 
@@ -78,6 +96,35 @@ test('filters by type, normalized status, and searchable fields', () => {
   assert.deepEqual(filterReportItems(items, { kind: 'bug' }).map((item) => item.id), ['bug-1']);
   assert.deepEqual(filterReportItems(items, { status: 'blocked' }).map((item) => item.id), ['bug-1']);
   assert.deepEqual(filterReportItems(items, { search: 'panes' }).map((item) => item.id), ['feature-1']);
+});
+
+test('reads JSON encoded payload and client context fields', () => {
+  const items = normalizeReportItems({
+    reports: [{
+      id: 'json-1',
+      module_id: 'reports',
+      title: 'Encoded feature',
+      payload: JSON.stringify({
+        kind: 'feature',
+        expected: 'Feature fields survive projection encoding.',
+        ctox_change_summary: 'Projected from JSON payload.',
+      }),
+      client_context: JSON.stringify({
+        attachment: {
+          capture_mode: 'viewport',
+          data_url: 'data:image/png;base64,AAAA',
+        },
+      }),
+      updated_at_ms: 40,
+    }],
+    t,
+  });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].kind, 'feature');
+  assert.equal(items[0].expected, 'Feature fields survive projection encoding.');
+  assert.equal(items[0].changeSummary, 'Projected from JSON payload.');
+  assert.equal(items[0].attachment.capture_mode, 'viewport');
 });
 
 let passed = 0;

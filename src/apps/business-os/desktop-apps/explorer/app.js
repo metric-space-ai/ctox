@@ -58,8 +58,8 @@ export async function mount(container, ctx) {
           <b data-explorer-path>Files</b>
         </div>
         <div class="app-explorer-actions">
-          <button type="button" data-explorer-new-folder>Neuer Ordner</button>
-          <button type="button" data-explorer-upload>Upload</button>
+          <button type="button" data-explorer-new-folder aria-label="Neuen Ordner erstellen"><span aria-hidden="true">＋</span><span>Neuer Ordner</span></button>
+          <button type="button" data-explorer-upload aria-label="Dateien hochladen"><span aria-hidden="true">⇧</span><span>Upload</span></button>
           <input data-explorer-file-input type="file" multiple hidden>
         </div>
         <label class="app-explorer-search">
@@ -207,6 +207,7 @@ export async function mount(container, ctx) {
         button.type = 'button';
         button.className = 'app-explorer-source';
         button.classList.toggle('is-active', state.activeSource.id === source.id);
+        button.setAttribute('aria-pressed', state.activeSource.id === source.id ? 'true' : 'false');
         button.innerHTML = `
           <span class="app-explorer-source-mark">${escapeHtml(source.mark)}</span>
           <span>${escapeHtml(source.label)}</span>
@@ -259,6 +260,7 @@ export async function mount(container, ctx) {
     for (const row of rows) table.append(rowNode(row));
     table.querySelectorAll('[data-sort]').forEach((button) => {
       button.classList.toggle('is-active', button.dataset.sort === state.sort);
+      button.setAttribute('aria-sort', button.dataset.sort === state.sort ? 'descending' : 'none');
       button.addEventListener('click', () => {
         state.sort = button.dataset.sort || 'modified';
         renderRows();
@@ -328,6 +330,7 @@ export async function mount(container, ctx) {
     state.selectedId = row.id;
     refs.table.querySelectorAll('.app-explorer-row').forEach((node) => {
       node.classList.toggle('is-selected', node.dataset.id === row.id);
+      node.setAttribute('aria-selected', node.dataset.id === row.id ? 'true' : 'false');
     });
     renderPreview(row);
   }
@@ -1028,6 +1031,13 @@ function ensureStyles() {
       padding: 0 10px;
       font-weight: 720;
     }
+    .app-explorer-actions button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
     .app-explorer-nav button { width: 30px; padding: 0; font-size: 15px; }
     .app-explorer-address {
       display: flex;
@@ -1142,13 +1152,15 @@ function ensureStyles() {
     .app-explorer-grid {
       display: grid;
       align-content: start;
-      min-width: 680px;
+      width: 100%;
+      min-width: 0;
     }
     .app-explorer-grid-header,
     .app-explorer-row {
       display: grid;
-      grid-template-columns: minmax(220px, 1.4fr) minmax(110px, .65fr) minmax(130px, .55fr) minmax(90px, .45fr);
+      grid-template-columns: minmax(0, 1.55fr) minmax(0, .65fr) minmax(0, .7fr) minmax(0, .45fr);
       width: 100%;
+      min-width: 0;
     }
     .app-explorer-grid-head {
       position: sticky;
@@ -1164,6 +1176,9 @@ function ensureStyles() {
       text-align: left;
       font-size: 11px;
       font-weight: 760;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     button.app-explorer-grid-head { cursor: pointer; }
     .app-explorer-grid-head.is-active { color: var(--text); }
@@ -1173,6 +1188,7 @@ function ensureStyles() {
       padding: 0;
       text-align: left;
       cursor: default;
+      min-width: 0;
     }
     .app-explorer-row > span {
       display: flex;
@@ -1184,6 +1200,9 @@ function ensureStyles() {
       background: transparent;
       color: var(--text);
       padding: 0 10px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
     .app-explorer-row:hover > span,
     .app-explorer-row:focus-visible > span {
@@ -1392,6 +1411,54 @@ function ensureStyles() {
       .app-explorer-preview { display: none; }
       .app-explorer-toolbar { grid-template-columns: auto minmax(0, 1fr) auto; }
       .app-explorer-search { grid-column: 1 / -1; }
+    }
+    @media (max-width: 640px) {
+      .app-explorer {
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .app-explorer-toolbar {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+      .app-explorer-actions,
+      .app-explorer-search {
+        grid-column: 1 / -1;
+      }
+      .app-explorer-actions button {
+        flex: 1 1 0;
+      }
+      .app-explorer-body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .app-explorer-sidebar {
+        display: flex;
+        gap: 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--hairline, var(--line));
+        overflow-x: auto;
+        overflow-y: hidden;
+      }
+      .app-explorer-sidebar-group {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: max-content;
+        align-items: center;
+        gap: 6px;
+      }
+      .app-explorer-sidebar-group + .app-explorer-sidebar-group { margin-top: 0; }
+      .app-explorer-sidebar h3 { margin: 0 2px 0 0; white-space: nowrap; }
+      .app-explorer-source {
+        width: auto;
+        min-width: 128px;
+      }
+      .app-explorer-grid-header,
+      .app-explorer-row {
+        grid-template-columns: minmax(132px, 1fr) minmax(72px, .55fr) minmax(86px, .65fr);
+      }
+      .app-explorer-grid-head:nth-child(4),
+      .app-explorer-row > span:nth-child(4) {
+        display: none;
+      }
     }
   `;
   document.head.appendChild(style);

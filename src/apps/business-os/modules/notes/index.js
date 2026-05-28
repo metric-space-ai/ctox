@@ -1,4 +1,3 @@
-console.log('[notes-module] Top-level evaluation started');
 import * as Lexical from '../../vendor/lexical.mjs';
 import { loadModuleMessages } from '../../shared/i18n.js';
 
@@ -121,8 +120,9 @@ const labels = {
     draftSaved: 'Entwurf gespeichert',
     draftDiscarded: 'Entwurf verworfen',
     noSearchResults: 'Keine passenden Notizen',
-    dataUnavailable: 'Notizdaten sind nicht verbunden.',
-    usingLocalCache: 'Lokale zwischengespeicherte Notizen werden angezeigt.',
+    dataUnavailable: 'Notizen sind gerade nicht verfügbar.',
+    dataUnavailableHint: 'Die Liste wird automatisch gefüllt, sobald Notizen geladen sind.',
+    usingLocalCache: 'Notizen werden aus dem letzten verfügbaren Stand angezeigt.',
     seededNotes: 'Beispielnotizen wurden lokal angelegt.',
     newNotebookPrompt: 'Name für das neue Notizbuch:',
     newTagPrompt: 'Name für den neuen Tag:',
@@ -146,8 +146,9 @@ const labels = {
     draftSaved: 'Draft saved',
     draftDiscarded: 'Draft discarded',
     noSearchResults: 'No matching notes',
-    dataUnavailable: 'Notes data is not connected.',
-    usingLocalCache: 'Showing locally cached notes.',
+    dataUnavailable: 'Notes are unavailable right now.',
+    dataUnavailableHint: 'The list fills automatically once notes are loaded.',
+    usingLocalCache: 'Showing the last available notes.',
     seededNotes: 'Sample notes were created locally.',
     newNotebookPrompt: 'Name for the new notebook:',
     newTagPrompt: 'Name for the new tag:',
@@ -272,6 +273,7 @@ export async function mount(ctx) {
   // loadFromLocalCache();
   
   bindElements(ctx.host);
+  normalizeInteractiveLabels(ctx.host);
   
   // Initialize Lexical Editor
   state.lexicalEditor = Lexical.createEditor({
@@ -520,6 +522,7 @@ function wireEvents() {
   // Global closes and custom circular checklist toggles
   document.addEventListener('click', handleGlobalClick);
   document.addEventListener('keydown', handleDocumentKeydown);
+  els.folderList?.addEventListener('keydown', handleSidebarKeydown);
   els.editor?.addEventListener('click', handleEditorCheckboxClick);
 }
 
@@ -551,7 +554,21 @@ function unbindEvents() {
   
   document.removeEventListener('click', handleGlobalClick);
   document.removeEventListener('keydown', handleDocumentKeydown);
+  els.folderList?.removeEventListener('keydown', handleSidebarKeydown);
   els.editor?.removeEventListener('click', handleEditorCheckboxClick);
+}
+
+function normalizeInteractiveLabels(root) {
+  root.querySelectorAll('button[title]:not([aria-label])').forEach((button) => {
+    button.setAttribute('aria-label', button.getAttribute('title'));
+  });
+  root.querySelectorAll('.notes-folder-item, [data-toggle-nav]').forEach((item) => {
+    item.setAttribute('role', 'button');
+    if (!item.hasAttribute('tabindex')) item.setAttribute('tabindex', '0');
+  });
+  if (els.search && !els.search.getAttribute('aria-label')) {
+    els.search.setAttribute('aria-label', state.t('search', 'Durchsuche Notizen...'));
+  }
 }
 
 // Local Cache Persistence
@@ -758,6 +775,7 @@ function renderSidebar() {
       `;
     });
     els.notebooksList.innerHTML = html;
+    normalizeInteractiveLabels(els.notebooksList);
     
     els.notebooksList.querySelectorAll('[data-nav-notebook]').forEach(el => {
       el.addEventListener('click', () => {
@@ -796,6 +814,7 @@ function renderSidebar() {
       `;
     });
     els.tagsList.innerHTML = html;
+    normalizeInteractiveLabels(els.tagsList);
     
     els.tagsList.querySelectorAll('[data-nav-tag]').forEach(el => {
       el.addEventListener('click', () => {
@@ -858,9 +877,9 @@ function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel,
   const diagnosticKind = diagnostics?.kind || 'ok';
   if (diagnosticKind === 'missing' || diagnosticKind === 'error') {
     return {
-      kind: 'diagnostic',
-      title: translate('dataUnavailable', 'Notes data is not connected.'),
-      body: diagnostics?.message || translate('dataUnavailable', 'Notes data is not connected.')
+      kind: 'unavailable',
+      title: translate('dataUnavailable', 'Notes are unavailable right now.'),
+      body: translate('dataUnavailableHint', 'The list fills automatically once notes are loaded.')
     };
   }
   if (hasSearch) {
@@ -1024,7 +1043,16 @@ function renderNotesList() {
   
   // Bind note card clicks
   els.notesList.querySelectorAll('[data-note-id]').forEach(el => {
+    el.setAttribute('role', 'button');
+    el.setAttribute('tabindex', '0');
+    el.setAttribute('aria-label', el.querySelector('.notes-card-title')?.textContent?.trim() || state.t('notes', 'Notizen'));
     el.addEventListener('click', () => {
+      const id = el.getAttribute('data-note-id');
+      selectNote(id);
+    });
+    el.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
       const id = el.getAttribute('data-note-id');
       selectNote(id);
     });
@@ -2130,6 +2158,14 @@ function handleDocumentKeydown(e) {
   if (e.key === 'Escape') {
     closeAllDropdowns();
   }
+}
+
+function handleSidebarKeydown(e) {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const target = e.target?.closest?.('.notes-folder-item, [data-toggle-nav]');
+  if (!target || !els.folderList?.contains(target)) return;
+  e.preventDefault();
+  target.click();
 }
 
 function closeAllDropdowns() {

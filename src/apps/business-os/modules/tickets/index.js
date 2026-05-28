@@ -14,8 +14,10 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blockiert',
     closed: 'Geschlossen',
-    noTickets: 'Keine Tickets repliziert.',
+    noTickets: 'Noch keine Tickets verfügbar.',
+    noTicketsDetail: 'Neue Tickets erscheinen hier, sobald sie für CTOX bereitstehen.',
     selectTicket: 'Wähle links ein Ticket aus.',
+    selectTicketDetail: 'Details, Verlauf und Kontrollen werden danach hier angezeigt.',
     timeline: 'Timeline',
     cases: 'Cases',
     selfWork: 'Self-work',
@@ -42,9 +44,9 @@ const labels = {
     promptReviewSummary: 'Prüfnotiz',
     promptResponseKey: 'Antwort-Referenz',
     promptResponseBody: 'Antwortinhalt',
-    commandPending: 'Befehl wird über RxDB synchronisiert...',
+    commandPending: 'Befehl wird verarbeitet...',
     commandDone: 'Befehl abgeschlossen.',
-    commandUnavailable: 'business_commands ist für Ticket-Aktionen erforderlich.',
+    commandUnavailable: 'Ticket-Aktionen sind gerade nicht verfügbar.',
     promptTicketTitle: 'Ticket-Titel',
     promptTicketBody: 'Beschreibung',
     promptRationale: 'Begründung',
@@ -63,8 +65,10 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blocked',
     closed: 'Closed',
-    noTickets: 'No replicated tickets.',
+    noTickets: 'No tickets available yet.',
+    noTicketsDetail: 'New tickets appear here once they are ready for CTOX.',
     selectTicket: 'Select a ticket on the left.',
+    selectTicketDetail: 'Details, timeline, and controls appear here after selection.',
     timeline: 'Timeline',
     cases: 'Cases',
     selfWork: 'Self-work',
@@ -91,9 +95,9 @@ const labels = {
     promptReviewSummary: 'Review note',
     promptResponseKey: 'Answer reference',
     promptResponseBody: 'Answer body',
-    commandPending: 'Command is syncing through RxDB...',
+    commandPending: 'Command is being processed...',
     commandDone: 'Command completed.',
-    commandUnavailable: 'business_commands is required for ticket actions.',
+    commandUnavailable: 'Ticket actions are unavailable right now.',
     promptTicketTitle: 'Ticket title',
     promptTicketBody: 'Description',
     promptRationale: 'Rationale',
@@ -327,7 +331,10 @@ function renderList() {
   const list = state.ctx.host.querySelector('[data-ticket-list]');
   const tickets = filteredTickets();
   if (!tickets.length) {
-    list.innerHTML = `<div class="tickets-empty">${escapeHtml(state.t('noTickets', 'Keine Tickets repliziert.'))}</div>`;
+    list.innerHTML = renderEmptyState(
+      state.t('noTickets', 'Noch keine Tickets verfügbar.'),
+      state.t('noTicketsDetail', 'Neue Tickets erscheinen hier, sobald sie für CTOX bereitstehen.'),
+    );
     return;
   }
   list.innerHTML = tickets.map((ticket) => {
@@ -356,7 +363,11 @@ function renderDetail() {
   const detail = state.ctx.host.querySelector('[data-ticket-detail]');
   const ticket = selectedTicket();
   if (!ticket) {
-    detail.innerHTML = `<div class="tickets-empty">${escapeHtml(state.t('selectTicket', 'Wähle links ein Ticket aus.'))}</div>`;
+    detail.innerHTML = renderEmptyState(
+      state.t('selectTicket', 'Wähle links ein Ticket aus.'),
+      state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
+      'is-centered',
+    );
     return;
   }
   const events = eventsForTicket(ticket.ticket_key);
@@ -391,7 +402,11 @@ function renderContext() {
   const context = state.ctx.host.querySelector('[data-ticket-context]');
   const ticket = selectedTicket();
   if (!ticket) {
-    context.innerHTML = '';
+    context.innerHTML = renderEmptyState(
+      state.t('controls', 'Kontrollen'),
+      state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
+      'is-context',
+    );
     return;
   }
   const cases = casesForTicket(ticket.ticket_key);
@@ -578,10 +593,10 @@ async function promptText(title, defaultValue = '', required = false) {
 
 async function dispatchTicketCommand(commandType, recordId, payload) {
   const collection = state.ctx.db?.collection?.('business_commands');
-  if (!collection) throw new Error(state.t('commandUnavailable', 'business_commands ist für Ticket-Aktionen erforderlich.'));
+  if (!collection) throw new Error(state.t('commandUnavailable', 'Ticket-Aktionen sind gerade nicht verfügbar.'));
   await state.ctx.sync?.startCollection?.('business_commands');
   const commandId = `cmd_${randomId()}`;
-  setCommandStatus(state.t('commandPending', 'Befehl wird über RxDB synchronisiert...'));
+  setCommandStatus(state.t('commandPending', 'Befehl wird verarbeitet...'));
   const command = {
     id: commandId,
     module: 'tickets',
@@ -624,11 +639,11 @@ async function waitForCommandProjection(commandId, timeoutMs = 45000) {
     }
     await delay(300);
   }
-  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+  throw new Error(`Aktion ${commandId} wurde noch nicht abgeschlossen.`);
 }
 
 function commandFailureMessage(data, commandId) {
-  return data?.error || data?.result?.error || `Command ${commandId} failed`;
+  return data?.error || data?.result?.error || `Aktion ${commandId} ist fehlgeschlagen.`;
 }
 
 function setCommandStatus(message, isError = false) {
@@ -780,6 +795,15 @@ function labelForTicket(ticketKey) {
 function fact(label, value) {
   if (value === undefined || value === null || value === '') return '';
   return `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd></div>`;
+}
+
+function renderEmptyState(title, body = '', modifier = '') {
+  return `
+    <div class="tickets-empty ${escapeAttr(modifier)}">
+      <strong>${escapeHtml(title)}</strong>
+      ${body ? `<span>${escapeHtml(body)}</span>` : ''}
+    </div>
+  `;
 }
 
 function displayStatus(value) {

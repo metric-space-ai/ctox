@@ -24,9 +24,9 @@
         </div>
         <div class="ctox-pane-tools">
           <input class="ctox-pane-search" id="sourceSearch" type="search" placeholder="Anforderung, Quellen oder Bereich suchen…" aria-label="Anforderungen suchen" />
-          <select class="ctox-pane-filter" aria-label="Anforderungen sortieren" style="width: 110px; flex-shrink: 0;">
-            <option value="source">Gruppieren: Quellen</option>
-            <option value="area">Gruppieren: Bereiche</option>
+          <select class="ctox-pane-filter" id="sourceGroupMode" aria-label="Anforderungen gruppieren und sortieren" style="width: 110px; flex-shrink: 0;">
+            <option value="source">Gruppe: Quellen</option>
+            <option value="area">Gruppe: Bereiche</option>
             <option value="recent">Neueste zuerst</option>
           </select>
           <button class="ctox-pane-icon" type="button" aria-label="Anforderungen Suche und Sortierung konfigurieren" title="Suche und Sortierung konfigurieren" data-column="requirements" data-column-action="search-sort" data-drawer-side="left">

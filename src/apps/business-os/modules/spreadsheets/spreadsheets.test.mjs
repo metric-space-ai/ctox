@@ -1,7 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __spreadsheetsTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  external: ['../../vendor/jspreadsheet.mjs'],
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __spreadsheetsTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 test('spreadsheet records without is_deleted remain visible', () => {
   assert.equal(hooks.isActiveSpreadsheetRecord({ id: 'sheet_1' }), true);

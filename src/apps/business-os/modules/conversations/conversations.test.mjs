@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __conversationsTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __conversationsTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 const t = (key, fallback) => fallback || key;
 
@@ -30,7 +45,8 @@ test('conversation empty state distinguishes filter misses from sync failures', 
   });
 
   assert.equal(syncFailure.kind, 'sync-failure');
-  assert.match(syncFailure.body, /communication_messages/);
+  assert.doesNotMatch(syncFailure.body, /communication_messages|WebRTC|replication/i);
+  assert.match(syncFailure.body, /Konversationen/);
 });
 
 test('communication diagnostics include accounts and messages sync errors', () => {
@@ -70,6 +86,47 @@ test('communication diagnostics treats failed sync status as failure without las
 
   assert.equal(diagnostics.hasFailure, true);
   assert.deepEqual(diagnostics.problemCollections, ['communication_messages']);
+});
+
+test('communication diagnostics treats running but connecting peers as sync starting', () => {
+  const diagnostics = hooks.buildConversationDataDiagnostics({
+    syncDiagnostics: {
+      collections: {
+        communication_accounts: { status: 'running', connectionStatus: 'connected' },
+        communication_threads: { status: 'running', connectionStatus: 'connecting' },
+        communication_messages: { status: 'running', connectionStatus: 'connected' },
+      },
+    },
+  });
+
+  assert.equal(diagnostics.hasFailure, false);
+  assert.equal(diagnostics.isStarting, true);
+  assert.deepEqual(diagnostics.startingCollections, ['communication_threads']);
+});
+
+test('communication diagnostics includes thread projection peer timeouts', () => {
+  const diagnostics = hooks.buildConversationDataDiagnostics({
+    syncDiagnostics: {
+      collections: {
+        communication_accounts: { status: 'running', connectionStatus: 'connected' },
+        communication_threads: {
+          status: 'running',
+          connectionStatus: 'connecting',
+          lastLifecycleEvent: {
+            code: 'peer_connect_timeout',
+            message: 'WebRTC native peer did not open for communication_threads within 30000ms',
+            severity: 'recoverable',
+          },
+        },
+        communication_messages: { status: 'running', connectionStatus: 'connected' },
+      },
+    },
+  });
+
+  assert.equal(diagnostics.hasFailure, true);
+  assert.deepEqual(diagnostics.problemCollections, ['communication_threads']);
+  assert.match(diagnostics.detail, /communication_threads/);
+  assert.match(diagnostics.detail, /native peer did not open/);
 });
 
 test('bucket filters report active account, channel, direction, date, and search state', () => {

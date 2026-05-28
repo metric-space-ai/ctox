@@ -369,7 +369,7 @@
   "to": "An",
   "letter": "Brief",
   "noEmailForSuppression": "Engagement hat keine Mailadresse.",
-  "noSuppressionCollection": "Suppression-Collection nicht verfuegbar.",
+  "noSuppressionCollection": "Unterdrückungsliste ist gerade nicht verfügbar.",
   "reconcileProviderHint": "Status der Mailserver-Queue mit Outbound-Messages abgleichen",
   "reconcileProvider": "Provider-Status abgleichen",
   "schedulerTickHint": "Faellige Engagements verarbeiten: Drafts vorbereiten, Suppressed schliessen",

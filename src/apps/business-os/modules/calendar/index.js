@@ -265,6 +265,15 @@ function wireEvents() {
     today: () => state.calendarViewInstance?.today(),
     newCalendar: () => openCalendarForm(),
     newBookingPage: () => openBookingPageForm(),
+    renderedEventClick: (event) => {
+      const eventEl = event.target?.closest?.('.ec-event');
+      if (!eventEl || !els.eventCalendarMount?.contains(eventEl)) return;
+      const dbEvent = findEventForRenderedCalendarElement(eventEl);
+      if (!dbEvent) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openEventForm(dbEvent.id);
+    },
     closeDrawer,
     keydown: (event) => {
       if (event.key === 'Escape' && els.drawer?.classList.contains('is-open')) {
@@ -280,6 +289,7 @@ function wireEvents() {
   els.btnToday?.addEventListener('click', state.domHandlers.today);
   els.btnAddNewCalendar?.addEventListener('click', state.domHandlers.newCalendar);
   els.btnAddBookingPage?.addEventListener('click', state.domHandlers.newBookingPage);
+  els.eventCalendarMount?.addEventListener('click', state.domHandlers.renderedEventClick, true);
   els.closeDrawerBtn?.addEventListener('click', state.domHandlers.closeDrawer);
   document.addEventListener('keydown', state.domHandlers.keydown);
 }
@@ -293,6 +303,7 @@ function unbindEvents() {
   els.btnToday?.removeEventListener('click', handlers.today);
   els.btnAddNewCalendar?.removeEventListener('click', handlers.newCalendar);
   els.btnAddBookingPage?.removeEventListener('click', handlers.newBookingPage);
+  els.eventCalendarMount?.removeEventListener('click', handlers.renderedEventClick, true);
   els.closeDrawerBtn?.removeEventListener('click', handlers.closeDrawer);
   document.removeEventListener('keydown', handlers.keydown);
   state.domHandlers = null;
@@ -1465,6 +1476,22 @@ function safeColor(value) {
   return /^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(color) ? color : '#3b82f6';
 }
 
+function findEventForRenderedCalendarElement(eventEl, events = state.events) {
+  const title = eventEl?.querySelector?.('.ec-event-title')?.textContent?.trim();
+  if (!title) return null;
+  const matches = events.filter(event => event.title === title);
+  if (matches.length === 1) return matches[0];
+
+  const datetime = eventEl.querySelector?.('.ec-event-time')?.getAttribute('datetime');
+  const startMs = datetime ? new Date(datetime).getTime() : NaN;
+  if (Number.isFinite(startMs)) {
+    const exactStart = matches.find(event => Number(event.start_time) === startMs);
+    if (exactStart) return exactStart;
+  }
+
+  return null;
+}
+
 function generateUUID() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -1487,6 +1514,7 @@ function escapeHtml(value) {
 }
 
 export const __calendarTestHooks = {
+  findEventForRenderedCalendarElement,
   normalizeSlug,
   validateBookingPageFormValues,
   validateCalendarFormValues,

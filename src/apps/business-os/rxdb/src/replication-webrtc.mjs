@@ -520,7 +520,7 @@ class CtoxWebRtcReplicationState {
   }
 
   periodicPullIntervalMs() {
-    return this.collection.name === 'desktop_file_chunks' ? 250 : 0;
+    return 0;
   }
 
   periodicPushIntervalMs() {

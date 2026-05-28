@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __researchTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+}
+
+const { __researchTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const bases = [
   { domain: 'research/vendor-ai-agents', title: 'Vendor AI Agents' },
@@ -30,4 +47,16 @@ test('diagnostic rows distinguish sync failures from local no-data', () => {
 
   assert.deepEqual(rows.map((row) => row.kind), ['failed', 'local', 'ok']);
   assert.match(rows[0].label, /WebRTC/);
+});
+
+test('empty dashboard keeps standard header and disabled workbench controls', () => {
+  const markup = hooks.renderNoTaskCenter();
+
+  assert.match(markup, /research-pane-header research-center-header/);
+  assert.match(markup, /data-action="refresh"/);
+  assert.match(markup, /data-action="new-task"/);
+  assert.match(markup, /research-empty-workbench/);
+  assert.match(markup, /disabled/);
+  assert.match(markup, /Quellensuche|Source search/);
+  assert.doesNotMatch(markup, /Reload Diagnose|Collection|Sync-Diagnosen|rows/);
 });

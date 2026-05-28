@@ -31,6 +31,7 @@ async function recordRxdbCommand({ db, command }) {
     inbound_channel: command.inbound_channel || command.module || '',
     payload: command.payload || {},
     client_context: command.client_context || {},
+    created_at_ms: now,
     updated_at_ms: now,
   };
   await writeCommandDocument(db, command_id, doc);

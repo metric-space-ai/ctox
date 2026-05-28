@@ -15,9 +15,9 @@ import {
   handleActiveOutreachAction,
   handleActiveOutreachInput,
   activeOutreachCounts,
-} from './active-outreach.js?v=20260527-outbound-scheduling-e2e2';
+} from './active-outreach.js?v=20260527-outbound-ui-e2e3';
 
-const BUILD = '20260527-outbound-scheduling-e2e2';
+const BUILD = '20260527-outbound-ui-e2e3';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {
@@ -2139,7 +2139,7 @@ function renderLeft() {
     <header class="outbound-pane-header">
       <div><span>${escapeHtml(t('outbound', 'Outbound'))}</span><h2>${escapeHtml(t('campaigns', 'Campaigns'))}</h2></div>
       <div class="outbound-actions">
-        <button class="outbound-icon-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
+        <button class="outbound-button outbound-outreach-toggle${outreachActive ? ' is-active' : ''}" type="button" data-action="toggle-outreach" title="${escapeHtml(t('outreachToggle', 'Active Outreach'))}" aria-pressed="${outreachActive}">${outreachActive ? '◀ Funnel' : 'Outreach ▶'}${outreachPending ? ` <em>${outreachPending}</em>` : ''}</button>
         <button class="outbound-icon-button" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Campaign'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Campaign'))}">+</button>
       </div>
     </header>
@@ -2458,7 +2458,7 @@ function renderCenter(force = false) {
           ${campaignTags.map(t => `<option value="${escapeHtml(t)}" ${state.tagFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
         </select>
 
-        <button type="button" id="toggle-hidden-companies" class="outbound-button" style="font-size: 11px; font-weight: 600; padding: 0 8px; min-height: 30px; display: inline-flex; align-items: center; gap: 6px; border-color: var(--outbound-line); color: var(--outbound-text); background: var(--outbound-surface-2); margin-right: 6px; cursor: pointer;">
+        <button type="button" id="toggle-hidden-companies" class="outbound-button" data-action="toggle-hidden-companies" style="font-size: 11px; font-weight: 600; padding: 0 8px; min-height: 30px; display: inline-flex; align-items: center; gap: 6px; border-color: var(--outbound-line); color: var(--outbound-text); background: var(--outbound-surface-2); margin-right: 6px; cursor: pointer;">
           <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
           <span style="background: var(--outbound-accent); color: #000; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 999px;">${hiddenCount}</span>
         </button>
@@ -4593,7 +4593,7 @@ function renderCompanyDetail() {
         ${runs.map((run) => `<div class="outbound-muted">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
       <div class="outbound-detail-block">
-        <div class="outbound-kicker">Diagnostik</div>
+        <div class="outbound-kicker">Details</div>
         ${renderDiagnosticsList(diagnostics)}
       </div>
     </div>
@@ -4623,7 +4623,7 @@ function renderPipelineDetail() {
         ${(item.contacts || []).map((contact) => `<div class="outbound-muted">${escapeHtml(contact.name || 'Kontakt')} · ${escapeHtml(contact.role || '')}</div>`).join('') || '<div class="outbound-muted">Kontakte werden erst in dieser Pipeline-Stufe recherchiert.</div>'}
       </div>
       <div class="outbound-detail-block">
-        <div class="outbound-kicker">Diagnostik</div>
+        <div class="outbound-kicker">Details</div>
         ${renderDiagnosticsList([
           ['Firma', company?.name || item.company_name || 'offen'],
           ['Pipeline-ID', item.id],

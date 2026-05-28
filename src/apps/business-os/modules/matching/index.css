@@ -938,15 +938,6 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   line-height:1.45;
 }
 
-.module-root[data-module-root="matching"] .collection-diagnostic{
-  display:block;
-  margin-top:6px;
-  color:var(--bo-muted, var(--muted));
-  font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size:11px;
-  overflow-wrap:anywhere;
-}
-
 .module-root[data-module-root="matching"] .panel h2{
   margin:0;
   padding:14px 16px;
@@ -1063,6 +1054,57 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 .module-root[data-module-root="matching"] .source-card:hover{
   transform:translateY(-1px);
   box-shadow:0 6px 14px rgba(0,0,0,.35)
+}
+.module-root[data-module-root="matching"] .source-area-card{
+  cursor:pointer;
+}
+.module-root[data-module-root="matching"] .source-area-card .area-logo{
+  display:grid;
+  place-items:center;
+}
+.module-root[data-module-root="matching"] .source-area-card .area-logo svg{
+  width:16px;
+  height:16px;
+  fill:currentColor;
+  color:var(--bo-accent, var(--primary-2));
+}
+.module-root[data-module-root="matching"] .area-source-summary{
+  color:var(--bo-muted, var(--muted));
+  font-size:11px;
+  line-height:1.3;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.module-root[data-module-root="matching"] .area-requirement-preview{
+  display:grid;
+  gap:6px;
+  margin-top:10px;
+}
+.module-root[data-module-root="matching"] .area-requirement-row{
+  display:grid;
+  gap:2px;
+  min-width:0;
+  padding:7px 8px;
+  border:1px solid var(--bo-border, var(--stroke));
+  border-radius:var(--radius-control, 8px);
+  background:var(--bo-surface-muted, var(--panel-2));
+}
+.module-root[data-module-root="matching"] .area-requirement-row span,
+.module-root[data-module-root="matching"] .area-requirement-row small{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.module-root[data-module-root="matching"] .area-requirement-row span{
+  color:var(--bo-text, var(--text));
+  font-size:12px;
+  font-weight:700;
+}
+.module-root[data-module-root="matching"] .area-requirement-row small{
+  color:var(--bo-muted, var(--muted));
+  font-size:11px;
 }
 .module-root[data-module-root="matching"] .source-head{display:flex; align-items:flex-start; gap:10px}
 .module-root[data-module-root="matching"] .source-main{

@@ -88,9 +88,15 @@ function existingChromeExecutable() {
 
 function chromiumLaunchOptions() {
   const executablePath = existingChromeExecutable();
-  return executablePath
-    ? { headless: true, executablePath }
-    : { headless: true };
+  const options = {
+    headless: true,
+    args: [
+      '--disable-gpu',
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+    ],
+  };
+  if (executablePath) options.executablePath = executablePath;
+  return options;
 }
 
 function base64UrlJson(value) {

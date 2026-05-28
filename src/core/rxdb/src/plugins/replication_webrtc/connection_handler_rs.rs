@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use ice::mdns::MulticastDnsMode;
 use parking_lot::Mutex;
 use serde_json::Value;
 use tokio_stream::StreamExt;
@@ -24,7 +25,7 @@ use webrtc::data_channel::{DataChannel, DataChannelEvent};
 use webrtc::peer_connection::{
     register_default_interceptors, MediaEngine, PeerConnection, PeerConnectionBuilder,
     PeerConnectionEventHandler, RTCConfigurationBuilder, RTCIceCandidateInit, RTCIceServer,
-    RTCPeerConnectionState, RTCSessionDescription, Registry,
+    RTCPeerConnectionState, RTCSessionDescription, Registry, SettingEngine,
 };
 use webrtc::runtime::default_runtime;
 
@@ -1347,9 +1348,12 @@ async fn build_peer_connection(
     let config = RTCConfigurationBuilder::new()
         .with_ice_servers(handler.ice_servers.clone())
         .build();
+    let mut setting_engine = SettingEngine::default();
+    setting_engine.set_multicast_dns_mode(MulticastDnsMode::QueryOnly);
 
     let pc = PeerConnectionBuilder::new()
         .with_configuration(config)
+        .with_setting_engine(setting_engine)
         .with_media_engine(media_engine)
         .with_interceptor_registry(registry)
         .with_handler(event_handler)
@@ -1824,12 +1828,6 @@ mod tests {
     }
 
     #[test]
-    fn native_webrtc_default_udp_bind_is_not_loopback() {
-        let handler = WebRTCRsConnectionHandler::new();
-        assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
-    }
-
-    #[test]
     fn classifies_send_priority_for_scheduler() {
         let token = WebRTCWireFrame::Message(WebRTCMessage {
             id: "m1".to_string(),
@@ -1853,6 +1851,12 @@ mod tests {
             classify_send_priority(&large_write, &"x".repeat(MAX_INLINE_FRAME_BYTES + 1)),
             SendPriority::Low
         );
+    }
+
+    #[test]
+    fn default_handler_binds_udp_on_all_ipv4_interfaces() {
+        let handler = WebRTCRsConnectionHandler::new();
+        assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
     }
 
     #[test]

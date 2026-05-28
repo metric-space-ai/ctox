@@ -530,22 +530,22 @@ function renderLeft(state) {
           <button class="ctox-pane-icon spreadsheets-column-icon" type="button" aria-label="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" title="${escapeHtml(state.t('exportSelected', 'Ausgewählte Tabelle exportieren'))}" data-spreadsheets-export ${selected ? '' : 'disabled'}>${iconSvg('export')}</button>
         </div>
       </div>
-      <div class="ctox-pane-tools">
+      <div class="ctox-pane-tools spreadsheets-filter-bar">
         <input class="ctox-pane-search" type="search" placeholder="${escapeHtml(state.t('searchPlaceholder', 'Tabelle suchen...'))}" aria-label="${escapeHtml(state.t('searchLabel', 'Tabellen suchen'))}" data-spreadsheets-search value="${escapeHtml(state.searchQuery)}">
-        <select class="ctox-pane-filter" aria-label="${escapeHtml(state.t('sortLabel', 'Tabellen sortieren'))}" data-spreadsheets-sort style="width: 70px; flex-shrink: 0;">
+        <select class="ctox-pane-filter spreadsheets-filter-control" aria-label="${escapeHtml(state.t('sortLabel', 'Tabellen sortieren'))}" data-spreadsheets-sort>
           <option value="updated_desc" ${state.sortBy === 'updated_desc' ? 'selected' : ''}>${escapeHtml(state.t('sortByNewest', 'Neueste zuerst'))}</option>
           <option value="updated_asc" ${state.sortBy === 'updated_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByOldest', 'Älteste zuerst'))}</option>
           <option value="title_asc" ${state.sortBy === 'title_asc' ? 'selected' : ''}>${escapeHtml(state.t('sortByTitle', 'Titel A-Z'))}</option>
           <option value="status" ${state.sortBy === 'status' ? 'selected' : ''}>${escapeHtml(state.t('sortByStatus', 'Status'))}</option>
         </select>
-        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status style="width: 60px; flex-shrink: 0;">
+        <select class="ctox-pane-sort spreadsheets-filter-control" aria-label="${escapeHtml(state.t('statusFilterLabel', 'Tabellenstatus filtern'))}" data-spreadsheets-status>
           <option value="all" ${state.statusFilter === 'all' ? 'selected' : ''}>${escapeHtml(state.t('filterAll', 'Alle'))}</option>
           <option value="Imported" ${state.statusFilter === 'Imported' ? 'selected' : ''}>Imported</option>
           <option value="Draft" ${state.statusFilter === 'Draft' ? 'selected' : ''}>Draft</option>
           <option value="Review" ${state.statusFilter === 'Review' ? 'selected' : ''}>Review</option>
           <option value="Final" ${state.statusFilter === 'Final' ? 'selected' : ''}>Final</option>
         </select>
-        <select class="ctox-pane-sort" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag style="width: 60px; flex-shrink: 0;">
+        <select class="ctox-pane-sort spreadsheets-filter-control" aria-label="${escapeHtml(state.t('tagFilterLabel', 'Tabellen-Tags filtern'))}" data-spreadsheets-tag>
           ${tagFilterOptions(state)}
         </select>
       </div>
@@ -599,7 +599,7 @@ function populateSpreadsheetList(state, list, records = visibleSpreadsheets(stat
         <span class="badge" style="background: var(--accent, #2b6f73); color: #fff; font-size: 10px; padding: 2px 4px; border-radius: 4px;">${escapeHtml(record.status)}</span>
         ${tagsHtml}
       </div>
-      <small class="spreadsheets-card-diagnostics">${escapeHtml(spreadsheetDiagnosticsLabel(state, record))}</small>
+      <small class="spreadsheets-card-diagnostics">${escapeHtml(spreadsheetMetaLabel(state, record))}</small>
       <small style="margin-top: 6px; font-size: 10px; color: var(--muted, #687684); display: block;">Updated: ${new Date(record.updated_at_ms).toLocaleString()}</small>
     `;
 
@@ -751,17 +751,16 @@ function revealSelectedSpreadsheetInList(state) {
   state.tagFilter = 'all';
 }
 
-function spreadsheetDiagnosticsLabel(state, record) {
+function spreadsheetMetaLabel(state, record) {
   const rows = Number(record.row_count || 0);
   const cols = Number(record.col_count || 0);
-  const diagnostics = Number(record.diagnostics_count || 0);
   const size = rows && cols
     ? state.t('spreadsheetSizeLabel', '{0} Zeilen · {1} Spalten', rows, cols)
     : state.t('spreadsheetSizeUnknown', 'Größe unbekannt');
-  const diagnosticLabel = diagnostics > 0
-    ? state.t('diagnosticsCountLabel', '{0} Diagnosen', diagnostics)
-    : state.t('noDiagnosticsLabel', 'Keine Diagnosen');
-  return `${size} · ${diagnosticLabel}`;
+  const qualityLabel = Number(record.diagnostics_count || 0) > 0
+    ? state.t('needsReviewLabel', 'Prüfen')
+    : state.t('readyLabel', 'Bereit');
+  return `${size} · ${qualityLabel}`;
 }
 
 function visibleSpreadsheets(state) {

@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __outboundTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __outboundTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 test('campaign scope recovers existing outbound rows for the only visible campaign', () => {
   const scoped = hooks.campaignScopedRows({

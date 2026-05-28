@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __appStoreTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __appStoreTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 test('creator navigation carries App Store return context', () => {
   assert.equal(
@@ -20,10 +35,11 @@ test('marketplace sync labels explain loading and stale counts', () => {
     hooks.marketplaceStateLabel({
       status: 'ready',
       message: '',
-      marketplaceCount: 18,
-      installedCount: 17,
+      discoveredCount: 19,
+      availableCount: 1,
+      installedCount: 20,
     }),
-    '18 GitHub Module gefunden. 17 installierte Apps lokal gezählt.'
+    '19 GitHub Module gefunden. 1 noch nicht lokal vorhanden. 20 installierte Apps lokal gezählt.'
   );
   assert.match(
     hooks.marketplaceStateLabel({
@@ -38,7 +54,8 @@ test('marketplace sync labels explain loading and stale counts', () => {
 
 test('scope matching keeps card badges and category counters aligned', () => {
   assert.equal(hooks.itemMatchesScope({ kind: 'marketplace', status: 'installed' }, 'installed'), true);
-  assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'installed'), false);
+  assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'installed'), true);
+  assert.equal(hooks.itemMatchesScope({ kind: 'template', status: 'template', id: 'create-scratch' }, 'installed'), false);
   assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'local'), true);
 });
 
@@ -61,4 +78,50 @@ test('empty states distinguish sync loading from search misses', () => {
 test('external GitHub action exposes an explicit external-link marker', () => {
   assert.match(hooks.externalLinkIcon(), /external-link-icon/);
   assert.match(hooks.externalLinkIcon(), /aria-hidden="true"/);
+});
+
+test('managed app actions do not expose fake upgrades', () => {
+  const editable = hooks.actionButtonsForManagedItem({
+    title: 'Browser',
+    editable: true,
+    deletable: false,
+    update_available: false,
+  });
+  assert.match(editable, /Bearbeiten/);
+  assert.doesNotMatch(editable, /Upgrade/);
+  assert.doesNotMatch(editable, /Aktualisieren/);
+
+  const update = hooks.actionButtonsForManagedItem({
+    title: 'Buchhaltung',
+    editable: true,
+    deletable: false,
+    update_available: true,
+    download_url: 'https://example.test/archive.zip',
+  });
+  assert.match(update, /Aktualisieren/);
+  assert.match(update, /Bearbeiten/);
+  assert.doesNotMatch(update, /Upgrade/);
+});
+
+test('version and modification states distinguish update and local edits', () => {
+  assert.equal(hooks.compareVersions('v1.2.0', '1.1.9') > 0, true);
+  assert.equal(hooks.compareVersions('1.0.0', 'v1') === 0, true);
+
+  assert.deepEqual(
+    hooks.updateStateFor(
+      { version: '1.0.0' },
+      { version: '1.2.0', download_url: 'https://example.test/archive.zip' },
+      'installed'
+    ),
+    { available: true, reason: '1.2.0 ist verfügbar, lokal ist 1.0.0.' }
+  );
+
+  assert.equal(
+    hooks.modificationStateFor(
+      { manifest_sha256: 'local' },
+      { manifest_sha256: 'release' },
+      'installed'
+    ).status,
+    'modified'
+  );
 });

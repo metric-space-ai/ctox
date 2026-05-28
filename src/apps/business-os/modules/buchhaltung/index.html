@@ -14,44 +14,47 @@
       <div class="fibu-nav-list" data-fibu-nav>
         <div class="fibu-nav-section-title">Kontenrahmen</div>
         <button type="button" class="fibu-nav-item active" data-nav="skr">
-          <span class="fibu-nav-icon">📊</span> Kontenrahmen (SKR)
+          <span class="fibu-nav-icon" data-icon="SKR" aria-hidden="true"></span> Kontenrahmen (SKR)
         </button>
 
         <div class="fibu-nav-section-title">Buchungen</div>
         <button type="button" class="fibu-nav-item" data-nav="journal">
-          <span class="fibu-nav-icon">📖</span> Journal & Hauptbuch
+          <span class="fibu-nav-icon" data-icon="J" aria-hidden="true"></span> Journal & Hauptbuch
         </button>
         <button type="button" class="fibu-nav-item" data-nav="receipts">
-          <span class="fibu-nav-icon">📁</span> Belege (OCR & Vorrat)
+          <span class="fibu-nav-icon" data-icon="OCR" aria-hidden="true"></span> Belege (OCR & Vorrat)
         </button>
 
         <div class="fibu-nav-section-title">Bank & Kasse</div>
         <button type="button" class="fibu-nav-item" data-nav="banking">
-          <span class="fibu-nav-icon">🏦</span> Bankabgleich
+          <span class="fibu-nav-icon" data-icon="BA" aria-hidden="true"></span> Bankabgleich
         </button>
 
         <div class="fibu-nav-section-title">Reisen & PKW</div>
         <button type="button" class="fibu-nav-item" data-nav="travel">
-          <span class="fibu-nav-icon">✈️</span> Reisekosten (VMA)
+          <span class="fibu-nav-icon" data-icon="RK" aria-hidden="true"></span> Reisekosten (VMA)
         </button>
         <button type="button" class="fibu-nav-item" data-nav="mileage">
-          <span class="fibu-nav-icon">🚗</span> Fahrtenbuch
+          <span class="fibu-nav-icon" data-icon="KM" aria-hidden="true"></span> Fahrtenbuch
         </button>
 
         <div class="fibu-nav-section-title">Auswertungen</div>
         <button type="button" class="fibu-nav-item" data-nav="reports">
-          <span class="fibu-nav-icon">📈</span> Bilanz / GuV / UStVA
+          <span class="fibu-nav-icon" data-icon="AV" aria-hidden="true"></span> Bilanz / GuV / UStVA
         </button>
 
         <div class="fibu-nav-section-title">Anlagen (AfA)</div>
         <button type="button" class="fibu-nav-item" data-nav="assets">
-          <span class="fibu-nav-icon">🏢</span> Anlagenspiegel
+          <span class="fibu-nav-icon" data-icon="AA" aria-hidden="true"></span> Anlagenspiegel
         </button>
 
         <details class="fibu-nav-details">
-          <summary class="fibu-nav-section-title fibu-details-summary">🛠️ System & QS</summary>
+          <summary class="fibu-nav-section-title fibu-details-summary">
+            <span class="fibu-nav-icon fibu-summary-icon" data-icon="QS" aria-hidden="true"></span>
+            System & QS
+          </summary>
           <button type="button" class="fibu-nav-item" data-nav="tests">
-            <span class="fibu-nav-icon">🧪</span> E2E Test Suite (UI)
+            <span class="fibu-nav-icon" data-icon="E2E" aria-hidden="true"></span> E2E Test Suite (UI)
           </button>
         </details>
       </div>
@@ -94,7 +97,8 @@
             <span id="accounts-count" class="fibu-result-count" data-accounts-count>0 Konten</span>
           </div>
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="init-skr">
-            🔄 Kontenrahmen neu initialisieren
+            <span class="fibu-action-icon" data-icon="R" aria-hidden="true"></span>
+            <span>Kontenrahmen neu initialisieren</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -124,7 +128,8 @@
             <span id="journal-count" class="fibu-result-count" data-journal-count>0 Buchungen</span>
           </div>
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-entry">
-            ➕ Neue manuelle Buchung
+            <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
+            <span>Neue manuelle Buchung</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -151,7 +156,7 @@
       <div class="fibu-view-panel" data-panel="receipts" hidden>
         <div class="fibu-panel-toolbar">
           <div class="fibu-file-dropzone" data-file-dropzone>
-            <span class="dropzone-icon">📥</span>
+            <span class="dropzone-icon" data-icon="PDF" aria-hidden="true"></span>
             <span class="dropzone-text">Belege hier ablegen (PDF/Image) oder zum Auswählen klicken</span>
             <input type="file" id="fibu-file-input" style="display:none;" accept="application/pdf,image/*" multiple />
           </div>
@@ -182,12 +187,14 @@
       <div class="fibu-view-panel" data-panel="banking" hidden>
         <div class="fibu-panel-toolbar" style="flex-wrap: wrap; gap: 10px;">
           <div class="fibu-file-dropzone compact" data-bank-dropzone style="flex: 1; min-width: 250px;">
-            <span>🏦 Bankauszug einlesen (camt.053 XML / MT940 Text)</span>
+            <span class="fibu-action-icon" data-icon="BA" aria-hidden="true"></span>
+            <span>Bankauszug einlesen (camt.053 XML / MT940 Text)</span>
             <input type="file" id="fibu-bank-input" style="display:none;" accept=".xml,.txt,.mt940" />
           </div>
           <div class="fibu-toolbar-actions">
             <button type="button" class="fibu-btn fibu-btn-secondary" data-action="run-auto-reconciliation">
-              🤖 Auto-Matching ausführen
+              <span class="fibu-action-icon" data-icon="AI" aria-hidden="true"></span>
+              <span>Auto-Matching ausführen</span>
             </button>
           </div>
         </div>
@@ -214,10 +221,18 @@
       <!-- 5. Reports Workspace (Bilanz, GuV, UStVA, DATEV) -->
       <div class="fibu-view-panel" data-panel="reports" hidden>
         <div class="fibu-report-tabs">
-          <button type="button" class="fibu-report-tab-btn active" data-report-tab="bilanz">🏛️ HGB-Bilanz</button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="guv">📊 HGB-GuV</button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="ustva">📋 Umsatzsteuer-Voranmeldung</button>
-          <button type="button" class="fibu-report-tab-btn" data-report-tab="datev">📦 DATEV EXTF-Export</button>
+          <button type="button" class="fibu-report-tab-btn active" data-report-tab="bilanz">
+            <span class="fibu-tab-icon" data-icon="BI" aria-hidden="true"></span>HGB-Bilanz
+          </button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="guv">
+            <span class="fibu-tab-icon" data-icon="GV" aria-hidden="true"></span>HGB-GuV
+          </button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="ustva">
+            <span class="fibu-tab-icon" data-icon="US" aria-hidden="true"></span>Umsatzsteuer-Voranmeldung
+          </button>
+          <button type="button" class="fibu-report-tab-btn" data-report-tab="datev">
+            <span class="fibu-tab-icon" data-icon="DV" aria-hidden="true"></span>DATEV EXTF-Export
+          </button>
         </div>
 
         <div class="fibu-report-workspace-content">
@@ -309,7 +324,8 @@
                 </div>
               </div>
               <button type="button" class="fibu-btn fibu-btn-primary fibu-btn-large" data-action="export-datev">
-                📥 DATEV CSV-Stapel herunterladen (EXTF)
+                <span class="fibu-action-icon" data-icon="CSV" aria-hidden="true"></span>
+                <span>DATEV CSV-Stapel herunterladen (EXTF)</span>
               </button>
             </div>
           </div>
@@ -320,10 +336,12 @@
       <div class="fibu-view-panel" data-panel="assets" hidden>
         <div class="fibu-panel-toolbar">
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="new-asset">
-            ➕ Neues Anlagegut erfassen
+            <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
+            <span>Neues Anlagegut erfassen</span>
           </button>
           <button type="button" class="fibu-btn fibu-btn-secondary" data-action="trigger-depreciations">
-            ⚙️ AfA-Abschreibungslauf triggern
+            <span class="fibu-action-icon" data-icon="AFA" aria-hidden="true"></span>
+            <span>AfA-Abschreibungslauf triggern</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -352,7 +370,8 @@
       <div class="fibu-view-panel" data-panel="travel" hidden>
         <div class="fibu-panel-toolbar">
           <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewTravelDrawer()">
-            ➕ Neue Dienstreise erfassen
+            <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
+            <span>Neue Dienstreise erfassen</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -377,13 +396,15 @@
       <div class="fibu-view-panel" data-panel="mileage" hidden>
         <div class="fibu-panel-toolbar" style="display:flex; justify-content:space-between; align-items:center;">
           <button type="button" class="fibu-btn fibu-btn-primary" onclick="openNewMileageDrawer()">
-            ➕ Neue Fahrt eintragen
+            <span class="fibu-action-icon" data-icon="+" aria-hidden="true"></span>
+            <span>Neue Fahrt eintragen</span>
           </button>
           <div id="mileage-dashboard-summary" style="display:flex; gap:16px; font-size:12.5px; background:var(--surface-2); padding:6px 12px; border-radius:6px; border:1px solid var(--line);">
             <!-- Live km shares dashboard -->
           </div>
           <button type="button" class="fibu-btn fibu-btn-secondary fibu-btn-dashed-warning" onclick="triggerAnnualPrivateCarShare()">
-            🚗 Privatanteil buchen
+            <span class="fibu-action-icon" data-icon="PKW" aria-hidden="true"></span>
+            <span>Privatanteil buchen</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -417,7 +438,8 @@
             </p>
           </div>
           <button type="button" class="fibu-btn fibu-btn-primary" data-action="run-all-ui-tests">
-            ⚡ Alle UI-Tests ausführen
+            <span class="fibu-action-icon" data-icon="RUN" aria-hidden="true"></span>
+            <span>Alle UI-Tests ausführen</span>
           </button>
         </div>
         <div class="fibu-scrollable-container">
@@ -477,8 +499,12 @@
         </div>
         <div class="ctox-pane-actions">
           <div class="ctox-pane-tabs fibu-right-tabs">
-            <button type="button" class="ctox-pane-tab fibu-right-tab-btn active" data-right-tab="ocr">📄 Beleg-Vorschau</button>
-            <button type="button" class="ctox-pane-tab fibu-right-tab-btn" data-right-tab="agent">🤖 CTOX AI Agent</button>
+            <button type="button" class="ctox-pane-tab fibu-right-tab-btn active" data-right-tab="ocr">
+              <span class="fibu-tab-icon" data-icon="OCR" aria-hidden="true"></span>Beleg-Vorschau
+            </button>
+            <button type="button" class="ctox-pane-tab fibu-right-tab-btn" data-right-tab="agent">
+              <span class="fibu-tab-icon" data-icon="AI" aria-hidden="true"></span>CTOX AI Agent
+            </button>
           </div>
         </div>
       </div>
@@ -500,7 +526,7 @@
         <div class="fibu-agent-chat-container">
           <div class="fibu-agent-chat-messages" data-chat-messages>
             <div class="chat-message system">
-              <span class="avatar">🤖</span>
+              <span class="avatar">AI</span>
               <div class="message-bubble">
                 Hallo! Ich bin dein CTOX Fibu-Agent. Ich unterstütze dich bei:
                 <ul>
@@ -514,7 +540,7 @@
           </div>
           <div class="fibu-agent-chat-input-wrap">
             <input type="text" class="fibu-agent-chat-input" data-chat-input placeholder="Fibu-Agent fragen..." />
-            <button type="button" class="fibu-agent-chat-send" data-action="send-chat-msg">🚀</button>
+            <button type="button" class="fibu-agent-chat-send" data-action="send-chat-msg" aria-label="Nachricht senden" title="Nachricht senden">S</button>
           </div>
         </div>
       </div>

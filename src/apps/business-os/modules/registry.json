@@ -24,7 +24,20 @@
         "left": "desktop scopes",
         "center": "desktop surface",
         "right": "agent context"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Workspace landing surface with switchable Windows/macOS chrome, draggable icons, taskbar/dock, and live CTOX activity notifications.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/desktop",
+        "installable": false,
+        "editable_after_install": true,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true
     },
     {
       "id": "ctox",
@@ -51,7 +64,20 @@
         "left": "runtime scopes",
         "center": "active workbench",
         "right": "agent context"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Native control surface for queues, runs, sync state, and agent context.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/ctox",
+        "installable": false,
+        "editable_after_install": true,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true
     },
     {
       "id": "reports",
@@ -74,7 +100,20 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-reports\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-reports\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ef4444\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-reports)\" fill-opacity=\"0.12\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M18 17V10M12 17V6M6 17v-4\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"#ffffff\" stroke=\"url(#grad-reports)\" stroke-width=\"1.2\"></circle></svg>",
         "left": "bug and feature filters and history",
         "center": "report evidence, CTOX change log, and rollback"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Historical bug and feature request tracker with CTOX acceptance, change evidence, screenshots, and module rollback actions.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/reports",
+        "installable": false,
+        "editable_after_install": true,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true
     },
     {
       "id": "tickets",
@@ -147,7 +186,20 @@
         "left": "document navigation and explorer",
         "center": "DOCX viewer/editor workbench",
         "right": "document runbooks and automation prompts"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Native DOCX document workspace with document explorer, editor surface, and CTOX runbooks.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/documents",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "knowledge",
@@ -170,7 +222,20 @@
         "left": "Knowledge selection and source groups",
         "center": "Markdown reader/editor and dataframe table tabs",
         "right": "Runbooks as operational knowledge layer"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Native CTOX Knowledge workspace for skillbooks, runbooks, markdown assets, and Polars-backed dataframes.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/knowledge",
+        "installable": false,
+        "editable_after_install": true,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true
     },
     {
       "id": "research",
@@ -195,7 +260,20 @@
         "left": "research tasks and scored source ranking",
         "center": "portfolio map and source evidence workbench",
         "right": "research task context, decisions, and CTOX handoff"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/research",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "matching",
@@ -217,7 +295,20 @@
         "left": "Requirement/source records and import task prompts",
         "center": "Configured matching task, queue state, and match results",
         "right": "Object pool records and import task prompts"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Generic matching workspace with configurable source parsing, object parsing, and CTOX match tasks.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/matching",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "conversations",
@@ -245,7 +336,20 @@
         "left": "Conversation list filtered by channel and search",
         "center": "Selected conversation timeline with channel-aware messages",
         "right": "Contact card, related business records, and CTOX agent attribution"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Read-only audit surface for all CTOX communication across WhatsApp, Jami, Email, and MS Teams. Contact-centric timeline with channel-aware rendering and cross-links into Outbound, Matching, and Reports.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/conversations",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "outbound",
@@ -277,7 +381,73 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-outbound\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-outbound\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ec4899\" /><stop offset=\"100%\" stop-color=\"#f43f5e\" /></linearGradient></defs><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><polygon points=\"22 2 15 22 11 13 2 9 22 2\" fill=\"url(#grad-outbound)\" fill-opacity=\"0.12\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><path d=\"M6 19c3-1 6-1 9-3\" stroke=\"url(#grad-outbound)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></path></svg>",
         "left": "campaign selection and source import",
         "center": "company qualification and pipeline workbench"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Campaign source import, company qualification, and pipeline handoff for outbound sales workflows.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/outbound",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
+    },
+    {
+      "id": "customers",
+      "title": "Kunden",
+      "description": "Native CRM-App fuer Bestandskunden, Kontakte, Opportunities, Aufgaben, Notizen, Aktivitaeten und Outbound-Handoffs.",
+      "entry": "modules/customers/index.html",
+      "collections": [
+        "business_commands",
+        "customer_accounts",
+        "customer_contacts",
+        "customer_opportunities",
+        "customer_tasks",
+        "customer_notes",
+        "customer_activities",
+        "customer_files",
+        "customer_views",
+        "customer_view_filters",
+        "customer_view_sorts",
+        "customer_import_batches",
+        "customer_dedupe_candidates"
+      ],
+      "source": "local",
+      "core": false,
+      "editable": true,
+      "deletable": true,
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-customers\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-customers\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><path d=\"M4 20V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v13\" fill=\"url(#grad-customers)\" fill-opacity=\"0.12\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 20v-5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v5\" stroke=\"url(#grad-customers)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 8h2M14 8h2M8 11h8\" stroke=\"url(#grad-customers)\" stroke-width=\"1.8\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"6\" r=\"3\" fill=\"#ffffff\" stroke=\"url(#grad-customers)\" stroke-width=\"1.5\"></circle><path d=\"M16.9 6h2.2M18 4.9v2.2\" stroke=\"url(#grad-customers)\" stroke-width=\"1.3\" stroke-linecap=\"round\"></path></svg>",
+        "left": "Customer scopes, saved views, filters and sync state",
+        "center": "Customer account list, opportunity pipeline and task workbench",
+        "right": "Selected customer inspector, contacts, open tasks and activity timeline"
+      },
+      "category": "Sales",
+      "version": "v1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "crm",
+        "customers",
+        "sales",
+        "accounts",
+        "pipeline"
+      ],
+      "store": {
+        "summary": "Bestandskunden-CRM mit Accounts, Kontakten, Opportunities, Aufgaben, Notizen, Aktivitaeten und Outbound-Handoff.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/customers",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "ctox-repo-module"
+      },
+      "install_scope": "store",
+      "default_installed": false
     },
     {
       "id": "shiftflow",
@@ -302,7 +472,20 @@
         "left": "team status, absence scopes and department selection",
         "center": "interactive scheduler timeline and timesheet grid",
         "right": "AI roster planner, conflict alerts and timesheet inspector"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Agentenunterstützte Einsatzplanung, Arbeitszeiterfassung und Urlaubsverwaltung für Teams mit Echtzeit-Synchronisation.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/shiftflow",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "spreadsheets",
@@ -325,7 +508,20 @@
         "left": "spreadsheet navigation and explorer",
         "center": "Spreadsheet viewer/editor workbench",
         "right": "spreadsheet runbooks and automation prompts"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Native XLSX spreadsheet workspace with spreadsheet explorer, spreadsheet editor surface based on JSpreadsheet, and CTOX runbooks.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/spreadsheets",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "notes",
@@ -346,7 +542,20 @@
         "left": "Folders and note list",
         "center": "Markdown editor and rich text live preview",
         "right": "Command dashboard and formatting shortcuts"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Premium local-first markdown note workspace matching macOS Notes aesthetic.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/notes",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "creator",
@@ -365,7 +574,20 @@
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#0891b2\" /></linearGradient></defs><polyline points=\"7 8 3 12 7 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><polyline points=\"17 8 21 12 17 16\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polyline><line x1=\"14\" y1=\"6\" x2=\"10\" y2=\"18\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><path d=\"M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z\" fill=\"url(#grad-creator)\"></path><path d=\"M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z\" fill=\"url(#grad-creator)\"></path></svg>",
         "left": "Harness configuration and parameter inputs",
         "center": "Architectural simulation flow, visual graphs, and code projections"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Native standalone code-generator & harness workbench to visualize and test custom Business-OS modules.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/creator",
+        "installable": false,
+        "editable_after_install": true,
+        "distribution": "system-module"
+      },
+      "install_scope": "core",
+      "default_installed": true
     },
     {
       "id": "app-store",
@@ -386,6 +608,64 @@
         "left": "Categories and Search",
         "center": "Available Applications Catalog",
         "right": "Application Details and Actions"
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "CTOX GitHub module catalog to discover repository apps, create apps from templates, and manage local Business OS installations.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/app-store",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
+    },
+    {
+      "id": "browser",
+      "title": "Browser",
+      "description": "Remote Browser surface that renders CTOX-hosted Chromium frames and sends input over the existing Business OS RxDB path.",
+      "entry": "modules/browser/index.html",
+      "collections": [
+        "business_commands",
+        "browser_sessions",
+        "browser_tabs",
+        "browser_frames",
+        "browser_input_events",
+        "ctox_queue_tasks"
+      ],
+      "source": "core",
+      "core": true,
+      "editable": false,
+      "deletable": false,
+      "install_scope": "core",
+      "default_installed": true,
+      "category": "Workspace",
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "tags": [
+        "browser",
+        "remote",
+        "rxdb",
+        "playwright"
+      ],
+      "store": {
+        "summary": "RxDB-backed remote browser viewer for CTOX-hosted Chromium sessions.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/browser",
+        "installable": false,
+        "editable_after_install": false,
+        "distribution": "system-module"
+      },
+      "layout": {
+        "shell": "full-workspace",
+        "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-browser\"><defs><linearGradient id=\"grad-browser\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#22c55e\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-browser)\" fill-opacity=\"0.12\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M3 9h18\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"7\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><circle cx=\"10\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><path d=\"M8 15h8M12 11v8\" stroke=\"url(#grad-browser)\" stroke-width=\"1.7\" stroke-linecap=\"round\"></path></svg>",
+        "left": "browser sessions and controls",
+        "center": "remote frame canvas",
+        "right": "runtime and input diagnostics"
       }
     },
     {
@@ -413,7 +693,20 @@
         "left": "Fibu-Navigationsstruktur & Kontenrahmen-Wähler",
         "center": "Aktiver Arbeitsbereich & Journale",
         "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Premium deutsches doppeltes Buchführungsmodul nach HGB mit SKR03/SKR04, UStVA/ELSTER, DATEV EXTF-Export und automatisiertem Bankabgleich.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/buchhaltung",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "calendar",
@@ -441,7 +734,20 @@
         "center": "Calendar Grid",
         "right": "Inspector & Booking Pages",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-calendar\"><defs><linearGradient id=\"grad-calendar\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" ry=\"3\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.12\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><line x1=\"3\" y1=\"9\" x2=\"21\" y2=\"9\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"9\" y1=\"9\" x2=\"9\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><line x1=\"15\" y1=\"9\" x2=\"15\" y2=\"20\" stroke=\"url(#grad-calendar)\" stroke-width=\"1.2\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></line><path d=\"M8 2v3M16 2v3\" stroke=\"url(#grad-calendar)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><rect x=\"5\" y=\"12\" width=\"3\" height=\"3\" rx=\"0.5\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect><rect x=\"10\" y=\"12\" width=\"4\" height=\"5\" rx=\"1\" fill=\"url(#grad-calendar)\" fill-opacity=\"0.3\" stroke=\"url(#grad-calendar)\" stroke-width=\"1\"></rect></svg>"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Mac/Outlook-style calendar with native booking links and availability scheduling.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/calendar",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     },
     {
       "id": "coding-agents",
@@ -461,7 +767,20 @@
         "left": "Agent selector and remote connection status",
         "center": "Unified Agent Control, subscriptions, permission bypasses, and active terminal",
         "right": "Sessions, remote jobs logs, and CLI runner"
-      }
+      },
+      "version": "v0.1",
+      "developer": "CTOX",
+      "license": "AGPL-3.0-only",
+      "store": {
+        "summary": "Unified dashboard to manage, configure, license, and remotely run Antigravity, Claude, and Codex agents.",
+        "repository": "metric-space-ai/ctox",
+        "source_path": "modules/coding-agents",
+        "installable": true,
+        "editable_after_install": true,
+        "distribution": "catalog-module"
+      },
+      "install_scope": "local",
+      "default_installed": true
     }
   ]
 }

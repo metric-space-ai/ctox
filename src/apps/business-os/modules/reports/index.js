@@ -127,15 +127,24 @@ function applyStaticLabels(host, t) {
 
   // Refresh button
   const refreshBtn = root.querySelector('[data-refresh-reports]');
-  if (refreshBtn) refreshBtn.textContent = t('refresh', 'Aktualisieren');
+  if (refreshBtn) {
+    const label = t('refresh', 'Aktualisieren');
+    refreshBtn.innerHTML = `${refreshIconSvg()}<span class="reports-sr-only">${escapeHtml(label)}</span>`;
+    refreshBtn.title = label;
+    refreshBtn.setAttribute('aria-label', label);
+  }
 
   // Search input placeholder
   const searchInput = root.querySelector('[data-report-search]');
-  if (searchInput) searchInput.placeholder = t('searchPlaceholder', 'Suchen...');
+  if (searchInput) {
+    searchInput.placeholder = t('searchPlaceholder', 'Suchen...');
+    searchInput.setAttribute('aria-label', t('searchLabel', 'Bugs und Features suchen'));
+  }
 
   // Kind select options
   const kindSelect = root.querySelector('[data-report-kind]');
   if (kindSelect) {
+    kindSelect.setAttribute('aria-label', t('kindFilterLabel', 'Typ filtern'));
     kindSelect.innerHTML = `
       <option value="all">${escapeHtml(t('allTypes', 'Alle Typen'))}</option>
       <option value="bug">${escapeHtml(t('bugs', 'Bugs'))}</option>
@@ -146,6 +155,7 @@ function applyStaticLabels(host, t) {
   // Status select options
   const statusSelect = root.querySelector('[data-report-status]');
   if (statusSelect) {
+    statusSelect.setAttribute('aria-label', t('statusFilterLabel', 'Status filtern'));
     statusSelect.innerHTML = `
       <option value="all">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
       <option value="open">${escapeHtml(t('open', 'Offen'))}</option>
@@ -311,49 +321,35 @@ function render() {
 function renderDiagnostics() {
   const root = state.ctx?.host?.querySelector?.('[data-reports-root]');
   if (!root) return;
-  const diagnosticsEl = root.querySelector('[data-reports-diagnostics]');
   const refreshBtn = root.querySelector('[data-refresh-reports]');
   if (refreshBtn) {
     refreshBtn.disabled = Boolean(state.diagnostics.loading);
     refreshBtn.setAttribute('aria-busy', state.diagnostics.loading ? 'true' : 'false');
     refreshBtn.title = refreshDiagnosticTitle(state.diagnostics);
   }
-  if (!diagnosticsEl) return;
-  const messages = diagnosticsMessages(state.diagnostics, state.t);
-  if (!messages.length && !state.diagnostics.lastManual) {
-    diagnosticsEl.hidden = true;
-    diagnosticsEl.replaceChildren();
-    return;
-  }
-  diagnosticsEl.hidden = false;
-  diagnosticsEl.dataset.state = state.diagnostics.loading ? 'loading' : (messages.length ? 'warn' : 'ok');
-  const text = messages.length
-    ? messages.join(' ')
-    : state.t('refreshOk', 'Aktualisiert: {0} Reports lokal verfuegbar.', state.diagnostics.reportCount || 0);
-  diagnosticsEl.textContent = text;
 }
 
 function renderListEmptyState(allItems) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="reports-empty is-diagnostic"><strong>${escapeHtml(state.t('reportsUnavailable', 'Reports-Speicher nicht bereit.'))}</strong><span>${escapeHtml(diagnosticsMessages(state.diagnostics, state.t).join(' ') || state.t('refreshTryAgain', 'Aktualisieren zeigt die letzte Sync-Diagnose.'))}</span></div>`;
+    return `<div class="reports-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><span>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</span></div>`;
   }
   if (allItems.length) {
-    return `<p class="reports-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Reports im aktuellen Filter.'))}</p>`;
+    return `<p class="reports-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
   }
-  return `<p class="reports-empty">${escapeHtml(state.t('noReports', 'Keine Reports gefunden.'))}</p>`;
+  return `<p class="reports-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Bugs oder Features verfügbar.')))}</p>`;
 }
 
 function renderDetailEmptyState({ normalized, filtered }) {
   if (hasBlockingReportDiagnostic()) {
-    return `<div class="reports-detail-empty is-diagnostic"><strong>${escapeHtml(state.t('reportsUnavailable', 'Reports-Speicher nicht bereit.'))}</strong><p>${escapeHtml(diagnosticsMessages(state.diagnostics, state.t).join(' ') || state.t('refreshTryAgain', 'Aktualisieren zeigt die letzte Sync-Diagnose.'))}</p></div>`;
+    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><p>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</p></div>`;
   }
   if (!normalized.length) {
-    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Reports'))}</strong><p>${escapeHtml(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wuensche synchronisiert sind, erscheinen Liste und Details hier.'))}</p></div>`;
+    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Bugs oder Features'))}</strong><p>${escapeHtml(reportStoreEmptyMessage(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wünsche vorliegen, erscheinen Liste und Details hier.')))}</p></div>`;
   }
   if (!filtered.length) {
-    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><p>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter aendern, um wieder Reportdetails zu sehen.'))}</p></div>`;
+    return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><p>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter ändern, um wieder Details zu sehen.'))}</p></div>`;
   }
-  return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Report auswählen'))}</strong><p>${escapeHtml(state.t('selectReport', 'Wähle links einen Report aus.'))}</p></div>`;
+  return `<div class="reports-detail-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Eintrag auswählen'))}</strong><p>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</p></div>`;
 }
 
 function syncSelectionToVisibleItems() {
@@ -430,7 +426,7 @@ function renderDetail() {
     </header>
     <div class="reports-detail-scroll os-scrollbar" data-reports-detail-scroll>
       <section class="reports-section">
-        <h3>${escapeHtml(state.t('report', 'Report'))}</h3>
+        <h3>${escapeHtml(state.t('report', 'Eintrag'))}</h3>
         <div class="reports-facts">
           ${fact(state.t('module', 'Modul'), report.moduleId)}
           ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
@@ -650,19 +646,19 @@ function buildDiagnosticsState({ results, syncErrors, syncDiagnostics, reportCou
 }
 
 function diagnosticsMessages(diagnostics, t = defaultTranslate) {
-  if (diagnostics.loading) return [t('refreshRunning', 'Aktualisiere Reports und Sync-Status...')];
+  if (diagnostics.loading) return [t('refreshRunning', 'Bugs & Features werden aktualisiert...')];
   const messages = [];
   for (const name of REPORT_DATA_COLLECTIONS) {
     const info = diagnostics.collections?.[name];
     if (!info) continue;
-    if (info.missing) messages.push(t('collectionMissing', 'Collection {0} ist lokal nicht verfuegbar.', name));
-    if (info.error) messages.push(t('collectionLoadFailed', 'Collection {0} konnte nicht gelesen werden: {1}', name, info.error));
+    if (info.missing) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
+    if (info.error) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
     if (isUnhealthySyncStatus(info.syncStatus) || info.syncError) {
-      messages.push(t('collectionSyncIssue', 'Sync fuer {0}: {1}', name, info.syncError || info.syncStatus));
+      messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
     }
   }
   for (const error of diagnostics.syncErrors || []) {
-    messages.push(t('syncRestartFailed', 'Sync-Neustart fuer {0} fehlgeschlagen: {1}', error.name, error.message));
+    if (error) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
   }
   return [...new Set(messages)];
 }
@@ -680,7 +676,7 @@ function isUnhealthySyncStatus(value) {
 }
 
 function refreshDiagnosticTitle(diagnostics) {
-  if (diagnostics.loading) return state.t('refreshRunning', 'Aktualisiere Reports und Sync-Status...');
+  if (diagnostics.loading) return state.t('refreshRunning', 'Bugs & Features werden aktualisiert...');
   const messages = diagnosticsMessages(diagnostics, state.t);
   if (messages.length) return messages.join(' ');
   if (diagnostics.lastSuccessAt) {
@@ -742,7 +738,7 @@ async function dispatchModuleCommand({
   source,
 }) {
   if (!state.ctx.commandBus?.dispatch || !state.ctx.db?.collection?.('business_commands')) {
-    throw new Error('business_commands collection is required for module governance commands');
+    throw new Error(state.t('commandsUnavailable', 'Aktionen sind gerade nicht verfügbar.'));
   }
   await Promise.all([
     state.ctx.sync?.startCollection?.('business_commands'),
@@ -772,12 +768,12 @@ async function waitForCommandProjection(commandId, timeoutMs = 45000) {
     const doc = await collection?.findOne(commandId).exec();
     const data = doc?.toJSON?.();
     if (data && data.status && data.status !== 'pending_sync') {
-      if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
+      if (data.status === 'failed') throw new Error(data.error || state.t('commandFailed', 'Aktion {0} ist fehlgeschlagen.', commandId));
       return data;
     }
     await delay(300);
   }
-  throw new Error(state.t('commandNotSynced', 'Command {0} wurde nicht synchronisiert.', commandId));
+  throw new Error(state.t('commandNotSynced', 'Aktion {0} wurde noch nicht abgeschlossen.', commandId));
 }
 
 function fact(label, value) {
@@ -815,7 +811,16 @@ function displayStatus(value) {
 }
 
 function objectValue(value) {
-  return value && typeof value === 'object' ? value : {};
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string') return {};
+  const trimmed = value.trim();
+  if (!trimmed || !/^[{[]/.test(trimmed)) return {};
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function formatDate(value) {
@@ -875,6 +880,28 @@ function escapeHtml(value) {
 
 function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
+}
+
+function reportStoreEmptyMessage(prefix = '') {
+  const reportInfo = state.diagnostics.collections?.business_module_reports;
+  const bugInfo = state.diagnostics.collections?.ctox_bug_reports;
+  const count = [reportInfo, bugInfo]
+    .filter(Boolean)
+    .reduce((sum, info) => sum + Number(info.count || 0), 0);
+  const base = prefix || state.t('emptyStoreSummary', 'Noch keine Bugs oder Features verfügbar.');
+  if (!count) return base;
+  return `${base} ${state.t('emptyStoreCounts', 'Einträge')}: ${count}.`;
+}
+
+function refreshIconSvg() {
+  return `
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
+      <path d="M20 12a8 8 0 0 1-13.7 5.7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M4 12A8 8 0 0 1 17.7 6.3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M7 18H4v-3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+      <path d="M17 6h3v3" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+    </svg>
+  `;
 }
 
 function initReportsContextMenu(state) {

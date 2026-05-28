@@ -10,7 +10,7 @@
   --font-brand: 'Outfit', 'Inter', system-ui, sans-serif;
   --font-mono: 'Fira Code', monospace;
 
-  --radius-panel: 14px;
+  --radius-panel: 8px;
   --radius-control: 8px;
 
   --transition-fast: 0.15s ease;
@@ -68,7 +68,7 @@
   display: grid;
   grid-template-columns: var(--coding-agents-left-width, 300px) 12px minmax(0, 1fr);
   gap: 0;
-  padding: 12px;
+  padding: 12px 12px calc(var(--shell-taskbar-safe-area, 58px) + 12px);
   height: 100%;
   width: 100%;
   box-sizing: border-box;
@@ -161,21 +161,21 @@
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
 
 .coding-agents-center {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
 
 .coding-agents-right {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
 
@@ -738,6 +738,7 @@ button[disabled]:hover {
   padding: 6px 14px;
   font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Workbench Dashboard panel */
@@ -1691,4 +1692,63 @@ button[disabled]:hover {
   overflow-y: auto;
   padding: 20px;
   flex: 1;
+}
+
+@media (max-width: 760px) {
+  .coding-agents-module[data-coding-agents-root] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(180px, auto) minmax(0, 1fr);
+    gap: 10px;
+    overflow-y: auto;
+    padding: 10px;
+  }
+
+  .coding-agents-col-resizer {
+    display: none !important;
+  }
+
+  .coding-agents-left,
+  .coding-agents-center {
+    min-height: 0;
+  }
+
+  .coding-agents-left {
+    max-height: 320px;
+  }
+
+  .ctox-pane-title-row,
+  .workbench-sessions-bar,
+  .workbench-chat-input-bar form {
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 10px !important;
+  }
+
+  .ctox-pane-actions,
+  .workbench-sessions-bar > div,
+  .workbench-sessions-bar select,
+  .workbench-sessions-bar button,
+  .workbench-chat-input-bar button {
+    width: 100% !important;
+  }
+
+  .connection-status-pill {
+    justify-content: center;
+  }
+
+  .settings-modal-overlay {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .settings-container {
+    max-height: calc(100vh - 24px);
+  }
+
+  .lifecycle-controls-row,
+  .permission-toggle-row,
+  .settings-section > div[style*="justify-content:space-between"] {
+    align-items: stretch !important;
+    flex-direction: column;
+  }
 }

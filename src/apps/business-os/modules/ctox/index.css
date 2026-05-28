@@ -80,7 +80,7 @@
   min-height: 0;
   display: grid;
   gap: 10px;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
   overscroll-behavior: contain;
   padding: 8px 2px 8px 0;
@@ -428,27 +428,82 @@ body.ctox-column-resizing {
   -webkit-line-clamp: 2;
 }
 
-.ctox-task-board {
+.ctox-work-overview {
   display: grid;
   align-content: start;
-  gap: 4px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 8px;
   min-height: 0;
   overflow: auto;
   padding-right: 6px;
   scrollbar-width: thin;
 }
 
-.ctox-inbound-panel {
+.ctox-task-filter-chips {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 1px 2px 4px;
+  scrollbar-width: none;
+}
+
+.ctox-task-filter-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.ctox-task-filter-chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-height: 26px;
+  border: 1px solid var(--ctox-hair);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ctox-surface-2) 54%, transparent);
+  color: var(--ctox-muted);
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 720;
+}
+
+.ctox-task-filter-chips button:hover,
+.ctox-task-filter-chips button.is-active {
+  border-color: color-mix(in srgb, var(--ctox-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--ctox-accent) 10%, var(--ctox-surface-2));
+  color: var(--text);
+}
+
+.ctox-task-filter-chips strong {
+  color: var(--ctox-accent);
+  font-size: 10px;
+}
+
+.ctox-aux-section {
   display: grid;
   gap: 4px;
   padding: 6px 8px;
   border: 1px solid var(--ctox-hair);
   border-radius: 8px;
   background: color-mix(in srgb, var(--ctox-surface) 20%, transparent);
-  margin-bottom: 6px;
+  min-width: 0;
 }
 
-.ctox-inbound-panel header,
+.ctox-aux-section summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  cursor: pointer;
+  list-style: none;
+}
+
+.ctox-aux-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.ctox-inbound-panel summary,
 .ctox-inbound-list article {
   display: flex;
   align-items: center;
@@ -457,7 +512,8 @@ body.ctox-column-resizing {
   min-width: 0;
 }
 
-.ctox-inbound-panel header span {
+.ctox-inbound-panel summary span,
+.ctox-web-stack-panel summary span {
   color: var(--ctox-accent);
   font-size: 10px;
   font-weight: 700;
@@ -465,13 +521,18 @@ body.ctox-column-resizing {
   text-transform: uppercase;
 }
 
-.ctox-inbound-panel header strong {
+.ctox-inbound-panel summary strong,
+.ctox-web-stack-panel summary strong {
+  min-width: 0;
+  overflow: hidden;
   color: var(--ctox-muted);
   font-size: 10px;
   font-weight: 700;
   background: color-mix(in srgb, var(--text) 6%, transparent);
   padding: 1px 5px;
   border-radius: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ctox-inbound-list {
@@ -533,7 +594,7 @@ body.ctox-column-resizing {
 .ctox-web-stack-panel {
   display: grid;
   gap: 6px;
-  max-height: 188px;
+  max-height: 220px;
   min-height: 0;
   overflow: auto;
   border: 1px solid var(--ctox-hair);
@@ -541,6 +602,16 @@ body.ctox-column-resizing {
   background: color-mix(in srgb, var(--ctox-surface-2) 44%, transparent);
   padding: 7px 8px;
   scrollbar-width: thin;
+}
+
+.ctox-web-stack-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ctox-web-stack-body > button {
+  justify-self: end;
 }
 
 .ctox-web-stack-panel header {
@@ -576,6 +647,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-web-stack-panel header button,
+.ctox-web-stack-body > button,
 .ctox-web-stack-source button {
   min-width: 0;
   border: 1px solid var(--ctox-hair);
@@ -718,6 +790,95 @@ body.ctox-column-resizing {
 .ctox-task-section[open] summary strong {
   background: color-mix(in srgb, var(--ctox-accent) 15%, transparent);
   color: var(--ctox-accent);
+}
+
+.ctox-work-section {
+  display: grid;
+  min-height: 0;
+  border: 1px solid var(--ctox-hair);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ctox-surface-2) 28%, transparent);
+  overflow: hidden;
+}
+
+.ctox-work-section[open] {
+  min-height: 0;
+}
+
+.ctox-work-section summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  padding: 7px 9px;
+  color: var(--text);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.ctox-work-section summary::-webkit-details-marker {
+  display: none;
+}
+
+.ctox-work-section summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--ctox-muted);
+  border-bottom: 2px solid var(--ctox-muted);
+  transform: rotate(-45deg);
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.ctox-work-section[open] summary::before {
+  border-color: var(--ctox-accent);
+  transform: rotate(45deg);
+}
+
+.ctox-work-section summary span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 760;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.ctox-work-section summary strong {
+  min-width: 20px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+  color: var(--ctox-muted);
+  font-size: 10px;
+  font-weight: 760;
+  padding: 2px 6px;
+  text-align: center;
+}
+
+.ctox-work-section[open] summary strong {
+  background: color-mix(in srgb, var(--ctox-accent) 14%, transparent);
+  color: var(--ctox-accent);
+}
+
+.ctox-work-section .ctox-task-list {
+  max-height: 184px;
+  overflow: auto;
+  padding: 0 6px 7px;
+  scrollbar-width: thin;
+}
+
+.ctox-work-section.is-queue[open] {
+  min-height: 0;
+}
+
+.ctox-work-section.is-queue .ctox-task-list {
+  max-height: none;
 }
 
 .ctox-task-list {

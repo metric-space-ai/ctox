@@ -10,6 +10,7 @@ const STYLE_BUILD = '20260527-conversations-diagnostics1';
 const SUPPORTED_CHANNELS = ['whatsapp', 'email', 'jami', 'teams', 'meeting'];
 const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
   'communication_accounts',
+  'communication_threads',
   'communication_messages',
 ];
 const OUTBOUND_REPLY_CLASSIFICATIONS = [
@@ -49,16 +50,16 @@ const FALLBACK_LABELS = {
     emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami, MS Teams oder Meeting führt.',
     noResultsTitle: 'Keine Treffer',
     noResultsBody: 'Keine Konversation passt zu den aktiven Filtern.',
-    syncFailureTitle: 'Kommunikations-Sync prüfen',
-    syncFailureBody: 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.',
+    syncFailureTitle: 'Kommunikation ist gerade nicht verfügbar',
+    syncFailureBody: 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.',
     syncStartingTitle: 'Kommunikation wird synchronisiert',
     syncStartingBody: 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.',
-    projectionMissingTitle: 'Thread-Projektion fehlt',
-    projectionMissingBody: 'Accounts oder Nachrichten sind lokal vorhanden, aber es wurden keine Conversation-Threads projiziert.',
-    diagnosticsLabel: 'Diagnose',
-    accountFilterEmpty: 'Keine Communication-Accounts synchronisiert',
+    projectionMissingTitle: 'Konversationen werden vorbereitet',
+    projectionMissingBody: 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.',
+    diagnosticsLabel: 'Status',
+    accountFilterEmpty: 'Keine Accounts verfügbar',
     accountFilterCount: 'Accounts verfügbar',
-    accountFilterSyncFailure: 'Account-Sync prüfen',
+    accountFilterSyncFailure: 'Accounts gerade nicht verfügbar',
     emptyDetailTitle: 'Keine Konversation ausgewählt',
     emptyDetailBody: 'Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.',
     rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
@@ -164,16 +165,16 @@ const FALLBACK_LABELS = {
     emptyListBody: 'Communications CTOX has on WhatsApp, Email, Jami, MS Teams, or Meeting appear here.',
     noResultsTitle: 'No matches',
     noResultsBody: 'No conversation matches the active filters.',
-    syncFailureTitle: 'Check communication sync',
-    syncFailureBody: 'Conversations cannot fully load communication data right now.',
+    syncFailureTitle: 'Communication is unavailable right now',
+    syncFailureBody: 'Conversations appear automatically once communication data is loaded.',
     syncStartingTitle: 'Communication is syncing',
     syncStartingBody: 'Accounts and messages have not fully arrived in the local app yet.',
-    projectionMissingTitle: 'Thread projection missing',
-    projectionMissingBody: 'Accounts or messages exist locally, but no conversation threads were projected.',
-    diagnosticsLabel: 'Diagnostics',
-    accountFilterEmpty: 'No communication accounts synced',
+    projectionMissingTitle: 'Preparing conversations',
+    projectionMissingBody: 'Accounts and messages are being prepared for the contact view.',
+    diagnosticsLabel: 'Status',
+    accountFilterEmpty: 'No accounts available',
     accountFilterCount: 'accounts available',
-    accountFilterSyncFailure: 'Check account sync',
+    accountFilterSyncFailure: 'Accounts unavailable right now',
     emptyDetailTitle: 'No conversation selected',
     emptyDetailBody: 'Pick a conversation on the left to view the CTOX-side timeline.',
     rightEmptyBody: 'Contact details and linked records appear here.',
@@ -747,7 +748,7 @@ export async function mount(ctx) {
     const hasAccountFailure = diagnostics.problemCollections.includes('communication_accounts');
     refs.accountFilterStatus.dataset.state = hasAccountFailure ? 'error' : '';
     if (hasAccountFailure) {
-      refs.accountFilterStatus.textContent = `${t('accountFilterSyncFailure', 'Account-Sync prüfen')}: ${diagnostics.detail}`;
+      refs.accountFilterStatus.textContent = t('accountFilterSyncFailure', 'Accounts gerade nicht verfügbar');
     } else if (accountCount > 0) {
       refs.accountFilterStatus.textContent = `${accountCount} ${t('accountFilterCount', 'Accounts verfügbar')}`;
     } else {
@@ -2110,10 +2111,8 @@ function conversationEmptyState({
   if (diagnostics.hasFailure) {
     return {
       kind: 'sync-failure',
-      title: t('syncFailureTitle', 'Kommunikations-Sync prüfen'),
-      body: diagnostics.detail
-        ? `${t('syncFailureBody', 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.')} ${diagnostics.detail}`
-        : t('syncFailureBody', 'Conversations kann Kommunikationsdaten gerade nicht vollständig laden.'),
+      title: t('syncFailureTitle', 'Kommunikation ist gerade nicht verfügbar'),
+      body: t('syncFailureBody', 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.'),
     };
   }
   if (totalBuckets > 0 && filteredBuckets === 0 && hasActiveFilters) {
@@ -2126,17 +2125,15 @@ function conversationEmptyState({
   if (totalBuckets === 0 && localData) {
     return {
       kind: 'projection-missing',
-      title: t('projectionMissingTitle', 'Thread-Projektion fehlt'),
-      body: t('projectionMissingBody', 'Accounts oder Nachrichten sind lokal vorhanden, aber es wurden keine Conversation-Threads projiziert.'),
+      title: t('projectionMissingTitle', 'Konversationen werden vorbereitet'),
+      body: t('projectionMissingBody', 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.'),
     };
   }
   if (diagnostics.isStarting) {
     return {
       kind: 'sync-starting',
       title: t('syncStartingTitle', 'Kommunikation wird synchronisiert'),
-      body: diagnostics.detail
-        ? `${t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.')} ${diagnostics.detail}`
-        : t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.'),
+      body: t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.'),
     };
   }
   return {
@@ -2177,11 +2174,14 @@ function buildConversationDataDiagnostics({
     if (sync?.lastError) {
       problemCollections.add(name);
       details.push(`${name}: ${syncErrorText(sync.lastError)}`);
+    } else if (sync?.lastLifecycleEvent && isProblemLifecycleEvent(sync.lastLifecycleEvent)) {
+      problemCollections.add(name);
+      details.push(`${name}: ${syncErrorText(sync.lastLifecycleEvent)}`);
     } else if (['failed', 'error'].includes(status) || ['failed', 'error'].includes(connectionStatus)) {
       problemCollections.add(name);
       details.push(`${name}: ${status || connectionStatus}`);
     }
-    if (!problemCollections.has(name) && (!sync || ['pending', 'starting', 'connecting', 'reconnecting'].includes(status || connectionStatus))) {
+    if (!problemCollections.has(name) && (!sync || ['pending', 'starting', 'connecting', 'reconnecting'].includes(status) || ['pending', 'starting', 'connecting', 'reconnecting'].includes(connectionStatus))) {
       startingCollections.add(name);
     }
   }
@@ -2199,6 +2199,12 @@ function syncErrorText(error) {
   if (!error) return '';
   if (typeof error === 'string') return error;
   return error.message || error.reason || error.code || JSON.stringify(error);
+}
+
+function isProblemLifecycleEvent(event) {
+  const severity = String(event?.severity || '').toLowerCase();
+  const code = String(event?.code || '').toLowerCase();
+  return ['error', 'fatal'].includes(severity) || code.includes('timeout');
 }
 
 function errorToText(error) {

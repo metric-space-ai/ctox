@@ -30,7 +30,7 @@
         <div class="form-group">
           <label class="form-label" for="ai-prompt-input">Wunsch-App Prompt</label>
           <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'"></textarea>
-          <button type="button" id="btn-apply-prompt" class="os-btn is-accent" style="width: 100%; margin-top: 10px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px;" disabled>
+          <button type="button" id="btn-apply-prompt" class="os-btn is-accent creator-wide-action" disabled>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
             Spezifikation optimieren & anwenden
           </button>
@@ -87,14 +87,16 @@
             </div>
 
             <div class="form-group">
-              <label class="form-label">RxDB Datenbank Collections</label>
+              <label class="form-label">Datentabellen</label>
               <div class="collections-editor">
                 <div id="collections-list">
                   <!-- Dynamically populated collection rows -->
                 </div>
                 <div class="collection-row" style="margin-top: 8px;">
-                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Collection..." style="flex: 1; padding: 6px 10px; font-size: 11px;">
-                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Collection hinzufügen">+</button>
+                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Datentabelle..." style="flex: 1; padding: 6px 10px; font-size: 11px;">
+                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Datentabelle hinzufügen" aria-label="Datentabelle hinzufügen">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -112,7 +114,7 @@
       <header class="creator-card-header">
         <span class="os-kicker">KI App Generator</span>
         <h2 class="os-title">Neue App beschreiben & installieren</h2>
-        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert die Datenmodelle, Benutzeroberflächen und das SQLite-Schema vollautomatisch.</p>
+        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert Datenmodell, Benutzeroberfläche und App-Struktur vollautomatisch.</p>
       </header>
 
       <div class="creator-card-body">
@@ -159,16 +161,18 @@
         </div>
       </div>
     </header>
-    <div class="creator-right-body">
+    <div class="creator-right-body" data-creator-right-body>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker">Bestehende Apps</span>
-        <div class="creator-right-empty">
+        <span class="ctox-pane-kicker" data-creator-installed-heading>Bestehende Apps</span>
+        <div class="creator-right-list" data-creator-installed-list></div>
+        <div class="creator-right-empty" data-creator-installed-empty>
           Noch keine eigenen Apps installiert. Sobald über den Generator eine App erstellt wurde, erscheint sie hier zum erneuten Öffnen oder Upgrade.
         </div>
       </section>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker">CTOX-Generator-Prompts</span>
-        <div class="creator-right-empty">
+        <span class="ctox-pane-kicker" data-creator-prompts-heading>CTOX-Generator-Prompts</span>
+        <div class="creator-right-list" data-creator-prompts-list></div>
+        <div class="creator-right-empty" data-creator-prompts-empty>
           Lass CTOX über die Chatleiste eine neue App-Spezifikation entwerfen — Prompts und Vorschläge erscheinen hier als Vorlage für den Generator links.
         </div>
       </section>

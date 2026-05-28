@@ -1614,6 +1614,19 @@ setup_managed_install() {
 
   rsync -a --exclude='target' --exclude='runtime' --exclude='.git' "$source_root/" "$release_dir/"
 
+  # Business OS apps are tenant/runtime state, not CTOX core release payload.
+  # Seed them once on first install, then mount the persistent tree into each
+  # release so CTOX upgrades cannot silently overwrite app-store-managed apps.
+  local state_business_os_root="$STATE_ROOT/business-os"
+  if [[ ! -e "$state_business_os_root/index.html" && -d "$source_root/src/apps/business-os" ]]; then
+    mkdir -p "$state_business_os_root"
+    rsync -a "$source_root/src/apps/business-os/" "$state_business_os_root/"
+  fi
+  if [[ -d "$state_business_os_root" ]]; then
+    rm -rf "$release_dir/business-os"
+    ln -sfn "$state_business_os_root" "$release_dir/business-os"
+  fi
+
   mkdir -p "$release_dir/bin"
   local ctox_binary=""
   ctox_binary="$(resolve_ctox_binary_path "$source_root" 2>/dev/null || true)"

@@ -15,6 +15,8 @@ const SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightS
 const CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
 const QUERY_STREAM_LIMIT_RETRY_MS = 160;
 const QUERY_STREAM_LIMIT_RETRIES = 6;
+const QUERY_PEER_RETRY_MS = 250;
+const QUERY_PEER_RETRIES = 24;
 const GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for('ctox.rxdb.query-stream-state.v1');
 
 /// Build the request-handler map that should be merged into
@@ -110,11 +112,13 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId });
       } catch (error) {
-        if (!isRetryableQueryStreamLimit(error) || attempt >= QUERY_STREAM_LIMIT_RETRIES) {
+        const peerUnavailable = isRetryableQueryPeerUnavailable(error);
+        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        await delay(QUERY_STREAM_LIMIT_RETRY_MS * attempt);
+        await delay((peerUnavailable ? QUERY_PEER_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS) * attempt);
       }
     }
   }
@@ -148,6 +152,17 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     const code = String(error?.code || '');
     const message = String(error?.message || '');
     return Boolean(error?.retryable) && (code === 'STREAM_LIMIT_EXCEEDED' || message.includes('STREAM_LIMIT_EXCEEDED'));
+  }
+
+  function isRetryableQueryFetch(error) {
+    return isRetryableQueryStreamLimit(error)
+      || isRetryableQueryPeerUnavailable(error);
+  }
+
+  function isRetryableQueryPeerUnavailable(error) {
+    const message = String(error?.message || '');
+    return message === 'PEER_UNAVAILABLE'
+      || /WebRTC peer .* is not open/.test(message);
   }
 
   function delay(ms) {

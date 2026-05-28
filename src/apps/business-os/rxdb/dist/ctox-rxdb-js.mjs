@@ -762,9 +762,9 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var SEND_PRIORITIES = ["high", "normal", "low"];
-var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 8;
+var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 16;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
-var RTC_HANDSHAKE_TIMEOUT_MS = 3e4;
+var RTC_HANDSHAKE_TIMEOUT_MS = 5e3;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
@@ -773,7 +773,10 @@ var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_commands",
   "ctox_queue_tasks",
   "desktop_files",
-  "desktop_file_chunks"
+  "browser_sessions",
+  "browser_tabs",
+  "browser_frames",
+  "browser_input_events"
 ]);
 function createCtoxWebRtcNativePeer(options = {}) {
   return new CtoxWebRtcNativePeer(options);
@@ -865,6 +868,7 @@ var CtoxWebRtcNativePeer = class {
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
     this.connectionRequests = /* @__PURE__ */ new Map();
+    this.forceInitiatorPeers = /* @__PURE__ */ new Set();
     this.closed = false;
   }
   on(type, listener) {
@@ -1115,10 +1119,15 @@ var CtoxWebRtcNativePeer = class {
         const connection = this.connections.get(peerId);
         if (connection) {
           this.recordConnectionEvent(connection, "request-timeout", { method });
+          this.forceInitiatorPeers.add(peerId);
           this.removeConnection(peerId, `request-timeout-${method}`);
           setTimeout(() => {
             if (!this.closed && this.shouldConnectToRemotePeer(peerId)) {
-              this.ensureConnection(peerId);
+              try {
+                this.ensureConnection(peerId);
+              } catch (reconnectError) {
+                this.events.emit("error", normalizePeerSignalError(reconnectError, peerId));
+              }
             }
           }, 250 + Math.floor(Math.random() * 500));
         }
@@ -1263,7 +1272,8 @@ var CtoxWebRtcNativePeer = class {
       signalStats: createPeerSignalStats(),
       localCandidateTypes: {},
       remoteCandidateTypes: {},
-      handshakeTimer: null
+      handshakeTimer: null,
+      forceInitiator: this.forceInitiatorPeers.has(remotePeerId)
     };
     this.connections.set(remotePeerId, connection);
     connection.handshakeTimer = setTimeout(() => {
@@ -1278,10 +1288,15 @@ var CtoxWebRtcNativePeer = class {
         signalingState: peer.signalingState || ""
       });
       this.events.emit("peer-state", { peerId: remotePeerId, state: "handshake-timeout" });
+      this.forceInitiatorPeers.add(remotePeerId);
       this.removeConnection(remotePeerId, "rtc-handshake-timeout");
       setTimeout(() => {
         if (!this.closed && this.shouldConnectToRemotePeer(remotePeerId)) {
-          this.ensureConnection(remotePeerId);
+          try {
+            this.ensureConnection(remotePeerId);
+          } catch (reconnectError) {
+            this.events.emit("error", normalizePeerSignalError(reconnectError, remotePeerId));
+          }
         }
       }, 250 + Math.floor(Math.random() * 500));
     }, RTC_HANDSHAKE_TIMEOUT_MS);
@@ -1318,7 +1333,7 @@ var CtoxWebRtcNativePeer = class {
       }
     };
     peer.ondatachannel = (event) => this.attachChannel(connection, event.channel);
-    if (this.shouldInitiate(remotePeerId)) {
+    if (this.shouldInitiate(remotePeerId, connection)) {
       this.attachChannel(connection, peer.createDataChannel("ctox-rxdb"));
       this.createOffer(remotePeerId, peer).catch((error) => {
         this.events.emit("error", normalizePeerSignalError(error, remotePeerId));
@@ -1326,7 +1341,8 @@ var CtoxWebRtcNativePeer = class {
     }
     return connection;
   }
-  shouldInitiate(remotePeerId) {
+  shouldInitiate(remotePeerId, connection = null) {
+    if (connection?.forceInitiator) return true;
     return String(this.options.clientId) < String(remotePeerId);
   }
   async createOffer(remotePeerId, peer) {
@@ -1428,6 +1444,7 @@ var CtoxWebRtcNativePeer = class {
         connection.handshakeTimer = null;
       }
       markCriticalRtcPeerConnectionOpened(connection.rtcPoolSlot);
+      this.forceInitiatorPeers.delete(connection.remotePeerId);
       drainRtcPeerConnectionQueue("critical-peer-opened");
       this.recordConnectionEvent(connection, "datachannel-open", { readyState: channel.readyState || "open" });
       this.events.emit("peer-open", { peerId: connection.remotePeerId });
@@ -2497,6 +2514,8 @@ var SERVER_QUERY_STREAM_LIMIT = Math.max(1, Number(CTOX_QUERY_RPC.maxInFlightStr
 var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMIT - 1 || 1));
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
+var QUERY_PEER_RETRY_MS = 250;
+var QUERY_PEER_RETRIES = 24;
 var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 function createDemandLoadingTransport({ getPeerId } = {}) {
   if (typeof getPeerId !== "function") {
@@ -2592,11 +2611,13 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
       try {
         return await requestQueryFetchOnce({ ...envelope, requestId });
       } catch (error) {
-        if (!isRetryableQueryStreamLimit(error) || attempt >= QUERY_STREAM_LIMIT_RETRIES) {
+        const peerUnavailable = isRetryableQueryPeerUnavailable(error);
+        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        await delay3(QUERY_STREAM_LIMIT_RETRY_MS * attempt);
+        await delay3((peerUnavailable ? QUERY_PEER_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS) * attempt);
       }
     }
   }
@@ -2628,6 +2649,13 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const code = String(error?.code || "");
     const message = String(error?.message || "");
     return Boolean(error?.retryable) && (code === "STREAM_LIMIT_EXCEEDED" || message.includes("STREAM_LIMIT_EXCEEDED"));
+  }
+  function isRetryableQueryFetch(error) {
+    return isRetryableQueryStreamLimit(error) || isRetryableQueryPeerUnavailable(error);
+  }
+  function isRetryableQueryPeerUnavailable(error) {
+    const message = String(error?.message || "");
+    return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message);
   }
   function delay3(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -4157,7 +4185,7 @@ var CtoxWebRtcReplicationState = class {
     return 15e3;
   }
   periodicPullIntervalMs() {
-    return this.collection.name === "desktop_file_chunks" ? 250 : 0;
+    return 0;
   }
   periodicPushIntervalMs() {
     return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;

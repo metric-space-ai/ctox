@@ -139,8 +139,8 @@ export class CtoxResizer {
     let parsedWidth = parseFloat(rawVal);
     if (isNaN(parsedWidth)) {
       const panelSelector = this.side === 'left'
-        ? '.knowledge-left, .matching-left, .shiftflow-left, .outbound-left, .research-left, .documents-left, .spreadsheets-left, .notes-left, .desktop-left, .ctox-left, .reports-left, .creator-left, .app-store-left, .fibu-left'
-        : '.knowledge-right, .matching-right, .shiftflow-right, .outbound-right, .research-right, .documents-right, .spreadsheets-right, .notes-right, .desktop-right, .ctox-right, .reports-right, .creator-right, .app-store-right, .fibu-right';
+        ? '.knowledge-left, .matching-left, .shiftflow-left, .outbound-left, .customers-left, .research-left, .documents-left, .spreadsheets-left, .notes-left, .desktop-left, .ctox-left, .reports-left, .creator-left, .app-store-left, .fibu-left'
+        : '.knowledge-right, .matching-right, .shiftflow-right, .outbound-right, .customers-right, .research-right, .documents-right, .spreadsheets-right, .notes-right, .desktop-right, .ctox-right, .reports-right, .creator-right, .app-store-right, .fibu-right';
       const panel = this.containerEl.querySelector(panelSelector) || this.resizerEl.previousElementSibling;
       parsedWidth = panel ? panel.getBoundingClientRect().width : 280;
     }

@@ -72,6 +72,10 @@ const state = {
   contextMenu: null,
   contextMenuCleanup: null,
   resizerCleanup: null,
+  catalogSubscription: null,
+  commandSubscription: null,
+  installedApps: [],
+  creatorPrompts: [],
   isOptimizing: false,
   isDeploying: false
 };
@@ -174,7 +178,7 @@ export function validateCreatorSpec({ appId, appTitle, appDesc, appCollections }
   if (!String(appTitle || '').trim()) errors.push('Titel fehlt.');
   if (!String(appDesc || '').trim()) errors.push('Beschreibung fehlt.');
   const collections = Array.isArray(appCollections) ? appCollections.map(normalizeCollectionName).filter(Boolean) : [];
-  if (collections.length === 0) errors.push('Mindestens eine RxDB Collection ist erforderlich.');
+  if (collections.length === 0) errors.push('Mindestens eine Datentabelle ist erforderlich.');
   return errors;
 }
 
@@ -197,6 +201,63 @@ export function computeCreatorActionState({ prompt, specPrompt, appId, appTitle,
   return { hasPrompt, hasFreshSpec, validationErrors, optimizeReady, deployReady, diagnostic };
 }
 
+export function normalizeCreatorInstalledApps(catalog) {
+  const modules = Array.isArray(catalog?.modules) ? catalog.modules : [];
+  return modules
+    .filter((mod) => {
+      const entry = String(mod?.entry || '');
+      const source = String(mod?.source || mod?.store?.distribution || '').toLowerCase();
+      return mod?.id
+        && mod.id !== 'creator'
+        && (
+          entry.startsWith('installed-modules/')
+          || source === 'installed'
+          || source.includes('installed-module')
+          || mod?.generated_by === 'creator'
+        );
+    })
+    .map((mod) => ({
+      id: normalizeModuleId(mod.id),
+      title: String(mod.title || mod.id),
+      description: String(mod.description || mod.store?.summary || ''),
+      category: String(mod.category || mod.source || 'Custom'),
+      version: String(mod.version || 'v1'),
+      entry: String(mod.entry || ''),
+    }))
+    .filter((mod) => mod.id)
+    .sort((a, b) => a.title.localeCompare(b.title, 'de'));
+}
+
+export function normalizeCreatorPromptSuggestions(commands, limit = 5) {
+  const items = Array.isArray(commands) ? commands : [];
+  return items
+    .filter((command) => {
+      const payload = command?.payload || {};
+      const type = String(command?.command_type || command?.type || '');
+      const module = String(command?.module || payload.module || '');
+      const source = String(command?.client_context?.source || payload.source || '');
+      return module === 'creator'
+        || source === 'business-os-creator'
+        || type === 'ctox.business_os.app.modify'
+        || type === 'business_os.chat.task';
+    })
+    .map((command) => {
+      const payload = command?.payload || {};
+      const context = payload.context || {};
+      const prompt = String(payload.prompt || payload.instruction || payload.user_message || command?.title || '').trim();
+      return {
+        id: String(command?.id || command?.command_id || `${Date.now()}-${prompt}`),
+        title: String(payload.title || context.app_title || command?.title || 'CTOX Prompt'),
+        prompt,
+        status: String(command?.status || 'pending'),
+        updated_at_ms: Number(command?.updated_at_ms || command?.created_at_ms || 0),
+      };
+    })
+    .filter((item) => item.prompt)
+    .sort((a, b) => b.updated_at_ms - a.updated_at_ms)
+    .slice(0, limit);
+}
+
 export async function mount(ctx) {
   state.ctx = ctx;
 
@@ -213,6 +274,9 @@ export async function mount(ctx) {
   // 4. Generate starting files
   generateAllFiles();
 
+  // 5. Load catalog-backed right rail data
+  await startCreatorDataStreams(ctx, ctx.host);
+
   // 5. Initialize CTOX unified context menu
   state.contextMenuCleanup = initCreatorContextMenu(state);
 
@@ -222,6 +286,10 @@ export async function mount(ctx) {
   return () => {
     state.contextMenuCleanup?.();
     state.resizerCleanup?.();
+    cleanupSubscription(state.catalogSubscription);
+    cleanupSubscription(state.commandSubscription);
+    state.catalogSubscription = null;
+    state.commandSubscription = null;
     state.contextMenu?.remove();
     state.contextMenu = null;
     console.log('[creator] Module unmounted and cleaned up.');
@@ -285,6 +353,111 @@ function setupResizers(host) {
   return () => {
     for (const resizer of resizers) resizer.destroy();
   };
+}
+
+async function startCreatorDataStreams(ctx, host) {
+  await Promise.allSettled([
+    ctx.sync?.startCollection?.('business_module_catalog'),
+    ctx.sync?.startCollection?.('business_commands'),
+  ]);
+
+  const catalogColl = getCollection(ctx, 'business_module_catalog');
+  const commandColl = getCollection(ctx, 'business_commands');
+
+  try {
+    const catalogDoc = await catalogColl?.findOne?.('module-catalog')?.exec?.();
+    state.installedApps = normalizeCreatorInstalledApps(catalogDoc?.toJSON?.() || {});
+  } catch (error) {
+    addConsoleLog(`[WARN] Modulkatalog konnte nicht geladen werden: ${error.message}`, 'warning');
+  }
+
+  try {
+    const commandDocs = await commandColl?.find?.()?.exec?.();
+    state.creatorPrompts = normalizeCreatorPromptSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
+  } catch (error) {
+    addConsoleLog(`[WARN] CTOX-Prompts konnten nicht geladen werden: ${error.message}`, 'warning');
+  }
+
+  state.catalogSubscription = catalogColl?.findOne?.('module-catalog')?.$?.subscribe?.((doc) => {
+    state.installedApps = normalizeCreatorInstalledApps(doc?.toJSON?.() || {});
+    renderCreatorRightRail(host);
+  }) || null;
+
+  state.commandSubscription = commandColl?.find?.()?.$?.subscribe?.((docs) => {
+    state.creatorPrompts = normalizeCreatorPromptSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
+    renderCreatorRightRail(host);
+  }) || null;
+
+  renderCreatorRightRail(host);
+}
+
+function getCollection(ctx, name) {
+  return ctx.db?.collection?.(name) || ctx.db?.raw?.[name] || null;
+}
+
+function cleanupSubscription(subscription) {
+  if (typeof subscription === 'function') {
+    subscription();
+    return;
+  }
+  subscription?.unsubscribe?.();
+}
+
+function renderCreatorRightRail(host) {
+  const installedList = host.querySelector('[data-creator-installed-list]');
+  const installedEmpty = host.querySelector('[data-creator-installed-empty]');
+  const promptsList = host.querySelector('[data-creator-prompts-list]');
+  const promptsEmpty = host.querySelector('[data-creator-prompts-empty]');
+
+  if (installedList && installedEmpty) {
+    installedList.innerHTML = state.installedApps.map(renderInstalledAppCard).join('');
+    installedEmpty.hidden = state.installedApps.length > 0;
+    installedList.hidden = state.installedApps.length === 0;
+  }
+
+  if (promptsList && promptsEmpty) {
+    promptsList.innerHTML = state.creatorPrompts.map(renderCreatorPromptCard).join('');
+    promptsEmpty.hidden = state.creatorPrompts.length > 0;
+    promptsList.hidden = state.creatorPrompts.length === 0;
+  }
+}
+
+function renderInstalledAppCard(app) {
+  return `
+    <article class="creator-mini-card" data-creator-installed-app="${escapeHtml(app.id)}">
+      <div class="creator-mini-card-main">
+        <strong>${escapeHtml(app.title)}</strong>
+        <span>${escapeHtml(app.category)} · ${escapeHtml(app.version)}</span>
+        ${app.description ? `<p>${escapeHtml(app.description)}</p>` : ''}
+      </div>
+      <div class="creator-mini-actions">
+        <button type="button" class="os-icon-btn" data-open-installed-app="${escapeHtml(app.id)}" title="App öffnen" aria-label="${escapeHtml(app.title)} öffnen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"/></svg>
+        </button>
+        <button type="button" class="os-icon-btn" data-upgrade-installed-app="${escapeHtml(app.id)}" title="Upgrade vorbereiten" aria-label="${escapeHtml(app.title)} Upgrade vorbereiten">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M12 3v12"/><path d="m7 8 5-5 5 5"/><path d="M5 21h14"/></svg>
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderCreatorPromptCard(item) {
+  const prompt = item.prompt.length > 140 ? `${item.prompt.slice(0, 137)}...` : item.prompt;
+  return `
+    <article class="creator-mini-card" data-creator-prompt="${escapeHtml(item.id)}">
+      <div class="creator-mini-card-main">
+        <strong>${escapeHtml(item.title)}</strong>
+        <span>${escapeHtml(item.status)}</span>
+        <p>${escapeHtml(prompt)}</p>
+      </div>
+      <div class="creator-mini-actions">
+        <button type="button" class="os-icon-btn" data-use-creator-prompt="${escapeHtml(item.id)}" title="Prompt übernehmen" aria-label="Prompt übernehmen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        </button>
+      </div>
+    </article>
+  `;
 }
 
 function wireUi(host) {
@@ -375,7 +548,7 @@ function wireUi(host) {
       addConsoleLog(`[KI-OPERATOR] Erkenne Domäne & Absicht: ${spec.category}`, 'info');
       await new Promise(r => setTimeout(r, 300));
       addConsoleLog(`[KI-OPERATOR] Bestimme Layout-Struktur: ${spec.layout === 'pane' ? 'Spalten-Tracker' : 'Tabellen-Workspace'}`, 'info');
-      addConsoleLog(`[KI-OPERATOR] Generiere RxDB Collections: [${spec.collections.join(', ')}]`, 'info');
+      addConsoleLog(`[KI-OPERATOR] Generiere Datentabellen: [${spec.collections.join(', ')}]`, 'info');
 
       inputId.value = spec.id;
       inputTitle.value = spec.title;
@@ -407,7 +580,7 @@ function wireUi(host) {
     } finally {
       state.isOptimizing = false;
       btnApplyPrompt.innerHTML = `
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
         Spezifikation optimieren & anwenden
       `;
       updateCreatorActionState();
@@ -468,7 +641,7 @@ function wireUi(host) {
 
   // Text inputs changed manually inside the expandable accordion
   [inputId, inputTitle, inputDesc, selectCategory, selectLayout].forEach(el => {
-    el.addEventListener('input', syncStateFromInputs);
+    el.addEventListener('input', () => syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) }));
   });
 
   // DB Collection Visual builder in advanced accordion
@@ -480,13 +653,15 @@ function wireUi(host) {
       row.className = 'collection-row';
       row.innerHTML = `
         <span style="font-family: var(--font-mono); font-size: 11px; color: var(--accent); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${coll}</span>
-        <button type="button" class="os-icon-btn is-danger" data-remove-idx="${idx}" aria-label="Collection ${coll} entfernen" title="Collection entfernen" style="width: 24px; height: 24px; font-size: 11px;">×</button>
+        <button type="button" class="os-icon-btn is-danger" data-remove-idx="${idx}" aria-label="Datentabelle ${coll} entfernen" title="Datentabelle entfernen">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
       `;
       row.querySelector('[data-remove-idx]').addEventListener('click', async (e) => {
         const removeIdx = parseInt(e.currentTarget.getAttribute('data-remove-idx'), 10);
         const name = state.appCollections[removeIdx];
-        const confirmed = await showBusinessConfirm(`Collection "${name}" aus der Spezifikation entfernen?`, {
-          title: 'Collection entfernen',
+        const confirmed = await showBusinessConfirm(`Datentabelle "${name}" aus der Spezifikation entfernen?`, {
+          title: 'Datentabelle entfernen',
           confirmLabel: 'Entfernen',
           cancelLabel: 'Abbrechen',
           kind: 'danger'
@@ -494,7 +669,7 @@ function wireUi(host) {
         if (!confirmed) return;
         state.appCollections.splice(removeIdx, 1);
         renderCollectionsList(h);
-        syncStateFromInputs();
+        syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) });
       });
       listEl.appendChild(row);
     });
@@ -504,14 +679,46 @@ function wireUi(host) {
     const newName = normalizeCollectionName(inputNewColl.value);
     if (!newName) return;
     if (state.appCollections.includes(newName)) {
-      addConsoleLog(`[WARN] Collection '${newName}' existiert bereits.`, 'warning');
+      addConsoleLog(`[WARN] Datentabelle '${newName}' existiert bereits.`, 'warning');
       return;
     }
     state.appCollections.push(newName);
     inputNewColl.value = '';
     renderCollectionsList(host);
-    syncStateFromInputs();
-    addConsoleLog(`[INFO] Collection '${newName}' hinzugefügt.`, 'info');
+    syncStateFromInputs({ preserveFreshSpec: Boolean(inputPrompt.value.trim()) });
+    addConsoleLog(`[INFO] Datentabelle '${newName}' hinzugefügt.`, 'info');
+  });
+
+  inputNewColl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    btnAddColl.click();
+  });
+
+  host.querySelector('[data-creator-right-body]')?.addEventListener('click', (event) => {
+    const openButton = event.target.closest('[data-open-installed-app]');
+    const upgradeButton = event.target.closest('[data-upgrade-installed-app]');
+    const promptButton = event.target.closest('[data-use-creator-prompt]');
+
+    if (openButton) {
+      window.location.hash = `#${encodeURIComponent(openButton.dataset.openInstalledApp || '')}`;
+      return;
+    }
+
+    if (upgradeButton) {
+      window.location.hash = `#creator?upgrade=${encodeURIComponent(upgradeButton.dataset.upgradeInstalledApp || '')}`;
+      return;
+    }
+
+    if (promptButton) {
+      const prompt = state.creatorPrompts.find((item) => item.id === promptButton.dataset.useCreatorPrompt);
+      if (!prompt) return;
+      inputPrompt.value = prompt.prompt;
+      state.specPrompt = '';
+      updateCreatorActionState();
+      addConsoleLog(`[INFO] CTOX-Prompt '${prompt.title}' übernommen.`, 'info');
+      inputPrompt.focus();
+    }
   });
 
   renderCollectionsList(host);
@@ -592,7 +799,7 @@ function wireUi(host) {
           .map(coll => coll.replace(/_v\d+$/, ''));
         state.appCollections = baseCollections;
 
-        addConsoleLog(`[INFO] Upgrade-Version erkannt: ${currentVer} -> ${nextVer}. Suffixe aus Collections entfernt.`, 'info');
+        addConsoleLog(`[INFO] Upgrade-Version erkannt: ${currentVer} -> ${nextVer}. Suffixe aus Datentabellen entfernt.`, 'info');
 
         renderCollectionsList(host);
         syncStateFromInputs({ preserveFreshSpec: true });
@@ -820,13 +1027,19 @@ function generateAllFiles() {
 
 @media (max-width: 768px) {
   .${appId}-layout {
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
   }
   .${appId}-left {
     display: none !important;
   }
+  .os-col-resizer,
   [data-resizer] {
     display: none !important;
+  }
+  .${appId}-center .pane-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 12px;
   }
 }
 `;

@@ -5,6 +5,13 @@ const SYNTHETIC_SESSION_ID = 'browser_session_synthetic';
 const SYNTHETIC_TAB_ID = 'browser_tab_synthetic';
 const VIEWPORT = { width: 1280, height: 720 };
 const VIEWER_HEARTBEAT_MS = 5000;
+const FRAME_SYNC_RECOVERY_MS = 12000;
+const BROWSER_SYNC_COLLECTIONS = [
+  'browser_sessions',
+  'browser_tabs',
+  'browser_frames',
+  'browser_input_events',
+];
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -61,13 +68,14 @@ export async function mount(ctx) {
     lastInputSeq: 0,
     lastPointerMoveAt: 0,
     lastViewerHeartbeatAt: 0,
+    lastFrameSyncRecoveryAt: 0,
   };
 
   const cleanups = [];
   let mounted = true;
   const scheduleRefresh = debounce(safeLoadAndRender, 80);
 
-  for (const collectionName of ['business_commands', 'browser_sessions', 'browser_tabs', 'browser_frames', 'browser_input_events', 'ctox_queue_tasks']) {
+  for (const collectionName of ['business_commands', ...BROWSER_SYNC_COLLECTIONS, 'ctox_queue_tasks']) {
     ctx.sync?.startCollection?.(collectionName)
       ?.catch?.((error) => console.warn(`[browser] ${collectionName} sync start failed`, error));
   }
@@ -171,6 +179,7 @@ export async function mount(ctx) {
     state.latestCommand = latestBrowserCommand(commands, state.latestSession?.id || state.latestFrame?.session_id);
     state.browserCommands = latestBrowserCommands(commands, state.latestSession?.id || state.latestFrame?.session_id, 5);
     state.handoffTasks = latestBrowserHandoffTasks(handoffTasks, state.latestSession?.id || state.latestFrame?.session_id, 5);
+    await reconcileCompletedStopCommand(ctx, state, commands);
     state.lastInputSeq = Math.max(
       Number(state.lastInputSeq || 0),
       ...inputs.map((event) => Number(event.seq || 0)).filter(Number.isFinite),
@@ -182,8 +191,26 @@ export async function mount(ctx) {
     renderDiagnostics(refs, state.latestFrame, inputs, state.latestCommand, state.browserCommands, state.handoffTasks);
     renderControls(refs, state);
     renderNotice(refs, state.notice);
+    recoverFrameSyncIfNeeded(ctx, state);
     await renderFrame(refs, state.latestFrame, state);
     writeViewerActivity(ctx, state).catch((error) => console.warn('[browser] viewer activity update failed', error));
+  }
+}
+
+function recoverFrameSyncIfNeeded(ctx, state) {
+  if (!ctx.sync) return;
+  if (state.latestFrame?.data) return;
+  const status = String(state.latestSession?.runtime_status || state.latestSession?.status || '').toLowerCase();
+  const commandStatus = String(state.latestCommand?.status || state.latestCommand?.task_status || '').toLowerCase();
+  const browserIsExpected = ['active', 'running', 'requested', 'pending_command', 'starting'].includes(status)
+    || ['pending_sync', 'accepted', 'completed'].includes(commandStatus);
+  if (!browserIsExpected) return;
+  const now = Date.now();
+  if (now - Number(state.lastFrameSyncRecoveryAt || 0) < FRAME_SYNC_RECOVERY_MS) return;
+  state.lastFrameSyncRecoveryAt = now;
+  for (const collectionName of BROWSER_SYNC_COLLECTIONS) {
+    ctx.sync.restartCollection?.(collectionName)
+      ?.catch?.((error) => console.warn(`[browser] ${collectionName} sync restart failed`, error));
   }
 }
 
@@ -200,41 +227,116 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
     ...payloadPatch,
   };
   if (payload.url) payload.url = normalizeUrl(payload.url);
-  await startCommandSync(ctx);
-  if (ctx.commandBus?.dispatch) {
-    await ctx.commandBus.dispatch({
-      id: commandId,
-      module: 'browser',
-      type: commandType,
-      record_id: sessionId,
-      inbound_channel: 'browser',
-      payload,
-      client_context: {
-        source: 'business-os.browser',
-        module_id: 'browser',
-        actor: actorContext(ctx.session),
+  await startBrowserRuntimeSync(ctx);
+  await writeOptimisticBrowserSession(ctx, state, commandType, payload);
+  await upsertDoc(ctx.db?.raw?.business_commands, {
+    id: commandId,
+    command_id: commandId,
+    module: 'browser',
+    command_type: commandType,
+    type: commandType,
+    record_id: sessionId,
+    inbound_channel: 'browser',
+    status: 'pending_sync',
+    payload,
+    client_context: {
+      source: 'business-os.browser.runtime',
+      module_id: 'browser',
+      actor: actorContext(ctx.session),
+      handled_by: 'native-rxdb-peer',
+    },
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+}
+
+async function writeOptimisticBrowserSession(ctx, state, commandType, payload) {
+  if (!['browser.session.start', 'browser.navigate', 'browser.reset', 'browser.session.stop'].includes(commandType)) return;
+  const now = Date.now();
+  const sessionId = payload.session_id || state.latestSession?.id || DEFAULT_SESSION_ID;
+  const tabId = payload.tab_id || state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID;
+  const url = payload.url || state.latestTab?.url || state.latestSession?.current_url || 'https://example.com';
+  const title = state.latestTab?.title || state.latestSession?.title || 'Browser';
+  const frameId = state.latestFrame?.id || state.latestSession?.active_frame_id || '';
+  const frameSeq = Number(state.latestFrame?.seq || state.latestSession?.last_frame_seq || 0);
+  const existingSession = (await ctx.db?.raw?.browser_sessions?.findOne(sessionId).exec())?.toJSON?.() || {};
+  const existingTab = (await ctx.db?.raw?.browser_tabs?.findOne(tabId).exec())?.toJSON?.() || {};
+  const isStop = commandType === 'browser.session.stop';
+  const optimisticStatus = isStop ? 'stopped' : 'requested';
+  const optimisticRuntimeStatus = isStop ? 'stopped' : 'pending_command';
+  await Promise.all([
+    upsertDoc(ctx.db?.raw?.browser_sessions, {
+      ...existingSession,
+      id: sessionId,
+      owner_user_id: existingSession.owner_user_id || ctx.session?.user?.id || '',
+      controller_user_id: ctx.session?.user?.id || existingSession.controller_user_id || '',
+      status: optimisticStatus,
+      runtime_status: optimisticRuntimeStatus,
+      current_tab_id: tabId,
+      current_url: url,
+      title,
+      viewport_w: payload.viewport_w || VIEWPORT.width,
+      viewport_h: payload.viewport_h || VIEWPORT.height,
+      device_scale_factor: existingSession.device_scale_factor || 1,
+      frame_rate_target: existingSession.frame_rate_target || 0,
+      active_frame_id: frameId,
+      last_frame_seq: frameSeq,
+      last_input_seq: existingSession.last_input_seq || 0,
+      pending_input_count: existingSession.pending_input_count || 0,
+      payload: {
+        ...(existingSession.payload || {}),
+        browser_stream: 'rxdb',
+        last_command_type: commandType,
+        last_requested_command: commandType,
       },
-    });
-  } else {
-    await upsertDoc(ctx.db?.raw?.business_commands, {
-      id: commandId,
-      command_id: commandId,
-      module: 'browser',
-      command_type: commandType,
-      type: commandType,
-      record_id: sessionId,
-      inbound_channel: 'browser',
-      status: 'pending_sync',
-      payload,
-      client_context: {
-        source: 'business-os.browser',
-        module_id: 'browser',
-        actor: actorContext(ctx.session),
-      },
-      created_at_ms: now,
+      created_at_ms: existingSession.created_at_ms || now,
       updated_at_ms: now,
-    });
-  }
+    }),
+    upsertDoc(ctx.db?.raw?.browser_tabs, {
+      ...existingTab,
+      id: tabId,
+      session_id: sessionId,
+      title,
+      url,
+      status: optimisticStatus,
+      loading: !isStop,
+      active: true,
+      can_go_back: Boolean(existingTab.can_go_back),
+      can_go_forward: Boolean(existingTab.can_go_forward),
+      frame_seq: frameSeq,
+      last_frame_id: frameId,
+      last_frame_at_ms: existingTab.last_frame_at_ms || 0,
+      payload: {
+        ...(existingTab.payload || {}),
+        browser_stream: 'rxdb',
+        last_command_type: commandType,
+        last_requested_command: commandType,
+      },
+      created_at_ms: existingTab.created_at_ms || now,
+      updated_at_ms: now,
+    }),
+  ]);
+}
+
+async function reconcileCompletedStopCommand(ctx, state, commands) {
+  const sessionId = state.latestSession?.id || state.latestTab?.session_id || DEFAULT_SESSION_ID;
+  const stopCommand = commands
+    .filter((command) => {
+      const type = command.command_type || command.type || '';
+      if (type !== 'browser.session.stop') return false;
+      if (String(command.status || '') !== 'completed') return false;
+      const payloadSession = command.payload?.session_id;
+      return command.record_id === sessionId || payloadSession === sessionId || (!command.record_id && !payloadSession);
+    })
+    .sort((a, b) => Number(b.created_at_ms || b.updated_at_ms || 0) - Number(a.created_at_ms || a.updated_at_ms || 0))[0];
+  if (!stopCommand) return;
+  if (state.latestSession?.status === 'stopped' && state.latestTab?.status === 'stopped') return;
+  await writeOptimisticBrowserSession(ctx, state, 'browser.session.stop', {
+    session_id: sessionId,
+    tab_id: state.latestTab?.id || state.latestSession?.current_tab_id || DEFAULT_TAB_ID,
+    viewport_w: state.latestSession?.viewport_w || VIEWPORT.width,
+    viewport_h: state.latestSession?.viewport_h || VIEWPORT.height,
+  });
 }
 
 async function sendBrowserContextToCtox(ctx, state, options = {}) {
@@ -242,13 +344,13 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
   const tab = state.latestTab;
   const frame = state.latestFrame;
   if (!session?.id) {
-    state.notice = 'No browser session to send.';
+    state.notice = 'Kein Browser-Fenster zum Senden geoeffnet.';
     return;
   }
   const payloadMetadata = session.payload || {};
   const now = Date.now();
   const url = tab?.url || session.current_url || '';
-  const title = tab?.title || session.title || 'Remote Browser';
+  const title = browserDisplayTitle(tab, session, url);
   const sourceId = payloadMetadata.source_id || '';
   const captureScript = payloadMetadata.capture_script || '';
   const verifySelector = payloadMetadata.verify_selector || '';
@@ -277,10 +379,10 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
   };
   const commandId = `browser_context_${now}_${Math.random().toString(36).slice(2, 10)}`;
   const payload = {
-    title: options.webStack && sourceId ? `Web Stack Browser: ${sourceId}` : `Remote Browser: ${title}`,
+    title: options.webStack && sourceId ? `Web Stack Browser: ${sourceId}` : `Browser: ${title}`,
     instruction: url
-      ? `Use this Remote Browser context from ${url}. The screenshot is available as the referenced browser_frames record.`
-      : 'Use this Remote Browser context. The screenshot is available as the referenced browser_frames record.',
+      ? `Use this browser context from ${url}. The screenshot is available as the referenced browser frame record.`
+      : 'Use this browser context. The screenshot is available as the referenced browser frame record.',
     source_module: sourceModule,
     required_skills: options.webStack ? ['browser-context', 'web-stack', 'ctox'] : ['browser-context', 'ctox'],
     browser_context: browserContext,
@@ -337,7 +439,7 @@ async function extractWebStackFields(ctx, state) {
   const frame = state.latestFrame;
   const payload = session?.payload || {};
   if (!session?.id || !payload.capture_script) {
-    state.notice = 'No Web Stack capture script available.';
+    state.notice = 'Keine Web-Stack-Uebergabe fuer dieses Browser-Fenster verfuegbar.';
     return;
   }
   const now = Date.now();
@@ -345,7 +447,7 @@ async function extractWebStackFields(ctx, state) {
     session_id: session.id,
     tab_id: tab?.id || session.current_tab_id || '',
     url: tab?.url || session.current_url || '',
-    title: tab?.title || session.title || 'Remote Browser',
+    title: browserDisplayTitle(tab, session, tab?.url || session.current_url || ''),
     status: session.runtime_status || session.status || '',
     purpose: payload.purpose || '',
     source_id: payload.source_id || '',
@@ -536,10 +638,20 @@ async function fillWebStackCredential(ctx, state) {
 }
 
 async function startCommandSync(ctx) {
+  return startBrowserRuntimeSync(ctx, ['business_commands']);
+}
+
+async function startBrowserRuntimeSync(ctx, collections = [
+  'business_commands',
+  'browser_sessions',
+  'browser_tabs',
+  'browser_frames',
+  'browser_input_events',
+]) {
   try {
-    await ctx.sync?.startCollection?.('business_commands');
+    await Promise.all(collections.map((collection) => ctx.sync?.startCollection?.(collection)));
   } catch (error) {
-    console.warn('[browser] business_commands sync start failed', error);
+    console.warn('[browser] browser runtime sync start failed', error);
   }
 }
 
@@ -649,8 +761,10 @@ async function writeInputEvent(ctx, state, type, patch) {
 }
 
 async function writeViewerActivity(ctx, state, options = {}) {
+  return;
   const session = state.latestSession;
   if (!session?.id || session.id === SYNTHETIC_SESSION_ID) return;
+  if (session.status !== 'active' && session.runtime_status !== 'active') return;
   const now = Number(options.atMs || Date.now());
   if (!options.force && now - Number(state.lastViewerHeartbeatAt || 0) < VIEWER_HEARTBEAT_MS) return;
   state.lastViewerHeartbeatAt = now;
@@ -766,11 +880,12 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
   refs.sessionList.innerHTML = sorted.slice(0, 8).map((session) => {
     const tab = latestTab(tabs.filter((candidate) => candidate.session_id === session.id), session.current_tab_id);
     const url = tab?.url || session.current_url || 'about:blank';
-    const status = session.runtime_status || session.status || 'unknown';
+    const status = browserStatusLabel(session);
+    const uiState = browserUiState(session);
     return `
       <button type="button" class="browser-session-item" data-browser-session-id="${escapeHtml(session.id)}" aria-current="${session.id === activeSession?.id ? 'true' : 'false'}">
-        <strong>${escapeHtml(tab?.title || session.title || 'Remote Browser')}</strong>
-        <span class="browser-pill">${escapeHtml(status)}</span>
+        <strong>${escapeHtml(browserDisplayTitle(tab, session, url))}</strong>
+        <span class="browser-pill" data-state="${escapeHtml(uiState)}">${escapeHtml(status)}</span>
         <span>${escapeHtml(url)}</span>
         <span>${escapeHtml(formatTime(session.updated_at_ms))}</span>
       </button>
@@ -794,13 +909,13 @@ function renderSession(refs, session, tab, frame, command) {
   const controller = session.controller_user_id || policy.controller_user_id || '-';
   if (refs.address && url) refs.address.value = url;
   refs.sessionCard.innerHTML = `
-    <strong>${escapeHtml(tab?.title || session.title || 'Remote Browser')}</strong>
+    <strong>${escapeHtml(browserDisplayTitle(tab, session, url))}</strong>
     <div class="browser-muted">${escapeHtml(url || 'about:blank')}</div>
     <div class="browser-meta-grid">
       <span>Status</span><span>${escapeHtml(session.runtime_status || session.status || 'unknown')}</span>
       <span>Owner</span><span>${escapeHtml(owner)}</span>
       <span>Control</span><span>${escapeHtml(controller)}</span>
-      <span>Frame</span><span>${escapeHtml(frame ? `${frame.width}x${frame.height}` : 'No frame')}</span>
+      <span>Frame</span><span>${escapeHtml(frame ? `${frame.width}x${frame.height}` : 'Kein Bild')}</span>
     </div>
     ${commandLine}
     ${sessionError}
@@ -851,14 +966,14 @@ function renderAuthAssist(refs, session) {
 }
 
 function renderStatus(refs, session, tab, frame, command) {
-  const state = String(session?.runtime_status || session?.status || 'offline').toLowerCase();
+  const state = browserUiState(session);
   if (refs.statusChip) {
-    refs.statusChip.textContent = session ? titleCase(state) : 'Offline';
+    refs.statusChip.textContent = session ? browserStatusLabel(session) : 'Nicht verbunden';
     refs.statusChip.dataset.state = state;
   }
   const url = tab?.url || session?.current_url || '';
   if (refs.statusTitle) {
-    refs.statusTitle.textContent = tab?.title || session?.title || url || 'No remote browser session';
+    refs.statusTitle.textContent = browserDisplayTitle(tab, session, url) || 'Kein Browser-Fenster geoeffnet';
   }
   const bits = [];
   if (url) bits.push(url);
@@ -917,12 +1032,48 @@ function frameEmptyText(state) {
   const session = state.latestSession;
   const commandError = commandErrorMessage(state.latestCommand);
   if (commandError) return commandError;
-  if (!session) return 'Start a remote browser session';
+  if (!session) return 'Oeffne ein neues Browser-Fenster';
   const status = String(session.runtime_status || session.status || '').toLowerCase();
-  if (status === 'failed' || status === 'error') return session.error || 'Remote browser failed';
-  if (status === 'stopped' || status === 'closed') return 'Remote browser stopped';
-  if (status === 'requested' || status === 'starting') return 'Waiting for CTOX to open Chromium';
-  return 'Waiting for the next RxDB frame';
+  if (status === 'failed' || status === 'error') return session.error || 'Der Browser konnte nicht gestartet werden';
+  if (status === 'stopped' || status === 'closed') return 'Browser-Fenster geschlossen';
+  if (status === 'requested' || status === 'starting' || status === 'pending_command') return 'Browser wird gestartet';
+  return 'Browser-Inhalt wird geladen';
+}
+
+function browserUiState(session) {
+  if (!session) return 'offline';
+  const raw = String(session.runtime_status || session.status || '').toLowerCase();
+  if (['active', 'running', 'capturing', 'synthetic'].includes(raw)) return 'ready';
+  if (['requested', 'starting', 'pending_command', 'pending_sync'].includes(raw)) return 'starting';
+  if (['stopped', 'closed'].includes(raw)) return 'offline';
+  if (['failed', 'error'].includes(raw)) return 'error';
+  return raw ? 'waiting' : 'offline';
+}
+
+function browserStatusLabel(session) {
+  const state = browserUiState(session);
+  if (state === 'ready') return 'Bereit';
+  if (state === 'starting') return 'Startet';
+  if (state === 'waiting') return 'Verbindet';
+  if (state === 'error') return 'Fehler';
+  return 'Nicht verbunden';
+}
+
+function browserDisplayTitle(tab, session, url = '') {
+  const raw = String(tab?.title || session?.title || '').trim();
+  if (!raw || /^remote browser$/i.test(raw)) {
+    return url ? browserUrlLabel(url) : 'Browser';
+  }
+  return raw;
+}
+
+function browserUrlLabel(url) {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname || 'Browser';
+  } catch {
+    return 'Browser';
+  }
 }
 
 function renderDiagnostics(refs, frame, inputs, command, commands = [], handoffTasks = []) {
@@ -989,7 +1140,7 @@ async function seedSyntheticFrame(ctx, requestedUrl) {
     runtime_status: 'not_started',
     current_tab_id: SYNTHETIC_TAB_ID,
     current_url: url,
-    title: 'Synthetic Remote Browser',
+    title: 'Browser Vorschau',
     viewport_w: VIEWPORT.width,
     viewport_h: VIEWPORT.height,
     device_scale_factor: 1,
@@ -1005,7 +1156,7 @@ async function seedSyntheticFrame(ctx, requestedUrl) {
   const tab = {
     id: SYNTHETIC_TAB_ID,
     session_id: SYNTHETIC_SESSION_ID,
-    title: 'Synthetic Remote Browser',
+    title: 'Browser Vorschau',
     url,
     status: 'synthetic',
     loading: false,
@@ -1057,15 +1208,20 @@ async function clearSyntheticFrames(ctx) {
 
 async function upsertDoc(collection, doc) {
   if (!collection) throw new Error('Browser collection is not registered');
-  if (typeof collection.upsert === 'function') {
-    await collection.upsert(doc);
+  const next = { ...doc };
+  delete next._rev;
+  delete next._meta;
+  const existing = await collection.findOne(next.id).exec();
+  if (existing?.incrementalPatch) {
+    await existing.incrementalPatch(next);
     return;
   }
-  const existing = await collection.findOne(doc.id).exec();
   if (existing) {
-    await existing.incrementalPatch(doc);
+    await existing.patch(next);
+  } else if (typeof collection.upsert === 'function') {
+    await collection.upsert(next);
   } else {
-    await collection.insert(doc);
+    await collection.insert(next);
   }
 }
 
@@ -1103,12 +1259,12 @@ async function createSyntheticFrame(url, seq) {
   }
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.font = '700 52px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
-  ctx.fillText('CTOX Remote Browser', 72, 140);
+  ctx.fillText('CTOX Browser', 72, 140);
   ctx.font = '26px system-ui, -apple-system, BlinkMacSystemFont, sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.74)';
   ctx.fillText(url, 72, 196);
   ctx.font = '20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
-  ctx.fillText(`RxDB frame seq ${seq}`, 72, 254);
+  ctx.fillText(`Vorschau ${seq}`, 72, 254);
   ctx.strokeStyle = 'rgba(34,197,94,0.75)';
   ctx.lineWidth = 4;
   ctx.strokeRect(72, 314, 1136, 260);

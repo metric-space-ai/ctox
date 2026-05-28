@@ -25,8 +25,12 @@
   --shiftflow-icon-close: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z'/%3E%3C/svg%3E");
   --shiftflow-icon-edit: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M4 17.2V20h2.8L17.9 8.9 15.1 6.1 4 17.2ZM19.7 7.1c.4-.4.4-1 0-1.4l-1.4-1.4a1 1 0 0 0-1.4 0l-1.1 1.1 2.8 2.8 1.1-1.1Z'/%3E%3C/svg%3E");
   --shiftflow-icon-delete: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M8 4h8l1 2h4v2H3V6h4l1-2Zm1 6h2v8H9v-8Zm4 0h2v8h-2v-8Zm-6 0h10l-.7 10H7.7L7 10Z'/%3E%3C/svg%3E");
+  --shiftflow-icon-search: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12Zm0 2a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm5.3 8.9 4.4 4.4-1.4 1.4-4.4-4.4 1.4-1.4Z'/%3E%3C/svg%3E");
+  --shiftflow-icon-replacement: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 3a5 5 0 0 1 5 5h-2a3 3 0 1 0-3 3h1v2h-1a5 5 0 0 1 0-10Zm6 7h2v3h3v2h-3v3h-2v-3h-3v-2h3v-3ZM4 18.5C4 15.5 7.6 14 11 14v2c-2.8 0-5 1.1-5 2.5V20h8v2H4v-3.5Z'/%3E%3C/svg%3E");
+  --shiftflow-icon-document: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 3h9l5 5v13H6V3Zm2 2v14h10V9h-4V5H8Zm8 .8V7h1.2L16 5.8ZM10 12h6v2h-6v-2Zm0 4h6v2h-6v-2Z'/%3E%3C/svg%3E");
 
   display: grid;
+  grid-template-areas: "left center right";
   grid-template-columns: var(--shiftflow-left-width, 280px) minmax(420px, 1fr) var(--shiftflow-right-width, 340px);
   gap: 12px;
   height: 100%;
@@ -107,6 +111,18 @@ body.is-shiftflow-resizing * {
   box-shadow: 0 8px 22px color-mix(in srgb, var(--shiftflow-text) 6%, transparent);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+}
+
+.shiftflow-left-pane {
+  grid-area: left;
+}
+
+.shiftflow-center-pane {
+  grid-area: center;
+}
+
+.shiftflow-right-pane {
+  grid-area: right;
 }
 
 .shiftflow-left-pane {
@@ -227,6 +243,11 @@ body.is-shiftflow-resizing * {
   mask: var(--shiftflow-icon-spark) center / contain no-repeat;
 }
 
+[data-shiftflow-root] [data-icon="spark"]::before {
+  -webkit-mask: var(--shiftflow-icon-spark) center / contain no-repeat;
+  mask: var(--shiftflow-icon-spark) center / contain no-repeat;
+}
+
 [data-shiftflow-root] .shiftflow-icon-mask[data-icon="edit"]::before {
   -webkit-mask: var(--shiftflow-icon-edit) center / contain no-repeat;
   mask: var(--shiftflow-icon-edit) center / contain no-repeat;
@@ -235,6 +256,37 @@ body.is-shiftflow-resizing * {
 [data-shiftflow-root] .shiftflow-icon-mask[data-icon="delete"]::before {
   -webkit-mask: var(--shiftflow-icon-delete) center / contain no-repeat;
   mask: var(--shiftflow-icon-delete) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="search"]::before {
+  -webkit-mask: var(--shiftflow-icon-search) center / contain no-repeat;
+  mask: var(--shiftflow-icon-search) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="replacement"]::before {
+  -webkit-mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
+  mask: var(--shiftflow-icon-replacement) center / contain no-repeat;
+}
+
+[data-shiftflow-root] [data-icon="document"]::before {
+  -webkit-mask: var(--shiftflow-icon-document) center / contain no-repeat;
+  mask: var(--shiftflow-icon-document) center / contain no-repeat;
+}
+
+.shiftflow-icon-text-btn,
+.shiftflow-ai-action-shortcut {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.shiftflow-icon-text-btn::before,
+.shiftflow-ai-action-shortcut::before {
+  content: "";
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  background: currentColor;
 }
 
 .shiftflow-tabs {
@@ -527,13 +579,14 @@ body.is-shiftflow-resizing * {
 }
 
 /* -------------------------------------------------------------
- * Shift Cards (Glassmorphism & Harmonious Colors)
+ * Shift Cards
  * ------------------------------------------------------------- */
 .shift-card {
   appearance: none;
+  --shiftflow-dept: var(--shiftflow-accent);
+  --shiftflow-dept-strong: var(--shiftflow-accent);
   padding: 8px 10px;
   border: 1px solid transparent;
-  border-left: 3px solid transparent;
   border-radius: var(--shiftflow-radius);
   font-size: 11px;
   display: flex;
@@ -543,10 +596,14 @@ body.is-shiftflow-resizing * {
   font: inherit;
   text-align: left;
   position: relative;
+  z-index: 2;
   overflow: hidden;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
   transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1),
               box-shadow 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+  background: color-mix(in srgb, var(--shiftflow-dept) 13%, var(--shiftflow-surface));
+  color: var(--shiftflow-text);
+  border-color: color-mix(in srgb, var(--shiftflow-dept) 38%, var(--shiftflow-line));
 }
 
 .shift-card:hover {
@@ -559,36 +616,27 @@ body.is-shiftflow-resizing * {
 }
 
 .shift-card.dept-service {
-  background: color-mix(in srgb, oklch(0.68 0.16 168) 12%, var(--shiftflow-surface));
-  color: oklch(0.48 0.16 168);
-  border-color: color-mix(in srgb, oklch(0.68 0.16 168) 25%, transparent);
-  border-left-color: oklch(0.58 0.16 168);
+  --shiftflow-dept: oklch(0.68 0.16 168);
+  --shiftflow-dept-strong: oklch(0.58 0.16 168);
 }
 
 .shift-card.dept-kitchen {
-  background: color-mix(in srgb, oklch(0.52 0.2 270) 12%, var(--shiftflow-surface));
-  color: oklch(0.42 0.2 270);
-  border-color: color-mix(in srgb, oklch(0.52 0.2 270) 25%, transparent);
-  border-left-color: oklch(0.46 0.2 270);
+  --shiftflow-dept: oklch(0.62 0.16 285);
+  --shiftflow-dept-strong: oklch(0.58 0.18 285);
 }
 
 .shift-card.dept-bar {
-  background: color-mix(in srgb, oklch(0.64 0.18 45) 12%, var(--shiftflow-surface));
-  color: oklch(0.44 0.18 45);
-  border-color: color-mix(in srgb, oklch(0.64 0.18 45) 25%, transparent);
-  border-left-color: oklch(0.54 0.18 45);
+  --shiftflow-dept: oklch(0.66 0.16 52);
+  --shiftflow-dept-strong: oklch(0.58 0.17 52);
 }
 
 .shift-card.dept-verwaltung {
-  background: color-mix(in srgb, oklch(0.58 0.16 210) 12%, var(--shiftflow-surface));
-  color: oklch(0.38 0.16 210);
-  border-color: color-mix(in srgb, oklch(0.58 0.16 210) 25%, transparent);
-  border-left-color: oklch(0.48 0.16 210);
+  --shiftflow-dept: oklch(0.62 0.14 218);
+  --shiftflow-dept-strong: oklch(0.56 0.15 218);
 }
 
 .shift-card.draft {
   border-style: dashed;
-  border-left-style: solid;
   opacity: 0.76;
 }
 
@@ -606,7 +654,8 @@ body.is-shiftflow-resizing * {
   font-size: 8.5px;
   text-transform: uppercase;
   font-weight: 860;
-  background: color-mix(in srgb, currentColor 10%, transparent);
+  background: color-mix(in srgb, var(--shiftflow-dept) 18%, transparent);
+  color: var(--shiftflow-text);
 }
 
 .add-shift-hover-btn {
@@ -626,7 +675,7 @@ body.is-shiftflow-resizing * {
   border-radius: var(--shiftflow-radius);
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  z-index: 2;
+  z-index: 1;
 }
 
 .grid-shift-cell:hover .add-shift-hover-btn {
@@ -818,7 +867,6 @@ body.is-shiftflow-resizing * {
 .shiftflow-conflict-item {
   background: color-mix(in srgb, var(--shiftflow-danger) 6%, var(--shiftflow-surface));
   border: 1px solid color-mix(in srgb, var(--shiftflow-danger) 25%, transparent);
-  border-left: 3px solid var(--shiftflow-danger);
   border-radius: var(--shiftflow-radius);
   padding: 10px 12px;
   font-size: 11px;
@@ -1356,6 +1404,9 @@ body.is-shiftflow-resizing * {
 
 @media (max-width: 1180px) {
   .shiftflow-app {
+    grid-template-areas:
+      "left center"
+      "right right";
     grid-template-columns: var(--shiftflow-left-width, 260px) minmax(360px, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(220px, 34vh);
   }
@@ -1367,5 +1418,68 @@ body.is-shiftflow-resizing * {
   .shiftflow-right-pane {
     grid-column: 1 / -1;
     min-height: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .shiftflow-app {
+    grid-template-areas:
+      "center"
+      "left"
+      "right";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(420px, 68vh) minmax(260px, 42vh) minmax(260px, 42vh);
+    gap: 8px;
+    padding: 8px;
+    overflow-y: auto;
+  }
+
+  .shiftflow-col-resizer {
+    display: none;
+  }
+
+  .shiftflow-panel {
+    min-width: 0;
+  }
+
+  .shiftflow-scheduler-toolbar,
+  .shiftflow-billing-toolbar,
+  .shiftflow-timesheets-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .shiftflow-view-toggle,
+  .shiftflow-billing-date-selector {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .shiftflow-toggle-btn,
+  .shiftflow-tab-btn {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .shiftflow-scheduler-grid-header,
+  .scheduler-row {
+    grid-template-columns: 140px repeat(7, minmax(92px, 1fr));
+    min-width: 784px;
+  }
+
+  .row-employee-cell,
+  .shiftflow-grid-corner-cell {
+    padding: 10px;
+  }
+
+  .shiftflow-financial-summary {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .shiftflow-billing-content-wrapper {
+    padding: 12px;
   }
 }

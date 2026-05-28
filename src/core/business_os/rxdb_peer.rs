@@ -10,6 +10,7 @@ use rxdb::plugins::replication_webrtc::{
     replicate_web_rtc_rs, RTCIceServer, RxWebRTCReplicationPool, SyncOptionsWebRTCRs,
     WebRTCRsConnectionHandler,
 };
+use rxdb::rx_collection::RxCollection;
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{HashOutput, MangoQuery, RxJsonSchema};
@@ -38,7 +39,9 @@ static NATIVE_PEER_RUNNING: AtomicBool = AtomicBool::new(false);
 static NATIVE_PEER: Mutex<Option<Arc<NativePeer>>> = Mutex::new(None);
 static TEMPORARY_RXDB_DATABASE_LOCK: Mutex<()> = Mutex::new(());
 static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+static BROWSER_RUNTIME_COMMAND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
+const NATIVE_SIGNALING_JOIN_STAGGER_MS: u64 = 75;
 const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
 const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-control-plane-v1",
@@ -69,6 +72,8 @@ const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
 const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email", "meeting"];
 const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
+const NATIVE_PEER_HEARTBEAT_INTERVAL_SECS: u64 = 5;
+const NATIVE_PEER_HEARTBEAT_TTL_MS: u64 = 30_000;
 
 type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
@@ -87,6 +92,7 @@ struct NativePeer {
     _module_catalog_sync: tokio::task::JoinHandle<()>,
     _ticket_state_sync: tokio::task::JoinHandle<()>,
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
+    _status_heartbeat: tokio::task::JoinHandle<()>,
 }
 
 impl NativePeer {
@@ -103,6 +109,7 @@ impl NativePeer {
         self._module_catalog_sync.abort();
         self._ticket_state_sync.abort();
         self._business_record_projection_sync.abort();
+        self._status_heartbeat.abort();
         let _ = self.database.close().await;
     }
 }
@@ -124,16 +131,34 @@ pub fn is_native_peer_running() -> bool {
 }
 
 pub fn is_native_peer_running_for_root(root: &Path) -> bool {
-    is_native_peer_running() || native_peer_process_lock_is_held(root)
+    is_native_peer_running() || native_peer_heartbeat_is_fresh(root)
 }
 
 pub fn native_peer_status(root: &Path) -> Value {
     let in_process_started = NATIVE_PEER_STARTED.load(Ordering::SeqCst);
     let in_process_running = NATIVE_PEER_RUNNING.load(Ordering::SeqCst);
     let process_lock_held = native_peer_process_lock_is_held(root);
-    let running = in_process_running || in_process_started || process_lock_held;
+    let heartbeat = read_native_peer_heartbeat(root);
+    let heartbeat_updated_at_ms = heartbeat_updated_at_ms(heartbeat.as_ref());
+    let heartbeat_age_ms = heartbeat_updated_at_ms.map(|updated_at_ms| {
+        let now = now_ms() as u64;
+        now.saturating_sub(updated_at_ms)
+    });
+    let heartbeat_fresh = heartbeat_age_ms
+        .map(|age_ms| age_ms <= NATIVE_PEER_HEARTBEAT_TTL_MS)
+        .unwrap_or(false);
+    let running = in_process_running || in_process_started || heartbeat_fresh;
     let health_errors = if running {
         Vec::<Value>::new()
+    } else if process_lock_held {
+        vec![native_peer_health_error(
+            "ctox_native_peer_lock_without_fresh_heartbeat",
+            "CtoxNativePeerCollectionDegraded",
+            "native-peer",
+            "recoverable",
+            true,
+            "Business OS native RxDB peer lock is held, but no fresh native peer heartbeat is visible.",
+        )]
     } else {
         vec![native_peer_health_error(
             "ctox_native_peer_not_running",
@@ -150,6 +175,13 @@ pub fn native_peer_status(root: &Path) -> Value {
         "in_process_started": in_process_started,
         "in_process_running": in_process_running,
         "process_lock_held": process_lock_held,
+        "heartbeat": {
+            "fresh": heartbeat_fresh,
+            "ttl_ms": NATIVE_PEER_HEARTBEAT_TTL_MS,
+            "updated_at_ms": heartbeat_updated_at_ms,
+            "age_ms": heartbeat_age_ms,
+            "path": native_peer_heartbeat_path(root).display().to_string(),
+        },
         "health": {
             "errorTotal": health_errors.len(),
             "errors": health_errors,
@@ -161,6 +193,7 @@ pub fn native_peer_status(root: &Path) -> Value {
         },
         "peer_session_id": current_peer()
             .map(|peer| peer.peer_session_id.clone())
+            .or_else(|| heartbeat_peer_session_id(heartbeat.as_ref()))
             .unwrap_or_default(),
         "lock_path": native_peer_lock_path(root).display().to_string(),
         "database_path": store::rxdb_store_path(root).display().to_string(),
@@ -800,7 +833,8 @@ async fn run_native_peer(
         signaling_url_with_native_metadata(&signaling_url, &sync_room, &signaling_room_password);
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
-    let database = open_database(store::rxdb_store_path(&root)).await?;
+    let database_path = store::rxdb_store_path(&root);
+    let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
     let collections = database
         .add_collections(collection_creators())
@@ -809,6 +843,9 @@ async fn run_native_peer(
 
     let mut pools = Vec::with_capacity(collections.len());
     for (collection_name, collection) in collections {
+        if !pools.is_empty() {
+            tokio::time::sleep(Duration::from_millis(NATIVE_SIGNALING_JOIN_STAGGER_MS)).await;
+        }
         let topic = format!("{sync_room}:{collection_name}");
         let mut options = SyncOptionsWebRTCRs::new(collection, signaling_url.clone(), topic);
         options.peer_session_id = peer_session_id.clone();
@@ -872,6 +909,11 @@ async fn run_native_peer(
             Arc::clone(&database),
             Arc::clone(&database_write_lock),
         ));
+    let status_heartbeat = spawn_native_peer_status_heartbeat(
+        root.clone(),
+        peer_session_id.clone(),
+        database_path.clone(),
+    );
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
     let peer = Arc::new(NativePeer {
@@ -889,6 +931,7 @@ async fn run_native_peer(
         _module_catalog_sync: module_catalog_sync,
         _ticket_state_sync: ticket_state_sync,
         _business_record_projection_sync: business_record_projection_sync,
+        _status_heartbeat: status_heartbeat,
     });
     if let Ok(mut current) = NATIVE_PEER.lock() {
         *current = Some(Arc::clone(&peer));
@@ -1035,6 +1078,89 @@ fn instance_id_from_sync_room(sync_room: &str) -> Option<&str> {
 
 fn native_peer_lock_path(root: &Path) -> PathBuf {
     root.join("runtime/business-os-rxdb-peer.lock")
+}
+
+fn native_peer_heartbeat_path(root: &Path) -> PathBuf {
+    root.join("runtime/business-os-rxdb-peer.status.json")
+}
+
+fn read_native_peer_heartbeat(root: &Path) -> Option<Value> {
+    let bytes = fs::read(native_peer_heartbeat_path(root)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+fn heartbeat_updated_at_ms(heartbeat: Option<&Value>) -> Option<u64> {
+    heartbeat?.get("updated_at_ms").and_then(Value::as_u64)
+}
+
+fn heartbeat_peer_session_id(heartbeat: Option<&Value>) -> Option<String> {
+    heartbeat?
+        .get("peer_session_id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn native_peer_heartbeat_is_fresh(root: &Path) -> bool {
+    let Some(updated_at_ms) = heartbeat_updated_at_ms(read_native_peer_heartbeat(root).as_ref())
+    else {
+        return false;
+    };
+    let age_ms = (now_ms() as u64).saturating_sub(updated_at_ms);
+    age_ms <= NATIVE_PEER_HEARTBEAT_TTL_MS
+}
+
+fn write_native_peer_heartbeat(
+    root: &Path,
+    peer_session_id: &str,
+    database_path: &Path,
+) -> anyhow::Result<()> {
+    let path = native_peer_heartbeat_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create native RxDB peer status dir {}",
+                parent.display()
+            )
+        })?;
+    }
+    let payload = json!({
+        "version": NATIVE_PEER_STATUS_VERSION,
+        "running": true,
+        "pid": std::process::id(),
+        "peer_session_id": peer_session_id,
+        "updated_at_ms": now_ms() as u64,
+        "database_path": database_path.display().to_string(),
+    });
+    let temporary_path = path.with_extension("status.json.tmp");
+    fs::write(&temporary_path, serde_json::to_vec_pretty(&payload)?).with_context(|| {
+        format!(
+            "failed to write native RxDB peer status {}",
+            temporary_path.display()
+        )
+    })?;
+    fs::rename(&temporary_path, &path).with_context(|| {
+        format!(
+            "failed to publish native RxDB peer status {}",
+            path.display()
+        )
+    })?;
+    Ok(())
+}
+
+fn spawn_native_peer_status_heartbeat(
+    root: PathBuf,
+    peer_session_id: String,
+    database_path: PathBuf,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = write_native_peer_heartbeat(&root, &peer_session_id, &database_path) {
+                eprintln!("[business-os] native rxdb peer status heartbeat failed: {err:#}");
+            }
+            tokio::time::sleep(Duration::from_secs(NATIVE_PEER_HEARTBEAT_INTERVAL_SECS)).await;
+        }
+    })
 }
 
 fn open_native_peer_lock_file(root: &Path) -> anyhow::Result<File> {
@@ -1468,6 +1594,29 @@ async fn accept_pending_business_command(
         .unwrap_or_default()
         .to_string();
     let command_payload = document.get("payload").cloned().unwrap_or(Value::Null);
+
+    if is_browser_runtime_command(&command_type) {
+        let command_id = document
+            .get("command_id")
+            .or_else(|| document.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let accepted = json!({
+            "id": command_id,
+            "command_id": command_id,
+            "status": "accepted",
+            "task_status": "accepted"
+        });
+        if let Err(err) = apply_browser_runtime_command(root, database, &document, &accepted).await
+        {
+            eprintln!("[business-os] browser runtime command failed: {err:#}");
+            mark_browser_runtime_command_failed(database, &command_id, &command_payload, &err)
+                .await?;
+        }
+        return Ok(());
+    }
+
     let root = root.to_path_buf();
     let accept_root = root.clone();
     let document_for_store = document.clone();
@@ -1737,8 +1886,778 @@ async fn accept_pending_business_command(
             }
         }
     }
+    if is_browser_runtime_command(&command_type) {
+        if let Err(err) = apply_browser_runtime_command(&root, database, &document, &accepted).await
+        {
+            eprintln!("[business-os] browser runtime command failed: {err:#}");
+            mark_browser_runtime_command_failed(database, &command_id, &command_payload, &err)
+                .await?;
+        }
+    }
 
     Ok(())
+}
+
+fn is_browser_runtime_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "browser.session.start"
+            | "browser.navigate"
+            | "browser.reload"
+            | "browser.back"
+            | "browser.forward"
+            | "browser.reset"
+            | "browser.session.stop"
+    )
+}
+
+async fn apply_browser_runtime_command(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+    document: &Value,
+    accepted: &Value,
+) -> anyhow::Result<()> {
+    let _browser_runtime_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
+    let command_type = document
+        .get("command_type")
+        .or_else(|| document.get("type"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload = document.get("payload").cloned().unwrap_or(Value::Null);
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("browser_session_default")
+        .to_string();
+    let tab_id = payload
+        .get("tab_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("browser_tab_default")
+        .to_string();
+    let viewport_w = payload
+        .get("viewport_w")
+        .and_then(Value::as_u64)
+        .unwrap_or(1280)
+        .clamp(320, 3840);
+    let viewport_h = payload
+        .get("viewport_h")
+        .and_then(Value::as_u64)
+        .unwrap_or(720)
+        .clamp(240, 2160);
+    let command_created_at_ms = document
+        .get("created_at_ms")
+        .or_else(|| document.get("updated_at_ms"))
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| now_ms() as u64);
+
+    let existing_session = find_browser_document(database, "browser_sessions", &session_id).await?;
+    let existing_tab = find_browser_document(database, "browser_tabs", &tab_id).await?;
+    let previous_url = existing_tab
+        .get("url")
+        .or_else(|| existing_session.get("current_url"))
+        .and_then(Value::as_str)
+        .unwrap_or("https://example.com")
+        .to_string();
+    let target_url = payload
+        .get("url")
+        .and_then(Value::as_str)
+        .map(normalize_browser_runtime_url)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(previous_url);
+
+    if command_type == "browser.session.stop" {
+        let title = existing_tab
+            .get("title")
+            .or_else(|| existing_session.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("Remote Browser");
+        upsert_browser_session(
+            database,
+            &session_id,
+            &tab_id,
+            "stopped",
+            "stopped",
+            &target_url,
+            title,
+            viewport_w,
+            viewport_h,
+            None,
+            0,
+            command_type,
+            command_created_at_ms,
+            None,
+        )
+        .await?;
+        upsert_browser_tab(
+            database,
+            &tab_id,
+            &session_id,
+            title,
+            &target_url,
+            "stopped",
+            false,
+            None,
+            0,
+        )
+        .await?;
+        mark_browser_runtime_command_completed(
+            database,
+            document,
+            accepted,
+            json!({
+                "ok": true,
+                "browser_stream": "rxdb",
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "status": "stopped"
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if matches!(
+        command_type,
+        "browser.navigate"
+            | "browser.reload"
+            | "browser.back"
+            | "browser.forward"
+            | "browser.reset"
+    ) {
+        if has_newer_browser_runtime_command(database, &session_id, command_created_at_ms).await? {
+            mark_browser_runtime_command_completed(
+                database,
+                document,
+                accepted,
+                json!({
+                    "ok": true,
+                    "browser_stream": "rxdb",
+                    "session_id": session_id,
+                    "tab_id": tab_id,
+                    "url": target_url,
+                    "superseded_by_newer_command": true
+                }),
+            )
+            .await?;
+            return Ok(());
+        }
+        let frame_id = existing_tab
+            .get("last_frame_id")
+            .or_else(|| existing_session.get("active_frame_id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let frame_seq = existing_tab
+            .get("frame_seq")
+            .or_else(|| existing_session.get("last_frame_seq"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let title = existing_tab
+            .get("title")
+            .or_else(|| existing_session.get("title"))
+            .and_then(Value::as_str)
+            .unwrap_or("Remote Browser")
+            .to_string();
+        let frame_ref = (!frame_id.is_empty()).then_some(frame_id.as_str());
+        upsert_browser_tab(
+            database,
+            &tab_id,
+            &session_id,
+            &title,
+            &target_url,
+            "active",
+            false,
+            frame_ref,
+            frame_seq,
+        )
+        .await?;
+        upsert_browser_session(
+            database,
+            &session_id,
+            &tab_id,
+            "active",
+            "active",
+            &target_url,
+            &title,
+            viewport_w,
+            viewport_h,
+            frame_ref,
+            frame_seq,
+            command_type,
+            command_created_at_ms,
+            None,
+        )
+        .await?;
+        mark_browser_runtime_command_completed(
+            database,
+            document,
+            accepted,
+            json!({
+                "ok": true,
+                "browser_stream": "rxdb",
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "frame_id": frame_id,
+                "url": target_url,
+                "title": title,
+                "reused_frame": true
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let root_for_capture = root.to_path_buf();
+    let browser_runtime_dir = browser_runtime_reference_dir(&root_for_capture);
+    let target_url_for_capture = target_url.clone();
+    let automation = tokio::task::spawn_blocking(move || {
+        let target_url_json = serde_json::to_string(&target_url_for_capture)
+            .unwrap_or_else(|_| "\"https://example.com\"".to_string());
+        let source = format!(
+            r#"
+await page.setViewportSize({{ width: {viewport_w}, height: {viewport_h} }});
+let navigationError = null;
+try {{
+  await ctoxBrowser.goto({target_url_json}, {{ waitUntil: "domcontentloaded", timeoutMs: 30000, textMax: 2000 }});
+}} catch (error) {{
+  navigationError = (error && error.message) || String(error);
+}}
+await page.waitForTimeout(700);
+const screenshot = await ctoxBrowser.screenshot({{ fullPage: false }});
+const observed = await ctoxBrowser.observe({{ limit: 12, textMax: 1200 }});
+return {{
+  ok: true,
+  browser_stream: "rxdb",
+  url: page.url(),
+  title: await page.title(),
+  navigation_error: navigationError,
+  observed,
+  screenshot,
+}};
+"#,
+            viewport_w = viewport_w,
+            viewport_h = viewport_h,
+            target_url_json = target_url_json
+        );
+        crate::web_stack::run_browser_automation(
+            &root_for_capture,
+            &crate::web_stack::BrowserAutomationRequest {
+                dir: browser_runtime_dir,
+                timeout_ms: Some(45_000),
+                source,
+            },
+        )
+    })
+    .await
+    .context("browser runtime worker panicked")??;
+
+    if automation.get("ok").and_then(Value::as_bool) == Some(false) {
+        let detail = automation
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("browser automation failed");
+        anyhow::bail!("{detail}");
+    }
+    let automation_result = automation.get("result").unwrap_or(&automation);
+
+    let final_url = automation_result
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or(&target_url)
+        .to_string();
+    let title = automation_result
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("Remote Browser")
+        .to_string();
+    if has_newer_browser_runtime_command(database, &session_id, command_created_at_ms).await? {
+        mark_browser_runtime_command_completed(
+            database,
+            document,
+            accepted,
+            json!({
+                "ok": true,
+                "browser_stream": "rxdb",
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "url": final_url,
+                "title": title,
+                "superseded_by_newer_command": true
+            }),
+        )
+        .await?;
+        return Ok(());
+    }
+    let screenshot = automation_result
+        .get("screenshot")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let data = screenshot
+        .get("base64")
+        .and_then(Value::as_str)
+        .context("browser runtime did not return screenshot data")?
+        .to_string();
+    let mime_type = screenshot
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("image/png")
+        .to_string();
+    let next_seq = existing_session
+        .get("last_frame_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    let frame_id = format!("browser_frame_{}_{}", session_id, next_seq);
+    let frame_hash = browser_frame_hash(&data);
+    let size_bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map(|bytes| bytes.len() as u64)
+        .unwrap_or_else(|_| data.len() as u64);
+    upsert_browser_frame(
+        database,
+        &frame_id,
+        &session_id,
+        &tab_id,
+        next_seq,
+        &mime_type,
+        &data,
+        viewport_w,
+        viewport_h,
+        size_bytes,
+        &frame_hash,
+    )
+    .await?;
+    upsert_browser_tab(
+        database,
+        &tab_id,
+        &session_id,
+        &title,
+        &final_url,
+        "active",
+        false,
+        Some(&frame_id),
+        next_seq,
+    )
+    .await?;
+    upsert_browser_session(
+        database,
+        &session_id,
+        &tab_id,
+        "active",
+        "active",
+        &final_url,
+        &title,
+        viewport_w,
+        viewport_h,
+        Some(&frame_id),
+        next_seq,
+        command_type,
+        command_created_at_ms,
+        None,
+    )
+    .await?;
+    mark_browser_runtime_command_completed(
+        database,
+        document,
+        accepted,
+        json!({
+            "ok": true,
+            "browser_stream": "rxdb",
+            "session_id": session_id,
+            "tab_id": tab_id,
+            "frame_id": frame_id,
+            "url": final_url,
+            "title": title,
+            "frame_hash": frame_hash,
+            "size_bytes": size_bytes
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
+fn browser_runtime_reference_dir(root: &Path) -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("CTOX_WEB_BROWSER_REFERENCE_DIR").map(PathBuf::from) {
+        return Some(path);
+    }
+    let root_candidate = root.join("runtime/browser/interactive-reference");
+    if root_candidate.join("package.json").exists() || root_candidate.join("node_modules").is_dir()
+    {
+        return Some(root_candidate);
+    }
+    let home_candidate = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join(".local/state/ctox/browser/interactive-reference"));
+    if let Some(path) = home_candidate {
+        if path.join("package.json").exists() || path.join("node_modules").is_dir() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+async fn find_browser_document(
+    database: &Arc<RxDatabase>,
+    collection_name: &str,
+    id: &str,
+) -> anyhow::Result<Value> {
+    let collection = database
+        .collection(collection_name)
+        .with_context(|| format!("{collection_name} collection is not registered"))?;
+    let existing = collection
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ "id": { "$eq": id } })),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query {collection_name} {id}: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec {collection_name} {id} query: {err}"))?;
+    Ok(existing
+        .is_object()
+        .then_some(existing)
+        .unwrap_or(Value::Null))
+}
+
+async fn has_newer_browser_runtime_command(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+    command_created_at_ms: u64,
+) -> anyhow::Result<bool> {
+    let collection = database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?;
+    let rows = collection
+        .find(Some(MangoQuery {
+            selector: Some(json!({ "module": { "$eq": "browser" } })),
+            limit: Some(500),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query newer browser commands: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec newer browser commands query: {err}"))?;
+    let Some(commands) = rows.as_array() else {
+        return Ok(false);
+    };
+    Ok(commands.iter().any(|command| {
+        let Some(candidate_type) = command
+            .get("command_type")
+            .or_else(|| command.get("type"))
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        if !is_browser_runtime_command(candidate_type) {
+            return false;
+        }
+        let candidate_session_id = command
+            .get("payload")
+            .and_then(|payload| payload.get("session_id"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("browser_session_default");
+        if candidate_session_id != session_id {
+            return false;
+        }
+        let candidate_created_at_ms = command
+            .get("created_at_ms")
+            .or_else(|| command.get("updated_at_ms"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        candidate_created_at_ms > command_created_at_ms
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_browser_session(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+    tab_id: &str,
+    status: &str,
+    runtime_status: &str,
+    url: &str,
+    title: &str,
+    viewport_w: u64,
+    viewport_h: u64,
+    frame_id: Option<&str>,
+    frame_seq: u64,
+    command_type: &str,
+    command_created_at_ms: u64,
+    error: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = now_ms() as u64;
+    let existing = find_browser_document(database, "browser_sessions", session_id).await?;
+    let existing_command_created_at_ms = existing
+        .get("payload")
+        .and_then(|payload| payload.get("last_command_created_at_ms"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if existing_command_created_at_ms > command_created_at_ms {
+        return Ok(());
+    }
+    let mut payload = json!({
+        "browser_stream": "rxdb",
+        "last_command_type": command_type,
+        "last_command_created_at_ms": command_created_at_ms,
+        "runtime": "ctox-web-stack",
+        "updated_by": "native-rxdb-peer"
+    });
+    if let Some(error) = error {
+        payload["error"] = Value::String(error.to_string());
+    }
+    let doc = json!({
+        "id": session_id,
+        "owner_user_id": "ctox",
+        "controller_user_id": "ctox",
+        "status": status,
+        "runtime_status": runtime_status,
+        "current_tab_id": tab_id,
+        "current_url": url,
+        "title": title,
+        "viewport_w": viewport_w,
+        "viewport_h": viewport_h,
+        "device_scale_factor": 1,
+        "frame_rate_target": 0,
+        "active_frame_id": frame_id.unwrap_or_default(),
+        "last_frame_seq": frame_seq,
+        "last_input_seq": 0,
+        "pending_input_count": 0,
+        "error": error.unwrap_or_default(),
+        "payload": payload,
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    database
+        .collection("browser_sessions")
+        .context("browser_sessions collection is not registered")?
+        .incremental_upsert(doc)
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert browser session {session_id}: {err}"))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_browser_tab(
+    database: &Arc<RxDatabase>,
+    tab_id: &str,
+    session_id: &str,
+    title: &str,
+    url: &str,
+    status: &str,
+    loading: bool,
+    frame_id: Option<&str>,
+    frame_seq: u64,
+) -> anyhow::Result<()> {
+    let now = now_ms() as u64;
+    let doc = json!({
+        "id": tab_id,
+        "session_id": session_id,
+        "title": title,
+        "url": url,
+        "status": status,
+        "loading": loading,
+        "active": true,
+        "can_go_back": false,
+        "can_go_forward": false,
+        "frame_seq": frame_seq,
+        "last_frame_id": frame_id.unwrap_or_default(),
+        "last_frame_at_ms": frame_id.map(|_| now).unwrap_or(0),
+        "error": "",
+        "payload": {
+            "browser_stream": "rxdb",
+            "updated_by": "native-rxdb-peer"
+        },
+        "created_at_ms": now,
+        "updated_at_ms": now
+    });
+    database
+        .collection("browser_tabs")
+        .context("browser_tabs collection is not registered")?
+        .incremental_upsert(doc)
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert browser tab {tab_id}: {err}"))?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn upsert_browser_frame(
+    database: &Arc<RxDatabase>,
+    frame_id: &str,
+    session_id: &str,
+    tab_id: &str,
+    seq: u64,
+    mime_type: &str,
+    data: &str,
+    width: u64,
+    height: u64,
+    size_bytes: u64,
+    frame_hash: &str,
+) -> anyhow::Result<()> {
+    let now = now_ms() as u64;
+    let doc = json!({
+        "id": frame_id,
+        "session_id": session_id,
+        "tab_id": tab_id,
+        "seq": seq,
+        "mime_type": mime_type,
+        "encoding": "base64",
+        "data": data,
+        "width": width,
+        "height": height,
+        "viewport_w": width,
+        "viewport_h": height,
+        "quality": 100,
+        "size_bytes": size_bytes,
+        "frame_hash": frame_hash,
+        "captured_at_ms": now,
+        "expires_at_ms": now + 15 * 60 * 1000,
+        "updated_at_ms": now
+    });
+    database
+        .collection("browser_frames")
+        .context("browser_frames collection is not registered")?
+        .incremental_upsert(doc)
+        .await
+        .map_err(|err| anyhow::anyhow!("upsert browser frame {frame_id}: {err}"))?;
+    Ok(())
+}
+
+async fn mark_browser_runtime_command_completed(
+    database: &Arc<RxDatabase>,
+    document: &Value,
+    accepted: &Value,
+    result: Value,
+) -> anyhow::Result<()> {
+    let command_id = document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .context("browser command is missing id")?;
+    let mut next = document.clone();
+    if let Some(object) = next.as_object_mut() {
+        object.insert("status".to_string(), Value::String("completed".to_string()));
+        object.insert(
+            "task_status".to_string(),
+            Value::String("completed".to_string()),
+        );
+        if let Some(task_id) = accepted.get("task_id") {
+            object.insert("task_id".to_string(), task_id.clone());
+        }
+        object.insert("result".to_string(), result);
+        object.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+    }
+    database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?
+        .incremental_upsert(next)
+        .await
+        .map_err(|err| anyhow::anyhow!("complete browser command {command_id}: {err}"))?;
+    Ok(())
+}
+
+async fn mark_browser_runtime_command_failed(
+    database: &Arc<RxDatabase>,
+    command_id: &str,
+    payload: &Value,
+    error: &anyhow::Error,
+) -> anyhow::Result<()> {
+    let session_id = payload
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser_session_default");
+    let tab_id = payload
+        .get("tab_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser_tab_default");
+    let message = error.to_string();
+    upsert_browser_session(
+        database,
+        session_id,
+        tab_id,
+        "failed",
+        "failed",
+        payload
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or("https://example.com"),
+        "Remote Browser",
+        payload
+            .get("viewport_w")
+            .and_then(Value::as_u64)
+            .unwrap_or(1280),
+        payload
+            .get("viewport_h")
+            .and_then(Value::as_u64)
+            .unwrap_or(720),
+        None,
+        0,
+        "browser.runtime.failed",
+        now_ms() as u64,
+        Some(&message),
+    )
+    .await?;
+    let commands = database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?;
+    let existing = commands
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ "id": { "$eq": command_id } })),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query failed browser command {command_id}: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec failed browser command {command_id}: {err}"))?;
+    let mut next = if existing.is_object() {
+        existing
+    } else {
+        json!({ "id": command_id, "command_id": command_id })
+    };
+    if let Some(object) = next.as_object_mut() {
+        object.insert("status".to_string(), Value::String("failed".to_string()));
+        object.insert(
+            "task_status".to_string(),
+            Value::String("failed".to_string()),
+        );
+        object.insert("error".to_string(), Value::String(message.clone()));
+        object.insert(
+            "result".to_string(),
+            json!({
+                "ok": false,
+                "browser_stream": "rxdb",
+                "error": message
+            }),
+        );
+        object.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+    }
+    commands
+        .incremental_upsert(next)
+        .await
+        .map_err(|err| anyhow::anyhow!("mark browser command {command_id} failed: {err}"))?;
+    Ok(())
+}
+
+fn normalize_browser_runtime_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        trimmed.to_string()
+    } else {
+        format!("https://{trimmed}")
+    }
+}
+
+fn browser_frame_hash(data: &str) -> String {
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(data.as_bytes());
+    let digest = hasher.finalize();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(digest)
 }
 
 async fn sync_business_users_with_database(
@@ -1931,8 +2850,7 @@ async fn sync_business_record_projections_with_database(
                     max_updated_at_ms = max_updated_at_ms.max(updated_at_ms);
                 }
             }
-            collection
-                .incremental_upsert(document)
+            upsert_business_record_projection_document(&collection, document)
                 .await
                 .map_err(|err| {
                     anyhow::anyhow!("upsert {collection_name} business record projection: {err}")
@@ -1987,12 +2905,34 @@ async fn upsert_business_record_projection(
             .await
             .map_err(|err| anyhow::anyhow!("upsert {collection_name} projection: {err}"))?;
     } else {
-        collection
-            .incremental_upsert(document)
+        upsert_business_record_projection_document(&collection, document)
             .await
             .map_err(|err| anyhow::anyhow!("upsert {collection_name} projection: {err}"))?;
     }
     Ok(())
+}
+
+async fn upsert_business_record_projection_document(
+    collection: &Arc<RxCollection>,
+    document: Value,
+) -> anyhow::Result<()> {
+    match collection.incremental_upsert(document.clone()).await {
+        Ok(_) => Ok(()),
+        Err(err) if is_doc_cache_revision_error(&err) => collection
+            .upsert(document)
+            .await
+            .map(|_| ())
+            .map_err(|fallback_err| {
+                anyhow::anyhow!(
+                    "projection upsert fallback after DOC_CACHE_REV failed: {fallback_err}"
+                )
+            }),
+        Err(err) => Err(anyhow::anyhow!("{err}")),
+    }
+}
+
+fn is_doc_cache_revision_error(error: &rxdb::rx_error::RxError) -> bool {
+    error.code() == "DOC_CACHE_REV" || error.to_string().contains("DOC_CACHE_REV")
 }
 
 #[derive(Debug)]
@@ -3029,7 +3969,7 @@ fn business_record_projection_collections() -> Vec<String> {
     business_os_collections()
         .into_iter()
         .map(|(name, _)| name)
-        .filter(|name| name != "desktop_file_chunks")
+        .filter(|name| !matches!(name.as_str(), "browser_frames" | "desktop_file_chunks"))
         .collect()
 }
 
@@ -3079,6 +4019,61 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn business_record_projection_skips_transient_payload_collections() {
+        let collections = business_record_projection_collections();
+        assert!(!collections.iter().any(|name| name == "browser_frames"));
+        assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
+        assert!(collections.iter().any(|name| name == "browser_tabs"));
+        assert!(collections.iter().any(|name| name == "desktop_files"));
+    }
+
+    #[test]
+    fn projection_upsert_detects_doc_cache_revision_errors() {
+        let revision_error = rxdb::rx_error::new_rx_error("DOC_CACHE_REV", Some(json!({})));
+        let other_error = rxdb::rx_error::new_rx_error("COL4", Some(json!({})));
+
+        assert!(is_doc_cache_revision_error(&revision_error));
+        assert!(!is_doc_cache_revision_error(&other_error));
+    }
+
+    #[test]
+    fn native_peer_status_reports_fresh_heartbeat() {
+        let root = tempfile::tempdir().expect("temp root");
+        let database_path = root.path().join("runtime/ctox.sqlite3");
+        write_native_peer_heartbeat(root.path(), "rxdb-rs-test", &database_path)
+            .expect("write heartbeat");
+
+        let status = native_peer_status(root.path());
+        assert_eq!(status["running"], true);
+        assert_eq!(status["heartbeat"]["fresh"], true);
+        assert_eq!(status["peer_session_id"], "rxdb-rs-test");
+        assert!(is_native_peer_running_for_root(root.path()));
+    }
+
+    #[test]
+    fn native_peer_heartbeat_freshness_expires() {
+        let root = tempfile::tempdir().expect("temp root");
+        let path = native_peer_heartbeat_path(root.path());
+        std::fs::create_dir_all(path.parent().expect("heartbeat parent"))
+            .expect("create heartbeat dir");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({
+                "version": NATIVE_PEER_STATUS_VERSION,
+                "running": true,
+                "pid": 1,
+                "peer_session_id": "rxdb-rs-stale",
+                "updated_at_ms": 1_u64,
+                "database_path": root.path().join("runtime/ctox.sqlite3").display().to_string(),
+            }))
+            .expect("serialize heartbeat"),
+        )
+        .expect("write heartbeat");
+
+        assert!(!native_peer_heartbeat_is_fresh(root.path()));
+    }
 
     #[test]
     fn native_signaling_url_carries_control_plane_metadata() {
@@ -3184,6 +4179,56 @@ mod tests {
             }
             assert_eq!(actual_hash, expected_hash, "schema hash for {collection}");
         }
+    }
+
+    #[tokio::test]
+    async fn native_all_schema_hashes_match_browser_contract_fixture() {
+        let fixture: HashMap<String, String> =
+            serde_json::from_str(include_str!("business_os_schema_hashes.json"))
+                .expect("Business OS schema hash fixture must be valid JSON");
+        let contract = business_os_schema_contract();
+        let mut missing = Vec::new();
+        let mut stale = Vec::new();
+        for (collection, schema_json) in contract {
+            let primary_key = schema_json
+                .get("primaryKey")
+                .and_then(Value::as_str)
+                .expect("schema primaryKey");
+            let schema = rxdb::rx_schema::create_rx_schema(
+                business_os_schema(collection, primary_key),
+                Arc::new(Sha256HashFunction),
+                true,
+            )
+            .expect("schema creates");
+            let actual = schema.hash().await;
+            match fixture.get(collection) {
+                Some(expected) if expected == &actual => {}
+                Some(expected) => stale.push(json!({
+                    "collection": collection,
+                    "expected": expected,
+                    "actual": actual,
+                })),
+                None => missing.push(json!({
+                    "collection": collection,
+                    "actual": actual,
+                })),
+            }
+        }
+        let extra = fixture
+            .keys()
+            .filter(|collection| !contract.contains_key(*collection))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(
+            missing.is_empty() && stale.is_empty() && extra.is_empty(),
+            "{}",
+            json!({
+                "message": "Business OS schema hash fixture drifted from generated schema contract",
+                "missing": missing,
+                "stale": stale,
+                "extra": extra,
+            })
+        );
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {

@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __codingAgentsTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __codingAgentsTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 test('workspace path validation blocks empty and relative paths', () => {
   assert.equal(hooks.validateWorkspacePath('').valid, false);
@@ -54,6 +69,11 @@ test('workspace backend errors stay diagnostic instead of becoming empty state',
     hooks.workspaceLoadErrorFromResult({ ok: false, stderr: 'backend offline' }),
     'backend offline'
   );
+});
+
+test('agent command arguments are scoped once to the requested app', () => {
+  assert.deepEqual(hooks.buildAgyCommandArgs(['status'], 'codex'), ['--app', 'codex', 'status']);
+  assert.deepEqual(hooks.buildAgyCommandArgs(['session', 'list'], 'antigravity'), ['--app', 'antigravity', 'session', 'list']);
 });
 
 test('escaped session text is safe to inject into render fragments', () => {

@@ -1,5 +1,23 @@
 import assert from 'node:assert/strict';
-import { __knowledgeTestHooks as hooks } from './index.js';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
+
+import { build } from 'esbuild';
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+}
+
+const { __knowledgeTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
   buildKnowledgeBundles,

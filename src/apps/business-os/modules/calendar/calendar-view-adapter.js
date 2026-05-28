@@ -59,16 +59,15 @@ export function createCalendarView({
     dayMaxEvents: true,
     eventClick: (info) => {
       if (onEventClick) {
-        const originalId = getOriginalEventId(info.event.id);
-        const original = events.find(e => e.id === originalId);
+        const original = resolveOriginalEventForCalendarClick(info, events);
         onEventClick({
           event: info.event,
           original: original || {
-            id: info.event.id,
-            title: info.event.title,
-            start_time: info.event.start.getTime(),
-            end_time: info.event.end.getTime(),
-            all_day: info.event.allDay
+            id: getCalendarEventId(info) || '',
+            title: info.event?.title || '',
+            start_time: info.event?.start?.getTime?.() || Date.now(),
+            end_time: info.event?.end?.getTime?.() || Date.now() + 60 * 60 * 1000,
+            all_day: !!info.event?.allDay
           }
         });
       }
@@ -198,6 +197,10 @@ function prepareEventsForCalendar(events, calendars, rangeStart, rangeEnd) {
             color: color,
             description: ev.description || '',
             location: ev.location || '',
+            sourceEventId: ev.id,
+            extendedProps: {
+              sourceEventId: ev.id
+            },
             editable: true
           });
         });
@@ -224,6 +227,10 @@ function mapSingleEvent(ev, color) {
     color: color,
     description: ev.description || '',
     location: ev.location || '',
+    sourceEventId: ev.id,
+    extendedProps: {
+      sourceEventId: ev.id
+    },
     editable: true
   };
 }
@@ -232,7 +239,42 @@ function getOriginalEventId(eventCalendarId) {
   return String(eventCalendarId || '').replace(/_occ_\d+$/, '');
 }
 
+function getCalendarEventId(info) {
+  return info?.event?.id
+    || info?.event?._def?.publicId
+    || info?.event?.sourceEventId
+    || info?.event?.extendedProps?.sourceEventId
+    || info?.event?.extendedProps?.originalId
+    || info?.event?.extendedProps?.id
+    || '';
+}
+
+function resolveOriginalEventForCalendarClick(info, events) {
+  const eventId = getCalendarEventId(info);
+  const originalId = getOriginalEventId(eventId);
+  if (originalId) {
+    const directMatch = events.find(e => e.id === originalId);
+    if (directMatch) return directMatch;
+  }
+
+  const title = info?.event?.title || '';
+  const startMs = info?.event?.start?.getTime?.();
+  const endMs = info?.event?.end?.getTime?.();
+  if (!title) return null;
+
+  const exactTimeMatch = events.find(e => (
+    e.title === title
+    && Number(e.start_time) === startMs
+    && Number(e.end_time) === endMs
+  ));
+  if (exactTimeMatch) return exactTimeMatch;
+
+  const sameTitle = events.filter(e => e.title === title);
+  return sameTitle.length === 1 ? sameTitle[0] : null;
+}
+
 export const __calendarViewAdapterTestHooks = {
   getOriginalEventId,
   prepareEventsForCalendar,
+  resolveOriginalEventForCalendarClick,
 };

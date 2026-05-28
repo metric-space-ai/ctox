@@ -1,7 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __notesTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __notesTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 const t = (_key, fallback) => fallback;
 
@@ -15,8 +30,8 @@ test('empty state distinguishes sync diagnostics from real empty lists', () => {
     t,
   });
 
-  assert.equal(diagnostic.kind, 'diagnostic');
-  assert.match(diagnostic.body, /missing/);
+  assert.equal(diagnostic.kind, 'unavailable');
+  assert.doesNotMatch(diagnostic.body, /missing|collection/i);
 
   const empty = hooks.buildNotesEmptyState({
     totalNotes: 0,

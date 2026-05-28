@@ -452,7 +452,6 @@ async function refreshAll({ seed = false } = {}) {
   render();
   state.diagnostics.reloadFinishedAt = Date.now();
   setStatus(reloadStatusText());
-  renderDiagnosticsIntoDom();
 }
 
 async function loadLocalState() {
@@ -813,8 +812,6 @@ function renderLeft() {
           ${state.sourceModels.map(renderRankingRow).join('') || renderNoSourcesEmpty(task)}
         </div>
       </section>
-      ${renderDiagnosticsPanel()}
-      <section class="research-status-line">${escapeHtml(state.status || task?.knowledge_domain || '')}</section>
     </div>
   `;
 }
@@ -846,7 +843,7 @@ function renderRankingRow(source) {
 function renderNoTasksEmpty() {
   const empty = emptyStateForNoTask();
   return `
-    <div class="research-empty research-empty-diagnostic">
+    <div class="research-empty research-empty-card">
       <strong>${escapeHtml(empty.title)}</strong>
       <span>${escapeHtml(empty.body)}</span>
     </div>
@@ -857,54 +854,27 @@ function renderNoSourcesEmpty(task) {
   const failure = diagnosticFailures()[0];
   let body = state.t('noSourcesLoaded', 'Noch keine Quellen geladen.');
   if (failure) {
-    body = state.t('syncFailedSources', 'Quellen konnten wegen eines Collection- oder Sync-Problems nicht geladen werden.');
+    body = state.t('sourcesTemporarilyUnavailable', 'Quellen sind gerade nicht verfügbar. Bitte später erneut versuchen.');
   } else if (task && !knowledgeBaseForTask(task)) {
-    body = state.t('selectedDomainMissing', 'Die ausgewählte Knowledge Domain ist lokal nicht verfügbar.');
+    body = state.t('selectedDomainMissing', 'Die ausgewählte Knowledge Base ist gerade nicht verfügbar.');
   } else if (task) {
-    body = state.t('selectedDomainNoSources', 'Die Knowledge Domain ist geladen, enthält aber noch keine Quellenzeilen für dieses Dashboard.');
+    body = state.t('selectedDomainNoSources', 'Diese Knowledge Base enthält noch keine Quellen für dieses Dashboard.');
   }
-  return `<div class="research-empty research-empty-diagnostic"><strong>${escapeHtml(state.t('sources', 'Sources'))}</strong><span>${escapeHtml(body)}</span></div>`;
-}
-
-function renderDiagnosticsPanel() {
-  const rows = diagnosticRows();
-  const failures = rows.filter((row) => row.kind === 'failed');
-  const status = failures.length
-    ? state.t('syncFailedShort', 'Sync-Problem')
-    : state.diagnostics.reloadFinishedAt
-      ? state.t('loadedShort', 'geladen')
-      : state.t('pendingShort', 'wartet');
-  return `
-    <section class="research-diagnostics" data-research-diagnostics aria-live="polite">
-      <div class="research-section-head flush">
-        <strong>${escapeHtml(state.t('reloadDiagnostics', 'Reload Diagnose'))}</strong>
-        <span>${escapeHtml(status)}</span>
-      </div>
-      <div class="research-diagnostic-summary">${escapeHtml(reloadStatusText())}</div>
-      <div class="research-diagnostic-list">
-        ${rows.map((row) => `
-          <div class="research-diagnostic-row research-diagnostic-${escapeHtml(row.kind)}">
-            <span>${escapeHtml(row.collection)}</span>
-            <strong>${escapeHtml(row.label)}</strong>
-          </div>
-        `).join('')}
-      </div>
-    </section>
-  `;
+  return `<div class="research-empty research-empty-card"><strong>${escapeHtml(state.t('sources', 'Sources'))}</strong><span>${escapeHtml(body)}</span></div>`;
 }
 
 function emptyStateForNoTask() {
   const failure = diagnosticFailures()[0];
   if (failure) {
     return {
-      title: state.t('syncFailedTitle', 'Daten konnten nicht geladen werden'),
-      body: state.t('syncFailedBody', `Collection ${failure.collection} meldet: ${failure.message}`, failure.collection, failure.message),
+      title: state.t('researchUnavailableTitle', 'Research ist gerade nicht verfügbar'),
+      body: state.t('researchUnavailableBody', 'Dashboards erscheinen automatisch, sobald die Knowledge Base verfügbar ist.'),
     };
   }
   if (!state.knowledgeBases.length) {
     return {
-      title: state.t('noKnowledgeDomains', 'Keine Knowledge-Domains lokal verfügbar'),
-      body: state.t('noKnowledgeDomainsBody', 'Daten neu laden zeigt hier Collection- und Sync-Diagnosen; Research-Dashboards erscheinen, sobald Knowledge-Tabellen lokal verfügbar sind.'),
+      title: state.t('noKnowledgeDomains', 'Noch keine Knowledge Base verfügbar'),
+      body: state.t('noKnowledgeDomainsBody', 'Lege eine Knowledge Base an oder lade Inhalte, um ein Research-Dashboard zu starten.'),
     };
   }
   return {
@@ -918,8 +888,7 @@ function renderCenter() {
   if (!root) return;
   const task = selectedTask();
   if (!task) {
-    const empty = emptyStateForNoTask();
-    root.innerHTML = `<div class="research-empty-state"><strong>${escapeHtml(empty.title)}</strong><span>${escapeHtml(empty.body)}</span></div>`;
+    root.innerHTML = renderNoTaskCenter();
     return;
   }
   const axisPair = normalizedAxisPair(task);
@@ -929,12 +898,13 @@ function renderCenter() {
   root.innerHTML = `
     <header class="research-pane-header research-center-header">
       <div><span>${escapeHtml(task.knowledge_domain)}</span><h2>${escapeHtml(task.title)}</h2></div>
-      <div style="display: flex; align-items: center; gap: 10px;">
-        ${state.showDiagram ? `<span class="research-map-hint" style="margin-right: 6px;">Scroll zoom · drag pan</span>` : ''}
+      <div class="research-center-actions">
+        ${state.showDiagram ? `<span class="research-map-hint">Scroll zoom · drag pan</span>` : ''}
         <button type="button"
                 class="research-icon-button"
                 data-action="toggle-diagram"
                 title="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
+                aria-label="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
                 aria-pressed="${!state.showDiagram}">
           ${iconSvg(state.showDiagram ? 'eyeOff' : 'eye')}
         </button>
@@ -945,7 +915,7 @@ function renderCenter() {
         <div class="research-map-head">
           <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
           ${mapModeToggle()}
-          <button type="button" class="research-map-reset" data-action="reset-map">${escapeHtml(state.t('reset', 'Reset'))}</button>
+          <button type="button" class="research-map-reset" data-action="reset-map" aria-label="${escapeHtml(state.t('resetMapView', 'Kartenansicht zurücksetzen'))}">${escapeHtml(state.t('reset', 'Reset'))}</button>
         </div>
         <div class="research-portfolio-map${isGraphMode ? ' is-discovery-graph' : ''}">
           <div class="research-map-grid" aria-hidden="true"></div>
@@ -969,6 +939,7 @@ function renderCenter() {
                       class="research-view-btn${state.sourcesViewMode === 'table' ? ' is-active' : ''}"
                       data-action="sources-view"
                       data-view-mode="table"
+                      aria-label="${escapeHtml(state.t('tableView', 'Tabelle'))}"
                       title="${escapeHtml(state.t('tableView', 'Tabelle'))}">
                 ${iconSvg('table')}
               </button>
@@ -976,6 +947,7 @@ function renderCenter() {
                       class="research-view-btn${state.sourcesViewMode === 'shards' ? ' is-active' : ''}"
                       data-action="sources-view"
                       data-view-mode="shards"
+                      aria-label="${escapeHtml(state.t('shardsView', 'Karten'))}"
                       title="${escapeHtml(state.t('shardsView', 'Karten'))}">
                 ${iconSvg('grid')}
               </button>
@@ -984,6 +956,41 @@ function renderCenter() {
         </div>
         <div class="research-table-host">
           ${renderActiveTable(task)}
+        </div>
+      </section>
+    </div>
+  `;
+}
+
+function renderNoTaskCenter() {
+  const empty = emptyStateForNoTask();
+  return `
+    <header class="research-pane-header research-center-header">
+      <div><span>${escapeHtml(state.t('webResearch', 'Web Research'))}</span><h2>${escapeHtml(state.t('evidenceWorkbench', 'Portfolio Map & Evidence Workbench'))}</h2></div>
+      <div class="research-header-actions">
+        <button type="button" class="research-icon-button" data-action="refresh" aria-label="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}" title="${escapeHtml(state.t('refreshData', 'Daten neu laden'))}">${iconSvg('refresh')}</button>
+        <button type="button" class="research-icon-button" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+      </div>
+    </header>
+    <div class="research-center-empty-body">
+      <section class="research-empty-state research-empty-state-panel">
+        <strong>${escapeHtml(empty.title)}</strong>
+        <span>${escapeHtml(empty.body)}</span>
+      </section>
+      <section class="research-workbench research-empty-workbench" aria-label="${escapeHtml(state.t('sources', 'Sources'))}">
+        <div class="research-tabs-container">
+          <div class="research-tabs" role="tablist" aria-label="Research views">
+            ${disabledTabButton('sources', state.t('sources', 'Sources'))}
+            ${disabledTabButton('measurements', state.t('measurements', 'Measurements'))}
+            ${disabledTabButton('knowledge', state.t('knowledge', 'Knowledge'))}
+          </div>
+        </div>
+        <div class="research-empty-workbench-body">
+          <label class="research-empty-search-row">
+            <span>${escapeHtml(state.t('sourceSearch', 'Quellensuche'))}</span>
+            <input type="text" disabled placeholder="${escapeHtml(state.t('searchSourcesPlaceholder', 'Quelle suchen: NASA, UIUC, Tyto, PX4, Vibration ...'))}" />
+          </label>
+          <p>${escapeHtml(state.t('noTaskControlsHint', 'Suche, Filter, Portfolio Map und Tabellen werden aktiv, sobald mindestens eine lokale Knowledge Domain mit Quellen geladen ist.'))}</p>
         </div>
       </section>
     </div>
@@ -1567,7 +1574,7 @@ function formValues(form) {
 
 function domainSelectionNote(isEdit) {
   if (isEdit) return state.t('domainLockedEdit', 'Domain bleibt beim Bearbeiten an die bestehende Research-Aufgabe gebunden.');
-  if (!state.knowledgeBases.length) return state.t('noLocalDomainsNote', 'Keine lokalen Knowledge Domains gefunden. Nutze Daten neu laden und prüfe die Reload Diagnose.');
+  if (!state.knowledgeBases.length) return state.t('noLocalDomainsNote', 'Noch keine Knowledge Base verfügbar.');
   return state.t('localDomainsNote', `${state.knowledgeBases.length} lokale Knowledge Domains verfügbar.`, state.knowledgeBases.length);
 }
 
@@ -2340,6 +2347,10 @@ function tabButton(id, label) {
   return `<button type="button" data-action="tab" data-tab="${id}" aria-pressed="${state.activeTab === id}">${escapeHtml(label)}</button>`;
 }
 
+function disabledTabButton(id, label) {
+  return `<button type="button" data-tab="${escapeHtml(id)}" aria-disabled="true" disabled>${escapeHtml(label)}</button>`;
+}
+
 function axisLabel(id, task = selectedTask()) {
   return scoringDimensionsForTask(task).find((axis) => axis.id === id)?.label || groupLabel(id);
 }
@@ -2405,7 +2416,7 @@ function avgScore() {
 
 async function findAll(collection, collectionName = '') {
   if (!collection?.find) {
-    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'missing', state.t('collectionMissing', 'Collection nicht verfügbar'));
+    if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'missing', state.t('collectionMissing', 'Daten nicht verfügbar'));
     return [];
   }
   try {
@@ -2464,24 +2475,13 @@ function diagnosticFailures() {
 
 function reloadStatusText() {
   const failures = diagnosticFailures();
-  if (failures.length) {
-    const first = failures[0];
-    return `${state.t('reloadProblem', 'Reload Diagnose')}: ${first.collection} - ${first.message}`;
-  }
+  if (failures.length) return state.t('researchUnavailableTitle', 'Research ist gerade nicht verfügbar');
   if (!state.diagnostics.reloadFinishedAt) return state.t('loadingKnowledge', 'Knowledge wird geladen...');
   const domainCount = state.knowledgeBases.length;
   const taskCount = state.tasks.length;
   const sourceCount = state.sourceModels.length;
-  if (!domainCount) return state.t('reloadNoDomains', 'Reload abgeschlossen: keine lokalen Knowledge Domains gefunden.');
-  return `Reload abgeschlossen: ${taskCount} Aufgaben, ${domainCount} Domains, ${sourceCount} Sources.`;
-}
-
-function renderDiagnosticsIntoDom() {
-  const host = state.ctx?.host?.querySelector?.('[data-research-diagnostics]');
-  if (!host) return;
-  const template = document.createElement('template');
-  template.innerHTML = renderDiagnosticsPanel().trim();
-  host.replaceWith(template.content.firstElementChild);
+  if (!domainCount) return state.t('noKnowledgeDomains', 'Noch keine Knowledge Base verfügbar');
+  return state.t('researchReadySummary', '{0} Aufgaben, {1} Knowledge Bases, {2} Quellen verfügbar.', taskCount, domainCount, sourceCount);
 }
 
 async function upsertDoc(collection, doc) {
@@ -2659,6 +2659,8 @@ function escapeHtml(value) {
 export const __researchTestHooks = {
   collectionDiagnosticRows,
   diagnosticRows,
+  disabledTabButton,
+  renderNoTaskCenter,
   validateResearchTaskInput,
   validateSelectedResearchTask,
 };

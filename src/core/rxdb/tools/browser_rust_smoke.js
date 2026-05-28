@@ -904,12 +904,45 @@ async function waitForHttp(url, ms = 20000) {
   throw new Error(`timeout waiting for ${url}`);
 }
 
+async function waitForLaunchSyncConfig(ms = 20000) {
+  const url = `http://127.0.0.1:${businessPort}/index.html?rxdbSmoke=1`;
+  const deadline = Date.now() + ms;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    if (globalThis.__ctoxProcess
+      && (globalThis.__ctoxProcess.exitCode !== null || globalThis.__ctoxProcess.signalCode !== null)) {
+      throw new Error(`ctox exited before launch sync config: code=${globalThis.__ctoxProcess.exitCode} signal=${globalThis.__ctoxProcess.signalCode}`);
+    }
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const html = await res.text();
+        const config = parseLaunchSyncConfig(html);
+        if (config) return config;
+      }
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`timeout waiting for launch sync config${lastError ? `: ${lastError.message}` : ''}`);
+}
+
+function parseLaunchSyncConfig(html) {
+  const marker = 'window.CTOX_BUSINESS_OS_CONFIG=';
+  const start = html.indexOf(marker);
+  if (start === -1) return null;
+  const bodyStart = start + marker.length;
+  const end = html.indexOf(';</script>', bodyStart);
+  if (end === -1) return null;
+  return JSON.parse(html.slice(bodyStart, end));
+}
+
 async function waitForNativePeerSyncConfig(ms = 60000) {
-  const url = `http://127.0.0.1:${businessPort}/api/business-os/sync/config`;
   const deadline = Date.now() + ms;
   let lastConfig = null;
   while (Date.now() < deadline) {
-    lastConfig = await waitForHttp(url, Math.min(2000, Math.max(500, deadline - Date.now())));
+    lastConfig = await waitForLaunchSyncConfig(Math.min(2000, Math.max(500, deadline - Date.now())));
     const status = lastConfig?.native_rxdb_peer_status || {};
     if (lastConfig?.native_rxdb_peer_available === true && status.peer_session_id) {
       return lastConfig;
@@ -1066,7 +1099,7 @@ function assertHealthyAdvancedStatusContract(status) {
     problems.push(`unexpected version ${JSON.stringify(status.version)}`);
   }
   if (!status.ok) problems.push('status.ok is false');
-  if (status.sync?.mode !== 'webrtc') problems.push(`sync.mode is ${JSON.stringify(status.sync?.mode)}`);
+  if (!isWebRtcStatusMode(status.sync?.mode)) problems.push(`sync.mode is ${JSON.stringify(status.sync?.mode)}`);
   if (status.sync?.protocol !== 'ctox-rxdb-protocol-v1') {
     problems.push(`sync.protocol is ${JSON.stringify(status.sync?.protocol)}`);
   }
@@ -1167,6 +1200,10 @@ function assertHealthyAdvancedStatusContract(status) {
   if (problems.length) {
     throw new Error(`Business OS advanced status contract failed: ${problems.join('; ')}\n${JSON.stringify(status, null, 2)}`);
   }
+}
+
+function isWebRtcStatusMode(mode) {
+  return typeof mode === 'string' && mode.split('+').includes('webrtc');
 }
 
 async function collectStartupState(page) {
@@ -1708,7 +1745,7 @@ async function waitForCtoxServerListening(child, ms = 60000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 500);
     try {
-      const response = await fetch(`http://127.0.0.1:${businessPort}/api/business-os/sync/config`, {
+      const response = await fetch(`http://127.0.0.1:${businessPort}/index.html?rxdbSmoke=1`, {
         signal: controller.signal,
       });
       if (response.ok) return;
@@ -1848,7 +1885,7 @@ function ensureCtoxSmokeBinary() {
     await waitForCtoxServerListening(ctox);
     outerPhaseTimings.ctoxServerWaitMs = Date.now() - ctoxServerWaitStartedAt;
     const configWaitStartedAt = Date.now();
-    const config = await waitForHttp(`http://127.0.0.1:${businessPort}/api/business-os/sync/config`, syncConfigWaitMs);
+    const config = await waitForLaunchSyncConfig(syncConfigWaitMs);
     outerPhaseTimings.syncConfigWaitMs = Date.now() - configWaitStartedAt;
     console.log(`ctox_sync_config_wait_ms=${outerPhaseTimings.syncConfigWaitMs}`);
     if (!config.native_rxdb_peer_available) {
@@ -2731,6 +2768,25 @@ function ensureCtoxSmokeBinary() {
             }
             await delay(450);
           };
+          const waitForAcceptedCommand = async (type, timeoutMs = 45000) => {
+            const deadline = Date.now() + timeoutMs;
+            let last = null;
+            while (Date.now() < deadline) {
+              const commands = (await db.business_commands.find().exec())
+                .map((doc) => doc.toJSON?.() || doc)
+                .filter((command) => {
+                  const commandType = command.command_type || command.type || '';
+                  return commandType === type
+                    && command.module === 'browser'
+                    && Number(command.created_at_ms || command.updated_at_ms || 0) >= startedAt - 1000;
+                })
+                .sort((a, b) => Number(b.created_at_ms || b.updated_at_ms || 0) - Number(a.created_at_ms || a.updated_at_ms || 0));
+              last = commands[0] || null;
+              if (last && String(last.status || '') !== 'pending_sync') return last;
+              await delay(250);
+            }
+            throw new Error(`Browser lifecycle command ${type} was not accepted: ${JSON.stringify(last, null, 2)}`);
+          };
           await clickControl(...commandTypes[0]);
           {
             const deadline = Date.now() + 45000;
@@ -2761,8 +2817,10 @@ function ensureCtoxSmokeBinary() {
               throw new Error(`Browser lifecycle UI smoke did not render session after Start Remote: ${root.querySelector('[data-browser-session-card]')?.textContent || ''}`);
             }
           }
+          await waitForAcceptedCommand(commandTypes[0][0]);
           for (const command of commandTypes.slice(1)) {
             await clickControl(...command);
+            await waitForAcceptedCommand(command[0]);
           }
 
           const expected = commandTypes.map(([type]) => type);
@@ -3551,7 +3609,18 @@ function ensureCtoxSmokeBinary() {
         }
         db = appState.db.raw;
       } else {
-        const config = await (await fetch('/api/business-os/sync/config')).json();
+        const config = globalThis.CTOX_BUSINESS_OS_CONFIG
+          || await fetch('/index.html?rxdbSmoke=1')
+            .then((res) => res.text())
+            .then((html) => {
+              const marker = 'window.CTOX_BUSINESS_OS_CONFIG=';
+              const start = html.indexOf(marker);
+              if (start === -1) throw new Error('launch sync config missing from index.html');
+              const bodyStart = start + marker.length;
+              const end = html.indexOf(';</script>', bodyStart);
+              if (end === -1) throw new Error('launch sync config script is malformed');
+              return JSON.parse(html.slice(bodyStart, end));
+            });
         const rxdb = await import('/rxdb/dist/ctox-rxdb-js.mjs');
         registerRxdbPlugin(rxdb, rxdb.RxDBMigrationSchemaPlugin || rxdb.RxDBMigrationPlugin);
         const desktopSchemaMod = await import('/modules/desktop/schema.js');
@@ -3904,7 +3973,7 @@ function ensureCtoxSmokeBinary() {
             minTextLength: 80,
           },
           browser: {
-            selectors: ['[data-browser-root]', '.browser-sidebar', '.browser-workbench', '.browser-inspector'],
+            selectors: ['[data-browser-root]', '.browser-sidebar', '.browser-workbench', '[data-browser-canvas]'],
             minTextLength: 70,
           },
           calendar: {

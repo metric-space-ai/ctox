@@ -1736,7 +1736,7 @@ async function addSuppressionFromEngagement(engagementId) {
   }
   const raw = stateRef.ctx?.db?.raw?.outbound_suppression_entries;
   if (!raw) {
-    setError(translate('noSuppressionCollection', 'Suppression-Collection nicht verfügbar.'));
+    setError(translate('noSuppressionCollection', 'Unterdrückungsliste ist gerade nicht verfügbar.'));
     return;
   }
   const id = `supp_${crypto.randomUUID()}`;

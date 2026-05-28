@@ -122,7 +122,7 @@ pub fn handle_browser_command(root: &Path, args: &[String]) -> Result<()> {
 }
 
 pub fn browser_doctor_report(root: &Path, dir: Option<PathBuf>) -> Result<Value> {
-    let reference_dir = dir.unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR));
+    let reference_dir = browser_reference_dir(root, dir);
     let report = build_doctor_report(&reference_dir)?;
     Ok(serde_json::to_value(report)?)
 }
@@ -131,10 +131,7 @@ pub fn prepare_browser_environment(
     root: &Path,
     options: &BrowserPrepareOptions,
 ) -> Result<serde_json::Value> {
-    let reference_dir = options
-        .dir
-        .clone()
-        .unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR));
+    let reference_dir = browser_reference_dir(root, options.dir.clone());
     let install_report = if options.install_reference || options.install_browser {
         Some(serde_json::to_value(install_reference(
             &reference_dir,
@@ -174,10 +171,7 @@ pub fn read_browser_automation_source(script_file: Option<&Path>) -> Result<Stri
 }
 
 pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -> Result<Value> {
-    let reference_dir = request
-        .dir
-        .clone()
-        .unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR));
+    let reference_dir = browser_reference_dir(root, request.dir.clone());
     fs::create_dir_all(&reference_dir).with_context(|| {
         format!(
             "failed to create browser automation reference dir {}",
@@ -187,14 +181,7 @@ pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -
     let _ = ensure_reference_package_json(&reference_dir)?;
     ensure_humanlike_module(&reference_dir)?;
     ensure_stealth_init_module(&reference_dir)?;
-    let doctor = build_doctor_report(&reference_dir)?;
-    if !doctor.automation_ready {
-        anyhow::bail!(
-            "browser automation runtime is not ready for {}. Run `ctox web browser-prepare --dir {} --install-reference [--install-browser]` first.",
-            reference_dir.display(),
-            reference_dir.display()
-        );
-    }
+    let _doctor = ensure_browser_automation_ready(&reference_dir, "browser automation")?;
     let Some(node_path) = find_command_on_path("node") else {
         anyhow::bail!("node is required for browser automation");
     };
@@ -254,10 +241,7 @@ pub fn run_browser_automation(root: &Path, request: &BrowserAutomationRequest) -
 }
 
 pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -> Result<Value> {
-    let reference_dir = request
-        .dir
-        .clone()
-        .unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR));
+    let reference_dir = browser_reference_dir(root, request.dir.clone());
     fs::create_dir_all(&reference_dir).with_context(|| {
         format!(
             "failed to create browser automation reference dir {}",
@@ -267,14 +251,7 @@ pub fn capture_browser_transport(root: &Path, request: &BrowserCaptureRequest) -
     let _ = ensure_reference_package_json(&reference_dir)?;
     ensure_humanlike_module(&reference_dir)?;
     ensure_stealth_init_module(&reference_dir)?;
-    let doctor = build_doctor_report(&reference_dir)?;
-    if !doctor.automation_ready {
-        anyhow::bail!(
-            "browser capture runtime is not ready for {}. Run `ctox web browser-prepare --dir {} --install-reference [--install-browser]` first.",
-            reference_dir.display(),
-            reference_dir.display()
-        );
-    }
+    let _doctor = ensure_browser_automation_ready(&reference_dir, "browser capture")?;
     let Some(node_path) = find_command_on_path("node") else {
         anyhow::bail!("node is required for browser capture");
     };
@@ -492,11 +469,8 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
                 error: Some("skipped because browser prerequisites are incomplete".to_string()),
             }
         };
-    let automation_ready = ok
-        && node_version_compatible
-        && runner_dependency_installed
-        && runner_browser_installed
-        && smoke.ok;
+    let automation_ready =
+        ok && node_version_compatible && runner_dependency_installed && runner_browser_installed;
     Ok(BrowserDoctorReport {
         ok,
         reference_dir: reference_dir.to_path_buf(),
@@ -518,6 +492,34 @@ fn build_doctor_report(reference_dir: &Path) -> Result<BrowserDoctorReport> {
         smoke,
         automation_ready,
     })
+}
+
+fn ensure_browser_automation_ready(
+    reference_dir: &Path,
+    context_label: &str,
+) -> Result<BrowserDoctorReport> {
+    let mut doctor = build_doctor_report(reference_dir)?;
+    if doctor.automation_ready {
+        return Ok(doctor);
+    }
+
+    let run_npm_install = !doctor.runner_dependency_declared || !doctor.runner_dependency_installed;
+    let install_browser = !doctor.runner_browser_installed;
+    if run_npm_install || install_browser {
+        install_reference(reference_dir, run_npm_install, install_browser)?;
+        doctor = build_doctor_report(reference_dir)?;
+        if doctor.automation_ready {
+            return Ok(doctor);
+        }
+    }
+
+    anyhow::bail!(
+        "{} runtime is not ready for {}. Run `ctox web browser-prepare --dir {} --install-reference [--install-browser]` first. Doctor: {}",
+        context_label,
+        reference_dir.display(),
+        reference_dir.display(),
+        serde_json::to_string(&doctor).unwrap_or_else(|_| "{}".to_string())
+    );
 }
 
 fn run_browser_smoke(
@@ -854,9 +856,15 @@ pub(crate) fn find_command_on_path(program: &str) -> Option<PathBuf> {
 }
 
 fn resolve_reference_dir(root: &Path, args: &[String]) -> PathBuf {
-    find_flag_value(args, "--dir")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| root.join(DEFAULT_REFERENCE_RELATIVE_DIR))
+    browser_reference_dir(root, find_flag_value(args, "--dir").map(PathBuf::from))
+}
+
+fn browser_reference_dir(root: &Path, dir: Option<PathBuf>) -> PathBuf {
+    resolve_root_relative_path(
+        root,
+        dir.or_else(|| std::env::var_os("CTOX_WEB_BROWSER_REFERENCE_DIR").map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_REFERENCE_RELATIVE_DIR)),
+    )
 }
 
 fn bootstrap_payload(reference_dir: &Path) -> serde_json::Value {
@@ -1606,9 +1614,9 @@ fn unix_ts() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use super::browser_doctor_report;
     use super::build_browser_capture_runner_script;
     use super::build_browser_runner_script;
-    use super::browser_doctor_report;
     use super::capture_chrome_extra_args;
     use super::ensure_reference_package_json;
     use super::find_playwright_chromium_executable_in;

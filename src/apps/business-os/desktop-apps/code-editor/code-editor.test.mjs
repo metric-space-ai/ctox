@@ -1,12 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import {
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./app.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const {
   filterSourceFiles,
+  formatSourceContent,
+  isJavaScriptMime,
   normalizeModuleCatalog,
   normalizeSourceFiles,
+  resolveMonacoBaseUrl,
   sourceEditorActionState,
-} from './app.js';
+} = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 
 test('module catalog exposes editable Business OS apps once each', () => {
   const modules = normalizeModuleCatalog([
@@ -49,6 +65,7 @@ test('actions stay disabled until a dirty writable file is selected', () => {
   assert.deepEqual(sourceEditorActionState({}), {
     openApp: false,
     diff: false,
+    format: false,
     revert: false,
     reload: false,
     save: false,
@@ -62,6 +79,7 @@ test('actions stay disabled until a dirty writable file is selected', () => {
   }), {
     openApp: true,
     diff: true,
+    format: true,
     revert: true,
     reload: true,
     save: true,
@@ -73,4 +91,24 @@ test('actions stay disabled until a dirty writable file is selected', () => {
     dirty: true,
     readonly: true,
   }).save, false);
+  assert.equal(sourceEditorActionState({
+    moduleId: 'ctox',
+    hasFile: true,
+    dirty: false,
+    readonly: true,
+  }).format, false);
+});
+
+test('monaco asset path resolves under the Business OS app bundle', () => {
+  assert.equal(
+    resolveMonacoBaseUrl('https://cto1.kunstmen.com/business-os/desktop-apps/code-editor/app.js?v=1'),
+    'https://cto1.kunstmen.com/business-os/vendor/monaco/',
+  );
+  assert.equal(isJavaScriptMime('text/html; charset=utf-8'), false);
+  assert.equal(isJavaScriptMime('application/javascript; charset=utf-8'), true);
+});
+
+test('formatter handles json and low-risk whitespace cleanup', () => {
+  assert.equal(formatSourceContent('{"b":1,"a":2}', 'json'), '{\n  "b": 1,\n  "a": 2\n}\n');
+  assert.equal(formatSourceContent('const value = 1;  \n\n', 'javascript'), 'const value = 1;\n');
 });

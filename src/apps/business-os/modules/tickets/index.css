@@ -1,19 +1,26 @@
 .tickets-module {
   --tickets-left-width: 340px;
   --tickets-right-width: 360px;
+  --tickets-bg: var(--ctox-bg, #0d141a);
+  --tickets-surface: var(--ctox-surface, #121a22);
+  --tickets-surface-2: var(--ctox-surface-2, #16212b);
+  --tickets-border: var(--ctox-border, rgba(148, 163, 184, 0.18));
+  --tickets-text: var(--ctox-text, #e5edf4);
+  --tickets-muted: var(--ctox-muted, #9aa8b5);
+  --tickets-accent: var(--ctox-accent, #53c7b5);
   display: grid;
   grid-template-columns: var(--tickets-left-width) 6px minmax(420px, 1fr) 6px var(--tickets-right-width);
   height: 100%;
   min-height: 0;
-  background: var(--ctox-bg, #f6f7f9);
-  color: var(--ctox-text, #101828);
+  background: var(--tickets-bg);
+  color: var(--tickets-text);
 }
 
 .tickets-pane {
   min-width: 0;
   min-height: 0;
-  border-color: var(--ctox-border, rgba(15, 23, 42, 0.12));
-  background: var(--ctox-surface, #fbfcfd);
+  border-color: var(--tickets-border);
+  background: var(--tickets-surface);
 }
 
 .tickets-left,
@@ -54,8 +61,8 @@
 
 .ticket-row:hover,
 .ticket-row.is-selected {
-  border-color: color-mix(in srgb, var(--ctox-accent, #2563eb) 28%, transparent);
-  background: color-mix(in srgb, var(--ctox-accent, #2563eb) 8%, transparent);
+  border-color: color-mix(in srgb, var(--tickets-accent) 34%, transparent);
+  background: color-mix(in srgb, var(--tickets-accent) 10%, transparent);
 }
 
 .ticket-row strong,
@@ -72,7 +79,7 @@
 .tickets-context-item small,
 .ticket-row-meta {
   overflow: hidden;
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
@@ -90,12 +97,12 @@
   justify-content: space-between;
   gap: 16px;
   padding: 16px 20px;
-  border-bottom: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border-bottom: 1px solid var(--tickets-border);
 }
 
 .tickets-detail-head span,
 .tickets-context-item span {
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   font-size: 12px;
 }
 
@@ -108,9 +115,9 @@
 .tickets-status {
   flex: 0 0 auto;
   padding: 4px 8px;
-  border: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border: 1px solid var(--tickets-border);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--ctox-accent, #2563eb) 8%, transparent);
+  background: color-mix(in srgb, var(--tickets-accent) 10%, transparent);
 }
 
 .tickets-detail-scroll {
@@ -131,7 +138,7 @@
 
 .tickets-section h3 {
   margin: 0;
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0;
@@ -150,13 +157,13 @@
 .tickets-context-item dl div {
   min-width: 0;
   padding: 8px;
-  border: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border: 1px solid var(--tickets-border);
   border-radius: 8px;
 }
 
 .tickets-facts dt,
 .tickets-context-item dt {
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   font-size: 11px;
 }
 
@@ -191,14 +198,14 @@
   gap: 5px;
   min-width: 0;
   padding: 10px;
-  border: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border: 1px solid var(--tickets-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--ctox-surface, #fbfcfd) 92%, var(--ctox-text, #101828) 8%);
+  background: var(--tickets-surface-2);
 }
 
 .ticket-timeline p {
   margin: 4px 0 0;
-  color: var(--ctox-text, #101828);
+  color: var(--tickets-text);
   white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.45;
@@ -206,7 +213,7 @@
 
 .tickets-note {
   margin: 2px 0 0;
-  color: var(--ctox-text, #101828);
+  color: var(--tickets-text);
   white-space: pre-wrap;
   font-size: 12px;
   line-height: 1.45;
@@ -223,23 +230,23 @@
 .tickets-command-button {
   min-height: 30px;
   padding: 0 10px;
-  border: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border: 1px solid var(--tickets-border);
   border-radius: 7px;
-  background: var(--ctox-surface, #fbfcfd);
-  color: var(--ctox-text, #101828);
+  background: var(--tickets-surface-2);
+  color: var(--tickets-text);
   font-size: 12px;
   font-weight: 650;
   cursor: pointer;
 }
 
 .tickets-command-button:hover {
-  border-color: color-mix(in srgb, var(--ctox-accent, #2563eb) 34%, transparent);
-  background: color-mix(in srgb, var(--ctox-accent, #2563eb) 9%, transparent);
+  border-color: color-mix(in srgb, var(--tickets-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--tickets-accent) 12%, transparent);
 }
 
 .tickets-command-status {
   margin: 8px 12px 0;
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   font-size: 12px;
   line-height: 1.35;
 }
@@ -256,9 +263,53 @@
 }
 
 .tickets-empty {
+  display: grid;
+  gap: 6px;
   padding: 14px;
-  color: var(--ctox-muted, #667085);
+  color: var(--tickets-muted);
   font-size: 13px;
+  line-height: 1.45;
+}
+
+.tickets-empty strong {
+  color: var(--tickets-text);
+  font-size: 13px;
+}
+
+.tickets-empty span {
+  display: block;
+  max-width: 46ch;
+}
+
+.tickets-empty.is-centered {
+  min-height: 100%;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+}
+
+.tickets-empty.is-context {
+  padding: 18px 14px;
+}
+
+.tickets-module .ctox-pane-search,
+.tickets-module .ctox-pane-filter {
+  min-height: 34px;
+  border: 1px solid var(--tickets-border);
+  border-radius: 7px;
+  background: var(--tickets-surface-2);
+  color: var(--tickets-text);
+}
+
+.tickets-module .ctox-pane-search::placeholder {
+  color: color-mix(in srgb, var(--tickets-muted) 72%, transparent);
+}
+
+.tickets-module .ctox-pane-search:focus,
+.tickets-module .ctox-pane-filter:focus,
+.tickets-command-button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--tickets-accent) 65%, transparent);
+  outline-offset: 2px;
 }
 
 @media (max-width: 920px) {

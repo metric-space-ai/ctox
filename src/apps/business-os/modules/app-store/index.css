@@ -1,6 +1,10 @@
 /* --- Business OS App Store Module Styling --- */
 
 .app-store-module[data-app-store-root] {
+  --app-store-line: color-mix(in srgb, var(--line) 55%, transparent);
+  --app-store-panel-radius: 8px;
+  --app-store-control-radius: 8px;
+  --app-store-control-bg: color-mix(in srgb, var(--surface-2) 78%, transparent);
   display: grid;
   grid-template-columns: var(--app-store-left-width, 320px) 12px minmax(0, 1fr);
   gap: 0;
@@ -30,8 +34,8 @@
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-panel-radius);
   box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
 }
 
@@ -45,8 +49,8 @@
 /* Center Catalog Grid Pane */
 .store-center {
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-panel-radius);
   box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
 }
 
@@ -88,9 +92,9 @@
 .store-search {
   width: 100%;
   padding: 8px 12px;
-  border-radius: 10px;
-  border: 1px solid var(--hairline, rgba(255, 255, 255, 0.08));
-  background: rgba(0, 0, 0, 0.2);
+  border-radius: var(--app-store-control-radius);
+  border: 1px solid var(--app-store-line);
+  background: var(--app-store-control-bg);
   color: var(--text, #ffffff);
   font-size: 13px;
   outline: none;
@@ -100,6 +104,43 @@
 .store-search:focus {
   border-color: var(--accent, #e5a93c);
   box-shadow: 0 0 0 3px rgba(229, 169, 60, 0.15);
+}
+
+.store-create-scratch-wrapper {
+  padding: 0 16px 16px;
+  border-bottom: 1px solid var(--app-store-line);
+}
+
+.store-action-btn {
+  width: 100%;
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-control-radius);
+  background: var(--app-store-control-bg);
+  color: var(--text-strong, #ffffff);
+  font-size: 12px;
+  font-weight: 760;
+  cursor: pointer;
+  transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+.store-action-btn.primary {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line));
+  background: color-mix(in srgb, var(--accent) 20%, var(--surface));
+  color: var(--text-strong, #ffffff);
+}
+
+.store-action-btn:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+}
+
+.store-action-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 /* Category Navigation */
@@ -123,7 +164,7 @@
   color: var(--text-muted, #a0a0a5);
   font-size: 13px;
   font-weight: 500;
-  border-radius: 8px;
+  border-radius: var(--app-store-control-radius);
   cursor: pointer;
   text-align: left;
   transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -167,7 +208,7 @@
 }
 
 .category-btn.active {
-  background: rgba(229, 169, 60, 0.15);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
   color: var(--accent, #e5a93c);
   font-weight: 600;
 }
@@ -176,9 +217,9 @@
 .store-info-box {
   padding: 16px;
   margin: 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: var(--app-store-panel-radius);
+  background: color-mix(in srgb, var(--surface-2) 54%, transparent);
+  border: 1px solid var(--app-store-line);
   font-size: 11px;
   line-height: 1.5;
   color: var(--text-muted, #8e8e93);
@@ -203,9 +244,9 @@
   width: 100%;
   margin: 12px 0 10px;
   padding: 8px 10px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--app-store-control-radius);
+  border: 1px solid var(--app-store-line);
+  background: var(--app-store-control-bg);
   color: var(--text-strong, #ffffff);
   font-size: 12px;
   font-weight: 700;
@@ -213,7 +254,7 @@
 }
 
 .store-refresh-btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
 }
 
 .store-refresh-btn:disabled {
@@ -244,7 +285,7 @@
 .store-message {
   margin: 14px 24px 0;
   padding: 10px 12px;
-  border-radius: 8px;
+  border-radius: var(--app-store-control-radius);
   border: 1px solid rgba(94, 234, 212, 0.18);
   background: rgba(94, 234, 212, 0.08);
   color: #99f6e4;
@@ -260,11 +301,15 @@
 
 /* Count Badge */
 .store-count-badge {
-  font-size: 11px;
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 4px 8px;
-  border-radius: 12px;
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 760;
+  background: var(--app-store-control-bg);
+  padding: 0 10px;
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-control-radius);
   color: var(--text-muted, #8e8e93);
 }
 
@@ -273,6 +318,7 @@
   flex: 1;
   overflow-y: auto;
   padding: 24px;
+  position: relative;
 }
 
 .store-loading-overlay {
@@ -318,7 +364,7 @@
   grid-column: 1 / -1;
   min-height: 190px;
   border: 1px dashed rgba(255, 255, 255, 0.13);
-  border-radius: 10px;
+  border-radius: var(--app-store-panel-radius);
   background: rgba(255, 255, 255, 0.025);
   display: grid;
   place-content: center;
@@ -342,44 +388,28 @@
 
 /* App Card styling */
 .app-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-panel-radius);
   padding: 18px;
   display: flex;
   flex-direction: column;
   cursor: pointer;
-  transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+  transition: background-color 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
   position: relative;
   overflow: hidden;
 }
 
-.app-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  background: linear-gradient(90deg, #e5a93c, #f59e0b);
-  opacity: 0;
-  transition: opacity 0.3s ease;
-}
-
 .app-card:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(229, 169, 60, 0.25);
+  background: color-mix(in srgb, var(--surface-2) 74%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
   transform: translateY(-2px);
-  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
-}
-
-.app-card:hover::before {
-  opacity: 1;
+  box-shadow: var(--shadow-md, 0 10px 20px rgba(0, 0, 0, 0.3));
 }
 
 .app-card.active {
-  background: rgba(229, 169, 60, 0.08);
-  border-color: rgba(229, 169, 60, 0.4);
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
 }
 
 .app-card-head {
@@ -390,14 +420,26 @@
 }
 
 .app-card-icon {
-  font-size: 24px;
+  font-size: 20px;
   background: rgba(255, 255, 255, 0.05);
   width: 44px;
   height: 44px;
-  border-radius: 10px;
+  flex: 0 0 44px;
+  border-radius: var(--app-store-control-radius);
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.app-card-icon svg,
+.app-logo-large svg {
+  width: 24px;
+  height: 24px;
+  display: block;
+}
+
+.app-card-icon-glyph {
+  line-height: 1;
 }
 
 .app-card-meta {
@@ -426,12 +468,54 @@
   font-size: 12px;
   line-height: 1.4;
   color: var(--text-muted, #a0a0a5);
-  margin: 0 0 16px 0;
+  margin: 0 0 12px 0;
   flex: 1;
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+
+.app-card-version-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 2px;
+  color: var(--text-muted, #8e8e93);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.app-card-version-row span {
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 1px solid var(--app-store-line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-2) 50%, transparent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-mod-state.clean {
+  border-color: rgba(52, 211, 153, 0.22);
+  color: #5eead4;
+}
+
+.app-mod-state.modified {
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fbbf24;
+}
+
+.app-mod-state.unreleased,
+.app-mod-state.unknown {
+  border-color: rgba(248, 113, 113, 0.24);
+  color: #fca5a5;
+}
+
+.app-mod-state.catalog {
+  border-color: rgba(96, 165, 250, 0.2);
+  color: #bfdbfe;
 }
 
 .app-card-footer {
@@ -442,11 +526,144 @@
   border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.store-pane-actions {
+  gap: 10px;
+}
+
+.view-toggle-buttons {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 3px;
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-control-radius);
+  background: var(--app-store-control-bg);
+}
+
+.view-toggle-btn {
+  min-width: 32px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, #8e8e93);
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.view-toggle-btn.active,
+.view-toggle-btn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+  color: var(--accent, #e5a93c);
+}
+
+.view-toggle-btn svg {
+  stroke: currentColor;
+}
+
 .app-status-badge {
   font-size: 10px;
   font-weight: 700;
   padding: 2px 6px;
   border-radius: 6px;
+}
+
+.app-version-badge,
+.app-category-badge {
+  font-size: 9px;
+  font-weight: 760;
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.app-version-badge {
+  background: color-mix(in srgb, var(--surface-2) 84%, transparent);
+  color: var(--text, #ffffff);
+}
+
+.app-category-badge {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent, #e5a93c);
+}
+
+.store-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  min-width: 0;
+}
+
+.app-logo-large {
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--app-store-control-radius);
+  background: color-mix(in srgb, var(--surface-2) 78%, transparent);
+  font-size: 24px;
+}
+
+.store-detail-heading {
+  min-width: 0;
+}
+
+.store-detail-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+.app-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface-2) 48%, transparent);
+  border: 1px solid var(--app-store-line);
+  border-radius: var(--app-store-panel-radius);
+  margin-bottom: 18px;
+}
+
+.info-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-muted, #8e8e93);
+  font-size: 8px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.info-value {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong, #ffffff);
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.store-readme-section h4 {
+  margin: 0 0 10px;
+  color: var(--text-strong, #ffffff);
+  font-size: 11px;
+  font-weight: 760;
+  text-transform: uppercase;
+}
+
+.store-readme-section [data-readme-content] {
+  color: var(--text, #e4e4e7);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .app-status-badge.installed {
@@ -540,7 +757,7 @@
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 700;
-  border-radius: 6px;
+  border-radius: var(--app-store-control-radius);
   cursor: pointer;
   border: 1px solid transparent;
   transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
@@ -549,12 +766,12 @@
 }
 
 .card-btn.primary {
-  background: var(--accent, #e5a93c);
-  color: #111112;
+  background: color-mix(in srgb, var(--accent) 80%, var(--surface));
+  color: var(--bg, #111112);
 }
 
 .card-btn.primary:hover {
-  background: #f59e0b;
+  background: var(--accent, #f59e0b);
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(229, 169, 60, 0.2);
 }
@@ -636,12 +853,7 @@
 }
 
 .store-card-grid.is-list-view .app-card::before {
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  height: 100%;
-  background: linear-gradient(180deg, #e5a93c, #f59e0b);
+  display: none;
 }
 
 .store-card-grid.is-list-view .app-card-head {
@@ -679,14 +891,100 @@
   justify-content: flex-end;
 }
 
-.view-toggle-buttons .view-toggle-btn {
-  min-width: 34px;
-}
-
 .store-detail-empty {
   margin: 0;
   color: var(--text-muted, #8e8e93);
   font-size: 12px;
+}
+
+.category-btn:focus-visible,
+.store-action-btn:focus-visible,
+.store-refresh-btn:focus-visible,
+.view-toggle-btn:focus-visible,
+.card-btn:focus-visible,
+.app-card:focus-visible,
+.ctox-drawer-close:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 820px) {
+  .app-store-module[data-app-store-root] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 10px;
+    padding: 10px;
+    overflow-y: auto;
+  }
+
+  .app-store-col-resizer {
+    display: none;
+  }
+
+  .store-left,
+  .store-center {
+    min-height: 0;
+  }
+
+  .store-left {
+    max-height: 42svh;
+  }
+
+  .store-category-list {
+    flex: 0 0 auto;
+    max-height: 190px;
+  }
+
+  .store-info-box {
+    margin: 10px 16px 14px;
+  }
+
+  .store-pane-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .store-grid-workspace {
+    padding: 14px;
+  }
+
+  .store-card-grid {
+    grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+    gap: 12px;
+  }
+
+  .store-card-grid.is-list-view .app-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .store-card-grid.is-list-view .app-card-head,
+  .store-card-grid.is-list-view .app-card-desc,
+  .store-card-grid.is-list-view .app-card-actions,
+  .store-card-grid.is-list-view .app-card-footer {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .app-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .store-detail-title-row {
+    align-items: flex-start;
+  }
+
+  .app-card-actions {
+    gap: 6px;
+  }
+
+  .card-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
 }
 
 /* Custom Scrollbars */

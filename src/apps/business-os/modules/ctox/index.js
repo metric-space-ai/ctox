@@ -128,8 +128,8 @@ const labels = {
     webStackLoading: 'Web Stack Projektion wird geladen…',
     webStackConnecting: 'RxDB ist verbunden, die CTOX Web-Stack-Projektion fehlt noch.',
     webStackUnavailable: 'Web Stack ist gerade nicht erreichbar.',
-    webStackSyncRequired: 'Sync-Diagnose erforderlich',
-    webStackProjectionMissing: 'Keine Web-Stack-Projektion in RxDB. Aktualisieren prüft erneut; Credentials bleiben außerhalb von RxDB.',
+    webStackSyncRequired: 'Verbindung prüfen',
+    webStackProjectionMissing: 'Der Web Stack ist gerade nicht vollständig verfügbar. Aktualisieren prüft erneut.',
     webStackCredentialSaved: 'Credential gespeichert.',
     webStackAuthQueued: 'Browser-Login angefordert.',
     webStackRecentCaptures: 'Letzte Captures',
@@ -251,8 +251,8 @@ const labels = {
     webStackLoading: 'Loading Web Stack projection…',
     webStackConnecting: 'RxDB is connected, but the CTOX Web Stack projection is still missing.',
     webStackUnavailable: 'Web Stack is currently unreachable.',
-    webStackSyncRequired: 'Sync diagnostics required',
-    webStackProjectionMissing: 'No Web Stack projection in RxDB. Refresh checks again; credentials stay outside RxDB.',
+    webStackSyncRequired: 'Check connection',
+    webStackProjectionMissing: 'The Web Stack is not fully available right now. Refresh checks again.',
     webStackCredentialSaved: 'Credential saved.',
     webStackAuthQueued: 'Browser login requested.',
     webStackRecentCaptures: 'Recent captures',
@@ -644,10 +644,12 @@ function renderLeft(state) {
   const left = state.ctx.host.querySelector('[data-ctox-left]');
   if (!left) return;
 
-  const taskBoard = left.querySelector('.ctox-task-board');
+  const taskBoard = left.querySelector('.ctox-work-overview');
   const scrollTop = taskBoard ? taskBoard.scrollTop : 0;
 
   const groups = taskGroups(model.tasks);
+  const selectedCategory = state.taskCategoryFilter || 'all';
+  const visibleGroups = filterTaskGroups(groups, selectedCategory);
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
   left.innerHTML = `
@@ -655,17 +657,17 @@ function renderLeft(state) {
       <span>${escapeHtml(t.tasks)}</span>
       <strong>${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</strong>
     </div>
+    ${taskCategoryChips(model.tasks, selectedCategory, state)}
+    <div class="ctox-work-overview">
+      ${workSection('done', t.doneWork, visibleGroups.done, state)}
+      ${workSection('current', t.currentWork, visibleGroups.current, state)}
+      ${workSection('queue', t.queue, [...visibleGroups.blocked, ...visibleGroups.waiting], state)}
+    </div>
     ${inboundChannelPanel(model.inboundChannels, state)}
     ${webStackPanel(state)}
-    <div class="ctox-task-board">
-      ${taskSection('current', t.currentWork, groups.current, state)}
-      ${taskSection('blocked', t.blockedWork, groups.blocked, state)}
-      ${taskSection('waiting', t.waitingWork, groups.waiting, state)}
-      ${taskSection('done', t.doneWork, groups.done, state)}
-    </div>
   `;
 
-  const newTaskBoard = left.querySelector('.ctox-task-board');
+  const newTaskBoard = left.querySelector('.ctox-work-overview');
   if (newTaskBoard) {
     newTaskBoard.scrollTop = scrollTop;
   }
@@ -673,6 +675,12 @@ function renderLeft(state) {
     section.addEventListener('toggle', () => {
       if (section.open) state.openTaskSections.add(section.dataset.taskSection);
       else state.openTaskSections.delete(section.dataset.taskSection);
+    });
+  });
+  left.querySelectorAll('[data-task-category]').forEach((button) => {
+    button.addEventListener('click', () => {
+      state.taskCategoryFilter = button.dataset.taskCategory || 'all';
+      renderLeft(state);
     });
   });
   left.querySelectorAll('[data-task-id]').forEach((button) => {
@@ -683,20 +691,75 @@ function renderLeft(state) {
   wireWebStackPanel(state, left);
 }
 
+function taskCategoryChips(tasks, selectedCategory, state) {
+  const t = labels[state.lang];
+  const categories = new Map();
+  for (const task of tasks) {
+    const key = taskCategoryKey(task);
+    if (!categories.has(key)) categories.set(key, { key, label: taskCategoryLabel(task), count: 0 });
+    categories.get(key).count += 1;
+  }
+  const items = [
+    { key: 'all', label: state.lang === 'de' ? 'Alle' : 'All', count: tasks.length },
+    ...Array.from(categories.values()).sort((left, right) => right.count - left.count || left.label.localeCompare(right.label)),
+  ];
+  return `
+    <div class="ctox-task-filter-chips" aria-label="${escapeAttr(t.tasks)}">
+      ${items.map(({ key, label, count }) => `
+        <button type="button" class="${selectedCategory === key ? 'is-active' : ''}" data-task-category="${escapeAttr(key)}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${count}</strong>
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
+function filterTaskGroups(groups, selectedCategory) {
+  if (!selectedCategory || selectedCategory === 'all') return groups;
+  return Object.fromEntries(Object.entries(groups).map(([key, tasks]) => [
+    key,
+    tasks.filter((task) => taskCategoryKey(task) === selectedCategory),
+  ]));
+}
+
+function taskCategoryKey(task) {
+  return normalizeInboundChannel(task?.channel || task?.channelLabel || task?.source || task?.moduleId || 'ctox');
+}
+
+function taskCategoryLabel(task) {
+  return task?.channelLabel || displayWorkSource(task?.channel || task?.source || task?.moduleId || 'ctox');
+}
+
 function syncOpenTaskSections(state, groups) {
-  if (!state.openTaskSections?.size) state.openTaskSections = new Set(['current']);
+  if (!state.openTaskSections?.size) state.openTaskSections = new Set(['done', 'current', 'queue']);
   const selected = getSelectedTask(state);
   const selectedGroup = selected ? groupKeyForTask(selected) : '';
   if (selectedGroup) state.openTaskSections.add(selectedGroup);
-  if (!groups.current.length && groups.blocked.length && !selectedGroup) state.openTaskSections.add('blocked');
+  if (!groups.current.length && (groups.blocked.length || groups.waiting.length) && !selectedGroup) state.openTaskSections.add('queue');
 }
 
 function groupKeyForTask(task) {
   const status = normalizeCommandStatus(task?.status || '');
   if (['running', 'leased', 'review', 'drafting'].includes(status)) return 'current';
-  if (['blocked', 'failed', 'cancelled', 'handled'].includes(status)) return 'blocked';
   if (['done', 'completed', 'sent', 'approved', 'healthy'].includes(status)) return 'done';
-  return 'waiting';
+  return 'queue';
+}
+
+function workSection(key, title, tasks, state) {
+  const t = labels[state.lang];
+  const open = state.openTaskSections?.has(key) || tasks.some((task) => task.id === state.selectedTaskId);
+  return `
+    <details class="ctox-work-section is-${escapeAttr(key)}" data-task-section="${escapeAttr(key)}" ${open ? 'open' : ''}>
+      <summary>
+        <span>${escapeHtml(title)}</span>
+        <strong>${tasks.length}</strong>
+      </summary>
+      <div class="ctox-task-list">
+        ${tasks.length ? tasks.map((task) => taskRow(task, state)).join('') : `<p>${escapeHtml(t.noWorkHere)}</p>`}
+      </div>
+    </details>
+  `;
 }
 
 function taskSection(key, title, tasks, state) {
@@ -754,11 +817,11 @@ function inboundChannelPanel(channels, state) {
   const t = labels[state.lang];
   if (!channels?.length) return '';
   return `
-    <section class="ctox-inbound-panel ctox-context-item" data-context-label="${escapeAttr(t.inboundChannels)}" data-context-record-id="ctox-inbound-channels">
-      <header>
+    <details class="ctox-aux-section ctox-inbound-panel ctox-context-item" data-context-label="${escapeAttr(t.inboundChannels)}" data-context-record-id="ctox-inbound-channels">
+      <summary>
         <span>${escapeHtml(t.inboundChannels)}</span>
         <strong>${channels.reduce((sum, channel) => sum + channel.count, 0)}</strong>
-      </header>
+      </summary>
       <div class="ctox-inbound-list">
         ${channels.map((channel) => `
           <article class="${channel.active ? 'is-active' : ''}">
@@ -767,7 +830,7 @@ function inboundChannelPanel(channels, state) {
           </article>
         `).join('')}
       </div>
-    </section>
+    </details>
   `;
 }
 
@@ -831,29 +894,29 @@ function webStackPanel(state) {
       : `${summary.credential_configured || 0}/${summary.credential_required || 0} ${t.webStackConfigured}`;
   const statusTone = webStack.error ? 'is-status' : (webStack.notice ? 'is-notice' : '');
   return `
-    <section class="ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
-      <header>
-        <div>
-          <span>${escapeHtml(t.webStack)}</span>
-          <strong>${escapeHtml(headerSummary)}</strong>
-        </div>
+    <details class="ctox-aux-section ctox-web-stack-panel ctox-context-item" data-context-label="${escapeAttr(t.webStack)}" data-context-record-id="ctox-web-stack">
+      <summary>
+        <span>${escapeHtml(t.webStack)}</span>
+        <strong>${escapeHtml(headerSummary)}</strong>
+      </summary>
+      <div class="ctox-web-stack-body">
         <button type="button" data-webstack-refresh aria-label="${escapeAttr(`${t.webStack} aktualisieren`)}" title="${escapeAttr(`${t.webStack} aktualisieren`)}">↻</button>
-      </header>
-      <p class="ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</p>
-      ${projectionMissing ? `<p class="ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</p>` : ''}
-      ${sourceOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
-      <div class="ctox-web-stack-source-list">
-        ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
+        <p class="ctox-web-stack-status ${statusTone}" role="status">${escapeHtml(friendlyStatus)}</p>
+        ${projectionMissing ? `<p class="ctox-web-stack-diagnostic">${escapeHtml(t.webStackProjectionMissing)}</p>` : ''}
+        ${sourceOptions && !projectionMissing ? `<small>${escapeHtml(`${t.webStackSecret}: ${selectedSecret}`)}</small>` : ''}
+        <div class="ctox-web-stack-source-list">
+          ${!projectionMissing && rows ? rows : `<small>${escapeHtml(t.webStackSources)}: ${Number(summary.sources || 0)}${projectionMissing ? ` · ${t.webStackSyncRequired}` : ''}</small>`}
+        </div>
+        <div class="ctox-web-stack-capture-list">
+          <span>${escapeHtml(t.webStackRecentCaptures)}</span>
+          ${captureRows || `<small>${escapeHtml(t.webStackNoCaptures)}</small>`}
+        </div>
+        <div class="ctox-web-stack-capture-list">
+          <span>${escapeHtml(t.webStackRecentExtracts)}</span>
+          ${extractRows || `<small>${escapeHtml(t.webStackNoExtracts)}</small>`}
+        </div>
       </div>
-      <div class="ctox-web-stack-capture-list">
-        <span>${escapeHtml(t.webStackRecentCaptures)}</span>
-        ${captureRows || `<small>${escapeHtml(t.webStackNoCaptures)}</small>`}
-      </div>
-      <div class="ctox-web-stack-capture-list">
-        <span>${escapeHtml(t.webStackRecentExtracts)}</span>
-        ${extractRows || `<small>${escapeHtml(t.webStackNoExtracts)}</small>`}
-      </div>
-    </section>
+    </details>
   `;
 }
 
@@ -2553,7 +2616,20 @@ async function loadLocalBugReports(ctx) {
 }
 
 async function loadHarnessFlowSnapshot() {
-  return emptyHarnessFlow('rxdb_flow_projection_unavailable');
+  try {
+    const collection = state.ctx?.db?.raw?.ctox_runtime_settings
+      || state.ctx?.db?.collections?.ctox_runtime_settings
+      || state.ctx?.db?.collection?.('ctox_runtime_settings');
+    if (!collection) return emptyHarnessFlow('rxdb_flow_projection_unavailable');
+    const doc = await collection.findOne('runtime-settings').exec();
+    const runtimeSettings = doc?.toJSON?.() || null;
+    return runtimeSettings?.harness_flow
+      || runtimeSettings?.harnessFlow
+      || emptyHarnessFlow('rxdb_flow_projection_unavailable');
+  } catch (error) {
+    console.warn('[ctox] harness flow projection unavailable', error);
+    return emptyHarnessFlow('rxdb_flow_projection_unavailable');
+  }
 }
 
 async function loadLocalWebStackOverview(ctx) {

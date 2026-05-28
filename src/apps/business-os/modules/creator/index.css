@@ -13,6 +13,10 @@
   position: relative;
 }
 
+.creator-module [hidden] {
+  display: none !important;
+}
+
 /* Static placeholder for the inline column resizers shipped in HTML. The
    actual drag interaction is still wired up by JS — this rule just keeps
    the resizer cells thin and visually consistent with other modules. */
@@ -109,6 +113,59 @@
   line-height: 1.5;
 }
 
+.creator-right-list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+}
+
+.creator-mini-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--surface-2) 45%, transparent);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.creator-mini-card-main {
+  min-width: 0;
+}
+
+.creator-mini-card-main strong {
+  display: block;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.creator-mini-card-main span {
+  display: block;
+  margin-top: 3px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.creator-mini-card-main p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.creator-mini-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .creator-pane {
   display: flex;
   flex-direction: column;
@@ -189,17 +246,6 @@
 }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
-
-@media (max-width: 768px) {
-  .creator-module[data-creator-root] {
-    grid-template-columns: 1fr;
-  }
-  .creator-left,
-  [data-resizer] {
-    display: none !important;
-  }
-}
-
 
 @keyframes card-appear {
   from {
@@ -282,6 +328,7 @@
   font-family: var(--font-inter), sans-serif;
   font-size: 13px;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  box-sizing: border-box;
 }
 
 .os-textarea {
@@ -289,6 +336,13 @@
   max-height: 180px;
   resize: vertical;
   line-height: 1.5;
+}
+
+.creator-wide-action {
+  width: 100%;
+  margin-top: 10px;
+  font-size: 11px;
+  gap: 6px;
 }
 
 .creator-spec-diagnostics {
@@ -428,6 +482,7 @@
   justify-content: center;
   cursor: pointer;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  flex: 0 0 auto;
 }
 
 .os-icon-btn:hover {
@@ -620,7 +675,7 @@
 
 .console-log-entry {
   white-space: pre-wrap;
-  word-break: break-all;
+  overflow-wrap: anywhere;
 }
 
 .console-log-entry.info {
@@ -638,4 +693,106 @@
 .console-log-entry.error {
   color: var(--danger);
   font-weight: 700;
+}
+
+@media (max-width: 980px) {
+  .creator-module[data-creator-root] {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: auto;
+    align-content: start;
+    height: 100%;
+    overflow-y: auto;
+    gap: 12px;
+    padding: 10px;
+  }
+
+  .creator-module[data-creator-root] > .ctox-column-resizer {
+    display: none !important;
+  }
+
+  .creator-pane,
+  .creator-left,
+  .creator-center,
+  .creator-right {
+    min-height: 0;
+    height: auto;
+    overflow: visible;
+  }
+
+  .creator-sidebar-content,
+  .creator-center .creator-card {
+    height: auto;
+  }
+
+  .creator-sidebar-body,
+  .creator-right-body {
+    overflow: visible;
+  }
+
+  .creator-card-header,
+  .creator-card-body,
+  .creator-card-footer {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .deploy-action-section {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sync-status {
+    justify-content: flex-start;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 560px) {
+  .creator-module[data-creator-root] {
+    padding: 8px;
+  }
+
+  .creator-left,
+  .creator-right,
+  .creator-center .creator-card {
+    border-radius: 10px;
+  }
+
+  .creator-sidebar-body,
+  .creator-right-body {
+    padding: 14px;
+  }
+
+  .form-grid,
+  .creator-mini-card {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .creator-mini-actions {
+    justify-content: flex-start;
+  }
+
+  .os-title {
+    font-size: 20px;
+  }
+
+  .creator-context-menu {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    top: auto !important;
+    bottom: 76px !important;
+    width: auto !important;
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+  }
+
+  .creator-context-menu footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .creator-context-menu footer button[type="submit"] {
+    width: 100%;
+  }
 }

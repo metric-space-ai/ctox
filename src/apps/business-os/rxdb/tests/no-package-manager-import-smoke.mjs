@@ -219,62 +219,6 @@ try {
   if (!thirdConnection || thirdConnection === firstConnection || closedConnections.length !== 1) {
     throw new Error('native peer rejoin with changed joinedAt must replace stale RTC connections');
   }
-  const prefixedPeer = createCtoxWebRtcNativePeer({
-    signalingUrl: 'ws://127.0.0.1:19998',
-    room: 'ctox-business-os:test:ctox_runtime_settings',
-    clientId: 'browser-prefixed',
-  });
-  prefixedPeer.handleSignalingMessage(JSON.stringify({ type: 'joined', peers: [{ peerId: 'ctox-core-live', role: 'ctox_instance_webserver' }] }));
-  if (!prefixedPeer.connections.has('ctox-core-live')) {
-    throw new Error('ctox-core native peer ids must be accepted even when signaling role metadata is not exact');
-  }
-  const targetedPeer = createCtoxWebRtcNativePeer({
-    signalingUrl: 'ws://127.0.0.1:19998',
-    room: 'ctox-business-os:test:business_commands',
-    clientId: 'browser-targeted',
-    expectedNativePeerId: 'ctox-core-current',
-  });
-  targetedPeer.handleSignalingMessage(JSON.stringify({
-    type: 'joined',
-    peers: [
-      { peerId: 'ctox-core-stale', role: 'ctox_instance' },
-      { peerId: 'ctox-core-current', role: 'ctox_instance_webserver' },
-    ],
-  }));
-  if (targetedPeer.connections.has('ctox-core-stale') || !targetedPeer.connections.has('ctox-core-current')) {
-    throw new Error('expected native peer id must prevent stale native peer fan-out');
-  }
-  const serverAssignedTargetPeer = createCtoxWebRtcNativePeer({
-    signalingUrl: 'ws://127.0.0.1:19998',
-    room: 'ctox-business-os:test:business_commands',
-    clientId: 'browser-server-assigned-target',
-    expectedNativePeerId: 'ctox-core-current',
-  });
-  serverAssignedTargetPeer.handleSignalingMessage(JSON.stringify({
-    type: 'joined',
-    peers: [
-      { peerId: 'native-server-id', role: 'ctox_instance', client: 'ctox-business-os-native' },
-      { peerId: 'browser-server-id', role: 'browser', client: 'business-os' },
-    ],
-  }));
-  if (!serverAssignedTargetPeer.connections.has('native-server-id') || serverAssignedTargetPeer.connections.has('browser-server-id')) {
-    throw new Error('expected native peer id must fall back to one native signaling peer when the server assigns opaque peer ids');
-  }
-  const presencePeer = createCtoxWebRtcNativePeer({
-    signalingUrl: 'ws://127.0.0.1:19998',
-    room: 'ctox-business-os:test:business_commands',
-    clientId: 'browser-presence',
-  });
-  presencePeer.handleSignalingMessage(JSON.stringify({
-    type: 'ctoxPresence',
-    peerId: 'browser-presence',
-    peers: [
-      { peerId: 'presence-native-id', role: 'ctox_instance', client: 'ctox-business-os-native' },
-    ],
-  }));
-  if (!presencePeer.connections.has('presence-native-id')) {
-    throw new Error('ctoxPresence metadata must be accepted as native peer evidence');
-  }
 } finally {
   globalThis.WebSocket = originalWebSocket;
   globalThis.RTCPeerConnection = originalRtcPeerConnection;

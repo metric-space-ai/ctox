@@ -73,11 +73,25 @@
 
 .research-header-actions,
 .research-axis-tools,
-.research-tabs {
+.research-tabs,
+.research-center-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+
+.research-center-actions {
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.research-map-hint {
+  margin-right: 6px;
+  color: var(--research-muted);
+  font-size: 11px;
+  font-weight: 760;
+  white-space: nowrap;
 }
 
 .research-icon-button,
@@ -856,66 +870,6 @@
   justify-content: flex-start;
 }
 
-.research-diagnostics {
-  display: grid;
-  gap: 8px;
-  padding: 9px;
-  border-top: 1px solid color-mix(in srgb, var(--research-line) 78%, transparent);
-}
-
-.research-diagnostic-summary {
-  color: var(--research-muted);
-  font-size: 12px;
-}
-
-.research-diagnostic-list {
-  display: grid;
-  gap: 4px;
-}
-
-.research-diagnostic-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  border: 1px solid var(--research-line);
-  border-radius: 6px;
-  padding: 3px 7px;
-  color: var(--research-muted);
-  font-size: 11px;
-}
-
-.research-diagnostic-row span,
-.research-diagnostic-row strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-diagnostic-row strong {
-  font-weight: 820;
-}
-
-.research-diagnostic-ok strong,
-.research-diagnostic-local strong {
-  color: var(--research-good);
-}
-
-.research-diagnostic-pending strong,
-.research-diagnostic-missing strong {
-  color: var(--research-warn);
-}
-
-.research-diagnostic-failed {
-  border-color: color-mix(in srgb, var(--research-risk) 54%, var(--research-line));
-  background: color-mix(in srgb, var(--research-risk) 8%, transparent);
-}
-
-.research-diagnostic-failed strong {
-  color: var(--research-risk);
-}
-
 @keyframes research-pulse {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--research-warn) 42%, transparent); }
   100% { box-shadow: 0 0 0 8px transparent; }
@@ -1019,7 +973,7 @@
   font-size: 13px;
 }
 
-.research-empty-diagnostic {
+.research-empty-card {
   display: grid;
   gap: 3px;
   border: 1px dashed color-mix(in srgb, var(--research-line) 88%, transparent);
@@ -1028,18 +982,18 @@
   padding: 10px;
 }
 
-.research-empty-diagnostic strong,
-.research-empty-diagnostic span {
+.research-empty-card strong,
+.research-empty-card span {
   min-width: 0;
 }
 
-.research-empty-diagnostic strong {
+.research-empty-card strong {
   color: var(--research-text);
   font-size: 12px;
   font-weight: 820;
 }
 
-.research-empty-diagnostic span {
+.research-empty-card span {
   color: var(--research-muted);
   font-size: 12px;
 }
@@ -1050,6 +1004,69 @@
   gap: 5px;
   height: 100%;
   text-align: center;
+}
+
+.research-center-empty-body {
+  display: grid;
+  grid-template-rows: minmax(180px, 0.9fr) minmax(180px, 0.7fr);
+  gap: 12px;
+  min-height: 0;
+  padding: 12px;
+}
+
+.research-empty-state-panel {
+  min-height: 0;
+  border: 1px dashed color-mix(in srgb, var(--research-line) 88%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--research-surface-2) 45%, transparent);
+  padding: 18px;
+}
+
+.research-empty-state-panel strong,
+.research-empty-state-panel span {
+  max-width: 68ch;
+}
+
+.research-empty-workbench {
+  min-height: 0;
+}
+
+.research-empty-workbench-body {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px;
+  color: var(--research-muted);
+  font-size: 12px;
+}
+
+.research-empty-workbench-body p {
+  margin: 0;
+  max-width: 72ch;
+}
+
+.research-empty-search-row {
+  display: grid;
+  gap: 5px;
+  max-width: 560px;
+  color: var(--research-muted);
+  font-size: 11px;
+  font-weight: 780;
+  text-transform: uppercase;
+}
+
+.research-empty-search-row input {
+  width: 100%;
+  min-height: 32px;
+  box-sizing: border-box;
+  border: 1px solid var(--research-line);
+  border-radius: 6px;
+  background: var(--research-surface-2);
+  color: color-mix(in srgb, var(--research-muted) 78%, transparent);
+  font: inherit;
+  font-size: 12px;
+  padding: 0 10px;
 }
 
 .research-drawer {
@@ -1413,7 +1430,16 @@
 @media (max-width: 760px) {
   .research-module {
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(220px, 0.7fr) minmax(420px, 1fr);
+    grid-template-rows: minmax(190px, 0.42fr) minmax(360px, 1fr);
+  }
+
+  .research-module > .ctox-column-resizer,
+  .research-right {
+    display: none;
+  }
+
+  .research-center-empty-body {
+    grid-template-rows: minmax(150px, 0.75fr) minmax(180px, 0.8fr);
   }
 
   .research-center-body {
@@ -1487,7 +1513,7 @@
 .research-view-btn.is-active {
   background: var(--research-surface);
   color: var(--research-accent);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--research-text) 10%, transparent);
 }
 
 /* Shards View Layout & Toolbar */
@@ -1575,35 +1601,19 @@
   gap: 14px;
 }
 
-/* Premium Shard Cards */
-
 .research-source-card {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--research-surface) 95%, var(--research-text)), color-mix(in srgb, var(--research-surface) 90%, var(--research-text)));
+  background: var(--research-surface);
   border: 1px solid var(--research-line);
-  border-radius: 14px;
+  border-radius: 8px;
   padding: 14px;
   box-shadow: 0 4px 14px color-mix(in srgb, var(--research-text) 4%, transparent);
-  transition: all 150ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1), transform 150ms cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer;
   position: relative;
   overflow: hidden;
-}
-
-.research-source-card::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: 14px;
-  padding: 1px;
-  background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.01));
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  pointer-events: none;
 }
 
 .research-source-card:hover {
@@ -1614,7 +1624,7 @@
 
 .research-source-card.is-selected {
   border-color: var(--research-accent);
-  background: linear-gradient(180deg, color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)), color-mix(in srgb, var(--research-accent) 3%, var(--research-surface)));
+  background: color-mix(in srgb, var(--research-accent) 5%, var(--research-surface));
   box-shadow: 0 8px 24px color-mix(in srgb, var(--research-accent) 12%, transparent);
 }
 

@@ -43,6 +43,10 @@ const criticalCollections = [
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
+  'browser_sessions',
+  'browser_tabs',
+  'browser_frames',
+  'browser_input_events',
 ];
 const joined = JSON.stringify({
   type: 'joined',
@@ -52,19 +56,23 @@ const joined = JSON.stringify({
 const peers = criticalCollections.map((collection) => createPeer(collection, `browser-${collection}`));
 for (const peer of peers) peer.handleSignalingMessage(joined);
 
-const optionalPeer = createPeer('desktop_windows', 'browser-optional');
-optionalPeer.handleSignalingMessage(joined);
+const optionalPeers = Array.from({ length: 8 }, (_, index) => createPeer(`desktop_windows_${index}`, `browser-optional-${index}`));
+for (const peer of optionalPeers) peer.handleSignalingMessage(joined);
 await delay(10);
 
-const snapshot = optionalPeer.getTransportStatus().rtcConnectionPool;
-assertEqual(snapshot.maxActive, 8, 'browser RTC pool must leave headroom after shell-critical startup');
-assertEqual(snapshot.active, 5, 'critical collections must consume the active RTC pool first');
-assertEqual(snapshot.queued, 1, 'optional collection must wait for critical DataChannels');
+const snapshot = optionalPeers[0].getTransportStatus().rtcConnectionPool;
+assertEqual(snapshot.maxActive, 16, 'browser RTC pool must leave headroom after shell-critical startup');
+assertEqual(snapshot.active, criticalCollections.length, 'only critical browser collections should receive RTC slots before readiness');
+assertEqual(snapshot.queued, optionalPeers.length, 'optional collections must wait for critical DataChannels');
 assertEqual(snapshot.criticalReady, false, 'critical pool must wait for datachannel-open, not slot allocation');
-assertEqual(snapshot.queuedConnections?.[0]?.collection, 'desktop_windows', 'optional collection should be queued');
-assertEqual(snapshot.activeConnections?.map((entry) => entry.collection).join(','), criticalCollections.join(','), 'active pool must contain only shell-critical collections');
+assertEqual(snapshot.queuedConnections?.[0]?.collection, 'desktop_windows_0', 'optional collections should be queued in request order');
+assertEqual(
+  snapshot.activeConnections?.filter((entry) => criticalCollections.includes(entry.collection)).length,
+  criticalCollections.length,
+  'active pool must contain every shell-critical and browser-critical collection'
+);
 
-for (const peer of [...peers, optionalPeer]) peer.close();
+for (const peer of [...peers, ...optionalPeers]) peer.close();
 console.log('ctox-rxdb-js rtc critical pool smoke OK');
 
 function createPeer(collection, clientId) {

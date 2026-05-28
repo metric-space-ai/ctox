@@ -1,5 +1,23 @@
-import assert from 'node:assert/strict';
-import { __ctoxTestHooks as hooks } from './index.js';
+const assert = require('node:assert/strict');
+const { Buffer } = require('node:buffer');
+const { fileURLToPath } = require('node:url');
+const { build } = require('esbuild');
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, `file://${__dirname}/`))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+}
+
+(async () => {
+const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
   clampMetric,
@@ -8,7 +26,9 @@ const {
   labels,
   progressPercent,
   setFlowZoom,
+  taskSteps,
   timelinePanel,
+  webStackStateFromRefreshResult,
   webStackProjectionMissing,
 } = hooks;
 
@@ -38,6 +58,20 @@ test('Web Stack projection failures render as actionable sync diagnostics', () =
   const webStack = { loading: false, error: 'Web Stack projection is not available in RxDB' };
   assert.equal(webStackProjectionMissing(webStack), true);
   assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
+});
+
+test('Web Stack refresh preserves projection-missing diagnostics', () => {
+  const webStack = webStackStateFromRefreshResult(
+    { notice: '', data: null },
+    { ok: false, error: 'Web Stack projection is not available in RxDB' }
+  );
+  assert.equal(webStack.error, 'Web Stack projection is not available in RxDB');
+  assert.equal(webStackProjectionMissing(webStack), true);
+  assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
+});
+
+test('Empty CTOX task selection does not crash task step rendering', () => {
+  assert.deepEqual(taskSteps(null, { model: { timeline: [] } }), []);
 });
 
 test('Flow zoom is symmetric and clamped', () => {
@@ -71,4 +105,8 @@ test('Single-event timeline is diagnostic and disabled', () => {
   assert.match(html, new RegExp(labels.de.timelineUnavailable));
   assert.equal(progressPercent(0, 0), 100);
   assert.equal(clampMetric(999, 0, 10), 10);
+});
+})().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
 });

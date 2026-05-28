@@ -1,7 +1,22 @@
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 import { describe, it } from 'node:test';
 
-import { __explorerTestHooks as explorer } from './app.js';
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./app.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __explorerTestHooks: explorer } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 describe('Explorer app helpers', () => {
   it('keeps existing records visible unless they are explicitly deleted', () => {
@@ -40,5 +55,10 @@ describe('Explorer app helpers', () => {
   it('creates deterministic unique names for uploads', () => {
     assert.equal(explorer.uniqueName('Report.pdf', ['Report.pdf']), 'Report 2.pdf');
     assert.equal(explorer.uniqueName('Report.pdf', ['Report.pdf', 'Report 2.pdf']), 'Report 3.pdf');
+  });
+
+  it('keeps grid rows inside the visible explorer main column', () => {
+    assert.match(bundledSource, /\.app-explorer-grid \{[\s\S]*min-width: 0;/);
+    assert.match(bundledSource, /\.app-explorer-row \{[\s\S]*min-width: 0;/);
   });
 });

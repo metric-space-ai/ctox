@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-runtime-form-fix2';
+const APP_BUILD = '20260528-browser-main1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -16,6 +16,13 @@ const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
+const CRITICAL_SYNC_COLLECTIONS = [
+  'business_module_catalog',
+  'ctox_runtime_settings',
+  'business_commands',
+  'ctox_queue_tasks',
+  'desktop_files',
+];
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
@@ -80,6 +87,8 @@ const state = {
   schemaImportRetries: new Map(),
   schemaRetryTimers: new Map(),
   syncStartedModules: new Set(),
+  deferredSyncModules: new Set(),
+  criticalSyncWarmupPromise: null,
   backgroundModuleWorkScheduled: false,
   ctoxHealth: null,
   fileIntegrityDiagnostics: [],
@@ -99,6 +108,7 @@ const state = {
   moduleCatalogFingerprint: '',
   shellCatalogMergedIds: new Set(),
   initialModuleOpened: false,
+  advancedStatusRequiredRestarts: new Map(),
 };
 
 function resetDataPlaneReady(reason = 'startup') {
@@ -160,6 +170,7 @@ function installAdvancedStatusInterface() {
       const deadline = Date.now() + timeoutMs;
       let lastSnapshot = null;
       while (Date.now() < deadline) {
+        await ensureAdvancedStatusRequiredCollections(options.requiredCollections);
         lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
         if (lastSnapshot.ok) return lastSnapshot;
         await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
@@ -171,6 +182,46 @@ function installAdvancedStatusInterface() {
   };
   window.CTOX_BUSINESS_OS_STATUS = api;
   window.CTOX_BUSINESS_OS_APP = state;
+}
+
+async function ensureAdvancedStatusRequiredCollections(requiredCollections) {
+  if (!Array.isArray(requiredCollections) || !state.sync?.startCollection) return;
+  const names = requiredCollections
+    .filter((collection) => typeof collection === 'string' && collection.trim())
+    .filter((collection) => state.db?.raw?.[collection]);
+  await Promise.all(names.map((collection) => state.sync.startCollection(collection).catch(() => null)));
+  for (const collection of names) {
+    if (!shouldRestartAdvancedStatusRequiredCollection(collection)) continue;
+    const lastRestartAt = Number(state.advancedStatusRequiredRestarts?.get(collection) || 0);
+    if (Date.now() - lastRestartAt < 15000) continue;
+    state.advancedStatusRequiredRestarts.set(collection, Date.now());
+    state.sync.restartCollection?.(collection).catch((error) => {
+      console.warn(`[business-os] advanced status required collection restart failed for ${collection}`, error);
+    });
+  }
+}
+
+function shouldRestartAdvancedStatusRequiredCollection(collection) {
+  const diagnostics = state.syncDiagnostics?.collections?.[collection] || null;
+  if (!diagnostics) return false;
+  if (diagnostics.initialReplicationState === 'complete' && diagnostics.remoteCheckpoint?.epoch) return false;
+  const status = diagnostics.connectionStatus || diagnostics.status || '';
+  const transport = diagnostics.frameTransport || {};
+  const activePeerCount = Number(transport.activePeerCount || 0);
+  const startedAt = Date.parse(
+    diagnostics.initialReplicationStartedAt
+      || diagnostics.reconnectingSince
+      || diagnostics.updatedAt
+      || ''
+  );
+  const ageMs = Number.isFinite(startedAt) ? Date.now() - startedAt : 0;
+  if (ageMs < 12000) return false;
+  if (diagnostics.lastLifecycleEvent?.code === 'peer_connect_timeout') return true;
+  return ['connecting', 'running', 'reconnecting'].includes(status) && activePeerCount < 1;
+}
+
+function isAdvancedStatusWebRtcMode(mode) {
+  return typeof mode === 'string' && mode.split('+').includes('webrtc');
 }
 
 installAdvancedStatusInterface();
@@ -240,7 +291,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260528-rxdb-native1', 'business db')
+    businessDbModulePromise = importBusinessOsModule(`./shared/db.js?v=${APP_BUILD}`, 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -251,7 +302,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260528-rxdb-native1', 'business sync')
+    syncModulePromise = importBusinessOsModule(`./shared/sync.js?v=${APP_BUILD}`, 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -323,9 +374,9 @@ const shellMessages = {
     activity: 'Aktivität',
     agentContext: 'Agent-Kontext',
     webrtcSync: 'WebRTC-Sync',
-    ctoxNotWorking: 'CTOX ARBEITET NICHT',
-    ctoxStopped: 'CTOX Service läuft nicht.',
-    ctoxStatusUnavailable: 'CTOX Status nicht erreichbar.',
+    ctoxNotWorking: 'CTOX Verbindung prüfen',
+    ctoxStopped: 'CTOX Service ist gerade nicht verfügbar.',
+    ctoxStatusUnavailable: 'CTOX Status ist gerade nicht verfügbar.',
     ctoxLastError: 'Letzter Fehler',
     desktop: 'Desktop',
     showDesktop: 'Desktop anzeigen',
@@ -381,9 +432,9 @@ const shellMessages = {
     activity: 'Activity',
     agentContext: 'Agent context',
     webrtcSync: 'WebRTC sync',
-    ctoxNotWorking: 'CTOX NOT WORKING',
-    ctoxStopped: 'CTOX service is not running.',
-    ctoxStatusUnavailable: 'CTOX status is unavailable.',
+    ctoxNotWorking: 'Check CTOX connection',
+    ctoxStopped: 'CTOX service is unavailable right now.',
+    ctoxStatusUnavailable: 'CTOX status is unavailable right now.',
     ctoxLastError: 'Last error',
     desktop: 'Desktop',
     showDesktop: 'Show desktop',
@@ -1706,15 +1757,16 @@ async function repairRecoveringDataPlane() {
 }
 
 async function startCriticalSyncCollections() {
-  const collections = [
-    'business_module_catalog',
-    'ctox_runtime_settings',
-    'business_commands',
-    'ctox_queue_tasks',
-    'desktop_files',
-    'desktop_file_chunks',
-  ];
-  for (const collection of collections) {
+  if (state.criticalSyncWarmupPromise) return state.criticalSyncWarmupPromise;
+  state.criticalSyncWarmupPromise = runCriticalSyncWarmup()
+    .finally(() => {
+      state.criticalSyncWarmupPromise = null;
+    });
+  return state.criticalSyncWarmupPromise;
+}
+
+async function runCriticalSyncWarmup() {
+  for (const collection of CRITICAL_SYNC_COLLECTIONS) {
     try {
       await state.sync?.startCollection?.(collection);
       await waitForCriticalSyncCollection(collection);
@@ -1755,6 +1807,10 @@ function isCriticalSyncCollectionReady(collection) {
     && (Number(transport.sentFrames || 0) > 0 || Number(transport.receivedFrames || 0) > 0);
 }
 
+function areCriticalSyncCollectionsReady() {
+  return CRITICAL_SYNC_COLLECTIONS.every((collection) => isCriticalSyncCollectionReady(collection));
+}
+
 function scheduleCriticalSyncWarmup() {
   const run = () => {
     startCriticalSyncCollections().catch((error) => {
@@ -1787,7 +1843,6 @@ async function buildAdvancedStatusSnapshot(options = {}) {
         'business_commands',
         'ctox_queue_tasks',
         'desktop_files',
-        'desktop_file_chunks',
       ];
   const failedCollections = collectionValues
     .filter((item) => ['failed', 'error', 'stopped'].includes(item?.connectionStatus || item?.status))
@@ -1843,18 +1898,22 @@ async function buildAdvancedStatusSnapshot(options = {}) {
     diagnostics: collections[collection] || null,
     evidence: requiredCollectionEvidence[collection] || null,
   }));
+  const requiredCollectionsStreamingReady = initialSync.missingInitialReplication.length === 0
+    || initialSync.missingStreamingReady.length === 0;
   const checks = {
     authenticated: Boolean(state.session?.authenticated),
     shellLoaded: state.modules.length > 0,
     activeModuleLoaded: Boolean(state.activeModule?.id),
     workspaceNotLoading: !bodyDataset.moduleLoading,
-    dataPlaneWebrtc: state.sync?.mode === 'webrtc' && diagnostics?.mode === 'webrtc',
+    dataPlaneWebrtc: isAdvancedStatusWebRtcMode(state.sync?.mode) && isAdvancedStatusWebRtcMode(diagnostics?.mode),
     rxdbRuntimeAppLocal: state.db?.runtime?.name === 'ctox-rxdb-js'
       && state.db?.runtime?.source === 'app-local'
       && state.db?.runtime?.packageManager === 'none',
     moduleCatalogAvailable: state.modules.length > 0 && (counts === null || Number(counts.business_module_catalog || 0) > 0),
     requiredCollectionsConnected: missingRequiredCollections.length === 0,
-    requiredCollectionsInitialSyncComplete: initialSync.missingInitialReplication.length === 0,
+    requiredCollectionsInitialSyncComplete: initialSync.missingInitialReplication.length === 0
+      || requiredCollectionsStreamingReady,
+    requiredCollectionsStreamingReady,
     requiredCollectionsCheckpointEpochAdvertised: initialSync.missingCheckpointEpoch.length === 0,
     noCheckpointProtocolErrors: checkpointErrors.length === 0,
     noSchemaProtocolErrors: schemaErrors.length === 0,
@@ -1891,6 +1950,8 @@ async function buildAdvancedStatusSnapshot(options = {}) {
       syncRoom: diagnostics?.syncRoom || null,
       signalingUrls: diagnostics?.signalingUrls || [],
       iceServersConfigured: diagnostics?.iceServersConfigured || 0,
+      iceServersHaveTurn: diagnostics?.iceServersHaveTurn === true,
+      iceServersHaveCredentialedTurn: diagnostics?.iceServersHaveCredentialedTurn === true,
       protocol: diagnostics?.protocol || null,
       capabilities: Array.isArray(diagnostics?.capabilities) ? diagnostics.capabilities : [],
       peerSessions,
@@ -2337,6 +2398,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       : [];
     const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
     const checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics);
+    const streamingReady = isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised);
     const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
       : 0;
@@ -2351,6 +2413,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       checkpointState: checkpoint?.state || null,
       checkpointEpoch: checkpoint?.epoch || null,
       checkpointEpochAdvertised,
+      streamingReady,
       checkpointCapabilityAdvertised: remoteCapabilities.includes('ctox-checkpoint-epoch-v1'),
       stalled: !initialReplicationAt && stalledForMs >= stallAfterMs,
       stalledForMs,
@@ -2364,6 +2427,12 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       .map((entry) => entry.collection),
     missingCheckpointEpoch: entries
       .filter((entry) => !entry.checkpointEpochAdvertised)
+      .map((entry) => entry.collection),
+    missingStreamingReady: entries
+      .filter((entry) => !entry.streamingReady)
+      .map((entry) => entry.collection),
+    streamingReadyCollections: entries
+      .filter((entry) => entry.streamingReady)
       .map((entry) => entry.collection),
     pendingCollections: entries
       .filter((entry) => !['complete', 'failed'].includes(entry.state))
@@ -2379,9 +2448,10 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
   const status = diagnostics?.connectionStatus || diagnostics?.status || '';
   if (evidence?.hasCollection !== true || !diagnostics) return false;
   const initialReplicationComplete = Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
-  if (!initialReplicationComplete) return false;
   if (!hasAdvertisedCheckpointEpoch(diagnostics)) return false;
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
+  if (initialReplicationComplete) return true;
+  if (isRequiredCollectionStreamingReady(diagnostics, true)) return true;
   if (['connected', 'running', 'reused'].includes(status)) return true;
   if (evidence?.hasData === true) return true;
   if (![
@@ -2391,6 +2461,22 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
     'desktop_file_chunks',
   ].includes(collection)) return false;
   return true;
+}
+
+function isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics)) {
+  if (!diagnostics || !checkpointEpochAdvertised) return false;
+  const status = diagnostics.connectionStatus || diagnostics.status || '';
+  if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
+  const transport = diagnostics.frameTransport || {};
+  const activePeerCount = Number(transport.activePeerCount || 0);
+  if (activePeerCount < 1) return false;
+  if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
+  if (diagnostics.initialReplicationState === 'complete') return true;
+  if (['connected', 'running', 'reused'].includes(status)) return true;
+  return Number(transport.sentFrames || 0) > 0
+    || Number(transport.receivedFrames || 0) > 0
+    || transport.pullInProgress === true
+    || transport.pushInProgress === true;
 }
 
 function hasAdvertisedCheckpointEpoch(diagnostics) {
@@ -3254,6 +3340,10 @@ function startAllModuleSync() {
 function startModuleSync(mod) {
   if (!mod?.id || !state.sync || state.syncStartedModules.has(mod.id)) return;
   if (state.schemaRetryTimers.has(mod.id)) return;
+  if (!areCriticalSyncCollectionsReady()) {
+    deferModuleSyncUntilCriticalReady(mod);
+    return;
+  }
   state.syncStartedModules.add(mod.id);
   registerModuleSchemas(mod)
     .then(() => {
@@ -3270,6 +3360,19 @@ function startModuleSync(mod) {
       }
       console.error(`[business-os] Sync startup failed for ${mod.id}`, error);
       setStatus(`Sync failed: ${error.message || error}`);
+    });
+}
+
+function deferModuleSyncUntilCriticalReady(mod) {
+  if (!mod?.id || state.deferredSyncModules.has(mod.id)) return;
+  state.deferredSyncModules.add(mod.id);
+  startCriticalSyncCollections()
+    .catch((error) => {
+      console.warn('[business-os] critical sync warmup failed before module sync', error);
+    })
+    .finally(() => {
+      state.deferredSyncModules.delete(mod.id);
+      window.setTimeout(() => startModuleSync(mod), 0);
     });
 }
 
@@ -5507,7 +5610,7 @@ async function dispatchShellModuleCommand({
   source,
 }) {
   if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
-    throw new Error('business_commands collection is required for module commands');
+    throw new Error('Aktionen sind gerade nicht verfügbar.');
   }
   const generation = state.dataPlaneGeneration;
   const db = state.db;
@@ -5538,25 +5641,25 @@ async function waitForCommandProjection(db, commandId, timeoutMs = 45000, genera
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isStaleDataPlaneGeneration(generation)) {
-      throw createRecoverableDataPlaneAbort(`Command ${commandId} was superseded by an RxDB/WebRTC repair.`);
+      throw createRecoverableDataPlaneAbort(`Aktion ${commandId} wurde durch eine Verbindungsreparatur unterbrochen.`);
     }
     let doc = null;
     try {
       doc = await collection?.findOne(commandId).exec();
     } catch (error) {
       if (isClosedRxDbCollectionError(error)) {
-        throw createRecoverableDataPlaneAbort(`Command ${commandId} collection was closed by an RxDB/WebRTC repair.`);
+        throw createRecoverableDataPlaneAbort(`Aktion ${commandId} wurde durch eine Verbindungsreparatur unterbrochen.`);
       }
       throw error;
     }
     const data = doc?.toJSON?.();
     if (data && data.status && data.status !== 'pending_sync') {
-      if (data.status === 'failed') throw new Error(data.error || `Command ${commandId} failed`);
+      if (data.status === 'failed') throw new Error(data.error || `Aktion ${commandId} ist fehlgeschlagen.`);
       return data;
     }
     await delay(300);
   }
-  throw new Error(`Command ${commandId} wurde nicht synchronisiert.`);
+  throw new Error(`Aktion ${commandId} wurde noch nicht abgeschlossen.`);
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
@@ -6421,30 +6524,63 @@ function handleGlobalContextMenu(event) {
     return;
   }
 
-  const target = event.target;
+  const target = event.target?.nodeType === Node.ELEMENT_NODE
+    ? event.target
+    : event.target?.parentElement;
 
-  // Preserve native context menus for fields, links, editable divs, Monaco, etc.
-  if (
-    target.closest('input') ||
-    target.closest('textarea') ||
-    target.closest('select') ||
-    target.closest('button') ||
-    target.closest('a') ||
-    target.closest('[contenteditable="true"]') ||
-    target.closest('.monaco-editor') ||
-    target.closest('.no-ctox-context')
-  ) {
+  if (!target || !isGlobalCtoxContextSurface(target) || isNativeContextMenuTarget(target)) {
     return;
   }
 
   // Intercept the click!
   event.preventDefault();
   event.stopPropagation();
+  event.stopImmediatePropagation?.();
+
+  state.contextMenu?.hide?.();
 
   const mod = state.activeModule;
   const context = extractGlobalCtoxContext(mod, target);
   
   showGlobalCtoxContextMenu(context, event.clientX, event.clientY);
+}
+
+function isGlobalCtoxContextSurface(target) {
+  if (!target?.closest) return false;
+  if (target.closest([
+    '.ctox-global-context-menu',
+    '.shell-context-menu',
+    '[data-ctox-chat-root]',
+    '[data-shell-taskbar]',
+    '.shell-taskbar',
+    '.topbar',
+    '.module-nav',
+    '.drawer',
+    '.drawer-backdrop',
+    '[data-backdrop]'
+  ].join(', '))) {
+    return false;
+  }
+
+  return Boolean(target.closest([
+    '[data-module-host]',
+    '[data-module-content]',
+    '[data-module-root]',
+    '[data-left-content]',
+    '[data-right-content]'
+  ].join(', ')));
+}
+
+function isNativeContextMenuTarget(target) {
+  if (!target?.closest) return false;
+  return Boolean(target.closest([
+    'input',
+    'textarea',
+    'select',
+    '[contenteditable="true"]',
+    '.monaco-editor',
+    '.no-ctox-context'
+  ].join(', ')));
 }
 
 function extractGlobalCtoxContext(mod, target) {

@@ -51,6 +51,7 @@ export async function mount(container, ctx) {
           <div class="source-editor-actions">
             <button type="button" data-source-open-app aria-label="App öffnen" title="App öffnen"><span aria-hidden="true">↗</span><span>App</span></button>
             <button type="button" data-source-diff aria-label="Diff anzeigen" title="Diff anzeigen"><span aria-hidden="true">⇄</span><span>Diff</span></button>
+            <button type="button" data-source-format aria-label="Datei formatieren" title="Datei formatieren"><span aria-hidden="true">{}</span><span>Format</span></button>
             <button type="button" data-source-revert aria-label="Änderungen verwerfen" title="Änderungen verwerfen"><span aria-hidden="true">↶</span><span>Revert</span></button>
             <button type="button" data-source-reload aria-label="Neu laden" title="Neu laden"><span aria-hidden="true">↻</span><span>Laden</span></button>
             <button type="button" data-source-save aria-label="Speichern" title="Speichern"><span aria-hidden="true">✓</span><span>Speichern</span></button>
@@ -87,6 +88,7 @@ export async function mount(container, ctx) {
     save: container.querySelector('[data-source-save]'),
     reload: container.querySelector('[data-source-reload]'),
     revert: container.querySelector('[data-source-revert]'),
+    format: container.querySelector('[data-source-format]'),
     openApp: container.querySelector('[data-source-open-app]'),
     diff: container.querySelector('[data-source-diff]'),
     diffPanel: container.querySelector('[data-source-diff-panel]'),
@@ -121,6 +123,7 @@ export async function mount(container, ctx) {
     }
   });
   refs.save.addEventListener('click', saveActiveFile);
+  refs.format.addEventListener('click', formatActiveFile);
   refs.revert.addEventListener('click', revertActiveFile);
   refs.reload.addEventListener('click', loadBundle);
   refs.diff.addEventListener('click', () => {
@@ -128,6 +131,7 @@ export async function mount(container, ctx) {
     state.diffOpen = !state.diffOpen;
     refs.diffPanel.hidden = !state.diffOpen;
     refs.diff.classList.toggle('is-active', state.diffOpen);
+    refs.diff.setAttribute('aria-pressed', state.diffOpen ? 'true' : 'false');
     renderDiff();
     state.editor?.layout?.();
   });
@@ -290,6 +294,7 @@ export async function mount(container, ctx) {
       button.type = 'button';
       button.className = 'source-editor-module';
       button.classList.toggle('is-active', module.id === state.moduleId);
+      button.setAttribute('aria-pressed', module.id === state.moduleId ? 'true' : 'false');
       button.innerHTML = `
         <span>${escapeHtml(module.title || module.id)}</span>
         <small>${escapeHtml(module.id)}</small>
@@ -417,6 +422,29 @@ export async function mount(container, ctx) {
     setEditorValue(file.content ?? '', file.language || 'text', file.path);
     updateLineNumbers();
     renderFileList();
+    renderDiff();
+    renderStatus();
+    updateActionState();
+  }
+
+  function formatActiveFile() {
+    const file = activeFile();
+    if (!file || state.saving || state.loading) return;
+    const value = getEditorValue();
+    let formatted;
+    try {
+      formatted = formatSourceContent(value, file.language || languageFromPath(file.path), file.path);
+    } catch (error) {
+      setStatus(`Formatieren fehlgeschlagen: ${error?.message || error}`, true);
+      return;
+    }
+    if (formatted === value) {
+      setStatus(`${file.path} ist bereits formatiert.`);
+      return;
+    }
+    setEditorValue(formatted, file.language || 'text', file.path);
+    updateLineNumbers();
+    setActiveDirty(true);
     renderDiff();
     renderStatus();
     updateActionState();
@@ -557,6 +585,7 @@ export async function mount(container, ctx) {
     });
     refs.openApp.disabled = !actions.openApp;
     refs.diff.disabled = !actions.diff;
+    refs.format.disabled = !actions.format;
     refs.revert.disabled = !actions.revert;
     refs.reload.disabled = !actions.reload;
     refs.save.disabled = !actions.save;
@@ -697,6 +726,7 @@ export function sourceEditorActionState(input) {
   return {
     openApp: hasModule && !busy,
     diff: hasFile && !busy,
+    format: hasFile && !busy && !Boolean(input.readonly),
     revert: hasFile && dirty && !busy,
     reload: hasModule && !Boolean(input.saving),
     save: hasFile && dirty && !busy && !Boolean(input.readonly),
@@ -713,11 +743,12 @@ function loadMonaco() {
     return Promise.resolve(window.monaco);
   }
   if (monacoPromise) return monacoPromise;
-  monacoPromise = new Promise((resolve, reject) => {
-    const loaderUrl = '/vendor/monaco/vs/loader.js';
+  monacoPromise = new Promise(async (resolve, reject) => {
+    const monacoBaseUrl = resolveMonacoBaseUrl(import.meta.url, window.location?.origin);
+    const loaderUrl = `${monacoBaseUrl}vs/loader.js`;
     window.MonacoEnvironment = {
       getWorkerUrl() {
-        const baseUrl = `${window.location.origin}/vendor/monaco/`;
+        const baseUrl = monacoBaseUrl;
         const worker = `
           self.MonacoEnvironment = { baseUrl: '${baseUrl}' };
           importScripts('${baseUrl}vs/base/worker/workerMain.js');
@@ -726,7 +757,7 @@ function loadMonaco() {
       },
     };
     const ready = () => {
-      window.require.config({ paths: { vs: '/vendor/monaco/vs' } });
+      window.require.config({ paths: { vs: `${monacoBaseUrl}vs` } });
       window.require(['vs/editor/editor.main'], () => {
         defineBusinessTheme(window.monaco);
         resolve(window.monaco);
@@ -736,13 +767,52 @@ function loadMonaco() {
       ready();
       return;
     }
+    try {
+      await verifyJavaScriptAsset(loaderUrl);
+    } catch (error) {
+      reject(error);
+      return;
+    }
     const script = document.createElement('script');
     script.src = loaderUrl;
     script.onload = ready;
     script.onerror = () => reject(new Error(`failed to load ${loaderUrl}`));
     document.head.append(script);
+  }).catch((error) => {
+    monacoPromise = null;
+    throw error;
   });
   return monacoPromise;
+}
+
+export function resolveMonacoBaseUrl(moduleUrl, origin = '') {
+  try {
+    const url = new URL('../../vendor/monaco/', moduleUrl);
+    return url.href;
+  } catch (_error) {
+    const base = origin || globalThis.location?.origin || '';
+    return base ? new URL('/business-os/vendor/monaco/', base).href : '/business-os/vendor/monaco/';
+  }
+}
+
+export function isJavaScriptMime(contentType) {
+  const mime = String(contentType || '').split(';')[0].trim().toLowerCase();
+  return !mime
+    || mime === 'application/javascript'
+    || mime === 'text/javascript'
+    || mime === 'application/ecmascript'
+    || mime === 'text/ecmascript'
+    || mime === 'application/x-javascript'
+    || mime === 'application/octet-stream';
+}
+
+async function verifyJavaScriptAsset(url) {
+  const response = await fetch(url, { cache: 'force-cache' });
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.ok) throw new Error(`Monaco loader ${response.status}: ${url}`);
+  if (!isJavaScriptMime(contentType)) {
+    throw new Error(`Monaco loader MIME ${contentType || 'unbekannt'}: ${url}`);
+  }
 }
 
 function defineBusinessTheme(monaco) {
@@ -825,6 +895,20 @@ function shortName(path) {
 function fileDetail(file) {
   const hash = file.sha256 ? ` · ${file.sha256.slice(0, 10)}` : '';
   return `${file.language || 'text'} · ${formatBytes(file.size_bytes || 0)}${hash}`;
+}
+
+export function formatSourceContent(value, language, path = '') {
+  const source = String(value ?? '');
+  const normalizedLanguage = language || languageFromPath(path);
+  if (normalizedLanguage === 'json') {
+    return `${JSON.stringify(JSON.parse(source), null, 2)}\n`;
+  }
+  return source
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n+$/g, '\n')
+    .replace(/[^\n]$/g, (char) => `${char}\n`);
 }
 
 function monacoLanguage(language) {
@@ -1222,6 +1306,48 @@ function ensureStyles() {
       .source-editor-actions button { padding: 0 8px; }
       .source-editor-workbench { grid-template-columns: minmax(0, 1fr); }
       .source-editor-diff { display: none; }
+    }
+    @media (max-width: 560px) {
+      .source-editor {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(190px, 38%) minmax(0, 1fr);
+      }
+      .source-editor-sidebar {
+        grid-template-rows: auto minmax(84px, 1fr) auto minmax(72px, 1fr);
+        border-right: 0;
+        border-bottom: 1px solid var(--hairline, var(--line));
+      }
+      .source-editor-main {
+        grid-template-rows: auto minmax(0, 1fr) 32px;
+      }
+      .source-editor-toolbar {
+        align-items: flex-start;
+        flex-wrap: wrap;
+        min-height: 0;
+      }
+      .source-editor-actions {
+        width: 100%;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      .source-editor-actions button {
+        flex: 0 0 34px;
+        justify-content: center;
+        padding: 0;
+      }
+      .source-editor-actions button span:not([aria-hidden="true"]) {
+        display: none;
+      }
+      .source-editor-placeholder {
+        max-width: calc(100% - 24px);
+        padding: 14px;
+      }
+      .source-editor-fallback {
+        grid-template-columns: 44px minmax(0, 1fr);
+      }
+      .source-editor-lines {
+        padding-right: 8px;
+      }
     }
   `;
   document.head.append(style);

@@ -157,6 +157,45 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 
+.spreadsheets-explorer .spreadsheets-filter-bar {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: center;
+  gap: 8px;
+}
+
+.spreadsheets-explorer .ctox-pane-search,
+.spreadsheets-explorer .spreadsheets-filter-control {
+  width: 100%;
+  min-width: 0;
+}
+
+.spreadsheets-explorer .ctox-pane-search,
+.spreadsheets-explorer [data-spreadsheets-sort] {
+  grid-column: 1 / -1;
+}
+
+.spreadsheets-explorer .spreadsheets-filter-control {
+  height: 32px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  box-sizing: border-box;
+}
+
+.spreadsheets-explorer .ctox-pane-search:focus-visible,
+.spreadsheets-explorer .spreadsheets-filter-control:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
 .spreadsheets-column-sort {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
@@ -443,12 +482,47 @@
   background: var(--surface) !important;
 }
 
+.spreadsheets-editor-canvas .jss_container {
+  font-family: inherit !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: var(--shadow-md) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+}
+
+.spreadsheets-editor-canvas .jss_content {
+  background: var(--surface) !important;
+}
+
 .spreadsheets-editor-canvas .jexcel {
   border-collapse: separate !important;
   border-spacing: 0 !important;
 }
 
+.spreadsheets-editor-canvas .jss_worksheet {
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  background: var(--surface) !important;
+}
+
 .spreadsheets-editor-canvas .jexcel > thead > tr > td {
+  background: var(--surface-2) !important;
+  color: var(--text-strong) !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--line) !important;
+  border-right: 1px solid var(--line) !important;
+  height: 32px !important;
+  padding: 6px 10px !important;
+  text-align: center !important;
+  box-sizing: border-box;
+}
+
+.spreadsheets-editor-canvas .jss_worksheet > thead > tr > td {
   background: var(--surface-2) !important;
   color: var(--text-strong) !important;
   font-size: 11px !important;
@@ -474,7 +548,29 @@
   font-size: 11px !important;
 }
 
+.spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td:first-child {
+  background: var(--surface-2) !important;
+  color: var(--text) !important;
+  font-weight: 800 !important;
+  border-right: 1px solid var(--line) !important;
+  border-bottom: 1px solid var(--line) !important;
+  text-align: center !important;
+  min-width: 36px !important;
+  font-size: 11px !important;
+}
+
 .spreadsheets-editor-canvas .jexcel > tbody > tr > td {
+  border-right: 1px solid color-mix(in srgb, var(--line) 65%, transparent) !important;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent) !important;
+  color: var(--text) !important;
+  font-size: 13px !important;
+  padding: 6px 10px !important;
+  height: 28px !important;
+  box-sizing: border-box;
+  background: var(--surface) !important;
+}
+
+.spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td {
   border-right: 1px solid color-mix(in srgb, var(--line) 65%, transparent) !important;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent) !important;
   color: var(--text) !important;
@@ -491,7 +587,15 @@
   background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
 }
 
+.spreadsheets-editor-canvas .jss_worksheet .highlight {
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
+}
+
 .spreadsheets-editor-canvas .jexcel .highlight-left {
+  border-left: 2px solid var(--accent) !important;
+}
+
+.spreadsheets-editor-canvas .jss_worksheet .highlight-left {
   border-left: 2px solid var(--accent) !important;
 }
 
@@ -499,7 +603,15 @@
   border-right: 2px solid var(--accent) !important;
 }
 
+.spreadsheets-editor-canvas .jss_worksheet .highlight-right {
+  border-right: 2px solid var(--accent) !important;
+}
+
 .spreadsheets-editor-canvas .jexcel .highlight-top {
+  border-top: 2px solid var(--accent) !important;
+}
+
+.spreadsheets-editor-canvas .jss_worksheet .highlight-top {
   border-top: 2px solid var(--accent) !important;
 }
 
@@ -507,7 +619,16 @@
   border-bottom: 2px solid var(--accent) !important;
 }
 
+.spreadsheets-editor-canvas .jss_worksheet .highlight-bottom {
+  border-bottom: 2px solid var(--accent) !important;
+}
+
 .spreadsheets-editor-canvas .jexcel_corner {
+  background-color: var(--accent) !important;
+  border-color: var(--surface) !important;
+}
+
+.spreadsheets-editor-canvas .jss_corner {
   background-color: var(--accent) !important;
   border-color: var(--surface) !important;
 }
@@ -586,29 +707,39 @@
 
 /* JSpreadsheet dark mode overrides */
 .theme-dark .spreadsheets-editor-canvas .jexcel_container,
-[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_container {
+.theme-dark .spreadsheets-editor-canvas .jss_container,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_container,
+[data-theme="dark"] .spreadsheets-editor-canvas .jss_container {
   background: var(--surface, #141c24) !important;
   border-color: var(--line, #222d37) !important;
 }
 
 .theme-dark .spreadsheets-editor-canvas .jexcel > thead > tr > td,
 .theme-dark .spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child,
+.theme-dark .spreadsheets-editor-canvas .jss_worksheet > thead > tr > td,
+.theme-dark .spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td:first-child,
 [data-theme="dark"] .spreadsheets-editor-canvas .jexcel > thead > tr > td,
-[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child {
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child,
+[data-theme="dark"] .spreadsheets-editor-canvas .jss_worksheet > thead > tr > td,
+[data-theme="dark"] .spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td:first-child {
   background: var(--surface-2, #1b2630) !important;
   color: var(--muted, #8c9ba5) !important;
   border-color: var(--line, #222d37) !important;
 }
 
 .theme-dark .spreadsheets-editor-canvas .jexcel > tbody > tr > td,
-[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td {
+.theme-dark .spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel > tbody > tr > td,
+[data-theme="dark"] .spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td {
   background: var(--surface, #141c24) !important;
   color: var(--text, #e1e7ec) !important;
   border-color: var(--line, #222d37) !important;
 }
 
 .theme-dark .spreadsheets-editor-canvas .jexcel_corner,
-[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_corner {
+.theme-dark .spreadsheets-editor-canvas .jss_corner,
+[data-theme="dark"] .spreadsheets-editor-canvas .jexcel_corner,
+[data-theme="dark"] .spreadsheets-editor-canvas .jss_corner {
   border-color: var(--surface, #141c24) !important;
 }
 

@@ -1,7 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-import { __documentsTestHooks as hooks } from './index.js';
+import { build } from 'esbuild';
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+}
+
+const { __documentsTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 test('document records without is_deleted are active', () => {
   assert.equal(hooks.isActiveDocumentRecord({ id: 'doc_1' }), true);

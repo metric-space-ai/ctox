@@ -43,6 +43,7 @@ const MATCHING_VIEW_STATE_DEFAULTS = {
   selectedObject: null,
   matrixSelectedObjectId: null,
   activeTab: 'list',
+  sourceGroupMode: 'source',
   sourceSearch: '',
   requirementSearch: '',
   requirementFilter: 'all',
@@ -451,7 +452,7 @@ function renderObjectsEdits() {
 
   if (!all.length) {
     list.innerHTML =
-      '<div class="muted" style="padding:8px;font-size:12px">Keine Objekte in der Datenbank.</div>';
+      '<div class="muted" style="padding:8px;font-size:12px">Noch keine Objekte verfügbar.</div>';
     return;
   }
 
@@ -956,25 +957,9 @@ function renderCollectionDiagnostic(collectionName, fallbackText) {
   const localCount = Number(entry.localCount || 0);
   const sync = entry.sync;
   const pull = entry.pull;
-  const syncText = sync
-    ? (sync.ok
-        ? `RxDB/WebRTC: ${Number(sync.count || 0)} Datensätze`
-        : `RxDB/WebRTC: Fehler${sync.error ? ` ${sync.error}` : ''}`)
-    : 'RxDB/WebRTC: nicht geprüft';
-  const pullText = pull
-    ? (pull.ok
-        ? `HTTP Pull: ${Number(pull.count || 0)} Datensätze`
-        : `HTTP Pull: Fehler${pull.status ? ` ${pull.status}` : ''}`)
-    : 'HTTP Pull: nicht geprüft';
-  const suffix = [
-    `Collection ${entry.collection}`,
-    `Schema v${entry.schemaVersion || 0}`,
-    `lokal ${localCount}`,
-    syncText,
-    pullText
-  ].join(' · ');
-
-  return `${fallbackText}<br><span class="collection-diagnostic">${_escapeHtml(suffix)}</span>`;
+  const availableCount = Math.max(localCount, Number(sync?.count || 0), Number(pull?.count || 0));
+  if (availableCount > 0 && !sources.length) return 'Daten werden geladen...';
+  return fallbackText;
 }
 
 function shouldRefreshMatchingDiagnostics() {
@@ -1591,6 +1576,8 @@ async function loadFromRxdb(){
           id: j.id,
           sourceId: j.sourceId,
           title: j.title,
+          createdAt: j.createdAt || j.created_at || (j.created_at_ms ? new Date(j.created_at_ms).toISOString() : ''),
+          updatedAt: j.updatedAt || j.updated_at || (j.updated_at_ms ? new Date(j.updated_at_ms).toISOString() : ''),
           internalReferenceId: String(
             j.internalReferenceId ||
             j.internal_reference_id ||
@@ -2642,6 +2629,7 @@ function persistMatchingViewState(patch = {}) {
 }
 
 function snapshotMatchingControlState() {
+  const sourceGroupModeEl = document.getElementById('sourceGroupMode');
   const sourceSearchEl = document.getElementById('sourceSearch');
   const requirementSearchEl = document.getElementById('requirementSearch');
   const requirementFilterEl = document.getElementById('requirementFilter');
@@ -2651,6 +2639,7 @@ function snapshotMatchingControlState() {
   const activeTab = mapWrapEl && mapWrapEl.classList.contains('active') ? 'matrix' : 'list';
 
   return {
+    sourceGroupMode: sourceGroupModeEl ? String(sourceGroupModeEl.value || 'source') : String(matchingViewState.sourceGroupMode || 'source'),
     sourceSearch: sourceSearchEl ? String(sourceSearchEl.value || '') : String(matchingViewState.sourceSearch || ''),
     requirementSearch: requirementSearchEl ? String(requirementSearchEl.value || '') : String(matchingViewState.requirementSearch || ''),
     requirementFilter: requirementFilterEl ? String(requirementFilterEl.value || 'all') : String(matchingViewState.requirementFilter || 'all'),
@@ -2672,11 +2661,18 @@ function persistMatchingRuntimeState(extraPatch = {}) {
 }
 
 function applyPersistedMatchingControls() {
+  const sourceGroupModeEl = document.getElementById('sourceGroupMode');
   const sourceSearchEl = document.getElementById('sourceSearch');
   const requirementSearchEl = document.getElementById('requirementSearch');
   const requirementFilterEl = document.getElementById('requirementFilter');
   const objectSearchEl = document.getElementById('objectSearch');
   const objectSortEl = document.getElementById('objectSort');
+
+  if (sourceGroupModeEl) {
+    const savedMode = String(matchingViewState.sourceGroupMode || 'source');
+    const hasSavedMode = Array.from(sourceGroupModeEl.options).some(opt => opt.value === savedMode);
+    sourceGroupModeEl.value = hasSavedMode ? savedMode : 'source';
+  }
 
   if (sourceSearchEl) {
     sourceSearchEl.value = typeof matchingViewState.sourceSearch === 'string'
@@ -5035,6 +5031,107 @@ function sourceMatchesSearch(source, query){
   return haystack.includes(q);
 }
 
+function requirementTimestamp(requirement) {
+  const raw =
+    requirement?.updatedAt ||
+    requirement?.createdAt ||
+    requirement?.updated_at ||
+    requirement?.created_at ||
+    requirement?.updated_at_ms ||
+    requirement?.created_at_ms ||
+    0;
+  const parsed = typeof raw === 'number' ? raw : Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sourceNewestRequirementTimestamp(source) {
+  return Math.max(0, ...(source?.requirements || []).map(requirementTimestamp));
+}
+
+function getSourceGroupMode() {
+  const modeEl = $('#sourceGroupMode');
+  const mode = String(modeEl?.value || matchingViewState.sourceGroupMode || 'source');
+  return ['source', 'area', 'recent'].includes(mode) ? mode : 'source';
+}
+
+function renderAreaGroupedSources(grid, visibleSources) {
+  const byArea = new Map();
+  for (const source of visibleSources || []) {
+    for (const requirement of source.requirements || []) {
+      const area = String(requirement.location || 'Remote').trim() || 'Remote';
+      if (!byArea.has(area)) {
+        byArea.set(area, {
+          area,
+          count: 0,
+          newest: 0,
+          sources: new Map(),
+          requirements: []
+        });
+      }
+      const group = byArea.get(area);
+      group.count += 1;
+      group.newest = Math.max(group.newest, requirementTimestamp(requirement));
+      group.sources.set(source.id, source.name);
+      group.requirements.push({ requirement, source });
+    }
+  }
+
+  const groups = Array.from(byArea.values())
+    .sort((a, b) => b.count - a.count || b.newest - a.newest || a.area.localeCompare(b.area, 'de-DE', { sensitivity: 'base' }));
+
+  if (!groups.length) {
+    grid.innerHTML = '<div class="muted" style="padding:8px">Keine Bereiche im aktuellen Suchfilter.</div>';
+    return;
+  }
+
+  for (const group of groups) {
+    const card = el('div', 'source-card source-area-card');
+    const sourcesLabel = Array.from(group.sources.values()).slice(0, 3).join(' · ');
+    const moreSources = Math.max(0, group.sources.size - 3);
+    const preview = group.requirements
+      .slice()
+      .sort((a, b) => requirementTimestamp(b.requirement) - requirementTimestamp(a.requirement))
+      .slice(0, 3);
+
+    card.innerHTML = `
+      <div class="source-head">
+        <div class="logo area-logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6a2.5 2.5 0 0 1 0 5.5Z"/></svg>
+        </div>
+        <div class="source-main">
+          <div class="cname">${_escapeHtml(group.area)}</div>
+          <div class="area-source-summary">${_escapeHtml(sourcesLabel)}${moreSources ? ` · +${moreSources}` : ''}</div>
+        </div>
+        <span class="total" title="Anforderungen in diesem Bereich">${group.count}</span>
+      </div>
+      <div class="area-requirement-preview">
+        ${preview.map(({ requirement, source }) => `
+          <div class="area-requirement-row">
+            <span>${_escapeHtml(requirement.title || 'Anforderung')}</span>
+            <small>${_escapeHtml(source.name || 'Quelle')}</small>
+          </div>
+        `).join('')}
+      </div>`;
+
+    card.title = 'Bereich in der Match-Liste filtern';
+    card.addEventListener('click', () => {
+      activeSource = null;
+      const filterEl = $('#requirementFilter');
+      if (filterEl) {
+        filterEl.dataset.persistedValue = group.area;
+        filterEl.value = group.area;
+      }
+      persistMatchingRuntimeState({ requirementFilter: group.area });
+      renderSources();
+      renderRequirements();
+      renderMap();
+      renderObjects();
+    });
+
+    grid.appendChild(card);
+  }
+}
+
 function renderSources(){
   const grid = $('#sourceGrid'); if (!grid) return;
   grid.innerHTML = '';
@@ -5046,11 +5143,11 @@ function renderSources(){
     // the misleading "empty database" message.
     if (hasUnsyncedMatchingData()) {
       grid.innerHTML = `<div class="muted collection-empty-state">` +
-        renderCollectionDiagnostic('matching_requirements', 'Daten werden synchronisiert…') +
+        renderCollectionDiagnostic('matching_requirements', 'Daten werden geladen...') +
         `</div>`;
     } else {
       grid.innerHTML = `<div class="muted collection-empty-state">` +
-        renderCollectionDiagnostic('matching_requirements', 'Keine Anforderungen in der Datenbank gefunden.') +
+        renderCollectionDiagnostic('matching_requirements', 'Noch keine Anforderungen verfügbar.') +
         `</div>`;
     }
     if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
@@ -5067,6 +5164,7 @@ function renderSources(){
 
   const sourceSearchEl = $('#sourceSearch');
   const sourceSearchQuery = sourceSearchEl ? sourceSearchEl.value : String(matchingViewState.sourceSearch || '');
+  const sourceGroupMode = getSourceGroupMode();
   const visibleSources = sources.filter(c => sourceMatchesSearch(c, sourceSearchQuery));
 
   if (!visibleSources.length){
@@ -5074,7 +5172,16 @@ function renderSources(){
     return;
   }
 
-  visibleSources.forEach(c => {
+  if (sourceGroupMode === 'area') {
+    renderAreaGroupedSources(grid, visibleSources);
+    return;
+  }
+
+  const sourceRows = sourceGroupMode === 'recent'
+    ? visibleSources.slice().sort((a, b) => sourceNewestRequirementTimestamp(b) - sourceNewestRequirementTimestamp(a))
+    : visibleSources;
+
+  sourceRows.forEach(c => {
     const total = (c.locations || []).reduce((s,l)=>s+l.open,0);
     const hasRel = hasSourceRel(c.id);
     const active = isSourceActive(c.id);
@@ -5243,7 +5350,7 @@ function renderRequirements(){
   if (!sources.length){
     compNameEl.textContent = 'Keine Anforderungen';
     list.innerHTML = `<div class="muted collection-empty-state">` +
-      renderCollectionDiagnostic('matching_requirements', 'Keine Anforderungen in der Datenbank gefunden.') +
+      renderCollectionDiagnostic('matching_requirements', 'Noch keine Anforderungen verfügbar.') +
       `</div>`;
     if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
     return;
@@ -7108,7 +7215,7 @@ function renderObjects(opts = {}){
     objectDomById.clear();
 
     list.innerHTML = `<div class="muted collection-empty-state">` +
-      renderCollectionDiagnostic('matching_objects', 'Keine Objekte in der Datenbank gefunden.') +
+      renderCollectionDiagnostic('matching_objects', 'Noch keine Objekte verfügbar.') +
       `</div>`;
     if (shouldRefreshMatchingDiagnostics()) refreshMatchingCollectionDiagnostics({ rerender: true });
     return;
@@ -8296,6 +8403,7 @@ function renderMap() {
 
 
 /* --------- Events --------- */
+const sourceGroupModeEl = $('#sourceGroupMode');
 const sourceSearchEl = $('#sourceSearch');
 const requirementSearchEl = $('#requirementSearch');
 const requirementFilterEl = $('#requirementFilter');
@@ -8305,6 +8413,15 @@ const objectSortEl = $('#objectSort');
 applyPersistedMatchingControls();
 setupMatchingColumnResizing();
 
+if (sourceGroupModeEl) {
+  sourceGroupModeEl.addEventListener('change', () => {
+    renderSources();
+    renderRequirements();
+    renderMap();
+    renderObjects();
+    persistMatchingRuntimeState();
+  });
+}
 if (sourceSearchEl) {
   sourceSearchEl.addEventListener('input', () => {
     renderSources();

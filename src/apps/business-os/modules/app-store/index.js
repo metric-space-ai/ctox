@@ -145,6 +145,15 @@ function wireEvents() {
     state.drawerOpen = true;
     render();
   });
+  els.grid?.addEventListener('keydown', (event) => {
+    if (!['Enter', ' '].includes(event.key)) return;
+    const card = event.target.closest('[data-app-id]');
+    if (!card) return;
+    event.preventDefault();
+    state.selectedId = card.dataset.appId || '';
+    state.drawerOpen = true;
+    render();
+  });
 
   els.closeDrawer?.addEventListener('click', () => {
     state.drawerOpen = false;
@@ -171,6 +180,8 @@ async function triggerCardAction(appId, actionType) {
 
   if (actionType === 'install') {
     await installMarketplaceItem(item);
+  } else if (actionType === 'update') {
+    await installMarketplaceItem(item, { update: true });
   } else if (actionType === 'open') {
     if (item.id === 'create-scratch') {
       openCreatorFromStore({ mode: 'scratch' });
@@ -179,7 +190,7 @@ async function triggerCardAction(appId, actionType) {
     } else {
       openModule(item.id);
     }
-  } else if (actionType === 'upgrade') {
+  } else if (actionType === 'edit') {
     openCreatorFromStore({ mode: 'upgrade', upgrade: item.id });
   } else if (actionType === 'uninstall') {
     await uninstallInstalledItem(item);
@@ -195,8 +206,30 @@ async function triggerCardAction(appId, actionType) {
 
 async function loadCatalog() {
   const doc = await state.ctx.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
-  state.catalog = doc?.toJSON?.() || { modules: [], templates: [], marketplace: [] };
+  state.catalog = mergeShellModulesIntoCatalog(doc?.toJSON?.() || { modules: [], templates: [], marketplace: [] });
   state.marketplace = normalizeMarketplace(state.catalog.marketplace || state.catalog.apps || []);
+}
+
+function mergeShellModulesIntoCatalog(catalog) {
+  const modules = Array.isArray(catalog?.modules) ? [...catalog.modules] : [];
+  const known = new Set(modules.map((item) => item?.id).filter(Boolean));
+  const shellModules = Array.isArray(state.ctx?.modules) ? state.ctx.modules : [];
+  for (const module of shellModules) {
+    if (!module?.id || known.has(module.id)) continue;
+    modules.push({
+      ...module,
+      source: module.source || (module.core ? 'core' : 'shell'),
+      install_scope: module.install_scope || (module.core ? 'core' : 'starter'),
+      default_installed: module.default_installed !== false,
+    });
+    known.add(module.id);
+  }
+  return {
+    ...catalog,
+    modules,
+    templates: Array.isArray(catalog?.templates) ? catalog.templates : [],
+    marketplace: Array.isArray(catalog?.marketplace) ? catalog.marketplace : [],
+  };
 }
 
 async function refreshMarketplace({ force = false } = {}) {
@@ -339,6 +372,7 @@ function normalizeMarketplaceItem(item) {
     source_path: item.source_path || '',
     manifest_url: item.manifest_url || '',
     homepage: item.homepage || item.html_url || '',
+    icon_svg: item.layout?.icon_svg || item.icon_svg || '',
     install_scope: item.install_scope || item.store?.install_scope || '',
     permissions: Array.isArray(item.permissions) ? item.permissions : (Array.isArray(item.collections) ? item.collections : []),
     installable: item.installable !== false && item.store?.installable !== false,
@@ -348,7 +382,13 @@ function normalizeMarketplaceItem(item) {
 
 function normalizeItem(item, kind) {
   const id = sanitizeId(item.module_id || item.id || item.source_module || item.default_title || '');
+  const remote = marketplaceItemFor(id);
+  const release = latestReleaseFor(id);
   const status = statusForItem(item, kind);
+  const installedVersion = installedVersionLabel(item, release, kind);
+  const availableVersion = availableVersionLabel(remote, item, kind);
+  const update = updateStateFor(item, remote, kind);
+  const modification = modificationStateFor(item, release, kind);
   return {
     id,
     kind,
@@ -361,14 +401,26 @@ function normalizeItem(item, kind) {
     developer: item.developer || item.publisher || 'CTOX',
     license: item.license || 'AGPL-3.0-only',
     source: sourceLabel(item, kind),
-    repo: item.repo || item.repository || '',
-    download_url: item.download_url || '',
+    repo: item.repo || item.repository || remote?.repo || '',
+    download_url: item.download_url || remote?.download_url || '',
     source_path: item.source_path || '',
-    manifest_url: item.manifest_url || '',
-    homepage: item.homepage || '',
+    manifest_url: item.manifest_url || remote?.manifest_url || '',
+    homepage: item.homepage || remote?.homepage || '',
+    icon_svg: item.layout?.icon_svg || item.icon_svg || '',
     install_scope: item.install_scope || item.raw?.install_scope || '',
     permissions: item.permissions || item.collections || [],
     installable: item.installable !== false && item.store?.installable !== false,
+    editable: item.editable === true && kind !== 'system',
+    deletable: item.deletable === true && kind === 'installed',
+    manifest_sha256: item.manifest_sha256 || '',
+    local_manifest_path: item.local_manifest_path || '',
+    installed_version: installedVersion,
+    available_version: availableVersion,
+    update_available: update.available,
+    update_reason: update.reason,
+    modification_status: modification.status,
+    modification_label: modification.label,
+    latest_release: release,
     raw: item,
   };
 }
@@ -391,9 +443,21 @@ function normalizeDesktopAppItem(item) {
     source_path: '',
     manifest_url: '',
     homepage: '',
+    icon_svg: item.layout?.icon_svg || item.icon_svg || '',
     install_scope: '',
     permissions: [],
     installable: false,
+    editable: false,
+    deletable: false,
+    manifest_sha256: '',
+    local_manifest_path: '',
+    installed_version: 'Installiert: Desktop',
+    available_version: 'Katalog: lokal',
+    update_available: false,
+    update_reason: '',
+    modification_status: 'clean',
+    modification_label: 'Unverändert',
+    latest_release: null,
     raw: item,
   };
 }
@@ -432,7 +496,16 @@ function scopedCatalogItems(scope) {
 }
 
 function itemMatchesScope(item, scope) {
+  if (scope === 'installed') return isInstalledCatalogItem(item);
   return scope === 'all' || item.kind === scope || item.status === scope;
+}
+
+function isInstalledCatalogItem(item) {
+  if (!item) return false;
+  if (item.id === 'create-scratch') return false;
+  if (item.kind === 'marketplace') return item.status === 'installed';
+  return ['installed', 'local', 'starter', 'system'].includes(item.kind)
+    || ['installed', 'local', 'starter', 'system'].includes(item.status);
 }
 
 function uniqueCatalogItems(items) {
@@ -480,9 +553,7 @@ function render() {
     for (const btn of els.viewToggle.querySelectorAll('[data-view]')) {
       const active = btn.dataset.view === state.viewMode;
       btn.classList.toggle('active', active);
-      btn.style.background = active ? 'rgba(255, 255, 255, 0.1)' : 'transparent';
-      const svg = btn.querySelector('svg');
-      if (svg) svg.style.color = active ? 'var(--accent, #e5a93c)' : 'var(--text-muted, #8e8e93)';
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
     }
   }
 
@@ -516,50 +587,58 @@ function renderCard(item) {
   card.className = 'app-card';
   card.dataset.appId = item.id;
   card.classList.toggle('active', item.id === state.selectedId);
+  card.tabIndex = 0;
+  card.setAttribute('aria-selected', item.id === state.selectedId ? 'true' : 'false');
+  card.setAttribute('aria-label', `${item.title}. ${statusLabel(item.status)}. ${item.category}.`);
 
   let actionsHtml = `<div class="app-card-actions">`;
 
   if (item.id === 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Erstellen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">Erstellen</button>`;
   } else if (item.kind === 'marketplace') {
     if (item.status === 'installed') {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>`;
+      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
     } else if (item.installable) {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install">Installieren</button>`;
+      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">Installieren</button>`;
     }
     if (item.homepage) {
       actionsHtml += `<button type="button" class="card-btn secondary external" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
     }
   } else if (item.kind === 'template') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Erstellen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">Erstellen</button>`;
   } else if (item.kind === 'system') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
   } else if (item.kind === 'starter') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
+    actionsHtml += actionButtonsForManagedItem(item);
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
-      <button type="button" class="card-btn primary" data-card-action="open">Öffnen</button>
-      <button type="button" class="card-btn warn" data-card-action="upgrade">Upgrade</button>
-      <button type="button" class="card-btn danger" data-card-action="uninstall">Deinstallieren</button>
+      <button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>
+      ${actionButtonsForManagedItem(item)}
     `;
   }
 
   if (item.id !== 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn link" data-card-action="details">Details</button>`;
+    actionsHtml += `<button type="button" class="card-btn link" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">Details</button>`;
   }
 
   actionsHtml += `</div>`;
 
   card.innerHTML = `
     <div class="app-card-head">
-      <div class="app-card-icon">${escapeHtml(iconForItem(item))}</div>
+      <div class="app-card-icon">${iconMarkupForItem(item)}</div>
       <div class="app-card-meta">
         <h3 class="app-card-title">${escapeHtml(item.title)}</h3>
         <span class="app-card-category">${escapeHtml(item.category)}</span>
       </div>
     </div>
     <p class="app-card-desc">${escapeHtml(item.description || item.source)}</p>
+    <div class="app-card-version-row">
+      <span>${escapeHtml(item.installed_version)}</span>
+      <span>${escapeHtml(item.available_version)}</span>
+      <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
+    </div>
     ${actionsHtml}
     <footer class="app-card-footer">
       <span class="app-status-badge ${escapeHtml(item.status)}">${escapeHtml(statusLabel(item.status))}</span>
@@ -580,7 +659,7 @@ function renderDetails() {
     renderEmptyDetails();
     return;
   }
-  if (els.detailIcon) els.detailIcon.textContent = iconForItem(item);
+  if (els.detailIcon) els.detailIcon.innerHTML = iconMarkupForItem(item);
   if (els.detailTitle) els.detailTitle.textContent = item.title;
   if (els.detailVersion) els.detailVersion.textContent = item.version;
   if (els.detailCategory) els.detailCategory.textContent = item.category;
@@ -614,8 +693,14 @@ function renderDocumentation(item) {
   const wrap = document.createElement('div');
   const lines = [
     item.description || 'No documentation available yet.',
+    item.installed_version ? item.installed_version : '',
+    item.available_version ? item.available_version : '',
+    item.update_reason ? `Update: ${item.update_reason}` : '',
+    item.modification_label ? `Modifikation: ${item.modification_label}` : '',
+    item.latest_release ? `Letztes Release: v${item.latest_release.version} (${item.latest_release.status})` : '',
     item.repo ? `Repository: ${item.repo}` : '',
     item.source_path ? `Source path: ${item.source_path}` : '',
+    item.local_manifest_path ? `Local manifest: ${item.local_manifest_path}` : '',
     item.download_url ? `Installer archive: ${item.download_url}` : '',
     item.permissions?.length ? `Collections: ${item.permissions.join(', ')}` : '',
   ].filter(Boolean);
@@ -627,10 +712,10 @@ function renderDocumentation(item) {
   return wrap;
 }
 
-async function installMarketplaceItem(item) {
+async function installMarketplaceItem(item, { update = false } = {}) {
   await runStoreCommand({
-    label: `Installing ${item.title}...`,
-    success: `${item.title} installed.`,
+    label: update ? `Updating ${item.title}...` : `Installing ${item.title}...`,
+    success: update ? `${item.title} updated.` : `${item.title} installed.`,
     commandType: 'ctox.app_store.install',
     moduleId: item.id,
     payload: {
@@ -739,6 +824,7 @@ function updateScopeButtons() {
   for (const button of els.scopes.querySelectorAll('[data-scope]')) {
     const scope = button.dataset.scope || 'marketplace';
     button.classList.toggle('active', scope === state.scope);
+    button.setAttribute('aria-pressed', scope === state.scope ? 'true' : 'false');
     const count = button.querySelector('[data-scope-count]');
     if (count) count.textContent = String(counts[scope] || 0);
   }
@@ -762,14 +848,15 @@ function renderMarketplaceState() {
   els.marketplaceState.textContent = marketplaceStateLabel({
     status: state.marketplaceStatus,
     message: state.marketplaceMessage,
-    marketplaceCount: counts.marketplace,
+    discoveredCount: state.marketplace.length,
+    availableCount: counts.marketplace,
     installedCount: counts.installed,
   });
   els.marketplaceState.dataset.state = state.marketplaceStatus;
   if (els.refresh) {
     const refreshBusy = state.marketplaceStatus === 'loading' || state.busy;
     els.refresh.disabled = refreshBusy;
-    els.refresh.textContent = state.marketplaceStatus === 'loading' ? 'Synchronisiere GitHub...' : 'Refresh GitHub';
+    els.refresh.textContent = state.marketplaceStatus === 'loading' ? 'Synchronisiere GitHub...' : 'GitHub aktualisieren';
     els.refresh.title = refreshBusy
       ? 'GitHub Discovery läuft bereits.'
       : `GitHub Discovery aus ${CTOX_REPO} aktualisieren.`;
@@ -831,6 +918,84 @@ function installedIds() {
   return new Set(modules.map((item) => item.id).filter(Boolean));
 }
 
+function marketplaceItemFor(id) {
+  if (!id) return null;
+  return state.marketplace.find((item) => item.id === id || item.module_id === id) || null;
+}
+
+function latestReleaseFor(moduleId) {
+  const releases = state.catalog?.governance?.releases?.[moduleId];
+  if (!Array.isArray(releases) || !releases.length) return null;
+  return [...releases].sort((left, right) => Number(right.version || 0) - Number(left.version || 0))[0] || null;
+}
+
+function installedVersionLabel(item, release, kind) {
+  if (kind === 'marketplace' || kind === 'template') return 'Nicht installiert';
+  if (release?.version) return `Installiert: Release ${release.version}`;
+  return `Installiert: ${item.version || 'unversioniert'}`;
+}
+
+function availableVersionLabel(remote, item, kind) {
+  if (kind === 'template') return 'Template';
+  const version = remote?.version || item?.version || '';
+  if (!remote && kind !== 'marketplace') return 'Katalog: lokal';
+  return `Katalog: ${version || 'unbekannt'}`;
+}
+
+function updateStateFor(item, remote, kind) {
+  if (!['installed', 'local', 'starter'].includes(kind)) {
+    return { available: false, reason: kind === 'system' ? 'System-Module werden über CTOX selbst aktualisiert.' : '' };
+  }
+  if (!remote?.download_url) {
+    return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
+  }
+  const comparison = compareVersions(remote.version || '', item.version || '');
+  if (comparison > 0) {
+    return { available: true, reason: `${remote.version} ist verfügbar, lokal ist ${item.version || 'unversioniert'}.` };
+  }
+  return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
+}
+
+function modificationStateFor(item, release, kind) {
+  if (kind === 'marketplace' || kind === 'template') return { status: 'catalog', label: 'Katalog' };
+  if (!release) return { status: 'unreleased', label: 'Nicht released' };
+  if (!item.manifest_sha256 || !release.manifest_sha256) return { status: 'unknown', label: 'Modifikation unbekannt' };
+  if (item.manifest_sha256 === release.manifest_sha256) return { status: 'clean', label: 'Unverändert' };
+  return { status: 'modified', label: 'Modifiziert' };
+}
+
+function actionButtonsForManagedItem(item) {
+  let html = '';
+  if (item.update_available && item.download_url) {
+    html += `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">Aktualisieren</button>`;
+  }
+  if (item.editable) {
+    html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">Bearbeiten</button>`;
+  }
+  if (item.deletable) {
+    html += `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">Deinstallieren</button>`;
+  }
+  return html;
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => String(value || '')
+    .replace(/^v/i, '')
+    .split(/[.-]/)
+    .map((part) => {
+      const number = Number.parseInt(part, 10);
+      return Number.isFinite(number) ? number : 0;
+    });
+  const a = parse(left);
+  const b = parse(right);
+  const length = Math.max(a.length, b.length, 1);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
+
 function mergeMarketplace(primary, fallback) {
   const map = new Map();
   for (const item of [...fallback, ...primary]) {
@@ -847,23 +1012,57 @@ function sortItems(left, right) {
 
 function scopeTitle(scope) {
   return {
-    all: 'All Applications',
+    all: 'Alle Anwendungen',
     marketplace: 'GitHub Marketplace',
     template: 'Templates',
-    installed: 'Installed Apps',
+    installed: 'Installierte Apps',
     starter: 'Starter Apps',
     system: 'System Apps',
     local: 'Local Modules',
   }[scope] || 'Applications';
 }
 
-function iconForItem(item) {
+function iconGlyphForItem(item) {
   if (item.kind === 'marketplace') return item.status === 'installed' ? '✓' : 'GH';
   if (item.kind === 'template') return '+';
   if (item.kind === 'installed') return '✓';
   if (item.kind === 'starter') return '★';
   if (item.kind === 'system') return '◆';
   return '*';
+}
+
+function iconMarkupForItem(item) {
+  const svg = sanitizeSvgIcon(item?.icon_svg || item?.raw?.layout?.icon_svg || item?.raw?.icon_svg || '');
+  if (svg) return svg;
+  return `<span class="app-card-icon-glyph">${escapeHtml(iconGlyphForItem(item))}</span>`;
+}
+
+function sanitizeSvgIcon(raw) {
+  const value = String(raw || '').trim();
+  if (!value || !value.startsWith('<svg')) return '';
+  try {
+    const doc = new DOMParser().parseFromString(value, 'image/svg+xml');
+    const parserError = doc.querySelector('parsererror');
+    const svg = doc.documentElement;
+    if (parserError || !svg || svg.localName !== 'svg') return '';
+    for (const blocked of [...svg.querySelectorAll('script, foreignObject, iframe, object, embed, style')]) {
+      blocked.remove();
+    }
+    for (const element of [svg, ...svg.querySelectorAll('*')]) {
+      for (const attr of [...element.attributes]) {
+        const name = attr.name.toLowerCase();
+        const attrValue = String(attr.value || '').trim().toLowerCase();
+        if (name.startsWith('on') || attrValue.startsWith('javascript:') || attrValue.includes('url(javascript:')) {
+          element.removeAttribute(attr.name);
+        }
+      }
+    }
+    svg.setAttribute('aria-hidden', 'true');
+    svg.setAttribute('focusable', 'false');
+    return svg.outerHTML;
+  } catch {
+    return '';
+  }
 }
 
 function statusLabel(status) {
@@ -885,9 +1084,19 @@ function appCountLabel(count, scope, marketplaceStatus) {
   return `${count} ${suffix}`;
 }
 
-function marketplaceStateLabel({ status, message, marketplaceCount, installedCount }) {
+function marketplaceStateLabel({
+  status,
+  message,
+  marketplaceCount = 0,
+  discoveredCount = marketplaceCount,
+  availableCount = marketplaceCount,
+  installedCount,
+}) {
   if (status === 'loading') return message || `GitHub Discovery läuft. Installierte Apps bleiben sichtbar.`;
-  if (status === 'ready') return message || `${marketplaceCount} GitHub Module gefunden. ${installedCount} installierte Apps lokal gezählt.`;
+  if (status === 'ready') {
+    const base = message || `${discoveredCount} GitHub Module gefunden.`;
+    return `${base} ${availableCount} noch nicht lokal vorhanden. ${installedCount} installierte Apps lokal gezählt.`;
+  }
   if (status === 'empty') return message || 'Keine GitHub Module gefunden. Installierte Apps bleiben lokal verfügbar.';
   if (status === 'stale') return `GitHub Sync fehlgeschlagen. Zeige letzten Stand: ${message || 'Unbekannter Fehler'}`;
   if (status === 'error') return `GitHub Sync fehlgeschlagen: ${message || 'Unbekannter Fehler'}`;
@@ -953,16 +1162,21 @@ function escapeHtml(value) {
 }
 
 export const __appStoreTestHooks = {
+  actionButtonsForManagedItem,
   appCountLabel,
   chooseCanonicalCatalogItem,
+  compareVersions,
   creatorHashFromStore,
   emptyCatalogBody,
   emptyCatalogTitle,
   externalLinkIcon,
+  isInstalledCatalogItem,
   itemMatchesScope,
   marketplaceStateLabel,
+  modificationStateFor,
   sanitizeId,
   statusLabel,
+  updateStateFor,
 };
 
 function initAppStoreContextMenu(state) {

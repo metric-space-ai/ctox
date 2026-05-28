@@ -1,4 +1,20 @@
-import { __ticketTestHooks } from './index.js';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
+
+import { build } from 'esbuild';
+
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+});
+
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __ticketTestHooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 const statusEl = {
   hidden: true,
@@ -29,7 +45,7 @@ assert(
 );
 
 assert(
-  __ticketTestHooks.commandFailureMessage({ status: 'failed' }, 'cmd_unknown') === 'Command cmd_unknown failed',
+  __ticketTestHooks.commandFailureMessage({ status: 'failed' }, 'cmd_unknown') === 'Aktion cmd_unknown ist fehlgeschlagen.',
   'failed command has deterministic fallback',
 );
 

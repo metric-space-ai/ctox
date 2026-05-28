@@ -1,11 +1,27 @@
+import test from 'node:test';
 import assert from 'node:assert/strict';
-import { __calendarTestHooks as hooks } from './index.js';
-import { __calendarViewAdapterTestHooks as adapterHooks } from './calendar-view-adapter.js';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
 
-const tests = [];
-function test(name, fn) {
-  tests.push({ name, fn });
+import { build } from 'esbuild';
+
+globalThis.window = globalThis.window || {};
+
+async function importBrowserBundle(relativePath) {
+  const bundledModule = await build({
+    entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
+    bundle: true,
+    format: 'esm',
+    platform: 'browser',
+    write: false,
+  });
+
+  const [{ text: bundledSource }] = bundledModule.outputFiles;
+  return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 }
+
+const { __calendarTestHooks: hooks } = await importBrowserBundle('./index.js');
+const { __calendarViewAdapterTestHooks: adapterHooks } = await importBrowserBundle('./calendar-view-adapter.js');
 
 test('recurring EventCalendar ids resolve back to the full source event id', () => {
   assert.equal(
@@ -69,6 +85,21 @@ test('calendar title validation prevents empty source creation', () => {
   );
 });
 
+test('rendered EventCalendar element resolves to matching Business OS event', () => {
+  const element = {
+    querySelector(selector) {
+      if (selector === '.ec-event-title') return { textContent: 'Tägliches Standup' };
+      if (selector === '.ec-event-time') return { getAttribute: () => '2026-05-27T09:30:00' };
+      return null;
+    },
+  };
+  const events = [
+    { id: 'evt_standup', title: 'Tägliches Standup', start_time: new Date('2026-05-27T09:30:00').getTime() },
+  ];
+
+  assert.equal(hooks.findEventForRenderedCalendarElement(element, events)?.id, 'evt_standup');
+});
+
 test('non-recurring events map with calendar colors and hidden calendars are excluded', () => {
   const events = [
     { id: 'evt_a', calendar_id: 'cal_a', title: 'Visible', start_time: 1_780_000_000_000, end_time: 1_780_003_600_000 },
@@ -90,16 +121,27 @@ test('non-recurring events map with calendar colors and hidden calendars are exc
   assert.equal(mapped[0].color, '#123456');
 });
 
-let passed = 0;
-for (const entry of tests) {
-  try {
-    await entry.fn();
-    passed += 1;
-    console.log(`ok - ${entry.name}`);
-  } catch (error) {
-    console.error(`not ok - ${entry.name}`);
-    throw error;
-  }
-}
+test('calendar click fallback resolves source event when EventCalendar omits public id', () => {
+  const events = [
+    {
+      id: 'evt_standup',
+      calendar_id: 'cal_work',
+      title: 'Tägliches Standup',
+      start_time: 1_780_000_000_000,
+      end_time: 1_780_001_800_000,
+      recurrence_rule: 'FREQ=DAILY;INTERVAL=1',
+    },
+  ];
 
-console.log(`${passed} calendar tests passed`);
+  assert.equal(
+    adapterHooks.resolveOriginalEventForCalendarClick({
+      event: {
+        title: 'Tägliches Standup',
+        start: new Date(1_780_086_400_000),
+        end: new Date(1_780_088_200_000),
+        extendedProps: {},
+      },
+    }, events)?.id,
+    'evt_standup',
+  );
+});

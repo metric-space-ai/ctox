@@ -87,6 +87,10 @@ struct ModuleManifest {
     editable: bool,
     #[serde(default)]
     deletable: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    manifest_sha256: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    local_manifest_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1361,6 +1365,8 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
             .with_context(|| format!("failed to read module manifest {}", path.display()))?;
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.local_manifest_path = path.display().to_string();
         if manifest.entry.is_empty() {
             manifest.entry = format!("modules/{}/index.html", manifest.id);
         }
@@ -1405,6 +1411,8 @@ fn load_installed_module_manifests(app_root: &Path) -> anyhow::Result<Vec<Module
             .with_context(|| format!("failed to read module manifest {}", path.display()))?;
         let mut manifest: ModuleManifest = serde_json::from_str(&text)
             .with_context(|| format!("failed to parse module manifest {}", path.display()))?;
+        manifest.manifest_sha256 = hex_sha256(text.as_bytes());
+        manifest.local_manifest_path = path.display().to_string();
         if is_core_module(&manifest.id) {
             continue;
         }
@@ -2663,6 +2671,11 @@ fn short_path_hash(path: &Path) -> String {
     format!("{:x}", hasher.finalize())[..16].to_owned()
 }
 
+fn hex_sha256(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn file_modified_label(path: &Path) -> String {
     fs::metadata(path)
         .and_then(|meta| meta.modified())
@@ -2673,11 +2686,15 @@ fn file_modified_label(path: &Path) -> String {
 }
 
 fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> anyhow::Result<()> {
-    let rel = if path == "/" {
+    let raw_rel = if path == "/" {
         "index.html"
     } else {
         path.trim_start_matches('/')
     };
+    let rel = raw_rel
+        .strip_prefix("business-os/")
+        .or_else(|| (raw_rel == "business-os").then_some("index.html"))
+        .unwrap_or(raw_rel);
     if rel
         .split('/')
         .any(|part| part == ".." || part.starts_with('.'))

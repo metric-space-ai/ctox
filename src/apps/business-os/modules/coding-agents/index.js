@@ -1,4 +1,3 @@
-console.log('[coding-agents-module] Top-level evaluation started');
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
@@ -799,7 +798,7 @@ async function refreshAllData() {
 async function refreshDiagnosticsSilently() {
   const apps = ['antigravity', 'claude', 'codex'];
   for (const app of apps) {
-    const res = await dispatchAgyCommand(['--app', app, 'status']);
+    const res = await dispatchAgyCommand(['status'], { app });
     if (res && res.ok && res.stdout) {
       const diag = parseDiagnosticsStdout(res.stdout);
       state.diagnostics[app] = { ...diag, installed: true, online: diag.electronPid !== 'N/A' || diag.lsPid !== 'N/A' };
@@ -1235,17 +1234,22 @@ function parseSessionGetStdout(stdout) {
 }
 
 /* Dispatch command through RxDB sync */
-async function dispatchAgyCommand(args) {
+function buildAgyCommandArgs(args, app = state.activeApp) {
+  return ['--app', app].concat(args);
+}
+
+async function dispatchAgyCommand(args, options = {}) {
   if (!state.ctx?.commandBus?.dispatch) {
     console.warn('[coding-agents] No commandBus available on mount context!');
     return null;
   }
 
-  const commandId = `cmd_agy_${state.activeApp}_${crypto.randomUUID()}`;
+  const app = options.app || state.activeApp;
+  const commandId = `cmd_agy_${app}_${crypto.randomUUID()}`;
   const startedAtMs = Date.now();
 
   try {
-    const fullArgs = ['--app', state.activeApp].concat(args);
+    const fullArgs = buildAgyCommandArgs(args, app);
     const dispatched = await state.ctx.commandBus.dispatch({
       id: commandId,
       module: 'coding-agents',
@@ -1328,5 +1332,6 @@ export const __codingAgentsTestHooks = {
   validateWorkspacePath,
   validateNewSessionPrompt,
   workspaceLoadErrorFromResult,
+  buildAgyCommandArgs,
   escapeHtml
 };

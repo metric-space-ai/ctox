@@ -1275,9 +1275,27 @@ details[open] > .conv-message-details-summary::before {
 @media (max-width: 760px) {
   .conv-module {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 42vh) minmax(260px, 1fr);
+    gap: 8px;
+    padding: 8px;
+    overflow: auto;
   }
-  .conv-pane.conv-left,
+
+  .conv-pane.conv-left {
+    display: grid !important;
+  }
+
   [data-resizer] {
     display: none !important;
+  }
+
+  .conv-channel-filters {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .conv-channel-filters::-webkit-scrollbar {
+    display: none;
   }
 }

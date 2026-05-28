@@ -687,8 +687,30 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     const empty = document.createElement('div');
     empty.className = 'documents-empty';
     empty.innerHTML = state.documents.length
-      ? `<strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong><span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>`
-      : `<strong>${escapeHtml(state.t('noDocuments', 'No documents'))}</strong><span>${escapeHtml(state.t('importPrompt', 'Über das Import-Icon DOCX oder Markdown hinzufügen.'))}</span>`;
+      ? `
+        <strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong>
+        <span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>
+        <div class="documents-empty-actions">
+          <button type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
+        </div>
+      `
+      : `
+        <strong>${escapeHtml(state.t('noDocuments', 'Keine Dokumente'))}</strong>
+        <span>${escapeHtml(state.t('importPrompt', 'DOCX oder Markdown importieren oder ein neues Word-Dokument anlegen.'))}</span>
+        <div class="documents-empty-actions">
+          <button type="button" data-documents-empty-import>${iconSvg('import')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
+          <button type="button" data-documents-empty-new>${iconSvg('new')} ${escapeHtml(state.t('createWordDocument', 'Word-Dokument erstellen'))}</button>
+        </div>
+      `;
+    empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
+    empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => openNewDocumentDrawer(state));
+    empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
+      state.searchQuery = '';
+      state.statusFilter = 'all';
+      state.tagFilter = 'all';
+      state.sortBy = 'updated_desc';
+      renderLeft(state);
+    });
     list.append(empty);
   }
 }
@@ -1414,7 +1436,15 @@ function renderRight(state) {
   const wrap = document.createElement('div');
   wrap.className = 'documents-runbooks';
   wrap.innerHTML = `
-    <div class="documents-panel-title"><span>Runbooks</span><strong>${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'none'))}</strong></div>
+    <header class="ctox-pane-header documents-runbook-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker">${escapeHtml(state.t('runbookKicker', 'Aktionen'))}</span>
+          <h2 class="ctox-pane-title documents-column-title">${escapeHtml(state.t('runbooksTitle', 'Runbooks'))}</h2>
+        </div>
+        <strong class="documents-runbook-state">${record ? escapeHtml(record.document_type || 'word') : escapeHtml(state.t('none', 'keine'))}</strong>
+      </div>
+    </header>
     <form class="documents-runbook-form" data-documents-runbook-form>
       <select data-documents-runbook ${record ? '' : 'disabled'}>
         ${runbookOptions(state, selectedRunbook)}

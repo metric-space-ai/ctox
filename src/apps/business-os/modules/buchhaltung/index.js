@@ -161,10 +161,13 @@ export async function mount(ctx) {
   // 7. Wire RxDB Realtime Subscriptions
   state.rxCleanup = wireRealtimeSubscriptions();
 
-  // 8. Pre-load mock data if completely fresh
+  // 8. Load once synchronously before seeding so account-dependent mock data can resolve account ids.
+  await loadAllFibuData();
+
+  // 9. Pre-load mock data if completely fresh
   await seedMockDataIfEmpty();
 
-  // 9. Initial View Render
+  // 10. Initial View Render
   switchView(state.activeNav);
 
   state.contextMenuCleanup = initBuchhaltungContextMenu(state);
@@ -2735,6 +2738,10 @@ async function seedMockDataIfEmpty() {
   const db = state.ctx.db?.raw;
   if (!db) return;
 
+  if (state.accounts.length === 0) {
+    await loadAllFibuData();
+  }
+
   const existingEntries = await db.accounting_journal_entries.find().exec();
   if (existingEntries.length > 0) return;
 
@@ -2861,6 +2868,119 @@ async function seedMockDataIfEmpty() {
     status: 'draft',
     updated_at_ms: now
   });
+
+  const statementId = 'mock-stmt1';
+  await db.accounting_bank_statements.insert({
+    id: statementId,
+    account_number: 'DE90370400440532013000',
+    updated_at_ms: now
+  });
+
+  await db.accounting_bank_statement_lines.insert({
+    id: 'mock-bankline1',
+    statement_id: statementId,
+    value_date: '2026-05-22',
+    narration: 'SEPA UEBERWEISUNG HETZNER HET-981724',
+    amount: -11900,
+    counterparty_name: 'Hetzner Online GmbH',
+    counterparty_iban: 'DE81200505501234567890',
+    match_status: 'proposed',
+    updated_at_ms: now
+  });
+
+  const travelExpenseAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '4660' : '6670'));
+  const mileageExpenseAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '4673' : '6680'));
+  const privateContraAcct = state.accounts.find(a => a.code === (state.skrName === 'SKR03' ? '1890' : '2180'));
+
+  if (travelExpenseAcct && privateContraAcct) {
+    const travelMetadata = {
+      startDate: '2026-05-06',
+      endDate: '2026-05-08',
+      totalAllowance: 5600,
+      days: [
+        { date: '2026-05-06', type: 'arrival' },
+        { date: '2026-05-07', type: 'full', breakfast: true },
+        { date: '2026-05-08', type: 'departure' }
+      ]
+    };
+
+    await db.accounting_journal_entries.insert({
+      id: 'mock-travel1',
+      posting_date: '2026-05-08',
+      type: 'travel',
+      ref_type: 'travel',
+      ref_id: JSON.stringify(travelMetadata),
+      number: '',
+      narration: 'Reisekostenabrechnung: Kundenworkshop Berlin',
+      posted_at: 0,
+      updated_at_ms: now
+    });
+
+    await db.accounting_journal_entry_lines.insert({
+      id: 'mock-travel1-l1',
+      journal_entry_id: 'mock-travel1',
+      account_id: travelExpenseAcct.id,
+      debit: travelMetadata.totalAllowance,
+      credit: 0,
+      line_no: 1,
+      updated_at_ms: now
+    });
+
+    await db.accounting_journal_entry_lines.insert({
+      id: 'mock-travel1-l2',
+      journal_entry_id: 'mock-travel1',
+      account_id: privateContraAcct.id,
+      debit: 0,
+      credit: travelMetadata.totalAllowance,
+      line_no: 2,
+      updated_at_ms: now
+    });
+  }
+
+  if (mileageExpenseAcct && privateContraAcct) {
+    const mileageMetadata = {
+      date: '2026-05-13',
+      purpose: 'business',
+      startKm: 12400,
+      endKm: 12550,
+      km: 150,
+      destination: 'Büro -> Kundentermin Potsdam -> Büro',
+      contactPerson: 'Müller GmbH',
+      reimbursement: 4500
+    };
+
+    await db.accounting_journal_entries.insert({
+      id: 'mock-mileage1',
+      posting_date: '2026-05-13',
+      type: 'mileage',
+      ref_type: 'mileage',
+      ref_id: JSON.stringify(mileageMetadata),
+      number: '',
+      narration: 'Kundenpräsentation und Vertragsabstimmung',
+      posted_at: 0,
+      updated_at_ms: now
+    });
+
+    await db.accounting_journal_entry_lines.insert({
+      id: 'mock-mileage1-l1',
+      journal_entry_id: 'mock-mileage1',
+      account_id: mileageExpenseAcct.id,
+      debit: mileageMetadata.reimbursement,
+      credit: 0,
+      line_no: 1,
+      updated_at_ms: now
+    });
+
+    await db.accounting_journal_entry_lines.insert({
+      id: 'mock-mileage1-l2',
+      journal_entry_id: 'mock-mileage1',
+      account_id: privateContraAcct.id,
+      debit: 0,
+      credit: mileageMetadata.reimbursement,
+      line_no: 2,
+      updated_at_ms: now
+    });
+  }
 
   // Reload
   await loadAllFibuData();

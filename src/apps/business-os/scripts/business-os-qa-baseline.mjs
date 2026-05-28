@@ -41,6 +41,8 @@ const config = {
   readyTimeoutMs: parsePositiveInt(process.env.BUSINESS_OS_QA_READY_TIMEOUT_MS || '70000', 'BUSINESS_OS_QA_READY_TIMEOUT_MS'),
   failOnConsole: process.env.BUSINESS_OS_QA_FAIL_ON_CONSOLE !== '0',
   failOnRegistry: process.env.BUSINESS_OS_QA_FAIL_ON_REGISTRY !== '0',
+  loginUser: process.env.BUSINESS_OS_QA_LOGIN_USER || '',
+  loginPassword: process.env.BUSINESS_OS_QA_LOGIN_PASSWORD || '',
 };
 
 const summary = {
@@ -55,6 +57,8 @@ const summary = {
     readyTimeoutMs: config.readyTimeoutMs,
     failOnConsole: config.failOnConsole,
     failOnRegistry: config.failOnRegistry,
+    loginUser: config.loginUser || '',
+    loginPasswordConfigured: !!config.loginPassword,
   },
   expectedApps: AUDIT_APP_BASELINE,
   staticRegistry: readStaticRegistry(),
@@ -82,11 +86,12 @@ try {
     attachConsoleCapture(page);
 
     const smokeUrl = withQuery(config.url, 'rxdbSmoke', '1');
-    await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+    await authenticateIfNeeded(page, smokeUrl);
     summary.shell = await waitForShellReady(page);
 
     summary.surfaces = await collectRegistrySurfaces(page);
-    await page.screenshot({ path: path.join(config.outputDir, '00-registry-surfaces.png'), fullPage: false });
+    await safeScreenshot(page, '00-registry-surfaces.png');
     pushRegistryFailures(summary.failures, summary.surfaces, summary.staticRegistry);
 
     for (let index = 0; index < AUDIT_APP_BASELINE.length; index += 1) {
@@ -132,13 +137,52 @@ if (!summary.ok) {
 console.log(`Business OS QA baseline OK: ${AUDIT_APP_BASELINE.length} apps checked.`);
 console.log(`Report: ${path.join(config.outputDir, 'business-os-qa-baseline.md')}`);
 
+async function authenticateIfNeeded(page, smokeUrl) {
+  const authState = await page.evaluate(() => document.body?.dataset?.authState || '');
+  if (authState !== 'locked') return;
+  if (!config.loginUser || !config.loginPassword) {
+    throw new Error('Business OS login gate is locked and BUSINESS_OS_QA_LOGIN_USER/PASSWORD are not configured');
+  }
+
+  const loginUrl = new URL('/login', smokeUrl).toString();
+  const response = await page.context().request.post(loginUrl, {
+    form: {
+      user: config.loginUser,
+      password: config.loginPassword,
+    },
+    maxRedirects: 0,
+  });
+  if (![200, 302, 303].includes(response.status())) {
+    throw new Error(`Business OS login request failed with HTTP ${response.status()}`);
+  }
+  const location = response.headers().location || '';
+  if (/loginFailed=1/.test(location)) {
+    throw new Error('Business OS login request was rejected by the server');
+  }
+  const setCookie = response.headers()['set-cookie'] || '';
+  const sessionCookie = setCookie.match(/(?:^|,\s*)ctox_business_os_session=([^;]+)/);
+  if (sessionCookie?.[1]) {
+    await page.context().addCookies([{
+      name: 'ctox_business_os_session',
+      value: sessionCookie[1],
+      domain: new URL(smokeUrl).hostname,
+      path: '/',
+      httpOnly: true,
+      secure: new URL(smokeUrl).protocol === 'https:',
+      sameSite: 'Lax',
+      expires: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+    }]);
+  }
+  await page.goto(smokeUrl, { waitUntil: 'domcontentloaded', timeout: config.readyTimeoutMs });
+}
+
 async function captureApp(page, app, ordinal) {
   const consoleStart = consoleEvents.length;
   const opened = await openApp(page, app);
   await page.waitForTimeout(config.appWaitMs);
   const dom = await collectDomCounts(page, app);
   const screenshot = `${String(ordinal).padStart(2, '0')}-${slug(app.id)}.png`;
-  await page.screenshot({ path: path.join(config.outputDir, screenshot), fullPage: false });
+  await safeScreenshot(page, screenshot);
   const consoleErrors = consoleEvents
     .slice(consoleStart)
     .filter((entry) => entry.level === 'error' || entry.level === 'pageerror');
@@ -232,7 +276,7 @@ async function waitForShellReady(page) {
 
 async function collectRegistrySurfaces(page) {
   await openDesktopSurface(page);
-  await page.screenshot({ path: path.join(config.outputDir, '00a-desktop.png'), fullPage: false });
+  await safeScreenshot(page, '00a-desktop.png');
 
   const desktop = await page.evaluate(() => ({
     activeModule: document.body.dataset.activeModule || '',
@@ -254,7 +298,7 @@ async function collectRegistrySurfaces(page) {
       categories: [...document.querySelectorAll('.shell-start-menu-panel .start-menu-category-title')].map((node) => node.textContent.trim()),
     };
   });
-  await page.screenshot({ path: path.join(config.outputDir, '00b-start-menu.png'), fullPage: false });
+  await safeScreenshot(page, '00b-start-menu.png');
   await page.evaluate(() => document.querySelector('.shell-start-menu-panel')?.classList.remove('is-active'));
 
   await openModuleSurface(page, 'app-store');
@@ -271,7 +315,7 @@ async function collectRegistrySurfaces(page) {
     })),
     countText: document.querySelector('[data-apps-count]')?.textContent?.trim() || '',
   }));
-  await page.screenshot({ path: path.join(config.outputDir, '00c-app-store.png'), fullPage: false });
+  await safeScreenshot(page, '00c-app-store.png');
 
   const runtime = await page.evaluate(() => {
     const state = globalThis.ctoxBusinessOsSmoke?.state || globalThis.CTOX_BUSINESS_OS_APP || null;
@@ -305,12 +349,30 @@ async function openDesktopSurface(page) {
     if (button) button.click();
     else location.hash = '#desktop';
   });
-  await page.waitForFunction(
-    () => document.body.dataset.activeModule === 'desktop' && !document.body.dataset.moduleLoading,
-    undefined,
-    { timeout: 25000 }
-  );
+  try {
+    await page.waitForFunction(
+      () => document.body.dataset.activeModule === 'desktop' && !document.body.dataset.moduleLoading,
+      undefined,
+      { timeout: Math.min(config.readyTimeoutMs, 25000) }
+    );
+  } catch (error) {
+    console.warn(`[business-os-qa] Desktop surface did not become active: ${error?.message || error}`);
+  }
   await page.waitForTimeout(1000);
+}
+
+async function safeScreenshot(page, fileName) {
+  try {
+    await page.screenshot({
+      path: path.join(config.outputDir, fileName),
+      fullPage: false,
+      animations: 'disabled',
+      caret: 'hide',
+      timeout: Math.min(config.readyTimeoutMs, 15000),
+    });
+  } catch (error) {
+    console.warn(`[business-os-qa] Screenshot ${fileName} failed: ${error?.message || error}`);
+  }
 }
 
 async function openModuleSurface(page, id) {
@@ -322,7 +384,7 @@ async function openModuleSurface(page, id) {
   await page.waitForFunction(
     (moduleId) => document.body.dataset.activeModule === moduleId && !document.body.dataset.moduleLoading,
     id,
-    { timeout: 25000 }
+    { timeout: config.readyTimeoutMs }
   );
 }
 
@@ -540,7 +602,10 @@ function chromiumLaunchOptions() {
   const executablePath = existingChromeExecutable();
   const options = {
     headless: config.headless,
-    args: ['--disable-gpu'],
+    args: [
+      '--disable-gpu',
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+    ],
   };
   if (executablePath) options.executablePath = executablePath;
   return options;
