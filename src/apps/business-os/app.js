@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-data-plane-ready1';
+const APP_BUILD = '20260528-runtime-form-fix1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -279,7 +279,7 @@ async function loadCoreSchemaModules() {
 
 async function loadReactSettingsModule() {
   if (!reactSettingsModulePromise) {
-    reactSettingsModulePromise = importBusinessOsModule('./shared/react-settings.js?v=20260527-subscription-rest1', 'react settings');
+    reactSettingsModulePromise = importBusinessOsModule(`./shared/react-settings.js?v=${APP_BUILD}`, 'react settings');
   }
   return reactSettingsModulePromise;
 }

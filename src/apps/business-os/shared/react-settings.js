@@ -213,11 +213,12 @@ export async function openReactSettings({
       });
     });
     body.querySelector('[data-runtime-save]')?.addEventListener('click', async () => {
+      const runtimePayload = runtimePayloadFromForm(body);
       settingsState.commandStatus = 'Runtime/Auth wird gespeichert...';
       render();
       try {
         settingsState.runtimeSettings = await saveRuntimeSettings(
-          runtimePayloadFromForm(body),
+          runtimePayload,
           { commandBus, db, session, sync },
         );
         settingsState.commandStatus = 'Runtime/Auth gespeichert.';
@@ -235,9 +236,9 @@ export async function openReactSettings({
         'CTOX speichert die Runtime-Einstellung und fordert die Login-URL an.',
       );
       settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
+      const runtimePayload = runtimePayloadFromForm(body);
       render();
       try {
-        const runtimePayload = runtimePayloadFromForm(body);
         settingsState.runtimeSettings = runtimeSettingsWithDraft(
           settingsState.runtimeSettings,
           runtimePayload,
