@@ -1276,12 +1276,16 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     } else {
         auth_message.clone()
     };
+    let harness_flow = harness_flow_projection(root);
+    let queue_health = harness_queue_health(root);
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
         "id": "runtime-settings",
         "ok": true,
         "can_manage": true,
         "updated_at_ms": updated_at_ms,
+        "harness_flow": harness_flow,
+        "queue_health": queue_health,
         "runtime": {
             "source": source,
             "provider": provider,
@@ -1322,6 +1326,61 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "message": diagnostics_message
         }
     }))
+}
+
+fn harness_flow_projection(root: &Path) -> Value {
+    match crate::service::harness_flow::load_latest_flow(root) {
+        Ok(flow) => serde_json::json!({
+            "ok": true,
+            "mode": "ctox_core",
+            "flow": flow
+        }),
+        Err(err) => serde_json::json!({
+            "ok": false,
+            "mode": "ctox_core",
+            "error": err.to_string()
+        }),
+    }
+}
+
+fn harness_queue_health(root: &Path) -> Value {
+    let statuses = ["pending".to_string(), "leased".to_string()];
+    match channels::list_queue_tasks(root, &statuses, 128) {
+        Ok(tasks) => {
+            let pending = tasks
+                .iter()
+                .filter(|task| task.route_status == "pending")
+                .count();
+            let leased = tasks
+                .iter()
+                .filter(|task| task.route_status == "leased")
+                .count();
+            let oldest_pending_created_at = tasks
+                .iter()
+                .filter(|task| task.route_status == "pending")
+                .map(|task| task.created_at.as_str())
+                .min()
+                .unwrap_or_default()
+                .to_string();
+            serde_json::json!({
+                "ok": true,
+                "pending_count": pending,
+                "leased_count": leased,
+                "open_count": tasks.len(),
+                "oldest_pending_created_at": oldest_pending_created_at,
+                "stalled": pending > 0 && leased == 0
+            })
+        }
+        Err(err) => serde_json::json!({
+            "ok": false,
+            "pending_count": null,
+            "leased_count": null,
+            "open_count": null,
+            "oldest_pending_created_at": "",
+            "stalled": false,
+            "error": err.to_string()
+        }),
+    }
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {

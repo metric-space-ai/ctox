@@ -25,6 +25,7 @@
   --ctox-flow-muted-fill: color-mix(in srgb, var(--muted) 66%, transparent);
   --ctox-shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.1);
   --ctox-drawer-bg: radial-gradient(760px 540px at 0% 0%, color-mix(in srgb, var(--ctox-accent) 8%, transparent), transparent 58%), var(--ctox-surface);
+  --ctox-danger: var(--danger, #b74333);
   --ctox-radius-panel: 16px;
   --ctox-radius-control: 12px;
   --ctox-ok: #4f7f35;
@@ -80,7 +81,7 @@
   min-height: 0;
   display: grid;
   gap: 10px;
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   overflow: hidden;
   overscroll-behavior: contain;
   padding: 8px 2px 8px 0;
@@ -126,7 +127,7 @@ body.ctox-column-resizing {
 
 .ctox-harness-main {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) 118px;
+  grid-template-rows: auto auto auto minmax(0, 1fr) 118px;
   overflow: hidden;
 }
 
@@ -429,6 +430,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-work-overview {
+  grid-row: 4;
   display: grid;
   align-content: start;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -440,6 +442,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-task-filter-chips {
+  grid-row: 3;
   display: flex;
   gap: 6px;
   min-width: 0;
@@ -489,6 +492,77 @@ body.ctox-column-resizing {
   min-width: 0;
 }
 
+.ctox-harness-health-panel {
+  grid-row: 2;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ctox-harness-health-panel[aria-hidden="true"] {
+  height: 0;
+  border: 0;
+  padding: 0;
+}
+
+.ctox-harness-health-panel.is-warning,
+.ctox-harness-health-panel.is-critical {
+  display: grid;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--ctox-danger) 58%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ctox-danger) 14%, var(--ctox-surface));
+  box-shadow: inset 3px 0 0 var(--ctox-danger);
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.ctox-harness-health-panel.is-warning {
+  border-color: color-mix(in srgb, var(--ctox-danger) 32%, var(--ctox-accent));
+  background: color-mix(in srgb, var(--ctox-danger) 8%, var(--ctox-surface));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--ctox-danger) 62%, var(--ctox-accent));
+}
+
+.ctox-harness-health-panel span {
+  color: color-mix(in srgb, var(--ctox-danger) 78%, var(--text));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ctox-harness-health-panel strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 780;
+  line-height: 1.15;
+}
+
+.ctox-harness-health-panel p {
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 78%, var(--ctox-muted));
+  font-size: 11px;
+  line-height: 1.32;
+}
+
+.ctox-harness-health-panel button,
+.ctox-harness-health-banner button {
+  justify-self: start;
+  border: 1px solid color-mix(in srgb, var(--ctox-danger) 54%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--ctox-danger) 16%, var(--ctox-surface-2));
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+  padding: 6px 8px;
+}
+
+.ctox-harness-health-panel button:hover,
+.ctox-harness-health-banner button:hover {
+  background: color-mix(in srgb, var(--ctox-danger) 26%, var(--ctox-surface-2));
+  border-color: var(--ctox-danger);
+}
+
 .ctox-aux-section summary {
   display: flex;
   align-items: center;
@@ -510,6 +584,10 @@ body.ctox-column-resizing {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
+}
+
+.ctox-inbound-panel {
+  grid-row: 5;
 }
 
 .ctox-inbound-panel summary span,
@@ -592,6 +670,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-web-stack-panel {
+  grid-row: 6;
   display: grid;
   gap: 6px;
   max-height: 220px;
@@ -1130,6 +1209,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-flow-head {
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1137,6 +1217,70 @@ body.ctox-column-resizing {
   min-height: 38px;
   border-bottom: 1px solid var(--ctox-hair);
   padding: 6px 12px;
+}
+
+.ctox-harness-health-banner {
+  grid-row: 2;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ctox-harness-health-banner[aria-hidden="true"] {
+  height: 0;
+  border: 0;
+  padding: 0;
+}
+
+.ctox-harness-health-banner.is-warning,
+.ctox-harness-health-banner.is-critical {
+  display: grid;
+  grid-template-columns: minmax(180px, auto) minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid color-mix(in srgb, var(--ctox-danger) 54%, transparent);
+  background: color-mix(in srgb, var(--ctox-danger) 12%, var(--ctox-surface));
+  box-shadow: inset 4px 0 0 var(--ctox-danger);
+  color: var(--text);
+  padding: 8px 12px;
+}
+
+.ctox-harness-health-banner.is-warning {
+  border-bottom-color: color-mix(in srgb, var(--ctox-danger) 26%, var(--ctox-accent));
+  background: color-mix(in srgb, var(--ctox-danger) 7%, var(--ctox-surface));
+  box-shadow: inset 4px 0 0 color-mix(in srgb, var(--ctox-danger) 62%, var(--ctox-accent));
+}
+
+.ctox-harness-health-banner div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ctox-harness-health-banner span {
+  color: color-mix(in srgb, var(--ctox-danger) 78%, var(--text));
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.ctox-harness-health-banner strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctox-harness-health-banner p {
+  min-width: 0;
+  margin: 0;
+  color: color-mix(in srgb, var(--text) 82%, var(--ctox-muted));
+  font-size: 12px;
+  line-height: 1.28;
 }
 
 .ctox-flow-head h1 {
@@ -1204,6 +1348,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-metrics-strip {
+  grid-row: 3;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
@@ -1251,6 +1396,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-canvas-container {
+  grid-row: 4;
   position: relative;
   min-height: 0;
   display: grid;
@@ -1561,6 +1707,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-timeline-panel {
+  grid-row: 5;
   display: grid;
   gap: 5px;
   height: 118px;
@@ -2220,7 +2367,8 @@ body.ctox-column-resizing {
 }
 
 .ctox-task-edit footer small,
-.ctox-task-edit header small {
+.ctox-task-edit header small,
+.ctox-task-edit label small {
   color: var(--ctox-muted);
   font-size: 11px;
   line-height: 1.25;

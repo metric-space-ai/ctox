@@ -4899,6 +4899,14 @@ mod tests {
         assert!(settings.get("runtime").and_then(Value::as_object).is_some());
         assert!(settings.get("auth").and_then(Value::as_object).is_some());
         assert!(settings
+            .get("harness_flow")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
+            .get("queue_health")
+            .and_then(Value::as_object)
+            .is_some());
+        assert!(settings
             .get("diagnostics")
             .and_then(Value::as_object)
             .is_some());

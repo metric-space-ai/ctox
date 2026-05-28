@@ -17,6 +17,8 @@
   "blockedWork": "Blocked",
   "selectedTask": "Selected task",
   "taskDetail": "Task details",
+  "taskPromptRedacted": "Prompt hidden because it contains code, stack, or Web Stack data.",
+  "redactedTechnicalDetail": "Technical details hidden",
   "currentStep": "Current station",
   "source": "Source",
   "status": "Status",
@@ -78,5 +80,13 @@
   "outbound": "Outbound",
   "ticketsOpen": "Open tickets",
   "runtimePolicy": "Runtime / policies",
-  "queued": "Command queued"
+  "queued": "Command queued",
+  "harnessHealth": "Harness health",
+  "harnessCriticalTitle": "CTOX harness is not processing the queue",
+  "harnessCriticalMessage": "{count} tasks have been waiting for {age}; no leased or running work is visible.",
+  "harnessCriticalProjection": "{count} tasks have been waiting for {age}; RxDB is connected, but the CTOX flow projection is missing.",
+  "harnessWarningTitle": "Queue is waiting for CTOX harness",
+  "harnessWarningMessage": "{count} tasks are waiting; no lease is visible yet.",
+  "harnessOpenTask": "Open task",
+  "harnessHealthy": "Harness is processing queue"
 }

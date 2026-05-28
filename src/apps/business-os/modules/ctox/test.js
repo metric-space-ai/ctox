@@ -21,10 +21,13 @@ const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 
 const {
   clampMetric,
+  deriveHarnessHealth,
   flowSourceView,
+  formatRelativeAge,
   friendlyWebStackStatus,
   labels,
   progressPercent,
+  safeTaskDisplayText,
   setFlowZoom,
   taskSteps,
   timelinePanel,
@@ -70,6 +73,65 @@ test('Web Stack refresh preserves projection-missing diagnostics', () => {
   assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
 });
 
+test('Task display copy redacts source code and Web Stack internals', () => {
+  assert.equal(
+    safeTaskDisplayText('```js\nconst token = "secret";\n```', 'de'),
+    labels.de.redactedTechnicalDetail
+  );
+  assert.equal(
+    safeTaskDisplayText('browser_context frame_data capture_script payload', 'en'),
+    labels.en.redactedTechnicalDetail
+  );
+  assert.equal(
+    safeTaskDisplayText('Queue state is waiting for review', 'en'),
+    'Queue state is waiting for review'
+  );
+});
+
+test('Queued work with missing flow projection is a critical harness health state', () => {
+  const health = deriveHarnessHealth({
+    lang: 'de',
+    flow: { ok: false, error: 'rxdb_flow_projection_unavailable' },
+    ctx: { sync: { mode: 'webrtc' } },
+    model: {
+      tasks: [
+        {
+          id: 'queue:system::1e204',
+          title: 'Olaf CTOX MCP Skill Install',
+          status: 'queued',
+          routeStatus: 'pending',
+          createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+        },
+      ],
+    },
+  });
+  assert.equal(health.severity, 'critical');
+  assert.equal(health.reason, 'flow_projection_missing');
+  assert.equal(health.waitingCount, 1);
+  assert.equal(health.activeCount, 0);
+  assert.equal(health.focusTaskId, 'queue:system::1e204');
+});
+
+test('Queued work without a lease becomes critical after the stall grace window', () => {
+  const health = deriveHarnessHealth({
+    lang: 'de',
+    flow: { ok: true },
+    ctx: { sync: { mode: 'webrtc' } },
+    model: {
+      tasks: [
+        {
+          id: 'queue:stalled',
+          status: 'queued',
+          routeStatus: 'pending',
+          createdAt: new Date(Date.now() - 3 * 60 * 1000).toISOString(),
+        },
+      ],
+    },
+  });
+  assert.equal(health.severity, 'critical');
+  assert.equal(health.reason, 'queue_stalled');
+});
+
 test('Empty CTOX task selection does not crash task step rendering', () => {
   assert.deepEqual(taskSteps(null, { model: { timeline: [] } }), []);
 });
@@ -105,6 +167,7 @@ test('Single-event timeline is diagnostic and disabled', () => {
   assert.match(html, new RegExp(labels.de.timelineUnavailable));
   assert.equal(progressPercent(0, 0), 100);
   assert.equal(clampMetric(999, 0, 10), 10);
+  assert.equal(formatRelativeAge(30_000, 'de'), 'unter 1 Min.');
 });
 })().catch((error) => {
   console.error(error);

@@ -14,7 +14,11 @@ const LEFT_COLUMN_MIN = 220;
 const LEFT_COLUMN_MAX = 560;
 const HARNESS_REFRESH_MS = 4000;
 const LOCAL_RENDER_DEBOUNCE_MS = 80;
-const CTOX_STYLE_BUILD = '20260527-harness-layout1';
+const HARNESS_STALL_GRACE_MS = 90 * 1000;
+const HARNESS_WAITING_STATUSES = new Set(['queued', 'pending', 'accepted']);
+const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'drafting']);
+const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
+const CTOX_STYLE_BUILD = '20260528-harness-health1';
 
 const labels = {
   de: {
@@ -45,6 +49,8 @@ const labels = {
     editTask: 'Task bearbeiten',
     taskTitle: 'Titel',
     taskPrompt: 'Prompt',
+    taskPromptRedacted: 'Prompt ausgeblendet, da er Code, Stack- oder Web-Stack-Daten enthält.',
+    redactedTechnicalDetail: 'Technische Details ausgeblendet',
     saveTask: 'Speichern',
     deleteTask: 'Löschen',
     deleteTaskConfirm: 'Diesen CTOX Task wirklich löschen?',
@@ -139,6 +145,14 @@ const labels = {
     timelineUnavailable: 'Keine Timeline-Ereignisse verfügbar',
     timelineUnavailableDetail: 'Der Regler ist deaktiviert, bis CTOX mehr als einen Schritt projiziert.',
     flowProjectionMissing: 'RxDB verbunden, CTOX Flow-Projektion fehlt',
+    harnessHealth: 'Harness Health',
+    harnessCriticalTitle: 'CTOX Harness verarbeitet keine Queue',
+    harnessCriticalMessage: '{count} Aufgaben warten seit {age}; keine geleaste oder laufende Verarbeitung sichtbar.',
+    harnessCriticalProjection: '{count} Aufgaben warten seit {age}; RxDB ist verbunden, aber die CTOX Flow-Projektion fehlt.',
+    harnessWarningTitle: 'Queue wartet auf CTOX Harness',
+    harnessWarningMessage: '{count} Aufgaben warten; noch keine Lease sichtbar.',
+    harnessOpenTask: 'Task öffnen',
+    harnessHealthy: 'Harness verarbeitet Queue',
   },
   en: {
     now: 'Now',
@@ -168,6 +182,8 @@ const labels = {
     editTask: 'Edit task',
     taskTitle: 'Title',
     taskPrompt: 'Prompt',
+    taskPromptRedacted: 'Prompt hidden because it contains code, stack, or Web Stack data.',
+    redactedTechnicalDetail: 'Technical details hidden',
     saveTask: 'Save',
     deleteTask: 'Delete',
     deleteTaskConfirm: 'Delete this CTOX task?',
@@ -262,6 +278,14 @@ const labels = {
     timelineUnavailable: 'No timeline events available',
     timelineUnavailableDetail: 'The scrubber is disabled until CTOX projects more than one step.',
     flowProjectionMissing: 'RxDB connected, CTOX flow projection missing',
+    harnessHealth: 'Harness health',
+    harnessCriticalTitle: 'CTOX harness is not processing the queue',
+    harnessCriticalMessage: '{count} tasks have been waiting for {age}; no leased or running work is visible.',
+    harnessCriticalProjection: '{count} tasks have been waiting for {age}; RxDB is connected, but the CTOX flow projection is missing.',
+    harnessWarningTitle: 'Queue is waiting for CTOX harness',
+    harnessWarningMessage: '{count} tasks are waiting; no lease is visible yet.',
+    harnessOpenTask: 'Open task',
+    harnessHealthy: 'Harness is processing queue',
   },
 };
 
@@ -381,6 +405,9 @@ export async function mount(ctx) {
     refreshTimer: null,
     localSubscriptionCleanup: null,
     refreshInFlight: false,
+    harnessHealth: null,
+    harnessToastId: '',
+    harnessToastKey: '',
     layoutResizeCleanup: null,
     contextMenuCleanup: null,
     flowViewport: { left: 0, top: 0 },
@@ -433,15 +460,17 @@ async function renderFromLocalCache(state) {
     notice: state.webStack?.notice || '',
     data: webStack?.ok ? webStack : state.webStack?.data,
   };
-  state.flow = await loadHarnessFlowSnapshot().catch(() => emptyHarnessFlow('harness_flow_unavailable'));
+  state.flow = await loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable'));
   const bundle = mergeBundleWithCommands(ctoxSeed, commands, queueTasks, bugReports);
   const metrics = aggregateFlowMetrics(state.flow);
   state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
   state.liveStartedAt = Date.now();
   state.model = buildHarnessModel(bundle, state.flow);
+  state.harnessHealth = deriveHarnessHealth(state);
   state.focusTask = readFocusTask();
   reconcileSelection(state);
   render(state);
+  syncDetailDrawer(state);
 }
 
 function wireLocalRealtime(state) {
@@ -480,7 +509,7 @@ async function refresh(state) {
       loadLocalQueueTasks(state.ctx).catch(() => []),
       loadLocalBugReports(state.ctx).catch(() => []),
       loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
-      loadHarnessFlowSnapshot().catch(() => emptyHarnessFlow('harness_flow_unavailable')),
+      loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     ]);
     state.webStack = {
       loading: false,
@@ -495,12 +524,14 @@ async function refresh(state) {
     state.liveBaseSeconds = Number.isFinite(metrics.seconds) ? metrics.seconds : 0;
     state.liveStartedAt = Date.now();
     state.model = buildHarnessModel(bundle, nextFlow);
+    state.harnessHealth = deriveHarnessHealth(state);
     state.focusTask = readFocusTask();
     reconcileSelection(state);
     state.runtimeStatus = state.ctx?.sync?.mode === 'webrtc'
       ? displayFlowMode('rxdb-webrtc')
       : (state.ctx?.sync?.config?.native_rxdb_peer_reason || 'native CTOX RxDB peer is not available');
     render(state);
+    syncDetailDrawer(state);
   } finally {
     state.refreshInFlight = false;
   }
@@ -531,9 +562,212 @@ async function renderLoading(state) {
 }
 
 function render(state) {
+  syncHarnessHealthUiState(state);
   renderLeft(state);
   renderMain(state);
   updateLiveIndicators(state);
+  updateHarnessHealthAlerts(state);
+}
+
+function deriveHarnessHealth(state) {
+  const tasks = Array.isArray(state?.model?.tasks) ? state.model.tasks : [];
+  const waitingTasks = tasks.filter(taskIsHarnessWaiting);
+  const activeTasks = tasks.filter(taskIsHarnessActive);
+  const flowProjectionMissing = harnessFlowProjectionMissing(state);
+  const now = Date.now();
+  const oldestWaitingAt = waitingTasks.reduce((oldest, task) => {
+    const timestamp = taskTimestampMs(task);
+    return Number.isFinite(timestamp) ? Math.min(oldest, timestamp) : oldest;
+  }, Number.POSITIVE_INFINITY);
+  const oldestWaitingAgeMs = waitingTasks.length && Number.isFinite(oldestWaitingAt)
+    ? Math.max(0, now - oldestWaitingAt)
+    : 0;
+  const stalled = waitingTasks.length > 0
+    && activeTasks.length === 0
+    && (flowProjectionMissing || oldestWaitingAgeMs >= HARNESS_STALL_GRACE_MS);
+  const waitingWithoutLease = waitingTasks.length > 0 && activeTasks.length === 0;
+  const severity = stalled ? 'critical' : (waitingWithoutLease ? 'warning' : 'ok');
+  const reason = stalled
+    ? (flowProjectionMissing ? 'flow_projection_missing' : 'queue_stalled')
+    : (waitingWithoutLease ? 'queue_waiting' : 'healthy');
+  const focusTask = waitingTasks[0] || null;
+  return {
+    ok: severity !== 'critical',
+    severity,
+    reason,
+    waitingCount: waitingTasks.length,
+    activeCount: activeTasks.length,
+    oldestWaitingAgeMs,
+    flowProjectionMissing,
+    focusTaskId: focusTask?.id || '',
+    focusTaskTitle: focusTask?.title || '',
+  };
+}
+
+function taskIsHarnessWaiting(task) {
+  if (!task || taskIsHarnessTerminal(task) || taskIsHarnessActive(task)) return false;
+  const statuses = taskHarnessStatuses(task);
+  return statuses.some((status) => HARNESS_WAITING_STATUSES.has(status));
+}
+
+function taskIsHarnessActive(task) {
+  if (!task || taskIsHarnessTerminal(task)) return false;
+  return taskHarnessStatuses(task).some((status) => HARNESS_ACTIVE_STATUSES.has(status));
+}
+
+function taskIsHarnessTerminal(task) {
+  return taskHarnessStatuses(task).some((status) => HARNESS_TERMINAL_STATUSES.has(status));
+}
+
+function taskHarnessStatuses(task) {
+  const raw = [
+    task?.status,
+    task?.routeStatus,
+    task?.route_status,
+    task?.task_status,
+  ].filter((value) => String(value || '').trim());
+  return raw.length
+    ? raw.map((value) => normalizeCommandStatus(value))
+    : ['queued'];
+}
+
+function taskTimestampMs(task) {
+  const candidates = [task?.createdAt, task?.startedAt, task?.timestamp, task?.updatedAt];
+  for (const value of candidates) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Number.NaN;
+}
+
+function harnessFlowProjectionMissing(state) {
+  if (state?.flow?.ok) return false;
+  const error = String(state?.flow?.error || '').toLowerCase();
+  if (error.includes('projection')) return true;
+  if (error.includes('rxdb')) return true;
+  return state?.ctx?.sync?.mode === 'webrtc';
+}
+
+function syncHarnessHealthUiState(state) {
+  const harness = state.ctx.host.querySelector('[data-ctox-harness]');
+  if (!harness) return;
+  const health = state.harnessHealth || deriveHarnessHealth(state);
+  harness.dataset.harnessHealth = health.severity;
+  harness.classList.toggle('has-critical-harness', health.severity === 'critical');
+  harness.classList.toggle('has-warning-harness', health.severity === 'warning');
+}
+
+function harnessHealthTitle(state, health) {
+  const t = labels[state.lang];
+  if (health?.severity === 'critical') return t.harnessCriticalTitle;
+  if (health?.severity === 'warning') return t.harnessWarningTitle;
+  return t.harnessHealthy;
+}
+
+function harnessHealthMessage(state, health) {
+  const t = labels[state.lang];
+  const values = {
+    count: String(health?.waitingCount || 0),
+    age: formatRelativeAge(health?.oldestWaitingAgeMs || 0, state.lang),
+  };
+  if (health?.severity === 'critical' && health.flowProjectionMissing) {
+    return interpolateLabel(t.harnessCriticalProjection, values);
+  }
+  if (health?.severity === 'critical') {
+    return interpolateLabel(t.harnessCriticalMessage, values);
+  }
+  if (health?.severity === 'warning') {
+    return interpolateLabel(t.harnessWarningMessage, values);
+  }
+  return t.harnessHealthy;
+}
+
+function harnessHealthPanel(state) {
+  const health = state.harnessHealth || deriveHarnessHealth(state);
+  if (!health || health.severity === 'ok') {
+    return '<section class="ctox-harness-health-panel" aria-hidden="true"></section>';
+  }
+  const t = labels[state.lang];
+  const title = harnessHealthTitle(state, health);
+  const message = harnessHealthMessage(state, health);
+  return `
+    <section class="ctox-harness-health-panel is-${escapeAttr(health.severity)}" role="${health.severity === 'critical' ? 'alert' : 'status'}">
+      <span>${escapeHtml(t.harnessHealth)}</span>
+      <strong>${escapeHtml(title)}</strong>
+      <p>${escapeHtml(message)}</p>
+      ${health.focusTaskId ? `<button type="button" data-task-id="${escapeAttr(health.focusTaskId)}">${escapeHtml(t.harnessOpenTask)}</button>` : ''}
+    </section>
+  `;
+}
+
+function harnessHealthBanner(state) {
+  const health = state.harnessHealth || deriveHarnessHealth(state);
+  if (!health || health.severity === 'ok') {
+    return '<section class="ctox-harness-health-banner" aria-hidden="true"></section>';
+  }
+  const t = labels[state.lang];
+  const title = harnessHealthTitle(state, health);
+  const message = harnessHealthMessage(state, health);
+  return `
+    <section class="ctox-harness-health-banner is-${escapeAttr(health.severity)}" role="${health.severity === 'critical' ? 'alert' : 'status'}">
+      <div>
+        <span>${escapeHtml(t.harnessHealth)}</span>
+        <strong>${escapeHtml(title)}</strong>
+      </div>
+      <p>${escapeHtml(message)}</p>
+      ${health.focusTaskId ? `<button type="button" data-task-id="${escapeAttr(health.focusTaskId)}">${escapeHtml(t.harnessOpenTask)}</button>` : ''}
+    </section>
+  `;
+}
+
+function updateHarnessHealthAlerts(state) {
+  const health = state.harnessHealth || deriveHarnessHealth(state);
+  const notifications = state.ctx?.notifications;
+  if (!notifications?.show) return;
+  if (!health || health.severity !== 'critical') {
+    if (state.harnessToastId && notifications.close) notifications.close(state.harnessToastId);
+    state.harnessToastId = '';
+    state.harnessToastKey = '';
+    return;
+  }
+  const key = `${health.reason}:${health.waitingCount}:${health.focusTaskId}`;
+  if (state.harnessToastId && state.harnessToastKey === key) return;
+  if (state.harnessToastId && notifications.close) notifications.close(state.harnessToastId);
+  state.harnessToastKey = key;
+  state.harnessToastId = notifications.show({
+    type: 'error',
+    icon: '!',
+    title: harnessHealthTitle(state, health),
+    message: harnessHealthMessage(state, health),
+    time: 0,
+    action: health.focusTaskId
+      ? {
+          label: labels[state.lang].harnessOpenTask,
+          callback: () => selectTask(state, health.focusTaskId, { drawer: true, center: true }),
+        }
+      : null,
+  });
+}
+
+function interpolateLabel(template, values) {
+  return String(template || '').replace(/\{([a-zA-Z0-9_]+)\}/g, (_match, key) => values[key] ?? '');
+}
+
+function formatRelativeAge(ms, lang) {
+  const seconds = Math.max(0, Math.floor(Number(ms) / 1000));
+  if (!Number.isFinite(seconds) || seconds < 60) {
+    return lang === 'de' ? 'unter 1 Min.' : 'under 1 min';
+  }
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return lang === 'de' ? `${minutes} Min.` : `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const restMinutes = minutes % 60;
+  if (hours < 24) {
+    if (!restMinutes) return lang === 'de' ? `${hours} Std.` : `${hours} hr`;
+    return lang === 'de' ? `${hours} Std. ${restMinutes} Min.` : `${hours} hr ${restMinutes} min`;
+  }
+  const days = Math.floor(hours / 24);
+  return lang === 'de' ? `${days} Tg.` : `${days} d`;
 }
 
 function readStoredLeftColumnWidth() {
@@ -657,6 +891,7 @@ function renderLeft(state) {
       <span>${escapeHtml(t.tasks)}</span>
       <strong>${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</strong>
     </div>
+    ${harnessHealthPanel(state)}
     ${taskCategoryChips(model.tasks, selectedCategory, state)}
     <div class="ctox-work-overview">
       ${workSection('done', t.doneWork, visibleGroups.done, state)}
@@ -782,6 +1017,7 @@ function taskRow(task, state) {
   const selected = task.id === state.selectedTaskId;
   const channel = task.channelLabel || displayWorkSource(task.channel || task.source || task.moduleId || 'ctox');
   const tone = statusClass(task.status);
+  const title = taskDisplayTitle(task, state);
 
   let iconHtml = '';
   if (tone === 'tone-ok') {
@@ -800,13 +1036,13 @@ function taskRow(task, state) {
   }
 
   return `
-    <button type="button" class="ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${tone}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(task.title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${task.title}`)}">
+    <button type="button" class="ctox-task-row ctox-context-item ${focused ? 'is-focused-task' : ''} ${selected ? 'is-selected' : ''} ${tone}" data-task-id="${escapeAttr(task.id)}" data-context-label="${escapeAttr(title)}" data-context-record-id="${escapeAttr(task.id)}" data-ctox-task-id="${escapeAttr(task.taskId || task.id)}" data-ctox-command-id="${escapeAttr(task.commandId || '')}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}">
       <span class="ctox-task-status-wrapper">
         <span class="ctox-task-icon-container">${iconHtml}</span>
         <span class="ctox-task-status-text">${escapeHtml(displayStatus(task.status, state.lang))}</span>
       </span>
       <span class="ctox-task-copy">
-        <strong>${escapeHtml(task.title)}</strong>
+        <strong>${escapeHtml(title)}</strong>
         <small>${escapeHtml(channel)}</small>
       </span>
     </button>
@@ -968,7 +1204,7 @@ function recentWebStackBrowserExtracts(state) {
         title: task.title || '',
         sourceId: artifact.source_id || '',
         captureScript: artifact.capture_script || '',
-        summary: browserExtractSummary(artifact.fields),
+        summary: browserExtractSummary(artifact.fields, state.lang),
         timestamp: task.updatedAt || task.createdAt || task.timestamp || '',
       };
     })
@@ -976,11 +1212,11 @@ function recentWebStackBrowserExtracts(state) {
     .sort((left, right) => Date.parse(right.timestamp || 0) - Date.parse(left.timestamp || 0));
 }
 
-function browserExtractSummary(fields = {}) {
+function browserExtractSummary(fields = {}, lang = 'en') {
   return Object.entries(fields || {})
     .filter(([, value]) => value !== null && value !== undefined && String(value).trim())
     .slice(0, 4)
-    .map(([key, value]) => `${key}: ${String(value).trim()}`)
+    .map(([key, value]) => `${key}: ${safeTaskDisplayText(value, lang, { max: 80 })}`)
     .join(' · ');
 }
 
@@ -1049,7 +1285,7 @@ function withRouteStatusStep(steps, task, state) {
     .concat({
       id: routeNode,
       label: displayStatus(task?.routeStatus || task?.status, state.lang),
-      detail: task?.resultSummary || task?.summary || task?.target || task?.source || '',
+      detail: taskDetailText(task?.resultSummary || task?.summary || task?.target || task?.source || '', state),
       timestamp: task?.updatedAt || task?.createdAt || '',
       metrics: '',
       active: true,
@@ -1079,13 +1315,13 @@ function taskStatusSteps(task, state) {
     ? {
         id: routeNode,
         label: displayStatus(status, state.lang),
-        detail: task.resultSummary || task.summary || task.target || task.source || '',
+        detail: taskDetailText(task.resultSummary || task.summary || task.target || task.source || '', state),
         active: true,
       }
     : {
         id: 'queued',
         label: displayStatus(status, state.lang),
-        detail: task.resultSummary || task.summary || task.target || task.source || labels[state.lang].unprovenOutcome,
+        detail: taskDetailText(task.resultSummary || task.summary || task.target || task.source || labels[state.lang].unprovenOutcome, state),
         active: true,
         unverified: true,
       });
@@ -1158,6 +1394,7 @@ function renderMain(state) {
         ${live ? liveStatusMarkup(state) : ''}
       </div>
     </header>
+    ${harnessHealthBanner(state)}
     <section class="ctox-metrics-strip" aria-label="${escapeAttr(t.measurements)}">
       ${metricCard(t.inputTokens, metrics.inputTokens, 'tokens', state.lang)}
       ${metricCard(t.outputTokens, metrics.outputTokens, 'tokens', state.lang)}
@@ -1196,6 +1433,11 @@ function renderMain(state) {
   main.querySelectorAll('[data-task-step-index]').forEach((button) => {
     button.addEventListener('click', () => {
       setTaskTimelineStep(state, Number(button.dataset.taskStepIndex), { center: true });
+    });
+  });
+  main.querySelectorAll('[data-task-id]').forEach((button) => {
+    button.addEventListener('click', () => {
+      selectTask(state, button.dataset.taskId, { drawer: true, center: true });
     });
   });
   main.querySelector('[data-timeline-range]')?.addEventListener('input', (event) => {
@@ -1923,7 +2165,11 @@ function taskDrawer(task, state) {
   const t = labels[state.lang];
   const steps = taskSteps(task, state);
   const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
-  const summary = cleanUiCopy(itemSummary(task) || '');
+  const displayTitle = taskDisplayTitle(task, state);
+  const titleField = taskFieldDisplay(task.title || '', state);
+  const promptField = taskPromptDisplay(task, state);
+  const summary = taskDetailText(itemSummary(task) || '', state);
+  const resultSummaryText = taskDetailText(task.resultSummary || '', state);
   const target = displayPathLike(task.target || task.commandId || task.taskId || '');
   const sourceLine = [
     displayWorkSource(task.source || task.moduleId || 'ctox'),
@@ -1936,7 +2182,7 @@ function taskDrawer(task, state) {
     <header class="ctox-detail-header">
       <div>
         <span>${escapeHtml(t.taskDetail)}</span>
-        <h2>${escapeHtml(task.title)}</h2>
+        <h2>${escapeHtml(displayTitle)}</h2>
         <small>${escapeHtml(sourceLine)}</small>
       </div>
       <button class="icon-button ctox-drawer-close" type="button" data-close-ctox-drawer aria-label="Schließen">×</button>
@@ -1955,11 +2201,13 @@ function taskDrawer(task, state) {
       </header>
       <label>
         <span>${escapeHtml(t.taskTitle)}</span>
-        <input type="text" name="title" value="${escapeAttr(task.title || '')}" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
+        <input type="text" name="${titleField.redacted ? 'titleDisplay' : 'title'}" value="${escapeAttr(titleField.text)}" ${canModifyCtoxApp(state) && !titleField.redacted ? '' : 'disabled'}>
+        ${titleField.redacted ? `<small>${escapeHtml(t.redactedTechnicalDetail)}</small>` : ''}
       </label>
       <label>
         <span>${escapeHtml(t.taskPrompt)}</span>
-        <textarea name="prompt" rows="4" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${escapeHtml(task.prompt || task.summary || '')}</textarea>
+        <textarea name="${promptField.redacted ? 'promptDisplay' : 'prompt'}" rows="4" ${canModifyCtoxApp(state) && !promptField.redacted ? '' : 'disabled'}>${escapeHtml(promptField.text)}</textarea>
+        ${promptField.redacted ? `<small>${escapeHtml(t.taskPromptRedacted)}</small>` : ''}
       </label>
       <label>
         <span>${escapeHtml(t.priority)}</span>
@@ -1978,10 +2226,10 @@ function taskDrawer(task, state) {
         <p>${escapeHtml(summary)}</p>
       </section>
     ` : ''}
-    ${task.resultSummary ? `
+    ${resultSummaryText ? `
       <section class="ctox-detail-summary">
         <span>${escapeHtml(t.evidence)}</span>
-        <p>${escapeHtml(task.resultSummary)}</p>
+        <p>${escapeHtml(resultSummaryText)}</p>
       </section>
     ` : ''}
     <section class="ctox-drawer-section ctox-drawer-timeline">
@@ -2022,10 +2270,16 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
   const status = form.querySelector('[data-ctox-task-action-status]');
   const submit = form.querySelector('button[type="submit"]');
   const formData = new FormData(form);
+  const titleControl = form.elements.title;
+  const promptControl = form.elements.prompt;
   const payload = {
     task_id: nativeTaskId(task),
-    title: String(formData.get('title') || '').trim(),
-    prompt: String(formData.get('prompt') || '').trim(),
+    title: titleControl && !titleControl.disabled
+      ? String(formData.get('title') || '').trim()
+      : String(task.title || '').trim(),
+    prompt: promptControl && !promptControl.disabled
+      ? String(formData.get('prompt') || '').trim()
+      : String(task.prompt || '').trim(),
     priority: String(formData.get('priority') || 'normal').trim(),
   };
   if (!payload.task_id) {
@@ -2136,7 +2390,7 @@ function removeTaskFromModel(state, taskId) {
 function humanTaskActionError(error, t) {
   const message = String(error?.message || error || '');
   if (message.includes('403') || /chef|admin/i.test(message)) return t.chefAdminOnly;
-  return message ? `${t.taskActionFailed} ${message}` : t.taskActionFailed;
+  return t.taskActionFailed;
 }
 
 function flowNodeDrawer(node, task, state) {
@@ -2615,11 +2869,11 @@ async function loadLocalBugReports(ctx) {
   return loadLocalCollection(ctx, 'ctox_bug_reports');
 }
 
-async function loadHarnessFlowSnapshot() {
+async function loadHarnessFlowSnapshot(ctx) {
   try {
-    const collection = state.ctx?.db?.raw?.ctox_runtime_settings
-      || state.ctx?.db?.collections?.ctox_runtime_settings
-      || state.ctx?.db?.collection?.('ctox_runtime_settings');
+    const collection = ctx?.db?.raw?.ctox_runtime_settings
+      || ctx?.db?.collections?.ctox_runtime_settings
+      || ctx?.db?.collection?.('ctox_runtime_settings');
     if (!collection) return emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const doc = await collection.findOne('runtime-settings').exec();
     const runtimeSettings = doc?.toJSON?.() || null;
@@ -2822,11 +3076,11 @@ function ctoxCommandContextFromElement(state, target) {
           ? 'tasks'
           : 'module';
   const timelineStep = state.model?.timeline?.[clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1)] || null;
-  const label = recordElement?.dataset.contextLabel
+  const label = safeTaskDisplayText(recordElement?.dataset.contextLabel
     || node?.label
     || task?.title
     || timelineStep?.label
-    || 'CTOX Harness';
+    || 'CTOX Harness', state.lang);
   return {
     module: 'ctox',
     column,
@@ -2838,8 +3092,8 @@ function ctoxCommandContextFromElement(state, target) {
     selected_command_id: task?.commandId || '',
     selected_node_id: node?.id || timelineStep?.id || '',
     selected_step_index: clampIndex(state.selectedStepIndex, state.model?.timeline?.length || 1),
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
+    selected_text: safeTaskDisplayText(String(window.getSelection?.()?.toString?.() || '').trim(), state.lang, { max: 1000 }),
+    clicked_text: safeTaskDisplayText(String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' '), state.lang, { max: 500 }),
   };
 }
 
@@ -3360,6 +3614,68 @@ function eventToNodeId(kind, title) {
   return null;
 }
 
+function taskDisplayTitle(task, state) {
+  return safeTaskDisplayText(itemTitle(task), state.lang, {
+    fallback: nativeTaskId(task) || 'CTOX task',
+    max: 120,
+  });
+}
+
+function taskFieldDisplay(value, state) {
+  const text = String(value || '').trim();
+  const redacted = hasSensitiveUiLeak(text);
+  return {
+    redacted,
+    text: redacted
+      ? labels[state.lang]?.redactedTechnicalDetail || labels.en.redactedTechnicalDetail
+      : cleanUiCopy(text),
+  };
+}
+
+function taskPromptDisplay(task, state) {
+  const text = String(task?.prompt || task?.summary || '').trim();
+  const redacted = hasSensitiveUiLeak(text);
+  return {
+    redacted,
+    text: redacted
+      ? labels[state.lang]?.redactedTechnicalDetail || labels.en.redactedTechnicalDetail
+      : cleanUiCopy(text),
+  };
+}
+
+function taskDetailText(value, state) {
+  return safeTaskDisplayText(value, state.lang, { max: 280 });
+}
+
+function safeTaskDisplayText(value, lang = 'de', options = {}) {
+  const text = String(value || '').trim();
+  const fallback = options.fallback || '';
+  if (!text) return fallback;
+  if (hasSensitiveUiLeak(text)) {
+    return labels[lang]?.redactedTechnicalDetail || labels.en.redactedTechnicalDetail;
+  }
+  return clip(cleanUiCopy(text).replace(/\s+/g, ' ').trim(), options.max || 180) || fallback;
+}
+
+function hasSensitiveUiLeak(value) {
+  const text = String(value || '');
+  if (!text.trim()) return false;
+  const lower = text.toLowerCase();
+  return [
+    /```/,
+    /<\/?(script|style|html|body|pre|code|div|span|table|iframe)\b/i,
+    /(?:^|\n)\s*(?:import|export|function|class|const|let|var)\s+[A-Za-z_$]/,
+    /(?:^|\n)\s*(?:async\s+)?(?:function\s*)?\([^)]*\)\s*=>/,
+    /(?:^|\n)\s*[.#]?[A-Za-z0-9_-]+\s*\{[^}]*:[^}]*\}/,
+    /\b(?:TypeError|ReferenceError|SyntaxError|RangeError|Stack trace)\b/,
+    /\bat\s+.+:\d+:\d+\)?/,
+    /\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|secret|password|credential|authorization)\b/i,
+    /\bbearer\s+[A-Za-z0-9._~+/=-]{12,}/i,
+    /\b(?:web_stack|browser_context|frame_data|capture_script|secret_value_in_payload|ctox_runtime_settings)\b/i,
+  ].some((pattern) => pattern.test(text))
+    || (lower.includes('web stack') && /\b(secret|credential|capture|source|extract|frame|payload)\b/i.test(text));
+}
+
 function cleanUiCopy(value = '') {
   return String(value)
     .replaceAll('ReviewHarness', 'Review process')
@@ -3555,10 +3871,13 @@ function escapeAttr(value) {
 
 export const __ctoxTestHooks = {
   clampMetric,
+  deriveHarnessHealth,
   flowSourceView,
+  formatRelativeAge,
   friendlyWebStackStatus,
   labels,
   progressPercent,
+  safeTaskDisplayText,
   setFlowZoom,
   taskSteps,
   timelinePanel,

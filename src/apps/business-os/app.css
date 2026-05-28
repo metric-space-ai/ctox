@@ -3485,7 +3485,7 @@ body[data-auth-state="locked"] .topbar {
 .shell-notifications {
   position: fixed;
   top: 64px;
-  right: 16px;
+  left: 16px;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -3725,8 +3725,16 @@ body[data-auth-state="locked"] .topbar {
 .shell-toast.is-fading { opacity: 0; transform: translateY(-6px); }
 .shell-toast--success { border-left-color: var(--accent); }
 .shell-toast--warning { border-left-color: color-mix(in srgb, var(--danger) 50%, var(--accent)); }
-.shell-toast--error   { border-left-color: var(--danger); }
+.shell-toast--error   {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--line));
+  border-left-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, var(--surface));
+}
 .shell-toast--info    { border-left-color: var(--accent); }
+.shell-toast--error .shell-toast-title,
+.shell-toast--error .shell-toast-icon {
+  color: color-mix(in srgb, var(--danger) 82%, var(--text));
+}
 .shell-toast-icon { font-size: 18px; align-self: center; }
 .shell-toast-content { min-width: 0; }
 .shell-toast-title { font-size: 12px; font-weight: 600; }
