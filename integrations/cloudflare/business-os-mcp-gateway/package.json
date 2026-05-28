@@ -1,0 +1,12 @@
+{
+  "name": "@ctox/business-os-mcp-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cloudflare Worker gateway for the CTOX Business OS MCP Channel.",
+  "scripts": {
+    "check": "npm test && node --check scripts/smoke-managed-gateway.mjs && node scripts/validate-config.mjs",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke-managed-gateway.mjs"
+  }
+}

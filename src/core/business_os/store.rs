@@ -4467,6 +4467,192 @@ pub fn pull_collection_records(
     }))
 }
 
+pub fn pull_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if collection.trim().is_empty() || record_id.trim().is_empty() {
+        return Ok(None);
+    }
+    match collection {
+        "communication_accounts" | "communication_threads" | "communication_messages" => {
+            let pulled = pull_collection_records(root, collection, None, Some(2_000))?;
+            return Ok(pulled
+                .get("documents")
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items.iter().find(|item| {
+                        item.get("id").and_then(Value::as_str) == Some(record_id)
+                            || item.get("record_id").and_then(Value::as_str) == Some(record_id)
+                    })
+                })
+                .cloned());
+        }
+        _ => {}
+    }
+    let conn = open_store(root)?;
+    let payload_json = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+            params![collection, record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if let Some(payload_json) = payload_json {
+        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+        if let Some(object) = payload.as_object_mut() {
+            object
+                .entry("id".to_string())
+                .or_insert_with(|| Value::String(record_id.to_string()));
+            object.insert("_deleted".to_string(), Value::Bool(false));
+        }
+        return Ok(Some(payload));
+    }
+    if let Some(rxdb_projection) = pull_rxdb_collection_table_records(root, collection, 0, 2_000)? {
+        return Ok(rxdb_projection
+            .get("documents")
+            .and_then(Value::as_array)
+            .and_then(|items| {
+                items.iter().find(|item| {
+                    item.get("id").and_then(Value::as_str) == Some(record_id)
+                        || item.get("record_id").and_then(Value::as_str) == Some(record_id)
+                })
+            })
+            .cloned());
+    }
+    Ok(None)
+}
+
+pub fn pull_latest_collection_records(
+    root: &Path,
+    collection: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    match collection {
+        "communication_accounts" | "communication_threads" | "communication_messages" => {
+            return pull_collection_records(root, collection, None, limit);
+        }
+        _ => {}
+    }
+    let conn = open_store(root)?;
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let mut statement = conn.prepare(
+        "SELECT record_id, deleted, updated_at_ms, payload_json
+         FROM business_records
+         WHERE collection = ?1
+         ORDER BY updated_at_ms DESC, record_id DESC
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![collection, limit as i64], |row| {
+        let record_id: String = row.get(0)?;
+        let deleted: i64 = row.get(1)?;
+        let updated_at_ms: i64 = row.get(2)?;
+        let payload_json: String = row.get(3)?;
+        Ok((record_id, deleted, updated_at_ms, payload_json))
+    })?;
+    let mut documents = Vec::new();
+    for row in rows {
+        let (record_id, deleted, updated_at_ms, payload_json) = row?;
+        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or(Value::Null);
+        if let Some(obj) = payload.as_object_mut() {
+            obj.entry("id".to_string())
+                .or_insert_with(|| Value::String(record_id.clone()));
+            obj.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+            obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+        }
+        documents.push(payload);
+    }
+    if documents.is_empty() {
+        if let Some(rxdb_projection) =
+            pull_rxdb_collection_table_records(root, collection, 0, limit)?
+        {
+            return Ok(rxdb_projection);
+        }
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "documents": documents,
+        "count": documents.len(),
+        "since_ms": 0
+    }))
+}
+
+pub fn pull_business_command_status_record(
+    root: &Path,
+    command_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let mut record =
+        pull_collection_record(root, "business_commands", command_id)?.unwrap_or_else(|| {
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "status": "accepted",
+                "source": "queue_task_fallback",
+                "updated_at_ms": now_ms() as i64
+            })
+        });
+    let task_id = record
+        .get("task_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| find_queue_task_for_command(root, command_id));
+    if let Some(task_id) = task_id {
+        if let Some(task) = channels::load_queue_task(root, &task_id)? {
+            let original_command_status = record
+                .get("status")
+                .cloned()
+                .unwrap_or_else(|| Value::String("accepted".to_string()));
+            if let Some(object) = record.as_object_mut() {
+                let task_status = normalize_queue_status(&task.route_status).to_string();
+                object
+                    .entry("original_command_status".to_string())
+                    .or_insert(original_command_status);
+                object.insert(
+                    "task_id".to_string(),
+                    Value::String(task.message_key.clone()),
+                );
+                object.insert(
+                    "task_status".to_string(),
+                    Value::String(task_status.clone()),
+                );
+                object.insert(
+                    "route_status".to_string(),
+                    Value::String(task.route_status.clone()),
+                );
+                object.insert("status".to_string(), Value::String(task_status));
+                if let Some(note) = task.status_note {
+                    object.insert("status_note".to_string(), Value::String(note));
+                }
+                if let Some(acked_at) = task.acked_at {
+                    object.insert("acked_at".to_string(), Value::String(acked_at));
+                }
+                if let Some(leased_at) = task.leased_at {
+                    object.insert("leased_at".to_string(), Value::String(leased_at));
+                }
+                object.insert("updated_at_ms".to_string(), Value::from(now_ms() as i64));
+            }
+        } else if record
+            .get("source")
+            .and_then(Value::as_str)
+            .is_some_and(|source| source == "queue_task_fallback")
+        {
+            return Ok(None);
+        }
+    } else if record
+        .get("source")
+        .and_then(Value::as_str)
+        .is_some_and(|source| source == "queue_task_fallback")
+    {
+        return Ok(None);
+    }
+    Ok(Some(record))
+}
+
 fn pull_rxdb_collection_table_records(
     root: &Path,
     collection: &str,
@@ -5587,6 +5773,7 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.message.request_approval"
             | "outbound.message.approve"
             | "outbound.message.reject"
+            | "outbound.message.request_changes"
             | "outbound.message.send_approved"
             | "outbound.message.pause"
             | "outbound.message.resume"
@@ -6137,6 +6324,9 @@ fn handle_outbound_active_command(
             }))
         }
         "outbound.message.reject" => outbound_record_rejection(&conn, session, command, now),
+        "outbound.message.request_changes" => {
+            outbound_record_change_request(&conn, session, command, now)
+        }
         "outbound.message.send_approved" => {
             let message_id = outbound_required_from_payload_or_record(
                 command,
@@ -8524,6 +8714,59 @@ fn outbound_record_rejection(
     }))
 }
 
+fn outbound_record_change_request(
+    conn: &Connection,
+    session: &BusinessOsSession,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let message_id = outbound_required_from_payload_or_record(
+        command,
+        &["message_id", "id"],
+        "message_id is required",
+    )?;
+    let mut message =
+        outbound_load_required(conn, "outbound_messages", &message_id, "message not found")?;
+    let revision_id = outbound_string(&message, &["revision_id"])
+        .unwrap_or_else(|| outbound_message_revision(&message));
+    let approval_id = outbound_id_from_command(command, &["approval_id"], "change_request")
+        .unwrap_or_else(|_| format!("change_request_{message_id}_{revision_id}"));
+    let engagement_id = outbound_string(&message, &["engagement_id"]).unwrap_or_default();
+    let mut approval = outbound_object_payload(&command.payload);
+    outbound_put_string(&mut approval, "id", approval_id.clone());
+    outbound_put_string(&mut approval, "message_id", message_id.clone());
+    outbound_put_string(&mut approval, "engagement_id", engagement_id.clone());
+    outbound_put_string(&mut approval, "revision_id", revision_id);
+    outbound_put_string(
+        &mut approval,
+        "actor_user_id",
+        outbound_session_actor_id(session),
+    );
+    outbound_put_string(&mut approval, "decision", "changes_requested");
+    outbound_put_default_i64(&mut approval, "created_at_ms", now);
+    outbound_put_i64(&mut approval, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_approvals",
+        &approval_id,
+        now,
+        approval.clone(),
+    )?;
+    outbound_put_string(&mut message, "approval_status", "changes_requested");
+    outbound_put_string(&mut message, "draft_status", "changes_requested");
+    outbound_put_string(&mut message, "send_status", "blocked");
+    outbound_put_i64(&mut message, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_messages", &message_id, now, message.clone())?;
+    if !engagement_id.is_empty() {
+        outbound_update_engagement_status(conn, &engagement_id, "draft_changes_requested", now)?;
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "message": message,
+        "approval": approval
+    }))
+}
+
 fn outbound_enforce_send_gate(conn: &Connection, message: &Value) -> anyhow::Result<()> {
     let message_id = outbound_required_string(message, &["id"])?;
     anyhow::ensure!(
@@ -10660,6 +10903,28 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_business_module_reports_module
             ON business_module_reports(module_id, status, updated_at_ms);
+
+        CREATE TABLE IF NOT EXISTS business_os_mcp_events (
+            event_id TEXT PRIMARY KEY,
+            channel TEXT NOT NULL,
+            surface TEXT NOT NULL,
+            actor TEXT NOT NULL,
+            workspace TEXT NOT NULL,
+            tool TEXT NOT NULL,
+            request_id TEXT NOT NULL,
+            confirmation_state TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error_code TEXT,
+            error_message TEXT,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_os_mcp_events_created
+            ON business_os_mcp_events(created_at_ms DESC, event_id DESC);
+        CREATE INDEX IF NOT EXISTS idx_business_os_mcp_events_actor
+            ON business_os_mcp_events(actor, created_at_ms DESC);
+        CREATE INDEX IF NOT EXISTS idx_business_os_mcp_events_tool
+            ON business_os_mcp_events(tool, created_at_ms DESC);
         ",
     )?;
     migrate_business_users_roles(conn)?;

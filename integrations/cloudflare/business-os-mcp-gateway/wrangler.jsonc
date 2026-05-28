@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "ctox-business-os-mcp-gateway",
+  "main": "src/index.js",
+  "compatibility_date": "2025-11-01",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BUSINESS_OS_MCP_SESSIONS",
+        "class_name": "BusinessOsMcpSession"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BusinessOsMcpSession"]
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "mcp.ctox.dev",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "UPSTREAM_MCP_URL": "",
+    "ALLOWED_INSTANCE_IDS": "desk_123,cto1.kunstmen.com",
+    "MAX_MCP_BODY_BYTES": "1000000",
+    "MAX_MCP_RESPONSE_BYTES": "1000000",
+    "MCP_SESSION_TIMEOUT_MS": "30000",
+    "MAX_PENDING_REQUESTS": "16",
+    "CONNECT_REPLAY_WINDOW_MS": "300000",
+    "MAX_CONNECT_NONCES": "128",
+    "REQUIRE_CONNECT_REPLAY_GUARD": "true",
+    "MCP_REQUIRE_CLIENT_IDENTITY": "true"
+  }
+}

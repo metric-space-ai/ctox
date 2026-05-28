@@ -76,6 +76,42 @@ serve the same Business OS shell, but browser business data still goes through
 the RxDB/WebRTC contract. There is no HTTP bridge for Business OS collections,
 commands, module manifests, files, or runtime state.
 
+### Business OS MCP Channel
+
+External agents use a separate typed communication channel: Business OS MCP.
+This channel is for agent workflows such as status checks, module discovery,
+bounded record queries, delegated Business OS actions, command status, artifacts,
+and approvals. It is not the Browser Business OS data path and does not replace
+RxDB/WebRTC replication.
+
+Managed MCP flow:
+
+```text
+Codex / ChatGPT / Agent
+  -> https://mcp.ctox.dev/mcp/<instance-id>
+  -> connected CTOX daemon
+  -> local Business OS store and policy gate
+```
+
+The external agent skill lives at `skills/ctox-business-os-mcp/`. Install it in
+an agent runtime together with an MCP server entry. For the Kunstmen instance,
+Codex is configured as:
+
+```text
+name: cto1-kunstmen-business-os
+url:  https://mcp.ctox.dev/mcp/cto1.kunstmen.com
+auth: bearer token from CTOX_BUSINESS_OS_MCP_TOKEN
+```
+
+The managed gateway does not store Business OS collections. A CTOX instance must
+connect outbound before the agent can read or delegate work:
+
+```sh
+export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
+ctox business-os mcp connect \
+  --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
+```
+
 For private desktop setups, keep the remote-control/TUI room separate from the
 Business OS sync room. The Business OS values come from:
 

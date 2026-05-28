@@ -20,6 +20,7 @@ anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 csv = "1"
+futures-util = "0.3"
 image = { version = "0.25", default-features = false, features = ["png"] }
 tempfile = "3"
 ctox-doc-stack = { path = "src/tools/doc-stack" }
@@ -71,6 +72,10 @@ ctox-cloud-requirements  = { path = "src/core/harness/cloud-requirements" }
 ctox-utils-absolute-path = { path = "src/core/harness/utils/absolute-path" }
 toml = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio-tungstenite = { version = "0.28.0", features = [
+    "proxy",
+    "rustls-tls-native-roots",
+] }
 rustls = { version = "0.23", features = ["ring"] }
 whatsapp = { path = "src/core/communication/whatsapp_rust/crates/whatsapp" }
 

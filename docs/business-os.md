@@ -104,7 +104,65 @@ Remote Browser control is native-authorized:
 
 ---
 
-## 5. Desktop Shell Infrastructure
+## 5. Agent Communication: Business OS MCP
+
+Business OS MCP is the supported agent communication channel for external
+software. It is separate from the browser replication path.
+
+Use MCP for:
+
+- status and module discovery
+- bounded record and context queries
+- run, artifact, and approval inspection
+- proposing Business OS actions
+- executing policy-gated actions
+- approving, rejecting, or requesting changes on queued work
+
+Do not use MCP as:
+
+- shell access
+- raw SQL access
+- RxDB replication
+- browser remote control
+- an HTTP data proxy for Business OS collections
+
+Managed channel shape:
+
+```text
+Agent -> https://mcp.ctox.dev/mcp/<instance-id> -> connected CTOX daemon -> Business OS policy/store
+```
+
+For `cto1.kunstmen.com`, Codex uses this MCP server entry:
+
+```text
+cto1-kunstmen-business-os
+https://mcp.ctox.dev/mcp/cto1.kunstmen.com
+```
+
+The companion external-agent skill is stored at:
+
+```text
+skills/ctox-business-os-mcp/
+```
+
+The skill tells Codex or another agent how to use the typed MCP tools safely. It
+does not grant access by itself; access is granted only by the configured MCP
+server token and the CTOX Business OS MCP policy.
+
+The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
+
+```sh
+export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
+ctox business-os mcp connect \
+  --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
+```
+
+If the instance is not connected, `/mcp/cto1.kunstmen.com` returns
+`runtime_unavailable` and agents must report that CTOX MCP is not connected.
+
+---
+
+## 6. Desktop Shell Infrastructure
 
 The main entrypoint is the Desktop shell (`modules/desktop/`), providing a lightweight operating environment:
 
@@ -117,7 +175,7 @@ The main entrypoint is the Desktop shell (`modules/desktop/`), providing a light
 
 ---
 
-## 6. Command Reference
+## 7. Command Reference
 
 Manage the Business OS instance directly from the CLI:
 
@@ -133,6 +191,13 @@ ctox business-os peer rotate
 
 # Serve the Business OS app locally
 ctox business-os serve [--addr 127.0.0.1:8765]
+
+# Serve local Business OS MCP for development
+ctox business-os mcp serve [--addr 127.0.0.1:8788]
+
+# Connect this CTOX instance to the managed MCP gateway
+CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<token> \
+  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id>
 
 # Install a standalone Business OS repository to an empty directory
 ctox business-os install --target <empty-dir> [--init-git]

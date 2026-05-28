@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 mod importer;
+pub mod mcp_channel;
 mod rxdb_peer;
 pub mod server;
 pub mod store;
