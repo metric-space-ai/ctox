@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-windowed-browser2';
+const APP_BUILD = '20260529-module-versioning';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -1149,8 +1149,9 @@ function wireShellActions() {
     const select = event.target.closest('[data-module-version-select]');
     if (select) {
       const moduleId = select.dataset.moduleVersionSelect;
-      const snapshotId = select.value;
-      if (!snapshotId) return;
+      const selected = select.value;
+      if (!selected) return;
+      const isBundleVersion = selected.startsWith('modver:');
 
       const moduleName = moduleDisplayTitleFor(moduleId);
       const confirmMsg = shellLang() === 'de'
@@ -1166,13 +1167,23 @@ function wireShellActions() {
         setStatus(shellLang() === 'de' ? 'Setze Version zurück...' : 'Rolling back version...');
         select.disabled = true;
 
-        await dispatchShellModuleCommand({
-          commandType: 'ctox.source.rollback_snapshot',
-          moduleId,
-          recordId: `${moduleId}:snapshots`,
-          payload: { module_id: moduleId, snapshot_id: snapshotId },
-          source: 'business-os-shell',
-        });
+        if (isBundleVersion) {
+          await dispatchShellModuleCommand({
+            commandType: 'ctox.module.rollback_version',
+            moduleId,
+            recordId: `${moduleId}:versions`,
+            payload: { module_id: moduleId, version_id: selected.slice('modver:'.length) },
+            source: 'business-os-shell',
+          });
+        } else {
+          await dispatchShellModuleCommand({
+            commandType: 'ctox.source.rollback_snapshot',
+            moduleId,
+            recordId: `${moduleId}:snapshots`,
+            payload: { module_id: moduleId, snapshot_id: selected },
+            source: 'business-os-shell',
+          });
+        }
 
         // Update module revision to bust cache
         if (!state.moduleRevisions) {
@@ -3612,6 +3623,28 @@ function moduleRevisionQuery(moduleId) {
   return rev ? `_${rev}` : '';
 }
 
+function moduleVersionOriginLabel(origin) {
+  const de = shellLang() === 'de';
+  return {
+    install: de ? 'Installation' : 'Install',
+    manual_release: de ? 'Release' : 'Release',
+    rollback: 'Rollback',
+    edit: de ? 'Bearbeitung' : 'Edit',
+    creator_deploy: 'Creator',
+  }[origin] || origin || 'Version';
+}
+
+async function moduleBundleVersionsFor(moduleId) {
+  try {
+    const doc = await state.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
+    const data = doc?.toJSON?.();
+    const versions = data?.version_states?.[moduleId]?.versions;
+    return Array.isArray(versions) ? versions : [];
+  } catch {
+    return [];
+  }
+}
+
 async function loadModuleVersionsDropdown(moduleId) {
   const select = els.host.querySelector(`[data-module-version-select="${moduleId}"]`);
   if (!select) return;
@@ -3625,30 +3658,48 @@ async function loadModuleVersionsDropdown(moduleId) {
       source: 'business-os-shell',
     });
     const snapshots = response?.result || [];
+    const bundleVersions = await moduleBundleVersionsFor(moduleId);
+    if (isStaleDataPlaneGeneration(generation)) return;
+
+    // Clear all but first (placeholder) option
+    while (select.options.length > 1) {
+      select.remove(1);
+    }
+
+    const fmtDate = (ms) => new Date(ms).toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+
+    if (bundleVersions.length > 0) {
+      const group = document.createElement('optgroup');
+      group.label = shellLang() === 'de' ? 'Vollständige Versionen' : 'Full versions';
+      bundleVersions.forEach((version) => {
+        const option = document.createElement('option');
+        option.value = `modver:${version.version_id}`;
+        const label = version.label || moduleVersionOriginLabel(version.origin);
+        option.textContent = `#${version.seq} ${label} (${fmtDate(version.created_at_ms)})`;
+        group.appendChild(option);
+      });
+      select.appendChild(group);
+    }
+
     if (snapshots.length > 0) {
-      // Clear all but first option
-      while (select.options.length > 1) {
-        select.remove(1);
-      }
-      // Populate select
+      const group = document.createElement('optgroup');
+      group.label = shellLang() === 'de' ? 'Datei-Snapshots' : 'File snapshots';
       snapshots.forEach((snap) => {
-        const date = new Date(snap.created_at_ms);
-        const dateStr = date.toLocaleString(shellLang() === 'de' ? 'de-DE' : 'en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-        });
         const option = document.createElement('option');
         option.value = snap.snapshot_id;
-        option.textContent = `${snap.path} (${dateStr})`;
-        select.appendChild(option);
+        option.textContent = `${snap.path} (${fmtDate(snap.created_at_ms)})`;
+        group.appendChild(option);
       });
-      select.style.display = 'inline-block';
-    } else {
-      select.style.display = 'none';
+      select.appendChild(group);
     }
+
+    select.style.display = (bundleVersions.length > 0 || snapshots.length > 0) ? 'inline-block' : 'none';
   } catch (error) {
     if (isRecoverableDataPlaneAbort(error) || isStaleDataPlaneGeneration(generation)) return;
     console.error('[business-os] failed to load module versions:', error);

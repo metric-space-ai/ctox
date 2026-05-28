@@ -181,7 +181,13 @@ async function triggerCardAction(appId, actionType) {
   if (actionType === 'install') {
     await installMarketplaceItem(item);
   } else if (actionType === 'update') {
+    if (item.modification_status === 'modified'
+      && !confirm(`${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`)) {
+      return;
+    }
     await installMarketplaceItem(item, { update: true });
+  } else if (actionType === 'versions') {
+    await openVersionsDialog(item);
   } else if (actionType === 'open') {
     if (item.id === 'create-scratch') {
       openCreatorFromStore({ mode: 'scratch' });
@@ -387,8 +393,10 @@ function normalizeItem(item, kind) {
   const status = statusForItem(item, kind);
   const installedVersion = installedVersionLabel(item, release, kind);
   const availableVersion = availableVersionLabel(remote, item, kind);
-  const update = updateStateFor(item, remote, kind);
-  const modification = modificationStateFor(item, release, kind);
+  const installable = item.installable !== false && item.store?.installable !== false;
+  const moduleClass = installable ? 'fork' : 'maintained';
+  const update = updateStateFor(item, remote, kind, moduleClass);
+  const modification = modificationStateFor(item, release, kind, id);
   return {
     id,
     kind,
@@ -409,7 +417,8 @@ function normalizeItem(item, kind) {
     icon_svg: item.layout?.icon_svg || item.icon_svg || '',
     install_scope: item.install_scope || item.raw?.install_scope || '',
     permissions: item.permissions || item.collections || [],
-    installable: item.installable !== false && item.store?.installable !== false,
+    installable,
+    module_class: moduleClass,
     editable: item.editable === true && kind !== 'system',
     deletable: item.deletable === true && kind === 'installed',
     manifest_sha256: item.manifest_sha256 || '',
@@ -420,6 +429,7 @@ function normalizeItem(item, kind) {
     update_reason: update.reason,
     modification_status: modification.status,
     modification_label: modification.label,
+    version_state: versionStateFor(id),
     latest_release: release,
     raw: item,
   };
@@ -447,6 +457,7 @@ function normalizeDesktopAppItem(item) {
     install_scope: '',
     permissions: [],
     installable: false,
+    module_class: 'maintained',
     editable: false,
     deletable: false,
     manifest_sha256: '',
@@ -457,6 +468,7 @@ function normalizeDesktopAppItem(item) {
     update_reason: '',
     modification_status: 'clean',
     modification_label: 'Unverändert',
+    version_state: null,
     latest_release: null,
     raw: item,
   };
@@ -608,6 +620,7 @@ function renderCard(item) {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">Erstellen</button>`;
   } else if (item.kind === 'system') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
+    actionsHtml += versionsButtonHtml(item);
   } else if (item.kind === 'starter') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
     actionsHtml += actionButtonsForManagedItem(item);
@@ -749,6 +762,85 @@ async function uninstallInstalledItem(item) {
     moduleId: item.id,
     payload: {
       module_id: item.id,
+    },
+  });
+}
+
+function originLabel(origin) {
+  return {
+    install: 'Installation',
+    manual_release: 'Release',
+    rollback: 'Rollback',
+    edit: 'Bearbeitung',
+    creator_deploy: 'Creator',
+  }[origin] || origin || 'Version';
+}
+
+async function openVersionsDialog(item) {
+  const versions = Array.isArray(item.version_state?.versions) ? item.version_state.versions : [];
+  if (!versions.length) {
+    state.status = { kind: 'error', text: `Keine Versionen für ${item.title} vorhanden.` };
+    render();
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'app-store-version-overlay';
+  const rows = versions.map((version) => {
+    const date = version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '';
+    const seal = version.sealed ? '' : ' · offen';
+    const meta = `#${version.seq} · ${escapeHtml(originLabel(version.origin))}${seal} · ${version.file_count || 0} Dateien · ${escapeHtml(date)}`;
+    return `
+      <li class="app-version-row">
+        <div class="app-version-meta">
+          <strong>${escapeHtml(version.label || originLabel(version.origin))}</strong>
+          <span>${meta}</span>
+        </div>
+        <button type="button" class="card-btn secondary" data-rollback-version="${escapeHtml(version.version_id)}">Wiederherstellen</button>
+      </li>`;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="app-store-version-dialog" role="dialog" aria-modal="true" aria-label="Versionen von ${escapeHtml(item.title)}">
+      <header class="app-version-head">
+        <h3>Versionen – ${escapeHtml(item.title)}</h3>
+        <button type="button" class="card-btn link" data-version-close aria-label="Schließen">Schließen</button>
+      </header>
+      <ul class="app-version-list">${rows}</ul>
+    </div>`;
+
+  const close = () => {
+    overlay.remove();
+    window.removeEventListener('keydown', onEscape);
+  };
+  const onEscape = (event) => { if (event.key === 'Escape') close(); };
+
+  overlay.addEventListener('click', async (event) => {
+    if (event.target === overlay || event.target.closest('[data-version-close]')) {
+      close();
+      return;
+    }
+    const rollbackBtn = event.target.closest('[data-rollback-version]');
+    if (!rollbackBtn) return;
+    const versionId = rollbackBtn.dataset.rollbackVersion;
+    if (!confirm(`${item.title} auf diese Version zurücksetzen? Die aktuelle Quelle wird vorher als Wiederherstellungs-Version gesichert.`)) return;
+    close();
+    await rollbackToVersion(item, versionId);
+  });
+
+  window.addEventListener('keydown', onEscape);
+  document.body.append(overlay);
+}
+
+async function rollbackToVersion(item, versionId) {
+  await runStoreCommand({
+    label: `${item.title} wird zurückgesetzt...`,
+    success: `${item.title} auf die gewählte Version zurückgesetzt.`,
+    commandType: 'ctox.module.rollback_version',
+    moduleId: item.id,
+    payload: {
+      module_id: item.id,
+      version_id: versionId,
     },
   });
 }
@@ -929,6 +1021,12 @@ function latestReleaseFor(moduleId) {
   return [...releases].sort((left, right) => Number(right.version || 0) - Number(left.version || 0))[0] || null;
 }
 
+function versionStateFor(moduleId) {
+  const states = state.catalog?.version_states;
+  if (!states || typeof states !== 'object') return null;
+  return states[moduleId] || null;
+}
+
 function installedVersionLabel(item, release, kind) {
   if (kind === 'marketplace' || kind === 'template') return 'Nicht installiert';
   if (release?.version) return `Installiert: Release ${release.version}`;
@@ -942,9 +1040,12 @@ function availableVersionLabel(remote, item, kind) {
   return `Katalog: ${version || 'unbekannt'}`;
 }
 
-function updateStateFor(item, remote, kind) {
+function updateStateFor(item, remote, kind, moduleClass) {
   if (!['installed', 'local', 'starter'].includes(kind)) {
     return { available: false, reason: kind === 'system' ? 'System-Module werden über CTOX selbst aktualisiert.' : '' };
+  }
+  if (moduleClass === 'fork') {
+    return { available: false, reason: 'Fork-Apps werden lokal weiterentwickelt. Für Upstream-Patches einen Agent beauftragen oder neu forken.' };
   }
   if (!remote?.download_url) {
     return { available: false, reason: 'Keine Marketplace-Quelle für Updates verknüpft.' };
@@ -956,8 +1057,16 @@ function updateStateFor(item, remote, kind) {
   return { available: false, reason: 'Kein neueres Marketplace-Release sichtbar.' };
 }
 
-function modificationStateFor(item, release, kind) {
+function modificationStateFor(item, release, kind, resolvedId) {
   if (kind === 'marketplace' || kind === 'template') return { status: 'catalog', label: 'Katalog' };
+  const versionState = versionStateFor(resolvedId || item.module_id || item.id);
+  if (versionState) {
+    if (!versionState.current_bundle_sha256 || !versionState.baseline_bundle_sha256) {
+      return { status: 'unknown', label: 'Modifikation unbekannt' };
+    }
+    if (versionState.modified) return { status: 'modified', label: 'Modifiziert' };
+    return { status: 'clean', label: 'Unverändert' };
+  }
   if (!release) return { status: 'unreleased', label: 'Nicht released' };
   if (!item.manifest_sha256 || !release.manifest_sha256) return { status: 'unknown', label: 'Modifikation unbekannt' };
   if (item.manifest_sha256 === release.manifest_sha256) return { status: 'clean', label: 'Unverändert' };
@@ -972,10 +1081,17 @@ function actionButtonsForManagedItem(item) {
   if (item.editable) {
     html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">Bearbeiten</button>`;
   }
+  html += versionsButtonHtml(item);
   if (item.deletable) {
     html += `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">Deinstallieren</button>`;
   }
   return html;
+}
+
+function versionsButtonHtml(item) {
+  const count = item.version_state?.version_count || 0;
+  if (count < 1) return '';
+  return `<button type="button" class="card-btn secondary" data-card-action="versions" aria-label="Versionen von ${escapeHtml(item.title)} anzeigen">Versionen (${count})</button>`;
 }
 
 function compareVersions(left, right) {
@@ -1174,9 +1290,11 @@ export const __appStoreTestHooks = {
   itemMatchesScope,
   marketplaceStateLabel,
   modificationStateFor,
+  originLabel,
   sanitizeId,
   statusLabel,
   updateStateFor,
+  versionsButtonHtml,
 };
 
 function initAppStoreContextMenu(state) {

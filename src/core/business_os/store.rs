@@ -1423,6 +1423,7 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             reason: None,
         },
     )?;
+    let version_states = module_version_states(root, &app_root).unwrap_or(Value::Null);
     Ok(serde_json::json!({
         "id": "module-catalog",
         "ok": true,
@@ -1430,6 +1431,7 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "marketplace": marketplace,
         "templates": templates,
         "governance": governance,
+        "version_states": version_states,
         "updated_at_ms": now_ms(),
         "_deleted": false,
     }))
@@ -3953,6 +3955,63 @@ pub fn list_module_versions(
         "module_id": module_id,
         "versions": versions
     }))
+}
+
+/// Per-module bundle modification state for the app-store badge.
+///
+/// For every module that has a recorded version timeline, reports the install
+/// baseline bundle hash (lowest seq), the live current bundle hash, and whether
+/// the working tree diverges from that baseline. This replaces the old
+/// module.json-only manifest hash compare with a whole-bundle signal.
+fn module_version_states(root: &Path, app_root: &Path) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT module_id, bundle_sha256, origin, seq
+         FROM business_module_versions v1
+         WHERE seq = (SELECT MIN(seq) FROM business_module_versions v2
+                      WHERE v2.module_id = v1.module_id)",
+    )?;
+    let baselines = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+
+    let mut ids_stmt = conn.prepare(
+        "SELECT version_id FROM business_module_versions WHERE module_id = ?1 ORDER BY seq DESC",
+    )?;
+
+    let mut states = serde_json::Map::new();
+    for (module_id, baseline_sha, baseline_origin) in baselines {
+        let current_sha = compute_module_bundle(app_root, &module_id)
+            .map(|bundle| bundle.sha256)
+            .unwrap_or_default();
+        let version_ids = ids_stmt
+            .query_map(params![module_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let mut versions = Vec::with_capacity(version_ids.len());
+        for id in &version_ids {
+            versions.push(version_summary_row(&conn, id)?);
+        }
+        let modified = !current_sha.is_empty() && current_sha != baseline_sha;
+        states.insert(
+            module_id.clone(),
+            serde_json::json!({
+                "baseline_bundle_sha256": baseline_sha,
+                "baseline_origin": baseline_origin,
+                "current_bundle_sha256": current_sha,
+                "modified": modified,
+                "version_count": versions.len(),
+                "versions": versions,
+            }),
+        );
+    }
+    Ok(Value::Object(states))
 }
 
 pub fn rollback_module_to_version(
@@ -13457,6 +13516,58 @@ mod tests {
                 .and_then(Value::as_str),
             Some("rollback")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn module_version_states_report_baseline_and_modification() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src").join("apps").join("business-os");
+        fs::create_dir_all(&app_root)?;
+        fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+        write_widget_module(&app_root, "export const v = 1;\n")?;
+
+        // No timeline yet -> module is absent from the states map.
+        let empty = module_version_states(root, &app_root)?;
+        assert!(empty.get("widget").is_none());
+
+        record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
+            .expect("install version recorded");
+        let baseline_sha = compute_module_bundle(&app_root, "widget")?.sha256;
+
+        // Right after install the working tree matches the baseline.
+        let clean = module_version_states(root, &app_root)?;
+        let clean_state = clean.get("widget").expect("widget state present");
+        assert_eq!(
+            clean_state.get("baseline_bundle_sha256").and_then(Value::as_str),
+            Some(baseline_sha.as_str())
+        );
+        assert_eq!(
+            clean_state.get("current_bundle_sha256").and_then(Value::as_str),
+            Some(baseline_sha.as_str())
+        );
+        assert_eq!(clean_state.get("modified").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            clean_state.get("baseline_origin").and_then(Value::as_str),
+            Some("install")
+        );
+
+        // After an edit the working tree diverges from the baseline.
+        save_widget_source(root, "index.js", "export const v = 99;\n")?;
+        let dirty = module_version_states(root, &app_root)?;
+        let dirty_state = dirty.get("widget").expect("widget state present");
+        assert_eq!(dirty_state.get("modified").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            dirty_state.get("baseline_bundle_sha256").and_then(Value::as_str),
+            Some(baseline_sha.as_str())
+        );
+        assert_ne!(
+            dirty_state.get("current_bundle_sha256").and_then(Value::as_str),
+            Some(baseline_sha.as_str())
+        );
+        let versions = dirty_state.get("versions").and_then(Value::as_array).unwrap();
+        assert_eq!(versions.len() as i64, dirty_state.get("version_count").and_then(Value::as_i64).unwrap());
         Ok(())
     }
 

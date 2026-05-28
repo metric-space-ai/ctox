@@ -1845,6 +1845,7 @@ async fn accept_pending_business_command(
             | "ctox.module.assign_founder"
             | "ctox.module.release"
             | "ctox.module.rollback"
+            | "ctox.module.rollback_version"
             | "ctox.app_store.install"
             | "ctox.app_store.uninstall"
     ) {

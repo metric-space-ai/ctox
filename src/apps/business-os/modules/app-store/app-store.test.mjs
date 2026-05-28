@@ -125,3 +125,37 @@ test('version and modification states distinguish update and local edits', () =>
     'modified'
   );
 });
+
+test('fork-class apps do not offer destructive upstream updates', () => {
+  const fork = hooks.updateStateFor(
+    { version: '1.0.0' },
+    { version: '1.2.0', download_url: 'https://example.test/archive.zip' },
+    'installed',
+    'fork'
+  );
+  assert.equal(fork.available, false);
+  assert.match(fork.reason, /Fork-Apps/);
+
+  const maintained = hooks.updateStateFor(
+    { version: '1.0.0' },
+    { version: '1.2.0', download_url: 'https://example.test/archive.zip' },
+    'installed',
+    'maintained'
+  );
+  assert.equal(maintained.available, true);
+});
+
+test('versions button reflects the recorded timeline', () => {
+  assert.equal(hooks.versionsButtonHtml({ title: 'X' }), '');
+  assert.equal(hooks.versionsButtonHtml({ title: 'X', version_state: { version_count: 0 } }), '');
+  const html = hooks.versionsButtonHtml({ title: 'Buchhaltung', version_state: { version_count: 3 } });
+  assert.match(html, /Versionen \(3\)/);
+  assert.match(html, /data-card-action="versions"/);
+});
+
+test('origin labels are humanized for the timeline', () => {
+  assert.equal(hooks.originLabel('install'), 'Installation');
+  assert.equal(hooks.originLabel('rollback'), 'Rollback');
+  assert.equal(hooks.originLabel('manual_release'), 'Release');
+  assert.equal(hooks.originLabel('edit'), 'Bearbeitung');
+});
