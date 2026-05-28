@@ -18,7 +18,7 @@ const HARNESS_STALL_GRACE_MS = 90 * 1000;
 const HARNESS_WAITING_STATUSES = new Set(['queued', 'pending', 'accepted']);
 const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'drafting']);
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260528-harness-health1';
+const CTOX_STYLE_BUILD = '20260528-harness-health2';
 
 const labels = {
   de: {
@@ -562,9 +562,9 @@ async function renderLoading(state) {
 }
 
 function render(state) {
-  syncHarnessHealthUiState(state);
   renderLeft(state);
   renderMain(state);
+  syncHarnessHealthUiState(state);
   updateLiveIndicators(state);
   updateHarnessHealthAlerts(state);
 }
@@ -652,9 +652,18 @@ function syncHarnessHealthUiState(state) {
   const harness = state.ctx.host.querySelector('[data-ctox-harness]');
   if (!harness) return;
   const health = state.harnessHealth || deriveHarnessHealth(state);
+  const title = harnessHealthTitle(state, health);
+  const message = harnessHealthMessage(state, health);
+  const detail = health.severity === 'ok' ? title : `${title}: ${message}`;
   harness.dataset.harnessHealth = health.severity;
+  harness.title = detail;
+  harness.setAttribute('aria-label', detail);
   harness.classList.toggle('has-critical-harness', health.severity === 'critical');
   harness.classList.toggle('has-warning-harness', health.severity === 'warning');
+  harness.querySelectorAll('[data-harness-health-tooltip]').forEach((element) => {
+    element.title = detail;
+    element.setAttribute('aria-label', detail);
+  });
 }
 
 function harnessHealthTitle(state, health) {
@@ -680,44 +689,6 @@ function harnessHealthMessage(state, health) {
     return interpolateLabel(t.harnessWarningMessage, values);
   }
   return t.harnessHealthy;
-}
-
-function harnessHealthPanel(state) {
-  const health = state.harnessHealth || deriveHarnessHealth(state);
-  if (!health || health.severity === 'ok') {
-    return '<section class="ctox-harness-health-panel" aria-hidden="true"></section>';
-  }
-  const t = labels[state.lang];
-  const title = harnessHealthTitle(state, health);
-  const message = harnessHealthMessage(state, health);
-  return `
-    <section class="ctox-harness-health-panel is-${escapeAttr(health.severity)}" role="${health.severity === 'critical' ? 'alert' : 'status'}">
-      <span>${escapeHtml(t.harnessHealth)}</span>
-      <strong>${escapeHtml(title)}</strong>
-      <p>${escapeHtml(message)}</p>
-      ${health.focusTaskId ? `<button type="button" data-task-id="${escapeAttr(health.focusTaskId)}">${escapeHtml(t.harnessOpenTask)}</button>` : ''}
-    </section>
-  `;
-}
-
-function harnessHealthBanner(state) {
-  const health = state.harnessHealth || deriveHarnessHealth(state);
-  if (!health || health.severity === 'ok') {
-    return '<section class="ctox-harness-health-banner" aria-hidden="true"></section>';
-  }
-  const t = labels[state.lang];
-  const title = harnessHealthTitle(state, health);
-  const message = harnessHealthMessage(state, health);
-  return `
-    <section class="ctox-harness-health-banner is-${escapeAttr(health.severity)}" role="${health.severity === 'critical' ? 'alert' : 'status'}">
-      <div>
-        <span>${escapeHtml(t.harnessHealth)}</span>
-        <strong>${escapeHtml(title)}</strong>
-      </div>
-      <p>${escapeHtml(message)}</p>
-      ${health.focusTaskId ? `<button type="button" data-task-id="${escapeAttr(health.focusTaskId)}">${escapeHtml(t.harnessOpenTask)}</button>` : ''}
-    </section>
-  `;
 }
 
 function updateHarnessHealthAlerts(state) {
@@ -887,11 +858,10 @@ function renderLeft(state) {
   const activeCount = groups.current.length;
   syncOpenTaskSections(state, groups);
   left.innerHTML = `
-    <div class="ctox-panel-title ctox-context-item" data-context-label="${escapeAttr(t.tasks)}" data-context-record-id="ctox-tasks">
+    <div class="ctox-panel-title ctox-context-item" data-harness-health-tooltip data-context-label="${escapeAttr(t.tasks)}" data-context-record-id="ctox-tasks">
       <span>${escapeHtml(t.tasks)}</span>
       <strong>${escapeHtml(model.tasks.length ? `${activeCount} ${t.active}` : t.noActiveWork)}</strong>
     </div>
-    ${harnessHealthPanel(state)}
     ${taskCategoryChips(model.tasks, selectedCategory, state)}
     <div class="ctox-work-overview">
       ${workSection('done', t.doneWork, visibleGroups.done, state)}
@@ -1388,13 +1358,12 @@ function renderMain(state) {
         <span>${escapeHtml(t.liveFlow)}</span>
         <h1>${escapeHtml(t.doingNow)}</h1>
       </div>
-      <div class="ctox-flow-source">
+      <div class="ctox-flow-source" data-harness-health-tooltip>
         <strong>${escapeHtml(flowSource.mode)}</strong>
         <span>${escapeHtml(flowSource.status)}</span>
         ${live ? liveStatusMarkup(state) : ''}
       </div>
     </header>
-    ${harnessHealthBanner(state)}
     <section class="ctox-metrics-strip" aria-label="${escapeAttr(t.measurements)}">
       ${metricCard(t.inputTokens, metrics.inputTokens, 'tokens', state.lang)}
       ${metricCard(t.outputTokens, metrics.outputTokens, 'tokens', state.lang)}
