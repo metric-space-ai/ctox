@@ -4,6 +4,10 @@ import { showBusinessPrompt } from '../../shared/dialogs.js';
 
 const REFRESH_DEBOUNCE_MS = 80;
 const LAYOUT_KEY = 'ctox.tickets.layout';
+const TICKET_PRIMARY_COLLECTION = 'ctox_ticket_items';
+const TICKET_SYNC_START_TIMEOUT_MS = 8000;
+const TICKET_HYDRATION_TIMEOUT_MS = 12000;
+const TICKET_HYDRATION_POLL_MS = 350;
 
 const labels = {
   de: {
@@ -14,6 +18,10 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blockiert',
     closed: 'Geschlossen',
+    loadingTickets: 'Tickets werden geladen...',
+    loadingTicketsDetail: 'Die Ticket-Projektionen werden vorbereitet.',
+    syncingTickets: 'Tickets werden synchronisiert.',
+    syncingTicketsDetail: 'Die Ticketdaten werden gerade aus dem CTOX-Datenstrom geladen.',
     noTickets: 'Noch keine Tickets verfügbar.',
     noTicketsDetail: 'Neue Tickets erscheinen hier, sobald sie für CTOX bereitstehen.',
     selectTicket: 'Wähle links ein Ticket aus.',
@@ -65,6 +73,10 @@ const labels = {
     pending: 'Pending',
     blocked: 'Blocked',
     closed: 'Closed',
+    loadingTickets: 'Loading tickets...',
+    loadingTicketsDetail: 'Ticket projections are being prepared.',
+    syncingTickets: 'Syncing tickets.',
+    syncingTicketsDetail: 'Ticket data is loading from the CTOX data stream.',
     noTickets: 'No tickets available yet.',
     noTicketsDetail: 'New tickets appear here once they are ready for CTOX.',
     selectTicket: 'Select a ticket on the left.',
@@ -135,6 +147,7 @@ const state = {
   renderTimer: null,
   cleanup: null,
   resizeCleanup: null,
+  loading: false,
   data: Object.fromEntries(collectionNames.map((name) => [name, []])),
 };
 
@@ -148,9 +161,13 @@ export async function mount(ctx) {
   ctx.host.innerHTML = html;
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
+  state.loading = true;
   applyStaticLabels();
   wireUi();
   state.resizeCleanup = setupResizers();
+  render();
+  await startTicketCollections();
+  await waitForPrimaryTicketDataOrReady();
   await refreshTickets();
   state.cleanup = wireRealtime();
   return () => {
@@ -283,6 +300,7 @@ function scheduleRefresh() {
 async function refreshTickets() {
   const entries = await Promise.all(collectionNames.map(async (name) => [name, await loadCollection(name)]));
   state.data = Object.fromEntries(entries);
+  state.loading = false;
   const visible = filteredTickets();
   if (!state.selectedId || !visible.some((ticket) => ticket.id === state.selectedId)) {
     state.selectedId = visible[0]?.id || '';
@@ -295,6 +313,75 @@ async function loadCollection(name) {
   if (!collection) return [];
   const docs = await collection.find().exec();
   return docs.map((doc) => doc.toJSON()).filter((doc) => !doc.is_deleted && !doc._deleted);
+}
+
+async function startTicketCollections() {
+  const sync = state.ctx.sync;
+  if (typeof sync?.startCollection !== 'function') return;
+  const available = collectionNames.filter((name) => state.ctx.db?.raw?.[name]);
+  if (!available.length) return;
+  const primary = available.includes(TICKET_PRIMARY_COLLECTION) ? TICKET_PRIMARY_COLLECTION : available[0];
+  try {
+    await withTimeout(
+      sync.startCollection(primary),
+      TICKET_SYNC_START_TIMEOUT_MS,
+      `${primary} sync start timed out`,
+    );
+  } catch (error) {
+    recordSyncStartError(primary, error);
+  }
+  available
+    .filter((name) => name !== primary)
+    .forEach((name, index) => {
+      window.setTimeout(() => {
+        try {
+          Promise.resolve(sync.startCollection(name))
+            .catch((error) => recordSyncStartError(name, error));
+        } catch (error) {
+          recordSyncStartError(name, error);
+        }
+      }, index * 100);
+    });
+}
+
+async function waitForPrimaryTicketDataOrReady(timeoutMs = TICKET_HYDRATION_TIMEOUT_MS) {
+  if (typeof state.ctx.sync?.startCollection !== 'function') return;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const tickets = await loadCollection(TICKET_PRIMARY_COLLECTION);
+    if (tickets.length) {
+      state.data = { ...state.data, [TICKET_PRIMARY_COLLECTION]: tickets };
+      return;
+    }
+    if (isCollectionSyncReady(TICKET_PRIMARY_COLLECTION)) return;
+    await delay(TICKET_HYDRATION_POLL_MS);
+  }
+}
+
+function recordSyncStartError(collection, error) {
+  console.warn(`[tickets] ${collection} sync start failed`, error);
+}
+
+function isCollectionSyncReady(collection) {
+  const diagnostics = state.ctx.sync?.diagnostics?.collections?.[collection];
+  return isCollectionDiagnosticsReady(diagnostics);
+}
+
+function isCollectionDiagnosticsReady(diagnostics) {
+  if (!diagnostics) return false;
+  const status = diagnostics.connectionStatus || diagnostics.status || '';
+  if (['connected', 'running', 'reused'].includes(status)) return true;
+  if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
+  if (diagnostics.initialReplicationState === 'complete') return true;
+  const transport = diagnostics.frameTransport || {};
+  return Number(transport.activePeerCount || 0) > 0
+    && (Number(transport.sentFrames || 0) > 0 || Number(transport.receivedFrames || 0) > 0);
+}
+
+function shouldShowTicketSyncState() {
+  if (state.data.ctox_ticket_items.length) return false;
+  if (typeof state.ctx.sync?.startCollection !== 'function') return false;
+  return !state.ctx.db?.raw?.[TICKET_PRIMARY_COLLECTION] || !isCollectionSyncReady(TICKET_PRIMARY_COLLECTION);
 }
 
 function filteredTickets() {
@@ -329,6 +416,10 @@ function render() {
 
 function renderList() {
   const list = state.ctx.host.querySelector('[data-ticket-list]');
+  if (state.loading || shouldShowTicketSyncState()) {
+    list.innerHTML = renderTicketLoadingState();
+    return;
+  }
   const tickets = filteredTickets();
   if (!tickets.length) {
     list.innerHTML = renderEmptyState(
@@ -342,12 +433,7 @@ function renderList() {
     const selected = ticket.id === state.selectedId ? 'is-selected' : '';
     return `
       <button type="button" class="ticket-row ${selected}" data-ticket-id="${escapeAttr(ticket.id)}"
-        data-context-module="tickets"
-        data-context-submodule="inbox"
-        data-context-record-type="ticket"
-        data-context-record-id="${escapeAttr(ticket.ticket_key || ticket.id)}"
-        data-context-label="${escapeAttr(ticket.title || ticket.ticket_key || ticket.id)}"
-        data-context-skill="product_engineering/business-basic-module-development">
+        ${ticketContextAttrs(ticket, 'inbox')}>
         <span class="ticket-row-meta">
           <span>${escapeHtml(ticket.source_system || 'ctox')}</span>
           <span>${escapeHtml(displayStatus(ticket.remote_status || 'open'))}</span>
@@ -363,6 +449,11 @@ function renderDetail() {
   const detail = state.ctx.host.querySelector('[data-ticket-detail]');
   const ticket = selectedTicket();
   if (!ticket) {
+    clearRecordContext(detail);
+    if (state.loading || shouldShowTicketSyncState()) {
+      detail.innerHTML = renderTicketLoadingState('is-centered');
+      return;
+    }
     detail.innerHTML = renderEmptyState(
       state.t('selectTicket', 'Wähle links ein Ticket aus.'),
       state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
@@ -370,6 +461,7 @@ function renderDetail() {
     );
     return;
   }
+  applyTicketContext(detail, ticket, 'detail');
   const events = eventsForTicket(ticket.ticket_key);
   detail.innerHTML = `
     <header class="tickets-detail-head">
@@ -402,6 +494,11 @@ function renderContext() {
   const context = state.ctx.host.querySelector('[data-ticket-context]');
   const ticket = selectedTicket();
   if (!ticket) {
+    clearRecordContext(context);
+    if (state.loading || shouldShowTicketSyncState()) {
+      context.innerHTML = renderTicketLoadingState('is-context');
+      return;
+    }
     context.innerHTML = renderEmptyState(
       state.t('controls', 'Kontrollen'),
       state.t('selectTicketDetail', 'Details, Verlauf und Kontrollen werden danach hier angezeigt.'),
@@ -409,6 +506,7 @@ function renderContext() {
     );
     return;
   }
+  applyTicketContext(context, ticket, 'context');
   const cases = casesForTicket(ticket.ticket_key);
   const selfWork = selfWorkForTicket(ticket.ticket_key);
   const clarifications = clarificationsForTicket(ticket.ticket_key);
@@ -446,7 +544,12 @@ function renderContext() {
 function renderEvent(event) {
   const route = state.data.ctox_ticket_event_routing_state.find((item) => item.event_key === event.event_key);
   return `
-    <li>
+    <li ${recordContextAttrs({
+      type: 'ticket_event',
+      id: event.event_key || event.id,
+      label: event.summary || event.event_type || 'Event',
+      submodule: 'timeline',
+    })}>
       <span>${escapeHtml(formatDate(event.external_created_at || event.observed_at))}</span>
       <strong>${escapeHtml(event.summary || event.event_type || 'Event')}</strong>
       <small>${escapeHtml([event.direction, event.event_type, route?.route_status].filter(Boolean).join(' · '))}</small>
@@ -461,7 +564,12 @@ function renderCase(item) {
   const writebacks = state.data.ctox_ticket_writebacks.filter((writeback) => writeback.case_id === item.case_id);
   const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   return `
-    <article class="tickets-context-item">
+    <article class="tickets-context-item" ${recordContextAttrs({
+      type: 'ticket_case',
+      id: item.case_id || item.id,
+      label: item.label || item.case_id,
+      submodule: 'cases',
+    })}>
       <span>${escapeHtml(item.state || 'case')} · ${escapeHtml(item.risk_level || '')}</span>
       <strong>${escapeHtml(item.label || item.case_id)}</strong>
       <small>${escapeHtml(item.approval_mode || '')} · A${escapeHtml(String(item.autonomy_level || '').replace(/^A/i, ''))}</small>
@@ -673,10 +781,30 @@ function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+function withTimeout(promise, timeoutMs, message) {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    Promise.resolve(promise)
+      .then((value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      });
+  });
+}
+
 function renderSelfWork(item) {
   const notes = state.data.ctox_ticket_self_work_notes.filter((note) => note.work_id === item.work_id);
   return `
-    <article class="tickets-context-item">
+    <article class="tickets-context-item" ${recordContextAttrs({
+      type: 'ticket_self_work',
+      id: item.work_id || item.id,
+      label: item.title || item.work_id,
+      submodule: 'self-work',
+    })}>
       <span>${escapeHtml(item.kind || 'self-work')} · ${escapeHtml(item.state || '')}</span>
       <strong>${escapeHtml(item.title || item.work_id)}</strong>
       <small>${escapeHtml([item.assigned_to, `${notes.length} notes`].filter(Boolean).join(' · '))}</small>
@@ -692,7 +820,12 @@ function renderClarification(item) {
   const canResolve = !['resolved', 'cancelled'].includes(status);
   const missing = Array.isArray(item.missing_inputs) ? item.missing_inputs.join(', ') : '';
   return `
-    <article class="tickets-context-item">
+    <article class="tickets-context-item" ${recordContextAttrs({
+      type: 'ticket_clarification',
+      id: item.clarification_id || item.id,
+      label: item.question || item.clarification_id,
+      submodule: 'clarifications',
+    })}>
       <span>${escapeHtml([item.status, item.target_type, item.target_channel].filter(Boolean).join(' · '))}</span>
       <strong>${escapeHtml(item.question || item.clarification_id)}</strong>
       <small>${escapeHtml(missing || item.unblock_criteria || item.outbound_message_key || '')}</small>
@@ -750,7 +883,12 @@ async function runClarificationAction(actionEl) {
 
 function renderBundle(item) {
   return `
-    <article class="tickets-context-item is-compact">
+    <article class="tickets-context-item is-compact" ${recordContextAttrs({
+      type: 'ticket_control_bundle',
+      id: item.runbook_id || item.id,
+      label: item.label || item.runbook_id,
+      submodule: 'runbooks',
+    })}>
       <span>${escapeHtml(item.support_mode || 'support')}</span>
       <strong>${escapeHtml(item.label || item.runbook_id)}</strong>
       <small>${escapeHtml(item.approval_mode || '')} · ${escapeHtml(item.verification_profile_id || '')}</small>
@@ -806,6 +944,87 @@ function renderEmptyState(title, body = '', modifier = '') {
   `;
 }
 
+function renderTicketLoadingState(modifier = '') {
+  if (state.loading) {
+    return renderEmptyState(
+      state.t('loadingTickets', 'Tickets werden geladen...'),
+      state.t('loadingTicketsDetail', 'Die Ticket-Projektionen werden vorbereitet.'),
+      `${modifier} is-loading`.trim(),
+    );
+  }
+  return renderEmptyState(
+    state.t('syncingTickets', 'Tickets werden synchronisiert.'),
+    state.t('syncingTicketsDetail', 'Die Ticketdaten werden gerade aus dem CTOX-Datenstrom geladen.'),
+    `${modifier} is-loading`.trim(),
+  );
+}
+
+function applyTicketContext(element, ticket, submodule) {
+  applyRecordContext(element, {
+    type: 'ticket',
+    id: ticketRecordId(ticket),
+    label: ticketRecordLabel(ticket),
+    submodule,
+  });
+}
+
+function applyRecordContext(element, context) {
+  if (!element) return;
+  const attrs = recordContextObject(context);
+  for (const [name, value] of Object.entries(attrs)) {
+    if (value) {
+      element.setAttribute(name, value);
+    } else {
+      element.removeAttribute(name);
+    }
+  }
+}
+
+function clearRecordContext(element) {
+  if (!element) return;
+  for (const name of Object.keys(recordContextObject({}))) {
+    element.removeAttribute(name);
+  }
+}
+
+function ticketContextAttrs(ticket, submodule) {
+  return recordContextAttrs({
+    type: 'ticket',
+    id: ticketRecordId(ticket),
+    label: ticketRecordLabel(ticket),
+    submodule,
+  });
+}
+
+function recordContextAttrs(context) {
+  return Object.entries(recordContextObject(context))
+    .filter(([, value]) => value)
+    .map(([name, value]) => `${name}="${escapeAttr(value)}"`)
+    .join('\n        ');
+}
+
+function recordContextObject(context = {}) {
+  return {
+    'data-context-module': 'tickets',
+    'data-context-submodule': context.submodule || '',
+    'data-context-record-type': context.type || '',
+    'data-context-record-id': context.id || '',
+    'data-context-label': context.label || '',
+    'data-context-skill': 'product_engineering/business-basic-module-development',
+    'data-record-type': context.type || '',
+    'data-record-id': context.id || '',
+    'data-label': context.label || '',
+  };
+}
+
+function ticketRecordId(ticket) {
+  return ticket?.ticket_key || ticket?.id || '';
+}
+
+function ticketRecordLabel(ticket) {
+  return ticket?.title || ticket?.ticket_key || ticket?.id || 'Ticket';
+}
+
 function displayStatus(value) {
   return String(value || '')
     .replace(/[_-]+/g, ' ')
@@ -844,6 +1063,13 @@ function escapeAttr(value) {
 
 export const __ticketTestHooks = {
   commandFailureMessage,
+  isCollectionDiagnosticsReady,
+  ticketRecordContextForSmoke: (ticket) => recordContextObject({
+    type: 'ticket',
+    id: ticketRecordId(ticket),
+    label: ticketRecordLabel(ticket),
+    submodule: 'inbox',
+  }),
   setCommandStatusForSmoke(ctx, message, isError = false) {
     const previousCtx = state.ctx;
     state.ctx = ctx;

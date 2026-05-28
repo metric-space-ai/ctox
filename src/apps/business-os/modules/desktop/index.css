@@ -150,7 +150,7 @@
   overflow-wrap: break-word;
   word-break: normal;
   color: var(--text);
-  letter-spacing: -0.015em;
+  letter-spacing: 0;
   text-shadow: 
     0 1px 3px color-mix(in srgb, var(--bg) 95%, transparent),
     0 1px 6px color-mix(in srgb, var(--bg) 70%, transparent);
@@ -230,9 +230,10 @@
 .widget-time {
   font-size: 46px;
   font-weight: 800;
-  letter-spacing: -0.04em;
+  letter-spacing: 0;
   color: var(--text);
   line-height: 1;
+  min-height: 46px;
   font-variant-numeric: tabular-nums;
   background: linear-gradient(135deg, var(--text), color-mix(in srgb, var(--text) 75%, var(--accent)));
   -webkit-background-clip: text;
@@ -244,9 +245,10 @@
   font-size: 12px;
   font-weight: 700;
   color: var(--muted);
-  letter-spacing: 0.04em;
+  letter-spacing: 0;
   text-transform: uppercase;
   margin-bottom: 12px;
+  min-height: 16px;
 }
 
 .widget-status {
@@ -295,17 +297,67 @@
 .status-text {
   font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
   color: var(--text);
   text-transform: uppercase;
+  min-height: 13px;
+}
+
+.widget-time:empty,
+.widget-date:empty,
+.status-text:empty {
+  visibility: hidden;
+}
+
+@media (max-width: 560px) {
+  .desktop-module {
+    --desktop-icon-cell-w: 88px;
+    --desktop-icon-cell-h: 100px;
+    --desktop-icon-padding: 12px;
+  }
+
+  .desktop-icon {
+    width: 80px;
+    gap: 6px;
+    padding: 6px 2px 8px;
+    border-radius: 12px;
+  }
+
+  .desktop-icon .desktop-icon-glyph {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+  }
+
+  .desktop-icon .desktop-icon-label {
+    font-size: 10px;
+    line-height: 1.25;
+    padding: 2px;
+  }
+
+  .desktop-widget-container {
+    display: none;
+  }
+
+  .desktop-icon-empty {
+    top: 20px;
+    left: 20px;
+    right: 20px;
+  }
+}
+
+@media (max-height: 620px) {
+  .desktop-widget-container {
+    display: none;
+  }
 }
 
 /* ------------------------------------------------------------- */
-/* Cohesive Glassmorphic Shell & Window Overrides (Global)       */
+/* Cohesive Glassmorphic Shell & Window Overrides                */
 /* ------------------------------------------------------------- */
 
-/* 1. Global Shell Topbar glassmorphism */
-.topbar {
+/* 1. Desktop-scoped shell topbar glassmorphism */
+body[data-active-module="desktop"] .topbar {
   backdrop-filter: blur(20px) saturate(160%) !important;
   -webkit-backdrop-filter: blur(20px) saturate(160%) !important;
   background: color-mix(in srgb, var(--surface) 40%, transparent) !important;
@@ -313,5 +365,3 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.02) !important;
   transition: background-color 300ms ease !important;
 }
-
-

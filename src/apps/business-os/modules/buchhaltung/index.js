@@ -4048,6 +4048,7 @@ function renderBuchhaltungContextMenu(state, context, x, y) {
   const closeText = getBuchhaltungText(state, 'close', 'Schließen');
   const chatActionLabel = getBuchhaltungText(state, 'chatActionLabel', 'CTOX Aufgabe');
   const chatWorkDataLabel = getBuchhaltungText(state, 'chatWorkDataLabel', 'Mit Daten arbeiten');
+  const chatAnswerLabel = getBuchhaltungText(state, 'chatAnswerLabel', 'Frage beantworten');
   const chatModifyAppLabel = getBuchhaltungText(state, 'chatModifyAppLabel', 'App modifizieren');
   const chatPlaceholder = getBuchhaltungText(state, 'chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?');
   const sendText = getBuchhaltungText(state, 'send', 'Senden');
@@ -4061,12 +4062,11 @@ function renderBuchhaltungContextMenu(state, context, x, y) {
         </div>
         <button type="button" data-buchhaltung-context-close aria-label="${escapeHtml(closeText)}">×</button>
       </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(chatActionLabel)}">
-          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(chatWorkDataLabel)}</label>
-          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(chatModifyAppLabel)}</label>
-        </div>
-      ` : ''}
+      <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(chatActionLabel)}">
+        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(chatWorkDataLabel)}</label>
+        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(chatAnswerLabel)}</label>
+        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(chatModifyAppLabel)}</label>` : ''}
+      </div>
       <textarea data-buchhaltung-context-message placeholder="${escapeHtml(chatPlaceholder)}"></textarea>
       <footer>
         <span data-buchhaltung-context-status></span>
@@ -4089,7 +4089,7 @@ function renderBuchhaltungContextMenu(state, context, x, y) {
   state.contextMenu.querySelector('[data-buchhaltung-context-close]')?.addEventListener('click', () => hideBuchhaltungContextMenu(state));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    const mode = new FormData(form).get('contextMode') || 'data';
     await dispatchBuchhaltungContextChat(state, context, textarea?.value || '', mode);
   });
   requestAnimationFrame(() => textarea?.focus());
@@ -4103,16 +4103,23 @@ async function dispatchBuchhaltungContextChat(state, context, message, mode = 'd
     return;
   }
 
-  const safeMode = mode === 'app' && canModifyBuchhaltungApp(state) ? 'app' : 'data';
+  const safeMode = mode === 'app' && canModifyBuchhaltungApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
   if (!document.querySelector('[data-ctox-chat-root]')) {
     if (status) status.textContent = getBuchhaltungText(state, 'chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
   if (status) status.textContent = getBuchhaltungText(state, 'chatOpening', 'Oeffne Chat...');
-  const title = `${safeMode === 'app' ? 'Buchhaltung App modifizieren' : 'Fibu bearbeiten'} · ${context.label || 'Buchhaltung'}`;
+  const titlePrefix = safeMode === 'app'
+    ? 'Buchhaltung App modifizieren'
+    : safeMode === 'ask'
+      ? getBuchhaltungText(state, 'chatAnswerLabel', 'Frage beantworten')
+      : 'Fibu bearbeiten';
+  const title = `${titlePrefix} · ${context.label || 'Buchhaltung'}`;
   const instruction = safeMode === 'app'
     ? `Modifiziere die Buchhaltung-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Buchhaltungsdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
+    : safeMode === 'ask'
+      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
+      : trimmed;
 
   let activeRecord = null;
   const activeNav = state.activeNav || 'skr';
@@ -4143,7 +4150,7 @@ async function dispatchBuchhaltungContextChat(state, context, message, mode = 'd
         prompt: trimmed,
         user_message: trimmed,
         mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
+        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
         selected_record: activeRecord,
         context,
         thread_key: 'business-os/buchhaltung',

@@ -2,7 +2,15 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
+const KNOWLEDGE_INITIAL_SYNC_WAIT_MS = 9000;
+const KNOWLEDGE_SYNC_START_WAIT_MS = 1500;
+const KNOWLEDGE_SYNC_POLL_MS = 350;
 const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
+const KNOWLEDGE_DATA_COLLECTIONS = Object.freeze([
+  'knowledge_items',
+  'knowledge_runbooks',
+  'knowledge_tables',
+]);
 
 const labels = {
   de: {
@@ -65,6 +73,7 @@ const state = {
   contextMenu: null,
   resizeCleanup: null,
   localSubscriptionCleanup: null,
+  syncWarmupPromise: null,
   refreshInFlight: false,
   missingCollections: [],
   loadError: '',
@@ -83,7 +92,7 @@ export async function mount(ctx) {
   bindElements(ctx.host);
   wireEvents();
   state.resizeCleanup = setupKnowledgeColumnResizing();
-  await loadKnowledgeFromLocal();
+  await loadKnowledgeFromLocal({ initial: true });
   state.localSubscriptionCleanup = wireLocalRealtime();
   window.addEventListener('message', handleShellMessage);
   return () => {
@@ -252,32 +261,40 @@ function wireEvents() {
   initKnowledgeContextMenu();
 }
 
-async function loadKnowledgeFromLocal() {
+async function loadKnowledgeFromLocal(options = {}) {
+  if (state.refreshInFlight) return;
+  state.refreshInFlight = true;
   state.loadError = '';
   state.missingCollections = [];
-  let items = [];
-  let runbooks = [];
-  let tables = [];
+  if (options.initial) renderKnowledgeLoading();
   try {
-    [items, runbooks, tables] = await Promise.all([
-      loadLocalKnowledgeRecords('knowledge_items'),
-      loadLocalKnowledgeRecords('knowledge_runbooks'),
-      loadLocalKnowledgeRecords('knowledge_tables'),
-    ]);
-  } catch (error) {
-    state.loadError = error?.message || String(error);
+    await ensureKnowledgeDataSyncStarted();
+    let snapshot = await readLocalKnowledgeSnapshot();
+    if (options.initial && !knowledgeSnapshotHasRecords(snapshot) && shouldWaitForKnowledgeSync(snapshot)) {
+      snapshot = await waitForKnowledgeSnapshot(snapshot, KNOWLEDGE_INITIAL_SYNC_WAIT_MS);
+    }
+    state.loadError = snapshot.error || '';
+    state.missingCollections = snapshot.missingCollections || [];
+    applyKnowledgeRecords(snapshot);
+    renderKnowledgeList();
+    renderRunbooks();
+    if (state.selectedId) await selectKnowledge(state.selectedId);
+    else renderEmptyKnowledgeSelection();
+  } finally {
+    state.refreshInFlight = false;
   }
-  applyKnowledgeRecords({ items, runbooks, tables });
-  renderKnowledgeList();
-  renderRunbooks();
-  if (state.selectedId) await selectKnowledge(state.selectedId);
-  else renderEmptyKnowledgeSelection();
 }
 
 function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
-  state.items = Array.isArray(items) ? items : [];
-  state.runbooks = Array.isArray(runbooks) ? runbooks : [];
-  state.tables = Array.isArray(tables) ? tables : [];
+  const normalizedItems = Array.isArray(items) ? items.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
+  const normalizedRunbooks = Array.isArray(runbooks) ? runbooks.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
+  const normalizedTables = Array.isArray(tables) ? tables.map(normalizeStoredKnowledgeRecord).filter(isActiveKnowledgeRecord) : [];
+  state.tables = normalizedTables;
+  state.items = uniqueById([
+    ...normalizedItems,
+    ...knowledgeItemsFromTables(normalizedTables, normalizedItems),
+  ]);
+  state.runbooks = normalizedRunbooks;
   state.groups = buildKnowledgeBundles(state.items, state.runbooks, state.tables);
   const requestedId = sessionStorage.getItem(KNOWLEDGE_OPEN_TARGET_KEY) || '';
   if (requestedId && state.items.some((item) => item.id === requestedId)) {
@@ -302,19 +319,118 @@ function applyKnowledgeRecords({ items = [], runbooks = [], tables = [] }) {
   state.selectedRunbookId = normaliseRunbookId(firstContext.runbooks[0]?.id || firstContext.runbooks[0]?.runbook_id || state.runbooks[0]?.id || '');
 }
 
-async function loadLocalKnowledgeRecords(collectionName) {
+async function readLocalKnowledgeSnapshot() {
+  const missingCollections = [];
+  let items = [];
+  let runbooks = [];
+  let tables = [];
+  let error = '';
+  try {
+    [items, runbooks, tables] = await Promise.all(KNOWLEDGE_DATA_COLLECTIONS.map((collectionName) => (
+      loadLocalKnowledgeRecords(collectionName, missingCollections)
+    )));
+  } catch (err) {
+    error = err?.message || String(err);
+  }
+  return { items, runbooks, tables, missingCollections, error };
+}
+
+async function loadLocalKnowledgeRecords(collectionName, missingCollections = state.missingCollections) {
   const collection = state.ctx.db?.raw?.[collectionName];
   if (!collection) {
-    state.missingCollections.push(collectionName);
+    missingCollections.push(collectionName);
     return [];
   }
   const docs = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
   return docs
-    .map((doc) => {
-      const json = doc.toJSON();
-      return json.payload && typeof json.payload === 'object' ? json.payload : json;
-    })
-    .filter((record) => record?.id);
+    .map((doc) => normalizeStoredKnowledgeRecord(doc.toJSON()))
+    .filter(isActiveKnowledgeRecord);
+}
+
+function normalizeStoredKnowledgeRecord(record) {
+  if (!record || typeof record !== 'object') return record;
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  if (!payload) return { ...record };
+  return {
+    ...payload,
+    ...record,
+    id: record.id || payload.id || record.table_id || payload.table_id || '',
+    kind: record.kind || payload.kind || '',
+    title: record.title || payload.title || '',
+    subtitle: record.subtitle || payload.subtitle || '',
+    summary: record.summary || record.description || payload.summary || payload.description || '',
+    source_path: record.source_path || payload.source_path || payload.parquet_path || '',
+    updated_at: record.updated_at || payload.updated_at || '',
+    updated_at_ms: Number(record.updated_at_ms ?? payload.updated_at_ms ?? 0),
+    payload,
+  };
+}
+
+function isActiveKnowledgeRecord(record) {
+  return Boolean(record?.id && !record._deleted && !record.is_deleted);
+}
+
+async function ensureKnowledgeDataSyncStarted() {
+  if (!state.ctx?.sync?.startCollection) return;
+  if (!state.syncWarmupPromise) {
+    state.syncWarmupPromise = Promise.allSettled(
+      KNOWLEDGE_DATA_COLLECTIONS.map((collectionName) => state.ctx.sync.startCollection(collectionName))
+    ).then((results) => {
+      if (results.some((result) => result.status === 'rejected')) state.syncWarmupPromise = null;
+      return results;
+    });
+  }
+  await promiseWithTimeout(state.syncWarmupPromise, KNOWLEDGE_SYNC_START_WAIT_MS).catch(() => {});
+}
+
+async function waitForKnowledgeSnapshot(initialSnapshot, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  let snapshot = initialSnapshot;
+  while (Date.now() < deadline) {
+    if (knowledgeSnapshotHasRecords(snapshot) || !shouldWaitForKnowledgeSync(snapshot)) return snapshot;
+    await delay(KNOWLEDGE_SYNC_POLL_MS);
+    snapshot = await readLocalKnowledgeSnapshot();
+  }
+  return snapshot;
+}
+
+function knowledgeSnapshotHasRecords(snapshot) {
+  return Boolean((snapshot?.items?.length || 0) || (snapshot?.runbooks?.length || 0) || (snapshot?.tables?.length || 0));
+}
+
+function shouldWaitForKnowledgeSync(snapshot) {
+  if (snapshot?.error || snapshot?.missingCollections?.length) return false;
+  if (knowledgeSnapshotHasRecords(snapshot)) return false;
+  if (!state.ctx?.sync?.startCollection) return false;
+  const diagnostics = state.ctx.sync?.diagnostics?.collections || {};
+  return KNOWLEDGE_DATA_COLLECTIONS.some((collectionName) => {
+    const info = diagnostics[collectionName];
+    if (!info) return true;
+    const status = String(info.connectionStatus || info.status || '');
+    const initialState = String(info.initialReplicationState || '');
+    return ['starting', 'connecting', 'pending', 'reconnecting'].includes(status)
+      || ['pending', 'waiting-for-peer'].includes(initialState);
+  });
+}
+
+function renderKnowledgeLoading() {
+  const copy = state.messages || labels[state.lang];
+  if (els.list) {
+    els.list.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.loading)}</strong></div>`;
+  }
+}
+
+function promiseWithTimeout(promise, timeoutMs) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => window.setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
 function wireLocalRealtime() {
@@ -380,11 +496,14 @@ async function loadKnowledgeDocument(id) {
 }
 
 function buildKnowledgeBundles(items, runbooks, tables) {
-  const itemById = new Map(items.map((item) => [item.id, item]));
-  const runbookItems = items.filter((item) => item.kind === 'runbook');
-  const tableItems = items.filter((item) => item.kind === 'dataframe');
-  const skillbookItems = items.filter((item) => item.kind === 'skillbook');
-  const skillItems = items.filter((item) => item.kind === 'skill');
+  const allItems = uniqueById([
+    ...(Array.isArray(items) ? items : []),
+    ...knowledgeItemsFromTables(tables, items),
+  ]);
+  const runbookItems = allItems.filter((item) => item.kind === 'runbook');
+  const tableItems = allItems.filter((item) => item.kind === 'dataframe');
+  const skillbookItems = allItems.filter((item) => item.kind === 'skillbook');
+  const skillItems = allItems.filter((item) => item.kind === 'skill');
   const used = new Set();
 
   const makeGroup = (config) => {
@@ -454,7 +573,9 @@ function buildKnowledgeBundles(items, runbooks, tables) {
     }));
   }
 
-  const remainingTablesByDomain = groupBy(tableItems.filter((item) => !used.has(item.id)), (item) => tableForItem(item, tables)?.domain || 'tables');
+  const remainingTablesByDomain = groupBy(tableItems.filter((item) => !used.has(item.id)), (item) => (
+    tableForItem(item, tables)?.domain || item.domain || item.payload?.domain || 'tables'
+  ));
   for (const [domain, domainTables] of Object.entries(remainingTablesByDomain)) {
     groups.push(makeGroup({
       id: `tables/${domain}`,
@@ -478,7 +599,7 @@ function buildKnowledgeBundles(items, runbooks, tables) {
     }));
   }
 
-  const remainingByDomain = groupBy(items.filter((item) => !used.has(item.id)), (item) => domainKeyFor(item));
+  const remainingByDomain = groupBy(allItems.filter((item) => !used.has(item.id)), (item) => domainKeyFor(item));
   for (const [key, entries] of Object.entries(remainingByDomain)) {
     groups.push(makeGroup({
       id: `knowledge/${key}`,
@@ -497,6 +618,36 @@ function buildKnowledgeBundles(items, runbooks, tables) {
   });
 }
 
+function knowledgeItemsFromTables(tables = [], existingItems = []) {
+  const existingIds = new Set((Array.isArray(existingItems) ? existingItems : []).map((item) => item?.id).filter(Boolean));
+  return (Array.isArray(tables) ? tables : [])
+    .map(knowledgeItemFromTable)
+    .filter((item) => item?.id && !existingIds.has(item.id));
+}
+
+function knowledgeItemFromTable(table) {
+  if (!table || typeof table !== 'object') return null;
+  const payload = table.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)
+    ? table.payload
+    : {};
+  const id = table.id || payload.id || table.table_id || payload.table_id || '';
+  if (!id) return null;
+  const rowCount = Number(table.row_count ?? payload.row_count ?? localDataFrameRows({ ...payload, ...table }).length);
+  return {
+    ...payload,
+    ...table,
+    id,
+    kind: 'dataframe',
+    title: table.title || payload.title || titleFromSlug(bareId(id)),
+    subtitle: table.subtitle || payload.subtitle || 'Runtime DataFrame',
+    summary: table.summary || table.description || payload.summary || payload.description || '',
+    source_path: table.source_path || payload.source_path || payload.parquet_path || '',
+    has_table: table.has_table ?? payload.has_table ?? true,
+    row_count: Number.isFinite(rowCount) ? rowCount : null,
+    payload,
+  };
+}
+
 function findGroupForItem(id) {
   return state.groups.find((group) => group.entries.some((entry) => entry.id === id) || group.tableIds.includes(id) || group.runbookIds.includes(id));
 }
@@ -504,6 +655,23 @@ function findGroupForItem(id) {
 function tableForItem(item, tables) {
   const tableId = bareId(item?.id || '');
   return tables.find((table) => bareId(table.id || table.table_id || '') === tableId || table.id === item?.id);
+}
+
+function mergeKnowledgeTableData(item, table) {
+  if (!item && !table) return null;
+  const tablePayload = table?.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)
+    ? table.payload
+    : {};
+  return {
+    ...tablePayload,
+    ...(table || {}),
+    ...(item || {}),
+    payload: {
+      ...tablePayload,
+      ...(item?.payload && typeof item.payload === 'object' && !Array.isArray(item.payload) ? item.payload : {}),
+    },
+    has_table: Boolean(item?.has_table || table?.has_table || tablePayload.has_table || table),
+  };
 }
 
 function isDroneBearingTable(table) {
@@ -1262,24 +1430,26 @@ async function renderTable() {
   const copy = state.messages || labels[state.lang];
   const tableId = activeTableId();
   const item = state.items.find((entry) => entry.id === tableId);
+  const tableRecord = tableForItem(item || { id: tableId }, state.tables);
+  const tableSource = mergeKnowledgeTableData(item, tableRecord);
   els.selectedKind.textContent = 'Data';
-  els.selectedTitle.textContent = item?.title || skillbookContext().skillbook?.title || 'DataFrame';
-  if (!item?.has_table) {
+  els.selectedTitle.textContent = tableSource?.title || skillbookContext().skillbook?.title || 'DataFrame';
+  if (!tableSource?.has_table) {
     els.tableTitle.textContent = 'DataFrame';
     els.tableMeta.textContent = copy.tableUnavailable;
     els.tableHost.innerHTML = `<div class="empty-state"><strong>${copy.tableUnavailable}</strong></div>`;
     return;
   }
   try {
-    const localRows = localDataFrameRows(item);
-    const schema = localDataFrameSchema(item);
+    const localRows = localDataFrameRows(tableSource);
+    const schema = localDataFrameSchema(tableSource);
     const rows = localRows.length
       ? {
           returned: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
           rows: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
         }
       : { returned: 0, rows: [] };
-    els.tableTitle.textContent = schema.title || item.title || 'DataFrame';
+    els.tableTitle.textContent = schema.title || tableSource.title || 'DataFrame';
     const totalRows = Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : localRows.length;
     const total = `${totalRows.toLocaleString('de-DE')} Zeilen`;
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · ${total}`;
@@ -1305,10 +1475,19 @@ function renderDataFrameTable(columns, rows) {
   const table = document.createElement('table');
   table.className = 'dataframe-table';
   table.innerHTML = `
-    <thead><tr>${columns.map((column) => `<th title="${escapeHtml(column.dtype || '')}">${escapeHtml(column.name)}</th>`).join('')}</tr></thead>
-    <tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(formatCell(row[column.name]))}</td>`).join('')}</tr>`).join('')}</tbody>
+    <thead><tr>${columns.map((column) => `<th title="${escapeHtml(column.dtype || column.type || '')}">${escapeHtml(column.label || column.name || column.key)}</th>`).join('')}</tr></thead>
+    <tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td>${escapeHtml(formatCell(valueForColumn(row, column)))}</td>`).join('')}</tr>`).join('')}</tbody>
   `;
   els.tableHost.replaceChildren(table);
+}
+
+function valueForColumn(row, column) {
+  if (!row || typeof row !== 'object') return '';
+  const keys = [column?.key, column?.name, column?.field, column?.id, column?.label].filter(Boolean);
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
+  }
+  return '';
 }
 
 function pageTable(direction) {
@@ -2150,6 +2329,12 @@ export const __knowledgeTestHooks = {
   canEditSelectedMarkdown,
   isKnowledgeActionFormReady,
   isKnowledgeTabDisabled,
+  knowledgeItemsFromTables,
   knowledgeEmptyStateMessage,
+  localDataFrameRows,
+  localDataFrameSchema,
+  mergeKnowledgeTableData,
+  normalizeStoredKnowledgeRecord,
   sourceScopeFor,
+  valueForColumn,
 };

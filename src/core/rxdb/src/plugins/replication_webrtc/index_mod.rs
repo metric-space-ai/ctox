@@ -464,6 +464,14 @@ where
                             .await,
                         )
                     }
+                    "masterChangesSince" | "masterWrite" => Some(
+                        call_master_method(
+                            pool_clone.master_replication_handler.as_ref(),
+                            &item.message.method,
+                            item.message.params.clone(),
+                        )
+                        .await,
+                    ),
                     _ => None,
                 };
                 let Some(result) = result else {
@@ -513,13 +521,12 @@ where
                     format!("{}|{}|{}", collection.database.token, request_flag, n)
                 };
                 let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
-                let local_protocol =
-                    ctox_protocol_response_with_flag(
-                        &collection,
-                        peer_session_id.as_deref(),
-                        local_flag,
-                    )
-                    .await;
+                let local_protocol = ctox_protocol_response_with_flag(
+                    &collection,
+                    peer_session_id.as_deref(),
+                    local_flag,
+                )
+                .await;
                 let protocol_response = match send_message_and_await_answer(
                     Arc::clone(&handler),
                     peer.clone(),
@@ -617,38 +624,6 @@ where
                         }
                     });
                     peer_sub_tasks.push(stream_task);
-
-                    let pool_for_msgs = Arc::clone(&pool_clone);
-                    let handler_for_msgs = Arc::clone(&handler);
-                    let peer_for_msgs = peer.clone();
-                    let msg_task = tokio::spawn(async move {
-                        let mut msgs = handler_for_msgs.message_stream();
-                        while let Some(item) = msgs.next().await {
-                            if item.peer != peer_for_msgs {
-                                continue;
-                            }
-                            if item.message.method == "token"
-                                || item.message.method == "ctoxProtocol"
-                            {
-                                continue;
-                            }
-                            let result = call_master_method(
-                                pool_for_msgs.master_replication_handler.as_ref(),
-                                &item.message.method,
-                                item.message.params.clone(),
-                            )
-                            .await;
-                            let resp = WebRTCResponse {
-                                id: item.message.id.clone(),
-                                result,
-                                error: None,
-                            };
-                            let _ = handler_for_msgs
-                                .send(&item.peer, WebRTCWireFrame::Response(resp))
-                                .await;
-                        }
-                    });
-                    peer_sub_tasks.push(msg_task);
                     pool_clone.add_peer(peer, peer_sub_tasks, None);
                 } else {
                     // ref: rxdb/src/plugins/replication-webrtc/index.ts:172-218

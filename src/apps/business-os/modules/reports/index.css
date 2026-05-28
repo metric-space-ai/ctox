@@ -371,7 +371,7 @@
     grid-template-columns: 1fr;
   }
 
-  [data-resizer] {
+  .reports-module [data-resizer] {
     display: none !important;
   }
 }

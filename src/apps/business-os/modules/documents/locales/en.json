@@ -88,6 +88,7 @@
   "chatWorkDataTitle": "Edit Documents",
   "chatModifyAppLabel": "Modify App",
   "chatWorkDataLabel": "Work with data",
+  "chatAnswerLabel": "Answer question",
   "chatActionLabel": "CTOX Task",
   "chatPlaceholder": "What should CTOX do or verify here?",
   "send": "Send",

@@ -97,7 +97,9 @@ fn canonicalize_selector(value: &Value) -> Result<Value, FingerprintError> {
 fn canonicalize_selector_value(value: &Value) -> Value {
     match value {
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => value.clone(),
-        Value::Array(items) => Value::Array(items.iter().map(canonicalize_selector_value).collect()),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(canonicalize_selector_value).collect())
+        }
         Value::Object(map) => {
             let mut keys: Vec<&String> = map.keys().collect();
             keys.sort();
@@ -192,9 +194,17 @@ fn canonicalize_window(value: &Value) -> Result<Value, FingerprintError> {
     }
     let obj = value.as_object().ok_or(FingerprintError::InvalidWindow)?;
     let offset = canonicalize_optional_number(obj.get("offset").unwrap_or(&Value::Null))?;
-    let offset = if offset.is_null() { Value::from(0i64) } else { offset };
+    let offset = if offset.is_null() {
+        Value::from(0i64)
+    } else {
+        offset
+    };
     let limit = canonicalize_optional_number(obj.get("limit").unwrap_or(&Value::Null))?;
-    let limit = if limit.is_null() { Value::from(200i64) } else { limit };
+    let limit = if limit.is_null() {
+        Value::from(200i64)
+    } else {
+        limit
+    };
     let mut out = Map::new();
     out.insert("limit".into(), limit);
     out.insert("offset".into(), offset);
@@ -287,7 +297,10 @@ mod tests {
             .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
             .collect();
         entries.sort();
-        assert!(!entries.is_empty(), "expected fingerprint corpus to contain fixtures");
+        assert!(
+            !entries.is_empty(),
+            "expected fingerprint corpus to contain fixtures"
+        );
         for path in &entries {
             let text = fs::read_to_string(path).expect("read corpus fixture");
             let fixture: Value = serde_json::from_str(&text).expect("parse fixture json");

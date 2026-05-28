@@ -1225,14 +1225,53 @@ function scrollActiveChatIntoView(root, state) {
   });
 }
 
+function trackButtonLabel(message) {
+  const de = (document.documentElement.lang || 'de').toLowerCase().startsWith('de');
+  const status = String(message.status || '').toLowerCase();
+  if (isFailureStatus(status)) return de ? 'Details ansehen' : 'View details';
+  if (['completed', 'passed', 'done', 'handled'].includes(status)) {
+    return de ? 'Ergebnis ansehen' : 'View result';
+  }
+  return de ? 'Fortschritt ansehen' : 'View progress';
+}
+
+function formatChatBodyHtml(rawText) {
+  const text = String(rawText || '');
+  return text
+    .split(/(```[\s\S]*?```)/g)
+    .map((part) => {
+      if (part.length >= 6 && part.startsWith('```') && part.endsWith('```')) {
+        const body = part.slice(3, -3);
+        const nl = body.indexOf('\n');
+        const firstLine = nl >= 0 ? body.slice(0, nl).trim() : '';
+        const code = nl >= 0 && /^[a-zA-Z0-9_+#.-]*$/.test(firstLine) ? body.slice(nl + 1) : body;
+        return `<pre class="ctox-chat-code"><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`;
+      }
+      if (!part) return '';
+      // escapeHtml first, then layer minimal, safe inline Markdown onto escaped text.
+      let html = escapeHtml(part);
+      html = html.replace(/`([^`]+)`/g, (_m, code) => `<code>${code}</code>`);
+      html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+      // Links: the URL comes from already-escaped text, so quotes/&/< are neutralised
+      // and cannot break out of the attribute.
+      html = html.replace(
+        /\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        (_m, label, url) => `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+      );
+      return `<span class="ctox-chat-text">${html}</span>`;
+    })
+    .join('');
+}
+
 function messageMarkup(message) {
+  const trackId = message.taskId || message.commandId;
   const tracking = message.commandId || message.taskId
-    ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}">${escapeHtml(message.taskId || message.commandId)}</button>`
+    ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(trackId)}">${escapeHtml(trackButtonLabel(message))}</button>`
     : '';
   const meta = [message.status, message.detail].filter(Boolean).join(' · ');
   return `
     <article class="ctox-chat-message is-${escapeAttr(message.role || 'ctox')}">
-      <p>${escapeHtml(message.text || '')}</p>
+      <div class="ctox-chat-body">${formatChatBodyHtml(message.text || '')}</div>
       ${tracking || meta ? `<footer>${tracking}${meta ? `<span>${escapeHtml(meta)}</span>` : ''}</footer>` : ''}
     </article>
   `;
@@ -1559,7 +1598,7 @@ function readChatState(session) {
       ownerUserId: owner,
       selectedDate: parsed.selectedDate || getLocalDateString(Date.now()),
       activeChatId: parsed.activeChatId || '',
-      dockCollapsed: Boolean(parsed.dockCollapsed),
+      dockCollapsed: 'dockCollapsed' in parsed ? Boolean(parsed.dockCollapsed) : true,
       preCollapseExpandedChatIds: Array.isArray(parsed.preCollapseExpandedChatIds)
         ? parsed.preCollapseExpandedChatIds.filter(Boolean)
         : [],
@@ -1583,7 +1622,7 @@ function readChatState(session) {
         })),
     };
   } catch {
-    return { ownerUserId: owner, selectedDate: getLocalDateString(Date.now()), chats: [] };
+    return { ownerUserId: owner, selectedDate: getLocalDateString(Date.now()), dockCollapsed: true, preCollapseExpandedChatIds: [], chats: [] };
   }
 }
 
@@ -1794,12 +1833,14 @@ function installChatStyles() {
     .ctox-chat-dock {
       pointer-events: auto;
       grid-row: 2;
+      justify-self: start;
       display: grid;
-      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      grid-template-columns: 88px 115px 28px minmax(0, max-content) 28px 34px;
       align-items: center;
       gap: 8px;
       min-width: 0;
-      width: 100%;
+      width: auto;
+      max-width: 100%;
       padding: 6px;
       border: 1px solid color-mix(in srgb, var(--line) 35%, transparent);
       border-radius: 14px;
@@ -2572,6 +2613,44 @@ function installChatStyles() {
       word-break: break-word;
       overflow-wrap: break-word;
       max-width: 100%;
+    }
+    .ctox-chat-body {
+      margin: 0;
+      max-width: 100%;
+      min-width: 0;
+      word-break: break-word;
+      overflow-wrap: break-word;
+    }
+    .ctox-chat-body .ctox-chat-text {
+      white-space: pre-wrap;
+    }
+    .ctox-chat-body code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+      border-radius: 5px;
+      padding: 1px 5px;
+    }
+    .ctox-chat-body pre.ctox-chat-code {
+      margin: 6px 0;
+      padding: 8px 10px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--line) 22%, var(--surface));
+      border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
+      overflow-x: auto;
+      max-width: 100%;
+    }
+    .ctox-chat-body pre.ctox-chat-code code {
+      background: none;
+      padding: 0;
+      white-space: pre;
+      font-size: 0.88em;
+      line-height: 1.45;
+    }
+    .ctox-chat-body a {
+      color: var(--accent);
+      text-decoration: underline;
+      word-break: break-all;
     }
     .ctox-chat-message footer {
       display: flex;

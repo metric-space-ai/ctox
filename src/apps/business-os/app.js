@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-browser-main1';
+const APP_BUILD = '20260528-windowed-browser2';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -22,6 +22,7 @@ const CRITICAL_SYNC_COLLECTIONS = [
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
+  'desktop_file_chunks',
 ];
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
@@ -244,8 +245,8 @@ async function loadShellUiModules() {
       importBusinessOsModule('./shared/event-bus.js?v=20260519-shell-os1', 'shell event bus'),
       importBusinessOsModule('./shared/notifications.js?v=20260519-shell-os1', 'shell notifications'),
       importBusinessOsModule('./shared/context-menu.js?v=20260519-shell-os1', 'shell context menu'),
-      importBusinessOsModule('./shared/window-manager.js?v=20260527-rxdb-release1', 'shell window manager'),
-      importBusinessOsModule('./shared/taskbar.js?v=20260527-rxdb-release1', 'shell taskbar'),
+      importBusinessOsModule(`./shared/window-manager.js?v=${APP_BUILD}`, 'shell window manager'),
+      importBusinessOsModule(`./shared/taskbar.js?v=${APP_BUILD}`, 'shell taskbar'),
       importBusinessOsModule('./shared/window-switcher.js?v=20260519-shell-os1', 'shell window switcher'),
     ]).then(([
       eventBus,
@@ -401,6 +402,7 @@ const shellMessages = {
     openApp: 'Öffnen',
     chatToCtox: 'Mit CTOX chatten',
     chatWorkDataLabel: 'Mit Daten arbeiten',
+    chatAnswerLabel: 'Frage beantworten',
     chatModifyAppLabel: 'App modifizieren',
     chatPlaceholder: 'Was soll CTOX hier tun oder prüfen?',
     chatOpening: 'Öffne Chat...',
@@ -459,6 +461,7 @@ const shellMessages = {
     openApp: 'Open',
     chatToCtox: 'Chat to CTOX',
     chatWorkDataLabel: 'Work with data',
+    chatAnswerLabel: 'Answer question',
     chatModifyAppLabel: 'Modify app',
     chatPlaceholder: 'What should CTOX do or check here?',
     chatOpening: 'Opening Chat...',
@@ -593,6 +596,7 @@ async function bootstrap() {
     eventBus: state.eventBus,
     t: (key, fallback) => shellText(key) || fallback || key,
     persistence: createWindowGeometryPersistence(),
+    getSvgIcon: getRegisteredSvgIcon,
   });
   state.windowManager.setChromeLayout(
     document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows'
@@ -605,6 +609,7 @@ async function bootstrap() {
       eventBus: state.eventBus,
       t: (key, fallback) => shellText(key) || fallback || key,
       ownerLabelFor: deriveOwnerLabel,
+      getSvgIcon: getRegisteredSvgIcon,
     });
   }
   if (els.shellSwitcherOverlay && els.shellSwitcherPanel) {
@@ -2576,6 +2581,14 @@ const DESKTOP_APPS = [
     loader: () => import('./desktop-apps/explorer/app.js?v=20260522-file-chunk-integrity4'),
   },
   {
+    id: 'browser',
+    title: 'Browser',
+    glyph: '🌐',
+    defaultWidth: 1120,
+    defaultHeight: 760,
+    loader: () => import('./desktop-apps/browser/app.js?v=20260528-windowed-browser1'),
+  },
+  {
     id: 'code-editor',
     title: 'Source Editor',
     glyph: '⌘',
@@ -2602,7 +2615,10 @@ const DESKTOP_APPS = [
 ];
 
 function listDesktopApps() {
-  const moduleIds = new Set((state.modules || []).map((mod) => mod?.id).filter(Boolean));
+  const moduleIds = new Set((state.modules || [])
+    .filter((mod) => !moduleLaunchesAsDesktopApp(mod))
+    .map((mod) => mod?.id)
+    .filter(Boolean));
   return DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
     .map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
@@ -2612,6 +2628,13 @@ function listDesktopApps() {
       defaultWidth,
       defaultHeight,
     }));
+}
+
+function moduleLaunchesAsDesktopApp(mod) {
+  return mod?.launch_kind === 'desktop-app'
+    || mod?.layout?.launch_kind === 'desktop-app'
+    || mod?.layout?.shell === 'windowed'
+    || mod?.layout?.shell === 'desktop-window';
 }
 
 async function openDesktopApp(appId, options = {}) {
@@ -2630,8 +2653,10 @@ async function openDesktopApp(appId, options = {}) {
   });
   let teardown = null;
   try {
-    const mod = await entry.loader();
-    teardown = await mod.mount(win.container, {
+    const moduleDef = state.modules.find((item) => item.id === appId);
+    if (moduleDef) await registerModuleSchemas(moduleDef);
+    const appModule = await entry.loader();
+    teardown = await appModule.mount(win.container, {
       db: createLiveDbFacade(),
       sync: createLiveSyncFacade(),
       commandBus: createLiveCommandBusFacade(),
@@ -2886,11 +2911,18 @@ function renderLegacyModuleTab(mod, options = {}) {
 }
 
 function moduleAppearsInSwitcher(mod) {
-  return mod?.id && mod.id !== 'desktop' && mod.id !== 'notizen' && mod.install_scope !== 'internal';
+  return mod?.id
+    && mod.id !== 'desktop'
+    && mod.id !== 'notizen'
+    && mod.install_scope !== 'internal'
+    && !moduleLaunchesAsDesktopApp(mod);
 }
 
 function listLaunchTargets(kind = '') {
-  const moduleIds = new Set((state.modules || []).map((mod) => mod?.id).filter(Boolean));
+  const moduleIds = new Set((state.modules || [])
+    .filter((mod) => !moduleLaunchesAsDesktopApp(mod))
+    .map((mod) => mod?.id)
+    .filter(Boolean));
   const moduleTargets = state.modules
     .filter(moduleAppearsInSwitcher)
     .map((mod) => ({
@@ -3180,6 +3212,26 @@ async function openModule(moduleId, options = {}) {
   }
   const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
   if (!mod) return;
+  if (moduleLaunchesAsDesktopApp(mod) && !options.asModule) {
+    const fallbackId = state.activeModule?.id && state.activeModule.id !== mod.id
+      ? state.activeModule.id
+      : (state.modules.some((item) => item.id === 'ctox')
+        ? 'ctox'
+        : (state.modules.find((item) => item.id !== mod.id)?.id || ''));
+    if (fallbackId && state.activeModule?.id !== fallbackId) {
+      if (currentHashModuleId() === mod.id) history.replaceState(null, '', `#${fallbackId}`);
+      await openModule(fallbackId, { isNavHistory: true });
+    } else if (currentHashModuleId() === mod.id && fallbackId) {
+      history.replaceState(null, '', `#${fallbackId}`);
+    }
+    await openDesktopApp(mod.id, {
+      title: moduleDisplayTitle(mod),
+      width: mod.layout?.default_width || undefined,
+      height: mod.layout?.default_height || undefined,
+      args: options.args || {},
+    });
+    return;
+  }
   if (state.activeModule?.id === mod.id && !options.force) return;
 
   // Track history stack
@@ -5069,20 +5121,24 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     });
 
     if (shellCatalog && Array.isArray(shellCatalog.modules)) {
-      let changed = false;
-      const mergedModules = [...(cachedCatalog.modules || [])];
-      for (const shellMod of shellCatalog.modules) {
-        if (!mergedModules.some(m => m.id === shellMod.id)) {
-          mergedModules.push(shellMod);
-          changed = true;
-          if (!state.shellCatalogMergedIds.has(shellMod.id)) {
-            state.shellCatalogMergedIds.add(shellMod.id);
-            console.log(`[business-os] Merging missing packaged module locally: ${shellMod.id}`);
-          }
+      const merged = mergePackagedCatalogModules(cachedCatalog.modules, shellCatalog.modules);
+      for (const id of merged.changedIds) {
+        if (!state.shellCatalogMergedIds.has(id)) {
+          state.shellCatalogMergedIds.add(id);
+          console.log(`[business-os] Merging packaged module metadata locally: ${id}`);
         }
       }
-    if (changed) {
-        return normalizeModuleCatalog({ ...cachedCatalog, modules: mergedModules });
+      if (merged.changed) {
+        const mergedCatalog = {
+          ...cachedCatalog,
+          modules: merged.modules,
+          updated_at_ms: Date.now(),
+          source: cachedCatalog.source || 'business-os-shell',
+        };
+        coll.upsert(mergedCatalog).catch((error) => {
+          console.warn('[business-os] failed to persist merged packaged module catalog', error);
+        });
+        return normalizeModuleCatalog(mergedCatalog);
       }
     }
     return normalizeModuleCatalog(cachedCatalog);
@@ -5151,11 +5207,42 @@ async function ensurePackagedModuleList(modules, options = {}) {
   if (options.allowShellSeed === false) return normalized;
   const shellCatalog = await loadPackagedModuleCatalog();
   if (!Array.isArray(shellCatalog?.modules) || shellCatalog.modules.length === 0) return normalized;
-  const merged = [...normalized];
-  for (const shellMod of normalizeModuleList(shellCatalog.modules)) {
-    if (!merged.some((mod) => mod.id === shellMod.id)) merged.push(shellMod);
+  return mergePackagedCatalogModules(normalized, shellCatalog.modules).modules;
+}
+
+function mergePackagedCatalogModules(cachedModules, packagedModules) {
+  const merged = normalizeModuleList(cachedModules);
+  const changedIds = [];
+  for (const shellMod of normalizeModuleList(packagedModules)) {
+    const index = merged.findIndex((mod) => mod.id === shellMod.id);
+    if (index < 0) {
+      merged.push(shellMod);
+      changedIds.push(shellMod.id);
+      continue;
+    }
+    const current = merged[index];
+    const next = {
+      ...current,
+      ...shellMod,
+      layout: {
+        ...(current.layout || {}),
+        ...(shellMod.layout || {}),
+      },
+      store: {
+        ...(current.store || {}),
+        ...(shellMod.store || {}),
+      },
+    };
+    if (JSON.stringify(current) !== JSON.stringify(next)) {
+      merged[index] = next;
+      changedIds.push(shellMod.id);
+    }
   }
-  return normalizeModuleList(merged);
+  return {
+    modules: normalizeModuleList(merged),
+    changed: changedIds.length > 0,
+    changedIds,
+  };
 }
 
 async function readModuleCatalogProjection(coll) {
@@ -6704,6 +6791,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
   
   const titleText = shellText('chatToCtox') || (lang === 'de' ? 'Mit CTOX chatten' : 'Chat to CTOX');
   const workDataLabel = shellText('chatWorkDataLabel') || (lang === 'de' ? 'Mit Daten arbeiten' : 'Work with data');
+  const answerLabel = shellText('chatAnswerLabel') || (lang === 'de' ? 'Frage beantworten' : 'Answer question');
   const modifyAppLabel = shellText('chatModifyAppLabel') || (lang === 'de' ? 'App modifizieren' : 'Modify app');
   const placeholderText = shellText('chatPlaceholder') || (lang === 'de' ? 'Was soll CTOX hier tun oder prüfen?' : 'What should CTOX do or check here?');
   const sendLabel = shellText('send') || (lang === 'de' ? 'Senden' : 'Send');
@@ -6723,12 +6811,11 @@ function showGlobalCtoxContextMenu(context, x, y) {
         </div>
         <button type="button" class="ctox-context-close-btn" aria-label="${escapeHtml(closeLabel)}" style="width: 28px; height: 28px; line-height: 24px; text-align: center; font-size: 20px; border: none; background: none; color: var(--text-muted, var(--muted, #64747c)); cursor: pointer; transition: color 0.2s ease; padding: 0;">×</button>
       </header>
-      ${canModify ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px;">
-          <label class="is-selected"><input type="radio" name="contextMode" value="data" checked style="display:none;" /><span>${escapeHtml(workDataLabel)}</span></label>
-          <label><input type="radio" name="contextMode" value="app" style="display:none;" /><span>${escapeHtml(modifyAppLabel)}</span></label>
-        </div>
-      ` : ''}
+      <div class="ctox-context-mode" role="radiogroup" aria-label="Aktion" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 8px;">
+        <label class="is-selected"><input type="radio" name="contextMode" value="data" checked style="display:none;" /><span>${escapeHtml(workDataLabel)}</span></label>
+        <label><input type="radio" name="contextMode" value="ask" style="display:none;" /><span>${escapeHtml(answerLabel)}</span></label>
+        ${canModify ? `<label><input type="radio" name="contextMode" value="app" style="display:none;" /><span>${escapeHtml(modifyAppLabel)}</span></label>` : ''}
+      </div>
       <textarea class="ctox-context-textarea" placeholder="${escapeHtml(placeholderText)}" style="width: 100%; box-sizing: border-box; min-height: 96px; max-height: 180px; border: 1px solid var(--line, #d8e1e5); border-radius: 8px; background: var(--surface-2, #eef3f7); color: var(--text, #18222d); font-family: inherit; font-size: 12.5px; line-height: 1.4; padding: 10px; resize: vertical; outline: none; transition: border-color 0.2s ease;"></textarea>
       <footer style="display: flex; align-items: center; justify-content: space-between; gap: 10px;">
         <span class="ctox-context-status" style="font-size: 11px; color: var(--text-muted, var(--muted, #64747c)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"></span>
@@ -6757,17 +6844,15 @@ function showGlobalCtoxContextMenu(context, x, y) {
     hideGlobalCtoxContextMenu();
   });
 
-  if (canModify) {
-    const labels = globalCtoxContextMenuEl.querySelectorAll('.ctox-context-mode label');
-    labels.forEach(label => {
-      label.addEventListener('click', () => {
-        labels.forEach(l => l.classList.remove('is-selected'));
-        label.classList.add('is-selected');
-        const input = label.querySelector('input');
-        if (input) input.checked = true;
-      });
+  const modeLabels = globalCtoxContextMenuEl.querySelectorAll('.ctox-context-mode label');
+  modeLabels.forEach(label => {
+    label.addEventListener('click', () => {
+      modeLabels.forEach(l => l.classList.remove('is-selected'));
+      label.classList.add('is-selected');
+      const input = label.querySelector('input');
+      if (input) input.checked = true;
     });
-  }
+  });
 
   const closeBtnHover = () => { closeBtn.style.color = 'var(--text-strong)'; };
   const closeBtnOut = () => { closeBtn.style.color = 'var(--text-muted)'; };
@@ -6798,11 +6883,20 @@ function showGlobalCtoxContextMenu(context, x, y) {
 
     if (statusEl) statusEl.textContent = chatOpeningLabel;
 
-    const mode = canModify ? (new FormData(form).get('contextMode') || 'data') : 'data';
-    const title = mode === 'app' ? `${mod.title || mod.id} App modifizieren` : `Kontext-Aufgabe · ${subtitle}`;
-    const instruction = mode === 'app' 
-      ? `Modifiziere die ${mod.title || mod.id}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Daten selbst nicht als primäres Ziel verändern.\n\n${prompt}`
-      : prompt;
+    let mode = new FormData(form).get('contextMode') || 'data';
+    if (mode === 'app' && !canModify) mode = 'data';
+    let title;
+    let instruction;
+    if (mode === 'app') {
+      title = `${mod.title || mod.id} App modifizieren`;
+      instruction = `Modifiziere die ${mod.title || mod.id}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, App-Daten selbst nicht als primäres Ziel verändern.\n\n${prompt}`;
+    } else if (mode === 'ask') {
+      title = `Frage · ${subtitle}`;
+      instruction = `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${prompt}`;
+    } else {
+      title = `Kontext-Aufgabe · ${subtitle}`;
+      instruction = prompt;
+    }
 
     window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
       detail: {
@@ -6819,7 +6913,7 @@ function showGlobalCtoxContextMenu(context, x, y) {
           prompt,
           user_message: prompt,
           mode,
-          target: mode === 'app' ? 'app' : 'data',
+          target: mode === 'app' ? 'app' : (mode === 'ask' ? 'read' : 'data'),
           context: {
             module: mod.id,
             column: context.column,

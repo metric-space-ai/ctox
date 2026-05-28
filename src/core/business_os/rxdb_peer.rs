@@ -1,6 +1,7 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+use super::browser_runtime::browser_runtime_manager;
 use super::store;
 use crate::mission::channels;
 use crate::mission::tickets;
@@ -11,9 +12,10 @@ use rxdb::plugins::replication_webrtc::{
     WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
+use rxdb::rx_collection_helper::fill_object_data_before_insert;
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
-use rxdb::types::{HashOutput, MangoQuery, RxJsonSchema};
+use rxdb::types::{BulkWriteRow, HashOutput, MangoQuery, RxJsonSchema};
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
@@ -92,6 +94,7 @@ struct NativePeer {
     _module_catalog_sync: tokio::task::JoinHandle<()>,
     _ticket_state_sync: tokio::task::JoinHandle<()>,
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
+    _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
     _status_heartbeat: tokio::task::JoinHandle<()>,
 }
 
@@ -109,7 +112,12 @@ impl NativePeer {
         self._module_catalog_sync.abort();
         self._ticket_state_sync.abort();
         self._business_record_projection_sync.abort();
+        self._browser_runtime_maintenance.abort();
         self._status_heartbeat.abort();
+        // Tear down any live browser processes so stop leaves no zombies.
+        for session_id in browser_runtime_manager().active_session_ids() {
+            browser_runtime_manager().stop(&session_id).await;
+        }
         let _ = self.database.close().await;
     }
 }
@@ -909,6 +917,18 @@ async fn run_native_peer(
             Arc::clone(&database),
             Arc::clone(&database_write_lock),
         ));
+    // Any session left active by a previous run has no live process; reconcile.
+    {
+        let _guard = database_write_lock.lock().await;
+        if let Err(err) = recover_stale_browser_sessions(&database).await {
+            eprintln!("[business-os] browser session recovery failed: {err:#}");
+        }
+    }
+    let browser_runtime_maintenance = tokio::spawn(browser_runtime_maintenance_loop(
+        root.clone(),
+        Arc::clone(&database),
+        Arc::clone(&database_write_lock),
+    ));
     let status_heartbeat = spawn_native_peer_status_heartbeat(
         root.clone(),
         peer_session_id.clone(),
@@ -931,6 +951,7 @@ async fn run_native_peer(
         _module_catalog_sync: module_catalog_sync,
         _ticket_state_sync: ticket_state_sync,
         _business_record_projection_sync: business_record_projection_sync,
+        _browser_runtime_maintenance: browser_runtime_maintenance,
         _status_heartbeat: status_heartbeat,
     });
     if let Ok(mut current) = NATIVE_PEER.lock() {
@@ -1973,6 +1994,7 @@ async fn apply_browser_runtime_command(
             .or_else(|| existing_session.get("title"))
             .and_then(Value::as_str)
             .unwrap_or("Remote Browser");
+        browser_runtime_manager().stop(&session_id).await;
         upsert_browser_session(
             database,
             &session_id,
@@ -1997,6 +2019,8 @@ async fn apply_browser_runtime_command(
             title,
             &target_url,
             "stopped",
+            false,
+            false,
             false,
             None,
             0,
@@ -2018,161 +2042,109 @@ async fn apply_browser_runtime_command(
         return Ok(());
     }
 
-    if matches!(
-        command_type,
-        "browser.navigate"
-            | "browser.reload"
-            | "browser.back"
-            | "browser.forward"
-            | "browser.reset"
-    ) {
-        if has_newer_browser_runtime_command(database, &session_id, command_created_at_ms).await? {
-            mark_browser_runtime_command_completed(
-                database,
-                document,
-                accepted,
-                json!({
-                    "ok": true,
-                    "browser_stream": "rxdb",
-                    "session_id": session_id,
-                    "tab_id": tab_id,
-                    "url": target_url,
-                    "superseded_by_newer_command": true
-                }),
-            )
-            .await?;
-            return Ok(());
-        }
-        let frame_id = existing_tab
-            .get("last_frame_id")
-            .or_else(|| existing_session.get("active_frame_id"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        let frame_seq = existing_tab
-            .get("frame_seq")
-            .or_else(|| existing_session.get("last_frame_seq"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let title = existing_tab
-            .get("title")
-            .or_else(|| existing_session.get("title"))
-            .and_then(Value::as_str)
-            .unwrap_or("Remote Browser")
-            .to_string();
-        let frame_ref = (!frame_id.is_empty()).then_some(frame_id.as_str());
-        upsert_browser_tab(
-            database,
-            &tab_id,
+    // All remaining commands (start/navigate/reload/back/forward/reset) drive a
+    // live, persistent Chromium runtime via the session registry.
+    let manager = browser_runtime_manager();
+    if command_type == "browser.reset" {
+        manager.stop(&session_id).await;
+    }
+
+    let browser_runtime_dir = browser_runtime_reference_dir(root);
+    let session = match manager
+        .ensure_session(
+            root.to_path_buf(),
+            browser_runtime_dir,
             &session_id,
-            &title,
-            &target_url,
-            "active",
-            false,
-            frame_ref,
-            frame_seq,
-        )
-        .await?;
-        upsert_browser_session(
-            database,
-            &session_id,
-            &tab_id,
-            "active",
-            "active",
-            &target_url,
-            &title,
             viewport_w,
             viewport_h,
-            frame_ref,
-            frame_seq,
-            command_type,
-            command_created_at_ms,
-            None,
         )
-        .await?;
-        mark_browser_runtime_command_completed(
-            database,
-            document,
-            accepted,
-            json!({
-                "ok": true,
-                "browser_stream": "rxdb",
-                "session_id": session_id,
-                "tab_id": tab_id,
-                "frame_id": frame_id,
-                "url": target_url,
-                "title": title,
-                "reused_frame": true
-            }),
-        )
-        .await?;
-        return Ok(());
-    }
+        .await
+    {
+        Ok(session) => session,
+        Err(err) => {
+            let detail = format!("{err:#}");
+            mark_browser_session_runtime_error(
+                database,
+                &session_id,
+                &tab_id,
+                &target_url,
+                viewport_w,
+                viewport_h,
+                command_type,
+                command_created_at_ms,
+                &detail,
+            )
+            .await?;
+            return Err(err);
+        }
+    };
 
-    let root_for_capture = root.to_path_buf();
-    let browser_runtime_dir = browser_runtime_reference_dir(&root_for_capture);
-    let target_url_for_capture = target_url.clone();
-    let automation = tokio::task::spawn_blocking(move || {
-        let target_url_json = serde_json::to_string(&target_url_for_capture)
-            .unwrap_or_else(|_| "\"https://example.com\"".to_string());
-        let source = format!(
-            r#"
-await page.setViewportSize({{ width: {viewport_w}, height: {viewport_h} }});
-let navigationError = null;
-try {{
-  await ctoxBrowser.goto({target_url_json}, {{ waitUntil: "domcontentloaded", timeoutMs: 30000, textMax: 2000 }});
-}} catch (error) {{
-  navigationError = (error && error.message) || String(error);
-}}
-await page.waitForTimeout(700);
-const screenshot = await ctoxBrowser.screenshot({{ fullPage: false }});
-const observed = await ctoxBrowser.observe({{ limit: 12, textMax: 1200 }});
-return {{
-  ok: true,
-  browser_stream: "rxdb",
-  url: page.url(),
-  title: await page.title(),
-  navigation_error: navigationError,
-  observed,
-  screenshot,
-}};
-"#,
-            viewport_w = viewport_w,
-            viewport_h = viewport_h,
-            target_url_json = target_url_json
-        );
-        crate::web_stack::run_browser_automation(
-            &root_for_capture,
-            &crate::web_stack::BrowserAutomationRequest {
-                dir: browser_runtime_dir,
-                timeout_ms: Some(45_000),
-                source,
-            },
-        )
-    })
-    .await
-    .context("browser runtime worker panicked")??;
+    // Translate the lifecycle command into a runtime operation.
+    let (op, op_params): (&str, Value) = match command_type {
+        "browser.navigate" | "browser.session.start" | "browser.reset" => {
+            ("navigate", json!({ "url": target_url, "timeoutMs": 30000 }))
+        }
+        "browser.reload" => ("reload", json!({ "timeoutMs": 30000 })),
+        "browser.back" => ("back", json!({ "timeoutMs": 30000 })),
+        "browser.forward" => ("forward", json!({ "timeoutMs": 30000 })),
+        _ => ("nav_state", json!({})),
+    };
 
-    if automation.get("ok").and_then(Value::as_bool) == Some(false) {
-        let detail = automation
+    let op_result = match manager.request(&session, op, op_params).await {
+        Ok(value) => value,
+        Err(err) => {
+            // The runtime process is unusable; drop it so the next command
+            // respawns, and surface a friendly error on the session.
+            manager.drop_session(&session_id);
+            let detail = format!("{err:#}");
+            mark_browser_session_runtime_error(
+                database,
+                &session_id,
+                &tab_id,
+                &target_url,
+                viewport_w,
+                viewport_h,
+                command_type,
+                command_created_at_ms,
+                &detail,
+            )
+            .await?;
+            return Err(err);
+        }
+    };
+
+    // A failed op (e.g. invalid URL) is reported as navigation_error but does
+    // not tear the session down; we still capture whatever the page shows.
+    let navigation_error = if op_result.get("ok").and_then(Value::as_bool) == Some(false) {
+        op_result
             .get("error")
             .and_then(Value::as_str)
-            .unwrap_or("browser automation failed");
-        anyhow::bail!("{detail}");
-    }
-    let automation_result = automation.get("result").unwrap_or(&automation);
-
-    let final_url = automation_result
+            .map(str::to_string)
+    } else {
+        None
+    };
+    let nav = op_result.get("nav").cloned().unwrap_or(Value::Null);
+    let final_url = nav
         .get("url")
         .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or(&target_url)
         .to_string();
-    let title = automation_result
+    let title = nav
         .get("title")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or("Remote Browser")
         .to_string();
+    let can_go_back = nav
+        .get("can_go_back")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let can_go_forward = nav
+        .get("can_go_forward")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
     if has_newer_browser_runtime_command(database, &session_id, command_created_at_ms).await? {
         mark_browser_runtime_command_completed(
             database,
@@ -2191,17 +2163,36 @@ return {{
         .await?;
         return Ok(());
     }
-    let screenshot = automation_result
-        .get("screenshot")
-        .cloned()
-        .unwrap_or(Value::Null);
+
+    let screenshot = match manager.request(&session, "screenshot", json!({})).await {
+        Ok(value) => value,
+        Err(err) => {
+            manager.drop_session(&session_id);
+            let detail = format!("{err:#}");
+            mark_browser_session_runtime_error(
+                database,
+                &session_id,
+                &tab_id,
+                &final_url,
+                viewport_w,
+                viewport_h,
+                command_type,
+                command_created_at_ms,
+                &detail,
+            )
+            .await?;
+            return Err(err);
+        }
+    };
     let data = screenshot
-        .get("base64")
+        .get("screenshot")
+        .and_then(|frame| frame.get("base64"))
         .and_then(Value::as_str)
         .context("browser runtime did not return screenshot data")?
         .to_string();
     let mime_type = screenshot
-        .get("mimeType")
+        .get("screenshot")
+        .and_then(|frame| frame.get("mimeType"))
         .and_then(Value::as_str)
         .unwrap_or("image/png")
         .to_string();
@@ -2238,6 +2229,8 @@ return {{
         &final_url,
         "active",
         false,
+        can_go_back,
+        can_go_forward,
         Some(&frame_id),
         next_seq,
     )
@@ -2256,7 +2249,7 @@ return {{
         next_seq,
         command_type,
         command_created_at_ms,
-        None,
+        navigation_error.as_deref(),
     )
     .await?;
     mark_browser_runtime_command_completed(
@@ -2272,7 +2265,10 @@ return {{
             "url": final_url,
             "title": title,
             "frame_hash": frame_hash,
-            "size_bytes": size_bytes
+            "size_bytes": size_bytes,
+            "can_go_back": can_go_back,
+            "can_go_forward": can_go_forward,
+            "navigation_error": navigation_error
         }),
     )
     .await?;
@@ -2297,6 +2293,511 @@ fn browser_runtime_reference_dir(root: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Record a runtime failure on a session/tab in user-friendly terms without
+/// tearing down the row, so the UI can show "needs attention" instead of a
+/// silent stall.
+#[allow(clippy::too_many_arguments)]
+async fn mark_browser_session_runtime_error(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+    tab_id: &str,
+    url: &str,
+    viewport_w: u64,
+    viewport_h: u64,
+    command_type: &str,
+    command_created_at_ms: u64,
+    detail: &str,
+) -> anyhow::Result<()> {
+    let existing_session = find_browser_document(database, "browser_sessions", session_id).await?;
+    let existing_tab = find_browser_document(database, "browser_tabs", tab_id).await?;
+    let title = existing_tab
+        .get("title")
+        .or_else(|| existing_session.get("title"))
+        .and_then(Value::as_str)
+        .unwrap_or("Remote Browser")
+        .to_string();
+    let frame_id = existing_session
+        .get("active_frame_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let frame_seq = existing_session
+        .get("last_frame_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    upsert_browser_tab(
+        database,
+        tab_id,
+        session_id,
+        &title,
+        url,
+        "error",
+        false,
+        false,
+        false,
+        frame_id.as_deref(),
+        frame_seq,
+    )
+    .await?;
+    upsert_browser_session(
+        database,
+        session_id,
+        tab_id,
+        "error",
+        "error",
+        url,
+        &title,
+        viewport_w,
+        viewport_h,
+        frame_id.as_deref(),
+        frame_seq,
+        command_type,
+        command_created_at_ms,
+        Some(detail),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Background loop that keeps live browser sessions responsive: it replays
+/// pending input events against the real page, refreshes frames after input,
+/// and garbage-collects expired frames. Runs under the shared write lock so it
+/// never races the command consumer's RxDB writes.
+async fn browser_runtime_maintenance_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
+    let _ = root;
+    loop {
+        {
+            let _guard = database_write_lock.lock().await;
+            let _browser_guard = BROWSER_RUNTIME_COMMAND_LOCK.lock().await;
+            if let Err(err) = run_browser_runtime_maintenance(&database).await {
+                eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
+async fn run_browser_runtime_maintenance(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+    let manager = browser_runtime_manager();
+    for session_id in manager.active_session_ids() {
+        if let Err(err) = drain_browser_session_inputs(database, &session_id).await {
+            eprintln!("[business-os] browser input drain failed for {session_id}: {err:#}");
+        }
+    }
+    gc_expired_browser_frames(database).await?;
+    Ok(())
+}
+
+/// Replay all pending `browser_input_events` for one session against its live
+/// page, mark them consumed/failed, and refresh the frame if anything applied.
+async fn drain_browser_session_inputs(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let manager = browser_runtime_manager();
+    let Some(session) = manager.get(session_id) else {
+        return Ok(());
+    };
+
+    let events_collection = database
+        .collection("browser_input_events")
+        .context("browser_input_events collection is not registered")?;
+    let pending = events_collection
+        .find(Some(MangoQuery {
+            selector: Some(json!({
+                "session_id": { "$eq": session_id },
+                "status": { "$eq": "pending" }
+            })),
+            sort: Some(vec![[("seq".to_string(), "asc".to_string())]
+                .into_iter()
+                .collect()]),
+            limit: Some(64),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query pending browser_input_events: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec pending browser_input_events query: {err}"))?;
+    let Some(rows) = pending.as_array() else {
+        return Ok(());
+    };
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let mut events = Vec::with_capacity(rows.len());
+    let mut max_seq = 0u64;
+    for row in rows {
+        let seq = row.get("seq").and_then(Value::as_u64).unwrap_or(0);
+        max_seq = max_seq.max(seq);
+        events.push(json!({
+            "type": row.get("type").and_then(Value::as_str).unwrap_or_default(),
+            "x": row.get("x").and_then(Value::as_f64).unwrap_or(0.0),
+            "y": row.get("y").and_then(Value::as_f64).unwrap_or(0.0),
+            "button": row.get("button").and_then(Value::as_str).unwrap_or("left"),
+            "buttons": row.get("buttons").and_then(Value::as_u64).unwrap_or(0),
+            "dx": row.get("dx").and_then(Value::as_f64).unwrap_or(0.0),
+            "dy": row.get("dy").and_then(Value::as_f64).unwrap_or(0.0),
+            "key": row.get("key").and_then(Value::as_str).unwrap_or_default(),
+            "code": row.get("code").and_then(Value::as_str).unwrap_or_default(),
+            "text": row.get("text").and_then(Value::as_str).unwrap_or_default()
+        }));
+    }
+
+    let response = match manager
+        .request(&session, "input", json!({ "events": events }))
+        .await
+    {
+        Ok(value) => value,
+        Err(err) => {
+            // Process is dead: drop it, fail the batch, surface the error.
+            manager.drop_session(session_id);
+            let now = now_ms() as u64;
+            for row in rows {
+                if let Some(id) = row.get("id").and_then(Value::as_str) {
+                    let mut next = row.clone();
+                    if let Some(obj) = next.as_object_mut() {
+                        obj.insert("status".to_string(), Value::String("failed".to_string()));
+                        obj.insert("error".to_string(), Value::String(format!("{err:#}")));
+                        obj.insert("updated_at_ms".to_string(), Value::from(now));
+                    }
+                    let _ = id;
+                    events_collection
+                        .incremental_upsert(next)
+                        .await
+                        .map_err(|e| anyhow::anyhow!("mark input event failed: {e}"))?;
+                }
+            }
+            let tab_id = find_browser_document(database, "browser_sessions", session_id)
+                .await?
+                .get("current_tab_id")
+                .and_then(Value::as_str)
+                .unwrap_or("browser_tab_default")
+                .to_string();
+            mark_browser_session_runtime_error(
+                database,
+                session_id,
+                &tab_id,
+                "",
+                session.viewport_w,
+                session.viewport_h,
+                "browser.input",
+                now,
+                &format!("{err:#}"),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let ok = response.get("ok").and_then(Value::as_bool) == Some(true);
+    let now = now_ms() as u64;
+    for row in rows {
+        let mut next = row.clone();
+        if let Some(obj) = next.as_object_mut() {
+            if ok {
+                obj.insert("status".to_string(), Value::String("consumed".to_string()));
+                obj.insert("consumed_at_ms".to_string(), Value::from(now));
+            } else {
+                obj.insert("status".to_string(), Value::String("failed".to_string()));
+                obj.insert(
+                    "error".to_string(),
+                    Value::String(
+                        response
+                            .get("error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("input replay failed")
+                            .to_string(),
+                    ),
+                );
+            }
+            obj.insert("updated_at_ms".to_string(), Value::from(now));
+        }
+        events_collection
+            .incremental_upsert(next)
+            .await
+            .map_err(|err| anyhow::anyhow!("mark input event consumed: {err}"))?;
+    }
+
+    if ok {
+        let nav = response.get("nav").cloned().unwrap_or(Value::Null);
+        capture_and_store_browser_frame(database, &session, session_id, Some(&nav)).await?;
+        update_browser_session_input_state(database, session_id, max_seq).await?;
+    }
+    Ok(())
+}
+
+/// Capture a fresh frame from the live page and persist it plus the derived
+/// tab/session navigation state. `nav` may carry the most recent navigation
+/// snapshot; otherwise it is read from the screenshot response.
+async fn capture_and_store_browser_frame(
+    database: &Arc<RxDatabase>,
+    session: &Arc<super::browser_runtime::LiveBrowserSession>,
+    session_id: &str,
+    nav_hint: Option<&Value>,
+) -> anyhow::Result<()> {
+    let manager = browser_runtime_manager();
+    let screenshot = manager.request(session, "screenshot", json!({})).await?;
+    let data = screenshot
+        .get("screenshot")
+        .and_then(|frame| frame.get("base64"))
+        .and_then(Value::as_str)
+        .context("browser runtime did not return screenshot data")?
+        .to_string();
+    let mime_type = screenshot
+        .get("screenshot")
+        .and_then(|frame| frame.get("mimeType"))
+        .and_then(Value::as_str)
+        .unwrap_or("image/png")
+        .to_string();
+    let nav = nav_hint
+        .cloned()
+        .filter(|value| !value.is_null())
+        .or_else(|| screenshot.get("nav").cloned())
+        .unwrap_or(Value::Null);
+
+    let session_doc = find_browser_document(database, "browser_sessions", session_id).await?;
+    let tab_id = session_doc
+        .get("current_tab_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("browser_tab_default")
+        .to_string();
+    let url = nav
+        .get("url")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| session_doc.get("current_url").and_then(Value::as_str))
+        .unwrap_or("about:blank")
+        .to_string();
+    let title = nav
+        .get("title")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| session_doc.get("title").and_then(Value::as_str))
+        .unwrap_or("Remote Browser")
+        .to_string();
+    let can_go_back = nav
+        .get("can_go_back")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let can_go_forward = nav
+        .get("can_go_forward")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    let next_seq = session_doc
+        .get("last_frame_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    let frame_id = format!("browser_frame_{}_{}", session_id, next_seq);
+    let frame_hash = browser_frame_hash(&data);
+    let size_bytes = base64::engine::general_purpose::STANDARD
+        .decode(data.as_bytes())
+        .map(|bytes| bytes.len() as u64)
+        .unwrap_or_else(|_| data.len() as u64);
+    upsert_browser_frame(
+        database,
+        &frame_id,
+        session_id,
+        &tab_id,
+        next_seq,
+        &mime_type,
+        &data,
+        session.viewport_w,
+        session.viewport_h,
+        size_bytes,
+        &frame_hash,
+    )
+    .await?;
+    upsert_browser_tab(
+        database,
+        &tab_id,
+        session_id,
+        &title,
+        &url,
+        "active",
+        false,
+        can_go_back,
+        can_go_forward,
+        Some(&frame_id),
+        next_seq,
+    )
+    .await?;
+    upsert_browser_session(
+        database,
+        session_id,
+        &tab_id,
+        "active",
+        "active",
+        &url,
+        &title,
+        session.viewport_w,
+        session.viewport_h,
+        Some(&frame_id),
+        next_seq,
+        "browser.input",
+        now_ms() as u64,
+        None,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Recompute `last_input_seq` and the live pending input count on a session
+/// after a drain pass.
+async fn update_browser_session_input_state(
+    database: &Arc<RxDatabase>,
+    session_id: &str,
+    last_input_seq: u64,
+) -> anyhow::Result<()> {
+    let events_collection = database
+        .collection("browser_input_events")
+        .context("browser_input_events collection is not registered")?;
+    let pending = events_collection
+        .find(Some(MangoQuery {
+            selector: Some(json!({
+                "session_id": { "$eq": session_id },
+                "status": { "$eq": "pending" }
+            })),
+            limit: Some(512),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("count pending browser_input_events: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec count pending browser_input_events: {err}"))?;
+    let pending_count = pending.as_array().map(|rows| rows.len()).unwrap_or(0) as u64;
+
+    let sessions = database
+        .collection("browser_sessions")
+        .context("browser_sessions collection is not registered")?;
+    let existing = find_browser_document(database, "browser_sessions", session_id).await?;
+    if !existing.is_object() {
+        return Ok(());
+    }
+    let mut next = existing;
+    if let Some(obj) = next.as_object_mut() {
+        obj.remove("_rev");
+        obj.remove("_meta");
+        let prev = obj
+            .get("last_input_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        obj.insert(
+            "last_input_seq".to_string(),
+            Value::from(prev.max(last_input_seq)),
+        );
+        obj.insert(
+            "pending_input_count".to_string(),
+            Value::from(pending_count),
+        );
+        obj.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+    }
+    sessions
+        .incremental_upsert(next)
+        .await
+        .map_err(|err| anyhow::anyhow!("update browser session input state: {err}"))?;
+    Ok(())
+}
+
+/// Remove expired frames so `browser_frames` does not grow without bound.
+async fn gc_expired_browser_frames(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+    let now = now_ms() as u64;
+    let frames = database
+        .collection("browser_frames")
+        .context("browser_frames collection is not registered")?;
+    let expired = frames
+        .find(Some(MangoQuery {
+            selector: Some(json!({ "expires_at_ms": { "$lt": now } })),
+            limit: Some(256),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query expired browser_frames: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec expired browser_frames query: {err}"))?;
+    let Some(rows) = expired.as_array() else {
+        return Ok(());
+    };
+    let ids: Vec<String> = rows
+        .iter()
+        .filter_map(|row| row.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    frames
+        .bulk_remove_by_ids(ids)
+        .await
+        .map_err(|err| anyhow::anyhow!("remove expired browser_frames: {err}"))?;
+    Ok(())
+}
+
+/// On peer startup, no live processes exist yet. Any session row left `active`
+/// from a previous run is stale; mark it disconnected so the UI does not show a
+/// dead live session as running.
+async fn recover_stale_browser_sessions(database: &Arc<RxDatabase>) -> anyhow::Result<()> {
+    let sessions = database
+        .collection("browser_sessions")
+        .context("browser_sessions collection is not registered")?;
+    let active = sessions
+        .find(Some(MangoQuery {
+            selector: Some(json!({ "status": { "$ne": "stopped" } })),
+            limit: Some(128),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query active browser_sessions: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec active browser_sessions query: {err}"))?;
+    let Some(rows) = active.as_array() else {
+        return Ok(());
+    };
+    let manager = browser_runtime_manager();
+    let now = now_ms() as u64;
+    for row in rows {
+        let Some(session_id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        if manager.has_session(session_id) {
+            continue;
+        }
+        let status = row
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if status == "error" || status == "disconnected" {
+            continue;
+        }
+        let mut next = row.clone();
+        if let Some(obj) = next.as_object_mut() {
+            obj.remove("_rev");
+            obj.remove("_meta");
+            obj.insert(
+                "status".to_string(),
+                Value::String("disconnected".to_string()),
+            );
+            obj.insert(
+                "runtime_status".to_string(),
+                Value::String("disconnected".to_string()),
+            );
+            obj.insert("updated_at_ms".to_string(), Value::from(now));
+        }
+        sessions
+            .incremental_upsert(next)
+            .await
+            .map_err(|err| anyhow::anyhow!("mark stale browser session disconnected: {err}"))?;
+    }
+    Ok(())
 }
 
 async fn find_browser_document(
@@ -2399,6 +2900,16 @@ async fn upsert_browser_session(
     if existing_command_created_at_ms > command_created_at_ms {
         return Ok(());
     }
+    // Carry forward input bookkeeping so a lifecycle/navigation write does not
+    // clobber counts maintained by the input-drain loop or the UI.
+    let preserved_last_input_seq = existing
+        .get("last_input_seq")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let preserved_pending_input_count = existing
+        .get("pending_input_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut payload = json!({
         "browser_stream": "rxdb",
         "last_command_type": command_type,
@@ -2424,8 +2935,8 @@ async fn upsert_browser_session(
         "frame_rate_target": 0,
         "active_frame_id": frame_id.unwrap_or_default(),
         "last_frame_seq": frame_seq,
-        "last_input_seq": 0,
-        "pending_input_count": 0,
+        "last_input_seq": preserved_last_input_seq,
+        "pending_input_count": preserved_pending_input_count,
         "error": error.unwrap_or_default(),
         "payload": payload,
         "created_at_ms": now,
@@ -2449,6 +2960,8 @@ async fn upsert_browser_tab(
     url: &str,
     status: &str,
     loading: bool,
+    can_go_back: bool,
+    can_go_forward: bool,
     frame_id: Option<&str>,
     frame_seq: u64,
 ) -> anyhow::Result<()> {
@@ -2461,8 +2974,8 @@ async fn upsert_browser_tab(
         "status": status,
         "loading": loading,
         "active": true,
-        "can_go_back": false,
-        "can_go_forward": false,
+        "can_go_back": can_go_back,
+        "can_go_forward": can_go_forward,
         "frame_seq": frame_seq,
         "last_frame_id": frame_id.unwrap_or_default(),
         "last_frame_at_ms": frame_id.map(|_| now).unwrap_or(0),
@@ -2918,21 +3431,90 @@ async fn upsert_business_record_projection_document(
 ) -> anyhow::Result<()> {
     match collection.incremental_upsert(document.clone()).await {
         Ok(_) => Ok(()),
-        Err(err) if is_doc_cache_revision_error(&err) => collection
-            .upsert(document)
-            .await
-            .map(|_| ())
-            .map_err(|fallback_err| {
-                anyhow::anyhow!(
-                    "projection upsert fallback after DOC_CACHE_REV failed: {fallback_err}"
-                )
-            }),
+        Err(err) if is_doc_cache_revision_error(&err) => match collection.upsert(document.clone()).await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => repair_projection_document_envelope_and_upsert(collection, document)
+                .await
+                .map_err(|fallback_err| {
+                    anyhow::anyhow!(
+                        "projection upsert fallback after document cache envelope repair failed: {fallback_err}"
+                    )
+                }),
+        },
         Err(err) => Err(anyhow::anyhow!("{err}")),
     }
 }
 
 fn is_doc_cache_revision_error(error: &rxdb::rx_error::RxError) -> bool {
-    error.code() == "DOC_CACHE_REV" || error.to_string().contains("DOC_CACHE_REV")
+    matches!(error.code(), "DOC_CACHE_REV" | "DOC_CACHE_LWT")
+        || error.to_string().contains("DOC_CACHE_REV")
+        || error.to_string().contains("DOC_CACHE_LWT")
+}
+
+async fn repair_projection_document_envelope_and_upsert(
+    collection: &Arc<RxCollection>,
+    document: Value,
+) -> anyhow::Result<()> {
+    let schema = collection
+        .schema_required()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let primary_path = schema.primary_path.clone();
+    let write_data = fill_object_data_before_insert(schema, document)
+        .map_err(|err| anyhow::anyhow!("fill projection document envelope: {err}"))?;
+    let document_id = write_data
+        .get(&primary_path)
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("projection document missing primary key {primary_path}"))?
+        .to_string();
+
+    let existing = collection
+        .storage_instance
+        .find_documents_by_id(std::slice::from_ref(&document_id), true)
+        .await
+        .map_err(|err| anyhow::anyhow!("load existing projection document for repair: {err}"))?
+        .into_iter()
+        .next();
+
+    let Some(previous) = existing else {
+        collection
+            .insert(write_data)
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow::anyhow!("insert projection document after repair: {err}"))?;
+        return Ok(());
+    };
+
+    let repaired_previous = fill_object_data_before_insert(schema, previous.clone())
+        .map_err(|err| anyhow::anyhow!("repair existing projection document envelope: {err}"))?;
+    let mut next = repaired_previous.clone();
+    if let (Some(next_obj), Some(write_obj)) = (next.as_object_mut(), write_data.as_object()) {
+        for (key, value) in write_obj {
+            if matches!(key.as_str(), "_rev" | "_attachments") {
+                continue;
+            }
+            next_obj.insert(key.clone(), value.clone());
+        }
+    } else {
+        next = write_data;
+    }
+
+    let result = collection
+        .storage_instance
+        .bulk_write(
+            vec![BulkWriteRow {
+                previous: Some(repaired_previous),
+                document: next,
+            }],
+            "business-os-projection-envelope-repair",
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("write repaired projection document: {err}"))?;
+    if let Some(err) = result.error.first() {
+        anyhow::bail!("write repaired projection document conflict: {err:?}");
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -5034,6 +5616,98 @@ mod tests {
             )
             .expect("projected version count");
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn sync_business_record_projections_repairs_missing_cache_metadata() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "documents",
+            "doc_projection_repair",
+            1_000,
+            json!({
+                "id": "doc_projection_repair",
+                "title": "Projected document",
+                "filename": "projected.docx",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "status": "imported",
+                "current_version_id": "doc_projection_repair_v1",
+                "index_text": "Projected document body",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 1_000
+            }),
+        )
+        .expect("insert document business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("initial sync") >= 1);
+
+        let rxdb_path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&rxdb_path).expect("open rxdb sqlite");
+        let document_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__documents__v0 WHERE id = 'doc_projection_repair'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected document row");
+        let mut document: Value = serde_json::from_str(&document_json).expect("document json");
+        document
+            .as_object_mut()
+            .expect("document object")
+            .remove("_meta");
+        conn.execute(
+            "UPDATE ctox_business_os__documents__v0 SET data = ? WHERE id = 'doc_projection_repair'",
+            params![serde_json::to_string(&document).expect("serialize damaged document")],
+        )
+        .expect("damage document metadata");
+        drop(conn);
+
+        let conn = store::open_store(root.path()).expect("reopen business store");
+        store::upsert_business_record(
+            &conn,
+            "documents",
+            "doc_projection_repair",
+            2_000,
+            json!({
+                "id": "doc_projection_repair",
+                "title": "Projected document repaired",
+                "filename": "projected.docx",
+                "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "status": "imported",
+                "current_version_id": "doc_projection_repair_v1",
+                "index_text": "Projected document body",
+                "is_deleted": false,
+                "created_at_ms": 900,
+                "updated_at_ms": 2_000
+            }),
+        )
+        .expect("update document business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("repair sync") >= 1);
+
+        let conn = Connection::open(rxdb_path).expect("open repaired rxdb sqlite");
+        let repaired_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__documents__v0 WHERE id = 'doc_projection_repair'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("repaired document row");
+        let repaired: Value = serde_json::from_str(&repaired_json).expect("repaired document json");
+        assert_eq!(
+            repaired.get("title").and_then(Value::as_str),
+            Some("Projected document repaired")
+        );
+        assert!(repaired
+            .get("_meta")
+            .and_then(|meta| meta.get("lwt"))
+            .is_some());
+        assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
     }
 
     #[test]

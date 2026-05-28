@@ -292,6 +292,11 @@
   padding: 18px 14px;
 }
 
+.tickets-empty.is-loading {
+  min-height: 96px;
+  align-content: center;
+}
+
 .tickets-module .ctox-pane-search,
 .tickets-module .ctox-pane-filter {
   min-height: 34px;
@@ -320,5 +325,37 @@
   .tickets-module > [data-resizer="right"],
   .tickets-right {
     display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .tickets-module {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(220px, 42%) minmax(0, 1fr);
+  }
+
+  .tickets-module > [data-resizer="left"],
+  .tickets-module > [data-resizer="right"],
+  .tickets-right {
+    display: none;
+  }
+
+  .tickets-left,
+  .tickets-center {
+    border-right: 0;
+  }
+
+  .tickets-left {
+    border-bottom: 1px solid var(--tickets-border);
+  }
+
+  .tickets-detail-head {
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .tickets-detail-scroll {
+    height: calc(100% - 64px);
+    padding: 12px 14px 20px;
   }
 }

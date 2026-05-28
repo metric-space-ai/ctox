@@ -26,6 +26,7 @@ const SHELL_CRITICAL_COLLECTIONS = new Set([
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
+  'desktop_file_chunks',
   'browser_sessions',
   'browser_tabs',
   'browser_frames',

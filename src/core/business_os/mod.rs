@@ -1,6 +1,7 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 
+mod browser_runtime;
 mod importer;
 pub mod mcp_channel;
 mod rxdb_peer;

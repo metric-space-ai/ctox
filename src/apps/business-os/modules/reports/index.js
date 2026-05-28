@@ -653,7 +653,7 @@ function diagnosticsMessages(diagnostics, t = defaultTranslate) {
     if (!info) continue;
     if (info.missing) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
     if (info.error) messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
-    if (isUnhealthySyncStatus(info.syncStatus) || info.syncError) {
+    if (isUnavailableReportSyncStatus(info.syncStatus) || info.syncError) {
       messages.push(t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'));
     }
   }
@@ -667,8 +667,17 @@ function hasBlockingReportDiagnostic() {
   const dataCollections = REPORT_DATA_COLLECTIONS.map((name) => state.diagnostics.collections?.[name]).filter(Boolean);
   if (!dataCollections.length) return true;
   const allStoresUnavailable = dataCollections.every((info) => info.missing || info.error);
-  const anyDataSyncIssue = dataCollections.some((info) => info.missing || info.error || info.syncError || isUnhealthySyncStatus(info.syncStatus));
+  const anyDataSyncIssue = dataCollections.some((info) => info.missing || info.error || info.syncError || isUnavailableReportSyncStatus(info.syncStatus));
   return allStoresUnavailable || ((state.diagnostics.reportCount || 0) === 0 && anyDataSyncIssue);
+}
+
+function isUnavailableReportSyncStatus(value) {
+  return isPendingReportSyncStatus(value) || isUnhealthySyncStatus(value);
+}
+
+export function isPendingReportSyncStatus(value) {
+  return ['connecting', 'initializing', 'loading', 'pending', 'reconnecting', 'starting', 'syncing', 'waiting']
+    .includes(String(value || '').toLowerCase());
 }
 
 function isUnhealthySyncStatus(value) {
@@ -954,11 +963,21 @@ function canModifyReportsApp(state) {
 
 function reportsCommandContextFromElement(state, target) {
   const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-  const activeReport = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0] || null;
+  const visibleReports = filteredReports();
+  const allReports = normalizedReports();
+  const clickedRow = element?.closest?.('[data-report-id]');
+  const clickedReportId = clickedRow?.getAttribute?.('data-report-id') || '';
+  const activeReport = resolveReportsContextRecord({
+    clickedReportId,
+    selectedId: state.selectedId,
+    visibleReports,
+    allReports,
+  });
+  const column = reportsColumnFromElement(element, clickedRow);
 
   return {
     module: 'reports',
-    column: state.selectedId ? 'detail' : 'list',
+    column,
     record_type: activeReport ? 'report' : 'module',
     record_id: activeReport?.id || '',
     label: activeReport?.title || '',
@@ -968,24 +987,45 @@ function reportsCommandContextFromElement(state, target) {
   };
 }
 
+export function resolveReportsContextRecord({
+  clickedReportId = '',
+  selectedId = '',
+  visibleReports = [],
+  allReports = [],
+} = {}) {
+  return visibleReports.find((item) => item.id === clickedReportId)
+    || visibleReports.find((item) => item.id === selectedId)
+    || allReports.find((item) => item.id === clickedReportId)
+    || allReports.find((item) => item.id === selectedId)
+    || allReports[0]
+    || null;
+}
+
+function reportsColumnFromElement(element, clickedRow) {
+  if (!element) return 'module';
+  if (clickedRow || element.closest?.('[data-reports-list], .reports-rail, .ctox-pane-tools, .ctox-pane-header')) return 'list';
+  if (element.closest?.('[data-reports-detail]')) return 'detail';
+  return 'module';
+}
+
 function renderReportsContextMenu(state, context, x, y) {
   ensureCtoxContextMenuStyles();
   const canModifyApp = canModifyReportsApp(state);
+  const reportsLabel = state.t('reportsLabel', 'Reports');
   state.contextMenu.innerHTML = `
     <form class="reports-context-chat" data-reports-context-chat-form>
       <header>
         <div>
           <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
-          <span>${escapeHtml(context.label || 'Reports')}</span>
+          <span>${escapeHtml(context.label || reportsLabel)}</span>
         </div>
         <button type="button" data-reports-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
-        </div>
-      ` : ''}
+      <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
+        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
+      </div>
       <textarea data-reports-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
         <span data-reports-context-status></span>
@@ -1008,7 +1048,7 @@ function renderReportsContextMenu(state, context, x, y) {
   state.contextMenu.querySelector('[data-reports-context-close]')?.addEventListener('click', () => hideReportsContextMenu(state));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    const mode = new FormData(form).get('contextMode') || 'data';
     await dispatchReportsContextChat(state, context, textarea?.value || '', mode);
   });
   requestAnimationFrame(() => textarea?.focus());
@@ -1022,23 +1062,39 @@ async function dispatchReportsContextChat(state, context, message, mode = 'data'
     return;
   }
 
-  const safeMode = mode === 'app' && canModifyReportsApp(state) ? 'app' : 'data';
-  const activeReport = filteredReports().find((item) => item.id === state.selectedId) || normalizedReports()[0] || null;
+  const safeMode = mode === 'app' && canModifyReportsApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
+  const visibleReports = filteredReports();
+  const allReports = normalizedReports();
+  const contextReportId = context.record_id || '';
+  const activeReport = resolveReportsContextRecord({
+    clickedReportId: contextReportId,
+    selectedId: state.selectedId,
+    visibleReports,
+    allReports,
+  });
   if (!document.querySelector('[data-ctox-chat-root]')) {
     if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
     return;
   }
-  if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
-  const title = `${safeMode === 'app' ? 'Reports App modifizieren' : 'Report bearbeiten'} · ${context.label || 'Reports'}`;
+  if (status) status.textContent = state.t('chatOpening', 'Öffne Chat...');
+  const reportsLabel = state.t('reportsLabel', 'Reports');
+  const titlePrefix = safeMode === 'app'
+    ? state.t('modifyReportsApp', 'Reports App modifizieren')
+    : safeMode === 'ask'
+      ? state.t('chatAnswerLabel', 'Frage beantworten')
+      : state.t('editReport', 'Report bearbeiten');
+  const title = `${titlePrefix} · ${context.label || reportsLabel}`;
   const instruction = safeMode === 'app'
     ? `Modifiziere die Reports-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Reportdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
+    : safeMode === 'ask'
+      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
+      : trimmed;
 
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
       text: trimmed,
       module: 'reports',
-      source_title: 'Reports',
+      source_title: reportsLabel,
       command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
       record_id: safeMode === 'app' ? 'reports' : (activeReport?.id || 'reports'),
       title,
@@ -1049,7 +1105,7 @@ async function dispatchReportsContextChat(state, context, message, mode = 'data'
         prompt: trimmed,
         user_message: trimmed,
         mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
+        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
         selected_report: activeReport,
         context,
         thread_key: 'business-os/reports',

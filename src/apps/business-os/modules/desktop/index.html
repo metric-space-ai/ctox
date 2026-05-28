@@ -1,15 +1,14 @@
-<section class="desktop-module" data-desktop-root>
+<section class="desktop-module no-ctox-context" data-desktop-root>
   <main class="desktop-surface" data-desktop-surface>
     <div class="desktop-icons" data-desktop-icons aria-label="Desktop icons"></div>
 
-    <!-- Premium Interactive Clock & Core Status Widget -->
     <div class="desktop-widget-container">
       <div class="desktop-hero-widget">
-        <div class="widget-time" data-widget-time>--:--</div>
-        <div class="widget-date" data-widget-date>---</div>
+        <div class="widget-time" data-widget-time aria-live="off"></div>
+        <div class="widget-date" data-widget-date></div>
         <div class="widget-status">
           <span class="status-pulse"></span>
-          <span class="status-text">CTOX Platform Active</span>
+          <span class="status-text" data-widget-status></span>
         </div>
       </div>
     </div>

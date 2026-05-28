@@ -80,12 +80,7 @@ pub type FileSourceFn = dyn Fn(&str, &str, Option<&FileRange>) -> RxResult<Vec<u
 ///   (collection, file_id, range, emit_chunk)
 /// where `emit_chunk(bytes) -> Ok(true)` continues, `Ok(false)` stops, and
 /// `Err(_)` aborts the whole stream with that error.
-pub type FileChunkStreamFn = dyn Fn(
-        &str,
-        &str,
-        Option<&FileRange>,
-        &mut dyn FnMut(&[u8]) -> RxResult<bool>,
-    ) -> RxResult<()>
+pub type FileChunkStreamFn = dyn Fn(&str, &str, Option<&FileRange>, &mut dyn FnMut(&[u8]) -> RxResult<bool>) -> RxResult<()>
     + Send
     + Sync;
 
@@ -159,7 +154,9 @@ impl FileFetchRegistry {
         }
         self.inflight_count.fetch_add(1, Ordering::SeqCst);
         let flag = Arc::new(AtomicBool::new(false));
-        self.inflight.lock().insert(request_id.to_string(), Arc::clone(&flag));
+        self.inflight
+            .lock()
+            .insert(request_id.to_string(), Arc::clone(&flag));
         Some(flag)
     }
 
@@ -322,7 +319,13 @@ async fn stream_file<H: WebRTCConnectionHandler>(
                         let req = request.clone();
                         let h_peer = peer.clone();
                         let _ = futures::executor::block_on(send_file_chunk(
-                            handler, &h_peer, &req, sequence, &[], true, true,
+                            handler,
+                            &h_peer,
+                            &req,
+                            sequence,
+                            &[],
+                            true,
+                            true,
                         ));
                         return Ok(false);
                     }
@@ -357,7 +360,8 @@ async fn stream_file<H: WebRTCConnectionHandler>(
                             handler, &h_peer, &req, sequence, bytes, false, false,
                         ));
                         sent_any = true;
-                        total_emitted_bytes = total_emitted_bytes.saturating_add(bytes.len() as u64);
+                        total_emitted_bytes =
+                            total_emitted_bytes.saturating_add(bytes.len() as u64);
                     }
                     sequence += 1;
                     Ok(true)
@@ -400,23 +404,26 @@ async fn stream_file<H: WebRTCConnectionHandler>(
             Ok(())
         }
         FileSource::Buffer(buffer_fn) => {
-            let bytes =
-                match buffer_fn(&request.collection_name, &request.file_id, request.range.as_ref()) {
-                    Ok(b) => b,
-                    Err(err) => {
-                        send_file_error(
-                            handler,
-                            peer,
-                            "",
-                            &request.request_id,
-                            FILE_FETCH_ERROR_NOT_FOUND,
-                            &format!("file source error: {err}"),
-                            false,
-                        )
-                        .await;
-                        return Ok(());
-                    }
-                };
+            let bytes = match buffer_fn(
+                &request.collection_name,
+                &request.file_id,
+                request.range.as_ref(),
+            ) {
+                Ok(b) => b,
+                Err(err) => {
+                    send_file_error(
+                        handler,
+                        peer,
+                        "",
+                        &request.request_id,
+                        FILE_FETCH_ERROR_NOT_FOUND,
+                        &format!("file source error: {err}"),
+                        false,
+                    )
+                    .await;
+                    return Ok(());
+                }
+            };
             let total_chunks = ((bytes.len() + chunk_size - 1) / chunk_size).max(1) as u32;
             let mut sequence: u32 = 0;
             let mut sent_any = false;
@@ -466,8 +473,16 @@ async fn stream_file<H: WebRTCConnectionHandler>(
                 sequence += 1;
             }
             if !sent_any {
-                send_file_chunk(handler, peer, request, total_chunks.saturating_sub(1), &[], true, false)
-                    .await;
+                send_file_chunk(
+                    handler,
+                    peer,
+                    request,
+                    total_chunks.saturating_sub(1),
+                    &[],
+                    true,
+                    false,
+                )
+                .await;
             }
             Ok(())
         }
@@ -561,30 +576,61 @@ mod tests {
 
     #[derive(Clone, Default, Debug)]
     struct MockPeer(&'static str);
-    impl PartialEq for MockPeer { fn eq(&self, other: &Self) -> bool { self.0 == other.0 } }
+    impl PartialEq for MockPeer {
+        fn eq(&self, other: &Self) -> bool {
+            self.0 == other.0
+        }
+    }
     impl Eq for MockPeer {}
     impl std::hash::Hash for MockPeer {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.0.hash(state) }
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.0.hash(state)
+        }
     }
 
-    struct MockHandler { sent: Arc<TokioMutex<Vec<WebRTCWireFrame>>>, buffered: Arc<AtomicUsize> }
+    struct MockHandler {
+        sent: Arc<TokioMutex<Vec<WebRTCWireFrame>>>,
+        buffered: Arc<AtomicUsize>,
+    }
     impl MockHandler {
-        fn new() -> Self { Self { sent: Arc::new(TokioMutex::new(Vec::new())), buffered: Arc::new(AtomicUsize::new(0)) } }
+        fn new() -> Self {
+            Self {
+                sent: Arc::new(TokioMutex::new(Vec::new())),
+                buffered: Arc::new(AtomicUsize::new(0)),
+            }
+        }
     }
     #[async_trait]
     impl WebRTCConnectionHandler for MockHandler {
         type Peer = MockPeer;
-        fn connect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-        fn disconnect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-        fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> { RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe() }
-        fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> { RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe() }
-        fn error_stream(&self) -> RxStream<RxError> { RxSubject::<RxError>::new().subscribe() }
-        async fn send(&self, _peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError> {
-            self.sent.lock().push(frame); Ok(())
+        fn connect_stream(&self) -> RxStream<Self::Peer> {
+            RxSubject::<Self::Peer>::new().subscribe()
         }
-        async fn close(&self) -> Result<(), RxError> { Ok(()) }
-        fn buffered_bytes(&self, _peer: &Self::Peer) -> usize { self.buffered.load(Ordering::SeqCst) }
-        fn peer_identity(&self, peer: &Self::Peer) -> String { peer.0.to_string() }
+        fn disconnect_stream(&self) -> RxStream<Self::Peer> {
+            RxSubject::<Self::Peer>::new().subscribe()
+        }
+        fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> {
+            RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe()
+        }
+        fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> {
+            RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe()
+        }
+        fn error_stream(&self) -> RxStream<RxError> {
+            RxSubject::<RxError>::new().subscribe()
+        }
+        async fn send(&self, _peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError> {
+            self.sent.lock().push(frame);
+            Ok(())
+        }
+        async fn close(&self) -> Result<(), RxError> {
+            Ok(())
+        }
+        fn buffered_bytes(&self, _peer: &Self::Peer) -> usize {
+            self.buffered.load(Ordering::SeqCst)
+        }
+        fn peer_identity(&self, peer: &Self::Peer) -> String {
+            peer.0.to_string()
+        }
     }
 
     fn make_request(id: &str, collection: &str, file_id: &str, known: Vec<u32>) -> WebRTCMessage {
@@ -608,18 +654,35 @@ mod tests {
             Arc::new(|_c, _f, _r| Ok(vec![42u8; 800_000])), // ~800 KB → multiple chunks
         );
         let handler = Arc::new(MockHandler::new());
-        run_file_fetch(registry, Arc::clone(&handler), MockPeer("p1"), "p1".into(),
-            make_request("f1", "desktop_files", "file-1", vec![]))
-            .await.unwrap();
+        run_file_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("f1", "desktop_files", "file-1", vec![]),
+        )
+        .await
+        .unwrap();
         let frames = handler.sent.lock();
-        let chunks: Vec<_> = frames.iter().filter_map(|f| match f {
-            WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_CHUNK =>
-                serde_json::from_value::<FileFetchChunk>(m.params[0].clone()).ok(),
-            _ => None,
-        }).collect();
-        assert!(chunks.len() >= 3, "800 KB at 256 KB/chunk → ≥3 (got {})", chunks.len());
+        let chunks: Vec<_> = frames
+            .iter()
+            .filter_map(|f| match f {
+                WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_CHUNK => {
+                    serde_json::from_value::<FileFetchChunk>(m.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            chunks.len() >= 3,
+            "800 KB at 256 KB/chunk → ≥3 (got {})",
+            chunks.len()
+        );
         assert!(chunks.last().unwrap().complete);
-        assert!(chunks.iter().all(|c| c.hash.is_some()), "all chunks must carry hash");
+        assert!(
+            chunks.iter().all(|c| c.hash.is_some()),
+            "all chunks must carry hash"
+        );
     }
 
     #[tokio::test]
@@ -630,16 +693,29 @@ mod tests {
             Arc::new(|_c, _f, _r| Ok(vec![1u8; 800_000])),
         );
         let handler = Arc::new(MockHandler::new());
-        run_file_fetch(registry, Arc::clone(&handler), MockPeer("p1"), "p1".into(),
-            make_request("f2", "desktop_files", "file-1", vec![0, 1])) // pretend client has seq 0+1
-            .await.unwrap();
+        run_file_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("f2", "desktop_files", "file-1", vec![0, 1]),
+        ) // pretend client has seq 0+1
+        .await
+        .unwrap();
         let frames = handler.sent.lock();
-        let chunks: Vec<_> = frames.iter().filter_map(|f| match f {
-            WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_CHUNK =>
-                serde_json::from_value::<FileFetchChunk>(m.params[0].clone()).ok(),
-            _ => None,
-        }).collect();
-        assert!(chunks.iter().all(|c| c.sequence >= 2), "seq 0,1 must be skipped");
+        let chunks: Vec<_> = frames
+            .iter()
+            .filter_map(|f| match f {
+                WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_CHUNK => {
+                    serde_json::from_value::<FileFetchChunk>(m.params[0].clone()).ok()
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            chunks.iter().all(|c| c.sequence >= 2),
+            "seq 0,1 must be skipped"
+        );
     }
 
     #[tokio::test]
@@ -668,7 +744,12 @@ mod tests {
                     let in_flight = buf.len();
                     let mut peak = peak_in_flight_clone.load(Ordering::SeqCst);
                     while in_flight > peak {
-                        match peak_in_flight_clone.compare_exchange(peak, in_flight, Ordering::SeqCst, Ordering::SeqCst) {
+                        match peak_in_flight_clone.compare_exchange(
+                            peak,
+                            in_flight,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        ) {
                             Ok(_) => break,
                             Err(actual) => peak = actual,
                         }
@@ -676,7 +757,9 @@ mod tests {
                     emit_calls_clone.fetch_add(1, Ordering::SeqCst);
                     let keep_going = emit(&buf)?;
                     drop(buf);
-                    if !keep_going { break; }
+                    if !keep_going {
+                        break;
+                    }
                 }
                 Ok(())
             }),
@@ -712,16 +795,31 @@ mod tests {
             })
             .collect();
         // N_CHUNKS payload frames + 1 terminal complete frame
-        assert_eq!(chunks.len(), N_CHUNKS + 1, "expected {} payload + 1 terminal chunk", N_CHUNKS);
-        assert!(chunks.last().unwrap().complete, "terminal chunk must be complete");
+        assert_eq!(
+            chunks.len(),
+            N_CHUNKS + 1,
+            "expected {} payload + 1 terminal chunk",
+            N_CHUNKS
+        );
+        assert!(
+            chunks.last().unwrap().complete,
+            "terminal chunk must be complete"
+        );
     }
 
     #[tokio::test]
     async fn unregistered_collection_returns_not_found() {
         let registry = Arc::new(FileFetchRegistry::new(4));
         let handler = Arc::new(MockHandler::new());
-        run_file_fetch(registry, Arc::clone(&handler), MockPeer("p1"), "p1".into(),
-            make_request("f3", "no_such", "x", vec![])).await.unwrap();
+        run_file_fetch(
+            registry,
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("f3", "no_such", "x", vec![]),
+        )
+        .await
+        .unwrap();
         let frames = handler.sent.lock();
         assert!(frames.iter().any(|f| matches!(
             f, WebRTCWireFrame::Message(m) if m.method == CTOX_FILE_RPC_ERROR

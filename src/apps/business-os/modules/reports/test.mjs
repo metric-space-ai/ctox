@@ -17,7 +17,12 @@ async function importBrowserBundle(relativePath) {
   return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 }
 
-const { filterReportItems, normalizeReportItems } = await importBrowserBundle('./index.js');
+const {
+  filterReportItems,
+  isPendingReportSyncStatus,
+  normalizeReportItems,
+  resolveReportsContextRecord,
+} = await importBrowserBundle('./index.js');
 
 const t = (_key, fallback) => fallback;
 
@@ -125,6 +130,35 @@ test('reads JSON encoded payload and client context fields', () => {
   assert.equal(items[0].expected, 'Feature fields survive projection encoding.');
   assert.equal(items[0].changeSummary, 'Projected from JSON payload.');
   assert.equal(items[0].attachment.capture_mode, 'viewport');
+});
+
+test('treats transient sync states as pending data, not true empty results', () => {
+  assert.equal(isPendingReportSyncStatus('connecting'), true);
+  assert.equal(isPendingReportSyncStatus('reconnecting'), true);
+  assert.equal(isPendingReportSyncStatus('syncing'), true);
+  assert.equal(isPendingReportSyncStatus('connected'), false);
+  assert.equal(isPendingReportSyncStatus('failed'), false);
+});
+
+test('right-click context resolves the clicked report before selected fallback', () => {
+  const reports = [
+    { id: 'selected-report', title: 'Selected' },
+    { id: 'clicked-report', title: 'Clicked' },
+  ];
+
+  assert.equal(resolveReportsContextRecord({
+    clickedReportId: 'clicked-report',
+    selectedId: 'selected-report',
+    visibleReports: reports,
+    allReports: reports,
+  }).id, 'clicked-report');
+
+  assert.equal(resolveReportsContextRecord({
+    clickedReportId: '',
+    selectedId: 'selected-report',
+    visibleReports: reports,
+    allReports: reports,
+  }).id, 'selected-report');
 });
 
 let passed = 0;

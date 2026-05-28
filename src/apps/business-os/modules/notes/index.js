@@ -2811,12 +2811,11 @@ function renderNotesContextMenu(state, context, x, y) {
         </div>
         <button type="button" data-notes-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
-        </div>
-      ` : ''}
+      <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
+        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
+      </div>
       <textarea data-notes-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
         <span data-notes-context-status></span>
@@ -2839,7 +2838,7 @@ function renderNotesContextMenu(state, context, x, y) {
   state.contextMenu.querySelector('[data-notes-context-close]')?.addEventListener('click', () => hideNotesContextMenu(state));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    const mode = new FormData(form).get('contextMode') || 'data';
     await dispatchNotesContextChat(state, context, textarea?.value || '', mode);
   });
   requestAnimationFrame(() => textarea?.focus());
@@ -2854,7 +2853,7 @@ async function dispatchNotesContextChat(state, context, message, mode = 'data') 
   }
 
   const activeModuleId = state.ctx.module?.id || 'notizen';
-  const safeMode = mode === 'app' && canModifyNotesApp(state) ? 'app' : 'data';
+  const safeMode = mode === 'app' && canModifyNotesApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
   const activeNote = state.notes.find((item) => item.id === state.activeNoteId) || null;
   if (!document.querySelector('[data-ctox-chat-root]')) {
     if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
@@ -2862,10 +2861,17 @@ async function dispatchNotesContextChat(state, context, message, mode = 'data') 
   }
   if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
   
-  const title = `${safeMode === 'app' ? (activeModuleId === 'notizen' ? 'Notizen App modifizieren' : 'Notes App modifizieren') : (activeModuleId === 'notizen' ? 'Notiz bearbeiten' : 'Note edit')} · ${context.label || (activeModuleId === 'notizen' ? 'Notizen' : 'Notes')}`;
+  const titlePrefix = safeMode === 'app'
+    ? (activeModuleId === 'notizen' ? 'Notizen App modifizieren' : 'Notes App modifizieren')
+    : safeMode === 'ask'
+      ? state.t('chatAnswerLabel', 'Frage beantworten')
+      : (activeModuleId === 'notizen' ? 'Notiz bearbeiten' : 'Note edit');
+  const title = `${titlePrefix} · ${context.label || (activeModuleId === 'notizen' ? 'Notizen' : 'Notes')}`;
   const instruction = safeMode === 'app'
     ? `Modifiziere die ${activeModuleId === 'notizen' ? 'Notizen' : 'Notes'}-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Notizdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : trimmed;
+    : safeMode === 'ask'
+      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
+      : trimmed;
 
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
@@ -2882,7 +2888,7 @@ async function dispatchNotesContextChat(state, context, message, mode = 'data') 
         prompt: trimmed,
         user_message: trimmed,
         mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
+        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
         selected_note: activeNote,
         context,
         thread_key: `business-os/${activeModuleId}`,

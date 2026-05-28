@@ -28,12 +28,8 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::{json, Value};
 
-use rxdb::plugins::replication_webrtc::file_fetch_handler::{
-    run_file_fetch, FileFetchRegistry,
-};
-use rxdb::plugins::replication_webrtc::query_fetch_handler::{
-    run_query_fetch, QueryFetchRegistry,
-};
+use rxdb::plugins::replication_webrtc::file_fetch_handler::{run_file_fetch, FileFetchRegistry};
+use rxdb::plugins::replication_webrtc::query_fetch_handler::{run_query_fetch, QueryFetchRegistry};
 use rxdb::plugins::replication_webrtc::webrtc_types::{
     PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage, WebRTCWireFrame,
 };
@@ -42,7 +38,9 @@ use rxdb::rx_collection::RxCollection;
 use rxdb::rx_database::RxDatabase;
 use rxdb::rx_schema::create_rx_schema;
 use rxdb::rxjs_compat::{RxStream, RxSubject};
-use rxdb::storage::sqlite::{create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings};
+use rxdb::storage::sqlite::{
+    create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
+};
 use rxdb::types::{
     BulkWriteRow, HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
     RxStorageInstance, RxStorageInstanceCreationParams,
@@ -57,10 +55,16 @@ impl HashFunction for TestHash {
 
 #[derive(Clone, Default, Debug)]
 struct DaemonPeer(String);
-impl PartialEq for DaemonPeer { fn eq(&self, o: &Self) -> bool { self.0 == o.0 } }
+impl PartialEq for DaemonPeer {
+    fn eq(&self, o: &Self) -> bool {
+        self.0 == o.0
+    }
+}
 impl Eq for DaemonPeer {}
 impl std::hash::Hash for DaemonPeer {
-    fn hash<H: std::hash::Hasher>(&self, s: &mut H) { self.0.hash(s) }
+    fn hash<H: std::hash::Hasher>(&self, s: &mut H) {
+        self.0.hash(s)
+    }
 }
 
 /// Connection handler whose `send` immediately writes the frame to a shared
@@ -73,12 +77,26 @@ struct StdoutHandler {
 #[async_trait]
 impl WebRTCConnectionHandler for StdoutHandler {
     type Peer = DaemonPeer;
-    fn connect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-    fn disconnect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-    fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> { RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe() }
-    fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> { RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe() }
-    fn error_stream(&self) -> RxStream<rxdb::rx_error::RxError> { RxSubject::<rxdb::rx_error::RxError>::new().subscribe() }
-    async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), rxdb::rx_error::RxError> {
+    fn connect_stream(&self) -> RxStream<Self::Peer> {
+        RxSubject::<Self::Peer>::new().subscribe()
+    }
+    fn disconnect_stream(&self) -> RxStream<Self::Peer> {
+        RxSubject::<Self::Peer>::new().subscribe()
+    }
+    fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> {
+        RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe()
+    }
+    fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> {
+        RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe()
+    }
+    fn error_stream(&self) -> RxStream<rxdb::rx_error::RxError> {
+        RxSubject::<rxdb::rx_error::RxError>::new().subscribe()
+    }
+    async fn send(
+        &self,
+        peer: &Self::Peer,
+        frame: WebRTCWireFrame,
+    ) -> Result<(), rxdb::rx_error::RxError> {
         let envelope = json!({
             "kind": "wire",
             "peerIdentity": peer.0,
@@ -91,27 +109,82 @@ impl WebRTCConnectionHandler for StdoutHandler {
         let _ = out.flush();
         Ok(())
     }
-    async fn close(&self) -> Result<(), rxdb::rx_error::RxError> { Ok(()) }
-    fn peer_identity(&self, peer: &Self::Peer) -> String { peer.0.clone() }
+    async fn close(&self) -> Result<(), rxdb::rx_error::RxError> {
+        Ok(())
+    }
+    fn peer_identity(&self, peer: &Self::Peer) -> String {
+        peer.0.clone()
+    }
 }
 
 fn doc_schema() -> RxJsonSchema {
     let mut p = HashMap::new();
-    p.insert("id".into(), JsonSchema { schema_type: Some("string".into()), max_length: Some(100), ..Default::default() });
-    p.insert("payload".into(), JsonSchema { schema_type: Some("string".into()), ..Default::default() });
-    p.insert("_deleted".into(), JsonSchema { schema_type: Some("boolean".into()), ..Default::default() });
+    p.insert(
+        "id".into(),
+        JsonSchema {
+            schema_type: Some("string".into()),
+            max_length: Some(100),
+            ..Default::default()
+        },
+    );
+    p.insert(
+        "payload".into(),
+        JsonSchema {
+            schema_type: Some("string".into()),
+            ..Default::default()
+        },
+    );
+    p.insert(
+        "_deleted".into(),
+        JsonSchema {
+            schema_type: Some("boolean".into()),
+            ..Default::default()
+        },
+    );
     let mut meta = HashMap::new();
-    meta.insert("lwt".into(), JsonSchema { schema_type: Some("number".into()), ..Default::default() });
-    p.insert("_meta".into(), JsonSchema { schema_type: Some("object".into()), properties: meta, ..Default::default() });
-    p.insert("_rev".into(), JsonSchema { schema_type: Some("string".into()), ..Default::default() });
-    p.insert("_attachments".into(), JsonSchema { schema_type: Some("object".into()), additional_properties: Some(true), ..Default::default() });
+    meta.insert(
+        "lwt".into(),
+        JsonSchema {
+            schema_type: Some("number".into()),
+            ..Default::default()
+        },
+    );
+    p.insert(
+        "_meta".into(),
+        JsonSchema {
+            schema_type: Some("object".into()),
+            properties: meta,
+            ..Default::default()
+        },
+    );
+    p.insert(
+        "_rev".into(),
+        JsonSchema {
+            schema_type: Some("string".into()),
+            ..Default::default()
+        },
+    );
+    p.insert(
+        "_attachments".into(),
+        JsonSchema {
+            schema_type: Some("object".into()),
+            additional_properties: Some(true),
+            ..Default::default()
+        },
+    );
     RxJsonSchema {
-        version: 0, primary_key: PrimaryKey::Simple("id".into()),
-        schema_type: "object".into(), properties: p,
-        required: vec!["id".into()], indexes: vec![],
-        encrypted: vec![], internal_indexes: vec![],
-        key_compression: false, attachments: None,
-        additional_properties: true, extra: HashMap::new(),
+        version: 0,
+        primary_key: PrimaryKey::Simple("id".into()),
+        schema_type: "object".into(),
+        properties: p,
+        required: vec!["id".into()],
+        indexes: vec![],
+        encrypted: vec![],
+        internal_indexes: vec![],
+        key_compression: false,
+        attachments: None,
+        additional_properties: true,
+        extra: HashMap::new(),
     }
 }
 
@@ -120,7 +193,10 @@ async fn main() {
     let stdout = std::io::stdout();
     let out: Arc<Mutex<Box<dyn Write + Send>>> = Arc::new(Mutex::new(Box::new(stdout)));
     let sent_bytes = Arc::new(AtomicUsize::new(0));
-    let handler = Arc::new(StdoutHandler { out: Arc::clone(&out), sent_bytes: Arc::clone(&sent_bytes) });
+    let handler = Arc::new(StdoutHandler {
+        out: Arc::clone(&out),
+        sent_bytes: Arc::clone(&sent_bytes),
+    });
 
     // Storage + collection
     let dir = tempfile::tempdir().expect("tempdir");
@@ -143,7 +219,14 @@ async fn main() {
     )
     .await
     .expect("create");
-    let database = RxDatabase::new("daemon", "tok", "stoken", false, Arc::new(TestHash), storage);
+    let database = RxDatabase::new(
+        "daemon",
+        "tok",
+        "stoken",
+        false,
+        Arc::new(TestHash),
+        storage,
+    );
     let collection = RxCollection::new_with_schema(
         "demo",
         database,
@@ -176,11 +259,17 @@ async fn main() {
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
         let trimmed = line.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
         let parsed: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(err) => {
-                let _ = writeln!(out.lock(), "{}", json!({"kind":"error","message":format!("bad json: {err}")}));
+                let _ = writeln!(
+                    out.lock(),
+                    "{}",
+                    json!({"kind":"error","message":format!("bad json: {err}")})
+                );
                 continue;
             }
         };
@@ -190,19 +279,36 @@ async fn main() {
                 break;
             }
             Some("seed") => {
-                let docs = parsed.get("docs").and_then(Value::as_array).cloned().unwrap_or_default();
-                let rows: Vec<BulkWriteRow> = docs.into_iter().map(|d| BulkWriteRow { previous: None, document: d }).collect();
+                let docs = parsed
+                    .get("docs")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let rows: Vec<BulkWriteRow> = docs
+                    .into_iter()
+                    .map(|d| BulkWriteRow {
+                        previous: None,
+                        document: d,
+                    })
+                    .collect();
                 if !rows.is_empty() {
                     let _ = collection.storage_instance.bulk_write(rows, "seed").await;
                 }
                 let _ = writeln!(out.lock(), "{}", json!({"kind":"seeded"}));
             }
             Some("request") => {
-                let peer_identity = parsed.get("peerIdentity").and_then(Value::as_str).unwrap_or("p1").to_string();
-                let message: WebRTCMessage = serde_json::from_value(
-                    parsed.get("message").cloned().unwrap_or(Value::Null),
-                )
-                .unwrap_or(WebRTCMessage { id: String::new(), method: String::new(), params: vec![] });
+                let peer_identity = parsed
+                    .get("peerIdentity")
+                    .and_then(Value::as_str)
+                    .unwrap_or("p1")
+                    .to_string();
+                let message: WebRTCMessage =
+                    serde_json::from_value(parsed.get("message").cloned().unwrap_or(Value::Null))
+                        .unwrap_or(WebRTCMessage {
+                            id: String::new(),
+                            method: String::new(),
+                            params: vec![],
+                        });
 
                 let peer = DaemonPeer(peer_identity.clone());
                 match message.method.as_str() {
@@ -240,7 +346,11 @@ async fn main() {
                         }
                     }
                     other => {
-                        let _ = writeln!(out.lock(), "{}", json!({"kind":"error","message":format!("unknown method: {other}")}));
+                        let _ = writeln!(
+                            out.lock(),
+                            "{}",
+                            json!({"kind":"error","message":format!("unknown method: {other}")})
+                        );
                     }
                 }
             }

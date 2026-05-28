@@ -24,7 +24,13 @@ const {
   canEditSelectedMarkdown,
   isKnowledgeActionFormReady,
   isKnowledgeTabDisabled,
+  knowledgeItemsFromTables,
+  localDataFrameRows,
+  localDataFrameSchema,
+  mergeKnowledgeTableData,
+  normalizeStoredKnowledgeRecord,
   sourceScopeFor,
+  valueForColumn,
 } = hooks;
 
 const tests = [];
@@ -46,6 +52,61 @@ test('groups unknown knowledge records instead of rendering a false empty state'
   assert.equal(groups.length, 1);
   assert.equal(groups[0].id, 'knowledge/operations');
   assert.equal(groups[0].entries[0].id, 'note:ops-runner');
+});
+
+test('projects knowledge table records into visible dataframe entries', () => {
+  const groups = buildKnowledgeBundles([], [], [{
+    id: 'table:load-points',
+    kind: 'dataframe',
+    title: 'Measured load points',
+    payload: {
+      domain: 'drone_bearing_design',
+      rows: [{ measurement_id: 'MLP-001', thrust_N: 3.2 }],
+      schema: { columns: [{ name: 'measurement_id', type: 'string' }, { name: 'thrust_N', type: 'number' }] },
+    },
+  }]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].id, 'tables/drone_bearing_design');
+  assert.equal(groups[0].entries[0].id, 'table:load-points');
+  assert.equal(groups[0].entries[0].has_table, true);
+  assert.deepEqual(groups[0].tableIds, ['table:load-points']);
+});
+
+test('normalizes RxDB payload records without dropping table rows or schema', () => {
+  const record = normalizeStoredKnowledgeRecord({
+    id: 'table:source-catalog',
+    title: 'Source catalog',
+    has_table: true,
+    payload: {
+      id: 'table:source-catalog',
+      title: 'Payload title',
+      rows: [{ source_id: 'NASA-MTB2' }],
+      schema: { columns: [{ name: 'source_id', type: 'string' }] },
+    },
+  });
+
+  assert.equal(record.title, 'Source catalog');
+  assert.equal(record.has_table, true);
+  assert.equal(localDataFrameRows(record).length, 1);
+  assert.equal(localDataFrameSchema(record).columns[0].key, 'source_id');
+});
+
+test('merges item metadata with table payload data for dataframe rendering', () => {
+  const [tableItem] = knowledgeItemsFromTables([{
+    id: 'table:metrics',
+    payload: {
+      rows: [{ metric_id: 'm1', score: 88 }],
+      schema: { columns: [{ name: 'metric_id' }, { name: 'score' }] },
+      title: 'Payload metrics',
+    },
+  }]);
+  const merged = mergeKnowledgeTableData({ id: 'table:metrics', title: 'Metrics', has_table: true }, tableItem);
+
+  assert.equal(merged.title, 'Metrics');
+  assert.equal(localDataFrameRows(merged)[0].score, 88);
+  assert.equal(localDataFrameSchema(merged).columns.length, 2);
+  assert.equal(valueForColumn({ score_value: 91 }, { key: 'score_value', label: 'Score' }), 91);
 });
 
 test('source filters classify user and system knowledge', () => {

@@ -5,9 +5,15 @@ use serde_json::json;
 use serde_json::Value;
 use std::fs;
 use std::io;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Read;
+use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Child;
+use std::process::ChildStdin;
+use std::process::ChildStdout;
 use std::process::Command;
 use std::process::Output;
 use std::process::Stdio;
@@ -1373,6 +1379,441 @@ try {{
     await browser.close();
   }} catch {{
     // ignore close errors; the JSON payload is already emitted
+  }}
+}}
+"#
+    ))
+}
+
+/// Spawn parameters for a long-lived (persistent) Chromium runtime.
+#[derive(Debug, Clone, Default)]
+pub struct PersistentBrowserSpawn {
+    pub dir: Option<PathBuf>,
+    pub viewport_w: u64,
+    pub viewport_h: u64,
+}
+
+/// A long-lived Chromium/Patchright process driven over newline-delimited JSON.
+///
+/// Each request is a single JSON line on stdin; each response is a single JSON
+/// line on stdout. Logs are routed to stderr so stdout stays a clean response
+/// channel. This is the persistent counterpart to [`run_browser_automation`],
+/// which spawns a fresh one-shot process per call.
+pub struct PersistentBrowserHandle {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_id: u64,
+    runner_path: PathBuf,
+}
+
+impl PersistentBrowserHandle {
+    /// Send one operation and block until the matching response line arrives.
+    pub fn request(&mut self, op: &str, params: Value) -> Result<Value> {
+        self.next_id += 1;
+        let id = self.next_id;
+        let mut message = match params {
+            Value::Object(map) => Value::Object(map),
+            Value::Null => Value::Object(serde_json::Map::new()),
+            other => {
+                let mut map = serde_json::Map::new();
+                map.insert("value".to_string(), other);
+                Value::Object(map)
+            }
+        };
+        if let Some(obj) = message.as_object_mut() {
+            obj.insert("id".to_string(), Value::from(id));
+            obj.insert("op".to_string(), Value::String(op.to_string()));
+        }
+        let line = serde_json::to_string(&message)
+            .context("failed to encode persistent browser request")?;
+        self.stdin
+            .write_all(line.as_bytes())
+            .context("failed to write persistent browser request")?;
+        self.stdin
+            .write_all(b"\n")
+            .context("failed to write persistent browser request newline")?;
+        self.stdin
+            .flush()
+            .context("failed to flush persistent browser request")?;
+        loop {
+            let mut buf = String::new();
+            let read = self
+                .stdout
+                .read_line(&mut buf)
+                .context("failed to read persistent browser response")?;
+            if read == 0 {
+                anyhow::bail!("persistent browser runtime closed stdout before responding");
+            }
+            let trimmed = buf.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
+                continue;
+            };
+            if value.get("id").and_then(Value::as_u64) == Some(id) {
+                return Ok(value);
+            }
+        }
+    }
+
+    /// Ask the runtime to close gracefully, then ensure the process is gone and
+    /// the generated runner file is cleaned up. Never panics; best effort.
+    pub fn shutdown(&mut self) {
+        let _ = self.request("close", json!({}));
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = fs::remove_file(&self.runner_path);
+    }
+}
+
+impl Drop for PersistentBrowserHandle {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = fs::remove_file(&self.runner_path);
+    }
+}
+
+/// Launch a persistent Chromium runtime and wait for it to signal readiness.
+pub fn spawn_persistent_browser(
+    root: &Path,
+    spawn: &PersistentBrowserSpawn,
+) -> Result<PersistentBrowserHandle> {
+    let reference_dir = browser_reference_dir(root, spawn.dir.clone());
+    fs::create_dir_all(&reference_dir).with_context(|| {
+        format!(
+            "failed to create browser automation reference dir {}",
+            reference_dir.display()
+        )
+    })?;
+    let _ = ensure_reference_package_json(&reference_dir)?;
+    ensure_humanlike_module(&reference_dir)?;
+    ensure_stealth_init_module(&reference_dir)?;
+    let _doctor = ensure_browser_automation_ready(&reference_dir, "persistent browser automation")?;
+    let Some(node_path) = find_command_on_path("node") else {
+        anyhow::bail!("node is required for browser automation");
+    };
+
+    let viewport_w = spawn.viewport_w.clamp(320, 3840);
+    let viewport_h = spawn.viewport_h.clamp(240, 2160);
+    let fallback_executable =
+        find_browser_executable(&reference_dir).map(|value| value.display().to_string());
+    let runner_path = reference_dir.join(format!(
+        ".ctox-browser-live-{}-{}.mjs",
+        std::process::id(),
+        unix_ts()
+    ));
+    let runner_source = build_persistent_browser_runner_script(
+        viewport_w,
+        viewport_h,
+        fallback_executable.as_deref(),
+    )?;
+    fs::write(&runner_path, runner_source)
+        .with_context(|| format!("failed to write {}", runner_path.display()))?;
+
+    let mut command = Command::new(&node_path);
+    command
+        .current_dir(&reference_dir)
+        .env(
+            "PLAYWRIGHT_BROWSERS_PATH",
+            playwright_browser_cache_dir(&reference_dir),
+        )
+        .arg(&runner_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            let _ = fs::remove_file(&runner_path);
+            return Err(err).with_context(|| {
+                format!(
+                    "failed to launch persistent browser runtime with {}",
+                    node_path.display()
+                )
+            });
+        }
+    };
+    let stdin = child
+        .stdin
+        .take()
+        .context("persistent browser runtime is missing stdin")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("persistent browser runtime is missing stdout")?;
+    let mut handle = PersistentBrowserHandle {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout),
+        next_id: 0,
+        runner_path,
+    };
+
+    // Wait for the runtime to confirm the page is live before returning.
+    loop {
+        let mut buf = String::new();
+        let read = handle
+            .stdout
+            .read_line(&mut buf)
+            .context("failed to read persistent browser readiness")?;
+        if read == 0 {
+            anyhow::bail!("persistent browser runtime exited before becoming ready");
+        }
+        let trimmed = buf.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+            if value.get("ready").and_then(Value::as_bool) == Some(true) {
+                break;
+            }
+            if value.get("ok").and_then(Value::as_bool) == Some(false) {
+                let detail = value
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("persistent browser runtime failed to start");
+                anyhow::bail!("{detail}");
+            }
+        }
+    }
+    Ok(handle)
+}
+
+fn build_persistent_browser_runner_script(
+    viewport_w: u64,
+    viewport_h: u64,
+    fallback_executable: Option<&str>,
+) -> Result<String> {
+    let encoded_executable = serde_json::to_string(&fallback_executable)
+        .context("failed to encode browser executable override")?;
+    Ok(format!(
+        r#"import process from "node:process";
+import path from "node:path";
+import readline from "node:readline";
+
+const VIEWPORT_W = {viewport_w};
+const VIEWPORT_H = {viewport_h};
+const fallbackExecutable = {encoded_executable};
+
+for (const level of ["log", "info", "warn", "debug", "error"]) {{
+  console[level] = (...args) => {{
+    try {{
+      process.stderr.write(`[live] ${{args.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" ")}}\n`);
+    }} catch {{}}
+  }};
+}}
+
+const respond = (payload) => {{
+  process.stdout.write(JSON.stringify(payload) + "\n");
+}};
+
+const {{ chromium }} = await import("patchright");
+const defaultUserAgent = (() => {{
+  switch (process.platform) {{
+    case "darwin":
+      return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+    case "win32":
+      return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+    default:
+      return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36";
+  }}
+}})();
+const hostLocale = (() => {{
+  const raw = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || "";
+  const stripped = raw.split(".")[0];
+  if (stripped && stripped.length >= 2) {{
+    return stripped.replace("_", "-");
+  }}
+  return null;
+}})();
+const launchArgs = [`--user-agent=${{defaultUserAgent}}`];
+if (hostLocale) launchArgs.push(`--lang=${{hostLocale}}`);
+const launchOptions = {{
+  headless: true,
+  ignoreDefaultArgs: ["--enable-automation", "--enable-unsafe-swiftshader"],
+  args: launchArgs,
+}};
+if (fallbackExecutable) {{
+  launchOptions.executablePath = fallbackExecutable;
+}}
+const defaultClientHints = (() => {{
+  let platform = '"Linux"';
+  if (process.platform === "darwin") platform = '"macOS"';
+  else if (process.platform === "win32") platform = '"Windows"';
+  return {{
+    "Sec-CH-UA": '"Chromium";v="146", "Google Chrome";v="146", "Not.A/Brand";v="24"',
+    "Sec-CH-UA-Mobile": "?0",
+    "Sec-CH-UA-Platform": platform,
+  }};
+}})();
+const contextOptions = {{
+  viewport: {{ width: VIEWPORT_W, height: VIEWPORT_H }},
+  userAgent: defaultUserAgent,
+  extraHTTPHeaders: defaultClientHints,
+}};
+if (hostLocale) contextOptions.locale = hostLocale;
+
+let browser;
+let context;
+let page;
+try {{
+  browser = await chromium.launch(launchOptions);
+  context = await browser.newContext(contextOptions);
+  try {{
+    await context.addInitScript({{ path: path.join(process.cwd(), "stealth_init.js") }});
+  }} catch {{}}
+  page = await context.newPage();
+}} catch (error) {{
+  respond({{ ok: false, error: (error && error.message) || String(error) }});
+  process.exit(1);
+}}
+
+// Simple linear navigation model so the UI can enable/disable back/forward.
+let historyPos = -1;
+let historyMax = -1;
+
+const navState = async () => {{
+  let url = "about:blank";
+  let title = "";
+  try {{ url = page.url(); }} catch {{}}
+  try {{ title = await page.title(); }} catch {{}}
+  return {{
+    url,
+    title,
+    can_go_back: historyPos > 0,
+    can_go_forward: historyPos < historyMax,
+  }};
+}};
+
+const screenshot = async () => {{
+  const buffer = await page.screenshot({{ fullPage: false }});
+  return {{ mimeType: "image/png", base64: buffer.toString("base64") }};
+}};
+
+const applyInput = async (events) => {{
+  let applied = 0;
+  for (const event of Array.isArray(events) ? events : []) {{
+    try {{
+      const type = event.type;
+      const x = Number(event.x || 0);
+      const y = Number(event.y || 0);
+      const button = typeof event.button === "string" && event.button ? event.button : "left";
+      if (type === "mouseMove") {{
+        await page.mouse.move(x, y);
+      }} else if (type === "mouseDown") {{
+        await page.mouse.move(x, y);
+        await page.mouse.down({{ button }});
+      }} else if (type === "mouseUp") {{
+        await page.mouse.move(x, y);
+        await page.mouse.up({{ button }});
+      }} else if (type === "click") {{
+        await page.mouse.click(x, y, {{ button }});
+      }} else if (type === "wheel") {{
+        await page.mouse.move(x, y);
+        await page.mouse.wheel(Number(event.dx || 0), Number(event.dy || 0));
+      }} else if (type === "keyDown") {{
+        if (event.text) {{
+          await page.keyboard.type(String(event.text));
+        }} else if (event.key) {{
+          await page.keyboard.press(String(event.key));
+        }}
+      }} else if (type === "keyUp") {{
+        // keyDown already performs a full press; ignore the paired keyUp.
+      }} else {{
+        continue;
+      }}
+      applied++;
+    }} catch {{
+      // Skip individual input failures; the batch result still advances.
+    }}
+  }}
+  return applied;
+}};
+
+const observe = async (limit, textMax) => {{
+  const cappedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(80, Math.floor(limit))) : 24;
+  const cappedText = Number.isFinite(textMax) ? Math.max(20, Math.min(4000, Math.floor(textMax))) : 1200;
+  let documentText = "";
+  try {{
+    documentText = await page.evaluate((max) => {{
+      const text = String(document.body ? document.body.innerText : "").replace(/\s+/g, " ").trim();
+      return text.length > max ? text.slice(0, max - 1) + "..." : text;
+    }}, cappedText);
+  }} catch {{}}
+  let title = "";
+  try {{ title = await page.title(); }} catch {{}}
+  return {{ url: page.url(), title, documentText, target_limit: cappedLimit }};
+}};
+
+respond({{ ready: true }});
+
+const rl = readline.createInterface({{ input: process.stdin }});
+for await (const line of rl) {{
+  const text = line.trim();
+  if (!text) continue;
+  let message;
+  try {{
+    message = JSON.parse(text);
+  }} catch {{
+    continue;
+  }}
+  const id = message.id;
+  const op = message.op;
+  const timeoutMs = Number(message.timeoutMs || 30000);
+  try {{
+    if (op === "navigate") {{
+      await page.goto(String(message.url || "about:blank"), {{
+        waitUntil: message.waitUntil || "domcontentloaded",
+        timeout: timeoutMs,
+      }});
+      historyPos += 1;
+      historyMax = historyPos;
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "reload") {{
+      await page.reload({{ waitUntil: "domcontentloaded", timeout: timeoutMs }});
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "back") {{
+      if (historyPos > 0) {{
+        await page.goBack({{ waitUntil: "domcontentloaded", timeout: timeoutMs }}).catch(() => {{}});
+        historyPos -= 1;
+      }}
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "forward") {{
+      if (historyPos < historyMax) {{
+        await page.goForward({{ waitUntil: "domcontentloaded", timeout: timeoutMs }}).catch(() => {{}});
+        historyPos += 1;
+      }}
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "input") {{
+      const applied = await applyInput(message.events);
+      respond({{ id, ok: true, applied, nav: await navState() }});
+    }} else if (op === "screenshot") {{
+      respond({{ id, ok: true, screenshot: await screenshot(), nav: await navState() }});
+    }} else if (op === "nav_state") {{
+      respond({{ id, ok: true, nav: await navState() }});
+    }} else if (op === "viewport") {{
+      await page.setViewportSize({{
+        width: Number(message.w || VIEWPORT_W),
+        height: Number(message.h || VIEWPORT_H),
+      }});
+      respond({{ id, ok: true }});
+    }} else if (op === "observe") {{
+      respond({{ id, ok: true, observed: await observe(message.limit, message.textMax) }});
+    }} else if (op === "close") {{
+      respond({{ id, ok: true }});
+      try {{ await context.close(); }} catch {{}}
+      try {{ await browser.close(); }} catch {{}}
+      process.exit(0);
+    }} else {{
+      respond({{ id, ok: false, error: `unknown op ${{op}}` }});
+    }}
+  }} catch (error) {{
+    let nav = null;
+    try {{ nav = await navState(); }} catch {{}}
+    respond({{ id, ok: false, error: (error && error.message) || String(error), nav }});
   }}
 }}
 "#

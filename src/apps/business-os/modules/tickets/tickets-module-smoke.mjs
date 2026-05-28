@@ -49,6 +49,30 @@ assert(
   'failed command has deterministic fallback',
 );
 
+assert(
+  __ticketTestHooks.isCollectionDiagnosticsReady({ connectionStatus: 'connected' }) === true,
+  'connected ticket collection diagnostics are ready',
+);
+
+assert(
+  __ticketTestHooks.isCollectionDiagnosticsReady({ frameTransport: { activePeerCount: 1, receivedFrames: 2 } }) === true,
+  'active ticket frame transport is ready',
+);
+
+assert(
+  __ticketTestHooks.isCollectionDiagnosticsReady({ connectionStatus: 'connecting' }) === false,
+  'connecting ticket collection diagnostics are not ready',
+);
+
+const recordContext = __ticketTestHooks.ticketRecordContextForSmoke({
+  id: 'local:one',
+  ticket_key: 'TCK-1',
+  title: 'Broken sync',
+});
+assert(recordContext['data-record-id'] === 'TCK-1', 'ticket context exposes record id');
+assert(recordContext['data-record-type'] === 'ticket', 'ticket context exposes record type');
+assert(recordContext['data-label'] === 'Broken sync', 'ticket context exposes label');
+
 console.log('business-os tickets module smoke OK');
 
 function assert(condition, message) {

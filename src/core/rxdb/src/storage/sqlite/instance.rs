@@ -491,7 +491,6 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         })
     }
 
-
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
         let result = self.query(prepared_query).await?;
         Ok(RxStorageCountResult {

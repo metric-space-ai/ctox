@@ -4,8 +4,11 @@ use std::path::Path;
 pub use ctox_web_stack::handle_browser_command;
 pub use ctox_web_stack::prepare_browser_environment;
 pub use ctox_web_stack::run_browser_automation;
+pub use ctox_web_stack::spawn_persistent_browser;
 pub use ctox_web_stack::BrowserAutomationRequest;
 pub use ctox_web_stack::BrowserPrepareOptions;
+pub use ctox_web_stack::PersistentBrowserHandle;
+pub use ctox_web_stack::PersistentBrowserSpawn;
 
 /// Canonical CTOX web-stack facade.
 ///

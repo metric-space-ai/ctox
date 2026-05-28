@@ -278,12 +278,11 @@ function renderDocumentsContextMenu(state, context, x, y) {
         </div>
         <button type="button" data-documents-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
       </header>
-      ${canModifyApp ? `
-        <div class="documents-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-          <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-          <label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>
-        </div>
-      ` : ''}
+      <div class="documents-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
+        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
+        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
+        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
+      </div>
       <textarea data-documents-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
       <footer>
         <span data-documents-context-status></span>
@@ -305,7 +304,7 @@ function renderDocumentsContextMenu(state, context, x, y) {
   state.contextMenu.querySelector('[data-documents-context-close]')?.addEventListener('click', () => hideDocumentsContextMenu(state));
   form?.addEventListener('submit', async (event) => {
     event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
+    const mode = new FormData(form).get('contextMode') || 'data';
     await dispatchDocumentsContextChat(state, context, textarea?.value || '', mode);
   });
   requestAnimationFrame(() => textarea?.focus());
@@ -332,7 +331,7 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
     return;
   }
 
-  const safeMode = mode === 'app' && canModifyDocumentsApp(state) ? 'app' : 'data';
+  const safeMode = mode === 'app' && canModifyDocumentsApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
   const record = state.documents.find((item) => item.id === context.record_id) || selectedRecord(state);
   const runbookId = defaultRunbookId(state);
   const runbook = state.runbooks.find((item) => item.id === runbookId || item.command_type === runbookId) || null;
@@ -341,10 +340,17 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
     return;
   }
   if (status) status.textContent = state.t('chatOpening', 'Oeffne Chat...');
-  const title = `${safeMode === 'app' ? state.t('chatModifyAppTitle', 'Documents App modifizieren') : state.t('chatWorkDataTitle', 'Documents bearbeiten')} · ${context.label || record?.title || context.column || 'Documents'}`;
+  const titlePrefix = safeMode === 'app'
+    ? state.t('chatModifyAppTitle', 'Documents App modifizieren')
+    : safeMode === 'ask'
+      ? state.t('chatAnswerLabel', 'Frage beantworten')
+      : state.t('chatWorkDataTitle', 'Documents bearbeiten');
+  const title = `${titlePrefix} · ${context.label || record?.title || context.column || 'Documents'}`;
   const instruction = safeMode === 'app'
     ? state.t('chatModifyAppInstruction', `Modifiziere die Documents-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Dokumentdaten selbst nicht als primäres Ziel verändern.\n\n{0}`, trimmed)
-    : trimmed;
+    : safeMode === 'ask'
+      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
+      : trimmed;
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
       text: trimmed,
@@ -360,7 +366,7 @@ async function dispatchDocumentsContextChat(state, context, message, mode = 'dat
         prompt: trimmed,
         user_message: trimmed,
         mode: safeMode,
-        target: safeMode === 'app' ? 'app' : 'data',
+        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
         selected_document: record || null,
         selected_version_id: record?.current_version_id || '',
         selected_runbook: runbook,

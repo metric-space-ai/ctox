@@ -429,8 +429,8 @@ async function sendBrowserContextToCtox(ctx, state, options = {}) {
   }
   const target = options.webStack ? 'Web Stack' : 'CTOX';
   state.notice = frame?.id
-    ? `Sent browser context with frame ${frame.seq || frame.id} to ${target}.`
-    : `Sent browser context to ${target} without a current frame.`;
+    ? `Browser-Kontext wurde an ${target} uebergeben.`
+    : `Browser-Kontext wurde an ${target} uebergeben. Sobald die Seite geladen ist, wird auch die aktuelle Ansicht referenziert.`;
 }
 
 async function extractWebStackFields(ctx, state) {
@@ -511,17 +511,17 @@ async function extractWebStackFields(ctx, state) {
       status: 'pending_sync',
     });
   }
-  state.notice = `Requested Web Stack extract via ${payload.capture_script}.`;
+  state.notice = 'CTOX liest die Seite fuer den Web Stack aus.';
 }
 
 async function completeWebStackAuthAssist(ctx, state) {
   const session = state.latestSession;
   if (!session?.id) {
-    state.notice = 'No Web Stack browser session to complete.';
+    state.notice = 'Kein Web-Stack-Browserfenster geoeffnet.';
     return;
   }
   if (session.payload?.purpose !== 'web_stack_auth') {
-    state.notice = 'This browser session is not a Web Stack login session.';
+    state.notice = 'Dieses Browserfenster gehoert nicht zu einer Web-Stack-Anmeldung.';
     return;
   }
   const now = Date.now();
@@ -570,18 +570,18 @@ async function completeWebStackAuthAssist(ctx, state) {
       updated_at_ms: now,
     });
   }
-  state.notice = 'Web Stack login completion queued.';
+  state.notice = 'Anmeldung wurde an CTOX uebergeben.';
 }
 
 async function fillWebStackCredential(ctx, state) {
   const session = state.latestSession;
   if (!session?.id) {
-    state.notice = 'No Web Stack browser session to fill.';
+    state.notice = 'Kein Web-Stack-Browserfenster geoeffnet.';
     return;
   }
   const secretName = session.payload?.secret_name || '';
   if (!secretName) {
-    state.notice = 'This Web Stack session has no credential reference.';
+    state.notice = 'Fuer diese Quelle ist kein Zugang im CTOX Secret Store hinterlegt.';
     return;
   }
   const now = Date.now();
@@ -633,8 +633,8 @@ async function fillWebStackCredential(ctx, state) {
     });
   }
   state.notice = selector
-    ? 'Credential fill queued for the source-specific browser field.'
-    : 'Credential fill queued for the focused browser field.';
+    ? 'CTOX setzt die gespeicherten Zugangsdaten in das passende Feld ein.'
+    : 'CTOX setzt die gespeicherten Zugangsdaten in das aktive Feld ein.';
 }
 
 async function startCommandSync(ctx) {
@@ -895,24 +895,25 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
 
 function renderSession(refs, session, tab, frame, command) {
   if (!session) {
-    refs.sessionCard.innerHTML = '<span class="browser-muted">No session</span>';
+    refs.sessionCard.innerHTML = '<span class="browser-muted">Kein Browserfenster</span>';
     return;
   }
   const url = tab?.url || session.current_url || '';
   const commandError = commandErrorMessage(command);
   const sessionError = session.error ? `<div class="browser-error">${escapeHtml(session.error)}</div>` : '';
   const commandLine = command
-    ? `<div class="browser-muted">Command ${escapeHtml(command.command_type || command.type || 'browser')} - ${escapeHtml(command.status || 'pending')}</div>`
+    ? `<div class="browser-muted">Letzte Browseraktion: ${escapeHtml(browserActionLabel(command.command_type || command.type || 'browser'))}</div>`
     : '';
   const policy = session.payload?.control_policy || {};
   const owner = session.owner_user_id || policy.owner_user_id || '-';
   const controller = session.controller_user_id || policy.controller_user_id || '-';
+  const status = browserStatusLabel(session);
   if (refs.address && url) refs.address.value = url;
   refs.sessionCard.innerHTML = `
     <strong>${escapeHtml(browserDisplayTitle(tab, session, url))}</strong>
     <div class="browser-muted">${escapeHtml(url || 'about:blank')}</div>
     <div class="browser-meta-grid">
-      <span>Status</span><span>${escapeHtml(session.runtime_status || session.status || 'unknown')}</span>
+      <span>Status</span><span>${escapeHtml(status)}</span>
       <span>Owner</span><span>${escapeHtml(owner)}</span>
       <span>Control</span><span>${escapeHtml(controller)}</span>
       <span>Frame</span><span>${escapeHtml(frame ? `${frame.width}x${frame.height}` : 'Kein Bild')}</span>
@@ -921,6 +922,18 @@ function renderSession(refs, session, tab, frame, command) {
     ${sessionError}
     ${commandError ? `<div class="browser-error">${escapeHtml(commandError)}</div>` : ''}
   `;
+}
+
+function browserActionLabel(commandType) {
+  const type = String(commandType || '');
+  if (type === 'browser.session.start') return 'Fenster geoeffnet';
+  if (type === 'browser.navigate') return 'Navigation';
+  if (type === 'browser.reload') return 'Neu laden';
+  if (type === 'browser.back') return 'Zurueck';
+  if (type === 'browser.forward') return 'Vor';
+  if (type === 'browser.reset') return 'Zurueckgesetzt';
+  if (type === 'browser.session.stop') return 'Fenster geschlossen';
+  return 'Aktualisiert';
 }
 
 function renderAuthAssist(refs, session) {
@@ -941,28 +954,35 @@ function renderAuthAssist(refs, session) {
   const domains = Array.isArray(payload.allowed_domains) ? payload.allowed_domains.join(', ') : '';
   refs.authAssist.innerHTML = `
     <div>
-      <span class="browser-kicker">Web Stack</span>
-      <strong>${escapeHtml(payload.source_id || 'Auth Assist')}</strong>
+      <span class="browser-kicker">Web Stack Anmeldung</span>
+      <strong>${escapeHtml(payload.source_id || 'Anmeldung erforderlich')}</strong>
       <small>${escapeHtml(domains || payload.target_url || '')}</small>
-      ${payload.capture_script ? `<small>Capture: ${escapeHtml(payload.capture_script)}</small>` : ''}
-      ${fillStatus ? `<small>Credential fill: ${escapeHtml(fillStatus)}</small>` : ''}
-      ${extractStatus ? `<small>Extract: ${escapeHtml(extractStatus)}</small>` : ''}
+      ${fillStatus ? `<small>${escapeHtml(authAssistStatusLabel(fillStatus, 'Zugangsdaten werden eingesetzt'))}</small>` : ''}
+      ${extractStatus ? `<small>${escapeHtml(authAssistStatusLabel(extractStatus, 'Seitenauswertung laeuft'))}</small>` : ''}
     </div>
     <div class="browser-auth-actions">
       <button type="button" data-browser-credential-fill ${canFill ? '' : 'disabled'}>
-        Fill credential
+        Zugangsdaten einsetzen
       </button>
       <button type="button" data-browser-auth-complete ${completed ? 'disabled' : ''}>
-        ${completed ? 'Login saved' : 'Login done'}
+        ${completed ? 'Angemeldet' : 'Ich bin angemeldet'}
       </button>
       <button type="button" data-browser-web-stack-capture ${canCapture ? '' : 'disabled'}>
-        Capture for Web Stack
+        An CTOX uebergeben
       </button>
       <button type="button" data-browser-web-stack-extract ${canExtract ? '' : 'disabled'}>
-        Extract fields
+        Seite auslesen
       </button>
     </div>
   `;
+}
+
+function authAssistStatusLabel(status, fallback) {
+  const normalized = String(status || '').toLowerCase();
+  if (['completed', 'done', 'ok', 'success'].includes(normalized)) return 'Abgeschlossen';
+  if (['pending', 'pending_sync', 'accepted', 'running'].includes(normalized)) return fallback;
+  if (['failed', 'error'].includes(normalized)) return 'Aktion fehlgeschlagen';
+  return fallback;
 }
 
 function renderStatus(refs, session, tab, frame, command) {
@@ -1022,7 +1042,7 @@ async function renderFrame(refs, frame, state) {
   } catch (error) {
     console.error('[browser] frame render failed', error);
     refs.empty.hidden = false;
-    refs.empty.textContent = 'Frame error';
+    refs.empty.textContent = 'Die Seite konnte nicht angezeigt werden.';
   } finally {
     state.drawing = false;
   }
@@ -1123,7 +1143,7 @@ function commandErrorMessage(command) {
   if (!command) return '';
   const status = String(command.status || '').toLowerCase();
   const error = command.error || command.result?.error || command.payload?.error || '';
-  if (status === 'failed' || error) return String(error || 'Command failed');
+  if (status === 'failed' || error) return String(error || 'Die Browser-Aktion ist fehlgeschlagen.');
   return '';
 }
 

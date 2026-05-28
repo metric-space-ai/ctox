@@ -32,7 +32,9 @@ use rxdb::rx_collection::RxCollection;
 use rxdb::rx_database::RxDatabase;
 use rxdb::rx_schema::create_rx_schema;
 use rxdb::rxjs_compat::{RxStream, RxSubject};
-use rxdb::storage::sqlite::{create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings};
+use rxdb::storage::sqlite::{
+    create_storage_instance, get_rx_storage_sqlite, RxStorageSqliteSettings,
+};
 use rxdb::types::{
     BulkWriteRow, HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
     RxStorageInstance, RxStorageInstanceCreationParams,
@@ -47,10 +49,16 @@ impl HashFunction for TestHashFunction {
 
 #[derive(Clone, Default, Debug)]
 struct MockPeer(&'static str);
-impl PartialEq for MockPeer { fn eq(&self, other: &Self) -> bool { self.0 == other.0 } }
+impl PartialEq for MockPeer {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
 impl Eq for MockPeer {}
 impl std::hash::Hash for MockPeer {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) { self.0.hash(state) }
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
+    }
 }
 
 struct CountingHandler {
@@ -63,18 +71,39 @@ struct CountingHandler {
 #[async_trait]
 impl WebRTCConnectionHandler for CountingHandler {
     type Peer = MockPeer;
-    fn connect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-    fn disconnect_stream(&self) -> RxStream<Self::Peer> { RxSubject::<Self::Peer>::new().subscribe() }
-    fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> { RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe() }
-    fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> { RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe() }
-    fn error_stream(&self) -> RxStream<rxdb::rx_error::RxError> { RxSubject::<rxdb::rx_error::RxError>::new().subscribe() }
-    async fn send(&self, _peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), rxdb::rx_error::RxError> {
+    fn connect_stream(&self) -> RxStream<Self::Peer> {
+        RxSubject::<Self::Peer>::new().subscribe()
+    }
+    fn disconnect_stream(&self) -> RxStream<Self::Peer> {
+        RxSubject::<Self::Peer>::new().subscribe()
+    }
+    fn message_stream(&self) -> RxStream<PeerWithMessage<Self::Peer>> {
+        RxSubject::<PeerWithMessage<Self::Peer>>::new().subscribe()
+    }
+    fn response_stream(&self) -> RxStream<PeerWithResponse<Self::Peer>> {
+        RxSubject::<PeerWithResponse<Self::Peer>>::new().subscribe()
+    }
+    fn error_stream(&self) -> RxStream<rxdb::rx_error::RxError> {
+        RxSubject::<rxdb::rx_error::RxError>::new().subscribe()
+    }
+    async fn send(
+        &self,
+        _peer: &Self::Peer,
+        frame: WebRTCWireFrame,
+    ) -> Result<(), rxdb::rx_error::RxError> {
         match frame {
             WebRTCWireFrame::Message(m) if m.method == "rxdb.query.chunk" => {
-                let bytes = serde_json::to_string(&m.params[0]).map(|s| s.len()).unwrap_or(0);
+                let bytes = serde_json::to_string(&m.params[0])
+                    .map(|s| s.len())
+                    .unwrap_or(0);
                 let mut prev_peak = self.peak_chunk_bytes.load(Ordering::SeqCst);
                 while bytes > prev_peak {
-                    match self.peak_chunk_bytes.compare_exchange(prev_peak, bytes, Ordering::SeqCst, Ordering::SeqCst) {
+                    match self.peak_chunk_bytes.compare_exchange(
+                        prev_peak,
+                        bytes,
+                        Ordering::SeqCst,
+                        Ordering::SeqCst,
+                    ) {
                         Ok(_) => break,
                         Err(actual) => prev_peak = actual,
                     }
@@ -89,30 +118,91 @@ impl WebRTCConnectionHandler for CountingHandler {
         }
         Ok(())
     }
-    async fn close(&self) -> Result<(), rxdb::rx_error::RxError> { Ok(()) }
-    fn peer_identity(&self, peer: &Self::Peer) -> String { peer.0.to_string() }
+    async fn close(&self) -> Result<(), rxdb::rx_error::RxError> {
+        Ok(())
+    }
+    fn peer_identity(&self, peer: &Self::Peer) -> String {
+        peer.0.to_string()
+    }
 }
 
 fn schema() -> RxJsonSchema {
     let mut properties = HashMap::new();
-    properties.insert("id".into(), JsonSchema { schema_type: Some("string".into()), max_length: Some(100), ..Default::default() });
+    properties.insert(
+        "id".into(),
+        JsonSchema {
+            schema_type: Some("string".into()),
+            max_length: Some(100),
+            ..Default::default()
+        },
+    );
     for f in ["status", "owner", "subject"] {
-        properties.insert(f.into(), JsonSchema { schema_type: Some("string".into()), ..Default::default() });
+        properties.insert(
+            f.into(),
+            JsonSchema {
+                schema_type: Some("string".into()),
+                ..Default::default()
+            },
+        );
     }
-    properties.insert("n".into(), JsonSchema { schema_type: Some("number".into()), ..Default::default() });
-    properties.insert("_deleted".into(), JsonSchema { schema_type: Some("boolean".into()), ..Default::default() });
+    properties.insert(
+        "n".into(),
+        JsonSchema {
+            schema_type: Some("number".into()),
+            ..Default::default()
+        },
+    );
+    properties.insert(
+        "_deleted".into(),
+        JsonSchema {
+            schema_type: Some("boolean".into()),
+            ..Default::default()
+        },
+    );
     let mut meta = HashMap::new();
-    meta.insert("lwt".into(), JsonSchema { schema_type: Some("number".into()), ..Default::default() });
-    properties.insert("_meta".into(), JsonSchema { schema_type: Some("object".into()), properties: meta, ..Default::default() });
-    properties.insert("_rev".into(), JsonSchema { schema_type: Some("string".into()), ..Default::default() });
-    properties.insert("_attachments".into(), JsonSchema { schema_type: Some("object".into()), additional_properties: Some(true), ..Default::default() });
+    meta.insert(
+        "lwt".into(),
+        JsonSchema {
+            schema_type: Some("number".into()),
+            ..Default::default()
+        },
+    );
+    properties.insert(
+        "_meta".into(),
+        JsonSchema {
+            schema_type: Some("object".into()),
+            properties: meta,
+            ..Default::default()
+        },
+    );
+    properties.insert(
+        "_rev".into(),
+        JsonSchema {
+            schema_type: Some("string".into()),
+            ..Default::default()
+        },
+    );
+    properties.insert(
+        "_attachments".into(),
+        JsonSchema {
+            schema_type: Some("object".into()),
+            additional_properties: Some(true),
+            ..Default::default()
+        },
+    );
     RxJsonSchema {
-        version: 0, primary_key: PrimaryKey::Simple("id".into()),
-        schema_type: "object".into(), properties,
-        required: vec!["id".into()], indexes: vec![],
-        encrypted: vec![], internal_indexes: vec![],
-        key_compression: false, attachments: None,
-        additional_properties: true, extra: HashMap::new(),
+        version: 0,
+        primary_key: PrimaryKey::Simple("id".into()),
+        schema_type: "object".into(),
+        properties,
+        required: vec!["id".into()],
+        indexes: vec![],
+        encrypted: vec![],
+        internal_indexes: vec![],
+        key_compression: false,
+        attachments: None,
+        additional_properties: true,
+        extra: HashMap::new(),
     }
 }
 
@@ -144,13 +234,19 @@ fn process_memory_kb() -> u64 {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    let n: usize = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(100_000);
+    let n: usize = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000);
     println!("=== V1.5 scale wire loop: n={} ===", n);
 
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("scale.sqlite3");
-    let storage = get_rx_storage_sqlite(RxStorageSqliteSettings { database_path: path });
-    let rx_schema = Arc::new(create_rx_schema(schema(), Arc::new(TestHashFunction), false).unwrap());
+    let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+        database_path: path,
+    });
+    let rx_schema =
+        Arc::new(create_rx_schema(schema(), Arc::new(TestHashFunction), false).unwrap());
     let storage_instance: Arc<dyn RxStorageInstance> = create_storage_instance(
         &storage,
         RxStorageInstanceCreationParams {
@@ -173,17 +269,33 @@ async fn main() {
     while written < n {
         let take = (n - written).min(batch);
         let rows: Vec<BulkWriteRow> = (written..written + take)
-            .map(|i| BulkWriteRow { previous: None, document: doc(i) })
+            .map(|i| BulkWriteRow {
+                previous: None,
+                document: doc(i),
+            })
             .collect();
-        storage_instance.bulk_write(rows, "scale-seed").await.unwrap();
+        storage_instance
+            .bulk_write(rows, "scale-seed")
+            .await
+            .unwrap();
         written += take;
     }
     println!("seed: {} ms", seed_start.elapsed().as_millis());
 
-    let database = RxDatabase::new("scale", "tok", "stoken", false, Arc::new(TestHashFunction), storage);
+    let database = RxDatabase::new(
+        "scale",
+        "tok",
+        "stoken",
+        false,
+        Arc::new(TestHashFunction),
+        storage,
+    );
     let collection = RxCollection::new_with_schema(
-        "synthetic", database, storage_instance,
-        Arc::new(DefaultConflictHandler), rx_schema,
+        "synthetic",
+        database,
+        storage_instance,
+        Arc::new(DefaultConflictHandler),
+        rx_schema,
     );
     let registry = Arc::new(QueryFetchRegistry::new(4));
     registry.register(Arc::clone(&collection));
@@ -235,7 +347,10 @@ async fn main() {
     println!("chunk_count:      {}", chunk_count);
     println!("peak_chunk_B:     {}", peak_chunk);
     println!("total_wire_KB:    {}", total_bytes / 1024);
-    println!("RSS Δ:            {:+} KB", rss_after as i64 - rss_before as i64);
+    println!(
+        "RSS Δ:            {:+} KB",
+        rss_after as i64 - rss_before as i64
+    );
     println!(
         "throughput:       {:.0} docs/s ({:.1} MB/s wire)",
         total_docs as f64 / (dispatch_ms as f64 / 1000.0).max(0.001),
@@ -243,7 +358,10 @@ async fn main() {
     );
 
     assert_eq!(total_docs, n, "all docs must reach the wire");
-    assert!(chunks.last().unwrap().complete, "last chunk must be complete");
+    assert!(
+        chunks.last().unwrap().complete,
+        "last chunk must be complete"
+    );
     assert!(
         peak_chunk <= 270_000,
         "no chunk may exceed ~256 KB byte cap (got {})",

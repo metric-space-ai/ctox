@@ -21,6 +21,7 @@
  *   SMOKE_MODE=tickets-clarification-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=browser-input-runtime SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=migration-version-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=command-burst-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
@@ -185,6 +186,7 @@ if (![
   'outbound-active-ui',
   'business-os-ui-regression',
   'browser-lifecycle-ui',
+  'browser-input-runtime',
   'browser-handoff-ui',
   'browser-responsive-ui',
   'migration-version-browser-to-rust',
@@ -3032,6 +3034,267 @@ function ensureCtoxSmokeBinary() {
         console.log(`browser_lifecycle_runtime_status=${lifecycle.runtimeStatus}`);
         console.log(`browser_lifecycle_tab_status=${lifecycle.tabStatus}`);
         console.log(`browser_lifecycle_last_command=${lifecycle.lastCommandType}`);
+        emitBrowserDiagnostics();
+        return;
+      }
+      if (smokeMode === 'browser-input-runtime') {
+        if (!/#browser(?:$|[?&])/.test(page.url())) {
+          const browserUrl = new URL(page.url());
+          browserUrl.pathname = '/index.html';
+          browserUrl.searchParams.set('rxdbSmoke', '1');
+          if (useAppDb && smokeDbId) browserUrl.searchParams.set('smokeDbId', smokeDbId);
+          browserUrl.hash = '#browser';
+          await page.goto(browserUrl.toString(), { waitUntil: 'domcontentloaded' });
+        }
+        await page.waitForFunction(() => Boolean(document.querySelector('[data-browser-root]')), null, { timeout: 60000 });
+        await assertNoVisibleBrowserDebugText(page);
+        await page.waitForFunction(() => {
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          return Boolean(state?.sync?.startCollection && state?.db?.raw?.business_commands);
+        }, null, { timeout: 60000 });
+
+        const phase1 = await page.evaluate(async () => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const bounded = (promise, ms) => promise
+            ? Promise.race([promise.catch?.(() => undefined) || promise, delay(ms)])
+            : delay(0);
+          const docsToJson = (docs) => (docs || []).map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          const db = state?.db?.raw;
+          if (!state?.sync?.startCollection || !db?.business_commands) {
+            throw new Error('Business OS command collections are not available for Browser input runtime smoke');
+          }
+          for (const collection of [
+            'business_commands',
+            'browser_sessions',
+            'browser_tabs',
+            'browser_frames',
+            'browser_input_events',
+          ]) {
+            const bridge = await state.sync.startCollection(collection);
+            await bounded(bridge?.state?.awaitInitialReplication?.(), 20000);
+            await bounded(bridge?.state?.awaitInSync?.(), 20000);
+          }
+          const waitForBrowserRoot = async () => {
+            const deadline = Date.now() + 60000;
+            while (Date.now() < deadline) {
+              const root = document.querySelector('[data-browser-root]');
+              if (root) return root;
+              location.hash = 'browser';
+              await delay(250);
+            }
+            throw new Error(`Browser module root did not appear: ${document.body?.innerText?.slice(0, 500) || ''}`);
+          };
+          const root = await waitForBrowserRoot();
+          const address = root.querySelector('[data-browser-address]');
+          if (!address) throw new Error('Browser address input not found');
+
+          // The local Business OS server is a deterministic, offline navigation
+          // target. Two distinct query strings prove the real runtime actually
+          // navigates and produces a fresh frame per navigation.
+          const origin = location.origin;
+          const url1 = `${origin}/index.html?probe=1`;
+          const url2 = `${origin}/index.html?probe=2`;
+          const setAddress = (value) => {
+            address.value = value;
+            address.dispatchEvent(new Event('input', { bubbles: true }));
+          };
+          const submitAddress = () => {
+            const form = root.querySelector('[data-browser-address-form]');
+            if (!form) throw new Error('Browser address form not found');
+            form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+          };
+
+          setAddress(url1);
+          const startedAt = Date.now();
+          root.querySelector('[data-browser-start]')?.click();
+
+          const latestRealFrame = async () => docsToJson(await db.browser_frames?.find().exec())
+            .filter((item) => item.session_id === 'browser_session_default' && item.data && Number(item.expires_at_ms || 0) > Date.now())
+            .sort((a, b) => Number(b.seq || 0) - Number(a.seq || 0))[0] || null;
+          const b64Len = (data) => {
+            const clean = String(data || '').replace(/=+$/, '');
+            return Math.floor((clean.length * 3) / 4);
+          };
+
+          let firstFrame = null;
+          let firstState = null;
+          {
+            const deadline = Date.now() + 90000;
+            while (Date.now() < deadline) {
+              const frame = await latestRealFrame();
+              const session = (await db.browser_sessions?.findOne('browser_session_default').exec())?.toJSON?.() || null;
+              const tab = (await db.browser_tabs?.findOne('browser_tab_default').exec())?.toJSON?.() || null;
+              firstState = {
+                frameSeq: frame?.seq ?? null,
+                frameBytes: frame ? b64Len(frame.data) : 0,
+                runtimeStatus: session?.runtime_status || '',
+                tabUrl: tab?.url || '',
+                sessionError: session?.error || '',
+              };
+              if (
+                frame?.data &&
+                Number(frame.seq || 0) >= 1 &&
+                b64Len(frame.data) > 1000 &&
+                session?.runtime_status === 'active' &&
+                String(tab?.url || '').includes('probe=1')
+              ) {
+                firstFrame = frame;
+                break;
+              }
+              await delay(500);
+            }
+          }
+          if (!firstFrame) {
+            throw new Error(`Browser input runtime smoke did not observe a real first frame: ${JSON.stringify(firstState, null, 2)}`);
+          }
+
+          // Navigate to a second URL; assert URL and frame both advance.
+          setAddress(url2);
+          submitAddress();
+          let secondFrame = null;
+          let secondState = null;
+          {
+            const deadline = Date.now() + 60000;
+            while (Date.now() < deadline) {
+              const frame = await latestRealFrame();
+              const tab = (await db.browser_tabs?.findOne('browser_tab_default').exec())?.toJSON?.() || null;
+              secondState = {
+                frameSeq: frame?.seq ?? null,
+                tabUrl: tab?.url || '',
+              };
+              if (
+                frame?.data &&
+                Number(frame.seq || 0) > Number(firstFrame.seq || 0) &&
+                String(tab?.url || '').includes('probe=2')
+              ) {
+                secondFrame = frame;
+                break;
+              }
+              await delay(500);
+            }
+          }
+          if (!secondFrame) {
+            throw new Error(`Browser input runtime smoke did not advance frame after navigation: ${JSON.stringify({ firstSeq: firstFrame.seq, secondState }, null, 2)}`);
+          }
+
+          const canvas = root.querySelector('[data-browser-canvas]');
+          if (!canvas) throw new Error('Browser canvas not found for input runtime smoke');
+          const rect = canvas.getBoundingClientRect();
+          if (!(rect.width > 0 && rect.height > 0)) {
+            throw new Error(`Browser canvas has no layout box: ${JSON.stringify({ width: rect.width, height: rect.height })}`);
+          }
+          return {
+            startedAt,
+            firstSeq: Number(firstFrame.seq || 0),
+            firstBytes: b64Len(firstFrame.data),
+            secondSeq: Number(secondFrame.seq || 0),
+            canvasRect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+          };
+        });
+
+        // Drive a trusted pointer click through Playwright so the canvas input
+        // handler enqueues a real browser_input_events row.
+        const clickX = phase1.canvasRect.x + Math.min(80, phase1.canvasRect.width / 2);
+        const clickY = phase1.canvasRect.y + Math.min(80, phase1.canvasRect.height / 2);
+        await page.mouse.move(clickX, clickY);
+        await page.mouse.down();
+        await page.mouse.up();
+
+        const phase2 = await page.evaluate(async (prevSeq) => {
+          const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          const docsToJson = (docs) => (docs || []).map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          const db = state?.db?.raw;
+          const root = document.querySelector('[data-browser-root]');
+
+          let consumed = null;
+          let inputState = null;
+          {
+            const deadline = Date.now() + 60000;
+            while (Date.now() < deadline) {
+              const events = docsToJson(await db.browser_input_events?.find().exec())
+                .filter((event) => event.session_id === 'browser_session_default');
+              const frame = docsToJson(await db.browser_frames?.find().exec())
+                .filter((item) => item.session_id === 'browser_session_default' && item.data && Number(item.expires_at_ms || 0) > Date.now())
+                .sort((a, b) => Number(b.seq || 0) - Number(a.seq || 0))[0] || null;
+              const session = (await db.browser_sessions?.findOne('browser_session_default').exec())?.toJSON?.() || null;
+              const consumedEvents = events.filter((event) => event.status === 'consumed');
+              const failedEvents = events.filter((event) => event.status === 'failed');
+              inputState = {
+                totalEvents: events.length,
+                consumed: consumedEvents.length,
+                failed: failedEvents.length,
+                statuses: events.map((event) => `${event.type}:${event.status}`),
+                frameSeq: frame?.seq ?? null,
+                lastInputSeq: session?.last_input_seq ?? null,
+                pendingInputCount: session?.pending_input_count ?? null,
+              };
+              if (failedEvents.length > 0) {
+                throw new Error(`Browser input runtime smoke saw failed input events: ${JSON.stringify(inputState, null, 2)}`);
+              }
+              if (
+                consumedEvents.length >= 1 &&
+                frame?.data &&
+                Number(frame.seq || 0) > Number(prevSeq || 0) &&
+                Number(session?.last_input_seq || 0) > 0 &&
+                Number(session?.pending_input_count || 0) === 0
+              ) {
+                consumed = { event: consumedEvents[0], frame, session };
+                break;
+              }
+              await delay(500);
+            }
+          }
+          if (!consumed) {
+            throw new Error(`Browser input runtime smoke did not consume the input event: ${JSON.stringify(inputState, null, 2)}`);
+          }
+
+          // Stop the session and assert it tears down cleanly.
+          root.querySelector('[data-browser-stop]')?.click();
+          let stopped = null;
+          {
+            const deadline = Date.now() + 45000;
+            while (Date.now() < deadline) {
+              const session = (await db.browser_sessions?.findOne('browser_session_default').exec())?.toJSON?.() || null;
+              const tab = (await db.browser_tabs?.findOne('browser_tab_default').exec())?.toJSON?.() || null;
+              stopped = {
+                status: session?.status || '',
+                runtimeStatus: session?.runtime_status || '',
+                tabStatus: tab?.status || '',
+              };
+              if (session?.status === 'stopped' && session?.runtime_status === 'stopped' && tab?.status === 'stopped') {
+                break;
+              }
+              await delay(500);
+            }
+          }
+          if (!(stopped?.status === 'stopped' && stopped?.runtimeStatus === 'stopped')) {
+            throw new Error(`Browser input runtime smoke session did not stop cleanly: ${JSON.stringify(stopped, null, 2)}`);
+          }
+          return {
+            consumedSeq: Number(consumed.event.seq || 0),
+            consumedType: consumed.event.type || '',
+            frameSeqAfterInput: Number(consumed.frame.seq || 0),
+            lastInputSeq: Number(consumed.session.last_input_seq || 0),
+            pendingInputCount: Number(consumed.session.pending_input_count || 0),
+            sessionStatus: stopped.status,
+            runtimeStatus: stopped.runtimeStatus,
+            tabStatus: stopped.tabStatus,
+          };
+        }, phase1.secondSeq);
+
+        console.log(`browser_input_first_frame_seq=${phase1.firstSeq}`);
+        console.log(`browser_input_first_frame_bytes=${phase1.firstBytes}`);
+        console.log(`browser_input_second_frame_seq=${phase1.secondSeq}`);
+        console.log(`browser_input_consumed_type=${phase2.consumedType}`);
+        console.log(`browser_input_consumed_seq=${phase2.consumedSeq}`);
+        console.log(`browser_input_frame_seq_after_input=${phase2.frameSeqAfterInput}`);
+        console.log(`browser_input_last_input_seq=${phase2.lastInputSeq}`);
+        console.log(`browser_input_pending_count=${phase2.pendingInputCount}`);
+        console.log(`browser_input_session_status=${phase2.sessionStatus}`);
+        console.log(`browser_input_runtime_status=${phase2.runtimeStatus}`);
+        console.log(`browser_input_tab_status=${phase2.tabStatus}`);
         emitBrowserDiagnostics();
         return;
       }

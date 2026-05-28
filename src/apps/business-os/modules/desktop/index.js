@@ -4,9 +4,16 @@ import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js';
 import { getSvgIcon } from '../../shared/icons.js?v=20260520-svg-icons2';
 
-const STYLE_BUILD = '20260520-triad-style2';
+const STYLE_BUILD = '20260528-desktop-isolated-fix1';
 const LAYOUT_DOC_ID = 'layout';
 const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
+const COMPACT_GRID = { cellW: 88, cellH: 100, offset: 12 };
+const ICON_METRICS = {
+  width: 96,
+  height: 104,
+  compactWidth: 80,
+  compactHeight: 96,
+};
 
 const FALLBACK_LABELS = {
   de: {
@@ -25,6 +32,7 @@ const FALLBACK_LABELS = {
     openNotes: 'Notiz öffnen',
     iconRestoreDefaults: 'Standard-Icons wiederherstellen',
     refresh: 'Aktualisieren',
+    platformActive: 'CTOX Plattform aktiv',
     ctoxLiveActivity: 'CTOX live',
   },
   en: {
@@ -43,25 +51,29 @@ const FALLBACK_LABELS = {
     openNotes: 'Open note',
     iconRestoreDefaults: 'Restore default icons',
     refresh: 'Refresh',
+    platformActive: 'CTOX platform active',
     ctoxLiveActivity: 'CTOX live',
   },
 };
 
 export async function mount(ctx) {
   await ensureStyles();
-  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  const [html, messages] = await Promise.all([
+    fetch(new URL('./index.html', import.meta.url)).then((res) => res.text()),
+    loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS),
+  ]);
   ctx.host.innerHTML = html;
 
   const root = ctx.host.querySelector('[data-desktop-root]');
   if (!root) throw new Error('desktop: root element missing after fragment mount');
 
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;
 
   const refs = {
     root,
     surface: root.querySelector('[data-desktop-surface]'),
     icons: root.querySelector('[data-desktop-icons]'),
+    widgetStatus: root.querySelector('[data-widget-status]'),
   };
 
   const launcher = createCtoxLauncher({
@@ -76,6 +88,7 @@ export async function mount(ctx) {
   // Wire up the live clock and date widget
   const timeEl = refs.root.querySelector('[data-widget-time]');
   const dateEl = refs.root.querySelector('[data-widget-date]');
+  if (refs.widgetStatus) refs.widgetStatus.textContent = t('platformActive', 'CTOX Plattform aktiv');
   if (timeEl && dateEl) {
     const updateClock = () => {
       try {
@@ -232,6 +245,8 @@ export async function mount(ctx) {
     if (event.target.closest('.desktop-icon')) return;
     if (!ctx.contextMenu) return;
     ctx.contextMenu.show(event, [
+      { label: t('chatWithCtox', 'Mit CTOX chatten'), icon: '◆', action: safeAction(chatWithCtoxAboutDesktop) },
+      { type: 'separator' },
       { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), action: () => launcher.open('explorer') },
       { label: t('openNotes', 'Notiz öffnen'), icon: '✎', disabled: !launcher.knows('notes'), action: () => launcher.open('notes') },
       { type: 'separator' },
@@ -349,11 +364,41 @@ export async function mount(ctx) {
         target_record_id: recordId,
       },
     };
+    openCtoxChat(detail);
+  }
+
+  function chatWithCtoxAboutDesktop() {
+    const iconCount = refs.icons?.querySelectorAll('.desktop-icon')?.length || 0;
+    const detail = {
+      title: 'CTOX · Desktop',
+      draft: 'Bitte hilf mir mit dem Desktop. ',
+      context_text: `Kontext: Desktop-Oberfläche mit ${iconCount} sichtbaren Icons.`,
+      context_label: t('chatContextLabel', 'Desktop-Kontext'),
+      module: 'desktop',
+      source_module: 'desktop',
+      source_title: t('moduleTitle', 'Desktop'),
+      record_id: 'desktop',
+      command_title: 'Desktop',
+      payload: {
+        desktop_surface: {
+          module: 'desktop',
+          visible_icon_count: iconCount,
+        },
+      },
+      client_context: {
+        source: 'desktop-surface-context-menu',
+        target_type: 'desktop_surface',
+      },
+    };
+    openCtoxChat(detail);
+  }
+
+  function openCtoxChat(detail) {
     if (typeof ctx.openBusinessChat === 'function') {
       ctx.openBusinessChat(detail);
-    } else {
-      window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail }));
+      return;
     }
+    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail }));
   }
 
   async function restoreDefaultIcons() {
@@ -477,10 +522,15 @@ export async function mount(ctx) {
   }
 
   function currentGrid() {
+    const surfaceWidth = refs.surface?.getBoundingClientRect?.().width || globalThis.innerWidth || 0;
+    if (surfaceWidth > 0 && surfaceWidth <= 560) {
+      return { ...COMPACT_GRID, compact: true };
+    }
     return {
       cellW: Math.max(104, layout?.grid_cell_w || DEFAULT_GRID.cellW),
       cellH: Math.max(120, layout?.grid_cell_h || DEFAULT_GRID.cellH),
       offset: layout?.grid_offset || DEFAULT_GRID.offset,
+      compact: false,
     };
   }
 
@@ -553,8 +603,10 @@ export async function mount(ctx) {
 
   function clampIconPosition(doc, fallback, grid) {
     const surfaceRect = refs.surface?.getBoundingClientRect();
-    const maxX = Math.max(grid.offset, (surfaceRect?.width || 1024) - 84);
-    const maxY = Math.max(grid.offset, (surfaceRect?.height || 720) - 96);
+    const iconWidth = grid.compact ? ICON_METRICS.compactWidth : ICON_METRICS.width;
+    const iconHeight = grid.compact ? ICON_METRICS.compactHeight : ICON_METRICS.height;
+    const maxX = Math.max(grid.offset, (surfaceRect?.width || 1024) - iconWidth - 8);
+    const maxY = Math.max(grid.offset, (surfaceRect?.height || 720) - iconHeight - 8);
     const x = Number.isFinite(doc.x) ? doc.x : fallback.x;
     const y = Number.isFinite(doc.y) ? doc.y : fallback.y;
     return {
