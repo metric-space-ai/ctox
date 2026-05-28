@@ -3447,9 +3447,10 @@ async fn upsert_business_record_projection_document(
 }
 
 fn is_doc_cache_revision_error(error: &rxdb::rx_error::RxError) -> bool {
-    matches!(error.code(), "DOC_CACHE_REV" | "DOC_CACHE_LWT")
+    matches!(error.code(), "DOC_CACHE_REV" | "DOC_CACHE_LWT" | "UTL2")
         || error.to_string().contains("DOC_CACHE_REV")
         || error.to_string().contains("DOC_CACHE_LWT")
+        || error.to_string().contains("UTL2")
 }
 
 async fn repair_projection_document_envelope_and_upsert(
