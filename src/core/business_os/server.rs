@@ -1289,6 +1289,11 @@ fn header_value(request: &Request, name: &str) -> Option<String> {
 }
 
 fn handle_login_request(mut request: Request) -> anyhow::Result<()> {
+    // Fetch-based logins ask for JSON so the login gate can show an inline error
+    // without a full-page reload that flashes the workspace startup loader.
+    let wants_json = header_value(&request, "Accept")
+        .map(|accept| accept.contains("application/json"))
+        .unwrap_or(false);
     let mut body = String::new();
     request.as_reader().read_to_string(&mut body)?;
     let form = Url::parse(&format!("http://localhost/login?{body}"))
@@ -1306,10 +1311,40 @@ fn handle_login_request(mut request: Request) -> anyhow::Result<()> {
     if session.authenticated {
         let cookie =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credentials.as_bytes());
-        respond_redirect_with_cookie(request, "/", &cookie, 60 * 60 * 24 * 30)
+        if wants_json {
+            respond_login_json(request, true, &cookie, 60 * 60 * 24 * 30)
+        } else {
+            respond_redirect_with_cookie(request, "/", &cookie, 60 * 60 * 24 * 30)
+        }
+    } else if wants_json {
+        respond_login_json(request, false, "", 0)
     } else {
         respond_redirect_with_cookie(request, "/login?loginFailed=1", "", 0)
     }
+}
+
+fn respond_login_json(
+    request: Request,
+    authenticated: bool,
+    cookie_value: &str,
+    max_age_secs: u64,
+) -> anyhow::Result<()> {
+    let body = serde_json::to_string(&serde_json::json!({ "authenticated": authenticated }))?;
+    let status = if authenticated { 200 } else { 401 };
+    let mut response = Response::from_string(body).with_status_code(status);
+    response.add_header(Header::from_bytes("Content-Type", "application/json").unwrap());
+    let cookie = if cookie_value.is_empty() {
+        "ctox_business_os_auth=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0".to_owned()
+    } else {
+        format!(
+            "ctox_business_os_auth={cookie_value}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age_secs}"
+        )
+    };
+    response.add_header(Header::from_bytes("Set-Cookie", cookie.as_bytes()).unwrap());
+    add_cors_headers(&mut response);
+    add_common_response_headers(&mut response);
+    request.respond(response)?;
+    Ok(())
 }
 
 fn login_cookie_auth_header(request: &Request) -> Option<String> {

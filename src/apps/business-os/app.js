@@ -530,13 +530,14 @@ async function bootstrap() {
   syncHeaderControls();
   wireShellActions();
 
-  setStartupProgress(10, 'System-Konfiguration wird geladen...');
-
-  setStartupProgress(30, 'Anmeldesitzung wird überprüft...');
+  // Resolve the session before showing any "loading" UI. An unauthenticated
+  // request must never see the workspace startup loader — that falsely implies
+  // the system is loading data when nothing past the auth gate runs.
   const session = await loadSession();
   state.session = session;
   renderAccountButton(session);
   if (!session.authenticated) {
+    document.documentElement.dataset.authState = 'locked';
     state.dataPlaneReadyStatus = 'idle';
     state.dataPlaneReadyReason = 'login-required';
     const loginFailed = session.reason === 'invalid_credentials'
@@ -547,6 +548,8 @@ async function bootstrap() {
     return;
   }
 
+  setStartupProgress(10, 'System-Konfiguration wird geladen...');
+  setStartupProgress(30, 'Anmeldesitzung wird überprüft...');
   setStartupProgress(50, 'Lokaler Datenspeicher wird geladen...');
   const syncConfig = await loadSyncConfig();
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
@@ -4190,14 +4193,17 @@ function renderLoginGate(session, options = {}) {
     showGateError("Ungültiger Benutzername oder Passwort.");
   }
 
-  form.addEventListener('submit', (event) => {
+  form.addEventListener('submit', async (event) => {
+    // Submit in-page so a failed attempt shows the inline error without a
+    // full-page reload — a reload re-paints the workspace startup loader and
+    // makes it look like data is loading before the auth error appears.
+    event.preventDefault();
     errorEl.hidden = true;
 
     const user = userInput.value.trim();
     const password = passwordInput.value;
 
     if (!user || !password) {
-      event.preventDefault();
       showGateError("Bitte Benutzername und Passwort eingeben.");
       return;
     }
@@ -4205,8 +4211,40 @@ function renderLoginGate(session, options = {}) {
     clearStoredBrowserAuth();
     localStorage.removeItem(LOGGED_OUT_KEY);
     writeAccountPrefs({ loginUser: user });
+    const originalLabel = submitBtn.textContent;
     submitBtn.disabled = true;
     submitBtn.textContent = "Verbindung wird hergestellt...";
+
+    const restoreSubmit = () => {
+      submitBtn.disabled = false;
+      submitBtn.textContent = originalLabel;
+    };
+
+    try {
+      const params = new URLSearchParams();
+      params.set('user', user);
+      params.set('password', password);
+      const response = await fetch('/login', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: params.toString(),
+      });
+      if (response.ok) {
+        // Auth cookie is set server-side; boot the authenticated workspace.
+        window.location.assign('/');
+        return;
+      }
+      restoreSubmit();
+      passwordInput.value = '';
+      showGateError("Ungültiger Benutzername oder Passwort.");
+      passwordInput.focus();
+    } catch (error) {
+      restoreSubmit();
+      showGateError("Verbindung fehlgeschlagen. Bitte erneut versuchen.");
+    }
   });
 
   els.host.replaceChildren(container);

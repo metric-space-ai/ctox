@@ -37,10 +37,25 @@
       body[data-module-loading] .workspace-pane-right {
         display: none !important;
       }
+      /* When the server already knows the request is unauthenticated, never paint
+         the workspace startup loader — it falsely implies data is loading. */
+      html[data-auth-state="locked"] #startup-loader {
+        display: none !important;
+      }
     </style>
     <link rel="stylesheet" href="app.css?v=20260527-rxdb-release1" />
   </head>
   <body data-module-shell="full" data-module-loading="startup">
+    <script>
+      (() => {
+        try {
+          const session = window.CTOX_BUSINESS_OS_SESSION;
+          if (session && session.authenticated === false) {
+            document.documentElement.dataset.authState = 'locked';
+          }
+        } catch {}
+      })();
+    </script>
     <div class="app-shell" data-shell>
       <header class="topbar">
         <div class="topbar-left-group">
@@ -199,6 +214,6 @@
     </div>
     <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen"></aside>
 
-    <script type="module" src="app.js?v=20260528-windowed-browser2"></script>
+    <script type="module" src="app.js?v=20260528-auth-gate-no-loader"></script>
   </body>
 </html>
