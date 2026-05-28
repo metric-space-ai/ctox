@@ -3431,7 +3431,7 @@ async fn upsert_business_record_projection_document(
 ) -> anyhow::Result<()> {
     match collection.incremental_upsert(document.clone()).await {
         Ok(_) => Ok(()),
-        Err(err) if is_doc_cache_revision_error(&err) => match collection.upsert(document.clone()).await
+        Err(err) if is_recoverable_projection_write_error(&err) => match collection.upsert(document.clone()).await
         {
             Ok(_) => Ok(()),
             Err(_) => repair_projection_document_envelope_and_upsert(collection, document)
@@ -3451,6 +3451,18 @@ fn is_doc_cache_revision_error(error: &rxdb::rx_error::RxError) -> bool {
         || error.to_string().contains("DOC_CACHE_REV")
         || error.to_string().contains("DOC_CACHE_LWT")
         || error.to_string().contains("UTL2")
+}
+
+// A tombstone re-delete (incoming `_deleted:true` over an existing tombstone with
+// a divergent `_rev`) surfaces as a 409 `CONFLICT`, because `incremental_upsert`
+// queries exclude deleted docs and fall through to `insert`, which the storage
+// rejects as a duplicate primary key. Route it through the same upsert/envelope
+// repair fallback, which rebases the write onto the existing tombstone instead of
+// failing the projection sync.
+fn is_recoverable_projection_write_error(error: &rxdb::rx_error::RxError) -> bool {
+    is_doc_cache_revision_error(error)
+        || error.code() == "CONFLICT"
+        || error.to_string().contains("CONFLICT")
 }
 
 async fn repair_projection_document_envelope_and_upsert(
@@ -4621,6 +4633,17 @@ mod tests {
         assert!(is_doc_cache_revision_error(&revision_error));
         assert!(is_doc_cache_revision_error(&lwt_error));
         assert!(!is_doc_cache_revision_error(&other_error));
+    }
+
+    #[test]
+    fn projection_upsert_recovers_from_tombstone_conflict() {
+        let conflict_error = rxdb::rx_error::new_rx_error("CONFLICT", Some(json!({})));
+        let revision_error = rxdb::rx_error::new_rx_error("DOC_CACHE_REV", Some(json!({})));
+        let other_error = rxdb::rx_error::new_rx_error("COL4", Some(json!({})));
+
+        assert!(is_recoverable_projection_write_error(&conflict_error));
+        assert!(is_recoverable_projection_write_error(&revision_error));
+        assert!(!is_recoverable_projection_write_error(&other_error));
     }
 
     #[test]
