@@ -53,7 +53,10 @@ pub fn create_revision(
 ) -> RxResult<String> {
     let new_height = match previous_rev {
         None => 1,
-        Some(r) => get_height_of_revision(r)? + 1,
+        Some(r) => match get_height_of_revision(r) {
+            Ok(height) => height + 1,
+            Err(_) => 1,
+        },
     };
     Ok(format!("{new_height}-{database_instance_token}"))
 }
@@ -63,4 +66,17 @@ fn malformatted(revision: &str) -> RxError {
         "UTL2",
         Some(serde_json::json!({ "message": format!("malformatted revision: {revision}") })),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_revision_repairs_legacy_malformed_previous_revision() {
+        let revision = create_revision("token", Some("rev_legacy_uuid"))
+            .expect("revision creation should tolerate legacy malformed revisions");
+
+        assert_eq!(revision, "1-token");
+    }
 }
