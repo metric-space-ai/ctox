@@ -4614,9 +4614,11 @@ mod tests {
     #[test]
     fn projection_upsert_detects_doc_cache_revision_errors() {
         let revision_error = rxdb::rx_error::new_rx_error("DOC_CACHE_REV", Some(json!({})));
+        let lwt_error = rxdb::rx_error::new_rx_error("DOC_CACHE_LWT", Some(json!({})));
         let other_error = rxdb::rx_error::new_rx_error("COL4", Some(json!({})));
 
         assert!(is_doc_cache_revision_error(&revision_error));
+        assert!(is_doc_cache_revision_error(&lwt_error));
         assert!(!is_doc_cache_revision_error(&other_error));
     }
 
