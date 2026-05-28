@@ -1655,6 +1655,7 @@ async function waitForCriticalSyncCollection(collection, timeoutMs = 18000) {
 function isCriticalSyncCollectionReady(collection) {
   const diagnostics = state.syncDiagnostics?.collections?.[collection];
   if (!diagnostics) return false;
+  if (diagnostics.httpBridgeStatus === 'ready' && diagnostics.httpBridgePulledAt) return true;
   const status = diagnostics.connectionStatus || diagnostics.status || '';
   if (['connected', 'running', 'reused'].includes(status)) return true;
   if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
