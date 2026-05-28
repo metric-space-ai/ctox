@@ -2436,6 +2436,31 @@ pub fn list_queue_tasks(
     list_queue_tasks_from_conn_with_statuses(&conn, &allowed, limit)
 }
 
+pub fn count_queue_tasks(root: &Path, statuses: &[String]) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    if statuses.is_empty() {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM communication_messages
+             WHERE channel = ?1
+               AND direction = 'inbound'",
+            params![QUEUE_CHANNEL_NAME],
+            |row| row.get(0),
+        )?;
+        return Ok(count.max(0) as usize);
+    }
+    let allowed = statuses
+        .iter()
+        .map(|status| status.trim().to_lowercase())
+        .filter(|status| !status.is_empty())
+        .collect::<Vec<_>>();
+    if allowed.is_empty() {
+        return Ok(0);
+    }
+    count_queue_tasks_from_conn_with_statuses(&conn, &allowed)
+}
+
 pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTaskView>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
@@ -7188,6 +7213,31 @@ fn list_queue_tasks_from_conn_with_statuses(
         .into_iter()
         .map(queue_task_from_message)
         .collect()
+}
+
+fn count_queue_tasks_from_conn_with_statuses(
+    conn: &Connection,
+    statuses: &[String],
+) -> Result<usize> {
+    let placeholders = (0..statuses.len())
+        .map(|index| format!("?{}", index + 2))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        r#"
+        SELECT COUNT(*)
+        FROM communication_messages m
+        LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = ?1
+          AND m.direction = 'inbound'
+          AND lower(COALESCE(r.route_status, 'pending')) IN ({placeholders})
+        "#
+    );
+    let mut values = Vec::with_capacity(statuses.len() + 1);
+    values.push(SqlValue::Text(QUEUE_CHANNEL_NAME.to_string()));
+    values.extend(statuses.iter().cloned().map(SqlValue::Text));
+    let count: i64 = conn.query_row(&sql, params_from_iter(values), |row| row.get(0))?;
+    Ok(count.max(0) as usize)
 }
 
 fn load_queue_message_from_conn(

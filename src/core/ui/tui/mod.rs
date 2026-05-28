@@ -1116,6 +1116,8 @@ impl App {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
             business_os: None,
             work_hours: service::working_hours::WorkHoursSnapshot::default(),
         };
@@ -1763,6 +1765,8 @@ impl App {
                 monitor_alerts: Vec::new(),
                 monitor_last_error: None,
                 last_agent_outcome: None,
+                worker_active_count: 0,
+                worker_phase: None,
                 business_os: None,
                 work_hours: service::working_hours::snapshot(&self.root),
             }

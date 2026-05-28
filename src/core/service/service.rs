@@ -156,6 +156,10 @@ pub struct ServiceStatus {
     /// or when the row predates the schema upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_agent_outcome: Option<String>,
+    #[serde(default)]
+    pub worker_active_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub business_os: Option<Value>,
     #[serde(default)]
@@ -186,6 +190,8 @@ struct ServiceStatusWire {
     monitor_alerts: Vec<String>,
     monitor_last_error: Option<String>,
     last_agent_outcome: Option<String>,
+    worker_active_count: usize,
+    worker_phase: Option<String>,
     business_os: Option<Value>,
     work_hours: crate::service::working_hours::WorkHoursSnapshot,
 }
@@ -219,6 +225,8 @@ impl ServiceStatus {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
             business_os: Some(business_os_health_snapshot(root)),
             work_hours: crate::service::working_hours::snapshot(root),
         };
@@ -227,9 +235,8 @@ impl ServiceStatus {
     }
 
     fn apply_durable_queue_snapshot(&mut self, root: &Path) {
-        if let Ok(tasks) =
-            channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6)
-        {
+        let runnable_statuses = ["pending".to_string(), "leased".to_string()];
+        if let Ok(tasks) = channels::list_queue_tasks(root, &runnable_statuses, 6) {
             for task in &tasks {
                 if self.pending_previews.len() >= 6 {
                     break;
@@ -243,11 +250,13 @@ impl ServiceStatus {
                     self.pending_previews.push(preview);
                 }
             }
-            self.pending_count = self
-                .pending_count
-                .max(tasks.len().max(self.pending_previews.len()));
+            let durable_count = channels::count_queue_tasks(root, &runnable_statuses)
+                .unwrap_or(tasks.len())
+                .max(tasks.len());
+            self.pending_count = self.pending_count.max(durable_count);
         }
-        if let Ok(tasks) = channels::list_queue_tasks(root, &["blocked".to_string()], 6) {
+        let blocked_statuses = ["blocked".to_string()];
+        if let Ok(tasks) = channels::list_queue_tasks(root, &blocked_statuses, 6) {
             for task in &tasks {
                 if self.blocked_previews.len() >= 6 {
                     break;
@@ -261,9 +270,10 @@ impl ServiceStatus {
                     self.blocked_previews.push(preview);
                 }
             }
-            self.blocked_count = self
-                .blocked_count
-                .max(tasks.len().max(self.blocked_previews.len()));
+            let durable_count = channels::count_queue_tasks(root, &blocked_statuses)
+                .unwrap_or(tasks.len())
+                .max(tasks.len());
+            self.blocked_count = self.blocked_count.max(durable_count);
         }
     }
 }
@@ -301,6 +311,8 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         monitor_alerts: wire.monitor_alerts,
         monitor_last_error: wire.monitor_last_error,
         last_agent_outcome: wire.last_agent_outcome,
+        worker_active_count: wire.worker_active_count,
+        worker_phase: wire.worker_phase,
         business_os: wire.business_os,
         work_hours: wire.work_hours,
     })
@@ -383,6 +395,8 @@ enum ServiceIpcResponse {
 #[derive(Debug)]
 struct SharedState {
     busy: bool,
+    worker_active_count: usize,
+    worker_phase: Option<String>,
     pending_prompts: VecDeque<QueuedPrompt>,
     leased_message_keys_inflight: HashSet<String>,
     current_goal_preview: Option<String>,
@@ -398,6 +412,8 @@ impl Default for SharedState {
     fn default() -> Self {
         Self {
             busy: false,
+            worker_active_count: 0,
+            worker_phase: None,
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             current_goal_preview: None,
@@ -2322,7 +2338,9 @@ fn resolve_scrape_api_payload(root: &Path, raw_url: &str) -> Result<(u16, serde_
 
 fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<ServiceStatus> {
     let shared = lock_shared_state(state);
-    let busy = shared.busy;
+    let worker_active_count = shared.worker_active_count;
+    let worker_phase = shared.worker_phase.clone();
+    let busy = shared.busy || worker_active_count > 0;
     let pid = Some(std::process::id());
     let current_goal_preview = shared.current_goal_preview.clone();
     let active_source_label = shared.active_source_label.clone();
@@ -2339,26 +2357,30 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
     let in_memory_pending_count = shared.pending_prompts.len();
     drop(shared);
 
-    let runnable_durable_tasks =
-        match channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 6) {
-            Ok(tasks) => tasks,
-            Err(err) => {
-                eprintln!("ctox service status queue read failed: {err:#}");
-                pending_previews.push(format!(
-                    "queue status unavailable  {}",
-                    clip_text(&err.to_string(), 96)
-                ));
-                Vec::new()
-            }
-        };
-    let blocked_durable_tasks = match channels::list_queue_tasks(root, &["blocked".to_string()], 6)
-    {
+    let runnable_statuses = ["pending".to_string(), "leased".to_string()];
+    let runnable_durable_tasks = match channels::list_queue_tasks(root, &runnable_statuses, 6) {
+        Ok(tasks) => tasks,
+        Err(err) => {
+            eprintln!("ctox service status queue read failed: {err:#}");
+            pending_previews.push(format!(
+                "queue status unavailable  {}",
+                clip_text(&err.to_string(), 96)
+            ));
+            Vec::new()
+        }
+    };
+    let runnable_durable_count = channels::count_queue_tasks(root, &runnable_statuses)
+        .unwrap_or(runnable_durable_tasks.len());
+    let blocked_statuses = ["blocked".to_string()];
+    let blocked_durable_tasks = match channels::list_queue_tasks(root, &blocked_statuses, 6) {
         Ok(tasks) => tasks,
         Err(err) => {
             eprintln!("ctox service blocked queue read failed: {err:#}");
             Vec::new()
         }
     };
+    let blocked_durable_count =
+        channels::count_queue_tasks(root, &blocked_statuses).unwrap_or(blocked_durable_tasks.len());
     let mut blocked_previews = Vec::new();
     let ticket_cases = tickets::list_cases(root, None, 6).unwrap_or_default();
     for task in &runnable_durable_tasks {
@@ -2424,9 +2446,9 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             .map(|_| "systemd-user".to_string())
             .unwrap_or_else(|| "process".to_string()),
         pending_count: in_memory_pending_count
-            .max(runnable_durable_tasks.len().max(pending_previews.len())),
+            .max(runnable_durable_count.max(pending_previews.len())),
         pending_previews,
-        blocked_count: blocked_durable_tasks.len().max(blocked_previews.len()),
+        blocked_count: blocked_durable_count.max(blocked_previews.len()),
         blocked_previews,
         current_goal_preview,
         active_source_label,
@@ -2438,6 +2460,8 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         monitor_alerts: runtime_lifecycle_alerts(root, pid, true)?,
         monitor_last_error: None,
         last_agent_outcome,
+        worker_active_count,
+        worker_phase,
         business_os: Some(business_os_health_snapshot(root)),
         work_hours: crate::service::working_hours::snapshot(root),
     })
@@ -2844,12 +2868,58 @@ fn process_is_running(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
+struct PromptWorkerActivity {
+    state: Arc<Mutex<SharedState>>,
+}
+
+impl PromptWorkerActivity {
+    fn start(state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
+        {
+            let mut shared = lock_shared_state(state);
+            shared.worker_active_count = shared.worker_active_count.saturating_add(1);
+            shared.worker_phase = Some(format!("{}: running", job.source_label));
+            if shared.current_goal_preview.is_none() {
+                shared.current_goal_preview = Some(job.preview.clone());
+            }
+            if shared.active_source_label.is_none() {
+                shared.active_source_label = Some(job.source_label.clone());
+            }
+            shared.last_progress_epoch_secs = current_epoch_secs();
+        }
+        Self {
+            state: state.clone(),
+        }
+    }
+
+    fn set_phase(&self, source_label: &str, phase: &str) {
+        let mut shared = lock_shared_state(&self.state);
+        shared.worker_phase = Some(format!("{source_label}: {phase}"));
+        shared.last_progress_epoch_secs = current_epoch_secs();
+    }
+}
+
+impl Drop for PromptWorkerActivity {
+    fn drop(&mut self) {
+        let mut shared = lock_shared_state(&self.state);
+        shared.worker_active_count = shared.worker_active_count.saturating_sub(1);
+        if shared.worker_active_count == 0 {
+            shared.worker_phase = None;
+            if !shared.busy {
+                shared.current_goal_preview = None;
+                shared.active_source_label = None;
+            }
+        }
+        shared.last_progress_epoch_secs = current_epoch_secs();
+    }
+}
+
 fn start_prompt_worker(
     root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
     job: QueuedPrompt,
 ) {
     thread::spawn(move || {
+        let worker_activity = PromptWorkerActivity::start(&state, &job);
         match maybe_suppress_fatal_harness_prompt_before_execution(&root, &state, &job) {
             Ok(true) => {
                 eprintln!(
@@ -3127,6 +3197,7 @@ fn start_prompt_worker(
                 );
                 CompletionReviewDisposition::None
             } else if let Ok(reply_text) = result.as_ref() {
+                worker_activity.set_phase(&job.source_label, "completion-review");
                 push_event(
                     &state,
                     format!(
@@ -3159,11 +3230,10 @@ fn start_prompt_worker(
             let mut outcome_recovery_prompt: Option<QueuedPrompt> = None;
             let mut platform_pipeline_event: Option<String> = None;
             let next_prompt;
+            worker_activity.set_phase(&job.source_label, "finalizing");
             {
                 let mut shared = lock_shared_state(&state);
                 shared.busy = false;
-                shared.current_goal_preview = None;
-                shared.active_source_label = None;
                 shared.last_completed_at = Some(now_iso_string());
                 shared.last_progress_epoch_secs = current_epoch_secs();
                 release_leased_keys_locked(
@@ -4176,6 +4246,7 @@ fn start_prompt_worker(
             }
             let queued_outcome_recovery = outcome_recovery_prompt.is_some();
             if let Some(queued) = outcome_recovery_prompt {
+                worker_activity.set_phase(&job.source_label, "queueing-recovery");
                 enqueue_prompt(
                     &root,
                     &state,
@@ -4185,8 +4256,10 @@ fn start_prompt_worker(
             }
             if !queued_outcome_recovery {
                 if let Some(queued) = next_prompt {
+                    worker_activity.set_phase(&job.source_label, "dispatching-next");
                     start_prompt_worker(root.clone(), state.clone(), queued);
                 } else {
+                    worker_activity.set_phase(&job.source_label, "leasing-next");
                     match maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state) {
                         Ok(Some(queued)) => enqueue_prompt(
                             &root,
@@ -8147,7 +8220,7 @@ fn live_service_settings(root: &Path) -> BTreeMap<String, String> {
 
 fn active_agent_loop_in_progress(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
-    shared.busy
+    shared.busy || shared.worker_active_count > 0
 }
 
 fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Result<()> {
@@ -15721,6 +15794,56 @@ mod tests {
             .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
     }
 
+    #[test]
+    fn service_status_counts_all_durable_queue_tasks_beyond_preview_limit() {
+        let root = temp_root("status-counts-full-queue");
+        for index in 0..9 {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: format!("Pending queue task {index}"),
+                    prompt: format!("Handle pending queue task {index}."),
+                    thread_key: "queue/status-count".to_string(),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .expect("failed to create queue task");
+        }
+        let state = Arc::new(Mutex::new(SharedState::default()));
+
+        let status = status_from_shared_state(&root, &state).expect("status should load");
+
+        assert_eq!(status.pending_count, 9);
+        assert_eq!(status.pending_previews.len(), 6);
+    }
+
+    #[test]
+    fn service_status_stays_busy_while_worker_activity_is_finalizing() {
+        let root = temp_root("status-worker-active");
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.worker_active_count = 1;
+            shared.worker_phase = Some("queue: finalizing".to_string());
+            shared.current_goal_preview = Some("Finalize queue work".to_string());
+            shared.active_source_label = Some("queue".to_string());
+        }
+
+        let status = status_from_shared_state(&root, &state).expect("status should load");
+
+        assert!(status.busy);
+        assert_eq!(status.worker_active_count, 1);
+        assert_eq!(status.worker_phase.as_deref(), Some("queue: finalizing"));
+        assert_eq!(
+            status.current_goal_preview.as_deref(),
+            Some("Finalize queue work")
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn service_status_prefers_live_socket_even_when_systemd_marker_exists() {
@@ -15762,6 +15885,8 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
         }))
@@ -15861,6 +15986,8 @@ mod tests {
             monitor_alerts: Vec::new(),
             monitor_last_error: None,
             last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
         }))

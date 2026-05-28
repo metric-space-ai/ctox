@@ -1344,17 +1344,25 @@ fn harness_flow_projection(root: &Path) -> Value {
 }
 
 fn harness_queue_health(root: &Path) -> Value {
-    let statuses = ["pending".to_string(), "leased".to_string()];
-    match channels::list_queue_tasks(root, &statuses, 128) {
+    let pending_statuses = ["pending".to_string()];
+    let leased_statuses = ["leased".to_string()];
+    let open_statuses = ["pending".to_string(), "leased".to_string()];
+    match channels::list_queue_tasks(root, &open_statuses, 128) {
         Ok(tasks) => {
-            let pending = tasks
-                .iter()
-                .filter(|task| task.route_status == "pending")
-                .count();
-            let leased = tasks
-                .iter()
-                .filter(|task| task.route_status == "leased")
-                .count();
+            let pending =
+                channels::count_queue_tasks(root, &pending_statuses).unwrap_or_else(|_| {
+                    tasks
+                        .iter()
+                        .filter(|task| task.route_status == "pending")
+                        .count()
+                });
+            let leased = channels::count_queue_tasks(root, &leased_statuses).unwrap_or_else(|_| {
+                tasks
+                    .iter()
+                    .filter(|task| task.route_status == "leased")
+                    .count()
+            });
+            let open = channels::count_queue_tasks(root, &open_statuses).unwrap_or(tasks.len());
             let oldest_pending_created_at = tasks
                 .iter()
                 .filter(|task| task.route_status == "pending")
@@ -1366,7 +1374,7 @@ fn harness_queue_health(root: &Path) -> Value {
                 "ok": true,
                 "pending_count": pending,
                 "leased_count": leased,
-                "open_count": tasks.len(),
+                "open_count": open,
                 "oldest_pending_created_at": oldest_pending_created_at,
                 "stalled": pending > 0 && leased == 0
             })
