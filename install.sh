@@ -1411,7 +1411,7 @@ build_ctox() {
   done
   [[ -n "$ctox_built_binary" ]] && cp "$ctox_built_binary" "$source_root/bin/" 2>/dev/null || true
 
-  if [[ -f "$source_root/src/apps/desktop/Cargo.toml" ]]; then
+  if [[ -f "$source_root/src/apps/desktop/Cargo.toml" && "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" != "1" ]]; then
     prepare_cargo_target_cache "$source_root/src/apps/desktop/target" "ctox-desktop"
     run_build_module "ctox desktop host" "$source_root" "$cargo" build --release --manifest-path src/apps/desktop/Cargo.toml --bin ctox-desktop-host
     local desktop_built_binary=""
@@ -1425,6 +1425,8 @@ build_ctox() {
       fi
     done
     [[ -n "$desktop_built_binary" ]] && cp "$desktop_built_binary" "$source_root/bin/" 2>/dev/null || true
+  elif [[ "${CTOX_SKIP_DESKTOP_HOST_BUILD:-0}" == "1" ]]; then
+    printf '[build] skipping optional ctox desktop host (CTOX_SKIP_DESKTOP_HOST_BUILD=1)\n'
   fi
 
   # Qwen3.6 uses a dedicated Rust Unix-socket adapter over the local
@@ -2046,6 +2048,7 @@ parse_args() {
         printf '  CTOX_DEPENDENCIES_ROOT      Canonical install root for downloaded dependencies/assets\n'
         printf '  CTOX_RELEASE_RETENTION      Managed releases to keep after upgrade (default: 2)\n'
         printf '  CTOX_DISABLE_CARGO_TARGET_CACHE=1 Disable persistent upgrade build cache\n'
+        printf '  CTOX_SKIP_DESKTOP_HOST_BUILD=1 Skip optional desktop host build on headless/server installs\n'
         printf '  CTOX_REPO                   Same as --repo\n'
         printf '  CTOX_BRANCH                 Same as --branch\n\n'
         exit 0
