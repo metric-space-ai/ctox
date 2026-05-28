@@ -1,6 +1,6 @@
 # Business OS Outbound: Active Communication Implementation Plan
 
-Status: Planungsstand 2026-05-27
+Status: Planungsstand 2026-05-28
 Ziel: Die bestehende Outbound-App wird von Research/Pipeline-Vorbereitung zu einer vollstaendigen, approval-gesteuerten Kommunikationsloesung erweitert. CTOX darf Kommunikation, Follow-ups, Reply Handling und Terminfindung automatisch vorbereiten, aber keine ausgehende Nachricht ohne explizite Freigabe senden.
 
 ## Fortschrittsmodell
@@ -19,8 +19,8 @@ Der Projektfortschritt wird ueber Wellengewichtung berechnet. Jede Welle hat ein
 | 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 75% |
 | 8. Scheduling & Terminfindung | 7% | In Arbeit | 50% |
 | 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 50% |
-| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 75% |
-| **Gesamt** | **100%** | **In Arbeit** | **68%** |
+| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 85% |
+| **Gesamt** | **100%** | **In Arbeit** | **69%** |
 
 Fortschritt je Welle:
 
@@ -632,12 +632,14 @@ Aufgaben:
 - [x] Audit-Export oder Debug-Panel bauen.
 - [ ] Observability: Command IDs, Task IDs, Message IDs und Engagement IDs verlinken.
 - [ ] Observability: Outbound-IDs und Communication-IDs sind beidseitig verlinkt und im Debug-/Statuspfad sichtbar.
+- [x] Live-Instanz `cto1.kunstmen.com` mit echter Outbound-Campaign, Daten-Hydration und RxDB-Push pruefen.
 - [ ] Performance bei grossen Campaigns pruefen.
 - [ ] Dokumentation fuer Betrieb und Troubleshooting schreiben.
 
 Akzeptanzkriterien:
 
 - [x] Komplettfluss funktioniert lokal im Browser-Smoke: Lead -> Assignment -> Draft -> Approval -> Send -> Reply -> Scheduling -> Meeting.
+- [x] Live-Browser-Smoke auf `cto1.kunstmen.com` zeigt Outbound-Daten und erfolgreichen `POST /api/business-os/rxdb/push`.
 - [ ] Kein automatisierter Test kann ungeprueften Versand ausloesen.
 - [ ] Alle kritischen Fehler sind in UI und Logs diagnostizierbar.
 - [ ] Release-Gate laeuft in CI oder als dokumentierter lokaler Check.
@@ -734,3 +736,4 @@ Diese Aufgaben laufen parallel zu mehreren Wellen und duerfen nicht bis zum Ende
 | 2026-05-27 | Review-Findings Scheduler, Message-Historie und Audit geschlossen | Aktive Drafts durften keine Message-IDs wiederverwenden, Scheduler musste echte Follow-up-Drafts erzeugen und Audit-/Skillbook-Konfiguration erhalten bleiben | UI erzeugt pro Draft eindeutige `msg_...` IDs; Scheduler schreibt approval-gated Follow-up-Drafts und stoppt bei Reply/Pause/Closure/Opt-out/Bounce; Skillbook-Save merged bestehende Felder; Audit exportiert Skillbooks und Briefvorlagen; Welle 9 steigt auf 50%, Welle 10 auf 25%, Gesamtfortschritt auf 61% |
 | 2026-05-27 | Aktiver Outbound-Mailpfad im Browser E2E gehaertet | Der erste echte Browser-Smoke zeigte, dass abhängige Outbound-Commands zu frueh nacheinander ausgeloest wurden und die UI nach `send_approved` auf verzögerte Pull-Replikation wartete | Active-Outreach-Commands warten jetzt auf native `business_commands`-Acks und projizieren Backend-Result-Records lokal; neuer Smoke `SMOKE_MODE=outbound-active-ui` prueft Lead Queue, Auto-Draft, Freigabe-Gate, Ready-to-Send, Mailserver-Queue und Conversations-Deep-Link mit 4 Screenshots; Welle 10 steigt auf 50%, Gesamtfortschritt auf 62% |
 | 2026-05-27 | Reply-zu-Scheduling-zu-Meeting im Browser-Smoke gehaertet | Der erweiterte E2E zeigte fehlende Empfaenger-Fallbacks, fehlende Slot-/Meeting-Request-Projektion in Scheduling-Drafts und zu frueh zurueckgesetzte Prompt-Mocks beim Buchen | Scheduling-Drafts uebernehmen Empfaenger aus Engagement oder letzter Message, erzeugen drei konkrete Default-Slots, liefern `meeting_request` im Command-Result, markieren gebuchte Termine mit aktualisiertem Engagement und werden im Browser-Smoke bis `meeting_booked` getestet; Welle 7 steigt auf 75%, Welle 8 auf 50%, Welle 10 auf 75%, Gesamtfortschritt auf 68% |
+| 2026-05-28 | Live-Datenpfad auf `cto1.kunstmen.com` repariert und verifiziert | Die Public-Domain lud statische Vercel-Assets und konnte Daten lesen, aber ohne `POST /api/business-os/rxdb/push` keine stabilen UI-Aktionen synchronisieren; dadurch sah Outbound zeitweise leer oder blockiert aus | Vercel-Webroute proxyt jetzt auch validierte RxDB-Pushes zur Instanz; Browser-E2E zeigt Outbound-Campaigns mit Firmen, HTTP-Hydration `webrtc+http`, `business_commands.httpBridgePushStatus = ready` und erfolgreichen Push-Status 200; Welle 10 steigt auf 85%, Gesamtfortschritt auf 69% |
