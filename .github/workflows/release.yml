@@ -31,7 +31,7 @@ jobs:
     name: Desktop .dmg — ${{ matrix.artifact }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -85,7 +85,7 @@ jobs:
             "${{ matrix.artifact }}.dmg"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: ${{ matrix.artifact }}.dmg
@@ -95,7 +95,7 @@ jobs:
     name: Desktop .AppImage — linux-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -145,7 +145,7 @@ jobs:
             --output appimage
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ctox-desktop-linux-x64
           path: ctox-desktop-linux-x64.AppImage
@@ -155,7 +155,7 @@ jobs:
     name: Desktop .msi — windows-x64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -202,7 +202,7 @@ jobs:
             src\apps\desktop\packaging\windows\main.wixobj
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ctox-desktop-windows-x64
           path: ctox-desktop-windows-x64.msi
@@ -232,7 +232,7 @@ jobs:
     name: CTOX CLI — ${{ matrix.artifact }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -308,7 +308,7 @@ jobs:
           "$hash  ${{ matrix.artifact }}.zip" | Set-Content "${{ matrix.artifact }}.zip.sha256" -NoNewline
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -325,7 +325,7 @@ jobs:
 
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true

@@ -47,7 +47,7 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || github.event.inputs.stage != 'stage2'
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -79,13 +79,13 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && (github.event.inputs.stage == 'stage2' || github.event.inputs.stage == 'full')
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.93.0"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: '20'
 
