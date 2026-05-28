@@ -14,6 +14,7 @@ const scannedRoots = [
   join(appRoot, 'shared'),
   join(appRoot, 'modules'),
   join(appRoot, 'template-store'),
+  join(repoRoot, 'src/core/business_os/server.rs'),
   join(repoRoot, 'src/core/business_os/store.rs'),
 ];
 
@@ -22,7 +23,7 @@ const forbidden = [
   { name: 'frontend-business-os-http-api', pattern: /\/api\/business-os(?:\/|[`'")])/, frontendOnly: true },
   { name: 'frontend-business-os-http-api-concat', pattern: /\/api\/['"`]\s*\+\s*['"`]business-os/, frontendOnly: true },
   { name: 'frontend-rxdb-http-pull', pattern: /\/rxdb\/pull/ },
-  { name: 'frontend-command-http-post', pattern: /\/commands[`'")]/ },
+  { name: 'frontend-command-http-post', pattern: /\/commands[`'")]/, frontendOnly: true },
   { name: 'frontend-status-http-poll', pattern: /\/api\/business-os\/status/, frontendOnly: true },
   { name: 'frontend-harness-http-fallback', pattern: /\/api\/business-os\/ctox\/(?:harness-flow|tasks)/, frontendOnly: true },
   { name: 'native-http-command-bridge', pattern: /recordNativeCommand|pullNativeCollection|native-http-pull/ },
@@ -45,10 +46,11 @@ assertCtoxDbBrandingContract();
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
   const content = readFileSync(file, 'utf8');
+  const scannedContent = contentForForbiddenHttpScan(file, content);
   assertNoUpstreamRxdbImports(file, content);
   for (const rule of forbidden) {
     if (rule.frontendOnly && !isFrontendFile(file)) continue;
-    if (rule.pattern.test(content)) offenders.push(`${rel}: ${rule.name}`);
+    if (rule.pattern.test(scannedContent)) offenders.push(`${rel}: ${rule.name}`);
   }
 }
 
@@ -71,6 +73,30 @@ function assertBusinessOsShellBuildKeyIsCurrent() {
   if (appBuild && scriptBuild && appBuild !== scriptBuild) {
     offenders.push(`src/apps/business-os/index.html: app.js build key ${scriptBuild} does not match APP_BUILD ${appBuild}`);
   }
+}
+
+function contentForForbiddenHttpScan(file, content) {
+  const rel = relative(repoRoot, file).replaceAll('\\', '/');
+  let scanned = content;
+  const allow = (...patterns) => {
+    for (const pattern of patterns) scanned = scanned.replace(pattern, '');
+  };
+
+  if (rel === 'src/apps/business-os/shared/react-settings.js') {
+    allow(
+      /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
+      /['"]\/api\/business-os\/ctox\/subscription-auth\/callback['"]/g,
+    );
+  }
+
+  if (rel === 'src/core/business_os/server.rs') {
+    allow(
+      /"\/api\/business-os\/ctox\/subscription-auth\/start"/g,
+      /"\/api\/business-os\/ctox\/subscription-auth\/callback"/g,
+    );
+  }
+
+  return scanned;
 }
 
 function assertLoginDoesNotDefaultToAdmin() {

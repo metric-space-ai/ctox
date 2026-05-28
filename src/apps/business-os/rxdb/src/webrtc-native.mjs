@@ -26,8 +26,6 @@ const SHELL_CRITICAL_COLLECTIONS = new Set([
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
-]);
-const DEFERRED_FILE_COLLECTIONS = new Set([
   'desktop_file_chunks',
 ]);
 
@@ -1536,7 +1534,6 @@ function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
 function rtcPeerConnectionPriority(owner) {
   const collection = collectionNameFromTopic(owner?.options?.room || '');
   if (SHELL_CRITICAL_COLLECTIONS.has(collection)) return 0;
-  if (DEFERRED_FILE_COLLECTIONS.has(collection)) return 5;
   return 10;
 }
 

@@ -11,20 +11,12 @@ const CTOX_BROWSER_CAPABILITIES = [
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
-const HTTP_BRIDGE_PULL_PATH = '/api/business-os/rxdb/pull';
-const HTTP_BRIDGE_PUSH_PATH = '/api/business-os/rxdb/push';
-const HTTP_BRIDGE_PULL_LIMIT = 2000;
-const HTTP_BRIDGE_TIMEOUT_MS = 12000;
-const HTTP_BRIDGE_PUSH_DEBOUNCE_MS = 350;
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
 
 export function createSyncRuntime({ db, config, onDiagnostic }) {
   const bridges = new Map();
-  const httpBridges = new Map();
-  const httpHydratingCollections = new Set();
-  const httpPushQueues = new Map();
   const activeCollections = new Set();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
@@ -32,11 +24,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
   let suspensionReason = '';
   let stopped = false;
   const useWebrtc = nativeRxdbPeerReady(config, db);
-  const useHttpBridge = sameOriginHttpBridgeAvailable(config, db);
-  if (!useWebrtc && !useHttpBridge) {
+  if (!useWebrtc) {
     throw new Error('Business OS requires RxDB WebRTC sync; unsupported sync contract.');
   }
-  const runtimeMode = useWebrtc && useHttpBridge ? 'webrtc+http' : (useWebrtc ? 'webrtc' : 'http');
+  const runtimeMode = 'webrtc';
   const diagnostics = createDiagnostics(config, runtimeMode);
   const emitDiagnostic = (updates = {}) => {
     if (updates.lastError !== undefined) diagnostics.lastError = updates.lastError;
@@ -90,20 +81,6 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         try { await withTimeout(state.value?.stop?.(), 3000); } catch {}
       }
     }
-  };
-  const stopAllHttpBridges = async () => {
-    const httpBridgePromises = [...httpBridges.values()];
-    httpBridges.clear();
-    const states = await Promise.allSettled(httpBridgePromises);
-    for (const state of states) {
-      if (state.status === 'fulfilled') {
-        try { await withTimeout(state.value?.stop?.(), 3000); } catch {}
-      }
-    }
-    for (const queue of httpPushQueues.values()) {
-      if (queue.timer) clearTimeout(queue.timer);
-    }
-    httpPushQueues.clear();
   };
   const collectionNeedsRestart = (collection) => {
     const current = diagnostics.collections[collection] || {};
@@ -194,34 +171,6 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           mode: 'pending',
           collection,
           reason: suspensionReason || 'sync-suspended',
-          state: null,
-          stop: async () => {},
-        };
-      }
-      let httpBridge = null;
-      if (useHttpBridge) {
-        try {
-          httpBridge = await ensureHttpBridgeCollection({
-            db,
-            collection,
-            recordCollection,
-            httpBridges,
-            httpHydratingCollections,
-            httpPushQueues,
-            isStopped: () => stopped,
-          });
-        } catch (error) {
-          recordCollection(collection, {
-            httpBridgeStatus: 'error',
-            httpBridgeLastError: serializeError(error),
-          });
-        }
-      }
-      if (!useWebrtc) {
-        return httpBridge || {
-          mode: 'pending',
-          collection,
-          reason: 'http-bridge-unavailable',
           state: null,
           stop: async () => {},
         };
@@ -395,222 +344,10 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         window.removeEventListener('online', onlineListener);
       }
       await stopAllBridges();
-      await stopAllHttpBridges();
       emitDiagnostic({ phase: 'stopped' });
     },
   };
   return syncRuntime;
-}
-
-function sameOriginHttpBridgeAvailable(config, db) {
-  if (db?.mode !== 'rxdb') return false;
-  if (typeof window === 'undefined' || typeof window.fetch !== 'function') return false;
-  const protocol = String(window.location?.protocol || '');
-  if (protocol !== 'http:' && protocol !== 'https:') return false;
-  if (config?.http_bridge === false || config?.httpBridge === false) return false;
-  return true;
-}
-
-async function ensureHttpBridgeCollection({
-  db,
-  collection,
-  recordCollection,
-  httpBridges,
-  httpHydratingCollections,
-  httpPushQueues,
-  isStopped,
-}) {
-  if (httpBridges.has(collection)) {
-    const bridge = await withTimeout(httpBridges.get(collection), 1000);
-    if (bridge) return bridge;
-    return httpBridges.get(collection);
-  }
-  const bridgePromise = startHttpBridgeCollection({
-    db,
-    collection,
-    recordCollection,
-    httpHydratingCollections,
-    httpPushQueues,
-    isStopped,
-  });
-  httpBridges.set(collection, bridgePromise);
-  try {
-    return await bridgePromise;
-  } catch (error) {
-    httpBridges.delete(collection);
-    throw error;
-  }
-}
-
-async function startHttpBridgeCollection({
-  db,
-  collection,
-  recordCollection,
-  httpHydratingCollections,
-  httpPushQueues,
-  isStopped,
-}) {
-  const rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
-  if (!rxCollection) {
-    recordCollection?.(collection, {
-      httpBridgeStatus: 'pending',
-      httpBridgeReason: 'collection-not-registered',
-    });
-    return { mode: 'http', collection, reason: 'collection-not-registered', stop: async () => {} };
-  }
-
-  let stopped = false;
-  let checkpointMs = 0;
-  let unsubscribe = null;
-  const pullNow = async ({ full = false } = {}) => {
-    if (stopped || isStopped?.()) return { count: 0, checkpointMs };
-    const sinceMs = full ? 0 : checkpointMs;
-    recordCollection?.(collection, {
-      httpBridgeStatus: 'pulling',
-      httpBridgeSinceMs: sinceMs,
-      httpBridgeLastError: null,
-    });
-    const result = await pullHttpCollection(collection, sinceMs);
-    const documents = Array.isArray(result?.documents) ? result.documents : [];
-    const maxUpdatedAt = maxUpdatedAtMs(documents, sinceMs);
-    if (documents.length) {
-      httpHydratingCollections.add(collection);
-      try {
-        await rxCollection.bulkUpsert(documents);
-      } finally {
-        httpHydratingCollections.delete(collection);
-      }
-    }
-    checkpointMs = Math.max(checkpointMs, maxUpdatedAt + 1);
-    recordCollection?.(collection, {
-      httpBridgeStatus: 'ready',
-      httpBridgeDocuments: documents.length,
-      httpBridgeCheckpointMs: checkpointMs,
-      httpBridgePulledAt: new Date().toISOString(),
-      httpBridgeSource: result?.source || 'business_records',
-      httpBridgeLastError: null,
-    });
-    return { count: documents.length, checkpointMs };
-  };
-
-  if (!isReadOnlyProjectionCollection(collection)) {
-    unsubscribe = rxCollection.observe?.((event) => {
-      if (stopped || isStopped?.() || httpHydratingCollections.has(collection)) return;
-      const documents = Object.values(event?.detail?.success || {});
-      if (!documents.length) return;
-      queueHttpPush({ collection, documents, recordCollection, httpPushQueues, isStopped });
-    });
-  }
-
-  await pullNow({ full: true });
-  return {
-    mode: 'http',
-    collection,
-    pullNow,
-    flush: async () => flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }),
-    async stop() {
-      stopped = true;
-      try { unsubscribe?.(); } catch {}
-      await flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped });
-    },
-  };
-}
-
-async function pullHttpCollection(collection, sinceMs = 0) {
-  const url = new URL(HTTP_BRIDGE_PULL_PATH, window.location.href);
-  url.searchParams.set('collection', collection);
-  url.searchParams.set('since_ms', String(Math.max(0, Number(sinceMs) || 0)));
-  url.searchParams.set('limit', String(HTTP_BRIDGE_PULL_LIMIT));
-  return fetchJsonWithTimeout(url.toString(), {
-    method: 'GET',
-    credentials: 'same-origin',
-    cache: 'no-store',
-  }, HTTP_BRIDGE_TIMEOUT_MS);
-}
-
-function queueHttpPush({ collection, documents, recordCollection, httpPushQueues, isStopped }) {
-  if (isReadOnlyProjectionCollection(collection)) return;
-  let queue = httpPushQueues.get(collection);
-  if (!queue) {
-    queue = { documents: new Map(), timer: null };
-    httpPushQueues.set(collection, queue);
-  }
-  for (const document of documents) {
-    const id = document?.id || document?._id || document?.command_id;
-    if (!id) continue;
-    queue.documents.set(String(id), document);
-  }
-  if (queue.timer) clearTimeout(queue.timer);
-  queue.timer = setTimeout(() => {
-    queue.timer = null;
-    flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }).catch((error) => {
-      recordCollection?.(collection, {
-        httpBridgePushStatus: 'error',
-        httpBridgeLastError: serializeError(error),
-      });
-    });
-  }, HTTP_BRIDGE_PUSH_DEBOUNCE_MS);
-}
-
-async function flushHttpPushQueue({ collection, recordCollection, httpPushQueues, isStopped }) {
-  const queue = httpPushQueues.get(collection);
-  if (!queue || !queue.documents.size || isStopped?.()) return { count: 0 };
-  if (queue.timer) {
-    clearTimeout(queue.timer);
-    queue.timer = null;
-  }
-  const documents = [...queue.documents.values()];
-  queue.documents.clear();
-  recordCollection?.(collection, {
-    httpBridgePushStatus: 'pushing',
-    httpBridgePushDocuments: documents.length,
-    httpBridgeLastError: null,
-  });
-  const result = await fetchJsonWithTimeout(HTTP_BRIDGE_PUSH_PATH, {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ collection, documents }),
-  }, HTTP_BRIDGE_TIMEOUT_MS);
-  recordCollection?.(collection, {
-    httpBridgePushStatus: 'ready',
-    httpBridgePushDocuments: Number(result?.count || documents.length),
-    httpBridgePushedAt: new Date().toISOString(),
-    httpBridgeLastError: null,
-  });
-  return result;
-}
-
-async function fetchJsonWithTimeout(url, options, timeoutMs) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, { ...options, signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} while syncing ${urlPathForError(url)}`);
-    }
-    return response.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-function maxUpdatedAtMs(documents, fallback = 0) {
-  let max = Math.max(0, Number(fallback) || 0);
-  for (const document of documents || []) {
-    const value = Number(document?.updated_at_ms || document?.updatedAtMs || document?._meta?.lwt || 0);
-    if (Number.isFinite(value)) max = Math.max(max, value);
-  }
-  return max;
-}
-
-function urlPathForError(value) {
-  try {
-    const url = new URL(value, window.location.href);
-    return `${url.pathname}${url.search}`;
-  } catch {
-    return String(value || '');
-  }
 }
 
 function peerSessionKey(value) {
@@ -748,7 +485,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260528-webrtc-rpc-timeout1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260528-rxdb-native1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -1303,9 +1040,111 @@ function sanitizeReplicationTransportStatus(status) {
     lastBufferedAmount: numberField('lastBufferedAmount'),
     pullInProgress: status.pullInProgress === true,
     pushInProgress: status.pushInProgress === true,
+    rtcConnections: sanitizeRtcConnectionSnapshots(status.rtcConnections),
+    recentRtcEvents: sanitizeRecentRtcEvents(status.recentRtcEvents),
+    connectionStates: sanitizeRtcConnectionStates(status.connectionStates),
+    rtcConnectionPool: sanitizeRtcConnectionPool(status.rtcConnectionPool),
     updatedAtMs: numberField('updatedAtMs'),
     observedAt: new Date().toISOString(),
   };
+}
+
+function sanitizeRtcConnectionSnapshots(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-12).map((entry) => ({
+    peerId: sanitizeShortString(entry?.peerId, 80),
+    collection: sanitizeShortString(entry?.collection, 120),
+    ageMs: sanitizeNumber(entry?.ageMs),
+    signalingState: sanitizeShortString(entry?.signalingState, 40),
+    iceConnectionState: sanitizeShortString(entry?.iceConnectionState, 40),
+    iceGatheringState: sanitizeShortString(entry?.iceGatheringState, 40),
+    connectionState: sanitizeShortString(entry?.connectionState, 40),
+    channelReadyState: sanitizeShortString(entry?.channelReadyState, 40),
+    pendingCandidates: sanitizeNumber(entry?.pendingCandidates),
+    hasLocalDescription: entry?.hasLocalDescription === true,
+    hasRemoteDescription: entry?.hasRemoteDescription === true,
+    localCandidateTypes: sanitizeCandidateTypeCounts(entry?.localCandidateTypes),
+    remoteCandidateTypes: sanitizeCandidateTypeCounts(entry?.remoteCandidateTypes),
+    signal: sanitizeSignalStats(entry?.signal),
+    lastError: entry?.lastError ? serializeError(entry.lastError) : null,
+  }));
+}
+
+function sanitizeRecentRtcEvents(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-24).map((entry) => ({
+    atMs: sanitizeNumber(entry?.atMs),
+    event: sanitizeShortString(entry?.event, 80),
+    peerId: sanitizeShortString(entry?.peerId, 80),
+    collection: sanitizeShortString(entry?.collection, 120),
+    state: sanitizeShortString(entry?.state, 80),
+    signalingState: sanitizeShortString(entry?.signalingState, 80),
+    connectionState: sanitizeShortString(entry?.connectionState, 80),
+    iceConnectionState: sanitizeShortString(entry?.iceConnectionState, 80),
+    iceGatheringState: sanitizeShortString(entry?.iceGatheringState, 80),
+    pendingCandidates: sanitizeNumber(entry?.pendingCandidates),
+    ageMs: sanitizeNumber(entry?.ageMs),
+  }));
+}
+
+function sanitizeRtcConnectionStates(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-12).map((entry) => ({
+    peerId: sanitizeShortString(entry?.peerId, 80),
+    peerConnectionState: sanitizeShortString(entry?.peerConnectionState, 40),
+    iceConnectionState: sanitizeShortString(entry?.iceConnectionState, 40),
+    iceGatheringState: sanitizeShortString(entry?.iceGatheringState, 40),
+    signalingState: sanitizeShortString(entry?.signalingState, 40),
+    channelState: sanitizeShortString(entry?.channelState, 40),
+    channelLabel: sanitizeShortString(entry?.channelLabel, 80),
+    pendingCandidates: sanitizeNumber(entry?.pendingCandidates),
+  }));
+}
+
+function sanitizeRtcConnectionPool(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    maxConnections: sanitizeNumber(value.maxConnections),
+    activeConnections: sanitizeNumber(value.activeConnections),
+    queuedConnections: sanitizeNumber(value.queuedConnections),
+    criticalActiveConnections: sanitizeNumber(value.criticalActiveConnections),
+    criticalQueuedConnections: sanitizeNumber(value.criticalQueuedConnections),
+  };
+}
+
+function sanitizeSignalStats(value) {
+  if (!value || typeof value !== 'object') return {};
+  return {
+    offerSent: sanitizeNumber(value.offerSent),
+    offerReceived: sanitizeNumber(value.offerReceived),
+    answerSent: sanitizeNumber(value.answerSent),
+    answerReceived: sanitizeNumber(value.answerReceived),
+    candidateSent: sanitizeNumber(value.candidateSent),
+    candidateReceived: sanitizeNumber(value.candidateReceived),
+    localCandidateComplete: value.localCandidateComplete === true,
+    lastLocalCandidateType: sanitizeShortString(value.lastLocalCandidateType, 40),
+    lastRemoteCandidateType: sanitizeShortString(value.lastRemoteCandidateType, 40),
+    lastSignalAtMs: sanitizeNumber(value.lastSignalAtMs),
+  };
+}
+
+function sanitizeCandidateTypeCounts(value) {
+  if (!value || typeof value !== 'object') return {};
+  const result = {};
+  for (const [key, count] of Object.entries(value)) {
+    const normalized = sanitizeShortString(key, 40);
+    if (!normalized) continue;
+    result[normalized] = sanitizeNumber(count);
+  }
+  return result;
+}
+
+function sanitizeShortString(value, maxLength = 120) {
+  return typeof value === 'string' && value.trim() ? value.slice(0, maxLength) : '';
+}
+
+function sanitizeNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
 function isTransientSignalingSocketError(error) {

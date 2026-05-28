@@ -134,7 +134,10 @@ function chromiumLaunchOptions() {
   const executablePath = existingChromeExecutable();
   const options = {
     headless: true,
-    args: ['--disable-gpu'],
+    args: [
+      '--disable-gpu',
+      '--disable-features=WebRtcHideLocalIpsWithMdns',
+    ],
   };
   if (executablePath) options.executablePath = executablePath;
   return options;
@@ -818,7 +821,22 @@ function startInlineSignalingServer() {
             socket.destroy();
             break;
           }
-          if (signalingDebug) console.error(`[smoke-signaling] signal from=${peer.id} to=${msg.receiverPeerId} receiver=${peers.has(msg.receiverPeerId) ? 'yes' : 'no'} room=${msg.room}`);
+          if (signalingDebug) {
+            const data = msg.data || msg.signal || {};
+            const signalType = data?.type || (data?.sdp ? 'sdp' : (data?.candidate ? 'candidate' : 'unknown'));
+            const candidateLine = typeof data?.candidate?.candidate === 'string'
+              ? data.candidate.candidate
+              : (typeof data?.candidate === 'string' ? data.candidate : '');
+            const candidateType = /\styp\s+([a-z0-9-]+)/i.exec(candidateLine)?.[1] || '';
+            const candidateAddress = candidateLine
+              .replace(/^candidate:\S+\s+\S+\s+\S+\s+\S+\s+/i, '')
+              .split(/\s+/)
+              .slice(0, 2)
+              .join(':')
+              .slice(0, 80);
+            const sdpBytes = typeof data?.sdp === 'string' ? Buffer.byteLength(data.sdp) : 0;
+            console.error(`[smoke-signaling] signal from=${peer.id} to=${msg.receiverPeerId} receiver=${peers.has(msg.receiverPeerId) ? 'yes' : 'no'} room=${msg.room} type=${signalType} candidateType=${candidateType || '-'} candidate=${candidateAddress || '-'} sdpBytes=${sdpBytes}`);
+          }
           peers.get(msg.receiverPeerId)?.send(msg);
         } else if (msg.type !== 'ping') {
           socket.destroy();
@@ -1644,6 +1662,7 @@ function startCtoxServer() {
     CTOX_ROOT: runtimeRoot,
     CARGO_TARGET_DIR: path.join(root, 'runtime/build/core-rxdb-integration-target'),
     CTOX_BROWSER_AUTOMATION_MODULE: process.env.CTOX_BROWSER_AUTOMATION_MODULE || playwrightModule,
+    CTOX_WEBRTC_UDP_BIND_ADDR: process.env.CTOX_WEBRTC_UDP_BIND_ADDR || '127.0.0.1:0',
   };
   const browserExecutable = process.env.CTOX_BROWSER_EXECUTABLE || existingChromeExecutable();
   if (browserExecutable) env.CTOX_BROWSER_EXECUTABLE = browserExecutable;

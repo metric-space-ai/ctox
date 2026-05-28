@@ -289,7 +289,22 @@ const server = net.createServer((socket) => {
           break;
         }
         const receiver = peers.get(message.receiverPeerId);
-        if (debug) console.error(`[signaling] signal from=${peer.id} to=${message.receiverPeerId} room=${redactRoom(roomKey(peer, message.room))} receiver=${receiver ? 'yes' : 'no'} sameRoom=${receiver?.rooms.has(roomKey(peer, message.room)) ? 'yes' : 'no'}`);
+        if (debug) {
+          const data = message.data || message.signal || {};
+          const signalType = data?.type || (data?.sdp ? 'sdp' : (data?.candidate ? 'candidate' : 'unknown'));
+          const candidateLine = typeof data?.candidate?.candidate === 'string'
+            ? data.candidate.candidate
+            : (typeof data?.candidate === 'string' ? data.candidate : '');
+          const candidateType = /\styp\s+([a-z0-9-]+)/i.exec(candidateLine)?.[1] || '';
+          const candidateAddress = candidateLine
+            .replace(/^candidate:\S+\s+\S+\s+\S+\s+\S+\s+/i, '')
+            .split(/\s+/)
+            .slice(0, 2)
+            .join(':')
+            .slice(0, 80);
+          const sdpBytes = typeof data?.sdp === 'string' ? Buffer.byteLength(data.sdp) : 0;
+          console.error(`[signaling] signal from=${peer.id} to=${message.receiverPeerId} room=${redactRoom(roomKey(peer, message.room))} receiver=${receiver ? 'yes' : 'no'} sameRoom=${receiver?.rooms.has(roomKey(peer, message.room)) ? 'yes' : 'no'} type=${signalType} candidateType=${candidateType || '-'} candidate=${candidateAddress || '-'} sdpBytes=${sdpBytes}`);
+        }
         if (receiver && receiver.rooms.has(roomKey(peer, message.room))) receiver.send(message);
       } else if (message.type !== 'ping') {
         socket.destroy();

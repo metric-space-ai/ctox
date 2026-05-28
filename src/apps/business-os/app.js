@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260528-http-hydrate1';
+const APP_BUILD = '20260528-rxdb-native1';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -188,7 +188,7 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
 
 async function loadBusinessDbModule() {
   if (!businessDbModulePromise) {
-    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260528-http-hydrate1', 'business db')
+    businessDbModulePromise = importBusinessOsModule('./shared/db.js?v=20260528-rxdb-native1', 'business db')
       .then((mod) => {
         businessDbModule = mod;
         return mod;
@@ -199,7 +199,7 @@ async function loadBusinessDbModule() {
 
 async function loadSyncModule() {
   if (!syncModulePromise) {
-    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260528-webrtc-rpc-timeout1', 'business sync')
+    syncModulePromise = importBusinessOsModule('./shared/sync.js?v=20260528-rxdb-native1', 'business sync')
       .then((mod) => {
         syncModule = mod;
         return mod;
@@ -443,8 +443,7 @@ async function bootstrap() {
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
 
-  setStartupProgress(70, 'Verbindung zum Netzwerk wird hergestellt...');
-  await startCriticalSyncCollections();
+  setStartupProgress(70, 'Workspace wird vorbereitet...');
   let modules;
   try {
     setStartupProgress(85, 'Ihre Anwendungen werden vorbereitet...');
@@ -1622,6 +1621,7 @@ async function startCriticalSyncCollections() {
     'business_commands',
     'ctox_queue_tasks',
     'desktop_files',
+    'desktop_file_chunks',
   ];
   for (const collection of collections) {
     try {
@@ -1655,7 +1655,6 @@ async function waitForCriticalSyncCollection(collection, timeoutMs = 18000) {
 function isCriticalSyncCollectionReady(collection) {
   const diagnostics = state.syncDiagnostics?.collections?.[collection];
   if (!diagnostics) return false;
-  if (diagnostics.httpBridgeStatus === 'ready' && diagnostics.httpBridgePulledAt) return true;
   const status = diagnostics.connectionStatus || diagnostics.status || '';
   if (['connected', 'running', 'reused'].includes(status)) return true;
   if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
@@ -1976,9 +1975,111 @@ function sanitizeAdvancedStatusFrameTransportEntry(collection, value) {
     lastBufferedAmount: numberField('lastBufferedAmount'),
     pullInProgress: value.pullInProgress === true,
     pushInProgress: value.pushInProgress === true,
+    rtcConnections: sanitizeAdvancedStatusRtcConnections(value.rtcConnections),
+    recentRtcEvents: sanitizeAdvancedStatusRtcEvents(value.recentRtcEvents),
+    connectionStates: sanitizeAdvancedStatusConnectionStates(value.connectionStates),
+    rtcConnectionPool: sanitizeAdvancedStatusRtcPool(value.rtcConnectionPool),
     updatedAtMs: numberField('updatedAtMs'),
     observedAt: stringField('observedAt', null, 80),
   };
+}
+
+function sanitizeAdvancedStatusRtcConnections(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-8).map((entry) => ({
+    peerId: advancedStatusString(entry?.peerId, 80),
+    collection: advancedStatusString(entry?.collection, 120),
+    ageMs: advancedStatusNumber(entry?.ageMs),
+    signalingState: advancedStatusString(entry?.signalingState, 40),
+    iceConnectionState: advancedStatusString(entry?.iceConnectionState, 40),
+    iceGatheringState: advancedStatusString(entry?.iceGatheringState, 40),
+    connectionState: advancedStatusString(entry?.connectionState, 40),
+    channelReadyState: advancedStatusString(entry?.channelReadyState, 40),
+    pendingCandidates: advancedStatusNumber(entry?.pendingCandidates),
+    hasLocalDescription: entry?.hasLocalDescription === true,
+    hasRemoteDescription: entry?.hasRemoteDescription === true,
+    localCandidateTypes: sanitizeAdvancedStatusCountMap(entry?.localCandidateTypes),
+    remoteCandidateTypes: sanitizeAdvancedStatusCountMap(entry?.remoteCandidateTypes),
+    signal: sanitizeAdvancedStatusSignalStats(entry?.signal),
+    lastError: entry?.lastError ? sanitizeAdvancedStatusTypedError(entry.lastError) : null,
+  }));
+}
+
+function sanitizeAdvancedStatusRtcEvents(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-16).map((entry) => ({
+    atMs: advancedStatusNumber(entry?.atMs),
+    event: advancedStatusString(entry?.event, 80),
+    peerId: advancedStatusString(entry?.peerId, 80),
+    collection: advancedStatusString(entry?.collection, 120),
+    state: advancedStatusString(entry?.state, 80),
+    signalingState: advancedStatusString(entry?.signalingState, 80),
+    connectionState: advancedStatusString(entry?.connectionState, 80),
+    iceConnectionState: advancedStatusString(entry?.iceConnectionState, 80),
+    iceGatheringState: advancedStatusString(entry?.iceGatheringState, 80),
+    pendingCandidates: advancedStatusNumber(entry?.pendingCandidates),
+    ageMs: advancedStatusNumber(entry?.ageMs),
+  }));
+}
+
+function sanitizeAdvancedStatusConnectionStates(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(-8).map((entry) => ({
+    peerId: advancedStatusString(entry?.peerId, 80),
+    peerConnectionState: advancedStatusString(entry?.peerConnectionState, 40),
+    iceConnectionState: advancedStatusString(entry?.iceConnectionState, 40),
+    iceGatheringState: advancedStatusString(entry?.iceGatheringState, 40),
+    signalingState: advancedStatusString(entry?.signalingState, 40),
+    channelState: advancedStatusString(entry?.channelState, 40),
+    channelLabel: advancedStatusString(entry?.channelLabel, 80),
+    pendingCandidates: advancedStatusNumber(entry?.pendingCandidates),
+  }));
+}
+
+function sanitizeAdvancedStatusRtcPool(value) {
+  if (!value || typeof value !== 'object') return null;
+  return {
+    maxConnections: advancedStatusNumber(value.maxConnections),
+    activeConnections: advancedStatusNumber(value.activeConnections),
+    queuedConnections: advancedStatusNumber(value.queuedConnections),
+    criticalActiveConnections: advancedStatusNumber(value.criticalActiveConnections),
+    criticalQueuedConnections: advancedStatusNumber(value.criticalQueuedConnections),
+  };
+}
+
+function sanitizeAdvancedStatusSignalStats(value) {
+  if (!value || typeof value !== 'object') return {};
+  return {
+    offerSent: advancedStatusNumber(value.offerSent),
+    offerReceived: advancedStatusNumber(value.offerReceived),
+    answerSent: advancedStatusNumber(value.answerSent),
+    answerReceived: advancedStatusNumber(value.answerReceived),
+    candidateSent: advancedStatusNumber(value.candidateSent),
+    candidateReceived: advancedStatusNumber(value.candidateReceived),
+    localCandidateComplete: value.localCandidateComplete === true,
+    lastLocalCandidateType: advancedStatusString(value.lastLocalCandidateType, 40),
+    lastRemoteCandidateType: advancedStatusString(value.lastRemoteCandidateType, 40),
+    lastSignalAtMs: advancedStatusNumber(value.lastSignalAtMs),
+  };
+}
+
+function sanitizeAdvancedStatusCountMap(value) {
+  if (!value || typeof value !== 'object') return {};
+  const result = {};
+  for (const [key, count] of Object.entries(value)) {
+    const normalized = advancedStatusString(key, 40);
+    if (!normalized) continue;
+    result[normalized] = advancedStatusNumber(count);
+  }
+  return result;
+}
+
+function advancedStatusString(value, maxLength = 120) {
+  return typeof value === 'string' && value.trim() ? value.slice(0, maxLength) : '';
+}
+
+function advancedStatusNumber(value) {
+  return Number.isFinite(Number(value)) ? Number(value) : 0;
 }
 
 function serializeAdvancedStatusCollectionError(item) {
@@ -4585,24 +4686,6 @@ function isPendingCtoxHealthError(error) {
 }
 
 async function loadShellCtoxHealth() {
-  try {
-    const response = await fetch('/api/business-os/ctox/runtime-settings', {
-      cache: 'no-store',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    const payload = await response.json().catch(() => null);
-    if (response.ok && payload?.ok !== false) {
-      return {
-        ok: true,
-        source: 'server',
-        ctox_service: payload?.service || null,
-        runtime_settings: payload || null,
-      };
-    }
-  } catch {
-    // Fall back to the replicated projection for local/offline builds.
-  }
   const coll = state.db?.collection?.('ctox_runtime_settings');
   if (!coll) throw new Error('ctox_runtime_settings collection is required for shell health');
   await state.sync?.startCollection?.('ctox_runtime_settings');

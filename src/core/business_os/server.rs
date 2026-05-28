@@ -541,27 +541,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
             }
         }
-        (Method::Get, "/api/business-os/rxdb/pull") => {
-            let query = parse_query(&url);
-            let collection = query
-                .get("collection")
-                .map(String::as_str)
-                .unwrap_or("business_commands");
-            let since_ms = query
-                .get("since_ms")
-                .and_then(|value| value.parse::<i64>().ok());
-            let limit = query
-                .get("limit")
-                .and_then(|value| value.parse::<usize>().ok());
-            respond_json_value(
-                request,
-                store::pull_collection_records(root, collection, since_ms, limit)?,
-            )?;
-        }
-        (Method::Post, "/api/business-os/rxdb/push") => {
-            let body = read_json(&mut request)?;
-            respond_json_value(request, store::push_collection_records(root, body)?)?;
-        }
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
@@ -723,9 +702,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     }
                 }
             }
-        }
-        _ if path.starts_with("/api/business-os/rxdb/") => {
-            respond_status(request, 404, "RxDB HTTP bridge endpoint not found")?;
         }
         _ if method == Method::Get => serve_static(root, app_root, request, path)?,
         _ => respond_status(request, 405, "method not allowed")?,

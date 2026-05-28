@@ -2553,19 +2553,7 @@ async function loadLocalBugReports(ctx) {
 }
 
 async function loadHarnessFlowSnapshot() {
-  if (typeof window === 'undefined' || !window.location?.origin) {
-    throw new Error('Harness Flow API is not available.');
-  }
-  const response = await fetch(new URL('/api/business-os/ctox/harness-flow', window.location.origin).toString(), {
-    cache: 'no-store',
-    credentials: 'include',
-    headers: { Accept: 'application/json' },
-  });
-  const payload = await response.json().catch(() => null);
-  if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.error || `Harness Flow API ${response.status}`);
-  }
-  return payload;
+  return emptyHarnessFlow('rxdb_flow_projection_unavailable');
 }
 
 async function loadLocalWebStackOverview(ctx) {

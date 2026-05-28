@@ -99,6 +99,7 @@ class CtoxWebRtcReplicationState {
     this.peer = createCtoxWebRtcNativePeer({
       signalingUrl,
       room: this.topic,
+      clientId: browserInitiatorPeerId(this.topic),
       role: 'browser',
       capabilities: BROWSER_CAPABILITIES,
       iceServers,
@@ -580,6 +581,19 @@ class CtoxWebRtcReplicationState {
   shouldRetainPeerAfterError(peerId, error) {
     return this.isPeerOpen(peerId) && this.isTransientMasterChangesSinceError(error);
   }
+}
+
+function browserInitiatorPeerId(topic) {
+  return `000-browser-${hashString(String(topic || 'ctox'))}`;
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function delay(ms) {

@@ -1140,34 +1140,16 @@ async function saveUser(payload, { commandBus, db, session } = {}) {
 }
 
 async function loadRuntimeSettings({ db } = {}) {
-  let lastError = null;
-  try {
-    return await fetchBusinessOsApi('/api/business-os/ctox/runtime-settings');
-  } catch (error) {
-    lastError = error;
-  }
-  try {
-    const coll = db?.collection?.('ctox_runtime_settings');
-    if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
-    const doc = await coll.findOne('runtime-settings').exec();
-    const data = doc?.toJSON?.();
-    if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
-    return data;
-  } catch {
-    throw lastError || new Error('Runtime-Status noch nicht synchronisiert.');
-  }
+  const coll = db?.collection?.('ctox_runtime_settings');
+  if (!coll) throw new Error('ctox_runtime_settings collection is required for runtime settings');
+  const doc = await coll.findOne('runtime-settings').exec();
+  const data = doc?.toJSON?.();
+  if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
+  return data;
 }
 
 async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {
   const previousSettings = await loadRuntimeSettings({ db }).catch(() => null);
-  try {
-    return await fetchBusinessOsApi('/api/business-os/ctox/runtime-settings', {
-      method: 'POST',
-      body: payload,
-    });
-  } catch {
-    // Older/local deployments may not expose the direct API yet.
-  }
   await dispatchModuleCommand({
     commandBus,
     db,

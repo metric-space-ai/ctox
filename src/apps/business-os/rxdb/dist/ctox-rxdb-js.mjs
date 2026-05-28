@@ -772,9 +772,7 @@ var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_module_catalog",
   "business_commands",
   "ctox_queue_tasks",
-  "desktop_files"
-]);
-var DEFERRED_FILE_COLLECTIONS = /* @__PURE__ */ new Set([
+  "desktop_files",
   "desktop_file_chunks"
 ]);
 function createCtoxWebRtcNativePeer(options = {}) {
@@ -2190,7 +2188,6 @@ function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
 function rtcPeerConnectionPriority(owner) {
   const collection = collectionNameFromTopic(owner?.options?.room || "");
   if (SHELL_CRITICAL_COLLECTIONS.has(collection)) return 0;
-  if (DEFERRED_FILE_COLLECTIONS.has(collection)) return 5;
   return 10;
 }
 function criticalRtcPeerConnectionsReady(pool) {
@@ -3772,6 +3769,7 @@ var CtoxWebRtcReplicationState = class {
     this.peer = createCtoxWebRtcNativePeer({
       signalingUrl,
       room: this.topic,
+      clientId: browserInitiatorPeerId(this.topic),
       role: "browser",
       capabilities: BROWSER_CAPABILITIES,
       iceServers,
@@ -4214,6 +4212,17 @@ var CtoxWebRtcReplicationState = class {
     return this.isPeerOpen(peerId) && this.isTransientMasterChangesSinceError(error);
   }
 };
+function browserInitiatorPeerId(topic) {
+  return `000-browser-${hashString(String(topic || "ctox"))}`;
+}
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
 function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
