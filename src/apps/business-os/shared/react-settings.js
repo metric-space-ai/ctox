@@ -1,5 +1,7 @@
 import { showBusinessConfirm } from './dialogs.js';
 
+const CHATGPT_DEVICE_AUTH_URL = 'https://auth.openai.com/codex/device';
+
 export async function openReactSettings({
   mount,
   modules = [],
@@ -229,12 +231,7 @@ export async function openReactSettings({
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
-      const authWindow = window.open('about:blank', 'ctox-chatgpt-subscription');
-      writeSubscriptionAuthWindow(
-        authWindow,
-        'ChatGPT Login wird vorbereitet',
-        'CTOX speichert die Runtime-Einstellung und fordert die Login-URL an.',
-      );
+      const authWindow = window.open(CHATGPT_DEVICE_AUTH_URL, 'ctox-chatgpt-subscription');
       settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
       const runtimePayload = runtimePayloadFromForm(body);
       render();
@@ -249,11 +246,6 @@ export async function openReactSettings({
         if (payload.status === 'device_code' && payload.user_code) {
           settingsState.commandStatus = `ChatGPT Geräte-Code: ${payload.user_code}. Code im OpenAI-Fenster eingeben.`;
           render();
-          writeSubscriptionAuthWindow(
-            authWindow,
-            'ChatGPT Geräte-Code',
-            `Code ${payload.user_code} im nächsten OpenAI-Fenster eingeben.`,
-          );
         }
         const authUrl = payload.auth_url || payload.verification_url;
         if (authWindow && !authWindow.closed) {
@@ -1186,7 +1178,6 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
     }
     await delay(300);
   }
-  if (lastSettings) return lastSettings;
   throw lastError || new Error('Runtime-Status wurde nicht synchronisiert.');
 }
 
@@ -1201,6 +1192,7 @@ async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
     recordId: 'subscription-auth',
     payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
     source: 'business-os-settings',
+    timeoutMs: 180000,
   });
   return command.result || command;
 }
@@ -1383,6 +1375,7 @@ async function dispatchModuleCommand({
   recordId,
   payload,
   source,
+  timeoutMs,
 }) {
   await sync?.startCollection?.('business_commands');
   if (!commandBus?.dispatch || !db?.collection?.('business_commands')) {
@@ -1403,7 +1396,7 @@ async function dispatchModuleCommand({
     },
   };
   await dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync });
-  return waitForCommandProjection(db, commandId, { sync });
+  return waitForCommandProjection(db, commandId, { sync, timeoutMs });
 }
 
 async function dispatchCommandWithRxdbRecovery(commandBus, command, { db, sync } = {}) {
