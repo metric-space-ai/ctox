@@ -1190,21 +1190,6 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
 }
 
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
-  try {
-    return await fetchBusinessOsApi('/api/business-os/ctox/subscription-auth/start', {
-      method: 'POST',
-      body: {
-        provider: 'openai',
-        auth_mode: 'chatgpt_subscription',
-        callback_url: new URL(
-          '/api/business-os/ctox/subscription-auth/callback',
-          window.location.origin,
-        ).toString(),
-      },
-    });
-  } catch {
-    // Older/local deployments may not expose the direct API yet.
-  }
   const command = await dispatchModuleCommand({
     commandBus,
     db,
@@ -1213,43 +1198,10 @@ async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
     commandType: 'ctox.subscription_auth.start',
     moduleId: 'ctox',
     recordId: 'subscription-auth',
-    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription' },
+    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
     source: 'business-os-settings',
   });
   return command.result || command;
-}
-
-async function fetchBusinessOsApi(path, options = {}) {
-  if (typeof window === 'undefined' || !window.location?.origin) {
-    throw new Error('Business-OS API ist in dieser Umgebung nicht verfügbar.');
-  }
-  const method = options.method || 'GET';
-  const init = {
-    method,
-    credentials: 'include',
-    headers: {
-      Accept: 'application/json',
-    },
-  };
-  if (options.body !== undefined) {
-    init.headers['Content-Type'] = 'application/json';
-    init.body = JSON.stringify(options.body);
-  }
-  const response = await fetch(new URL(path, window.location.origin).toString(), init);
-  const text = await response.text();
-  let payload = null;
-  if (text) {
-    try {
-      payload = JSON.parse(text);
-    } catch {
-      payload = null;
-    }
-  }
-  if (!response.ok || payload?.ok === false) {
-    const message = payload?.error || payload?.message || text || `Business-OS API ${response.status}`;
-    throw new Error(message);
-  }
-  return payload || { ok: true };
 }
 
 function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {

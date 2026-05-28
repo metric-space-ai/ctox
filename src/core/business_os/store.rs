@@ -25,6 +25,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use tiny_http::{Header, Request, Response, Server};
@@ -1528,12 +1529,47 @@ pub fn save_runtime_settings_command(
 pub fn start_subscription_auth_command(
     root: &Path,
     session: &BusinessOsSession,
+    request: SubscriptionAuthStartCommandRequest,
 ) -> anyhow::Result<Value> {
     anyhow::ensure!(
         session_can_manage_all(session),
         "chef or admin role required"
     );
-    subscription_auth_start_payload(root)
+    subscription_auth_start_payload(root, request.use_device_code())
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SubscriptionAuthStartCommandRequest {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub auth_mode: Option<String>,
+    #[serde(default)]
+    pub flow: Option<String>,
+}
+
+impl SubscriptionAuthStartCommandRequest {
+    fn use_device_code(&self) -> bool {
+        let provider = self
+            .provider
+            .as_deref()
+            .unwrap_or("openai")
+            .trim()
+            .to_ascii_lowercase();
+        let auth_mode = self
+            .auth_mode
+            .as_deref()
+            .unwrap_or("chatgpt_subscription")
+            .trim()
+            .to_ascii_lowercase();
+        let flow = self
+            .flow
+            .as_deref()
+            .unwrap_or("device_code")
+            .trim()
+            .to_ascii_lowercase();
+        provider == "openai" && auth_mode == "chatgpt_subscription" && flow == "device_code"
+    }
 }
 
 pub fn run_channel_command(
@@ -1737,13 +1773,16 @@ fn runtime_auth_message(
     }
 }
 
-fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
-    let login = start_chatgpt_subscription_login(root)?;
+fn subscription_auth_start_payload(root: &Path, use_device_code: bool) -> anyhow::Result<Value> {
+    let login = start_chatgpt_subscription_login(root, use_device_code)?;
     Ok(serde_json::json!({
         "ok": true,
-        "status": "auth_url",
+        "status": if login.device_user_code.is_some() { "device_code" } else { "auth_url" },
         "login_id": login.login_id,
         "auth_url": login.auth_url,
+        "redirect_uri": login.redirect_uri,
+        "verification_url": login.verification_url,
+        "user_code": login.device_user_code,
         "message": "ChatGPT Subscription Autorisierung gestartet."
     }))
 }
@@ -1751,6 +1790,9 @@ fn subscription_auth_start_payload(root: &Path) -> anyhow::Result<Value> {
 struct StartedChatgptSubscriptionLogin {
     login_id: String,
     auth_url: String,
+    redirect_uri: String,
+    device_user_code: Option<String>,
+    verification_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -1761,26 +1803,70 @@ struct ChatgptLoginPkce {
 
 fn start_chatgpt_subscription_login(
     root: &Path,
+    use_device_code: bool,
 ) -> anyhow::Result<StartedChatgptSubscriptionLogin> {
     let codex_home = ctox_core::config::find_codex_home()
         .context("Codex/CTOX Auth-Store konnte nicht aufgelöst werden")?;
     let pkce = chatgpt_login_pkce();
     let state = chatgpt_login_state();
+    let login_id = Uuid::new_v4().to_string();
+    if use_device_code {
+        let device = request_chatgpt_device_code()?;
+        let verification_url = format!("{CHATGPT_AUTH_ISSUER}/codex/device");
+        let redirect_uri = format!("{CHATGPT_AUTH_ISSUER}/deviceauth/callback");
+        let auth_url = verification_url.clone();
+        let device_auth_id = device.device_auth_id.clone();
+        let device_user_code = device.user_code.clone();
+        let device_interval_secs = device.interval_secs;
+        let worker_login_id = login_id.clone();
+        let worker_redirect_uri = redirect_uri.clone();
+        let worker_root = root.to_path_buf();
+        thread::spawn(move || {
+            if let Err(err) = complete_chatgpt_device_code_login(
+                &worker_root,
+                &codex_home,
+                device_auth_id,
+                device_user_code,
+                device_interval_secs,
+                worker_redirect_uri,
+            ) {
+                eprintln!("CTOX ChatGPT subscription device login {worker_login_id} failed: {err}");
+            }
+        });
+        return Ok(StartedChatgptSubscriptionLogin {
+            login_id,
+            auth_url,
+            redirect_uri,
+            device_user_code: Some(device.user_code),
+            verification_url: Some(verification_url),
+        });
+    }
     let (server, port) = bind_chatgpt_login_server()
         .context("Lokaler ChatGPT-Login-Callback konnte nicht gestartet werden")?;
     let redirect_uri = format!("http://localhost:{port}/auth/callback");
     let auth_url = build_chatgpt_authorize_url(&redirect_uri, &pkce.challenge, &state);
-    let login_id = Uuid::new_v4().to_string();
     let worker_login_id = login_id.clone();
+    let worker_redirect_uri = redirect_uri.clone();
     let root = root.to_path_buf();
     thread::spawn(move || {
-        if let Err(err) =
-            run_chatgpt_login_callback_server(server, root, codex_home, redirect_uri, pkce, state)
-        {
+        if let Err(err) = run_chatgpt_login_callback_server(
+            server,
+            root,
+            codex_home,
+            worker_redirect_uri,
+            pkce,
+            state,
+        ) {
             eprintln!("CTOX ChatGPT subscription login {worker_login_id} failed: {err}");
         }
     });
-    Ok(StartedChatgptSubscriptionLogin { login_id, auth_url })
+    Ok(StartedChatgptSubscriptionLogin {
+        login_id,
+        auth_url,
+        redirect_uri,
+        device_user_code: None,
+        verification_url: None,
+    })
 }
 
 fn chatgpt_login_pkce() -> ChatgptLoginPkce {
@@ -1941,6 +2027,115 @@ fn respond_html(request: Request, status: u16, body: &str) -> anyhow::Result<()>
     .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap());
     request.respond(response).map_err(io::Error::other)?;
     Ok(())
+}
+
+struct ChatgptDeviceCode {
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatgptDeviceTokenResponse {
+    authorization_code: String,
+    code_verifier: String,
+}
+
+fn request_chatgpt_device_code() -> anyhow::Result<ChatgptDeviceCode> {
+    let response = ureq::post(&format!(
+        "{CHATGPT_AUTH_ISSUER}/api/accounts/deviceauth/usercode"
+    ))
+    .set("Content-Type", "application/json")
+    .send_json(serde_json::json!({
+        "client_id": ctox_core::auth::CLIENT_ID,
+    }));
+    let body: Value = match response {
+        Ok(response) => response.into_json().map_err(anyhow::Error::from)?,
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            anyhow::bail!("Device-Code-Anforderung fehlgeschlagen ({status}): {body}")
+        }
+        Err(err) => return Err(anyhow::Error::from(err)),
+    };
+    let device_auth_id = body
+        .get("device_auth_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("Device-Code-Antwort enthält keine device_auth_id")?;
+    let user_code = body
+        .get("user_code")
+        .or_else(|| body.get("usercode"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .context("Device-Code-Antwort enthält keinen user_code")?;
+    let interval_secs = body
+        .get("interval")
+        .and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.trim().parse::<u64>().ok(),
+            _ => None,
+        })
+        .unwrap_or(5)
+        .max(1);
+    Ok(ChatgptDeviceCode {
+        device_auth_id,
+        user_code,
+        interval_secs,
+    })
+}
+
+fn complete_chatgpt_device_code_login(
+    root: &Path,
+    codex_home: &Path,
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+    redirect_uri: String,
+) -> anyhow::Result<()> {
+    let token = poll_chatgpt_device_token(device_auth_id, user_code, interval_secs)?;
+    let tokens = exchange_chatgpt_authorization_code(
+        &token.authorization_code,
+        &redirect_uri,
+        &token.code_verifier,
+    )?;
+    persist_chatgpt_subscription_auth(root, codex_home, tokens)
+}
+
+fn poll_chatgpt_device_token(
+    device_auth_id: String,
+    user_code: String,
+    interval_secs: u64,
+) -> anyhow::Result<ChatgptDeviceTokenResponse> {
+    let started = Instant::now();
+    let max_wait = Duration::from_secs(15 * 60);
+    let sleep_for = Duration::from_secs(interval_secs).min(Duration::from_secs(15));
+    loop {
+        let response = ureq::post(&format!(
+            "{CHATGPT_AUTH_ISSUER}/api/accounts/deviceauth/token"
+        ))
+        .set("Content-Type", "application/json")
+        .send_json(serde_json::json!({
+            "device_auth_id": &device_auth_id,
+            "user_code": &user_code,
+        }));
+        match response {
+            Ok(response) => return response.into_json().map_err(anyhow::Error::from),
+            Err(ureq::Error::Status(status, response)) if status == 403 || status == 404 => {
+                if started.elapsed() >= max_wait {
+                    anyhow::bail!("Device-Code-Login ist nach 15 Minuten abgelaufen");
+                }
+                let _ = response.into_string();
+                thread::sleep(sleep_for);
+            }
+            Err(ureq::Error::Status(status, response)) => {
+                let body = response.into_string().unwrap_or_default();
+                anyhow::bail!("Device-Code-Token-Abfrage fehlgeschlagen ({status}): {body}")
+            }
+            Err(err) => return Err(anyhow::Error::from(err)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -4751,7 +4946,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.task.update" => {
             let mutation: CtoxTaskUpdateMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.task.update payload")?;
-            let session = rxdb_command_session(&command)?;
+            let session = rxdb_command_session(root, &command)?;
             let outcome = update_ctox_task(root, &session, mutation)?;
             let task_id = outcome
                 .get("task")
@@ -4770,7 +4965,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.task.delete" => {
             let mutation: CtoxTaskDeleteMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.task.delete payload")?;
-            let session = rxdb_command_session(&command)?;
+            let session = rxdb_command_session(root, &command)?;
             let outcome = delete_ctox_task(root, &session, mutation)?;
             let task_id = outcome
                 .get("task_id")
@@ -4812,7 +5007,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.business_os.user.upsert" => {
             let mutation: BusinessOsUserMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.business_os.user.upsert payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = upsert_user(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -4826,7 +5021,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.runtime_settings.save" => {
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.runtime_settings.save payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = save_runtime_settings_command(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -4838,8 +5033,11 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.subscription_auth.start" => {
-            let session = rxdb_authenticated_session(&command)?;
-            let outcome = start_subscription_auth_command(root, &session)?;
+            let request: SubscriptionAuthStartCommandRequest =
+                serde_json::from_value(command.payload.clone())
+                    .context("invalid ctox.subscription_auth.start payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let outcome = start_subscription_auth_command(root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -4850,7 +5048,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         command_type if is_outbound_active_command(command_type) => {
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = handle_outbound_active_command(root, &session, &command_id, &command)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -4864,7 +5062,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.channel payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = run_channel_command(root, &session, command_type, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -4876,7 +5074,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         command_type if command_type.starts_with("ctox.ticket.") => {
-            let _session = rxdb_authenticated_session(&command)?;
+            let _session = rxdb_authenticated_session(root, &command)?;
             let outcome = crate::mission::tickets::run_business_os_ticket_command(
                 root,
                 command_type,
@@ -4907,7 +5105,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                     .to_string();
             }
             mutation.client_context = command.client_context.clone();
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let accepted = record_report_command(
                 root,
                 &session,
@@ -4944,7 +5142,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleSourceSaveMutation =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.source.save payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&mutation.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
             anyhow::ensure!(
@@ -4979,7 +5177,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let request: ModuleSourceRollbackSnapshotRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.source.rollback_snapshot payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let module_id = source_sanitize_slug(&request.module_id);
             anyhow::ensure!(!module_id.is_empty(), "module_id is required");
             anyhow::ensure!(
@@ -5000,7 +5198,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: DesktopFileMaterializeRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.file.materialize payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = materialize_desktop_file_command(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -5014,7 +5212,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.module.release" => {
             let mutation: ModuleReleaseRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.release payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = record_module_release(root, &app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -5029,7 +5227,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.module.assign_founder" => {
             let mutation: ModuleFounderAssignment = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.assign_founder payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let outcome = assign_module_founder(root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -5043,7 +5241,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.module.save" => {
             let mutation: ModuleUpsertRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.save payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = upsert_module_manifest_command(root, &app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -5058,7 +5256,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.module.delete" => {
             let mutation: ModuleDeleteRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.delete payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = delete_installed_module_command(root, &app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -5074,7 +5272,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleInstallTemplateRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.module.install_template payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = install_template_module_command(&app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -5090,7 +5288,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleRollbackRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.module.rollback payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = rollback_module_release(root, &app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
@@ -5106,7 +5304,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let request: AppStoreInstallRequest =
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.app_store.install payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = install_app_module(root, &app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
@@ -5121,7 +5319,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
         "ctox.app_store.uninstall" => {
             let request: AppStoreUninstallRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.app_store.uninstall payload")?;
-            let session = rxdb_authenticated_session(&command)?;
+            let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
             let outcome = uninstall_app_module(root, &app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
@@ -8581,15 +8779,22 @@ fn stored_rxdb_business_command_outcome(
     Ok(Some(payload))
 }
 
-fn rxdb_command_session(command: &BusinessCommand) -> anyhow::Result<BusinessOsSession> {
-    rxdb_session_from_command(command, true)
+fn rxdb_command_session(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<BusinessOsSession> {
+    rxdb_session_from_command(root, command, true)
 }
 
-fn rxdb_authenticated_session(command: &BusinessCommand) -> anyhow::Result<BusinessOsSession> {
-    rxdb_session_from_command(command, false)
+fn rxdb_authenticated_session(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<BusinessOsSession> {
+    rxdb_session_from_command(root, command, false)
 }
 
 fn rxdb_session_from_command(
+    root: &Path,
     command: &BusinessCommand,
     require_manage_all: bool,
 ) -> anyhow::Result<BusinessOsSession> {
@@ -8599,12 +8804,6 @@ fn rxdb_session_from_command(
         command.client_context.clone()
     };
     let actor = client_ctx.get("actor").or_else(|| client_ctx.get("user"));
-    let role = actor
-        .and_then(|value| value.get("role"))
-        .or_else(|| client_ctx.get("role"))
-        .and_then(Value::as_str)
-        .unwrap_or("user")
-        .to_string();
     let id = actor
         .and_then(|value| value.get("id"))
         .or_else(|| client_ctx.get("user_id"))
@@ -8618,11 +8817,10 @@ fn rxdb_session_from_command(
         .and_then(Value::as_str)
         .unwrap_or(id.as_str())
         .to_string();
-    let is_admin = actor
-        .and_then(|value| value.get("is_admin"))
-        .or_else(|| client_ctx.get("is_admin"))
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| normalize_business_role(&role) == "admin");
+    let trusted_user = trusted_rxdb_command_user(root, &id, &display_name)?;
+    let role = trusted_user.role;
+    let display_name = trusted_user.display_name;
+    let is_admin = role_can_manage(&role);
     let session = BusinessOsSession {
         ok: true,
         authenticated: true,
@@ -8643,6 +8841,77 @@ fn rxdb_session_from_command(
         );
     }
     Ok(session)
+}
+
+fn trusted_rxdb_command_user(
+    root: &Path,
+    actor_id: &str,
+    actor_display_name: &str,
+) -> anyhow::Result<BusinessOsUser> {
+    let actor_id = actor_id.trim();
+    let conn = open_store(root)?;
+    let user = conn
+        .query_row(
+            "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
+             FROM business_users
+             WHERE user_id = ?1 AND active = 1",
+            params![actor_id],
+            |row| {
+                Ok(BusinessOsUser {
+                    id: row.get(0)?,
+                    display_name: row.get(1)?,
+                    role: normalize_business_role(&row.get::<_, String>(2)?),
+                    active: row.get::<_, i64>(3)? != 0,
+                    created_at_ms: row.get(4)?,
+                    updated_at_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()?;
+    if let Some(user) = user {
+        return Ok(user);
+    }
+
+    let user_count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM business_users", [], |row| row.get(0))?;
+    if user_count == 0 && env::var("CTOX_BUSINESS_OS_REQUIRE_LOGIN").as_deref() != Ok("1") {
+        let local = session(None, None);
+        if let Some(user) = local.user {
+            return Ok(BusinessOsUser {
+                id: if actor_id.is_empty() {
+                    user.id
+                } else {
+                    actor_id.to_owned()
+                },
+                display_name: if actor_display_name.trim().is_empty() {
+                    user.display_name
+                } else {
+                    actor_display_name.to_owned()
+                },
+                role: normalize_business_role(&user.role),
+                active: true,
+                created_at_ms: 0,
+                updated_at_ms: 0,
+            });
+        }
+    }
+
+    Ok(BusinessOsUser {
+        id: if actor_id.is_empty() {
+            "rxdb-command".to_owned()
+        } else {
+            actor_id.to_owned()
+        },
+        display_name: if actor_display_name.trim().is_empty() {
+            actor_id.to_owned()
+        } else {
+            actor_display_name.to_owned()
+        },
+        role: "user".to_owned(),
+        active: true,
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    })
 }
 
 fn write_rxdb_control_command_outcome(
@@ -10681,6 +10950,55 @@ mod tests {
                 .pointer("/documents/0/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_command_auth_uses_trusted_user_role_not_client_claims() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('viewer', 'Viewer', 'user', 1, ?1, ?1)",
+            params![now],
+        )?;
+        drop(conn);
+
+        let error = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_spoof_runtime_admin",
+                "command_id": "cmd_spoof_runtime_admin",
+                "module": "ctox",
+                "command_type": "ctox.runtime_settings.save",
+                "record_id": "runtime-settings",
+                "status": "pending_sync",
+                "payload": {
+                    "provider": "openai",
+                    "auth_mode": "chatgpt_subscription",
+                    "chat_model": "gpt-5.5",
+                    "preset": "Quality",
+                    "context": "256k"
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )
+        .expect_err("client-side role claims must not grant admin rights");
+
+        assert!(
+            error.to_string().contains("chef or admin role required"),
+            "unexpected error: {error}"
         );
         Ok(())
     }

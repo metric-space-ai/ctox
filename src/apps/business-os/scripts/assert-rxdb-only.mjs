@@ -43,6 +43,7 @@ assertConnectionSmokeRequiresAdvancedStatusBootBudget();
 assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
 assertBusinessOsServerHttpDataApisAreGated();
+assertSubscriptionAuthStartsThroughRxdbCommand();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
@@ -85,7 +86,6 @@ function contentForForbiddenHttpScan(file, content) {
 
   if (rel === 'src/apps/business-os/shared/react-settings.js') {
     allow(
-      /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
       /['"]\/api\/business-os\/ctox\/subscription-auth\/callback['"]/g,
     );
   }
@@ -112,6 +112,20 @@ function assertBusinessOsServerHttpDataApisAreGated() {
   const runtimeSettingsRoute = /"\/api\/business-os\/ctox\/runtime-settings"/;
   if (runtimeSettingsRoute.test(server)) {
     offenders.push('src/core/business_os/server.rs: runtime settings must not be exposed as an HTTP route');
+  }
+}
+
+function assertSubscriptionAuthStartsThroughRxdbCommand() {
+  const settingsPath = join(appRoot, 'shared/react-settings.js');
+  const settings = readFileSync(settingsPath, 'utf8');
+  if (!/commandType:\s*['"]ctox\.subscription_auth\.start['"]/.test(settings)) {
+    offenders.push('src/apps/business-os/shared/react-settings.js: ChatGPT subscription auth must start through business_commands');
+  }
+  if (!/flow:\s*['"]device_code['"]/.test(settings)) {
+    offenders.push('src/apps/business-os/shared/react-settings.js: remote ChatGPT subscription auth must request device_code flow');
+  }
+  if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
+    offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
   }
 }
 
