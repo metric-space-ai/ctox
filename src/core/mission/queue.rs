@@ -611,6 +611,14 @@ fn cleanup_queue_scope(root: &Path, args: &[String]) -> Result<QueueCleanupScope
                 mutated = updated.route_status == route_status;
                 if mutated {
                     mutated_count += 1;
+                    if matches!(options.action, QueueCleanupScopeAction::CancelOpen) {
+                        finalize_cancelled_queue_task_scope(
+                            root,
+                            task,
+                            &metadata,
+                            &options.reason,
+                        )?;
+                    }
                 }
             }
         }
@@ -908,6 +916,68 @@ fn load_queue_task_metadata(root: &Path, message_key: &str) -> Result<serde_json
         .optional()?
         .unwrap_or_else(|| "{}".to_string());
     Ok(serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw})))
+}
+
+fn finalize_cancelled_queue_task_scope(
+    root: &Path,
+    task: &channels::QueueTaskView,
+    metadata: &serde_json::Value,
+    reason: &str,
+) -> Result<()> {
+    let metadata_work_id = json_string(metadata, "ticket_self_work_id");
+    let work_id = task
+        .ticket_self_work_id
+        .as_deref()
+        .or(metadata_work_id.as_deref());
+    if let Some(work_id) = work_id {
+        if tickets::load_ticket_self_work_item(root, work_id)?.is_some() {
+            let _ = tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "cancelled",
+                "queue-cleanup",
+                Some(reason),
+                "internal",
+            )?;
+        }
+    }
+
+    let is_founder_rework = json_string(metadata, "ticket_self_work_kind")
+        .map(|kind| kind == "founder-communication-rework")
+        .unwrap_or(false);
+    if !is_founder_rework {
+        return Ok(());
+    }
+    let metadata_parent_key = json_string(metadata, "parent_message_key");
+    let metadata_inbound_key = json_string(metadata, "inbound_message_key");
+    let inbound_key = task
+        .parent_message_key
+        .as_deref()
+        .or(metadata_parent_key.as_deref())
+        .or(metadata_inbound_key.as_deref())
+        .map(str::trim)
+        .filter(|value| value.starts_with("email:"));
+    if let Some(inbound_key) = inbound_key {
+        channels::record_terminal_no_send_verdict(
+            root,
+            inbound_key,
+            "queue-cleanup",
+            &format!(
+                "Operator cleanup cancelled stale founder communication rework {}; no outbound resend is expected. {}",
+                task.message_key, reason
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value
+        .get(key)
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn queue_cleanup_task_plan(
@@ -2589,6 +2659,78 @@ mod tests {
                 .route_status,
             "pending"
         );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_scope_cancel_open_terminally_closes_founder_rework() -> Result<()> {
+        let root = temp_root("cleanup-founder-rework");
+        std::fs::create_dir_all(&root)?;
+        let inbound_key = "email:cto1@example.test::INBOX::42";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: "founder-communication-rework".to_string(),
+                title: "Founder communication rework: stale mail".to_string(),
+                body_text: "Reply to a stale founder mail.".to_string(),
+                state: "queued".to_string(),
+                metadata: json!({
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                    "thread_key": "email-review:founder:stale",
+                    "priority": "urgent",
+                }),
+            },
+            false,
+        )?;
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: stale mail".to_string(),
+                prompt: "Reply to stale founder mail.".to_string(),
+                thread_key: "email-review:founder:stale".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: Some("follow-up-orchestrator".to_string()),
+                parent_message_key: Some(inbound_key.to_string()),
+                extra_metadata: Some(json!({
+                    "ticket_self_work_id": item.work_id.clone(),
+                    "ticket_self_work_kind": "founder-communication-rework",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                })),
+            },
+        )?;
+
+        let report = cleanup_queue_scope(
+            &root,
+            &[
+                "cleanup-scope".to_string(),
+                "--match-title-prefix".to_string(),
+                "Founder communication rework:".to_string(),
+                "--cancel-open".to_string(),
+                "--reason".to_string(),
+                "stale founder backlog cleared by operator".to_string(),
+            ],
+        )?;
+
+        assert_eq!(report.matched_count, 1);
+        assert_eq!(report.mutated_count, 1);
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)?
+                .unwrap()
+                .route_status,
+            "cancelled"
+        );
+        let item = tickets::load_ticket_self_work_item(&root, &item.work_id)?.unwrap();
+        assert_eq!(item.state, "cancelled");
+        assert!(channels::inbound_message_has_terminal_no_send(
+            &root,
+            inbound_key
+        )?);
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
