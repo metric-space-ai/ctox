@@ -78,6 +78,18 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   ctox_ticket_approvals: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
   ctox_ticket_verifications: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
   ctox_ticket_writebacks: "b233b5e15b0f46ccfa864976861b8e0665dcee8f3e5d920f1c2341b2a3366ba9",
+  customer_accounts: "9a98ca2106e699119cd958f5fe35baf31a1eaa90aaf2dced51a903e353aa5e47",
+  customer_activities: "011f283b5b83c14faecff2f639af4db0d4f8ea97f8373bf513dbb50db251e5d8",
+  customer_contacts: "5f7abb4b088c1ce30f12ae1438d75012de41bcd9d46c9b07d8f34478f506a093",
+  customer_dedupe_candidates: "5b9503d8708014f6d7210ec37450611b77ee8127557d6dd5d901f1ad4e9c5097",
+  customer_files: "2436166ea70232f2beeebc3d2a6841a61a06985805db2968db39d4506ab9277e",
+  customer_import_batches: "59c02b9e9d7ea0449d407a9454550476457e2a2ec5af89090b7599eeee493f3b",
+  customer_notes: "b0ac4af2ad41f552f589e8cd9c55511fc35efd55c8b0f87012aa52089d1ac0f9",
+  customer_opportunities: "222c4446b849ad99db0210a36ebb1911b84a789952ff56489884675d3541cec5",
+  customer_tasks: "b9de4bca1c54d10100a19c5453fc1803990d15f803ecb52e6075b61daf1109c4",
+  customer_view_filters: "abd2880ebc48b29b72ef205a4b09085ee7acf1bdde3ffebcea08059ed7e99123",
+  customer_view_sorts: "be8feb8ba887879e7c223d4883b9b7771a0b137e9523c732d4de3432b3f4dc51",
+  customer_views: "c20ecce31428596148a2a4348061465eb8055aee14ef84ed9755d1a84503936e",
   desktop_file_chunks: "e59672c6f729c100b9076f88be0abb695f8e780f5cd03c2fabc7abc770ae44d9",
   desktop_files: "5c8ea6eddecd37233ef1b99ad10280afe9ae5654bc77819d85d56236257be627",
   desktop_icons: "b3fc7cde6c2df59469255353b9ce91e5213ad091b86e8b3f2372e63db8c5ecd9",
@@ -100,12 +112,14 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   outbound_campaigns: "194e3748c589a9cfc50ed63dccab525028e9bdbd006f20b73c10e29aa865e58d",
   outbound_companies: "1d79eb4b67d84826ed2016b0385224600d51c334d5b91d4adb77e62e916d0bbf",
   outbound_engagements: "f310db7ac3c7abdc78b40b227866ce673f5871601d594b00853000f7c4e088c2",
+  outbound_letter_templates: "9839d58ede05148b48b2a7e494fc29d4aa94611034a11bc4c73b32de866a7466",
   outbound_meeting_requests: "f04c3249c3a3d8cf7ca6c2a4b51fbb15729035bca707668fbef3988242e69aa2",
   outbound_messages: "93b8e2cea0670112b6499a86a774dafef3cbd289d11725bf57d4e0941ad13006",
   outbound_pipeline_items: "d128a88597977a96b0b2572c0eaeb7c2e5da7d21ae691ff0b0a18e4824fd378c",
   outbound_research_runs: "46573b72d1bd75daf105265b179af2b0b5d9fae5a61e15cf1198e0dc2604a372",
   outbound_sender_assignments: "d57aeee6946976bd082044147591d648583a6493c6c1c320359b0949c3405c78",
   outbound_sequences: "9368f8c42dc026c94549485d230d01ea511358313b64de0100b5f7706bae251b",
+  outbound_skillbooks: "a896fd1593614940aa223831a949fbda53e8714c9b5086a4f1949db1ace83c35",
   outbound_sources: "241a2673630fb51c06a4e3155465855f299cb56ceeb8ce09ab1ba0d4c460c29a",
   outbound_suppression_entries: "2a894fbfc598d41b81ad7c76466e531d6771c7a9f6e5aa34389dba0e5f2cb329",
   planning_absences: "20263440e5b0fa1d7a3a8c0d95f0753f6f5a30da517dcc208fafe5467ef1870b",
@@ -762,9 +776,9 @@ var FRAME_ACK_TIMEOUT_MS = 3e4;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
 var SEND_PRIORITIES = ["high", "normal", "low"];
-var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 16;
+var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
-var RTC_HANDSHAKE_TIMEOUT_MS = 5e3;
+var RTC_HANDSHAKE_TIMEOUT_MS = 15e3;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
@@ -2052,6 +2066,7 @@ function serializeFrameError(error, method = "") {
 }
 function tryAcquireRtcPeerConnectionSlot(owner, remotePeerId) {
   const pool = getRtcPeerConnectionPool();
+  noteCriticalRequested(pool, owner);
   const key = rtcPeerConnectionOwnerKey(owner, remotePeerId);
   const existing = pool.active.get(key);
   if (existing) return existing;
@@ -2075,6 +2090,7 @@ function acquireRtcPeerConnectionSlot(owner, remotePeerId) {
     scheduleRtcPeerConnectionQueueDrain("existing-slot-request");
     return existingQueued.promise;
   }
+  noteCriticalRequested(pool, owner);
   let resolve;
   let reject;
   const promise = new Promise((promiseResolve, promiseReject) => {
@@ -2175,6 +2191,7 @@ function getRtcPeerConnectionPool() {
       active: /* @__PURE__ */ new Map(),
       queue: [],
       criticalOpened: /* @__PURE__ */ new Set(),
+      criticalRequested: /* @__PURE__ */ new Set(),
       drainScheduled: false
     };
   } else if (root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive < MAX_GLOBAL_RTC_PEER_CONNECTIONS) {
@@ -2208,8 +2225,20 @@ function rtcPeerConnectionPriority(owner) {
   if (SHELL_CRITICAL_COLLECTIONS.has(collection)) return 0;
   return 10;
 }
+function noteCriticalRequested(pool, owner) {
+  if (!pool || !owner) return;
+  const room = owner?.options?.room || "";
+  if (!isBusinessOsRoom(room)) return;
+  const collection = collectionNameFromTopic(room);
+  if (!SHELL_CRITICAL_COLLECTIONS.has(collection)) return;
+  if (!pool.criticalRequested) pool.criticalRequested = /* @__PURE__ */ new Set();
+  pool.criticalRequested.add(collection);
+}
 function criticalRtcPeerConnectionsReady(pool) {
-  for (const collection of SHELL_CRITICAL_COLLECTIONS) {
+  const requested = pool?.criticalRequested;
+  if (!requested || requested.size === 0) return true;
+  for (const collection of requested) {
+    if (!SHELL_CRITICAL_COLLECTIONS.has(collection)) continue;
     if (!pool.criticalOpened?.has(collection)) return false;
   }
   return true;
@@ -3867,9 +3896,15 @@ var CtoxWebRtcReplicationState = class {
       localProtocol
     ]);
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
-    assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
-      requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES
-    });
+    try {
+      assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
+        requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES
+      });
+    } catch (error) {
+      this.peer?.removeConnection?.(peerId, "protocol-incompatible");
+      this.rejectInitialReplication(error);
+      throw error;
+    }
     if (normalizedRemoteProtocol?.peerSession?.role !== "ctox_instance") {
       this.peer?.removeConnection?.(peerId, "non-native-peer-role");
       return;
@@ -5041,6 +5076,7 @@ export {
   OBSERVABLE_DEBOUNCE_MS,
   QueryMetaStorage,
   RxDBMigrationSchemaPlugin,
+  SHELL_CRITICAL_COLLECTIONS,
   SIDECAR_DATABASE_NAME,
   SIDECAR_PIN_RECENT_READ_TTL_MS,
   V1_5_QUERY_FETCH_CAPABILITY,

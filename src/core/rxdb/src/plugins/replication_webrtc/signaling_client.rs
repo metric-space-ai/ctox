@@ -35,6 +35,12 @@ use crate::rxjs_compat::{RxBehaviorSubject, RxStream, RxSubject};
 
 type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// FIX 3: bound the WebSocket handshake. An unreachable or slow signaling
+/// server used to let `connect_async` hang indefinitely, wedging the
+/// per-collection bring-up that awaits it. 20s matches the per-collection
+/// timeout enforced at the bring-up loop.
+const SIGNALING_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+
 static RUSTLS_CRYPTO_PROVIDER: Once = Once::new();
 
 pub struct SignalingClient {
@@ -65,15 +71,32 @@ impl SignalingClient {
                 })),
             )
         })?;
-        let (ws_stream, _resp) = connect_async(parsed.as_str()).await.map_err(|e| {
-            new_rx_error(
-                "RC_WEBRTC_SIGNAL",
-                Some(serde_json::json!({
-                    "message": format!("WebSocket connect failed: {e}"),
-                    "url": &url_string,
-                })),
-            )
-        })?;
+        let (ws_stream, _resp) =
+            match tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, connect_async(parsed.as_str()))
+                .await
+            {
+                Ok(result) => result.map_err(|e| {
+                    new_rx_error(
+                        "RC_WEBRTC_SIGNAL",
+                        Some(serde_json::json!({
+                            "message": format!("WebSocket connect failed: {e}"),
+                            "url": &url_string,
+                        })),
+                    )
+                })?,
+                Err(_) => {
+                    return Err(new_rx_error(
+                        "RC_WEBRTC_SIGNAL",
+                        Some(serde_json::json!({
+                            "message": format!(
+                                "WebSocket connect timed out after {}s",
+                                SIGNALING_CONNECT_TIMEOUT.as_secs()
+                            ),
+                            "url": &url_string,
+                        })),
+                    ));
+                }
+            };
         let (write_half, mut read_half) = ws_stream.split();
         let client = Arc::new(Self {
             url: url_string,

@@ -15,12 +15,24 @@ const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const SEND_PRIORITIES = ['high', 'normal', 'low'];
-const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 16;
+// TODO(rxdb-webrtc-multiplexing): the real fix is to multiplex every
+// collection over a single RTCPeerConnection instead of opening one
+// PeerConnection per collection. There are ~80 Business OS collections (see
+// CTOX_BUSINESS_OS_SCHEMA_HASHES in schema.mjs), so a per-collection model
+// always risks slot starvation when several modules are open at once. Raising
+// the cap to 64 buys headroom for that workload until the multiplexing
+// redesign lands; it is not the end state.
+const MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
-const RTC_HANDSHAKE_TIMEOUT_MS = 5_000;
+const RTC_HANDSHAKE_TIMEOUT_MS = 15_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
-const SHELL_CRITICAL_COLLECTIONS = new Set([
+// Single source of truth for the shell-critical collection set. app.js derives
+// its CRITICAL_SYNC_COLLECTIONS from this exported list so the two lists cannot
+// silently drift. Browser_* members only register when the Browser module is
+// active; the grant logic below gates only on criticals actually requested this
+// session (see criticalRequested / criticalRtcPeerConnectionsReady).
+export const SHELL_CRITICAL_COLLECTIONS = new Set([
   'ctox_runtime_settings',
   'business_module_catalog',
   'business_commands',
@@ -1384,6 +1396,7 @@ function serializeFrameError(error, method = '') {
 
 function tryAcquireRtcPeerConnectionSlot(owner, remotePeerId) {
   const pool = getRtcPeerConnectionPool();
+  noteCriticalRequested(pool, owner);
   const key = rtcPeerConnectionOwnerKey(owner, remotePeerId);
   const existing = pool.active.get(key);
   if (existing) return existing;
@@ -1408,6 +1421,7 @@ function acquireRtcPeerConnectionSlot(owner, remotePeerId) {
     scheduleRtcPeerConnectionQueueDrain('existing-slot-request');
     return existingQueued.promise;
   }
+  noteCriticalRequested(pool, owner);
   let resolve;
   let reject;
   const promise = new Promise((promiseResolve, promiseReject) => {
@@ -1518,6 +1532,7 @@ function getRtcPeerConnectionPool() {
       active: new Map(),
       queue: [],
       criticalOpened: new Set(),
+      criticalRequested: new Set(),
       drainScheduled: false,
     };
   } else if (root[GLOBAL_RTC_CONNECTION_POOL_KEY].maxActive < MAX_GLOBAL_RTC_PEER_CONNECTIONS) {
@@ -1555,8 +1570,27 @@ function rtcPeerConnectionPriority(owner) {
   return 10;
 }
 
+function noteCriticalRequested(pool, owner) {
+  if (!pool || !owner) return;
+  const room = owner?.options?.room || '';
+  if (!isBusinessOsRoom(room)) return;
+  const collection = collectionNameFromTopic(room);
+  if (!SHELL_CRITICAL_COLLECTIONS.has(collection)) return;
+  if (!pool.criticalRequested) pool.criticalRequested = new Set();
+  pool.criticalRequested.add(collection);
+}
+
 function criticalRtcPeerConnectionsReady(pool) {
-  for (const collection of SHELL_CRITICAL_COLLECTIONS) {
+  // Gate optional connections only on the shell-critical collections actually
+  // requested this session, not on the full SHELL_CRITICAL_COLLECTIONS set.
+  // The 4 browser_* collections only register when the Browser module is
+  // active, so a Documents-only session must not wait on them forever. If no
+  // critical collection has been requested yet, optional connections may
+  // proceed; otherwise every requested critical must have an open DataChannel.
+  const requested = pool?.criticalRequested;
+  if (!requested || requested.size === 0) return true;
+  for (const collection of requested) {
+    if (!SHELL_CRITICAL_COLLECTIONS.has(collection)) continue;
     if (!pool.criticalOpened?.has(collection)) return false;
   }
   return true;

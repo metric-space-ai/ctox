@@ -36,6 +36,19 @@ const SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT: u64 = 2;
 
 static INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
+/// FIX 1: map a `tokio::task::JoinError` (blocking task panicked or was
+/// cancelled) into an `RxError` so the storage methods can keep their
+/// existing `Result<_, RxError>` signatures while running the synchronous
+/// rusqlite work off the async runtime via `spawn_blocking`.
+fn join_error(err: tokio::task::JoinError) -> RxError {
+    new_rx_error(
+        "SQLITE",
+        Some(json!({
+            "message": format!("sqlite blocking task failed: {err}")
+        })),
+    )
+}
+
 static UPDATE_REGISTRY: OnceLock<StdMutex<HashMap<String, Arc<Notify>>>> = OnceLock::new();
 
 pub fn register_table_notifier(table_name: &str, notifier: Arc<Notify>) {
@@ -136,49 +149,48 @@ impl RxStorageInstanceSqlite {
         Ok(())
     }
 
-    fn load_docs_in_db(&self, conn: &rusqlite::Connection) -> RxResult<HashMap<String, Value>> {
-        let docs = all_documents(conn, &self.table_name)?;
-        let mut docs_in_db = HashMap::new();
-        for doc in docs {
-            if let Some(id) = doc.get(&self.primary_path).and_then(Value::as_str) {
-                docs_in_db.insert(id.to_string(), doc);
-            }
-        }
-        Ok(docs_in_db)
-    }
+}
 
-    fn checkpoint_status_snapshot(&self) -> Value {
-        let conn = self.connection.lock();
-        let checkpoint = latest_checkpoint(&conn, &self.table_name)
-            .unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
-        let latest_id = checkpoint
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let latest_lwt = checkpoint
-            .get("lwt")
-            .and_then(Value::as_f64)
-            .unwrap_or_default();
-        let schema_hash = schema_checkpoint_hash(&self.schema);
-        let latest_id_hash = if latest_id.is_empty() {
-            String::new()
-        } else {
-            sha256_hex(latest_id.as_bytes())
-        };
-        let epoch_input = format!(
-            "{}\n{}\n{}\n{}\n{}",
-            self.database_name, self.collection_name, schema_hash, latest_lwt, latest_id
-        );
-        json!({
-            "source": "rxdb-rs-sqlite",
-            "state": "advertised",
-            "collection": self.collection_name,
-            "schemaHash": schema_hash,
-            "latestLwt": latest_lwt,
-            "latestIdHash": latest_id_hash,
-            "epoch": sha256_hex(epoch_input.as_bytes()),
-        })
-    }
+/// FIX 1: free-standing checkpoint-status computation so it can run inside
+/// `spawn_blocking` (no `&self` lifetime captured). Behavior is identical to
+/// the previous `RxStorageInstanceSqlite::checkpoint_status_snapshot` method.
+fn checkpoint_status_snapshot(
+    connection: &SharedSqliteConnection,
+    table_name: &str,
+    database_name: &str,
+    collection_name: &str,
+    schema: &RxJsonSchema,
+) -> Value {
+    let conn = connection.lock();
+    let checkpoint =
+        latest_checkpoint(&conn, table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }));
+    let latest_id = checkpoint
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let latest_lwt = checkpoint
+        .get("lwt")
+        .and_then(Value::as_f64)
+        .unwrap_or_default();
+    let schema_hash = schema_checkpoint_hash(schema);
+    let latest_id_hash = if latest_id.is_empty() {
+        String::new()
+    } else {
+        sha256_hex(latest_id.as_bytes())
+    };
+    let epoch_input = format!(
+        "{}\n{}\n{}\n{}\n{}",
+        database_name, collection_name, schema_hash, latest_lwt, latest_id
+    );
+    json!({
+        "source": "rxdb-rs-sqlite",
+        "state": "advertised",
+        "collection": collection_name,
+        "schemaHash": schema_hash,
+        "latestLwt": latest_lwt,
+        "latestIdHash": latest_id_hash,
+        "epoch": sha256_hex(epoch_input.as_bytes()),
+    })
 }
 
 fn start_external_write_poll(
@@ -206,23 +218,32 @@ fn start_external_write_poll(
             if closed.load(Ordering::SeqCst) {
                 break;
             }
-            let result = {
-                let checkpoint = checkpoint.lock().clone();
-                let conn = connection.lock();
-                let poll_limit = if table_name.contains("desktop_file_chunks") {
+            // FIX 1: run the per-table poll query off the tokio worker thread.
+            // Each instance spawns one of these loops; doing the blocking
+            // rusqlite read directly on a worker (1-2 on a small VPS) is what
+            // starves the heartbeat timer + replication. We move owned clones
+            // into `spawn_blocking` and only await the `Send` result here.
+            let poll_conn = Arc::clone(&connection);
+            let poll_table = table_name.clone();
+            let poll_primary = primary_path.clone();
+            let poll_checkpoint = checkpoint.lock().clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let conn = poll_conn.lock();
+                let poll_limit = if poll_table.contains("desktop_file_chunks") {
                     SQLITE_EXTERNAL_POLL_FILE_CHUNK_LIMIT
                 } else {
                     50
                 };
                 changed_documents_since(
                     &conn,
-                    &table_name,
-                    &primary_path,
+                    &poll_table,
+                    &poll_primary,
                     poll_limit,
-                    Some(&checkpoint),
+                    Some(&poll_checkpoint),
                 )
-            };
-            let Ok(result) = result else {
+            })
+            .await;
+            let Ok(Ok(result)) = result else {
                 continue;
             };
             if result.documents.is_empty() {
@@ -366,36 +387,63 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         context: &str,
     ) -> Result<RxStorageBulkWriteResponse, RxError> {
         self.ensure_open("bulk_write")?;
-        let mut ret = RxStorageBulkWriteResponse { error: Vec::new() };
-        let mut event_bulk: Option<EventBulk> = None;
-        let mut checkpoint: Option<Value> = None;
-        {
-            let mut conn = self.connection.lock();
+
+        // FIX 1: run the blocking rusqlite transaction on a dedicated blocking
+        // thread instead of a tokio worker. Holding the connection mutex while
+        // doing synchronous SQLite work directly on a tokio worker thread
+        // starves the heartbeat timer + replication on a 1-2 worker VPS. We
+        // move owned clones of everything the transaction needs into
+        // `spawn_blocking`, run the identical transaction/categorize logic
+        // there, and return only the `Send` results (errors, optional event
+        // bulk, optional checkpoint). Semantics (ordering, Immediate
+        // transaction, error mapping) are unchanged — only WHERE it runs.
+        let connection = Arc::clone(&self.connection);
+        let schema_has_attachments = self.schema.attachments.is_some();
+        let primary_path = self.primary_path.clone();
+        let table_name = self.table_name.clone();
+        let context = context.to_string();
+
+        let (error, event_bulk, checkpoint): (
+            Vec<crate::types::RxStorageWriteError>,
+            Option<EventBulk>,
+            Option<Value>,
+        ) = tokio::task::spawn_blocking(move || -> RxResult<_> {
+            let mut conn = connection.lock();
             let tx = conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(sqlite_error)?;
-            let docs_in_db = self.load_docs_in_db(&tx)?;
+            let mut docs_in_db = HashMap::new();
+            {
+                let docs = all_documents(&tx, &table_name)?;
+                for doc in docs {
+                    if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
+                        docs_in_db.insert(id.to_string(), doc);
+                    }
+                }
+            }
             let categorized = crate::rx_storage_helper::categorize_bulk_write_rows(
-                self.schema.attachments.is_some(),
-                &self.primary_path,
+                schema_has_attachments,
+                &primary_path,
                 &docs_in_db,
                 &document_writes,
-                context,
+                &context,
             );
-            ret.error = categorized.errors;
+            let error = categorized.errors;
 
             for row in categorized.bulk_insert_docs.iter() {
-                insert_document(&tx, &self.table_name, &self.primary_path, &row.document)?;
+                insert_document(&tx, &table_name, &primary_path, &row.document)?;
             }
             for row in categorized.bulk_update_docs.iter() {
-                update_document(&tx, &self.table_name, &self.primary_path, row)?;
+                update_document(&tx, &table_name, &primary_path, row)?;
             }
             tx.commit().map_err(sqlite_error)?;
 
+            let mut event_bulk: Option<EventBulk> = None;
+            let mut checkpoint: Option<Value> = None;
             if !categorized.event_bulk.events.is_empty() {
                 if let Some(newest) = categorized.newest_row.as_ref() {
                     checkpoint = Some(json!({
-                        "id": newest.document.get(&self.primary_path).cloned().unwrap_or(Value::Null),
+                        "id": newest.document.get(&primary_path).cloned().unwrap_or(Value::Null),
                         "lwt": newest
                             .document
                             .get("_meta")
@@ -408,7 +456,12 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 bulk.checkpoint = checkpoint.clone();
                 event_bulk = Some(bulk);
             }
-        }
+            Ok((error, event_bulk, checkpoint))
+        })
+        .await
+        .map_err(join_error)??;
+
+        let ret = RxStorageBulkWriteResponse { error };
 
         if let Some(checkpoint) = checkpoint {
             *self.external_checkpoint.lock() = checkpoint;
@@ -425,20 +478,28 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         with_deleted: bool,
     ) -> Result<Vec<Value>, RxError> {
         self.ensure_open("find_documents_by_id")?;
-        let conn = self.connection.lock();
-        let mut ret = Vec::new();
-        for id in ids {
-            if let Some(doc) = document_by_id(&conn, &self.table_name, id)? {
-                let deleted = doc
-                    .get("_deleted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if with_deleted || !deleted {
-                    ret.push(doc);
+        // FIX 1: read off the tokio worker thread.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        let ids = ids.to_vec();
+        tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+            let conn = connection.lock();
+            let mut ret = Vec::new();
+            for id in &ids {
+                if let Some(doc) = document_by_id(&conn, &table_name, id)? {
+                    let deleted = doc
+                        .get("_deleted")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if with_deleted || !deleted {
+                        ret.push(doc);
+                    }
                 }
             }
-        }
-        Ok(ret)
+            Ok(ret)
+        })
+        .await
+        .map_err(join_error)?
     }
 
     async fn query_stream_into(
@@ -472,23 +533,31 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         let matcher = get_query_matcher(&self.schema, &query);
         let comparator = get_sort_comparator(&self.schema, &query);
 
-        let conn = self.connection.lock();
-        // Stream rows one at a time and keep only those that match. Sort and
-        // truncate at the end so we never materialize the whole table.
-        // Memory bound: O(number of matches), not O(table size).
-        let mut rows: Vec<Value> = Vec::new();
-        for_each_document(&conn, &self.table_name, |doc| {
-            if matcher(&doc) {
-                rows.push(doc);
-            }
-            Ok(true)
-        })?;
-        rows.sort_by(|a, b| comparator(a, b));
-        let start = skip.min(rows.len());
-        let end = skip_plus_limit.min(rows.len());
-        Ok(RxStorageQueryResult {
-            documents: rows[start..end].to_vec(),
+        // FIX 1: run the full-table scan + sort off the tokio worker thread.
+        // The matcher/comparator are `Arc<dyn Fn .. + Send + Sync>` so they
+        // move cleanly into `spawn_blocking`.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        let documents = tokio::task::spawn_blocking(move || -> RxResult<Vec<Value>> {
+            let conn = connection.lock();
+            // Stream rows one at a time and keep only those that match. Sort and
+            // truncate at the end so we never materialize the whole table.
+            // Memory bound: O(number of matches), not O(table size).
+            let mut rows: Vec<Value> = Vec::new();
+            for_each_document(&conn, &table_name, |doc| {
+                if matcher(&doc) {
+                    rows.push(doc);
+                }
+                Ok(true)
+            })?;
+            rows.sort_by(|a, b| comparator(a, b));
+            let start = skip.min(rows.len());
+            let end = skip_plus_limit.min(rows.len());
+            Ok(rows[start..end].to_vec())
         })
+        .await
+        .map_err(join_error)??;
+        Ok(RxStorageQueryResult { documents })
     }
 
     async fn count(&self, prepared_query: &Value) -> Result<RxStorageCountResult, RxError> {
@@ -505,14 +574,25 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         checkpoint: Option<&Value>,
     ) -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
         self.ensure_open("get_changed_documents_since")?;
-        let conn = self.connection.lock();
-        changed_documents_since(
-            &conn,
-            &self.table_name,
-            &self.primary_path,
-            limit,
-            checkpoint,
+        // FIX 1: read off the tokio worker thread.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        let primary_path = self.primary_path.clone();
+        let checkpoint = checkpoint.cloned();
+        tokio::task::spawn_blocking(
+            move || -> Result<RxStorageChangedDocumentsSinceResult, RxError> {
+                let conn = connection.lock();
+                changed_documents_since(
+                    &conn,
+                    &table_name,
+                    &primary_path,
+                    limit,
+                    checkpoint.as_ref(),
+                )
+            },
         )
+        .await
+        .map_err(join_error)?
     }
 
     fn change_stream(&self) -> RxStream<EventBulk> {
@@ -521,15 +601,27 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
 
     async fn cleanup(&self, min_deleted_time: i64) -> Result<bool, RxError> {
         self.ensure_open("cleanup")?;
-        cleanup_deleted_documents(&self.connection, &self.table_name, min_deleted_time)
+        // FIX 1: run the DELETE off the tokio worker thread.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        tokio::task::spawn_blocking(move || -> RxResult<bool> {
+            cleanup_deleted_documents(&connection, &table_name, min_deleted_time)
+        })
+        .await
+        .map_err(join_error)?
     }
 
     async fn remove(&self) -> Result<(), RxError> {
         self.ensure_open("remove")?;
-        {
-            let conn = self.connection.lock();
-            drop_table(&conn, &self.table_name)?;
-        }
+        // FIX 1: run the DROP TABLE off the tokio worker thread.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        tokio::task::spawn_blocking(move || -> RxResult<()> {
+            let conn = connection.lock();
+            drop_table(&conn, &table_name)
+        })
+        .await
+        .map_err(join_error)??;
         self.closed.store(true, Ordering::SeqCst);
         unregister_table_notifier(&self.table_name);
         Ok(())
@@ -542,7 +634,23 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
     }
 
     async fn replication_checkpoint_status(&self) -> Value {
-        self.checkpoint_status_snapshot()
+        // FIX 1: compute the checkpoint snapshot off the tokio worker thread.
+        let connection = Arc::clone(&self.connection);
+        let table_name = self.table_name.clone();
+        let database_name = self.database_name.clone();
+        let collection_name = self.collection_name.clone();
+        let schema = self.schema.clone();
+        tokio::task::spawn_blocking(move || {
+            checkpoint_status_snapshot(
+                &connection,
+                &table_name,
+                &database_name,
+                &collection_name,
+                &schema,
+            )
+        })
+        .await
+        .unwrap_or_else(|_| json!({ "source": "rxdb-rs-sqlite", "state": "error" }))
     }
 
     async fn get_attachment_data(

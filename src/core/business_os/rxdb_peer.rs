@@ -44,6 +44,10 @@ static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::cons
 static BROWSER_RUNTIME_COMMAND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
 const NATIVE_SIGNALING_JOIN_STAGGER_MS: u64 = 75;
+/// FIX 3: per-collection signaling/replication bring-up timeout. One slow or
+/// unreachable signaling room must not wedge the whole peer; on timeout we log
+/// and move on to the next collection.
+const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
 const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-control-plane-v1",
@@ -76,6 +80,29 @@ const BUSINESS_OS_CHANNEL_IDS: &[&str] = &["whatsapp", "jami", "teams", "email",
 const NATIVE_PEER_STATUS_VERSION: &str = "ctox-native-rxdb-peer-status-v1";
 const NATIVE_PEER_HEARTBEAT_INTERVAL_SECS: u64 = 5;
 const NATIVE_PEER_HEARTBEAT_TTL_MS: u64 = 30_000;
+/// FIX 2: the peer's runtime must not be single-threaded on a small VPS. With
+/// 1-2 worker threads the per-collection pollers + blocking work starved the
+/// heartbeat and replication. We floor the worker count at 4 (and scale up
+/// with available cores) so timers, replication, and blocking offload have
+/// room to make progress concurrently.
+const NATIVE_PEER_MIN_WORKER_THREADS: usize = 4;
+/// FIX 2: how often the lock/heartbeat watchdog wakes inside `run_native_peer`
+/// to confirm the peer's own status heartbeat is still being written. If the
+/// dedicated heartbeat thread has died/stalled, the watchdog shuts the peer
+/// down cleanly so the OS process lock is released for a fresh start.
+const NATIVE_PEER_WATCHDOG_INTERVAL_SECS: u64 = 15;
+/// FIX 2: maximum tolerated heartbeat staleness before the watchdog considers
+/// its own liveness machinery wedged. Generously above the write interval and
+/// the published TTL so a healthy peer never trips it.
+const NATIVE_PEER_WATCHDOG_MAX_HEARTBEAT_AGE_MS: u64 = 90_000;
+
+/// FIX 2: worker-thread count for the peer's tokio runtime: `max(4, cores)`.
+fn native_peer_worker_threads() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(NATIVE_PEER_MIN_WORKER_THREADS)
+        .max(NATIVE_PEER_MIN_WORKER_THREADS)
+}
 
 type WebRtcPool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 
@@ -95,7 +122,10 @@ struct NativePeer {
     _ticket_state_sync: tokio::task::JoinHandle<()>,
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
     _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
-    _status_heartbeat: tokio::task::JoinHandle<()>,
+    // FIX 2: the status heartbeat now runs on a dedicated OS thread (see
+    // `StatusHeartbeatHandle`) so its liveness is independent of the tokio
+    // runtime. `Mutex` lets `shutdown` take/stop it through `&self`.
+    _status_heartbeat: Mutex<Option<StatusHeartbeatHandle>>,
 }
 
 impl NativePeer {
@@ -113,7 +143,13 @@ impl NativePeer {
         self._ticket_state_sync.abort();
         self._business_record_projection_sync.abort();
         self._browser_runtime_maintenance.abort();
-        self._status_heartbeat.abort();
+        // FIX 2: stop the dedicated heartbeat OS thread.
+        if let Ok(mut heartbeat) = self._status_heartbeat.lock() {
+            if let Some(handle) = heartbeat.as_mut() {
+                handle.stop();
+            }
+            *heartbeat = None;
+        }
         // Tear down any live browser processes so stop leaves no zombies.
         for session_id in browser_runtime_manager().active_session_ids() {
             browser_runtime_manager().stop(&session_id).await;
@@ -265,6 +301,7 @@ pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
     let root = root.to_path_buf();
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .worker_threads(native_peer_worker_threads())
         .thread_name("business-os-rxdb-peer")
         .build()
         .context("failed to create Business OS native RxDB peer runtime")?;
@@ -291,6 +328,7 @@ pub fn spawn_native_peer(
         .spawn(move || {
             let runtime = match tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .worker_threads(native_peer_worker_threads())
                 .thread_name("business-os-rxdb-peer")
                 .build()
             {
@@ -844,16 +882,55 @@ async fn run_native_peer(
     let database_path = store::rxdb_store_path(&root);
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
-    let collections = database
-        .add_collections(collection_creators())
+
+    // FIX 2: start the status heartbeat on its dedicated OS thread NOW — right
+    // after the process lock and DB are ready and BEFORE the collection
+    // bring-up loop. If bring-up stalls, the heartbeat must still be written so
+    // `business-os-rxdb-peer.status.json` stays fresh and the process is not
+    // mistaken for dead-but-lock-held.
+    let status_heartbeat = spawn_native_peer_status_heartbeat(
+        root.clone(),
+        peer_session_id.clone(),
+        database_path.clone(),
+    );
+
+    // FIX 4: register collections fault tolerantly. A drifted/failing OPTIONAL
+    // collection is logged and skipped; a failing REQUIRED collection still
+    // aborts the peer (the daemon depends on those). The strict
+    // all-or-nothing `add_collections` is no longer used here.
+    let (collections, failed_collections) = database
+        .add_collections_tolerant(collection_creators())
         .await
         .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+    for (collection_name, err) in &failed_collections {
+        if is_required_native_collection(collection_name) {
+            // Drop the heartbeat handle + process lock before returning so the
+            // lock is released for a clean restart.
+            return Err(anyhow::anyhow!(
+                "required Business OS RxDB collection `{collection_name}` failed to register: {err}"
+            ));
+        }
+        eprintln!(
+            "[business-os] skipping optional Business OS RxDB collection `{collection_name}` \
+             (registration failed: {err})"
+        );
+    }
 
-    let mut pools = Vec::with_capacity(collections.len());
+    // FIX 3: bring collections up CONCURRENTLY, each guarded by a per-collection
+    // timeout. A slow or unreachable signaling room for one collection must not
+    // serialize or wedge the bring-up of the rest. Each collection's
+    // `replicate_web_rtc_rs` runs in its own task; on timeout or error we log
+    // and continue. Required-collection failures here are tolerated at the
+    // replication layer (the collection is still registered and locally
+    // queryable) — only registration failure of a required collection aborts.
+    let mut bringup_tasks: Vec<(String, tokio::task::JoinHandle<anyhow::Result<WebRtcPool>>)> =
+        Vec::with_capacity(collections.len());
+    let mut staggered = false;
     for (collection_name, collection) in collections {
-        if !pools.is_empty() {
+        if staggered {
             tokio::time::sleep(Duration::from_millis(NATIVE_SIGNALING_JOIN_STAGGER_MS)).await;
         }
+        staggered = true;
         let topic = format!("{sync_room}:{collection_name}");
         let mut options = SyncOptionsWebRTCRs::new(collection, signaling_url.clone(), topic);
         options.peer_session_id = peer_session_id.clone();
@@ -863,10 +940,43 @@ async fn run_native_peer(
             options.push_batch_size = 1;
             options.retry_time = 1_000;
         }
-        let pool = replicate_web_rtc_rs(options).await.map_err(|err| {
-            anyhow::anyhow!("start WebRTC replication for {collection_name}: {err}")
-        })?;
-        pools.push(pool);
+        let task_name = collection_name.clone();
+        let handle = tokio::spawn(async move {
+            match tokio::time::timeout(
+                Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
+                replicate_web_rtc_rs(options),
+            )
+            .await
+            {
+                Ok(Ok(pool)) => Ok(pool),
+                Ok(Err(err)) => Err(anyhow::anyhow!(
+                    "start WebRTC replication for {task_name}: {err}"
+                )),
+                Err(_) => Err(anyhow::anyhow!(
+                    "WebRTC replication bring-up for {task_name} timed out after {}s",
+                    NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
+                )),
+            }
+        });
+        bringup_tasks.push((collection_name, handle));
+    }
+
+    let mut pools = Vec::with_capacity(bringup_tasks.len());
+    for (collection_name, handle) in bringup_tasks {
+        match handle.await {
+            Ok(Ok(pool)) => pools.push(pool),
+            Ok(Err(err)) => {
+                eprintln!(
+                    "[business-os] WebRTC replication bring-up skipped for `{collection_name}`: {err}"
+                );
+            }
+            Err(join_err) => {
+                eprintln!(
+                    "[business-os] WebRTC replication bring-up task for `{collection_name}` \
+                     panicked: {join_err}"
+                );
+            }
+        }
     }
 
     let command_consumer = tokio::spawn(consume_business_commands_loop(
@@ -929,13 +1039,11 @@ async fn run_native_peer(
         Arc::clone(&database),
         Arc::clone(&database_write_lock),
     ));
-    let status_heartbeat = spawn_native_peer_status_heartbeat(
-        root.clone(),
-        peer_session_id.clone(),
-        database_path.clone(),
-    );
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
 
+    // The heartbeat thread was started before bring-up (FIX 2). Move its
+    // handle into the peer so `shutdown` can stop it and so it is dropped (and
+    // signalled to stop) on any unwind of this function.
     let peer = Arc::new(NativePeer {
         database,
         peer_session_id,
@@ -952,13 +1060,49 @@ async fn run_native_peer(
         _ticket_state_sync: ticket_state_sync,
         _business_record_projection_sync: business_record_projection_sync,
         _browser_runtime_maintenance: browser_runtime_maintenance,
-        _status_heartbeat: status_heartbeat,
+        _status_heartbeat: Mutex::new(Some(status_heartbeat)),
     });
     if let Ok(mut current) = NATIVE_PEER.lock() {
         *current = Some(Arc::clone(&peer));
     }
     NATIVE_PEER_RUNNING.store(true, Ordering::SeqCst);
-    let _ = shutdown_rx.await;
+
+    // FIX 2: instead of a bare `shutdown_rx.await`, select over the shutdown
+    // signal and a periodic watchdog tick. The watchdog confirms the dedicated
+    // heartbeat thread is still publishing a fresh status file. If the
+    // heartbeat machinery is wedged (no fresh heartbeat for well over the
+    // write interval and published TTL), the peer logs and shuts down cleanly
+    // so the OS process lock is released for a fresh start instead of being
+    // held forever by a dead-but-not-exited process. This is conservative: the
+    // threshold is far above the heartbeat interval to avoid flapping.
+    let mut watchdog =
+        tokio::time::interval(Duration::from_secs(NATIVE_PEER_WATCHDOG_INTERVAL_SECS));
+    watchdog.tick().await; // first tick fires immediately; consume it.
+    loop {
+        tokio::select! {
+            _ = &mut shutdown_rx => {
+                break;
+            }
+            _ = watchdog.tick() => {
+                let heartbeat_age_ms = heartbeat_updated_at_ms(
+                    read_native_peer_heartbeat(&root).as_ref(),
+                )
+                .map(|updated_at_ms| (now_ms() as u64).saturating_sub(updated_at_ms));
+                let wedged = heartbeat_age_ms
+                    .map(|age_ms| age_ms > NATIVE_PEER_WATCHDOG_MAX_HEARTBEAT_AGE_MS)
+                    .unwrap_or(true);
+                if wedged {
+                    eprintln!(
+                        "[business-os] native rxdb peer watchdog: heartbeat stale ({:?} ms); \
+                         shutting down to release the process lock for a clean restart",
+                        heartbeat_age_ms
+                    );
+                    break;
+                }
+            }
+        }
+    }
+
     peer.shutdown().await;
     if let Ok(mut current) = NATIVE_PEER.lock() {
         if current
@@ -1169,19 +1313,65 @@ fn write_native_peer_heartbeat(
     Ok(())
 }
 
+/// FIX 2: handle for the dedicated status-heartbeat OS thread. Holding it
+/// alive keeps the heartbeat running; calling `stop()` (or dropping it) sets
+/// the stop flag so the thread exits at its next wake.
+struct StatusHeartbeatHandle {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl StatusHeartbeatHandle {
+    fn stop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+impl Drop for StatusHeartbeatHandle {
+    fn drop(&mut self) {
+        // Ensure the heartbeat thread is signalled to stop even if the peer
+        // unwinds without an explicit shutdown path.
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// FIX 2: run the status heartbeat on a DEDICATED OS thread driven by
+/// `std::thread::sleep`, not a tokio task. Heartbeat liveness must be
+/// independent of async-runtime health: if the tokio workers are starved or
+/// the collection bring-up loop stalls, the heartbeat must still be written so
+/// `business-os-rxdb-peer.status.json` stays fresh (TTL 30s). The caller
+/// starts this right after the process lock + DB are ready, BEFORE bring-up.
 fn spawn_native_peer_status_heartbeat(
     root: PathBuf,
     peer_session_id: String,
     database_path: PathBuf,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            if let Err(err) = write_native_peer_heartbeat(&root, &peer_session_id, &database_path) {
-                eprintln!("[business-os] native rxdb peer status heartbeat failed: {err:#}");
+) -> StatusHeartbeatHandle {
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_for_thread = Arc::clone(&stop);
+    let thread = std::thread::Builder::new()
+        .name("business-os-rxdb-heartbeat".to_string())
+        .spawn(move || {
+            while !stop_for_thread.load(Ordering::SeqCst) {
+                if let Err(err) =
+                    write_native_peer_heartbeat(&root, &peer_session_id, &database_path)
+                {
+                    eprintln!("[business-os] native rxdb peer status heartbeat failed: {err:#}");
+                }
+                // Sleep in short slices so a stop request is honored promptly
+                // instead of after a full heartbeat interval.
+                let mut slept_ms = 0u64;
+                let interval_ms = NATIVE_PEER_HEARTBEAT_INTERVAL_SECS * 1_000;
+                while slept_ms < interval_ms && !stop_for_thread.load(Ordering::SeqCst) {
+                    std::thread::sleep(Duration::from_millis(250));
+                    slept_ms += 250;
+                }
             }
-            tokio::time::sleep(Duration::from_secs(NATIVE_PEER_HEARTBEAT_INTERVAL_SECS)).await;
-        }
-    })
+        })
+        .ok();
+    StatusHeartbeatHandle { stop, thread }
 }
 
 fn open_native_peer_lock_file(root: &Path) -> anyhow::Result<File> {
@@ -4569,6 +4759,25 @@ fn business_record_projection_collections() -> Vec<String> {
         .collect()
 }
 
+/// FIX 4: the set of Business OS RxDB collections whose failure must abort the
+/// peer bring-up. These carry runtime data the daemon depends on (module
+/// catalog, runtime settings, command queue, queue tasks, desktop files +
+/// chunks). Everything else is OPTIONAL: if it drifts or fails to register we
+/// log and skip it instead of tearing down the whole peer. This mirrors the
+/// required-vs-optional knowledge already encoded in
+/// `repair_optional_rxdb_collection_schema_drift`.
+fn is_required_native_collection(collection: &str) -> bool {
+    matches!(
+        collection,
+        "business_module_catalog"
+            | "ctox_runtime_settings"
+            | "business_commands"
+            | "ctox_queue_tasks"
+            | "desktop_files"
+            | "desktop_file_chunks"
+    )
+}
+
 pub fn repair_optional_rxdb_collection_schema_drift(
     root: &Path,
     collection: &str,
@@ -4579,15 +4788,7 @@ pub fn repair_optional_rxdb_collection_schema_drift(
     if collection.is_empty() {
         anyhow::bail!("collection is required");
     }
-    let required = matches!(
-        collection,
-        "business_module_catalog"
-            | "ctox_runtime_settings"
-            | "business_commands"
-            | "ctox_queue_tasks"
-            | "desktop_files"
-            | "desktop_file_chunks"
-    );
+    let required = is_required_native_collection(collection);
     if required && !force {
         anyhow::bail!(
             "refusing to repair required Business OS RxDB collection `{collection}` without --force"

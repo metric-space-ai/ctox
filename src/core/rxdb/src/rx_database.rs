@@ -33,7 +33,7 @@ use crate::rx_database_internal_store::{
     get_all_collection_documents, get_primary_key_of_internal_document, storage_token_document_id,
     INTERNAL_CONTEXT_COLLECTION,
 };
-use crate::rx_error::{new_rx_error, RxResult};
+use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rx_schema::{create_rx_schema, RxSchema};
 use crate::rx_storage_helper::{
     flat_clone_doc_with_meta, get_single_document, get_wrapped_storage_instance,
@@ -283,54 +283,103 @@ impl RxDatabase {
         let mut created = HashMap::new();
 
         for (name, creator) in collection_creators {
-            if self.collections.lock().contains_key(&name) {
-                return Err(new_rx_error("DB3", Some(json!({ "name": name }))));
-            }
-
-            let schema = Arc::new(create_rx_schema(
-                creator.schema,
-                Arc::clone(&self.hash_function),
-                true,
-            )?);
-            write_collection_meta(self, &internal_store, &name, &schema).await?;
-
-            let raw_storage_instance = create_rx_collection_storage_instance(
-                &self.storage,
-                self.multi_instance,
-                RxStorageInstanceCreationParams {
-                    database_instance_token: self.token.clone(),
-                    database_name: self.name.clone(),
-                    collection_name: name.clone(),
-                    schema: schema.json_schema.clone(),
-                    options: creator.options,
-                    multi_instance: self.multi_instance,
-                    dev_mode: false,
-                    password: self.password.clone(),
-                },
-            )
-            .await?;
-            let storage_instance = get_wrapped_storage_instance(
-                Arc::clone(self),
-                raw_storage_instance,
-                schema.json_schema.clone(),
-            );
-            let conflict_handler = creator
-                .conflict_handler
-                .unwrap_or_else(|| Arc::new(DefaultConflictHandler));
-            let collection = RxCollection::new_with_schema(
-                name.clone(),
-                Arc::clone(self),
-                storage_instance,
-                conflict_handler,
-                schema,
-            );
-            self.collections
-                .lock()
-                .insert(name.clone(), Arc::clone(&collection));
-            created.insert(name, collection);
+            let collection = self.add_single_collection(&internal_store, name, creator).await?;
+            created.insert(collection.name.clone(), collection);
         }
 
         Ok(created)
+    }
+
+    /// FIX 4: per-collection fault-tolerant registration. Each collection is
+    /// registered independently; a collection that fails (e.g. genuine schema
+    /// drift returning `DB6`) is reported in the returned error map and
+    /// SKIPPED, while every other collection still comes up. This lets the
+    /// native peer bring up required collections (and the rest) even when an
+    /// optional collection has drifted, instead of aborting the whole peer on
+    /// the first failure. The strict `add_collections` is unchanged for other
+    /// callers, and the auto-repair-when-structurally-identical path inside
+    /// `write_collection_meta` is reused untouched.
+    pub async fn add_collections_tolerant(
+        self: &Arc<Self>,
+        collection_creators: HashMap<String, RxCollectionCreator>,
+    ) -> RxResult<(HashMap<String, Arc<RxCollection>>, HashMap<String, RxError>)> {
+        let internal_store = self.internal_store.as_ref().cloned().ok_or_else(|| {
+            new_rx_error("DB_INTERNAL_STORE", Some(json!({ "database": self.name })))
+        })?;
+        let mut created = HashMap::new();
+        let mut failed = HashMap::new();
+
+        for (name, creator) in collection_creators {
+            match self
+                .add_single_collection(&internal_store, name.clone(), creator)
+                .await
+            {
+                Ok(collection) => {
+                    created.insert(collection.name.clone(), collection);
+                }
+                Err(err) => {
+                    failed.insert(name, err);
+                }
+            }
+        }
+
+        Ok((created, failed))
+    }
+
+    /// FIX 4: register exactly one collection. Extracted from `add_collections`
+    /// so the strict and fault-tolerant entry points share identical
+    /// per-collection semantics (including the existing auto-repair path).
+    async fn add_single_collection(
+        self: &Arc<Self>,
+        internal_store: &Arc<dyn RxStorageInstance>,
+        name: String,
+        creator: RxCollectionCreator,
+    ) -> RxResult<Arc<RxCollection>> {
+        if self.collections.lock().contains_key(&name) {
+            return Err(new_rx_error("DB3", Some(json!({ "name": name }))));
+        }
+
+        let schema = Arc::new(create_rx_schema(
+            creator.schema,
+            Arc::clone(&self.hash_function),
+            true,
+        )?);
+        write_collection_meta(self, internal_store, &name, &schema).await?;
+
+        let raw_storage_instance = create_rx_collection_storage_instance(
+            &self.storage,
+            self.multi_instance,
+            RxStorageInstanceCreationParams {
+                database_instance_token: self.token.clone(),
+                database_name: self.name.clone(),
+                collection_name: name.clone(),
+                schema: schema.json_schema.clone(),
+                options: creator.options,
+                multi_instance: self.multi_instance,
+                dev_mode: false,
+                password: self.password.clone(),
+            },
+        )
+        .await?;
+        let storage_instance = get_wrapped_storage_instance(
+            Arc::clone(self),
+            raw_storage_instance,
+            schema.json_schema.clone(),
+        );
+        let conflict_handler = creator
+            .conflict_handler
+            .unwrap_or_else(|| Arc::new(DefaultConflictHandler));
+        let collection = RxCollection::new_with_schema(
+            name.clone(),
+            Arc::clone(self),
+            storage_instance,
+            conflict_handler,
+            schema,
+        );
+        self.collections
+            .lock()
+            .insert(name.clone(), Arc::clone(&collection));
+        Ok(collection)
     }
 
     // ref: rxdb/src/rx-database.ts removeCollectionDoc

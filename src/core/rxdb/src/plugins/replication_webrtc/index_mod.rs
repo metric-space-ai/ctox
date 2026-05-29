@@ -512,6 +512,30 @@ where
                         continue;
                     }
                 }
+                // FIX 5: spawn the per-peer handshake + master/fork build in
+                // its own task. The handshake performs two full request/answer
+                // round-trips (`ctoxProtocol`, then `token`) plus the fork
+                // replication-state build, all awaited. Running them inline in
+                // this loop meant one peer with a stalled handshake serialized
+                // and blocked the bring-up of every subsequent peer. Each peer
+                // now drives its own handshake concurrently; the loop only
+                // dispatches.
+                let pool_clone_outer = Arc::clone(&pool_clone);
+                let pool_clone = Arc::clone(&pool_clone);
+                let handler = Arc::clone(&handler);
+                let collection = Arc::clone(&collection);
+                let storage_token = storage_token.clone();
+                let request_counter = Arc::clone(&request_counter);
+                let request_flag = request_flag.clone();
+                let peer_session_id = peer_session_id.clone();
+                let tuning = tuning.clone();
+                let handshake_task = tokio::spawn(async move {
+                if pool_clone
+                    .canceled
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    return;
+                }
                 // 1. CTOX protocol handshake. Rust actively reads the remote
                 // role so Browser/CTOX pairs make the same deterministic
                 // master/fork decision instead of relying on random storage
@@ -544,7 +568,7 @@ where
                             "RC_WEBRTC_PROTOCOL",
                             Some(serde_json::json!({ "message": e.to_string() })),
                         ));
-                        continue;
+                        return;
                     }
                 };
                 if let Err(e) = validate_ctox_protocol_response(
@@ -553,7 +577,7 @@ where
                     true,
                 ) {
                     pool_clone.error_subject.next(e);
-                    continue;
+                    return;
                 }
                 let remote_peer_role = protocol_response
                     .result
@@ -584,7 +608,7 @@ where
                             "RC_WEBRTC_PEER",
                             Some(serde_json::json!({ "message": e.to_string() })),
                         ));
-                        continue;
+                        return;
                     }
                 };
                 let peer_token = token_response
@@ -651,6 +675,10 @@ where
                         }
                     }
                 }
+                });
+                // Track the per-peer handshake task on the pool so it is
+                // aborted on pool cancel/drop alongside the other tasks.
+                pool_clone_outer.tasks.lock().push(handshake_task);
             }
         });
         pool.tasks.lock().push(t);

@@ -16,6 +16,13 @@ const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
+// Shell-critical collections this app eagerly warms at boot. This MUST stay a
+// subset of SHELL_CRITICAL_COLLECTIONS, the single source of truth exported by
+// the ctox-rxdb-js bundle (rxdb/src/webrtc-native.mjs). The browser_* shell
+// criticals are intentionally omitted here because they only register when the
+// Browser module is active; warming them eagerly is not this app's job.
+// assertCriticalSyncCollectionsMatchBundle() runs once the bundle loads and
+// throws if this list ever drifts out of that source-of-truth set.
 const CRITICAL_SYNC_COLLECTIONS = [
   'business_module_catalog',
   'ctox_runtime_settings',
@@ -24,6 +31,22 @@ const CRITICAL_SYNC_COLLECTIONS = [
   'desktop_files',
   'desktop_file_chunks',
 ];
+
+let criticalSyncCollectionsBundleChecked = false;
+
+function assertCriticalSyncCollectionsMatchBundle(rxdb) {
+  if (criticalSyncCollectionsBundleChecked) return;
+  const canonical = rxdb?.SHELL_CRITICAL_COLLECTIONS;
+  if (!canonical || typeof canonical.has !== 'function') return;
+  criticalSyncCollectionsBundleChecked = true;
+  const drifted = CRITICAL_SYNC_COLLECTIONS.filter((collection) => !canonical.has(collection));
+  if (drifted.length) {
+    throw new Error(
+      `[business-os] CRITICAL_SYNC_COLLECTIONS drifted from the ctox-rxdb-js `
+      + `SHELL_CRITICAL_COLLECTIONS source of truth: ${drifted.join(', ')}`,
+    );
+  }
+}
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
@@ -689,6 +712,7 @@ async function openBusinessDataPlane(syncConfig) {
     setStartupProgress(54, 'Lokaler Speicher wird geöffnet...');
     const { createBusinessDb } = await loadBusinessDbModule();
     state.db = await createBusinessDb({ name: dbName });
+    assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
     setStartupProgress(58, 'Systemdatenstrukturen werden aufgebaut...');
     await registerCoreCollections();

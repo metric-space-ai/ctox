@@ -80,6 +80,11 @@ struct PeerEntry {
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
+/// FIX 5: result of a once-only per-peer connection build. `RxError` is
+/// `Clone`, so concurrent followers awaiting the same `OnceCell` all receive
+/// the same outcome.
+type BuildOutcome = Result<Arc<dyn PeerConnection>, RxError>;
+
 struct IncomingFrame {
     peer: PeerId,
     attempt: u64,
@@ -221,6 +226,14 @@ pub struct WebRTCRsConnectionHandler {
     response_subject: RxSubject<PeerWithResponse<WebRTCRsPeer>>,
     error_subject: RxSubject<RxError>,
     peers: Arc<Mutex<HashMap<WebRTCRsPeer, PeerEntry>>>,
+    /// FIX 5: per-peer in-flight build slots. `ensure_peer_connection` is
+    /// called concurrently from the peer-list task and `handle_signal`; both
+    /// could see an empty `peers` map, build a connection, and the second
+    /// insert would overwrite the first — orphaning the initiator's
+    /// DataChannel/offer. We register an `OnceCell` under the `peers` lock
+    /// before awaiting the build, so a second caller for the same peer awaits
+    /// the winner's result instead of building a duplicate.
+    building: Arc<Mutex<HashMap<WebRTCRsPeer, Arc<tokio::sync::OnceCell<BuildOutcome>>>>>,
     signaling: Option<Arc<SignalingClient>>,
     ice_servers: Vec<RTCIceServer>,
     data_channel_label: String,
@@ -266,6 +279,7 @@ impl WebRTCRsConnectionHandler {
             response_subject: RxSubject::new(),
             error_subject: RxSubject::new(),
             peers: Arc::new(Mutex::new(HashMap::new())),
+            building: Arc::new(Mutex::new(HashMap::new())),
             signaling,
             ice_servers,
             data_channel_label: data_channel_label.to_string(),
@@ -390,6 +404,7 @@ impl WebRTCRsConnectionHandler {
         remote_peer_id: PeerId,
         initiator: bool,
     ) -> RxResult<Arc<dyn PeerConnection>> {
+        // Fast path: a fully-built peer already exists.
         if let Some(existing) = self
             .peers
             .lock()
@@ -399,6 +414,71 @@ impl WebRTCRsConnectionHandler {
             return Ok(existing);
         }
 
+        // FIX 5: atomic check-and-insert. Under the `peers` lock (held just
+        // long enough to also touch `building`), claim or join the per-peer
+        // build slot BEFORE awaiting the connection build. The first caller to
+        // arrive becomes the winner and runs the build; any concurrent caller
+        // for the same peer becomes a follower and awaits the winner's result
+        // via the shared `OnceCell` instead of building a duplicate that would
+        // overwrite (and orphan) the winner's DataChannel/offer.
+        let (cell, is_winner) = {
+            // Re-check `peers` while we still hold its lock, so a connection
+            // completed between the fast-path read and here is observed.
+            let peers = self.peers.lock();
+            if let Some(existing) = peers
+                .get(&remote_peer_id)
+                .map(|entry| Arc::clone(&entry.peer_connection))
+            {
+                return Ok(existing);
+            }
+            let mut building = self.building.lock();
+            match building.get(&remote_peer_id) {
+                Some(cell) => (Arc::clone(cell), false),
+                None => {
+                    let cell = Arc::new(tokio::sync::OnceCell::new());
+                    building.insert(remote_peer_id.clone(), Arc::clone(&cell));
+                    (cell, true)
+                }
+            }
+        };
+
+        // All callers (winner + followers) await the same `OnceCell`. The
+        // initializer closure runs exactly once — for the winner. Followers
+        // block until the winner finishes and observe the cached outcome.
+        let outcome = cell
+            .get_or_init(|| {
+                let handler = Arc::clone(self);
+                let remote_peer_id = remote_peer_id.clone();
+                async move {
+                    handler
+                        .build_and_register_peer(remote_peer_id, initiator)
+                        .await
+                }
+            })
+            .await
+            .clone();
+
+        // The winner is responsible for clearing the in-flight slot once the
+        // build has resolved (success or failure). On failure this lets a
+        // later attempt rebuild; on success the `peers` map now answers the
+        // fast path.
+        if is_winner {
+            self.building.lock().remove(&remote_peer_id);
+        }
+
+        outcome
+    }
+
+    /// FIX 5: the once-only build body extracted from `ensure_peer_connection`.
+    /// Runs the connection build, registers the `PeerEntry`, and performs the
+    /// initiator-side DataChannel + offer setup. Identical to the previous
+    /// inline logic — only relocated so it can be driven by a per-peer
+    /// `OnceCell` initializer.
+    async fn build_and_register_peer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+        initiator: bool,
+    ) -> RxResult<Arc<dyn PeerConnection>> {
         let signaling = self.signaling.as_ref().cloned().ok_or_else(|| {
             new_rx_error(
                 "RC_WEBRTC_SIGNAL",
@@ -1303,13 +1383,23 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
     }
 
     async fn on_connection_state_change(&self, state: RTCPeerConnectionState) {
-        if matches!(
-            state,
-            RTCPeerConnectionState::Failed
-                | RTCPeerConnectionState::Closed
-                | RTCPeerConnectionState::Disconnected
-        ) {
-            remove_peer(&self.handler, &self.remote_peer_id);
+        // FIX 5: `Disconnected` is a TRANSIENT ICE state that very often
+        // recovers on its own (e.g. brief network blips, NAT rebinding). Only
+        // `Failed` and `Closed` are terminal and warrant tearing the peer
+        // down. Tearing down on `Disconnected` orphaned otherwise-recoverable
+        // peers and forced full re-handshakes. We keep `Disconnected` logged
+        // for observability but do not remove the peer.
+        match state {
+            RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
+                remove_peer(&self.handler, &self.remote_peer_id);
+            }
+            RTCPeerConnectionState::Disconnected => {
+                tracing::debug!(
+                    peer = %self.remote_peer_id,
+                    "webrtc peer Disconnected (transient); keeping connection for recovery"
+                );
+            }
+            _ => {}
         }
     }
 

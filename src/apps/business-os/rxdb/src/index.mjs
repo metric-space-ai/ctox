@@ -23,6 +23,7 @@ export {
 } from './storage-indexeddb.mjs';
 
 export {
+  SHELL_CRITICAL_COLLECTIONS,
   CtoxWebRtcNativePeer,
   createCtoxWebRtcNativePeer,
   normalizeSignalingControlPlaneError,

@@ -171,9 +171,20 @@ class CtoxWebRtcReplicationState {
       localProtocol,
     ]);
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
-    assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
-      requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
-    });
+    try {
+      assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
+        requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+      });
+    } catch (error) {
+      // Protocol/schema handshake is incompatible. Free the pooled RTC slot and
+      // surface the real error instead of leaking the connection and letting
+      // sync.js's 30s watchdog mislabel it as peer_connect_timeout. The
+      // peer-open caller routes the rethrown error to error$, so we only reject
+      // the initial-replication promise here to avoid a double emit.
+      this.peer?.removeConnection?.(peerId, 'protocol-incompatible');
+      this.rejectInitialReplication(error);
+      throw error;
+    }
     if (normalizedRemoteProtocol?.peerSession?.role !== 'ctox_instance') {
       this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
       return;
