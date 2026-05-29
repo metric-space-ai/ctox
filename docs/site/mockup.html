@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CTOX Business OS - Rechtsklick AI Mockup</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+    <style>
+      :root {
+        --bg-color: #0b0f19;
+        --accent: #00a8df;
+        --accent-glow: rgba(0, 168, 223, 0.15);
+        --green: #10b981;
+        --green-glow: rgba(16, 185, 129, 0.15);
+        --shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      }
+
+      body {
+        margin: 0;
+        padding: 40px 20px;
+        background-color: var(--bg-color);
+        color: #fff;
+        font-family: 'Inter', sans-serif;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        overflow: hidden;
+      }
+
+      h1 {
+        font-size: 24px;
+        font-weight: 700;
+        margin-bottom: 8px;
+        text-align: center;
+        background: linear-gradient(135deg, #ffffff 0%, #a5b4fc 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      p.subtitle {
+        font-size: 14px;
+        color: rgba(255, 255, 255, 0.5);
+        margin: 0 0 40px 0;
+        text-align: center;
+        max-width: 500px;
+        line-height: 1.5;
+      }
+
+      /* Mockup Wrapper */
+      .rc-revolution-mockup {
+        width: 100%;
+        max-width: 900px;
+        margin: 0 auto;
+        position: relative;
+      }
+
+      .rc-mockup-window {
+        background: #0d131f;
+        border-radius: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: var(--shadow);
+        position: relative;
+        overflow: hidden;
+        height: 400px;
+        width: 100%;
+      }
+
+      /* Window Header */
+      .rc-window-header {
+        display: flex;
+        align-items: center;
+        background: rgba(17, 24, 39, 0.7);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 10px 16px;
+        height: 40px;
+        box-sizing: border-box;
+      }
+
+      .rc-window-dots {
+        display: flex;
+        gap: 6px;
+      }
+
+      .rc-window-dots .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        display: inline-block;
+      }
+
+      .rc-window-dots .dot.red { background: #ef4444; }
+      .rc-window-dots .dot.yellow { background: #f59e0b; }
+      .rc-window-dots .dot.green { background: #10b981; }
+
+      .rc-window-title {
+        flex: 1;
+        text-align: center;
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 11px;
+        font-family: monospace;
+        letter-spacing: 0.5px;
+      }
+
+      .rc-window-badge {
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--green);
+        font-size: 10px;
+        padding: 3px 10px;
+        border-radius: 20px;
+        border: 1px solid rgba(16, 185, 129, 0.2);
+        font-weight: 600;
+        letter-spacing: 0.5px;
+      }
+
+      /* Workspace */
+      .rc-workspace {
+        display: flex;
+        height: calc(100% - 40px);
+        width: 100%;
+      }
+
+      /* Sidebar */
+      .rc-sidebar {
+        width: 180px;
+        background: #090d16;
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+        padding: 20px 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        box-sizing: border-box;
+        height: 100%;
+      }
+
+      .rc-sidebar-item {
+        color: rgba(255, 255, 255, 0.5);
+        font-size: 13px;
+        padding: 8px 12px;
+        border-radius: 6px;
+        cursor: default;
+        transition: background 0.2s, color 0.2s;
+        font-weight: 500;
+      }
+
+      .rc-sidebar-item.active {
+        background: rgba(255, 255, 255, 0.05);
+        color: #fff;
+      }
+
+      .rc-sidebar-status {
+        margin-top: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.4);
+        padding-left: 12px;
+      }
+
+      .status-indicator-green {
+        width: 6px;
+        height: 6px;
+        background: var(--green);
+        border-radius: 50%;
+        display: inline-block;
+        box-shadow: 0 0 8px var(--green);
+      }
+
+      /* Grid */
+      .rc-main-grid {
+        flex: 1;
+        padding: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: #0d131f;
+        box-sizing: border-box;
+        height: 100%;
+        overflow: hidden;
+      }
+
+      .rc-grid-header {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr 1fr var(--dynamic-col-width, 0fr);
+        padding: 8px 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.8px;
+        font-weight: 600;
+        transition: grid-template-columns 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+      }
+
+      .rc-row {
+        display: grid;
+        grid-template-columns: 1.5fr 1fr 1fr var(--dynamic-col-width, 0fr);
+        padding: 10px 12px;
+        border-radius: 6px;
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid transparent;
+        transition: grid-template-columns 0.6s cubic-bezier(0.25, 1, 0.5, 1),
+                    background 0.5s ease,
+                    border-color 0.5s ease,
+                    box-shadow 0.5s ease;
+        box-sizing: border-box;
+      }
+
+      .rc-row.glow-green {
+        background: rgba(16, 185, 129, 0.08);
+        border-color: rgba(16, 185, 129, 0.3);
+        box-shadow: 0 0 15px rgba(16, 185, 129, 0.08);
+      }
+
+      .rc-cell {
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+      }
+
+      .font-bold {
+        font-weight: 600;
+        color: #fff;
+      }
+
+      .badge {
+        font-size: 11px;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-weight: 500;
+      }
+
+      .badge.yellow {
+        background: rgba(245, 158, 11, 0.1);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.2);
+      }
+
+      .badge.blue {
+        background: rgba(59, 130, 246, 0.1);
+        color: #3b82f6;
+        border: 1px solid rgba(59, 130, 246, 0.2);
+      }
+
+      .badge.green {
+        background: rgba(16, 185, 129, 0.1);
+        color: var(--green);
+        border: 1px solid rgba(16, 185, 129, 0.2);
+      }
+
+      .badge.grey {
+        background: rgba(255, 255, 255, 0.04);
+        color: rgba(255, 255, 255, 0.4);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .badge.red {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        border: 1px solid rgba(239, 68, 68, 0.2);
+      }
+
+      .pulse {
+        position: relative;
+        animation: pulse-red 2s infinite;
+      }
+
+      @keyframes pulse-red {
+        0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+        70% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+      }
+
+      .rc-dynamic-col {
+        opacity: 0;
+        overflow: hidden;
+        transition: opacity 0.5s ease;
+        display: flex;
+        align-items: center;
+      }
+
+      .rc-dynamic-col.active {
+        opacity: 1;
+      }
+
+      /* Float elements */
+      /* Context Menu */
+      .rc-context-menu {
+        position: absolute;
+        background: rgba(15, 23, 42, 0.85);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        padding: 6px;
+        display: none;
+        z-index: 10;
+        width: 190px;
+        transform-origin: top left;
+        box-sizing: border-box;
+      }
+
+      .menu-item {
+        color: rgba(255, 255, 255, 0.8);
+        font-size: 12px;
+        padding: 8px 10px;
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: default;
+        transition: background 0.15s, color 0.15s;
+      }
+
+      .menu-item.header {
+        font-size: 10px;
+        color: rgba(255, 255, 255, 0.4);
+        font-weight: 600;
+        text-transform: uppercase;
+        padding-bottom: 4px;
+        letter-spacing: 0.5px;
+      }
+
+      .menu-divider {
+        height: 1px;
+        background: rgba(255, 255, 255, 0.06);
+        margin: 4px 0;
+      }
+
+      .menu-item.active {
+        background: rgba(0, 168, 223, 0.15);
+        color: var(--accent);
+        font-weight: 500;
+      }
+
+      /* AI Dialog */
+      .rc-ai-dialog {
+        position: absolute;
+        top: 65px;
+        left: calc(50% - 170px);
+        width: 340px;
+        background: rgba(15, 23, 42, 0.9);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(0, 168, 223, 0.3);
+        border-radius: 10px;
+        box-shadow: 0 15px 35px rgba(0,0,0,0.6), 0 0 20px rgba(0, 168, 223, 0.1);
+        z-index: 11;
+        display: none;
+        opacity: 0;
+        transform: translateY(15px);
+        transition: opacity 0.4s cubic-bezier(0.25, 1, 0.5, 1),
+                    transform 0.4s cubic-bezier(0.25, 1, 0.5, 1);
+        box-sizing: border-box;
+      }
+
+      .rc-dialog-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 12px 16px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .rc-dialog-close {
+        color: rgba(255, 255, 255, 0.4);
+        font-size: 16px;
+        cursor: default;
+      }
+
+      .rc-dialog-body {
+        padding: 16px;
+        box-sizing: border-box;
+      }
+
+      .rc-dialog-label {
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.4);
+        margin: 0 0 8px 0;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+
+      .rc-dialog-input-box {
+        background: rgba(0, 0, 0, 0.3);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 6px;
+        padding: 12px;
+        font-size: 13px;
+        color: #fff;
+        min-height: 54px;
+        display: flex;
+        align-items: flex-start;
+        line-height: 1.4;
+        position: relative;
+        box-sizing: border-box;
+      }
+
+      .rc-typed-text {
+        color: #fff;
+        font-weight: 400;
+        word-break: break-word;
+      }
+
+      .typing-cursor {
+        display: inline-block;
+        width: 2px;
+        color: var(--accent);
+        margin-left: 2px;
+        animation: blink 1s step-end infinite;
+      }
+
+      @keyframes blink {
+        from, to { opacity: 0; }
+        50% { opacity: 1; }
+      }
+
+      .rc-dialog-buttons {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 14px;
+      }
+
+      .rc-dialog-buttons button {
+        border: none;
+        border-radius: 4px;
+        font-size: 12px;
+        padding: 6px 14px;
+        font-weight: 600;
+        cursor: default;
+        transition: background 0.15s, transform 0.1s;
+      }
+
+      .btn-cancel {
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(255, 255, 255, 0.6);
+      }
+
+      .btn-submit {
+        background: var(--accent);
+        color: #fff;
+        box-shadow: 0 0 10px rgba(0, 168, 223, 0.3);
+      }
+
+      .btn-submit.active {
+        background: #0094c4;
+        transform: scale(0.96);
+      }
+
+      /* Daemon processing panel */
+      .rc-daemon-panel {
+        position: absolute;
+        top: 60px;
+        left: calc(50% - 200px);
+        width: 400px;
+        background: #05070d;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        box-shadow: 0 20px 40px rgba(0,0,0,0.7);
+        z-index: 12;
+        padding: 14px;
+        display: none;
+        transition: opacity 0.3s ease;
+        box-sizing: border-box;
+      }
+
+      .rc-daemon-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: #fff;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 12px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .spinner {
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(0, 168, 223, 0.2);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
+      .rc-daemon-console {
+        font-family: monospace;
+        font-size: 11px;
+        color: #a7f3d0;
+        line-height: 1.5;
+        max-height: 150px;
+        overflow-y: hidden;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        box-sizing: border-box;
+      }
+
+      .log-line {
+        opacity: 0;
+        transform: translateY(4px);
+        animation: fade-in-up 0.2s forwards;
+      }
+
+      @keyframes fade-in-up {
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      /* Success Toast */
+      .rc-toast {
+        position: absolute;
+        bottom: 20px;
+        right: -320px;
+        width: 290px;
+        background: rgba(15, 23, 42, 0.9);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(16, 185, 129, 0.3);
+        border-radius: 8px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        padding: 12px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 13;
+        transition: right 0.6s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        box-sizing: border-box;
+      }
+
+      .toast-check {
+        width: 22px;
+        height: 22px;
+        background: rgba(16, 185, 129, 0.2);
+        color: var(--green);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border-radius: 50%;
+        font-size: 13px;
+        font-weight: bold;
+      }
+
+      .toast-content {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .toast-content b {
+        color: #fff;
+        font-size: 12px;
+      }
+
+      .toast-content span {
+        color: rgba(255,255,255,0.4);
+        font-size: 10px;
+      }
+
+      .toast-rollback-btn {
+        margin-left: auto;
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 4px;
+        color: #fff;
+        font-size: 10px;
+        padding: 4px 8px;
+        font-weight: 600;
+        cursor: default;
+      }
+
+      /* Virtual Mouse */
+      .rc-virtual-cursor {
+        position: absolute;
+        z-index: 100;
+        pointer-events: none;
+        width: 24px;
+        height: 24px;
+        top: 85%;
+        left: 85%;
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+      }
+
+      .rc-virtual-cursor svg {
+        width: 100%;
+        height: 100%;
+      }
+
+      .click-ripple {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 32px;
+        height: 32px;
+        border: 2px solid #00ffff;
+        border-radius: 50%;
+        transform: translate(-30%, -30%) scale(0);
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .click-ripple.active {
+        animation: ripple-out 0.6s ease-out;
+      }
+
+      @keyframes ripple-out {
+        0% { transform: translate(-30%, -30%) scale(0); opacity: 1; }
+        100% { transform: translate(-30%, -30%) scale(1.5); opacity: 0; }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Rechtsklick-Revolution in Echtzeit</h1>
+    <p class="subtitle">Idealisiertes HTML-Mockup: Erleben Sie, wie der CTOX Daemon Ihre Benutzeroberfläche und Datenbankschemata on-the-fly durch KI-Patches restrukturiert.</p>
+
+    <div class="rc-revolution-mockup" id="rc-mockup">
+      <div class="rc-mockup-window">
+        <!-- Window Topbar -->
+        <div class="rc-window-header">
+          <div class="rc-window-dots">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+          </div>
+          <div class="rc-window-title">kunstmen-workspace / ctox-pipeline</div>
+          <div class="rc-window-badge">Live-Modus</div>
+        </div>
+        
+        <!-- Workspace Grid -->
+        <div class="rc-workspace">
+          <!-- Sidebar -->
+          <div class="rc-sidebar">
+            <div class="rc-sidebar-item active">💼 Pipeline</div>
+            <div class="rc-sidebar-item">👥 Leads</div>
+            <div class="rc-sidebar-item">📂 Archiv</div>
+            <div class="rc-sidebar-item">⚙️ Einstellungen</div>
+            <div class="rc-sidebar-status">
+              <span class="status-indicator-green"></span>
+              <span>Daemon: Online</span>
+            </div>
+          </div>
+          
+          <!-- Grid Area -->
+          <div class="rc-main-grid" id="main-grid">
+            <div class="rc-grid-header" id="grid-header">
+              <div class="rc-col">Lead-Name</div>
+              <div class="rc-col">Deal-Wert</div>
+              <div class="rc-col">Status</div>
+              <div class="rc-col rc-dynamic-col" id="dynamic-header">Prio</div>
+            </div>
+            <div class="rc-grid-body">
+              <div class="rc-row" id="row-milton">
+                <div class="rc-cell font-bold">Milton S.</div>
+                <div class="rc-cell">24.500 €</div>
+                <div class="rc-cell"><span class="badge yellow">Offen</span></div>
+                <div class="rc-cell rc-dynamic-col" data-row-cell="milton"><span class="badge grey">Medium</span></div>
+              </div>
+              <div class="rc-row" id="row-irena">
+                <div class="rc-cell font-bold">Irena M.</div>
+                <div class="rc-cell">12.000 €</div>
+                <div class="rc-cell"><span class="badge blue">Terminiert</span></div>
+                <div class="rc-cell rc-dynamic-col" data-row-cell="irena"><span class="badge grey">Low</span></div>
+              </div>
+              <div class="rc-row highlightable" id="row-welsch">
+                <div class="rc-cell font-bold">Milton P.</div>
+                <div class="rc-cell">68.000 €</div>
+                <div class="rc-cell"><span class="badge green">Verifiziert</span></div>
+                <div class="rc-cell rc-dynamic-col" data-row-cell="welsch"><span class="badge red pulse">High</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Float Components -->
+        <!-- Context Menu -->
+        <div class="rc-context-menu" id="rc-menu">
+          <div class="menu-item header">🎯 CTOX Aktionen</div>
+          <div class="menu-divider"></div>
+          <div class="menu-item">⚡ Datenstruktur anpassen</div>
+          <div class="menu-item active" id="menu-item-modify">🛠️ App-Ansicht modifizieren</div>
+          <div class="menu-item">⏮️ Rollback ausführen</div>
+        </div>
+        
+        <!-- AI Input Dialog -->
+        <div class="rc-ai-dialog" id="rc-dialog">
+          <div class="rc-dialog-header">
+            <span>✨ CTOX Business OS AI</span>
+            <span class="rc-dialog-close">×</span>
+          </div>
+          <div class="rc-dialog-body">
+            <p class="rc-dialog-label">Was soll angepasst werden?</p>
+            <div class="rc-dialog-input-box">
+              <span class="rc-typed-text" id="typed-prompt"></span>
+              <span class="typing-cursor">|</span>
+            </div>
+            <div class="rc-dialog-buttons">
+              <button class="btn-cancel" type="button">Abbrechen</button>
+              <button class="btn-submit" type="button" id="btn-submit-prompt">Ausführen</button>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Daemon Processing Panel -->
+        <div class="rc-daemon-panel" id="rc-daemon">
+          <div class="rc-daemon-header">
+            <div class="spinner"></div>
+            <span>Daemon verarbeitet Code-Änderung...</span>
+          </div>
+          <div class="rc-daemon-console" id="daemon-console"></div>
+        </div>
+        
+        <!-- Success Toast -->
+        <div class="rc-toast" id="rc-toast">
+          <span class="toast-check">✓</span>
+          <div class="toast-content">
+            <b>App-Ansicht angepasst</b>
+            <span>Version 12 versiegelt (modver_pipeline_12)</span>
+          </div>
+          <button class="toast-rollback-btn" type="button">⏮ Rollback</button>
+        </div>
+        
+        <!-- Virtual Mouse Cursor -->
+        <div class="rc-virtual-cursor" id="rc-cursor">
+          <svg viewBox="0 0 32 32">
+            <path d="M5.5 3v23l6.5-6.5h8.5z" fill="#00a8df" stroke="#ffffff" stroke-width="2"/>
+          </svg>
+          <div class="click-ripple" id="click-ripple"></div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const mockup = document.getElementById("rc-mockup");
+        const cursor = document.getElementById("rc-cursor");
+        const ripple = document.getElementById("click-ripple");
+        const menu = document.getElementById("rc-menu");
+        const dialog = document.getElementById("rc-dialog");
+        const typedText = document.getElementById("typed-prompt");
+        const daemonPanel = document.getElementById("rc-daemon");
+        const consoleEl = document.getElementById("daemon-console");
+        const toast = document.getElementById("rc-toast");
+        const submitBtn = document.getElementById("btn-submit-prompt");
+        
+        const dynamicCols = document.querySelectorAll(".rc-dynamic-col");
+        const gridHeader = document.getElementById("grid-header");
+        const rows = document.querySelectorAll(".rc-row");
+        const rowWelsch = document.getElementById("row-welsch");
+
+        const promptText = "Füge Prio-Spalte hinzu & markiere Leads über 50k € grün.";
+        
+        // Helper to update cursor position
+        function moveCursor(x, y, duration = 1200) {
+          cursor.style.transition = `top ${duration}ms cubic-bezier(0.25, 1, 0.5, 1), left ${duration}ms cubic-bezier(0.25, 1, 0.5, 1)`;
+          cursor.style.top = y;
+          cursor.style.left = x;
+          return new Promise(resolve => setTimeout(resolve, duration));
+        }
+
+        // Helper to trigger click ripple
+        function clickCursor() {
+          ripple.classList.add("active");
+          return new Promise(resolve => {
+            setTimeout(() => {
+              ripple.classList.remove("active");
+              resolve();
+            }, 600);
+          });
+        }
+
+        // Helper to type text in dialog
+        function typePrompt(text, speed = 40) {
+          return new Promise(resolve => {
+            let i = 0;
+            typedText.textContent = "";
+            const interval = setInterval(() => {
+              if (i < text.length) {
+                typedText.textContent += text.charAt(i);
+                i++;
+              } else {
+                clearInterval(interval);
+                resolve();
+              }
+            }, speed);
+          });
+        }
+
+        // Helper to log console lines
+        function logConsoleLine(line, delay = 500) {
+          return new Promise(resolve => {
+            const el = document.createElement("div");
+            el.className = "log-line";
+            el.textContent = line;
+            consoleEl.appendChild(el);
+            resolve();
+          });
+        }
+
+        async function runSequence() {
+          // STEP 1: Reset state
+          mockup.style.setProperty("--dynamic-col-width", "0fr");
+          dynamicCols.forEach(col => col.classList.remove("active"));
+          rows.forEach(r => r.classList.remove("glow-green"));
+          menu.style.display = "none";
+          menu.style.opacity = "0";
+          menu.style.transform = "scale(0.95)";
+          dialog.style.display = "none";
+          dialog.style.opacity = "0";
+          dialog.style.transform = "translateY(15px)";
+          daemonPanel.style.display = "none";
+          daemonPanel.style.opacity = "0";
+          consoleEl.innerHTML = "";
+          typedText.textContent = "";
+          toast.style.right = "-320px";
+          submitBtn.classList.remove("active");
+          
+          await moveCursor("85%", "85%", 100);
+          await new Promise(r => setTimeout(r, 1500));
+
+          // STEP 2: Move cursor to Milton P. Row
+          await moveCursor("48%", "270px", 1400);
+          await new Promise(r => setTimeout(r, 200));
+
+          // STEP 3: Click
+          await clickCursor();
+
+          // STEP 4: Show Context Menu
+          menu.style.display = "block";
+          setTimeout(() => {
+            menu.style.opacity = "1";
+            menu.style.transform = "scale(1)";
+          }, 50);
+          await new Promise(r => setTimeout(r, 1000));
+
+          // STEP 5: Move to menu item
+          await moveCursor("58%", "205px", 800);
+          await new Promise(r => setTimeout(r, 200));
+
+          // STEP 6: Click menu item
+          await clickCursor();
+          menu.style.opacity = "0";
+          menu.style.transform = "scale(0.95)";
+          setTimeout(() => menu.style.display = "none", 200);
+          await new Promise(r => setTimeout(r, 400));
+
+          // STEP 7: Show dialog & Start Typing
+          dialog.style.display = "block";
+          setTimeout(() => {
+            dialog.style.opacity = "1";
+            dialog.style.transform = "translateY(0)";
+          }, 50);
+          await new Promise(r => setTimeout(r, 600));
+          await typePrompt(promptText, 35);
+          await new Promise(r => setTimeout(r, 800));
+
+          // STEP 8: Cursor moves to Submit
+          await moveCursor("63%", "295px", 800);
+          await new Promise(r => setTimeout(r, 200));
+          submitBtn.classList.add("active");
+          await clickCursor();
+          await new Promise(r => setTimeout(r, 150));
+          submitBtn.classList.remove("active");
+
+          // Hide dialog & Show Daemon panel
+          dialog.style.opacity = "0";
+          dialog.style.transform = "translateY(15px)";
+          setTimeout(() => dialog.style.display = "none", 400);
+          
+          daemonPanel.style.display = "block";
+          setTimeout(() => daemonPanel.style.opacity = "1", 50);
+          await new Promise(r => setTimeout(r, 600));
+
+          // STEP 9: Daemon processing log sequence
+          await logConsoleLine("[CTOX] Session: founder (michael.welsch@...) verifiziert.");
+          await new Promise(r => setTimeout(r, 600));
+          await logConsoleLine("[CTOX] Lade Module-Schnittstelle: pipeline.js...");
+          await new Promise(r => setTimeout(r, 500));
+          await logConsoleLine("[CTOX] Modifiziere HTML/JS in-place (hot-patching)...");
+          await new Promise(r => setTimeout(r, 700));
+          await logConsoleLine("[CTOX] Berechne Bundle-Prüfsumme (SHA-256): SHA-256 ... OK");
+          await new Promise(r => setTimeout(r, 600));
+          await logConsoleLine("[CTOX] Speichere Version 12 in business_module_versions...");
+          await new Promise(r => setTimeout(r, 500));
+          await logConsoleLine("[CTOX] App-Status: Live-aktualisiert.");
+          await new Promise(r => setTimeout(r, 1000));
+
+          // STEP 10: Evolution & success
+          daemonPanel.style.opacity = "0";
+          setTimeout(() => daemonPanel.style.display = "none", 300);
+          await new Promise(r => setTimeout(r, 200));
+
+          // Animate grid header & body columns
+          mockup.style.setProperty("--dynamic-col-width", "1fr");
+          dynamicCols.forEach(col => col.classList.add("active"));
+          rowWelsch.classList.add("glow-green");
+          
+          // Toast slides in
+          toast.style.right = "20px";
+
+          // Cursor returns to idle position
+          await moveCursor("85%", "85%", 1200);
+
+          // Let the user admire the screen
+          await new Promise(r => setTimeout(r, 6500));
+
+          // Reset loop
+          runSequence();
+        }
+
+        // Start loop
+        runSequence();
+      });
+    </script>
+  </body>
+</html>
