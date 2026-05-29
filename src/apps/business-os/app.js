@@ -1,3 +1,5 @@
+import { CtoxResizer } from './shared/resizer.js';
+
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
 const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
@@ -8,7 +10,11 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260529-http-bridge-restore2';
+const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
+const APP_BUILD = '20260529-research-rxdb1';
+// Monotonic token so a slow loading-shadow fetch from a previous module open
+// cannot paint over a newer one (rapid module switching).
+let activeLoadToken = 0;
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -50,6 +56,8 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
 let shellColumnResizeSync = null;
+let syncToastRefresh = null;
+let moduleResizers = [];
 let syncRecoveryRepairTimer = null;
 let syncRecoveryRepairRunning = false;
 let businessReporterModulePromise = null;
@@ -391,6 +399,9 @@ const shellMessages = {
     loadingWorkspace: 'Workspace wird geladen',
     loadingModule: 'Modul-Workspace wird geladen.',
     localWorkspace: 'Lokaler Workspace',
+    syncingContent: 'Inhalte werden synchronisiert',
+    syncComplete: 'Inhalte synchronisiert',
+    syncDismiss: 'Ausblenden',
     loginRequired: 'Login erforderlich',
     startupChecking: 'CTOX-Sitzung prüfen',
     syncConnecting: 'Sync-Verbindungen starten',
@@ -450,6 +461,9 @@ const shellMessages = {
     loadingWorkspace: 'Loading workspace',
     loadingModule: 'Loading module workspace.',
     localWorkspace: 'Local workspace',
+    syncingContent: 'Syncing content',
+    syncComplete: 'Content synced',
+    syncDismiss: 'Dismiss',
     loginRequired: 'Login required',
     startupChecking: 'Checking CTOX session',
     syncConnecting: 'Connecting sync peers',
@@ -1281,6 +1295,175 @@ function wireShellActions() {
     state.db?.close?.();
   });
   shellColumnResizeSync = setupShellColumnResizing();
+  setupSyncToast();
+}
+
+// Shell-owned sync toast. Watches the existing `ctox-business-os-sync-diagnostics`
+// snapshot and shows a bottom-right progress toast while the active module's
+// collections replicate. Fully automatic — modules contribute nothing beyond the
+// `collections` they already declare in module.json.
+function setupSyncToast() {
+  if (document.querySelector('[data-sync-toast]')) return;
+  const toast = document.createElement('div');
+  toast.className = 'sync-toast';
+  toast.dataset.syncToast = '';
+  toast.hidden = true;
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+  toast.innerHTML = `
+    <div class="sync-toast-row">
+      <span class="sync-toast-spinner" aria-hidden="true"></span>
+      <div class="sync-toast-body">
+        <strong class="sync-toast-label"></strong>
+        <span class="sync-toast-count"></span>
+      </div>
+      <button type="button" class="sync-toast-dismiss" aria-label="">×</button>
+    </div>
+    <div class="sync-toast-bar"><i></i></div>
+  `;
+  document.body.append(toast);
+
+  const labelEl = toast.querySelector('.sync-toast-label');
+  const countEl = toast.querySelector('.sync-toast-count');
+  const barEl = toast.querySelector('.sync-toast-bar > i');
+  const dismissEl = toast.querySelector('.sync-toast-dismiss');
+
+  let hideTimer = 0;
+  let stallTimer = 0;
+  let dismissedModuleKey = '';
+  let lastReady = -1;
+  let lastModuleKey = '';
+
+  const activeModuleKey = () => state.activeModule?.id || '';
+
+  function hide() {
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; }
+    if (stallTimer) { clearTimeout(stallTimer); stallTimer = 0; }
+    toast.hidden = true;
+    toast.classList.remove('is-complete');
+  }
+
+  function computeProgress() {
+    const mod = state.activeModule;
+    const diag = state.syncDiagnostics;
+    if (!mod || !diag || diag.mode !== 'webrtc') return null;
+    const collections = Array.isArray(mod.collections) ? mod.collections : [];
+    if (!collections.length) return null;
+    let ready = 0;
+    for (const name of collections) {
+      const c = diag.collections?.[name];
+      if (!c) continue;
+      const status = c.connectionStatus || c.status || '';
+      if (c.initialReplicationAt || ['connected', 'running', 'reused'].includes(status)) ready += 1;
+    }
+    return { ready, total: collections.length };
+  }
+
+  function refresh() {
+    const progress = computeProgress();
+    if (!progress) { hide(); return; }
+    const { ready, total } = progress;
+
+    if (ready >= total) {
+      // Complete: briefly confirm, then auto-hide. Never flash a completion
+      // toast for content that was already in sync when the module opened.
+      if (toast.hidden) return;
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = 0; }
+      labelEl.textContent = shellText('syncComplete');
+      countEl.textContent = `${total}/${total}`;
+      barEl.style.width = '100%';
+      toast.classList.add('is-complete');
+      if (!hideTimer) hideTimer = window.setTimeout(hide, 1600);
+      return;
+    }
+
+    if (dismissedModuleKey === activeModuleKey()) return;
+
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = 0; }
+    toast.classList.remove('is-complete');
+    labelEl.textContent = shellText('syncingContent');
+    countEl.textContent = `${ready}/${total}`;
+    barEl.style.width = `${Math.round((ready / total) * 100)}%`;
+    dismissEl.setAttribute('aria-label', shellText('syncDismiss'));
+    toast.hidden = false;
+
+    // Stall guard: if progress stops for a while (likely no peer / offline), fade
+    // out so we never leave a permanent toast. Reset whenever progress advances.
+    if (ready !== lastReady) {
+      lastReady = ready;
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = window.setTimeout(() => {
+        if (!toast.classList.contains('is-complete')) hide();
+      }, 30000);
+    }
+  }
+
+  dismissEl.addEventListener('click', () => {
+    dismissedModuleKey = activeModuleKey();
+    hide();
+  });
+
+  // Called on module switch: reset per-module state, then refresh.
+  syncToastRefresh = () => {
+    const key = activeModuleKey();
+    if (key !== lastModuleKey) {
+      lastModuleKey = key;
+      dismissedModuleKey = '';
+      lastReady = -1;
+      hide();
+    }
+    refresh();
+  };
+
+  window.addEventListener('ctox-business-os-sync-diagnostics', refresh);
+}
+
+function teardownModuleResizers() {
+  for (const resizer of moduleResizers) {
+    try { resizer.destroy?.(); } catch {}
+  }
+  moduleResizers = [];
+}
+
+// Shell-owned column resizing for module-provided frames. Any module that ships
+// resizer handles declaratively — a `.ctox-column-resizer` with `data-resizer-var`
+// (the CSS custom property to drive) plus `data-resizer` (left|right) and optional
+// `data-resizer-min`/`data-resizer-max`, inside a `[data-resize-frame]` root — gets
+// drag/keyboard resizing AND per-module width persistence for free. Modules no
+// longer hand-wire CtoxResizer or their own localStorage layout code.
+function setupModuleResizers(mod) {
+  teardownModuleResizers();
+  const scope = els.host?.querySelector('[data-module-content]');
+  if (!scope || !mod?.id) return;
+  for (const handle of scope.querySelectorAll('.ctox-column-resizer[data-resizer-var]')) {
+    const cssVar = handle.getAttribute('data-resizer-var');
+    const container = handle.closest('[data-resize-frame]');
+    if (!cssVar || !container) continue;
+    const side = handle.getAttribute('data-resizer') === 'right' ? 'right' : 'left';
+    const minWidth = Number.parseFloat(handle.getAttribute('data-resizer-min')) || 200;
+    const maxWidth = Number.parseFloat(handle.getAttribute('data-resizer-max')) || 600;
+    const storageKey = `${SHELL_MODULE_RESIZER_KEY_PREFIX}${mod.id}:${cssVar}`;
+
+    // Restore persisted width synchronously (before paint) to avoid a flash.
+    let savedWidth = NaN;
+    try { savedWidth = Number.parseFloat(localStorage.getItem(storageKey) || ''); } catch {}
+    if (Number.isFinite(savedWidth) && savedWidth > 0) {
+      container.style.setProperty(cssVar, `${Math.round(clampNumber(savedWidth, minWidth, maxWidth))}px`);
+    }
+
+    const resizer = new CtoxResizer({
+      resizerEl: handle,
+      containerEl: container,
+      cssVar,
+      side,
+      minWidth,
+      maxWidth,
+      onResize: (width) => {
+        try { localStorage.setItem(storageKey, String(Math.round(width))); } catch {}
+      },
+    });
+    moduleResizers.push(resizer);
+  }
 }
 
 function openModuleSourceEditor(moduleId) {
@@ -1380,6 +1563,7 @@ function setupShellColumnResizing() {
   let dragState = null;
   let resizeRaf = 0;
   let currentLayoutKey = '';
+  let syncRetries = 0;
 
   function layoutKey() {
     return state.activeModule?.id
@@ -1460,7 +1644,16 @@ function setupShellColumnResizing() {
     }
 
     const metrics = getGridMetrics(frame);
-    if (!metrics || metrics.trackTotal <= 0) return;
+    if (!metrics || metrics.trackTotal <= 0) {
+      // Frame not measured yet (called mid-transition right after mount). Retry
+      // on the next frame so handles still appear without waiting for a resize.
+      if (syncRetries < 5) {
+        syncRetries += 1;
+        requestAnimationFrame(syncLayout);
+      }
+      return;
+    }
+    syncRetries = 0;
 
     let nextWidths = readPersistedRatios()
       ? columnRatiosToPixels(persistedRatios, metrics.trackTotal)
@@ -3296,6 +3489,7 @@ async function openModule(moduleId, options = {}) {
   if (typeof state.activeUnmount === 'function') {
     await state.activeUnmount();
   }
+  teardownModuleResizers();
   state.activeModule = mod;
   state.activeUnmount = null;
   document.body.dataset.activeModule = mod.id;
@@ -3307,7 +3501,9 @@ async function openModule(moduleId, options = {}) {
   for (const button of els.tabs.querySelectorAll('[data-module]')) {
     button.setAttribute('aria-current', button.dataset.module === mod.id ? 'page' : 'false');
   }
+  const loadToken = ++activeLoadToken;
   els.host.replaceChildren(renderModuleFrame(mod));
+  applyLoadingShadow(mod, loadToken);
   els.leftContent.replaceChildren(renderLeftContext(mod));
   els.rightContent.replaceChildren(renderRightContext(mod));
   loadModuleVersionsDropdown(mod.id);
@@ -3325,12 +3521,20 @@ async function openModule(moduleId, options = {}) {
     if (typeof moduleScript.mount === 'function') {
       state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
     }
+    // Wire shell-owned column resizing for any declarative handles the module
+    // rendered. Runs before paint so restored widths apply without a flash.
+    setupModuleResizers(mod);
   } finally {
     delete document.body.dataset.moduleLoading;
+    // If a module renders no own markup (no/short-circuited mount), drop the
+    // leftover shadow so we never leave a permanent fake skeleton on screen.
+    els.host?.querySelector('[data-loading-shadow]')?.remove();
+    els.host?.querySelector('.module-loading-note')?.remove();
     shellColumnResizeSync?.();
   }
   postCurrentPreferencesToModule();
   startModuleSync(mod);
+  syncToastRefresh?.();
   updateNavButtons();
 }
 
@@ -3646,7 +3850,13 @@ function renderModuleFrame(mod) {
   root.innerHTML = `
     ${renderModuleAppBar(mod)}
     <div class="module-content" data-module-content>
-      ${renderModuleLoadingShell(mod, moduleDisplayTitle(mod), shellText('loadingModule'))}
+      <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
+        ${renderLoadingShadowFallback()}
+      </div>
+      <div class="module-loading-note" aria-hidden="true">
+        <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
+        <span>${escapeHtml(shellText('loadingModule'))}</span>
+      </div>
     </div>
   `;
   return root;
@@ -3787,114 +3997,104 @@ function taskbarMarkForModule(mod) {
   return marks[mod?.id] || String(mod?.title || mod?.id || 'A').trim().slice(0, 1).toUpperCase();
 }
 
-function renderModuleLoadingShell(mod, title, subtitle) {
-  const moduleId = String(mod?.id || 'generic').replace(/[^a-z0-9_-]/gi, '').toLowerCase() || 'generic';
-  const safeTitle = escapeHtml(title || 'Documents');
-  const safeSubtitle = escapeHtml(subtitle || shellText('loadingModule'));
-  const panels = moduleLoadingPanels(moduleId, safeTitle, safeSubtitle);
+// Generic instant placeholder shown the moment a module opens, before its real
+// markup has been fetched. Also the fallback when the markup fetch fails. It is
+// intentionally layout-agnostic — the real shadow (derived from the module's own
+// index.html) replaces it as soon as the fetch resolves.
+function renderLoadingShadowFallback() {
   return `
-    <div class="module-loading-shell module-loading-shell-${moduleId}" aria-busy="true">
-      ${panels}
+    <div class="module-loading-shadow-frame">
+      <div class="module-loading-shadow-pane">${loadingFillRows(1, 4)}</div>
+      <div class="module-loading-shadow-pane is-wide">${loadingFillRows(1, 3)}</div>
     </div>
   `;
 }
 
-function moduleLoadingPanels(moduleId, title, subtitle) {
-  if (moduleId === 'matching') {
-    return `
-      <section class="module-loading-pane module-loading-matching-source" aria-hidden="true">
-        ${loadingHead()}
-        <div class="module-loading-control-stack"><b></b><b></b></div>
-        <div class="module-loading-source-list"><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-pane module-loading-matching-center">
-        ${loadingHead()}
-        ${loadingCopy(title, subtitle)}
-        <div class="module-loading-match-workbench" aria-hidden="true">
-          <div class="module-loading-match-toolbar"><b></b><b></b><b></b></div>
-          <div class="module-loading-match-grid"><b></b><b></b><b></b><b></b><b></b><b></b></div>
-        </div>
-      </section>
-      <section class="module-loading-pane module-loading-matching-object" aria-hidden="true">
-        ${loadingHead()}
-        <div class="module-loading-control-stack"><b></b><b></b></div>
-        <div class="module-loading-object-list"><b></b><b></b><b></b><b></b></div>
-      </section>
-    `;
-  }
-  if (moduleId === 'knowledge') {
-    return `
-      <section class="module-loading-pane module-loading-knowledge-left" aria-hidden="true">
-        ${loadingHead()}
-        <div class="module-loading-segments"><b></b><b></b><b></b></div>
-        <div class="module-loading-search"></div>
-        <div class="module-loading-tree"><b></b><b></b><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-pane module-loading-knowledge-reader">
-        ${loadingHead()}
-        ${loadingCopy(title, subtitle)}
-        <div class="module-loading-article" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b></div>
-      </section>
-    `;
-  }
-  if (moduleId === 'ctox') {
-    return `
-      <section class="module-loading-pane module-loading-ctox-left" aria-hidden="true">
-        <div class="module-loading-kpi"><b></b><b></b></div>
-        <div class="module-loading-channel"><b></b><b></b></div>
-        <div class="module-loading-task-card"><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-pane module-loading-ctox-flow">
-        ${loadingHead()}
-        ${loadingCopy(title, subtitle)}
-        <div class="module-loading-stats" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
-        <div class="module-loading-flow-canvas" aria-hidden="true"><b></b><b></b><b></b><b></b><i></i><i></i><i></i></div>
-        <div class="module-loading-timeline" aria-hidden="true"><b></b><b></b></div>
-      </section>
-    `;
-  }
-  if (moduleId === 'outbound') {
-    return `
-      <section class="module-loading-pane module-loading-outbound-left" aria-hidden="true">
-        ${loadingHead()}
-        <div class="module-loading-campaign-list"><b></b><b></b><b></b><b></b></div>
-      </section>
-      <section class="module-loading-pane module-loading-outbound-center">
-        ${loadingHead()}
-        ${loadingCopy(title, subtitle)}
-        <div class="module-loading-pipeline" aria-hidden="true"><b></b><b></b><b></b><b></b><b></b><b></b></div>
-      </section>
-    `;
-  }
-  return `
-    <section class="module-loading-pane module-loading-doc-list" aria-hidden="true">
-      ${loadingHead()}
-      <div class="module-loading-control-stack"><b></b><b></b></div>
-      <div class="module-loading-document-list"><b></b><b></b><b></b></div>
-    </section>
-    <section class="module-loading-pane module-loading-doc-editor">
-      ${loadingHead()}
-      ${loadingCopy(title, subtitle)}
-      <div class="module-loading-document" aria-hidden="true"><b></b><b></b><b></b><b></b></div>
-    </section>
-    <section class="module-loading-pane module-loading-doc-runbooks" aria-hidden="true">
-      ${loadingHead()}
-      <div class="module-loading-runbook-list"><b></b><b></b><b></b></div>
-    </section>
-  `;
+function loadingFillRows(head, rows) {
+  const h = head ? '<b class="mls-head"></b>' : '';
+  const r = Array.from({ length: Math.max(0, rows) }, () => '<b class="mls-row"></b>').join('');
+  return `<div class="module-loading-shadow-fill">${h}${r}</div>`;
 }
 
-function loadingHead() {
-  return '<div class="module-loading-panel-head"><span></span><i></i></div>';
+// Derive the loading shell automatically from the module's own static layout
+// (index.html + index.css) instead of a hand-authored per-module skeleton. The
+// real (empty) frame is injected and a single global CSS rule turns it into a
+// shimmer shadow; truly empty panes get generic shimmer fillers. `token` guards
+// against races when the user switches modules quickly: a stale fetch must not
+// paint over a freshly mounted (or different) module.
+async function applyLoadingShadow(mod, token) {
+  const base = moduleBasePath(mod);
+  ensureModuleStylesheet(base);
+  let markup = '';
+  try {
+    const res = await fetch(
+      `./${base}/index.html?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    markup = await res.text();
+  } catch (error) {
+    console.warn(`[business-os] loading shadow markup failed for ${mod.id}; keeping generic placeholder`, error);
+    return;
+  }
+  if (token !== activeLoadToken) return;
+  if (document.body.dataset.moduleLoading !== mod.id) return;
+  const shadow = els.host?.querySelector('[data-loading-shadow].is-pending');
+  if (!shadow || !shadow.isConnected) return;
+
+  let frag;
+  try {
+    const doc = new DOMParser().parseFromString(markup, 'text/html');
+    doc.querySelectorAll('script, link, style, template, noscript').forEach((el) => el.remove());
+    // Avoid duplicate-id / form collisions during the brief overlap with mount.
+    doc.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
+    doc.querySelectorAll('input, textarea, select, button').forEach((el) => {
+      el.setAttribute('disabled', '');
+      el.setAttribute('tabindex', '-1');
+    });
+    fillEmptyPanes(doc.body);
+    frag = doc.body.innerHTML;
+  } catch (error) {
+    console.warn(`[business-os] loading shadow parse failed for ${mod.id}`, error);
+    return;
+  }
+  if (token !== activeLoadToken || !shadow.isConnected) return;
+  shadow.innerHTML = frag;
+  shadow.classList.remove('is-pending');
 }
 
-function loadingCopy(title, subtitle) {
-  return `
-    <div class="module-loading-copy">
-      <strong>${title}</strong>
-      <span>${subtitle}</span>
-    </div>
-  `;
+// Inject the module's stylesheet ahead of mount so the derived shadow is styled.
+// Matches the module's own `ensureStyles()` href shape; a duplicate <link> to an
+// identical sheet is harmless (the browser dedupes the fetch) and doubles as a
+// preload for the real mount.
+function ensureModuleStylesheet(base) {
+  const already = Array.from(document.querySelectorAll('link[rel="stylesheet"]'))
+    .some((l) => l.href.includes(`/${base}/index.css`));
+  if (already) return;
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `${base}/index.css?v=${APP_BUILD}`;
+  link.dataset.loadingShadowCss = base;
+  document.head.append(link);
+}
+
+// Most modules ship a frame in index.html but fill its panes from JS at mount
+// (e.g. outbound/ctox have empty <section> shells). Those panes would render as
+// empty boxes in the shadow, so drop generic shimmer rows into any leaf pane
+// that has no content of its own.
+function fillEmptyPanes(scope) {
+  const panes = scope.querySelectorAll(
+    'section, aside, [class*="pane"], [class*="-left"], [class*="-center"], [class*="-right"], [class*="sidebar"], [class*="column"]',
+  );
+  const SKIP = 'button, a, input, textarea, select, hr, [class*="resizer"], [class*="splitter"], [class*="handle"], [class*="divider"]';
+  panes.forEach((pane) => {
+    if (pane.closest('[data-loading-filled]')) return;
+    if (pane.matches(SKIP)) return;
+    const hasContent = pane.querySelector('*') || (pane.textContent || '').trim().length > 0;
+    if (hasContent) return;
+    pane.setAttribute('data-loading-filled', '');
+    pane.innerHTML = loadingFillRows(1, 4);
+  });
 }
 
 function readModuleLayout() {

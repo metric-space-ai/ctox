@@ -10,7 +10,10 @@
     "research_tasks",
     "research_runs",
     "research_notes",
-    "knowledge_tables"
+    "knowledge_tables",
+    "documents",
+    "document_versions",
+    "document_blob_chunks"
   ],
   "layout": {
     "shell": "full-workspace",

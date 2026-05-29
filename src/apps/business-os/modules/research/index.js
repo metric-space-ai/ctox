@@ -1,13 +1,9 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const BUILD = '20260529-research-rxdb-rows1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 320;
-const RESEARCH_LAYOUT_KEY = 'ctox.businessOs.research.columnLayout';
-const RESEARCH_COL_MIN = Object.freeze({ left: 260, center: 420, right: 240 });
-const RESEARCH_COL_MAX = Object.freeze({ left: 680, right: 520 });
 const RESEARCH_COLLECTIONS = Object.freeze([
   'business_commands',
   'ctox_queue_tasks',
@@ -318,8 +314,6 @@ export async function mount(ctx) {
   };
   
   await startResearchCollections();
-  const resizeCleanup = setupResearchColumnResizing();
-  if (resizeCleanup) state.cleanup.push(resizeCleanup);
   wireRealtime();
   state.cleanup.push(initResearchContextMenu());
   await refreshAll({ seed: true });
@@ -2080,76 +2074,6 @@ function focusCtoxRun(taskQueueId, commandId) {
   location.hash = 'ctox';
 }
 
-function setupResearchColumnResizing() {
-  const root = state.ctx.host.querySelector('[data-research-root]');
-  if (!root) return null;
-
-  const leftHandle = root.querySelector('[data-resizer="left"]');
-  const rightHandle = root.querySelector('[data-resizer="right"]');
-  if (!leftHandle || !rightHandle) return null;
-
-  const widths = readResearchColumnLayout();
-  const leftPx = clampNumber(widths.left, RESEARCH_COL_MIN.left, RESEARCH_COL_MAX.left);
-  const rightPx = clampNumber(widths.right, RESEARCH_COL_MIN.right, RESEARCH_COL_MAX.right);
-  root.style.setProperty('--research-left-width', `${Math.round(leftPx)}px`);
-  root.style.setProperty('--research-right-width', `${Math.round(rightPx)}px`);
-
-  const persistWidths = () => {
-    try {
-      const leftStr = root.style.getPropertyValue('--research-left-width') || `${leftPx}px`;
-      const rightStr = root.style.getPropertyValue('--research-right-width') || `${rightPx}px`;
-      window.localStorage.setItem(RESEARCH_LAYOUT_KEY, JSON.stringify({
-        left: Number.parseFloat(leftStr),
-        right: Number.parseFloat(rightStr),
-      }));
-    } catch (_) {
-      /* storage unavailable */
-    }
-  };
-
-  const resizerL = new CtoxResizer({
-    resizerEl: leftHandle,
-    containerEl: root,
-    cssVar: '--research-left-width',
-    side: 'left',
-    minWidth: RESEARCH_COL_MIN.left,
-    maxWidth: RESEARCH_COL_MAX.left,
-    onResize: persistWidths,
-  });
-
-  const resizerR = new CtoxResizer({
-    resizerEl: rightHandle,
-    containerEl: root,
-    cssVar: '--research-right-width',
-    side: 'right',
-    minWidth: RESEARCH_COL_MIN.right,
-    maxWidth: RESEARCH_COL_MAX.right,
-    onResize: persistWidths,
-  });
-
-  return () => {
-    resizerL.destroy();
-    resizerR.destroy();
-  };
-}
-
-function readResearchColumnLayout() {
-  try {
-    const raw = JSON.parse(window.localStorage.getItem(RESEARCH_LAYOUT_KEY) || 'null');
-    if (raw && typeof raw === 'object') {
-      const left = Number(raw.left);
-      const right = Number(raw.right);
-      return {
-        left: Number.isFinite(left) && left > 0 ? left : 320,
-        right: Number.isFinite(right) && right > 0 ? right : 300,
-      };
-    }
-  } catch (_) {
-    /* storage unavailable */
-  }
-  return { left: 320, right: 300 };
-}
-
 function initResearchContextMenu() {
   state.contextMenu?.remove();
   const menu = document.createElement('div');
@@ -3102,6 +3026,47 @@ function parseMarkdown(md) {
   return html;
 }
 
+// Load a Fachbericht's content from RxDB (NO HTTP). The reports are the same
+// documents that replicate into the `documents` collection over RxDB/WebRTC;
+// `index_text` holds the document text, with a blob-chunk fallback — all RxDB.
+async function loadReportContentFromRxdb(filename) {
+  const raw = state.ctx && state.ctx.db && state.ctx.db.raw;
+  if (!raw || !raw.documents) {
+    throw new Error('RxDB-Dokumente nicht verfügbar');
+  }
+  const matches = await raw.documents.find({ selector: { filename } }).exec();
+  const rows = matches.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d));
+  const json = rows.find((d) => !d.is_deleted) || rows[0];
+  if (!json) {
+    throw new Error(`Dokument ${filename} (noch) nicht synchronisiert`);
+  }
+  if (typeof json.index_text === 'string' && json.index_text.trim()) {
+    return json.index_text;
+  }
+  // Fallback: reconstruct from the current version's blob chunks (RxDB only).
+  const versionId = json.current_version_id;
+  if (versionId && raw.document_versions && raw.document_blob_chunks) {
+    const version = await raw.document_versions.findOne(versionId).exec();
+    const blobId = version && typeof version.toJSON === 'function' ? version.toJSON().blob_id : null;
+    if (blobId) {
+      const chunkDocs = await raw.document_blob_chunks.find({ selector: { blob_id: blobId } }).exec();
+      const chunks = chunkDocs
+        .map((c) => (typeof c.toJSON === 'function' ? c.toJSON() : c))
+        .sort((a, b) => (a.idx || 0) - (b.idx || 0));
+      if (chunks.length) {
+        const joined = chunks.map((c) => c.data || '').join('');
+        try {
+          const bytes = Uint8Array.from(atob(joined), (ch) => ch.charCodeAt(0));
+          return new TextDecoder('utf-8').decode(bytes);
+        } catch {
+          return joined;
+        }
+      }
+    }
+  }
+  throw new Error(`Kein Inhalt für ${filename}`);
+}
+
 function renderReportsWorkbench(task) {
   const reports = GENERATED_REPORTS;
   const selectedReportId = state.selectedReportId || reports[0].id;
@@ -3114,11 +3079,9 @@ function renderReportsWorkbench(task) {
   const content = state.reportContents[selectedReport.id];
   if (content === undefined) {
     state.reportContents[selectedReport.id] = null;
-    fetch(`/runtime/business-os/documents/generated/${selectedReport.filename}`)
-      .then(res => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.text();
-      })
+    // No HTTP: the Fachberichte ARE the documents that sync into the RxDB
+    // `documents` collection over WebRTC. Read the content from RxDB.
+    loadReportContentFromRxdb(selectedReport.filename)
       .then(text => {
         state.reportContents[selectedReport.id] = text;
         renderCenter();
