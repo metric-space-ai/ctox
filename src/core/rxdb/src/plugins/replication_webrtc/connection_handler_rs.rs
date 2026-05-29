@@ -2143,4 +2143,63 @@ mod tests {
         let resume = transport_resume_frame(transfer_id, 0, 1);
         assert_eq!(resume, fixture["frames"]["resume"]);
     }
+
+    // Phase 1: native SCTP send-buffer backpressure must gate the sender while
+    // the channel is over the high watermark and release promptly on the low
+    // event — never deadlock. Drives the event-driven flow control directly
+    // (no real data channel needed).
+    #[test]
+    fn backpressure_gates_send_capacity_and_releases_on_low() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+
+        // No backpressure registered yet → nothing buffered, capacity free.
+        assert_eq!(handler.buffered_bytes(&peer), 0);
+
+        let bp = handler.peer_backpressure(&peer);
+        bp.set_high();
+        // While buffered we report above the high watermark so the demand
+        // dispatchers' `buffered_bytes > high_water` guards engage.
+        assert!(handler.buffered_bytes(&peer) > DATA_CHANNEL_BUFFERED_HIGH_WATER as usize);
+
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            let bp_for_clear = Arc::clone(&bp);
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                bp_for_clear.clear_high();
+            });
+            // Must block while high, then return well under the 30s wait cap
+            // once the low event clears it.
+            tokio::time::timeout(
+                Duration::from_secs(2),
+                handler.wait_for_send_capacity(&peer),
+            )
+            .await
+            .expect("wait_for_send_capacity did not release after OnBufferedAmountLow");
+        });
+
+        assert_eq!(handler.buffered_bytes(&peer), 0);
+    }
+
+    #[test]
+    fn wait_for_send_capacity_returns_immediately_without_backpressure() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-2".to_string();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        rt.block_on(async {
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                handler.wait_for_send_capacity(&peer),
+            )
+            .await
+            .expect("wait_for_send_capacity blocked despite no backpressure");
+        });
+    }
 }
