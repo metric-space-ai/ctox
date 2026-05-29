@@ -1,6 +1,22 @@
-# CTOX
+<div align="center">
 
-CTOX is an agentic daemon for long-running technical work.
+<img src="docs/site/assets/ctox-full-logo.png" alt="CTOX" width="440">
+
+<p><strong>The agentic daemon for long-running technical work.</strong></p>
+
+[![Release](https://img.shields.io/github/v/release/metric-space-ai/ctox?sort=semver&display_name=tag&label=release&color=ec4899)](https://github.com/metric-space-ai/ctox/releases)
+[![License](https://img.shields.io/github/license/metric-space-ai/ctox?color=3b82f6)](LICENSE)
+[![Built with Rust](https://img.shields.io/github/languages/top/metric-space-ai/ctox?logo=rust&logoColor=white&color=000000)](https://www.rust-lang.org)
+[![Last commit](https://img.shields.io/github/last-commit/metric-space-ai/ctox?color=ec4899&label=last%20commit)](https://github.com/metric-space-ai/ctox/commits/main)
+![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-3b82f6)
+
+[Project page](https://metric-space-ai.github.io/ctox/)
+&middot; [Documentation](https://metric-space-ai.github.io/ctox/docs.html)
+&middot; [CLI reference](https://metric-space-ai.github.io/ctox/cli.html)
+&middot; [Harness guide](HARNESS.md)
+&middot; [Releases](https://github.com/metric-space-ai/ctox/releases)
+
+</div>
 
 It is built for people who already use coding agents and notice where a single
 agent session stops being enough: real work spreads across tickets, servers,
@@ -10,14 +26,6 @@ that must still be correct tomorrow.
 CTOX does not try to be "another better coding agent". It owns the layer around
 agent execution: durable work state, context assembly, queue and ticket
 management, verification, process evidence, communication, and continuation.
-
-## Links
-
-- Project page: <https://metric-space-ai.github.io/ctox/>
-- Technical documentation: <https://metric-space-ai.github.io/ctox/docs.html>
-- CLI reference: <https://metric-space-ai.github.io/ctox/cli.html>
-- Harness guide: [HARNESS.md](HARNESS.md)
-- Releases and binaries: <https://github.com/metric-space-ai/ctox/releases>
 
 ## Quick Introduction
 
