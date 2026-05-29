@@ -10,6 +10,7 @@ pub mod harness_flow;
 pub mod harness_mining;
 pub mod mission_governor;
 pub mod process_mining;
+pub mod reset;
 pub mod state_invariants;
 pub mod state_write_guard;
 pub mod turn_ledger;

@@ -56,6 +56,12 @@ const SQLITE_ACCESS_READS_ENV: &str = "CTOX_PROCESS_MINING_RECORD_SQLITE_READS";
 const SQLITE_ACCESS_MAX_EVENTS_PER_COMMAND: usize = 512;
 const SQLITE_ACCESS_RETENTION_WINDOW: i64 = 200_000;
 const SQLITE_ACCESS_RETENTION_INTERVAL_FLUSHES: u64 = 128;
+// Safety ceiling on the full process-mining event log across all case_ids. The
+// per-source sqlite-access window above only caps recorder noise; this bounds
+// total audit volume so a runaway producer (e.g. a stuck self-work spawn
+// cascade) cannot grow the table without bound and degrade the runtime DB.
+// Generous enough to retain real audit history, low enough to stay serviceable.
+const PROCESS_EVENTS_GLOBAL_RETENTION_WINDOW: i64 = 500_000;
 
 #[derive(Debug, Clone)]
 struct TableInfo {
@@ -320,6 +326,7 @@ pub fn ensure_process_mining_schema(conn: &Connection, db_path: &Path) -> Result
         }
         install_table_triggers(conn, &table, &db_path_text)?;
     }
+    prune_process_events_global(conn, PROCESS_EVENTS_GLOBAL_RETENTION_WINDOW)?;
     Ok(())
 }
 
@@ -513,6 +520,132 @@ fn prune_sqlite_access_process_events(conn: &Connection, keep_window: i64) -> Re
         params![keep_window],
     )?;
     Ok(deleted)
+}
+
+fn prune_process_events_global(conn: &Connection, keep_window: i64) -> Result<usize> {
+    let keep_window = keep_window.max(1);
+    // event_seq is a monotonic AUTOINCREMENT PK, so MAX/MIN are index lookups.
+    // Skip the DELETE entirely unless the seq span exceeds the window, keeping
+    // the per-command call effectively free in steady state while guaranteeing
+    // the table can never grow unbounded.
+    let span: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(event_seq) - MIN(event_seq), 0) FROM ctox_process_events",
+        [],
+        |row| row.get(0),
+    )?;
+    if span <= keep_window {
+        return Ok(0);
+    }
+    let deleted = conn.execute(
+        r#"
+        DELETE FROM ctox_process_events
+        WHERE event_seq <= COALESCE(
+            (SELECT MAX(event_seq) - ?1 FROM ctox_process_events),
+            -1
+        )
+        "#,
+        params![keep_window],
+    )?;
+    Ok(deleted)
+}
+
+/// Recorded process-mining "Mitschrieb" tables — the audit trail and derived
+/// analysis rows. A soft reset empties these but leaves schema, instrumentation
+/// triggers, and the transition-rule configuration intact. The trigger registry
+/// and `ctox_pm_core_transition_rules` are configuration, not recordings, so
+/// they are intentionally excluded here.
+pub const RECORDED_DATA_TABLES: &[&str] = &[
+    PROCESS_EVENTS_TABLE,
+    PROCESS_CONTEXT_TABLE,
+    "ctox_pm_state_violations",
+    "ctox_pm_core_transition_audit",
+    "ctox_pm_event_transition_coverage",
+    "ctox_pm_unmapped_events",
+    "ctox_core_transition_proofs",
+    "ctox_core_spawn_edges",
+];
+
+fn reset_table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn reset_table_row_count(conn: &Connection, table: &str) -> Result<i64> {
+    if !reset_table_exists(conn, table)? {
+        return Ok(0);
+    }
+    let count: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM {}", quote_ident(table)),
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Current row count for each recorded-data table. Used to preview a reset
+/// before `--confirm`. Missing tables report zero.
+pub fn recorded_data_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut counts = Vec::with_capacity(RECORDED_DATA_TABLES.len());
+    for &table in RECORDED_DATA_TABLES {
+        counts.push((table.to_string(), reset_table_row_count(conn, table)?));
+    }
+    Ok(counts)
+}
+
+/// Soft reset: delete every recorded-data row while keeping the schema and the
+/// installed mutation triggers in place. Returns the deleted row count per
+/// table. Caller is expected to wrap this in a transaction.
+pub fn clear_recorded_data(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut cleared = Vec::with_capacity(RECORDED_DATA_TABLES.len());
+    for &table in RECORDED_DATA_TABLES {
+        if !reset_table_exists(conn, table)? {
+            cleared.push((table.to_string(), 0));
+            continue;
+        }
+        let deleted = conn.execute(&format!("DELETE FROM {}", quote_ident(table)), [])?;
+        cleared.push((table.to_string(), deleted as i64));
+    }
+    Ok(cleared)
+}
+
+/// Hard reset: drop every process-mining trigger first so a corrupted
+/// instrumentation layer can no longer fail live writes on the tables it
+/// observes, then drop the process-mining tables and rebuild a clean schema.
+/// `ensure_process_mining_schema` reinstalls fresh triggers and re-seeds the
+/// default transition rules. Caller is expected to wrap this in a transaction.
+pub fn hard_reset(conn: &Connection, db_path: &Path) -> Result<()> {
+    let trigger_names: Vec<String> = {
+        let mut stmt = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'ctox_pm_%'",
+        )?;
+        let names = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        names
+    };
+    for name in &trigger_names {
+        conn.execute_batch(&format!("DROP TRIGGER IF EXISTS {};", quote_ident(name)))?;
+    }
+    conn.execute_batch(
+        r#"
+        DROP TABLE IF EXISTS ctox_process_events;
+        DROP TABLE IF EXISTS ctox_process_context;
+        DROP TABLE IF EXISTS ctox_process_trigger_registry;
+        DROP TABLE IF EXISTS ctox_pm_state_violations;
+        DROP TABLE IF EXISTS ctox_pm_core_transition_audit;
+        DROP TABLE IF EXISTS ctox_pm_core_transition_rules;
+        DROP TABLE IF EXISTS ctox_pm_event_transition_coverage;
+        DROP TABLE IF EXISTS ctox_pm_unmapped_events;
+        DROP TABLE IF EXISTS ctox_core_transition_proofs;
+        DROP TABLE IF EXISTS ctox_core_spawn_edges;
+        "#,
+    )?;
+    ensure_process_mining_schema(conn, db_path)?;
+    Ok(())
 }
 
 pub fn activate_command_context(

@@ -340,3 +340,41 @@ ctox harness-mining stuck-cases                       # Detect stuck agent runs
 ctox harness-mining variants                          # Analyze executed harness variants
 ctox harness-mining multiperspective                   # Deep multiperspective conformance audit
 ```
+
+## Audit Trail Reset and Recovery
+
+CTOX instruments every runtime table with SQLite triggers that record each
+mutation into the process-mining event log. This trail is what makes a mission
+auditable after the fact. Because the instrumentation sits in the write path,
+a corrupted event log or a bad trigger can amplify a bug — failing the very
+writes it only means to observe. `ctox reset` is the stable, scoped recovery
+for that situation. It clears or rebuilds the audit trail only; it never touches
+business data.
+
+```sh
+ctox reset process-mining                  # Dry-run: report what a soft reset would delete
+ctox reset process-mining --confirm        # Soft reset: empty the recorded-data tables
+ctox reset process-mining --hard --confirm # Hard reset: drop + rebuild triggers and schema
+ctox reset harness-mining --confirm        # Clear harness-mining findings + audit-run log
+ctox reset all --confirm                   # Soft-reset process-mining + harness-mining
+ctox reset all --hard --confirm            # Hard-reset process-mining + clear harness-mining
+```
+
+- **Dry-run by default.** Without `--confirm`, `reset` only reports the row
+  counts it would delete (as JSON) and changes nothing. Destructive runs require
+  `--confirm` and execute inside a single transaction.
+- **soft** (default) empties the recorded-data tables (`ctox_process_events`,
+  `ctox_process_context`, the `ctox_pm_*` analysis tables, and the
+  `ctox_core_transition_proofs` / `ctox_core_spawn_edges` evidence) while leaving
+  the schema, mutation triggers, and transition-rule configuration in place.
+- **`--hard`** (process-mining only) first drops every process-mining trigger so
+  a broken instrumentation layer can no longer block live writes, then drops the
+  process-mining tables and rebuilds a clean schema — reinstalling fresh triggers
+  and re-seeding the default transition rules. This is the recovery path when the
+  instrumentation itself is the problem.
+- **Self-recording.** Every `ctox` invocation is itself recorded in the audit
+  trail, so a confirmed reset is immediately followed by a small number of rows
+  describing the reset command run. This is expected: the log faithfully records
+  that a reset happened.
+- For routine retention (trimming only the high-volume `sqlite-access:` events
+  rather than wiping the trail), use `ctox process-mining prune` instead.

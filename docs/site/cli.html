@@ -1012,9 +1012,22 @@ ctox jami-daemon --foreground</code></pre>
                   <td><code>core-liveness</code>, <code>proofs</code>, <code>state-audit</code>, <code>scan-violations</code>, <code>violations</code>, <code>coverage</code>, <code>assert-clean</code></td>
                   <td>Check graph reachability, illegal transitions, and closure evidence.</td>
                 </tr>
+                <tr>
+                  <td>Reset and retention</td>
+                  <td><code>process-mining prune</code>, <code>reset process-mining [--hard]</code>, <code>reset harness-mining</code>, <code>reset all [--hard]</code></td>
+                  <td>Trim or clear the audit trail. <code>prune</code> trims high-volume access events; <code>reset</code> empties the recorded-data tables (soft) or drops and rebuilds the instrumentation triggers and schema (<code>--hard</code>). Destructive runs require <code>--confirm</code>; without it the command is a dry-run.</td>
+                </tr>
               </tbody>
             </table>
           </div>
+          <p>
+            Because the mutation triggers sit in the write path, a corrupted
+            event log or trigger can amplify a bug by failing the very writes it
+            only means to observe. <code>ctox reset process-mining --hard --confirm</code>
+            is the recovery path: it drops every process-mining trigger first, then
+            rebuilds a clean schema. <code>reset</code> only ever touches the audit
+            trail, never business data, and each reset is itself recorded in the log.
+          </p>
         </section>
 
         <section id="security">

@@ -171,6 +171,51 @@ fn harness_mining_db_path(root: &Path) -> PathBuf {
     root.join("runtime").join("ctox.sqlite3")
 }
 
+/// Recorded harness-mining tables: the audit-tick run log and the structured
+/// findings derived from it. Both are recordings, not configuration, so a reset
+/// may safely empty them; `ensure_findings_schema` recreates the (empty) schema.
+pub const RECORDED_TABLES: &[&str] = &["ctox_hm_findings", "ctox_hm_audit_runs"];
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        rusqlite::params![table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Current row count for each recorded harness-mining table (reset preview).
+pub fn recorded_counts(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut counts = Vec::with_capacity(RECORDED_TABLES.len());
+    for &table in RECORDED_TABLES {
+        let count = if table_exists(conn, table)? {
+            conn.query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })?
+        } else {
+            0
+        };
+        counts.push((table.to_string(), count));
+    }
+    Ok(counts)
+}
+
+/// Delete every recorded harness-mining row. Returns deleted count per table.
+/// Caller is expected to wrap this in a transaction.
+pub fn clear_recorded(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut cleared = Vec::with_capacity(RECORDED_TABLES.len());
+    for &table in RECORDED_TABLES {
+        let deleted = if table_exists(conn, table)? {
+            conn.execute(&format!("DELETE FROM \"{table}\""), [])? as i64
+        } else {
+            0
+        };
+        cleared.push((table.to_string(), deleted));
+    }
+    Ok(cleared)
+}
+
 pub(crate) fn now_iso_z() -> String {
     chrono::Utc::now()
         .format("%Y-%m-%dT%H:%M:%S%.3fZ")

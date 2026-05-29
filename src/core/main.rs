@@ -178,6 +178,9 @@ GOVERNANCE / MISSION
   ctox harness-mining <subcmd>   forensic + conformance mining of the agent harness
                                  (stuck-cases, variants, sojourn, conformance,
                                   alignment, causal, drift, multiperspective)
+  ctox reset <target>            clear/rebuild the logging + process-mining audit
+                                 trail (process-mining [--hard] | harness-mining |
+                                 all); destructive runs require --confirm
 
 CONTEXT / LCM (power-user)
   ctox lcm-init | lcm-add-message | lcm-compact | lcm-grep | lcm-dump
@@ -538,6 +541,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("harness-mining") => {
             service::harness_mining::handle_harness_mining_command(root, &args[1..])
         }
+        Some("reset") => service::reset::handle_reset_command(root, &args[1..]),
         Some("tui-smoke") => {
             let page = args.get(1).map(String::as_str).unwrap_or("chat");
             let width: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(120);
