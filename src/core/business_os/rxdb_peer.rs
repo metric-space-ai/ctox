@@ -963,6 +963,13 @@ async fn run_native_peer(
                     "[business-os] multiplexed WebRTC replication up for {collection_count} \
                      collections on one connection (room `{sync_room}`)"
                 );
+                // Phase 4: register demand-fetch file SOURCES on the pool's file
+                // fetch registry so `rxdb.file.fetch` actually serves bytes for
+                // the file-bearing chunk collections (without a source the
+                // dispatcher always returns FILE_NOT_FOUND). The query registry
+                // already auto-registers every multiplexed collection inside
+                // `RxWebRTCReplicationPool::new_multi`.
+                register_demand_file_sources(&pool, &database);
                 pools.push(pool);
             }
             Ok(Ok(Err(err))) => {
@@ -4079,6 +4086,147 @@ async fn upsert_desktop_file_with_parent(
     Ok(())
 }
 
+/// Phase 4: the file-bearing chunk collections and the chunk-document field
+/// that carries the per-file grouping key. `rxdb.file.fetch` requests a
+/// `(collectionName, fileId)`; the source reads every chunk doc whose key field
+/// equals `fileId`, orders them by `idx`, base64-decodes each `data` field, and
+/// streams the raw bytes back. Each collection is keyed by a different field
+/// because they were authored independently (desktop vs. document/spreadsheet
+/// blobs), but the chunk shape (`idx` + base64 `data`) is uniform.
+const DEMAND_FILE_CHUNK_COLLECTIONS: &[(&str, &str)] = &[
+    ("desktop_file_chunks", "file_id"),
+    ("document_blob_chunks", "blob_id"),
+    ("spreadsheet_blob_chunks", "blob_id"),
+];
+
+/// Phase 4: register a bounded-memory file stream source on the pool's file
+/// fetch registry for each file-bearing chunk collection that is actually
+/// registered on this database. Without this, `rxdb.file.fetch` always returns
+/// FILE_NOT_FOUND (no source). The source closure is sync (it owns the read
+/// loop); it `block_on`s the async storage query to fetch the chunk docs, then
+/// emits decoded bytes chunk-by-chunk so server RAM stays bounded to one chunk.
+fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
+    for (collection_name, key_field) in DEMAND_FILE_CHUNK_COLLECTIONS.iter().copied() {
+        // Only register collections the database actually carries (the catalog
+        // is fault-tolerant; an optional chunk collection may be absent).
+        if database.collection(collection_name).is_none() {
+            continue;
+        }
+        let database = Arc::clone(database);
+        let key_field = key_field.to_string();
+        let closure_key_field = key_field.clone();
+        let source: Arc<rxdb::plugins::replication_webrtc::file_fetch_handler::FileChunkStreamFn> =
+            Arc::new(move |collection, file_id, range, emit| {
+                stream_demand_file_chunks(
+                    &database,
+                    collection,
+                    &closure_key_field,
+                    file_id,
+                    range,
+                    emit,
+                )
+            });
+        pool.file_fetch_registry
+            .register_stream_source(collection_name, source);
+        eprintln!(
+            "[business-os] demand-fetch file source registered for `{collection_name}` (key `{key_field}`)"
+        );
+    }
+}
+
+/// Phase 4: stream the bytes of `file_id` from `collection`'s chunk documents.
+/// Reads the chunk docs by the collection's key field, orders by `idx`,
+/// base64-decodes each `data`, and emits one chunk of raw bytes at a time
+/// (honoring an optional byte range). Returns `Err` when the collection is
+/// missing or the query fails; emits nothing (→ FILE_NOT_FOUND upstream) when
+/// the file has no chunks.
+fn stream_demand_file_chunks(
+    database: &Arc<RxDatabase>,
+    collection: &str,
+    key_field: &str,
+    file_id: &str,
+    range: Option<&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange>,
+    emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
+) -> rxdb::rx_error::RxResult<()> {
+    let chunk_collection = database.collection(collection).ok_or_else(|| {
+        rxdb::rx_error::new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(json!({
+                "message": format!("demand-fetch collection {collection} is not registered"),
+            })),
+        )
+    })?;
+    let query = MangoQuery {
+        selector: Some(json!({ key_field: { "$eq": file_id } })),
+        ..Default::default()
+    };
+    // The stream source closure is sync, but the file-fetch dispatcher runs it
+    // inside a tokio task (`tokio::spawn` in index_mod.rs). `block_in_place`
+    // hands the blocking work to a dedicated worker so the async storage query
+    // can be driven to completion without stalling the runtime, keeping the
+    // file-read loop owned by this closure (bounded memory, no full-file
+    // materialization on the wire).
+    let prepared = chunk_collection.find(Some(query))?;
+    let rows = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            prepared.exec(false).await.map_err(|err| {
+                rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(json!({
+                        "message": format!("query {collection} chunks for {file_id}: {err}"),
+                    })),
+                )
+            })
+        })
+    })?;
+    let mut chunk_rows = rows.as_array().cloned().unwrap_or_default();
+    // Order by `idx` so the reassembled byte stream is correct.
+    chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
+
+    // Range support: skip/take a byte window across the decoded chunk stream.
+    let (range_start, range_end) = match range {
+        Some(r) => (r.offset, r.offset.saturating_add(r.length)),
+        None => (0u64, u64::MAX),
+    };
+    let mut emitted_offset: u64 = 0;
+    for chunk in chunk_rows {
+        // Skip redacted/pruned chunks (empty data) so they do not corrupt the
+        // stream; the browser tracks presence separately.
+        let data = chunk.get("data").and_then(Value::as_str).unwrap_or("");
+        if data.is_empty() {
+            continue;
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|err| {
+                rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(json!({
+                        "message": format!("decode {collection} chunk for {file_id}: {err}"),
+                    })),
+                )
+            })?;
+        let chunk_start = emitted_offset;
+        let chunk_end = emitted_offset.saturating_add(decoded.len() as u64);
+        emitted_offset = chunk_end;
+        // Clip this chunk to the requested byte window.
+        if chunk_end <= range_start || chunk_start >= range_end {
+            continue;
+        }
+        let slice_start = range_start.saturating_sub(chunk_start) as usize;
+        let slice_end = (range_end.min(chunk_end) - chunk_start) as usize;
+        let slice = &decoded[slice_start.min(decoded.len())..slice_end.min(decoded.len())];
+        if slice.is_empty() {
+            continue;
+        }
+        // `emit` returns Ok(false) to stop early (cancel / known-sequence skip).
+        if !emit(slice)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
 async fn prune_desktop_file_chunk_generations(
     database: &Arc<RxDatabase>,
     file_id: &str,
@@ -5044,6 +5192,102 @@ mod tests {
                 "extra": extra,
             })
         );
+    }
+
+    // Multi-thread flavor: `stream_demand_file_chunks` uses
+    // `tokio::task::block_in_place`, which requires the multi-threaded runtime
+    // (matching production, where ctox runs on `rt-multi-thread`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn demand_file_source_streams_decoded_chunks_in_idx_order() {
+        // Phase 4: a registered file stream source must read the chunk docs by
+        // the collection's key field, order by `idx`, base64-decode each `data`,
+        // and emit the raw bytes in order. This is what makes `rxdb.file.fetch`
+        // serve bytes instead of FILE_NOT_FOUND.
+        let root = tempfile::tempdir().expect("temp root");
+        let database = open_test_database(root.path().join("demand.sqlite3"))
+            .await
+            .expect("open db");
+        database
+            .add_collections(HashMap::from([(
+                "desktop_file_chunks".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("desktop_file_chunks", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("add desktop_file_chunks");
+        let chunks = database
+            .collection("desktop_file_chunks")
+            .expect("desktop_file_chunks collection");
+        // Two chunks for file "f1": "Hello, " then "world!" (base64-encoded),
+        // inserted out of order to prove the source sorts by `idx`.
+        let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        for (idx, payload) in [(1u64, &b"world!"[..]), (0u64, &b"Hello, "[..])] {
+            chunks
+                .incremental_upsert(json!({
+                    "id": format!("f1_{idx}"),
+                    "file_id": "f1",
+                    "idx": idx,
+                    "total": 2,
+                    "encoding": "base64",
+                    "data": enc(payload),
+                    "created_at_ms": 1,
+                }))
+                .await
+                .expect("upsert chunk");
+        }
+
+        let mut collected: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "f1",
+            None,
+            &mut |bytes| {
+                collected.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream chunks");
+        assert_eq!(String::from_utf8(collected).unwrap(), "Hello, world!");
+
+        // A byte range clips the stream across chunk boundaries.
+        let mut ranged: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "f1",
+            Some(&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
+                offset: 7,
+                length: 5,
+            }),
+            &mut |bytes| {
+                ranged.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream ranged");
+        assert_eq!(String::from_utf8(ranged).unwrap(), "world");
+
+        // Unknown file → no bytes emitted (dispatcher maps that to FILE_NOT_FOUND).
+        let mut none: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "missing",
+            None,
+            &mut |bytes| {
+                none.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream missing");
+        assert!(none.is_empty());
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {

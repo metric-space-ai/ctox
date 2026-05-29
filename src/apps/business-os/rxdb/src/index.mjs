@@ -30,10 +30,19 @@ export {
 } from './webrtc-native.mjs';
 
 export {
+  ACTIVE_COLLECTIONS_METHOD,
+  DEFAULT_QUERY_META_BUDGET_BYTES,
   getConnectionHandlerSimplePeer,
   remoteSupportsQueryFetch,
   replicateWebRTC,
 } from './replication-webrtc.mjs';
+
+export {
+  ACTIVE_NOTIFY_DEBOUNCE_MS,
+  RECENT_EXEC_ACTIVE_MS,
+  createActiveCollectionRegistry,
+  getActiveCollectionRegistry,
+} from './active-collections.mjs';
 
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';
 export { CtoxSubject } from './observable.mjs';

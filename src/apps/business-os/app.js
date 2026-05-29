@@ -111,9 +111,12 @@ const state = {
   schemaImportRetries: new Map(),
   schemaRetryTimers: new Map(),
   syncStartedModules: new Set(),
-  deferredSyncModules: new Set(),
-  criticalSyncWarmupPromise: null,
-  backgroundModuleWorkScheduled: false,
+  // Phase 2: sync orchestration (critical-warmup ordering, module-sync
+  // deferral, background scheduling) was removed from app.js. Replication now
+  // starts lazily inside the RxDB layer and the foreground collection is
+  // prioritized from real reactive subscriptions (see active-collections.mjs).
+  // `deferredSyncModules` / `criticalSyncWarmupPromise` /
+  // `backgroundModuleWorkScheduled` are intentionally gone.
   ctoxHealth: null,
   fileIntegrityDiagnostics: [],
   ctoxHealthTimer: null,
@@ -666,9 +669,12 @@ async function bootstrap() {
     state.initialModuleOpened = Boolean(state.activeModule?.id);
     flushDeferredCatalogRefresh();
   }
-  scheduleBackgroundModuleWork();
+  // Phase 2: no critical-sync warmup choreography here anymore — replication
+  // starts lazily inside RxDB when a collection is first subscribed/read.
+  // Module-script preloading is a render concern (not sync orchestration) and
+  // stays, scheduled off the idle path.
+  scheduleModuleScriptPreload();
   refreshRemoteShellStateInBackground();
-  scheduleCriticalSyncWarmup();
 }
 
 function businessDbName(syncConfig = state.syncConfig) {
@@ -1792,81 +1798,30 @@ async function repairRecoveringDataPlane() {
     console.warn('[business-os] repairing RxDB/WebRTC data plane after stalled reconnect');
     setStatus('RxDB/WebRTC wird neu verbunden');
     await repairBusinessDataPlane(state.syncConfig);
-    await startCriticalSyncCollections();
+    // Phase 2: no critical-warmup choreography on reconnect — re-arm the active
+    // module's collections directly; RxDB drives replication + priority lazily.
     if (state.activeModule) startModuleSync(state.activeModule);
   } finally {
     syncRecoveryRepairRunning = false;
   }
 }
 
-async function startCriticalSyncCollections() {
-  if (state.criticalSyncWarmupPromise) return state.criticalSyncWarmupPromise;
-  state.criticalSyncWarmupPromise = runCriticalSyncWarmup()
-    .finally(() => {
-      state.criticalSyncWarmupPromise = null;
-    });
-  return state.criticalSyncWarmupPromise;
-}
-
-async function runCriticalSyncWarmup() {
-  for (const collection of CRITICAL_SYNC_COLLECTIONS) {
-    try {
-      await state.sync?.startCollection?.(collection);
-      await waitForCriticalSyncCollection(collection);
-    } catch (error) {
-      console.warn(`[business-os] critical sync collection ${collection} did not start during repair`, error);
-    }
-  }
-}
-
-async function waitForCriticalSyncCollection(collection, timeoutMs = 18000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (isCriticalSyncCollectionReady(collection)) return true;
-    await delay(250);
-  }
-  const diagnostics = state.syncDiagnostics?.collections?.[collection] || null;
-  console.warn('[business-os] critical sync collection did not become ready before continuing', {
-    collection,
-    connectionStatus: diagnostics?.connectionStatus || diagnostics?.status || null,
-    activePeerCount: diagnostics?.frameTransport?.activePeerCount ?? null,
-    sentFrames: diagnostics?.frameTransport?.sentFrames ?? null,
-    receivedFrames: diagnostics?.frameTransport?.receivedFrames ?? null,
-    lastLifecycleEvent: diagnostics?.lastLifecycleEvent || null,
-    lastError: diagnostics?.lastError || null,
-  });
-  return false;
-}
-
-function isCriticalSyncCollectionReady(collection) {
-  const diagnostics = state.syncDiagnostics?.collections?.[collection];
-  if (!diagnostics) return false;
-  if (diagnostics.httpBridgeStatus === 'ready' && diagnostics.httpBridgePulledAt) return true;
-  const status = diagnostics.connectionStatus || diagnostics.status || '';
-  if (['connected', 'running', 'reused'].includes(status)) return true;
-  if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
-  if (diagnostics.initialReplicationState === 'complete') return true;
-  const transport = diagnostics.frameTransport || {};
-  return Number(transport.activePeerCount || 0) > 0
-    && (Number(transport.sentFrames || 0) > 0 || Number(transport.receivedFrames || 0) > 0);
-}
-
-function areCriticalSyncCollectionsReady() {
-  return CRITICAL_SYNC_COLLECTIONS.every((collection) => isCriticalSyncCollectionReady(collection));
-}
-
-function scheduleCriticalSyncWarmup() {
-  const run = () => {
-    startCriticalSyncCollections().catch((error) => {
-      console.warn('[business-os] critical sync warmup failed', error);
-    });
-  };
-  if ('requestIdleCallback' in window) {
-    window.requestIdleCallback(run, { timeout: 1000 });
-  } else {
-    window.setTimeout(run, 0);
-  }
-}
+// Phase 2: the critical-sync warmup choreography
+// (`runCriticalSyncWarmup` / `startCriticalSyncCollections` /
+// `scheduleCriticalSyncWarmup` / `waitForCriticalSyncCollection` /
+// `isCriticalSyncCollectionReady` / `areCriticalSyncCollectionsReady`) was
+// REMOVED. Apps no longer choreograph which collections sync first or wait for
+// "critical" collections to be ready before opening a module. Replication
+// starts lazily inside the RxDB layer the first time a collection is
+// subscribed/read, and the foreground collection is prioritized from real
+// reactive subscriptions (active-collections.mjs → `rxdb.activeCollections`).
+//
+// TODO(phase2-cleanup): once every app reads/writes purely through RxDB
+// reactive queries, the thin `state.sync.startModule(mod)` call in
+// `startModuleSync` can also move into RxDB's lazy first-subscription path so
+// app.js stops touching sync entirely. `CRITICAL_SYNC_COLLECTIONS` is retained
+// ONLY for the schema-hash drift guard near the top of this file, not for
+// ordering.
 
 async function buildAdvancedStatusSnapshot(options = {}) {
   const diagnostics = state.syncDiagnostics || null;
@@ -3430,20 +3385,22 @@ function withMigrationStrategies(collections, migrationStrategies = {}) {
   return next;
 }
 
-function startAllModuleSync() {
-  const modules = state.modules.filter((mod) => mod.id !== state.activeModule?.id);
-  modules.forEach((mod, index) => {
-    window.setTimeout(() => startModuleSync(mod), index * 350);
-  });
-}
-
+// Phase 2: `startModuleSync` is now a thin RxDB-layer trigger — it registers
+// the module's schemas (so RxDB knows the collections) and asks the sync
+// runtime to begin replication for them. It NO LONGER choreographs ordering:
+// the old critical-collections-ready gate and the `deferModuleSyncUntilCriticalReady`
+// deferral are gone. Replication begins as soon as a module's schemas are
+// registered, and which collection gets bandwidth first is decided by real
+// reactive subscriptions (active-collections.mjs), not by app.js.
+//
+// TODO(phase2-cleanup): fold this last `state.sync.startModule` call into RxDB
+// so it fires on first subscription to a collection — then app.js no longer
+// touches sync at all (apps just read/write). Kept thin (not fully removed)
+// because the sync runtime still owns connection-handler + signaling config,
+// and moving that into RxDB is a larger, separately-shippable refactor.
 function startModuleSync(mod) {
   if (!mod?.id || !state.sync || state.syncStartedModules.has(mod.id)) return;
   if (state.schemaRetryTimers.has(mod.id)) return;
-  if (!areCriticalSyncCollectionsReady()) {
-    deferModuleSyncUntilCriticalReady(mod);
-    return;
-  }
   state.syncStartedModules.add(mod.id);
   registerModuleSchemas(mod)
     .then(() => {
@@ -3460,19 +3417,6 @@ function startModuleSync(mod) {
       }
       console.error(`[business-os] Sync startup failed for ${mod.id}`, error);
       setStatus(`Sync failed: ${error.message || error}`);
-    });
-}
-
-function deferModuleSyncUntilCriticalReady(mod) {
-  if (!mod?.id || state.deferredSyncModules.has(mod.id)) return;
-  state.deferredSyncModules.add(mod.id);
-  startCriticalSyncCollections()
-    .catch((error) => {
-      console.warn('[business-os] critical sync warmup failed before module sync', error);
-    })
-    .finally(() => {
-      state.deferredSyncModules.delete(mod.id);
-      window.setTimeout(() => startModuleSync(mod), 0);
     });
 }
 
@@ -3545,9 +3489,11 @@ function preloadModuleScripts() {
   }
 }
 
-function scheduleBackgroundModuleWork() {
-  if (state.backgroundModuleWorkScheduled) return;
-  state.backgroundModuleWorkScheduled = true;
+// Phase 2: renamed from `scheduleBackgroundModuleWork` and stripped of the
+// sync-orchestration flag (`backgroundModuleWorkScheduled`). This is purely a
+// render concern now — it warms the module-script HTTP cache so navigation is
+// snappy. It does NOT touch sync; replication is lazy in RxDB.
+function scheduleModuleScriptPreload() {
   const run = () => {
     preloadModuleScripts();
   };
@@ -4948,8 +4894,9 @@ async function refreshModules() {
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
   persistModuleLayout();
   renderTabs();
-  state.backgroundModuleWorkScheduled = false;
-  scheduleBackgroundModuleWork();
+  // Phase 2: re-warm the module-script cache after a catalog change. Pure
+  // render concern — no sync orchestration.
+  scheduleModuleScriptPreload();
   refreshRemoteShellStateInBackground();
 
   // If the URL hash requests a module that wasn't previously loaded, but is now available, open it!

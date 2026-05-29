@@ -3,6 +3,7 @@ import { createCtoxWebRtcNativePeer } from './webrtc-native.mjs';
 import {
   CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
   assertCompatibleProtocol,
+  assertCollectionSchemasCompatible,
   buildProtocolPayload,
   schemaHash,
   schemaHashSource,
@@ -14,6 +15,19 @@ import { createFileDemandLoader } from './file-demand-loader.mjs';
 import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
+import { getActiveCollectionRegistry } from './active-collections.mjs';
+
+// Phase 2: the wire method the browser uses to tell the native peer which
+// collections are foreground (subscription-driven). Must match the native
+// `ACTIVE_COLLECTIONS_METHOD` constant in connection_handler_rs.rs.
+export const ACTIVE_COLLECTIONS_METHOD = 'rxdb.activeCollections';
+
+// Phase 4: per-collection demand-cache memory budget. The query-meta sidecar
+// evicts LRU document-access entries (and deletes them from the primary store)
+// once the working set exceeds this. Without a budget the default is 0 and
+// eviction never runs, so the cache grows unbounded under real-time
+// replication. 128 MiB is a sane ceiling for a peer-driven cache.
+export const DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
 
 const BROWSER_CAPABILITIES = [
   'ctox-rxdb-browser-v1',
@@ -82,6 +96,18 @@ class SharedRoomPeer {
     // Negotiated remote protocol from the room-level handshake, retained so a
     // collection that registers AFTER the handshake can immediately catch up.
     this.negotiated = null; // { peerId, remoteProtocol, queryFetchCapable }
+    // Phase 3 schema-validation hardening: collections whose per-collection
+    // schema hash mismatched the remote at handshake time. They stay quiesced
+    // (no pull/push) until reconciled instead of disabling validation for the
+    // whole room.
+    this.schemaMismatchCollections = new Set();
+    // Phase 2: subscription-driven active-collection priority. The shared peer
+    // forwards the RxDB layer's active set (derived from real reactive
+    // subscriptions, NOT app.js) to the native peer over `rxdb.activeCollections`
+    // so the native send queue prioritizes the foreground collection.
+    this.activeRegistry = getActiveCollectionRegistry();
+    this.activeRegistryUnsub = null;
+    this.lastActiveCollectionsSent = null;
   }
 
   representativeCollection() {
@@ -98,7 +124,22 @@ class SharedRoomPeer {
     if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) {
       const { peerId, remoteProtocol, queryFetchCapable } = this.negotiated;
       Promise.resolve()
-        .then(() => registration.state.onPeerReady(peerId, remoteProtocol, queryFetchCapable))
+        .then(async () => {
+          // Phase 3 schema-validation hardening: a collection that joins AFTER
+          // the room handshake was not covered by the per-collection schema
+          // check in `handlePeerOpen`. Validate just this collection's hash
+          // against the negotiated remote `collectionSchemas` now; on mismatch
+          // surface its error and skip its pull/push (do not quiesce the room).
+          const localSchemas = await this.collectCollectionSchemas();
+          const only = { [collection]: localSchemas[collection] };
+          const mismatches = assertCollectionSchemasCompatible(only, remoteProtocol);
+          if (mismatches.has(collection)) {
+            this.schemaMismatchCollections.add(collection);
+            registration.state.emitError(mismatches.get(collection));
+            return;
+          }
+          await registration.state.onPeerReady(peerId, remoteProtocol, queryFetchCapable);
+        })
         .catch((error) => registration.state.emitError(error));
     }
   }
@@ -111,6 +152,12 @@ class SharedRoomPeer {
       try { this.peer?.close?.(); } catch {}
       this.peer = null;
       this.started = false;
+      // Phase 2: stop forwarding active-collection changes once the room peer
+      // is torn down.
+      if (this.activeRegistryUnsub) {
+        try { this.activeRegistryUnsub(); } catch {}
+        this.activeRegistryUnsub = null;
+      }
     }
   }
 
@@ -161,7 +208,35 @@ class SharedRoomPeer {
       const collection = event.detail?.collection || event.collection || null;
       this.fanoutMasterChange(collection);
     });
+    // Phase 2: forward the RxDB layer's active-collection set to the native
+    // peer whenever it changes. The listener fires immediately with the current
+    // set and on every subsequent change (debounced inside the registry).
+    if (!this.activeRegistryUnsub) {
+      this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
+        this.sendActiveCollections(names);
+      });
+    }
     return this.peer;
+  }
+
+  // Phase 2: send `rxdb.activeCollections` (fire-and-forget) to the active
+  // native peer. No-op until a peer is open. Resent on (re)handshake because
+  // the native peer drops its per-peer active set on disconnect.
+  sendActiveCollections(names) {
+    const list = Array.isArray(names) ? names : this.activeRegistry.activeCollectionsList();
+    const peerId = this.activeRemotePeerId;
+    if (!peerId || !this.peer) return;
+    const key = list.join(' ');
+    this.lastActiveCollectionsSent = key;
+    try {
+      this.peer.send(peerId, {
+        id: `active-collections|${Date.now()}`,
+        method: ACTIVE_COLLECTIONS_METHOD,
+        params: [list],
+      });
+    } catch {
+      // Best-effort transport hint; priority falls back to Normal if it fails.
+    }
   }
 
   start() {
@@ -201,7 +276,36 @@ class SharedRoomPeer {
         capabilities: BROWSER_CAPABILITIES,
       });
     }
-    return registration.state.buildProtocolPayload();
+    const payload = await registration.state.buildProtocolPayload();
+    // Phase 3 schema-validation hardening: under multiplex the handshake runs
+    // ONCE off the representative collection, so attach the per-collection
+    // schema-hash map for EVERY collection on this connection. The remote
+    // validates each entry individually instead of skipping schema validation.
+    // Single-collection rooms omit the map (payload stays legacy-identical).
+    if (this.collections.size > 1) {
+      payload.collectionSchemas = await this.collectCollectionSchemas();
+    }
+    return payload;
+  }
+
+  // Build `{ collectionName -> { schemaVersion, schemaHash, schemaHashSource } }`
+  // across every registered collection on this shared connection.
+  async collectCollectionSchemas() {
+    const map = {};
+    for (const [name, registration] of this.collections.entries()) {
+      const state = registration.state;
+      if (!state) continue;
+      let hash = state.schemaHashValue;
+      if (!hash) {
+        try { hash = await state.collection.schema.hash(); } catch { hash = null; }
+      }
+      map[name] = {
+        schemaVersion: state.collection?.schema?.version ?? null,
+        schemaHash: hash || null,
+        schemaHashSource: schemaHashSource(name),
+      };
+    }
+    return map;
   }
 
   async routeMasterChangesSince(collection, params, peerId) {
@@ -234,14 +338,16 @@ class SharedRoomPeer {
       representative.collection,
     );
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
+    const multiplexed = this.collections.size > 1;
     try {
       assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
         requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
-        // The single shared peer multiplexes many collections, so the remote's
-        // representative collection may differ from ours; the per-collection
-        // name/hash match is validated implicitly via replication, not at the
-        // room handshake. We still enforce protocol + required capabilities.
-        validateSchema: this.collections.size <= 1,
+        // Under multiplex the representative collection in the room handshake
+        // may differ from the remote's representative, so the SINGLE-collection
+        // name/hash check on `localProtocol.collection` is meaningless here. We
+        // still enforce protocol + required capabilities, and validate every
+        // collection's schema individually below via `collectionSchemas`.
+        validateSchema: !multiplexed,
       });
     } catch (error) {
       this.peer?.removeConnection?.(peerId, 'protocol-incompatible');
@@ -252,16 +358,38 @@ class SharedRoomPeer {
       this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
       return;
     }
+    // Phase 3 schema-validation hardening: validate EACH collection's schema
+    // hash individually under multiplex. On mismatch, surface the
+    // schemaHashMismatch error for THAT collection and skip just it (do NOT
+    // tear down the connection or disable validation for the whole room).
+    this.schemaMismatchCollections = new Set();
+    if (multiplexed) {
+      const localSchemas = await this.collectCollectionSchemas();
+      const mismatches = assertCollectionSchemasCompatible(localSchemas, normalizedRemoteProtocol);
+      for (const [name, error] of mismatches.entries()) {
+        this.schemaMismatchCollections.add(name);
+        const registration = this.collections.get(name);
+        registration?.state?.emitError(error);
+      }
+    }
     await this.peer.request(peerId, 'token', [], 15000, representative.collection);
     await this.awaitRemoteMasterReady(peerId);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
+    // Phase 2: the native peer cleared its per-peer active set on the prior
+    // disconnect — re-send the current foreground set now that the handshake
+    // completed so priority is correct from the first frame.
+    this.sendActiveCollections();
     // Retain the negotiated handshake so collections that register later catch
     // up immediately (see `register`).
     this.negotiated = { peerId, remoteProtocol: normalizedRemoteProtocol, queryFetchCapable };
     // Notify every collection that the shared peer is open + protocol-ready, so
     // each runs its own initial pull/push and (optionally) demand-loading.
-    for (const registration of this.collections.values()) {
+    // Skip collections whose schema mismatched — they stay quiesced (no rows
+    // exchanged) until the schema is reconciled, while every other collection
+    // syncs normally.
+    for (const [name, registration] of this.collections.entries()) {
+      if (this.schemaMismatchCollections.has(name)) continue;
       try {
         await registration.state.onPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable);
       } catch (error) {
@@ -659,6 +787,13 @@ class CtoxWebRtcReplicationState {
       databaseName: dbName,
       primaryDelete,
     });
+    // Phase 4: set a memory budget so eviction ACTUALLY RUNS. Without this the
+    // budget defaults to 0 and `evictDocuments` short-circuits (the cache grows
+    // unbounded from real-time replication). 128 MiB is a sane per-collection
+    // ceiling for a peer-driven cache; LRU document-access entries are evicted
+    // (and removed from the primary store via `primaryDelete`) once the working
+    // set exceeds it.
+    try { await this.demandSidecar.setBudgetBytes(DEFAULT_QUERY_META_BUDGET_BYTES); } catch {}
     // Run cache eviction periodically in production. 30 s is conservative
     // for a peer-driven cache that grows from real-time replication.
     try { this.demandSidecar.startEvictionScheduler({ intervalMs: 30_000 }); } catch {}

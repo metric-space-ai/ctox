@@ -172,7 +172,15 @@ function buildProtocolPayload({
   peerGeneration,
   checkpoint,
   role = "browser",
-  capabilities = []
+  capabilities = [],
+  // Phase 3 schema-validation hardening: the per-collection schema-hash map
+  // for EVERY collection multiplexed on this one connection. Keyed by
+  // collection name. The room handshake runs once off a single representative
+  // collection, so this map is the only place the remote learns the schema
+  // hash/version of the OTHER collections sharing the DataChannel. The remote
+  // validates each entry individually (see `assertCollectionSchemasCompatible`)
+  // instead of skipping schema validation wholesale under multiplex.
+  collectionSchemas = null
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   return {
@@ -185,6 +193,10 @@ function buildProtocolPayload({
       schemaHashSource: source || schemaHashSource(collectionName),
       checkpoint: checkpointEvidence
     } : null,
+    // `{ collectionName: { schemaVersion, schemaHash, schemaHashSource } }`.
+    // Omitted (null) for single-collection rooms so the legacy single-
+    // collection handshake stays byte-identical.
+    collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     peerSession: {
       role,
       sessionId: peerSessionId || null,
@@ -195,6 +207,19 @@ function buildProtocolPayload({
       ...capabilities
     ])).sort()
   };
+}
+function normalizeCollectionSchemas(map) {
+  if (!map || typeof map !== "object") return null;
+  const out = {};
+  for (const [name, entry] of Object.entries(map)) {
+    if (!name || !entry || typeof entry !== "object") continue;
+    out[name] = {
+      schemaVersion: Number.isFinite(entry.schemaVersion) ? entry.schemaVersion : null,
+      schemaHash: entry.schemaHash || null,
+      schemaHashSource: entry.schemaHashSource || schemaHashSource(name)
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 function assertCompatibleProtocol(local, remote, {
   requiredCapabilities = CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
@@ -267,6 +292,38 @@ function assertCompatibleProtocol(local, remote, {
     });
   }
   return true;
+}
+function assertCollectionSchemasCompatible(localSchemas, remote) {
+  const mismatches = /* @__PURE__ */ new Map();
+  const remoteSchemas = remote && typeof remote.collectionSchemas === "object" && remote.collectionSchemas ? remote.collectionSchemas : {};
+  for (const [name, local] of Object.entries(localSchemas || {})) {
+    const remoteEntry = remoteSchemas[name];
+    if (!remoteEntry || typeof remoteEntry !== "object") continue;
+    const localVersion = Number.isFinite(local?.schemaVersion) ? local.schemaVersion : null;
+    const remoteVersion = Number.isFinite(remoteEntry.schemaVersion) ? remoteEntry.schemaVersion : null;
+    if (localVersion !== null && remoteVersion !== null && localVersion !== remoteVersion) {
+      mismatches.set(name, createProtocolCompatibilityError({
+        code: CTOX_PROTOCOL_ERROR_CODES.schemaVersionMismatch,
+        message: `CTOX RxDB schema version mismatch for ${name}.`,
+        expected: localVersion,
+        actual: remoteVersion,
+        collection: name
+      }));
+      continue;
+    }
+    const localHash = local?.schemaHash || null;
+    const remoteHash = remoteEntry.schemaHash || null;
+    if (localHash && remoteHash && localHash !== remoteHash) {
+      mismatches.set(name, createProtocolCompatibilityError({
+        code: CTOX_PROTOCOL_ERROR_CODES.schemaHashMismatch,
+        message: `CTOX RxDB schema hash mismatch for ${name}.`,
+        expected: localHash,
+        actual: remoteHash,
+        collection: name
+      }));
+    }
+  }
+  return mismatches;
 }
 function normalizeProtocolCollection(payload) {
   const collection = payload?.collection && typeof payload.collection === "object" ? payload.collection : {};
@@ -779,7 +836,7 @@ var SEND_PRIORITIES = ["high", "normal", "low"];
 var MAX_GLOBAL_RTC_PEER_CONNECTIONS = 64;
 var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var RTC_HANDSHAKE_TIMEOUT_MS = 15e3;
-var GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
+var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "ctox_runtime_settings",
@@ -2240,6 +2297,7 @@ function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
   return `${String(owner?.options?.room || "")}|${String(owner?.options?.clientId || "")}|${String(remotePeerId || "")}`;
 }
 function rtcPeerConnectionPriority(owner) {
+  void owner;
   return 0;
 }
 function noteCriticalRequested(pool, owner) {
@@ -2486,7 +2544,7 @@ function classifySendPriority(payload = {}, text = "") {
     return ["ack", "resume", "start"].includes(payload.kind) ? "high" : "normal";
   }
   const method = String(payload?.method || "");
-  if (["ctoxProtocol", "token"].includes(method)) return "high";
+  if (["ctoxProtocol", "token", "rxdb.activeCollections"].includes(method)) return "high";
   if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return "low";
   if (method === "masterChangesSince") return "normal";
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, "result") || Object.prototype.hasOwnProperty.call(payload, "error"))) {
@@ -2572,7 +2630,7 @@ var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
-var GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for("ctox.rxdb.query-stream-state.v1");
+var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 function createDemandLoadingTransport({ getPeerId } = {}) {
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
@@ -3776,7 +3834,107 @@ function runRequest(request) {
   });
 }
 
+// src/apps/business-os/rxdb/src/active-collections.mjs
+var RECENT_EXEC_ACTIVE_MS = 15e3;
+var ACTIVE_NOTIFY_DEBOUNCE_MS = 100;
+var ActiveCollectionRegistry = class {
+  constructor({ clock = () => Date.now(), recentExecMs = RECENT_EXEC_ACTIVE_MS } = {}) {
+    this.clock = clock;
+    this.recentExecMs = recentExecMs;
+    this.subscriptionCounts = /* @__PURE__ */ new Map();
+    this.lastExecAt = /* @__PURE__ */ new Map();
+    this.listeners = /* @__PURE__ */ new Set();
+    this.notifyTimer = null;
+    this.lastNotifiedKey = null;
+  }
+  // A live query/collection subscription started for `collectionName`.
+  subscriptionStarted(collectionName) {
+    if (!collectionName) return;
+    this.subscriptionCounts.set(
+      collectionName,
+      (this.subscriptionCounts.get(collectionName) || 0) + 1
+    );
+    this.scheduleNotify();
+  }
+  // A live subscription ended.
+  subscriptionEnded(collectionName) {
+    if (!collectionName) return;
+    const next = (this.subscriptionCounts.get(collectionName) || 0) - 1;
+    if (next <= 0) {
+      this.subscriptionCounts.delete(collectionName);
+    } else {
+      this.subscriptionCounts.set(collectionName, next);
+    }
+    this.scheduleNotify();
+  }
+  // A one-shot `.exec()` read happened on `collectionName` — keep it active for
+  // a short window so imperative reads also get foreground priority.
+  markRead(collectionName) {
+    if (!collectionName) return;
+    this.lastExecAt.set(collectionName, this.clock());
+    this.scheduleNotify();
+  }
+  // The current active set: every collection with a live subscription, plus
+  // every collection read within the recent-exec window.
+  activeCollections() {
+    const now = this.clock();
+    const active = /* @__PURE__ */ new Set();
+    for (const [name, count] of this.subscriptionCounts.entries()) {
+      if (count > 0) active.add(name);
+    }
+    for (const [name, at] of this.lastExecAt.entries()) {
+      if (now - at <= this.recentExecMs) active.add(name);
+      else this.lastExecAt.delete(name);
+    }
+    return active;
+  }
+  // Listener receives a sorted array of active collection names whenever the
+  // active set changes. Returns an unsubscribe function. The listener fires
+  // immediately with the current set.
+  onChange(listener) {
+    if (typeof listener !== "function") return () => {
+    };
+    this.listeners.add(listener);
+    try {
+      listener(this.activeCollectionsList());
+    } catch {
+    }
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+  activeCollectionsList() {
+    return Array.from(this.activeCollections()).sort();
+  }
+  scheduleNotify() {
+    if (this.notifyTimer != null) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      const list = this.activeCollectionsList();
+      const key = list.join("\0");
+      if (key === this.lastNotifiedKey) return;
+      this.lastNotifiedKey = key;
+      for (const listener of this.listeners) {
+        try {
+          listener(list);
+        } catch {
+        }
+      }
+    }, ACTIVE_NOTIFY_DEBOUNCE_MS);
+  }
+};
+var SINGLETON = null;
+function getActiveCollectionRegistry() {
+  if (!SINGLETON) SINGLETON = new ActiveCollectionRegistry();
+  return SINGLETON;
+}
+function createActiveCollectionRegistry(options = {}) {
+  return new ActiveCollectionRegistry(options);
+}
+
 // src/apps/business-os/rxdb/src/replication-webrtc.mjs
+var ACTIVE_COLLECTIONS_METHOD = "rxdb.activeCollections";
+var DEFAULT_QUERY_META_BUDGET_BYTES = 128 * 1024 * 1024;
 var BROWSER_CAPABILITIES = [
   "ctox-rxdb-browser-v1",
   "ctox-file-chunks-v1",
@@ -3821,6 +3979,10 @@ var SharedRoomPeer = class {
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     this.negotiated = null;
+    this.schemaMismatchCollections = /* @__PURE__ */ new Set();
+    this.activeRegistry = getActiveCollectionRegistry();
+    this.activeRegistryUnsub = null;
+    this.lastActiveCollectionsSent = null;
   }
   representativeCollection() {
     const first = this.collections.keys().next();
@@ -3831,7 +3993,17 @@ var SharedRoomPeer = class {
     this.refCount += 1;
     if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) {
       const { peerId, remoteProtocol, queryFetchCapable } = this.negotiated;
-      Promise.resolve().then(() => registration.state.onPeerReady(peerId, remoteProtocol, queryFetchCapable)).catch((error) => registration.state.emitError(error));
+      Promise.resolve().then(async () => {
+        const localSchemas = await this.collectCollectionSchemas();
+        const only = { [collection]: localSchemas[collection] };
+        const mismatches = assertCollectionSchemasCompatible(only, remoteProtocol);
+        if (mismatches.has(collection)) {
+          this.schemaMismatchCollections.add(collection);
+          registration.state.emitError(mismatches.get(collection));
+          return;
+        }
+        await registration.state.onPeerReady(peerId, remoteProtocol, queryFetchCapable);
+      }).catch((error) => registration.state.emitError(error));
     }
   }
   unregister(collection) {
@@ -3845,6 +4017,13 @@ var SharedRoomPeer = class {
       }
       this.peer = null;
       this.started = false;
+      if (this.activeRegistryUnsub) {
+        try {
+          this.activeRegistryUnsub();
+        } catch {
+        }
+        this.activeRegistryUnsub = null;
+      }
     }
   }
   ensurePeer() {
@@ -3886,7 +4065,30 @@ var SharedRoomPeer = class {
       const collection = event.detail?.collection || event.collection || null;
       this.fanoutMasterChange(collection);
     });
+    if (!this.activeRegistryUnsub) {
+      this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
+        this.sendActiveCollections(names);
+      });
+    }
     return this.peer;
+  }
+  // Phase 2: send `rxdb.activeCollections` (fire-and-forget) to the active
+  // native peer. No-op until a peer is open. Resent on (re)handshake because
+  // the native peer drops its per-peer active set on disconnect.
+  sendActiveCollections(names) {
+    const list = Array.isArray(names) ? names : this.activeRegistry.activeCollectionsList();
+    const peerId = this.activeRemotePeerId;
+    if (!peerId || !this.peer) return;
+    const key = list.join(" ");
+    this.lastActiveCollectionsSent = key;
+    try {
+      this.peer.send(peerId, {
+        id: `active-collections|${Date.now()}`,
+        method: ACTIVE_COLLECTIONS_METHOD,
+        params: [list]
+      });
+    } catch {
+    }
   }
   start() {
     this.ensurePeer();
@@ -3925,7 +4127,34 @@ var SharedRoomPeer = class {
         capabilities: BROWSER_CAPABILITIES
       });
     }
-    return registration.state.buildProtocolPayload();
+    const payload = await registration.state.buildProtocolPayload();
+    if (this.collections.size > 1) {
+      payload.collectionSchemas = await this.collectCollectionSchemas();
+    }
+    return payload;
+  }
+  // Build `{ collectionName -> { schemaVersion, schemaHash, schemaHashSource } }`
+  // across every registered collection on this shared connection.
+  async collectCollectionSchemas() {
+    const map = {};
+    for (const [name, registration] of this.collections.entries()) {
+      const state = registration.state;
+      if (!state) continue;
+      let hash = state.schemaHashValue;
+      if (!hash) {
+        try {
+          hash = await state.collection.schema.hash();
+        } catch {
+          hash = null;
+        }
+      }
+      map[name] = {
+        schemaVersion: state.collection?.schema?.version ?? null,
+        schemaHash: hash || null,
+        schemaHashSource: schemaHashSource(name)
+      };
+    }
+    return map;
   }
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
@@ -3951,14 +4180,16 @@ var SharedRoomPeer = class {
       representative.collection
     );
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
+    const multiplexed = this.collections.size > 1;
     try {
       assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
         requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
-        // The single shared peer multiplexes many collections, so the remote's
-        // representative collection may differ from ours; the per-collection
-        // name/hash match is validated implicitly via replication, not at the
-        // room handshake. We still enforce protocol + required capabilities.
-        validateSchema: this.collections.size <= 1
+        // Under multiplex the representative collection in the room handshake
+        // may differ from the remote's representative, so the SINGLE-collection
+        // name/hash check on `localProtocol.collection` is meaningless here. We
+        // still enforce protocol + required capabilities, and validate every
+        // collection's schema individually below via `collectionSchemas`.
+        validateSchema: !multiplexed
       });
     } catch (error) {
       this.peer?.removeConnection?.(peerId, "protocol-incompatible");
@@ -3969,12 +4200,24 @@ var SharedRoomPeer = class {
       this.peer?.removeConnection?.(peerId, "non-native-peer-role");
       return;
     }
+    this.schemaMismatchCollections = /* @__PURE__ */ new Set();
+    if (multiplexed) {
+      const localSchemas = await this.collectCollectionSchemas();
+      const mismatches = assertCollectionSchemasCompatible(localSchemas, normalizedRemoteProtocol);
+      for (const [name, error] of mismatches.entries()) {
+        this.schemaMismatchCollections.add(name);
+        const registration = this.collections.get(name);
+        registration?.state?.emitError(error);
+      }
+    }
     await this.peer.request(peerId, "token", [], 15e3, representative.collection);
     await this.awaitRemoteMasterReady(peerId);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
+    this.sendActiveCollections();
     this.negotiated = { peerId, remoteProtocol: normalizedRemoteProtocol, queryFetchCapable };
-    for (const registration of this.collections.values()) {
+    for (const [name, registration] of this.collections.entries()) {
+      if (this.schemaMismatchCollections.has(name)) continue;
       try {
         await registration.state.onPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable);
       } catch (error) {
@@ -4340,6 +4583,10 @@ var CtoxWebRtcReplicationState = class {
       primaryDelete
     });
     try {
+      await this.demandSidecar.setBudgetBytes(DEFAULT_QUERY_META_BUDGET_BYTES);
+    } catch {
+    }
+    try {
       this.demandSidecar.startEvictionScheduler({ intervalMs: 3e4 });
     } catch {
     }
@@ -4674,6 +4921,8 @@ var CtoxRxCollection = class {
     return {
       subscribe: (listener) => {
         let active = true;
+        const registry = getActiveCollectionRegistry();
+        registry.subscriptionStarted(this.name);
         let pendingTimer = null;
         const debounceMs = OBSERVABLE_DEBOUNCE_MS;
         const flushEmit = async () => {
@@ -4696,6 +4945,7 @@ var CtoxRxCollection = class {
               pendingTimer = null;
             }
             unsubscribe();
+            registry.subscriptionEnded(this.name);
           }
         };
       }
@@ -4711,6 +4961,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
     this.$ = {
       subscribe: (listener) => {
         let active = true;
+        const registry = getActiveCollectionRegistry();
+        registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         const flushEmit = () => {
           pendingTimer = null;
@@ -4734,6 +4986,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            registry.subscriptionEnded(this.collection.name);
           }
         };
       }
@@ -4774,6 +5027,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
     };
   }
   async exec() {
+    getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     if (this.collection.demandLoader) {
       docs = await this.collection.demandLoader.resolveQuery(this.query);
@@ -5250,6 +5504,8 @@ function buildBusinessOsAdvancedStatus({
   };
 }
 export {
+  ACTIVE_COLLECTIONS_METHOD,
+  ACTIVE_NOTIFY_DEBOUNCE_MS,
   CTOX_BUSINESS_OS_SCHEMA_HASHES,
   CTOX_CHECKPOINT_EPOCH_CAPABILITY,
   CTOX_PEER_SESSION_CAPABILITY,
@@ -5263,10 +5519,12 @@ export {
   CtoxIndexedDbStorage,
   CtoxSubject,
   CtoxWebRtcNativePeer,
+  DEFAULT_QUERY_META_BUDGET_BYTES,
   DEFAULT_WINDOW_LIMIT,
   FILE_CHUNK_PRESENCE_KEY,
   OBSERVABLE_DEBOUNCE_MS,
   QueryMetaStorage,
+  RECENT_EXEC_ACTIVE_MS,
   RxDBMigrationSchemaPlugin,
   SHELL_CRITICAL_COLLECTIONS,
   SIDECAR_DATABASE_NAME,
@@ -5281,6 +5539,7 @@ export {
   canonicalJson,
   canonicalQueryJson,
   canonicalizeQueryInput,
+  createActiveCollectionRegistry,
   createBroadcastChannelBroker,
   createCtoxWebRtcNativePeer,
   createDemandLoadingTransport,
@@ -5295,6 +5554,7 @@ export {
   ctoxIndexedDbStorageTestInternals,
   ctoxRxdbTestInternals,
   decodeChunk,
+  getActiveCollectionRegistry,
   getConnectionHandlerSimplePeer,
   getCtoxIndexedDbStorage,
   normalizeSignalingControlPlaneError,

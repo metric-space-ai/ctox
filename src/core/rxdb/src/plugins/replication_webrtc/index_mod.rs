@@ -625,11 +625,17 @@ where
                             .as_deref()
                             .and_then(|name| pool_clone.collection_by_name(name))
                             .unwrap_or_else(|| Arc::clone(&representative));
+                        // Phase 3 schema-validation hardening: include the
+                        // per-collection schema-hash map so a multiplexing
+                        // browser validates EACH collection individually.
+                        let schemas =
+                            collection_schemas_payload(&pool_clone.collections()).await;
                         Some(
                             ctox_protocol_response_with_flag(
                                 &target,
                                 peer_session_id.as_deref(),
                                 flag,
+                                schemas,
                             )
                             .await,
                         )
@@ -746,10 +752,16 @@ where
                     format!("{}|{}|{}", representative.database.token, request_flag, n)
                 };
                 let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                // Phase 3 schema-validation hardening: carry the per-collection
+                // schema-hash map on the outbound handshake so the remote can
+                // validate each collection individually too (symmetric).
+                let local_collection_schemas =
+                    collection_schemas_payload(&pool_clone.collections()).await;
                 let local_protocol = ctox_protocol_response_with_flag(
                     &representative,
                     peer_session_id.as_deref(),
                     local_flag,
+                    local_collection_schemas.clone(),
                 )
                 .await;
                 let protocol_response = match send_message_and_await_answer(
@@ -773,14 +785,10 @@ where
                         return;
                     }
                 };
-                // When multiplexing, the remote's representative collection may
-                // differ from ours, so the per-collection name/hash check is
-                // meaningless at the room level — validate protocol/capability
-                // compatibility but skip the collection-identity match. The
-                // real per-collection schema check still happens implicitly:
-                // each collection's master/fork handler only serves its own
-                // storage instance, and mismatched collections simply never
-                // exchange rows.
+                // The single-collection name/hash check on `local_protocol
+                // .collection` is meaningless under multiplex (the remote's
+                // representative may differ from ours). We still enforce
+                // protocol/capability compatibility at the room level.
                 let collection_for_validation = if multiplexed {
                     None
                 } else {
@@ -793,6 +801,27 @@ where
                 ) {
                     pool_clone.error_subject.next(e);
                     return;
+                }
+                // Phase 3 schema-validation hardening: under multiplex, validate
+                // EACH collection's schema hash individually against the remote's
+                // `collectionSchemas` map. A mismatch surfaces the
+                // schemaHashMismatch error for THAT collection and excludes just
+                // it from this peer's master/fork registration — the room itself
+                // stays up and every compatible collection syncs.
+                let mut schema_mismatch_collections: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                if multiplexed {
+                    schema_mismatch_collections = collect_collection_schema_mismatches(
+                        local_collection_schemas.as_ref(),
+                        &protocol_response.result,
+                    );
+                    for collection in collections.iter() {
+                        if let Some(err) =
+                            schema_mismatch_error_for(&schema_mismatch_collections, &collection.name)
+                        {
+                            pool_clone.error_subject.next(err);
+                        }
+                    }
                 }
                 let remote_peer_role = protocol_response
                     .result
@@ -854,6 +883,12 @@ where
                     // message-stream loop above.
                     for collection in collections.iter() {
                         let collection_name = collection.name.clone();
+                        // Phase 3 schema-validation hardening: skip a collection
+                        // whose schema mismatched the remote — no master-change
+                        // relay for it, so no rows flow until reconciled.
+                        if schema_mismatch_collections.contains(&collection_name) {
+                            continue;
+                        }
                         let Some(master) = pool_clone.master_handler_for(&collection_name) else {
                             continue;
                         };
@@ -890,6 +925,12 @@ where
                     // stream.
                     pool_clone.add_peer(peer.clone(), peer_sub_tasks);
                     for collection in collections.iter() {
+                        // Phase 3 schema-validation hardening: skip building a
+                        // fork replication state for a schema-mismatched
+                        // collection — it stays quiesced until reconciled.
+                        if schema_mismatch_collections.contains(&collection.name) {
+                            continue;
+                        }
                         let fork_state = build_fork_replication_state(
                             Arc::clone(collection),
                             Arc::clone(&handler),
@@ -935,17 +976,42 @@ pub fn master_change_stream_id(collection: &str) -> String {
     format!("masterChangeStream$:{collection}")
 }
 
-async fn ctox_protocol_response(
-    collection: &Arc<RxCollection>,
-    peer_session_id: Option<&str>,
-) -> Value {
-    ctox_protocol_response_with_flag(collection, peer_session_id, true).await
+/// Phase 3 schema-validation hardening: build the per-collection schema-hash
+/// map (`{ name -> { schemaVersion, schemaHash, schemaHashSource } }`) for
+/// every collection multiplexed on the connection. Returned as a `Value` to
+/// attach to the `ctoxProtocol` handshake payload so the browser can validate
+/// EACH collection individually under multiplex instead of skipping schema
+/// validation wholesale. Returns `None` for single-collection rooms so the
+/// legacy handshake stays byte-identical.
+async fn collection_schemas_payload(collections: &[Arc<RxCollection>]) -> Option<Value> {
+    if collections.len() <= 1 {
+        return None;
+    }
+    let mut map = serde_json::Map::with_capacity(collections.len());
+    for collection in collections.iter() {
+        if let Some(schema) = &collection.schema {
+            map.insert(
+                collection.name.clone(),
+                serde_json::json!({
+                    "schemaVersion": schema.version(),
+                    "schemaHash": schema.hash().await,
+                    "schemaHashSource": CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+                }),
+            );
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
 }
 
 async fn ctox_protocol_response_with_flag(
     collection: &Arc<RxCollection>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    collection_schemas: Option<Value>,
 ) -> Value {
     let checkpoint = collection
         .storage_instance
@@ -965,17 +1031,20 @@ async fn ctox_protocol_response_with_flag(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
+        collection_schemas,
     )
 }
 
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
-    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true)
+    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None)
 }
 
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    collection_schemas: Option<Value>,
 ) -> Value {
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
@@ -994,7 +1063,7 @@ fn ctox_protocol_response_payload_with_flag(
             *cap != CTOX_QUERY_FETCH_CAPABILITY || query_demand_loading_enabled
         })
         .collect();
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "protocol": CTOX_RXDB_PROTOCOL,
         "capabilities": advertised_capabilities,
         "collection": collection,
@@ -1005,7 +1074,14 @@ fn ctox_protocol_response_payload_with_flag(
         "v1_5": {
             "queryDemandLoadingEnabled": query_demand_loading_enabled,
         },
-    })
+    });
+    // Phase 3 schema-validation hardening: attach the per-collection schema-hash
+    // map under multiplex so the browser validates each collection's schema
+    // individually. Omitted entirely (key absent) for single-collection rooms.
+    if let Some(schemas) = collection_schemas {
+        payload["collectionSchemas"] = schemas;
+    }
+    payload
 }
 
 fn validate_ctox_protocol_response(
@@ -1111,6 +1187,76 @@ fn validate_ctox_protocol_response(
         }
     }
     Ok(())
+}
+
+/// Phase 3 schema-validation hardening: compare the local `collectionSchemas`
+/// map against the remote protocol response's `collectionSchemas` map and
+/// return the set of collection names whose schema hash / version mismatched.
+/// Collections the remote does not advertise are NOT flagged (it simply does
+/// not serve them on this connection). This is the native counterpart to the
+/// browser's `assertCollectionSchemasCompatible`.
+fn collect_collection_schema_mismatches(
+    local_collection_schemas: Option<&Value>,
+    remote_protocol: &Value,
+) -> std::collections::HashSet<String> {
+    let mut mismatches = std::collections::HashSet::new();
+    let Some(local_map) = local_collection_schemas.and_then(Value::as_object) else {
+        return mismatches;
+    };
+    let remote_map = remote_protocol
+        .get("collectionSchemas")
+        .and_then(Value::as_object);
+    let Some(remote_map) = remote_map else {
+        // The remote did not advertise per-collection schemas (older peer or
+        // single-collection room on its side). Fall back to no per-collection
+        // flagging — the room-level protocol/capability check already passed.
+        return mismatches;
+    };
+    for (name, local_entry) in local_map.iter() {
+        let Some(remote_entry) = remote_map.get(name) else {
+            continue;
+        };
+        let local_version = local_entry.get("schemaVersion").and_then(Value::as_i64);
+        let remote_version = remote_entry.get("schemaVersion").and_then(Value::as_i64);
+        if let (Some(expected), Some(actual)) = (local_version, remote_version) {
+            if expected != actual {
+                mismatches.insert(name.clone());
+                continue;
+            }
+        }
+        let local_hash = local_entry
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let remote_hash = remote_entry
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !local_hash.is_empty() && !remote_hash.is_empty() && local_hash != remote_hash {
+            mismatches.insert(name.clone());
+        }
+    }
+    mismatches
+}
+
+/// Build the `schemaHashMismatch` error for a collection that was flagged by
+/// [`collect_collection_schema_mismatches`], or `None` when the collection is
+/// compatible. Surfaces the same error code as the single-collection path so
+/// existing browser/native error handling treats it identically.
+fn schema_mismatch_error_for(
+    mismatches: &std::collections::HashSet<String>,
+    collection_name: &str,
+) -> Option<RxError> {
+    if !mismatches.contains(collection_name) {
+        return None;
+    }
+    Some(ctox_protocol_error(
+        CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+        "CTOX RxDB schema hash mismatch",
+        None,
+        None,
+        Some(collection_name.to_string()),
+    ))
 }
 
 fn non_empty(value: &str) -> Option<&str> {
@@ -1852,6 +1998,141 @@ mod tests {
             master_change_stream_id("documents"),
             master_change_stream_id("desktop_files")
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3 schema-validation hardening: per-collection schema validation
+    // under multiplex (replaces the old wholesale `validate_schema` skip).
+    // -------------------------------------------------------------------------
+
+    fn local_schemas_two() -> Value {
+        serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs", "schemaHashSource": "rxdb-rs" },
+            "desktop_files": { "schemaVersion": 0, "schemaHash": "hash-files", "schemaHashSource": "rxdb-rs" },
+        })
+    }
+
+    fn remote_protocol_with_schemas(schemas: Value) -> Value {
+        serde_json::json!({
+            "protocol": CTOX_RXDB_PROTOCOL,
+            "capabilities": CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+            "collectionSchemas": schemas,
+            "peerSession": { "role": "browser" },
+        })
+    }
+
+    #[test]
+    fn per_collection_schema_match_yields_no_mismatch() {
+        let local = local_schemas_two();
+        let remote = remote_protocol_with_schemas(local.clone());
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(
+            mismatches.is_empty(),
+            "matching per-collection hashes must not flag any collection: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn per_collection_schema_hash_mismatch_flags_only_that_collection() {
+        let local = local_schemas_two();
+        // Same `documents` hash, different `desktop_files` hash.
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+            "desktop_files": { "schemaVersion": 0, "schemaHash": "DRIFTED" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert_eq!(mismatches.len(), 1, "only the drifted collection is flagged");
+        assert!(mismatches.contains("desktop_files"));
+        assert!(!mismatches.contains("documents"));
+        // The error builder surfaces the existing schemaHashMismatch code for
+        // the flagged collection, and None for the compatible one.
+        let err = schema_mismatch_error_for(&mismatches, "desktop_files")
+            .expect("flagged collection must produce an error");
+        assert_eq!(err.code(), "RC_WEBRTC_PROTOCOL");
+        assert_eq!(
+            err.parameters().get("code").and_then(Value::as_str),
+            Some(CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH)
+        );
+        assert_eq!(
+            err.parameters().get("collection").and_then(Value::as_str),
+            Some("desktop_files")
+        );
+        assert!(schema_mismatch_error_for(&mismatches, "documents").is_none());
+    }
+
+    #[test]
+    fn per_collection_schema_version_mismatch_flags_collection() {
+        let local = local_schemas_two();
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+            "desktop_files": { "schemaVersion": 9, "schemaHash": "hash-files" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert_eq!(mismatches.len(), 1);
+        assert!(mismatches.contains("desktop_files"));
+    }
+
+    #[test]
+    fn collection_not_advertised_by_remote_is_not_flagged() {
+        let local = local_schemas_two();
+        // Remote only advertises `documents`; `desktop_files` absent → benign.
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(
+            mismatches.is_empty(),
+            "a collection the remote does not serve must not be flagged: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn missing_remote_collection_schemas_map_skips_per_collection_check() {
+        let local = local_schemas_two();
+        // Older/single-collection remote: no `collectionSchemas` key at all.
+        let remote = serde_json::json!({
+            "protocol": CTOX_RXDB_PROTOCOL,
+            "capabilities": CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+        });
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(mismatches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collection_schemas_payload_is_none_for_zero_or_one_collection() {
+        // Single-collection (and empty) rooms must keep the legacy handshake
+        // byte-identical: no `collectionSchemas` map. The guard is a pure
+        // length check, so an empty slice exercises the same branch a
+        // one-collection slice would.
+        let payload = collection_schemas_payload(&[]).await;
+        assert!(
+            payload.is_none(),
+            "rooms with <= 1 collection must omit the per-collection schema map"
+        );
+    }
+
+    #[test]
+    fn handshake_payload_omits_collection_schemas_when_none() {
+        // The single-collection handshake payload must not carry the new key,
+        // so the wire stays byte-compatible with V1 peers.
+        let single = ctox_protocol_response_payload_with_flag(
+            serde_json::json!({ "name": "documents" }),
+            Some("rxdb-rs-session"),
+            true,
+            None,
+        );
+        assert!(single.get("collectionSchemas").is_none());
+        // Multiplexed payload carries the map.
+        let multi = ctox_protocol_response_payload_with_flag(
+            serde_json::json!({ "name": "documents" }),
+            Some("rxdb-rs-session"),
+            true,
+            Some(local_schemas_two()),
+        );
+        assert!(multi.get("collectionSchemas").is_some());
+        assert!(multi
+            .pointer("/collectionSchemas/desktop_files/schemaHash")
+            .is_some());
     }
 
     // -------------------------------------------------------------------------

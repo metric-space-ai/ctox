@@ -1889,7 +1889,10 @@ function classifySendPriority(payload = {}, text = '') {
     return ['ack', 'resume', 'start'].includes(payload.kind) ? 'high' : 'normal';
   }
   const method = String(payload?.method || '');
-  if (['ctoxProtocol', 'token'].includes(method)) return 'high';
+  // Phase 2: the `rxdb.activeCollections` priority hint must reach the native
+  // peer ahead of any bulk backlog so foreground prioritization takes effect
+  // promptly. Treat it as a control frame (high).
+  if (['ctoxProtocol', 'token', 'rxdb.activeCollections'].includes(method)) return 'high';
   if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
   if (method === 'masterChangesSince') return 'normal';
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {

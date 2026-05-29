@@ -18,6 +18,7 @@ import {
   getConnectionHandlerSimplePeer,
   replicateWebRTC,
 } from './replication-webrtc.mjs';
+import { getActiveCollectionRegistry } from './active-collections.mjs';
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -207,6 +208,11 @@ class CtoxRxCollection {
     return {
       subscribe: (listener) => {
         let active = true;
+        // Phase 2: a live collection subscription marks this collection as
+        // foreground in the RxDB layer so replication prioritizes it on the
+        // shared DataChannel. Released on unsubscribe.
+        const registry = getActiveCollectionRegistry();
+        registry.subscriptionStarted(this.name);
         // V1.5 production hardening: debounce change-bulks so a busy
         // collection (1000 writes/sec) doesn't trigger 1000 subscription
         // emissions per second. The 50 ms window collapses burst writes
@@ -233,6 +239,7 @@ class CtoxRxCollection {
               pendingTimer = null;
             }
             unsubscribe();
+            registry.subscriptionEnded(this.name);
           },
         };
       },
@@ -250,6 +257,9 @@ class CtoxRxQuery {
     this.$ = {
       subscribe: (listener) => {
         let active = true;
+        // Phase 2: a live query subscription marks its collection foreground.
+        const registry = getActiveCollectionRegistry();
+        registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         const flushEmit = () => {
           pendingTimer = null;
@@ -272,6 +282,7 @@ class CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            registry.subscriptionEnded(this.collection.name);
           },
         };
       },
@@ -320,6 +331,9 @@ class CtoxRxQuery {
   }
 
   async exec() {
+    // Phase 2: an imperative `.exec()` read keeps the collection foreground for
+    // a short window so one-shot reads also get priority on the wire.
+    getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     if (this.collection.demandLoader) {
       docs = await this.collection.demandLoader.resolveQuery(this.query);
