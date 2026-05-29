@@ -202,7 +202,38 @@ Full reference: https://metric-space-ai.github.io/ctox/cli.html"
     );
 }
 
+/// Raise the soft open-file limit (RLIMIT_NOFILE) toward the hard limit at
+/// process startup. The in-process Business OS native RxDB/WebRTC peer opens,
+/// under a full sync, roughly one signaling socket + one WebRTC peer connection
+/// + several SQLite file handles per collection across ~80 collections. The
+/// default soft limit of 1024 is exhausted (EMFILE: "Too many open files"),
+/// which makes SQLite fail to open databases, signaling sockets fail, and the
+/// peer status heartbeat fail — collapsing the native peer so browsers can no
+/// longer sync. Raising soft to the (already large) hard limit is unprivileged
+/// and avoids depending on a per-host systemd `LimitNOFILE` override.
+#[cfg(unix)]
+fn raise_open_file_limit() {
+    // SAFETY: plain libc getrlimit/setrlimit calls with a stack-local rlimit.
+    unsafe {
+        let mut rl = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut rl) == 0 && rl.rlim_cur < rl.rlim_max {
+            let new = libc::rlimit {
+                rlim_cur: rl.rlim_max,
+                rlim_max: rl.rlim_max,
+            };
+            let _ = libc::setrlimit(libc::RLIMIT_NOFILE, &new);
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_open_file_limit() {}
+
 fn main() -> anyhow::Result<()> {
+    raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = resolve_workspace_root()?;
     if args.first().map(String::as_str) == Some("__native-qwen3-embedding-service") {
