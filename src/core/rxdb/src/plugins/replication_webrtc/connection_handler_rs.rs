@@ -44,6 +44,18 @@ use frame_contract_generated::{
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
 const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
+// Phase 1 (constant real-time stream): native -> browser SCTP send-buffer
+// watermarks. webrtc-rs exposes no buffered-amount *getter*, only threshold
+// *events* (OnBufferedAmountHigh / OnBufferedAmountLow), so flow control is
+// driven off these thresholds. Never overrunning the SCTP send buffer is what
+// keeps the channel real-time and stops the browser from killing the
+// DataChannel when a large transfer (e.g. documents + blob chunks) is sent.
+const DATA_CHANNEL_BUFFERED_HIGH_WATER: u32 = 1024 * 1024; // 1 MiB
+const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
+// Upper bound on how long a sender waits for the buffer to drain below the low
+// watermark before giving up (matches the ack timeout so a wedged peer fails
+// rather than hanging forever).
+const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
 const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
 
@@ -78,6 +90,40 @@ struct PeerEntry {
     peer_connection: Arc<dyn PeerConnection>,
     data_channel: Option<Arc<dyn DataChannel>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+/// Phase 1: per-peer SCTP send-buffer backpressure signal, driven by the data
+/// channel's OnBufferedAmountHigh / OnBufferedAmountLow events (webrtc-rs has
+/// no buffered-amount getter). `high` is set when buffered data crosses the
+/// high watermark and cleared — waking `low_notify` — when it drops below the
+/// low watermark, so senders pause instead of overrunning the channel and
+/// being killed by the browser.
+struct PeerBackpressure {
+    high: std::sync::atomic::AtomicBool,
+    low_notify: tokio::sync::Notify,
+}
+
+impl PeerBackpressure {
+    fn new() -> Self {
+        Self {
+            high: std::sync::atomic::AtomicBool::new(false),
+            low_notify: tokio::sync::Notify::new(),
+        }
+    }
+
+    fn set_high(&self) {
+        self.high.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn clear_high(&self) {
+        self.high.store(false, std::sync::atomic::Ordering::SeqCst);
+        // Wake every sender parked on the low-water notification.
+        self.low_notify.notify_waiters();
+    }
+
+    fn is_high(&self) -> bool {
+        self.high.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 /// FIX 5: result of a once-only per-peer connection build. `RxError` is
@@ -244,6 +290,8 @@ pub struct WebRTCRsConnectionHandler {
     send_queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
+    /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
+    backpressure: Arc<Mutex<HashMap<WebRTCRsPeer, Arc<PeerBackpressure>>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -290,7 +338,42 @@ impl WebRTCRsConnectionHandler {
             send_queues: Arc::new(Mutex::new(HashMap::new())),
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
+            backpressure: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Phase 1: fetch (or lazily create) the backpressure signal for a peer.
+    fn peer_backpressure(&self, peer: &WebRTCRsPeer) -> Arc<PeerBackpressure> {
+        let mut map = self.backpressure.lock();
+        Arc::clone(
+            map.entry(peer.clone())
+                .or_insert_with(|| Arc::new(PeerBackpressure::new())),
+        )
+    }
+
+    /// Phase 1: pause the sender while the peer's SCTP send buffer is above the
+    /// high watermark, so we never burst past what the channel can deliver in
+    /// real time. Returns when the buffer has drained below the low watermark
+    /// (OnBufferedAmountLow) or after `SEND_CAPACITY_WAIT_TIMEOUT` (so a wedged
+    /// peer surfaces a timeout instead of hanging forever).
+    async fn wait_for_send_capacity(&self, peer: &WebRTCRsPeer) {
+        let bp = self.peer_backpressure(peer);
+        while bp.is_high() {
+            let notified = bp.low_notify.notified();
+            // Re-check after arming the waiter to avoid missing a clear that
+            // raced between the load above and arming `notified`.
+            if !bp.is_high() {
+                break;
+            }
+            if tokio::time::timeout(SEND_CAPACITY_WAIT_TIMEOUT, notified)
+                .await
+                .is_err()
+            {
+                // Timed out waiting for drain; stop blocking and let the
+                // normal ack/resume machinery handle a genuinely stuck peer.
+                break;
+            }
         }
     }
 
@@ -652,8 +735,27 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
             signaling.close().await;
         }
         self.send_queues.lock().clear();
+        self.backpressure.lock().clear();
         self.refresh_send_queue_status();
         Ok(())
+    }
+
+    /// Phase 1: report the peer over the high watermark so the V1.5 demand
+    /// dispatchers (query/file fetch) actually engage their backpressure
+    /// backoff. webrtc-rs gives no exact byte count, so we report a value above
+    /// the high water when buffered (and 0 otherwise) — enough for the
+    /// `buffered_bytes > WEBRTC_BUFFERED_HIGH_WATER` guards to fire.
+    fn buffered_bytes(&self, peer: &Self::Peer) -> usize {
+        match self.backpressure.lock().get(peer) {
+            Some(bp) if bp.is_high() => DATA_CHANNEL_BUFFERED_HIGH_WATER as usize + 1,
+            _ => 0,
+        }
+    }
+
+    /// Phase 1: the signaling peer id is already a stable string; use it
+    /// directly for authz / rate-limit keying instead of the opaque Debug form.
+    fn peer_identity(&self, peer: &Self::Peer) -> String {
+        peer.to_string()
     }
 }
 
@@ -792,6 +894,11 @@ impl WebRTCRsConnectionHandler {
                     .take(window_end + 1)
                     .skip(window_start)
                 {
+                    // Phase 1: pace on the SCTP send buffer so a large transfer
+                    // never bursts past what the channel can deliver in real
+                    // time (which would overrun the buffer and get the channel
+                    // killed by the browser).
+                    self.wait_for_send_capacity(peer).await;
                     let chunk = transport_chunk_frame(&transfer_id, attempt, seq, data);
                     if let Err(error) = send_json_text(&data_channel, &chunk).await {
                         self.pending_frame_acks.lock().remove(&ack_key);
@@ -1475,7 +1582,17 @@ fn install_data_channel(
     let handler_for_task = Arc::clone(&handler);
     let data_channel_for_task = Arc::clone(&data_channel);
     let peer_for_task = remote_peer_id.clone();
+    // Phase 1: register the per-peer backpressure signal and arm the SCTP
+    // buffered-amount thresholds so the channel emits OnBufferedAmountHigh/Low
+    // and senders can pace instead of overrunning the buffer.
+    let backpressure_for_task = handler.peer_backpressure(&remote_peer_id);
     let task = tokio::spawn(async move {
+        let _ = data_channel
+            .set_buffered_amount_low_threshold(DATA_CHANNEL_BUFFERED_LOW_WATER)
+            .await;
+        let _ = data_channel
+            .set_buffered_amount_high_threshold(DATA_CHANNEL_BUFFERED_HIGH_WATER)
+            .await;
         while let Some(event) = data_channel.poll().await {
             match event {
                 DataChannelEvent::OnOpen => connect_subject.next(peer_for_task.clone()),
@@ -1537,7 +1654,17 @@ fn install_data_channel(
                         }
                     }
                 }
+                DataChannelEvent::OnBufferedAmountHigh => {
+                    // Phase 1: SCTP send buffer crossed the high watermark —
+                    // pause senders so we keep the stream real-time.
+                    backpressure_for_task.set_high();
+                }
+                DataChannelEvent::OnBufferedAmountLow => {
+                    // Phase 1: buffer drained — let senders resume.
+                    backpressure_for_task.clear_high();
+                }
                 DataChannelEvent::OnClose => {
+                    backpressure_for_task.clear_high();
                     disconnect_subject.next(peer_for_task.clone());
                     break;
                 }
@@ -1553,6 +1680,13 @@ fn install_data_channel(
                 _ => {}
             }
         }
+        // Channel ended: release any sender parked on backpressure and drop the
+        // per-peer signal so it cannot leak across reconnects.
+        backpressure_for_task.clear_high();
+        handler_for_task
+            .backpressure
+            .lock()
+            .remove(&peer_for_task);
     });
 
     if let Some(entry) = handler.peers.lock().get_mut(&remote_peer_id) {
