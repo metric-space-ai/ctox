@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
-const BUILD = '20260519-research-dynamic-scoring1';
+const BUILD = '20260529-research-rxdb-rows1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 320;
@@ -644,6 +644,11 @@ async function fetchTableRows(tableId) {
   if (rows.length) {
     return rows.slice(0, ROW_LIMIT).map((row) => row && typeof row === 'object' ? row : { value: row });
   }
+  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
+  // the authoritative peer, materializes the parquet records into the synced
+  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
+  // yet, we surface nothing until replication delivers them.
+  markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
   return [];
 }
 
