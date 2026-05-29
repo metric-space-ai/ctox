@@ -146,10 +146,7 @@ const DEFAULT_CONTACT_FIELD_IDS = Object.freeze(['contact.people', 'contact.stat
 const DEFAULT_CONTACT_FIELD_IDS_COMPACT = Object.freeze(['contact.people', 'contact.status']);
 
 
-const DEFAULT_API_URL = 'https://leadgenservice.ngrok.io';
-const DEFAULT_TOKEN_ID = '2QjI3u9txqyB9chbDt1rUJF5th4_31BsnCZFuiZTUoeVMeyui';
-
-const DEFAULT_ICP_CORE = `Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`;
+const DEFAULT_ICP_CORE =`Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`;
 
 const DEFAULT_CHECKLIST = `B2B-Ansprache klar erkennbar (Leistungs-/Branchen-/Lösungsseiten).
 Objekt-/Auftragslogik sichtbar (z. B. Immobilien/Exposés, Aufträge, Tickets, Wartung, Projekte).
@@ -2932,20 +2929,20 @@ function renderCRMCompanyRows(row) {
               }).join('')}
             </div>
             <div style="margin-top: 8px;">
-              <button class="outbound-button" type="button" data-action="generate-outreach" style="width: 100%; font-size: 11px; padding: 4px 8px; border-color: var(--outbound-accent); color: var(--outbound-accent);" ${state.generatingOutreach.has(contactKey) ? 'disabled' : ''}>✨ ${t('generate', 'Generieren')}</button>
+              <button class="outbound-button" type="button" data-action="generate-outreach" style="width: 100%; font-size: 11px; padding: 4px 8px; border-color: var(--outbound-accent); color: var(--outbound-accent);" ${(state.generatingOutreach.has(contactKey) || contact.outreach_generating) ? 'disabled' : ''}>✨ ${t('generate', 'Generieren')}</button>
             </div>
           </td>
         `;
       } else if (col.type === 'outreach_draft') {
         html += `
           <td class="col-message">
-            ${state.generatingOutreach.has(contactKey) ? `
+            ${(state.generatingOutreach.has(contactKey) || contact.outreach_generating) ? `
               <div class="outbound-message-loading">
                 <span class="outbound-spinner"></span>
                 <div>
                   <strong>${escapeHtml(t('generatingOutreachEllipsis', 'Anschreiben wird generiert...'))}</strong>
                   <div style="font-size: 11px; color: var(--outbound-muted); margin-top: 2px;">
-                    ${escapeHtml(state.generatingOutreach.get(contactKey)?.statusText || t('waitingForApi', 'Warte auf API...'))}
+                    ${escapeHtml(state.generatingOutreach.get(contactKey)?.statusText || t('outreachInProgress', 'CTOX erstellt das Anschreiben...'))}
                   </div>
                 </div>
               </div>
@@ -3658,20 +3655,6 @@ function renderResearchSettingsDrawer(campaign) {
     tabBodyHtml = `
       <div class="outbound-prompts-settings-form">
         <div class="outbound-settings-section">
-          <h4>${escapeHtml(t('apiConnection', 'API Verbindung'))}</h4>
-          <div class="outbound-prompt-fields-row">
-            <label class="outbound-field-wrap">
-              <span>${escapeHtml(t('gatewayUrl', 'Gateway URL'))}</span>
-              <input data-prompt-setting="apiUrl" value="${escapeHtml(settings.apiUrl)}" placeholder="https://..." />
-            </label>
-            <label class="outbound-field-wrap">
-              <span>${escapeHtml(t('tokenId', 'Token ID'))}</span>
-              <input data-prompt-setting="apiToken" type="password" value="${escapeHtml(settings.apiToken)}" placeholder="Token..." />
-            </label>
-          </div>
-        </div>
-
-        <div class="outbound-settings-section">
           <h4>${escapeHtml(t('outreachVariables', 'Outreach Variables'))}</h4>
           <div class="outbound-prompt-variables-grid">
             <label class="outbound-field-wrap">
@@ -4135,8 +4118,6 @@ function normalizeResearchSettings(raw = {}) {
     columnLabels,
     fieldPrompts,
     customInstruction: String(raw.customInstruction || raw.custom_instruction || '').trim(),
-    apiUrl: String(raw.apiUrl || raw.api_url || DEFAULT_API_URL).trim(),
-    apiToken: String(raw.apiToken || raw.api_token || DEFAULT_TOKEN_ID).trim(),
     icpCore: String(raw.icpCore || raw.icp_core || DEFAULT_ICP_CORE).trim(),
     checklist: String(raw.checklist || raw.checklist_landingpage || DEFAULT_CHECKLIST).trim(),
     cta: String(raw.cta || DEFAULT_CTA).trim(),
@@ -6500,12 +6481,6 @@ function saveResearchSettingsTemporaryState(drawer) {
     });
   }
 
-  const apiUrlInput = drawer.querySelector('[data-prompt-setting="apiUrl"]');
-  if (apiUrlInput) state.tempResearchSettings.apiUrl = apiUrlInput.value.trim();
-
-  const apiTokenInput = drawer.querySelector('[data-prompt-setting="apiToken"]');
-  if (apiTokenInput) state.tempResearchSettings.apiToken = apiTokenInput.value.trim();
-
   const icpCoreTextarea = drawer.querySelector('[data-prompt-setting="icpCore"]');
   if (icpCoreTextarea) state.tempResearchSettings.icpCore = icpCoreTextarea.value.trim();
 
@@ -6528,25 +6503,6 @@ function saveResearchSettingsTemporaryState(drawer) {
   if (extractEmailPromptTextarea) state.tempResearchSettings.extractEmailPrompt = extractEmailPromptTextarea.value.trim();
 }
 
-function normalizeDraftResult(messageObj) {
-  if (!messageObj) return {};
-  const result = {};
-  const findVal = (keys) => {
-    for (const key of keys) {
-      const found = Object.keys(messageObj).find(k => k.toLowerCase() === key.toLowerCase());
-      if (found) return messageObj[found];
-    }
-    return '';
-  };
-
-  result.message_mail_subject = findVal(['Betreff', 'subject']);
-  result.message_mail_body = findVal(['Text', 'body', 'mail_body', 'email_body', 'email']);
-  result.message_followup_1 = findVal(['FollowUp1', 'followup_1', 'follow_up_1', 'followup1']);
-  result.message_followup_2 = findVal(['FollowUp2', 'followup_2', 'follow_up_2', 'followup2']);
-
-  return result;
-}
-
 async function generateOutreachForContact(itemId, contactIndex) {
   const contactKey = `${itemId}_${contactIndex}`;
   if (state.generatingOutreach.has(contactKey)) return;
@@ -6560,10 +6516,11 @@ async function generateOutreachForContact(itemId, contactIndex) {
 
   const campaign = selectedCampaign();
   const settings = getCampaignResearchSettings(campaign);
-  const gatewayUrl = settings.apiUrl || DEFAULT_API_URL;
-  const gatewayToken = settings.apiToken || DEFAULT_TOKEN_ID;
 
-  state.generatingOutreach.set(contactKey, { statusText: 'Verbindung wird aufgebaut... (0%)' });
+  // Transient spinner hint. The durable spinner is driven by the persisted
+  // contact.outreach_generating flag, which the CTOX agent clears when it writes
+  // the draft back via the outbound.pipeline.write_outreach_draft command.
+  state.generatingOutreach.set(contactKey, { statusText: t('outreachHandedToCtox', 'An CTOX übergeben...') });
   renderCenter();
 
   const researchResults = company.company_data || company.payload?.research_results || {};
@@ -6600,131 +6557,69 @@ async function generateOutreachForContact(itemId, contactIndex) {
     linkedin_url: contact.linkedin_url || contact.linkedin || ''
   };
 
-  const itemPayload = {
-    company: {
-      website_url: company.website || (company.domain ? `https://${company.domain}` : ''),
-      homepage_summary
+  const command = {
+    id: `cmd_outreach_${crypto.randomUUID()}`,
+    module: 'outbound',
+    type: 'outbound.pipeline.outreach_draft',
+    record_id: item.id,
+    inbound_channel: 'business_os.outbound',
+    payload: {
+      title: t('outreachDraftTitle', 'Anschreiben generieren: {0}', company.name),
+      instruction: t('outreachDraftInstruction', 'Erstelle ein personalisiertes Outbound-Anschreiben (Betreff, Mailtext und zwei Follow-ups) für den angegebenen Ansprechpartner. Nutze Produkt-/ICP-Beschreibung, CTA, Signatur, Landingpage-Checkliste und die Prompt-Templates aus drafting_request. Schreibe das Ergebnis ausschließlich über den CTOX-Command outbound.pipeline.write_outreach_draft mit pipeline_id und contact_index zurück. Sende keine Nachricht und rufe keinen externen Dienst auf.'),
+      pipeline_id: item.id,
+      contact_index: contactIndex,
+      company_id: company.id,
+      writeback: {
+        command_type: 'outbound.pipeline.write_outreach_draft',
+        pipeline_id: item.id,
+        contact_index: contactIndex,
+        message_fields: ['message_mail_subject', 'message_mail_body', 'message_followup_1', 'message_followup_2'],
+      },
+      drafting_request: {
+        Produkt_und_Dienstleistungsbeschreibung: settings.icpCore,
+        CTA: settings.cta,
+        Signatur: settings.signature,
+        Checkliste_Landingpage: settings.checklist,
+        message_prompt_template: settings.messagePromptTemplate,
+        extract_prompt_template: settings.extractEmailPrompt,
+        company: {
+          name: company.name,
+          website_url: company.website || (company.domain ? `https://${company.domain}` : ''),
+          homepage_summary,
+        },
+        person,
+      },
     },
-    person
-  };
-
-  const payload = {
-    Produkt_und_Dienstleistungsbeschreibung: settings.icpCore,
-    CTA: settings.cta,
-    Signatur: settings.signature,
-    Checkliste_Landingpage: settings.checklist,
-    message_prompt_template: settings.messagePromptTemplate,
-    extract_prompt_template: settings.extractEmailPrompt,
-    items: [itemPayload]
-  };
-
-  const headers = {
-    'Content-Type': 'application/json',
-    'X-Token-Id': gatewayToken,
-    'X-Auth-Token': gatewayToken
+    client_context: {
+      source_module: 'outbound',
+      campaign_id: campaign?.id || item.campaign_id || '',
+      pipeline_id: item.id,
+      company_id: company.id,
+      contact_index: contactIndex,
+    },
   };
 
   try {
-    const url = `${gatewayUrl}/email/generate?async=1`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
+    await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+      c.outreach_generating = true;
+      c.outreach_status = 'queued';
     });
-
-    if (!response.ok) {
-      throw new Error(`HTTP-Fehler ${response.status}: ${response.statusText}`);
+    const result = await state.ctx.commandBus.dispatch(command)
+      .catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
+    if (result && result.ok === false) {
+      throw new Error(result.error || 'Command konnte nicht zugestellt werden.');
     }
-
-    const resData = await response.json();
-
-    if (response.status === 200 && resData.results && resData.results[0]) {
-      const messageObj = resData.results[0].message;
-      const normalized = normalizeDraftResult(messageObj);
-      await updateContactInPipelineItem(itemId, contactIndex, (c) => {
-        if (!c.messages) c.messages = {};
-        c.messages.message_mail_subject = normalized.message_mail_subject || '';
-        c.messages.message_mail_body = normalized.message_mail_body || '';
-        c.messages.message_followup_1 = normalized.message_followup_1 || '';
-        c.messages.message_followup_2 = normalized.message_followup_2 || '';
-      });
-      state.generatingOutreach.delete(contactKey);
-      renderCenter();
-      return;
-    }
-
-    const jobId = resData.job_id;
-    if (!jobId) {
-      throw new Error('Keine Job-ID vom Server zurückgegeben.');
-    }
-
-    const pollInterval = 2000;
-    const poll = async () => {
-      if (!state.generatingOutreach.has(contactKey)) return;
-
-      try {
-        const pollResponse = await fetch(`${gatewayUrl}/email/generate/status/${jobId}`, {
-          method: 'GET',
-          headers
-        });
-
-        if (!pollResponse.ok) {
-          throw new Error(`Polling HTTP-Fehler ${pollResponse.status}`);
-        }
-
-        const pollData = await pollResponse.json();
-
-        if (!pollData.ok) {
-          throw new Error(pollData.error || 'Fehler beim Polling.');
-        }
-
-        const status = pollData.status;
-        const progress = pollData.progress || 0;
-        const note = pollData.note || 'Warte auf Verarbeitung...';
-
-        if (status === 'queued' || status === 'running') {
-          state.generatingOutreach.set(contactKey, {
-            statusText: `${note} (${progress}%)`
-          });
-          renderCenter();
-          setTimeout(poll, pollInterval);
-        } else if (status === 'done') {
-          const result = pollData.result || {};
-          if (result.results && result.results[0]) {
-            const messageObj = result.results[0].message;
-            const normalized = normalizeDraftResult(messageObj);
-
-            await updateContactInPipelineItem(itemId, contactIndex, (c) => {
-              if (!c.messages) c.messages = {};
-              c.messages.message_mail_subject = normalized.message_mail_subject || '';
-              c.messages.message_mail_body = normalized.message_mail_body || '';
-              c.messages.message_followup_1 = normalized.message_followup_1 || '';
-              c.messages.message_followup_2 = normalized.message_followup_2 || '';
-            });
-
-            state.generatingOutreach.delete(contactKey);
-            renderCenter();
-          } else {
-            throw new Error('Keine Ergebnisse in der Serverantwort vorhanden.');
-          }
-        } else {
-          throw new Error(pollData.error || 'Serverfehler bei der Generierung.');
-        }
-      } catch (err) {
-        console.error('[outbound] error during outreach generation polling:', err);
-        state.generatingOutreach.delete(contactKey);
-        renderCenter();
-        showBusinessAlert(`Fehler bei der Outreach-Generierung: ${err.message}`);
-      }
-    };
-
-    setTimeout(poll, pollInterval);
-
-  } catch (err) {
-    console.error('[outbound] error starting outreach generation:', err);
     state.generatingOutreach.delete(contactKey);
     renderCenter();
-    showBusinessAlert(`Verbindungsfehler: ${err.message}`);
+  } catch (err) {
+    console.error('[outbound] error dispatching outreach generation:', err);
+    state.generatingOutreach.delete(contactKey);
+    await updateContactInPipelineItem(itemId, contactIndex, (c) => {
+      c.outreach_generating = false;
+      c.outreach_status = 'draft_failed';
+    }).catch(() => {});
+    renderCenter();
+    showBusinessAlert(`Fehler bei der Outreach-Generierung: ${err.message}`);
   }
 }
 

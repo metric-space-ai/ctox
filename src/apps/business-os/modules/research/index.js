@@ -256,9 +256,11 @@ const state = {
   knowledgeBases: [],
   selectedTaskId: '',
   selectedSourceId: '',
+  selectedReportId: '',
+  reportContents: {},
   activeTab: 'sources',
   sourcesViewMode: 'shards',
-  showDiagram: true,
+  showDiagram: false,
   sourceSearchTerm: '',
   sourceActiveTag: 'all',
   mapMode: 'portfolio',
@@ -305,6 +307,16 @@ export async function mount(ctx) {
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
   bindEvents(ctx.host);
+  
+  // Globals for reports explorer
+  window.selectReport = (reportId) => {
+    state.selectedReportId = reportId;
+    renderCenter();
+  };
+  window.showPromptViewer = (filename) => {
+    showPromptViewer(filename);
+  };
+  
   await startResearchCollections();
   const resizeCleanup = setupResearchColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
@@ -312,6 +324,10 @@ export async function mount(ctx) {
   state.cleanup.push(initResearchContextMenu());
   await refreshAll({ seed: true });
   return () => {
+    // Cleanup globals
+    delete window.selectReport;
+    delete window.showPromptViewer;
+    
     state.cleanup.forEach((fn) => fn?.());
     state.cleanup = [];
     if (state.refreshTimer) window.clearTimeout(state.refreshTimer);
@@ -370,7 +386,7 @@ function bindEvents(root) {
       renderCenter();
     } else if (action === 'map-mode') {
       state.mapMode = target.dataset.mapMode || 'portfolio';
-      resetMapView();
+      // Zoom & Pan state is persistent, do not reset view!
       renderCenter();
     } else if (action === 'refresh') {
       await refreshAll();
@@ -722,6 +738,7 @@ function scoreDimensions(row, curated, measurements, task, axisDefs = BASE_AXES)
   else if (/web|manufacturer|vendor|datasheet/.test(sourceClass + text)) evidence = 52;
   if (row.doi || /\bdoi\b|openalex|arxiv/.test(text)) evidence += 6;
   if (row.source_url || row.url) evidence += 4;
+  if (measurements?.count) evidence += 15; // High-fidelity boost for sources with active telemetry/measured data points!
 
   let relevance = 30;
   for (const term of ['bearing', 'load', 'thrust', 'torque', 'rpm', 'propeller', 'rotor', 'vibration', 'force', 'moment']) {
@@ -773,6 +790,14 @@ function scoreDimensions(row, curated, measurements, task, axisDefs = BASE_AXES)
     const direct = numberValue(row[axis.id] ?? curated?.[axis.id]);
     if (direct) scores[axis.id] = normalizeScoreScale(direct);
   }
+  
+  // High-fidelity keyword filter on Title to prevent crawler noise / cross-domain leakage!
+  const titleText = String(row.title || row.name || '').toLowerCase();
+  const hasDroneTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
+  if (!hasDroneTopic) {
+    scores.topic_fit = 10;
+  }
+
   const weightedCriteria = axisDefs
     .filter((axis) => axis.id !== 'portfolio_priority')
     .map((axis) => [scores[axis.id] ?? topicFitScore(task, text, row), Number(axis.weight || 1)]);
@@ -806,15 +831,6 @@ function renderLeft() {
         </div>
         <div class="research-task-list">
           ${state.tasks.map(renderTaskButton).join('') || renderNoTasksEmpty()}
-        </div>
-      </section>
-      <section class="research-section">
-        <div class="research-section-head">
-          <strong>${escapeHtml(state.t('ranking', 'Ranking'))}</strong>
-          <span>${escapeHtml(axisLabel('portfolio_priority'))}</span>
-        </div>
-        <div class="research-ranking-list">
-          ${state.sourceModels.map(renderRankingRow).join('') || renderNoSourcesEmpty(task)}
         </div>
       </section>
     </div>
@@ -906,12 +922,13 @@ function renderCenter() {
       <div class="research-center-actions">
         ${state.showDiagram ? `<span class="research-map-hint">Scroll zoom · drag pan</span>` : ''}
         <button type="button"
-                class="research-icon-button"
+                class="research-button"
                 data-action="toggle-diagram"
+                style="margin:0; background:color-mix(in srgb, var(--research-accent) 12%, var(--research-surface-2)); border-color:color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); color:var(--research-accent); font-weight:800; font-size:11px; padding:0 12px; height:30px; border-radius:6px;"
                 title="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
                 aria-label="${state.showDiagram ? 'Diagramm ausblenden' : 'Diagramm einblenden'}"
                 aria-pressed="${!state.showDiagram}">
-          ${iconSvg(state.showDiagram ? 'eyeOff' : 'eye')}
+          ${state.showDiagram ? 'Karte ausblenden ✖' : 'Karte einblenden 🗺️'}
         </button>
       </div>
     </header>
@@ -921,6 +938,7 @@ function renderCenter() {
           <div><strong>${isGraphMode ? escapeHtml(state.t('discoveryGraph', 'Discovery Graph')) : escapeHtml(state.t('portfolioMap', 'Portfolio Map'))}</strong><span>${isGraphMode ? escapeHtml(state.t('discoverySub', 'Knowledge, Quellen, Messpunkte')) : `${escapeHtml(axisLabel(yAxis))} ${escapeHtml(state.t('portfolioSub', 'gegen'))} ${escapeHtml(axisLabel(xAxis))}`}</span></div>
           ${mapModeToggle()}
           <button type="button" class="research-map-reset" data-action="reset-map" aria-label="${escapeHtml(state.t('resetMapView', 'Kartenansicht zurücksetzen'))}">${escapeHtml(state.t('reset', 'Reset'))}</button>
+          <button type="button" class="research-map-reset" data-action="toggle-diagram" title="${state.showDiagram ? 'Einklappen' : 'Ausklappen'}" style="margin-left: 6px;">${state.showDiagram ? 'Einklappen' : 'Ausklappen'}</button>
         </div>
         <div class="research-portfolio-map${isGraphMode ? ' is-discovery-graph' : ''}">
           <div class="research-map-grid" aria-hidden="true"></div>
@@ -934,9 +952,10 @@ function renderCenter() {
       <section class="research-workbench">
         <div class="research-tabs-container">
           <div class="research-tabs" role="tablist" aria-label="Research views">
-            ${tabButton('sources', state.t('sources', 'Sources'))}
-            ${tabButton('measurements', state.t('measurements', 'Measurements'))}
-            ${tabButton('knowledge', state.t('knowledge', 'Knowledge'))}
+            ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
+            ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
+            ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${knowledgeBaseForTask(task)?.tables?.length || 0})`)}
+            ${tabButton('reports', `Fachberichte (12)`)}
           </div>
           ${state.activeTab === 'sources' ? `
             <div class="research-view-toggle">
@@ -1056,6 +1075,29 @@ function renderDiscoveryGraph(task) {
   `;
 }
 
+function getSearchCluster(source) {
+  const meta = DRONE_SOURCES_METADATA[source.id];
+  const tags = meta?.tags || [];
+  const text = [source.id, source.title, source.sourceClass, source.note, meta?.kind, ...(meta?.tags || [])].join(' ').toLowerCase();
+
+  if (tags.includes('simulation') || /simulation|modell|gazebo|sih|virtuell|cfd|ansys|numerical/i.test(text)) {
+    return 'simulation';
+  }
+  if (tags.includes('vibration') || tags.includes('fault') || /vibration|unwucht|schaden|fault|pitting|edm|abrasiv|sand/i.test(text)) {
+    return 'vibration';
+  }
+  if (tags.includes('flightlog') || tags.includes('duty') || /flight|flug|telemetry|telemetrie|mission|ulog|blackbox/i.test(text)) {
+    return 'flightlog';
+  }
+  if (tags.includes('bench') || tags.includes('motor') || /bench|pr\u00fcfstand|motor|esc|spindel|dynamometer|dyno|messstand|t-motor|kde|apc/i.test(text)) {
+    return 'bench';
+  }
+  if (tags.includes('rotorload') || tags.includes('windtunnel') || /rotor|propeller|thrust|force|moment|aerodynamic|windtunnel|windkanal/i.test(text)) {
+    return 'rotorload';
+  }
+  return 'rotorload';
+}
+
 function discoveryGraph(task) {
   const base = knowledgeBaseForTask(task);
   const nodes = [];
@@ -1064,35 +1106,95 @@ function discoveryGraph(task) {
     if (nodes.some((item) => item.id === node.id)) return;
     nodes.push(node);
   };
-  const topSources = state.sourceModels.slice(0, 12);
-  const sourceGroups = [...new Set(topSources.map((source) => source.sourceClass || 'source'))].slice(0, 7);
-  const sourceLayout = new Map(topSources.map((source, index) => {
-    const span = Math.max(topSources.length - 1, 1);
-    return [source.id, {
-      x: 66 + ((index % 2) * 14),
-      y: 12 + (index * (76 / span)),
-    }];
-  }));
+  const topSources = [];
+  const cIds = ["rotorload", "bench", "flightlog", "vibration", "simulation"];
+  cIds.forEach(cId => {
+    const clusterSources = state.sourceModels
+      .filter(s => getSearchCluster(s) === cId)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    topSources.push(...clusterSources);
+  });
+  
+  // Group sources by cluster to prevent vertical overlaps and messy criss-cross lines!
+  const sourcesByCluster = {
+    rotorload: [],
+    bench: [],
+    flightlog: [],
+    vibration: [],
+    simulation: []
+  };
+  topSources.forEach(source => {
+    const cluster = getSearchCluster(source);
+    if (sourcesByCluster[cluster]) {
+      sourcesByCluster[cluster].push(source);
+    } else {
+      sourcesByCluster.rotorload.push(source);
+    }
+  });
+
+  const sourceLayout = new Map();
+  const clusters = [
+    { id: 'rotorload', y: 20 },
+    { id: 'bench', y: 35 },
+    { id: 'flightlog', y: 50 },
+    { id: 'vibration', y: 65 },
+    { id: 'simulation', y: 80 }
+  ];
+
+  clusters.forEach(c => {
+    const list = sourcesByCluster[c.id];
+    const len = list.length;
+    list.forEach((source, index) => {
+      // 3 columns: x = 52, 68, 84 to prevent horizontal overlaps!
+      const col = index % 3;
+      const row = Math.floor(index / 3);
+      const totalRows = Math.ceil(len / 3);
+      
+      const x = 52 + col * 16;
+      // Compact vertical row spacing (6%) centered around cluster's y coordinate
+      const rowOffset = (row - (totalRows - 1) / 2) * 6;
+      const y = c.y + rowOffset;
+      
+      sourceLayout.set(source.id, { x, y });
+    });
+  });
   pushNode({
     id: 'knowledge',
     kind: 'knowledge',
     label: base?.title || task.title,
     title: task.knowledge_domain || task.title,
-    meta: `${base?.tables?.length || 0} tables`,
+    meta: `${base?.tables?.length || 0} Tabellen`,
     x: 14,
     y: 50,
   });
-  sourceGroups.forEach((group, index) => {
-    const groupSources = topSources.filter((source) => source.sourceClass === group);
-    const y = groupSources.length
-      ? groupSources.reduce((sum, source) => sum + (sourceLayout.get(source.id)?.y || 50), 0) / groupSources.length
-      : 18 + (index * (64 / Math.max(sourceGroups.length - 1, 1)));
-    const id = `class_${slugId(group)}`;
-    pushNode({ id, kind: 'class', label: groupLabel(group), title: group, meta: `${groupSources.length} ${state.t('sourcesLabel', 'Quellen')}`, x: 36, y });
-    edges.push({ from: 'knowledge', to: id, kind: 'class' });
+
+  const searchClusters = [
+    { id: 'rotorload', label: 'Rotorlasten & Aerodynamik', y: 20 },
+    { id: 'bench', label: 'Prüfstand & Motoren', y: 35 },
+    { id: 'flightlog', label: 'Fluglogs & Lastprofile', y: 50 },
+    { id: 'vibration', label: 'Vibration & Defekte', y: 65 },
+    { id: 'simulation', label: 'Simulation & Modelle', y: 80 }
+  ];
+
+  searchClusters.forEach((cluster) => {
+    const clusterSources = topSources.filter((source) => getSearchCluster(source) === cluster.id);
+    if (clusterSources.length > 0) {
+      pushNode({
+        id: `cluster_${cluster.id}`,
+        kind: 'class',
+        label: cluster.label,
+        title: cluster.label,
+        meta: `${clusterSources.length} Quellen`,
+        x: 36,
+        y: cluster.y
+      });
+      edges.push({ from: 'knowledge', to: `cluster_${cluster.id}`, kind: 'class' });
+    }
   });
+
   topSources.forEach((source, index) => {
-    const group = source.sourceClass || 'source';
+    const clusterId = getSearchCluster(source);
     const layout = sourceLayout.get(source.id) || { x: 72, y: 50 };
     const id = `source_${source.id}`;
     pushNode({
@@ -1105,14 +1207,14 @@ function discoveryGraph(task) {
       x: clampNumber(layout.x, 58, 84),
       y: clampNumber(layout.y, 12, 88),
     });
-    edges.push({ from: `class_${slugId(group)}`, to: id, kind: 'source' });
+    edges.push({ from: `cluster_${clusterId}`, to: id, kind: 'source' });
     if (source.measurements?.count && index < 5) {
       const measureId = `measurement_${source.id}`;
       pushNode({
         id: measureId,
         kind: 'measurement',
-        label: `${source.measurements.count} ${state.t('measurementsLabel', 'Messpunkte')}`,
-        title: `${source.title}: ${source.measurements.count} ${state.t('measurementsLabel', 'Messpunkte')}`,
+        label: `${source.measurements.count} Messpunkte`,
+        title: `${source.title}: ${source.measurements.count} Messpunkte`,
         meta: source.measurements.maxAxial ? `${formatNumber(source.measurements.maxAxial)} N axial` : '',
         x: 92,
         y: clampNumber(layout.y + 3, 14, 90),
@@ -1198,6 +1300,7 @@ function updateMapTransform() {
 function renderActiveTable(task) {
   if (state.activeTab === 'measurements') return renderMeasurementsTable();
   if (state.activeTab === 'knowledge') return renderKnowledgeTables(task);
+  if (state.activeTab === 'reports') return renderReportsWorkbench(task);
   return renderSourcesWorkbench();
 }
 
@@ -1207,17 +1310,34 @@ function renderSourcesTable(filteredList = state.sourceModels) {
   const xAxis = axisPair.x;
   const yAxis = axisPair.y;
   return `
-    <table class="research-data-table">
-      <thead><tr><th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th><th>${escapeHtml(state.t('classLabel', 'Class'))}</th><th>${escapeHtml(state.t('scoreLabel', 'Score'))}</th><th>${escapeHtml(axisLabel(yAxis, task))}</th><th>${escapeHtml(axisLabel(xAxis, task))}</th><th></th></tr></thead>
+    <table class="research-data-table" style="table-layout: fixed; width: 100%;">
+      <colgroup>
+        <col style="width: 48%;" />
+        <col style="width: 14%;" />
+        <col style="width: 14%;" />
+        <col style="width: 8%;" />
+        <col style="width: 8%;" />
+        <col style="width: 8%;" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th>
+          <th>${escapeHtml(state.t('classLabel', 'Class'))}</th>
+          <th style="text-align: right;">${escapeHtml(state.t('scoreLabel', 'Score'))}</th>
+          <th style="text-align: right;">${escapeHtml(axisLabel(yAxis, task))}</th>
+          <th style="text-align: right;">${escapeHtml(axisLabel(xAxis, task))}</th>
+          <th style="text-align: right;"></th>
+        </tr>
+      </thead>
       <tbody>
         ${filteredList.map((source) => `
           <tr class="${source.id === state.selectedSourceId ? 'is-selected' : ''}">
             <td><button type="button" data-action="select-source" data-source-id="${escapeHtml(source.id)}"><strong>${escapeHtml(source.title)}</strong><span>${escapeHtml(source.id)}</span></button></td>
             <td>${escapeHtml(source.sourceClass)}</td>
-            <td><span class="research-score-pill research-grade-${source.grade.toLowerCase()}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
-            <td>${Math.round(source.dimensions[yAxis] ?? 0)}</td>
-            <td>${Math.round(source.dimensions[xAxis] ?? 0)}</td>
-            <td>${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
+            <td style="text-align: right;"><span class="research-score-pill research-grade-${source.grade.toLowerCase()}">${source.grade} · ${(source.score / 10).toFixed(1)}</span></td>
+            <td style="text-align: right;">${Math.round(source.dimensions[yAxis] ?? 0)}</td>
+            <td style="text-align: right;">${Math.round(source.dimensions[xAxis] ?? 0)}</td>
+            <td style="text-align: right;">${source.url ? `<a href="${escapeHtml(source.url)}" target="_blank" rel="noreferrer">${escapeHtml(state.t('openLabel', 'Open'))}</a>` : ''}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noSources', 'Keine Quellen vorhanden.'))}</td></tr>`}
       </tbody>
@@ -1376,16 +1496,33 @@ function gradeFullText(grade) {
 
 function renderMeasurementsTable() {
   return `
-    <table class="research-data-table">
-      <thead><tr><th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th><th>Prop</th><th>RPM</th><th>Axial N</th><th>Radial N</th><th>Method</th></tr></thead>
+    <table class="research-data-table" style="table-layout: fixed; width: 100%;">
+      <colgroup>
+        <col style="width: 25%;" />
+        <col style="width: 15%;" />
+        <col style="width: 15%;" />
+        <col style="width: 15%;" />
+        <col style="width: 15%;" />
+        <col style="width: 15%;" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>${escapeHtml(state.t('sourceLabel', 'Source'))}</th>
+          <th>Prop</th>
+          <th style="text-align: right;">RPM</th>
+          <th style="text-align: right;">Axial N</th>
+          <th style="text-align: right;">Radial N</th>
+          <th>Method</th>
+        </tr>
+      </thead>
       <tbody>
         ${state.measurementRows.slice(0, 120).map((row) => `
           <tr>
             <td>${escapeHtml(row.source_id || '')}</td>
             <td>${escapeHtml([row.prop_diameter_in, row.prop_pitch_in].filter(isPresent).join(' x '))}</td>
-            <td>${formatNumber(row.rpm)}</td>
-            <td>${formatNumber(row.axial_load_N ?? row.thrust_N)}</td>
-            <td>${formatNumber(row.radial_load_N)}</td>
+            <td style="text-align: right;">${formatNumber(row.rpm)}</td>
+            <td style="text-align: right;">${formatNumber(row.axial_load_N ?? row.thrust_N)}</td>
+            <td style="text-align: right;">${formatNumber(row.radial_load_N)}</td>
             <td>${escapeHtml(firstString(row, ['confidence', 'derivation_method']).slice(0, 90))}</td>
           </tr>
         `).join('') || `<tr><td colspan="6">${escapeHtml(state.t('noMeasurements', 'Keine Messpunkte vorhanden.'))}</td></tr>`}
@@ -1442,15 +1579,67 @@ function renderRight() {
       <section class="research-context-block">
         <span class="research-kicker">${escapeHtml(state.t('selectedSource', 'Selected Source'))}</span>
         ${source ? `
-          <strong>${escapeHtml(source.title)}</strong>
-          <p>${escapeHtml(source.note || state.t('noSummaryAvailable', 'Keine Zusammenfassung vorhanden.'))}</p>
-          <dl class="research-facts">
-            <div><dt>${escapeHtml(state.t('gradeLabel', 'Grade'))}</dt><dd>${source.grade} · ${(source.score / 10).toFixed(1)}</dd></div>
-            <div><dt>${escapeHtml(axisLabel(axisPair.y, task))}</dt><dd>${Math.round(source.dimensions[axisPair.y] || 0)}</dd></div>
-            <div><dt>${escapeHtml(axisLabel(axisPair.x, task))}</dt><dd>${Math.round(source.dimensions[axisPair.x] || 0)}</dd></div>
-            <div><dt>${escapeHtml(state.t('evidenceLabel', 'Evidence'))}</dt><dd>${Math.round(source.dimensions.evidence_strength || 0)}</dd></div>
-          </dl>
-          <button type="button" class="research-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}">${escapeHtml(state.t('details', 'Details'))}</button>
+          <strong style="font-size: 13px; display: block; margin-bottom: 8px; color: var(--research-text);">${escapeHtml(source.title)}</strong>
+          <p style="font-size: 11.5px; line-height: 1.4; color: var(--research-muted); margin-bottom: 12px;">${escapeHtml(source.note || state.t('noSummaryAvailable', 'Keine Zusammenfassung vorhanden.'))}</p>
+          
+          <div class="research-metric-profile" style="margin-bottom: 16px; display: flex; flex-direction: column; gap: 8px;">
+            <!-- Overall Score Progress -->
+            <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
+              <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
+                <span>Overall Score</span>
+                <span>${(source.score / 10).toFixed(1)}%</span>
+              </div>
+              <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
+                <div class="research-metric-progress-bar-fill ${source.score / 10 > 75 ? 'good' : source.score / 10 > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${(source.score / 10).toFixed(1)}%;"></div>
+              </div>
+            </div>
+            
+            <!-- Source Quality Progress -->
+            <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
+              <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
+                <span>Source Quality</span>
+                <span>${Math.round(source.dimensions.source_quality || 0)}%</span>
+              </div>
+              <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
+                <div class="research-metric-progress-bar-fill ${source.dimensions.source_quality > 75 ? 'good' : source.dimensions.source_quality > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.source_quality || 0)}%;"></div>
+              </div>
+            </div>
+            
+            <!-- Evidence Strength Progress -->
+            <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
+              <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
+                <span>Evidence Strength</span>
+                <span>${Math.round(source.dimensions.evidence_strength || 0)}%</span>
+              </div>
+              <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
+                <div class="research-metric-progress-bar-fill ${source.dimensions.evidence_strength > 75 ? 'good' : source.dimensions.evidence_strength > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.evidence_strength || 0)}%;"></div>
+              </div>
+            </div>
+            
+            <!-- Topic Fit Progress -->
+            <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
+              <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
+                <span>Topic Fit</span>
+                <span>${Math.round(source.dimensions.topic_fit || 0)}%</span>
+              </div>
+              <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
+                <div class="research-metric-progress-bar-fill ${source.dimensions.topic_fit > 75 ? 'good' : source.dimensions.topic_fit > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.topic_fit || 0)}%;"></div>
+              </div>
+            </div>
+            
+            <!-- Actionability Progress -->
+            <div class="research-metric-progress-wrapper" style="margin-bottom: 4px;">
+              <div class="research-metric-progress-label" style="display: flex; justify-content: space-between; font-size: 11px; font-weight: 700; margin-bottom: 4px;">
+                <span>Actionability</span>
+                <span>${Math.round(source.dimensions.actionability || 0)}%</span>
+              </div>
+              <div class="research-metric-progress-bar-bg" style="height: 6px; background: var(--research-surface-2); border-radius: 3px; overflow: hidden;">
+                <div class="research-metric-progress-bar-fill ${source.dimensions.actionability > 75 ? 'good' : source.dimensions.actionability > 45 ? 'accent' : 'warn'}" style="height: 100%; border-radius: 3px; transition: width 0.3s ease; width: ${Math.round(source.dimensions.actionability || 0)}%;"></div>
+              </div>
+            </div>
+          </div>
+          
+          <button type="button" class="research-button" data-action="source-detail" data-source-id="${escapeHtml(source.id)}" style="width: 100%; text-align: center;">${escapeHtml(state.t('details', 'Details'))}</button>
         ` : `<p>${escapeHtml(state.t('selectSourcePrompt', 'Wähle eine Quelle aus.'))}</p>`}
       </section>
       <section class="research-context-block">
@@ -2406,11 +2595,11 @@ function safeAxis(value, task = selectedTask(), fallback = DEFAULT_AXIS_X) {
 }
 
 function pointJitter(source) {
-  const seed = Array.from(String(source.id || source.title || source.rank))
+  const seed = Array.from(String(source.id || source.title))
     .reduce((sum, char) => sum + char.charCodeAt(0), 0);
   return {
-    x: ((seed % 7) - 3) * 1.4,
-    y: (((Math.floor(seed / 7) % 7) - 3) * 1.4),
+    x: ((seed % 13) - 6) * 1.6,
+    y: (((Math.floor(seed / 13) % 13) - 6) * 1.6),
   };
 }
 
@@ -2540,6 +2729,15 @@ function defaultPromptForKnowledgeBase(base) {
 }
 
 function topicFitScore(task, text, row) {
+  const titleText = String(row?.title || '').toLowerCase();
+  
+  // High-fidelity keyword filter on Title to prevent crawler noise / cross-domain leakage!
+  const hasDroneTopic = /propeller|rotor|uav|drone|bearing|load|force|moment|thrust|torque|rpm|vibration|spindel|motor|flight|telemetry|aerodynamic|blade|windtunnel|w\u00e4lzlager|lager|schub|drehmoment|last|messung|pr\u00fcfstand|spindle|vibrat|flight|telemetr|testing|bench|load cell|stanag|mil-std/i.test(titleText);
+  
+  if (!hasDroneTopic) {
+    return 10;
+  }
+
   const haystack = String(text || '').toLowerCase();
   const terms = [
     task?.title,
@@ -2659,6 +2857,329 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+const DOCUMENT_PROMPTS = {
+  'doc_deep_research_report.md': `Generiere einen wissenschaftlichen, umfassenden Deep Research Word-Bericht auf Deutsch zum Thema "Wälzlagerauslegung für taktische UAVs unter militärischen Grenzlasten". 
+Fokus: Detaillierte Übersicht aller 125 Wellen, wissenschaftliche Validierungsmethoden, mathematische Belastungsberechnungen (z.B. Hertzsche Pressung) und fundierte Zitate aus echten Forschungsdaten.`,
+  'doc_decision_brief.md': `Generiere eine Entscheidungsvorlage zur Schmierstoff- und Dichtungsauswahl für arktische und chemische Einsatzbedingungen von Drohnen-Spindellagern.
+Fokus: Vergleich arktischer Tieftemperatur-Fette (-60°C) und chemisch laugenresistenter Polymer-Dichtungssysteme für militärische Dekontaminations-Spülungen.`,
+  'doc_feasibility_study.md': `Generiere eine Machbarkeitsstudie zur berührungslosen Früherkennung von EDM-Laufflächen-Pitting an Spindellagern unter elektromagnetischen Radarstörungen.
+Fokus: Eignungsbewertung von Induktions-Thermografie (ECPT) und mmWave-Inline-Scannern zur zerstörungsfreien Zustandsüberwachung im Einsatz.`,
+  'doc_market_research.md': `Generiere eine umfassende Marktanalyse für hochrobuste, zivil-militärische Outrunner-Motoren und Wälzlagerungen (< 25 kg MTOW).
+Fokus: Marktsegmente, Verteidigungs-Barrieren, Analyse führender Lieferanten wie KDE Direct und T-Motor (inklusive Preispunkte und Dichtungsvarianten).`,
+  'doc_project_description.md': `Generiere eine Projektbeschreibung / Fördervorhaben zur Entwicklung eines resonanzresistenten Spindellagersystems für FPV-Kampfdrohnen im aktiven Störumfeld.
+Fokus: Begründungs- und Förderlogik, aktueller Stand der Technik, ESC-induzierte Resonanzschäden, innovative Technologiesprünge und eine strukturierte Arbeitspaket-Kostenmatrix.`,
+  'doc_source_review.md': `Generiere ein Quellenreview und Datenabdeckungs-Kompendium der wissenschaftlichen, militärischen und industriellen Referenzen.
+Fokus: Systematische Suchmethodik, Klassifikationstaxonomie nach Vertrauensgraden (Grade A bis D), Coverage-Analyse und Offenlegung verbleiberinger Datenlücken im Bereich kleiner Drohnen-Antriebe.`,
+  'doc_literature_review.md': `Generiere einen wissenschaftlichen Stand der Technik zu aeroelastischem Flattern und dynamic-stall-induzierten Biegebewegungen im Sturzflug.
+Fokus: Physikalischer Konsens über kreiselwirksame Momente, instationäre Aerodynamik und hochfrequente Lastspitzen an den Lagersitzflächen durch Dynamic Stall bei FPV-Drohnen.`,
+  'doc_technology_screening.md': `Generiere ein Technologie-Screening von Wellen- und Gehäusewerkstoffen für ultraleichte Drohnen-Spindellagerungen.
+Fokus: Strukturierter mechanischer Vergleich von Aluminium 7075-T6, Titan Grade 5 und Kohlefaser-Verbundwerkstoffen (CFK) hinsichtlich Steifigkeit, thermischer Dehnung und Gewichtsvorteil.`,
+  'doc_competitive_analysis.md': `Generiere eine strukturierte Wettbewerberanalyse für Triebwerks- und Wälzlagerhersteller im Bereich Class 1-2 UAS.
+Fokus: Detaillierte Bewertungsmatrix von T-Motor, KDE Direct und Tyto Robotics hinsichtlich Fertigungstoleranzen, IP-Schutzklassen (z.B. IP54 Lagerseals) und militärischer Tauglichkeit.`,
+  'doc_whitepaper.md': `Generiere ein Whitepaper zum Thema "Cyber-physische Schutzstrategien gegen ESC-Resonanzangriffe auf Drohnen-Antriebslager".
+Fokus: Argumentative Empfehlung kombinierter Schutzmaßnahmen durch Firmware-Notch-Filter in den Reglern (ESC) und mechanische Dämpfungsringe (Dämpfungs-O-Ringe) zur Verschleißminderung.`,
+  'doc_requirements_extraction.md': `Generiere eine systematische Anforderungsextraktion aus militärischen STANAG-Lufttüchtigkeits- und MIL-STD-Härteprüfvorschriften.
+Fokus: Detaillierte Extraktionstabelle für Schockzyklen, Sandsturm-Geschwindigkeiten, Vibrationsprofile und Salznebel-Testdauern gemäß STANAG 4671/4703 und MIL-STD-810H.`,
+  'doc_risk_assessment.md': `Generiere eine Risikoanalyse und Fehlermöglichkeits- und Einflussanalyse (FMEA) für Spindellagerschäden unter Gefechtsbedingungen.
+Fokus: Vollständige FMEA-Risikomatrix mit Risikoprioritätszahlen (RPZ) zu Schmierfilm-Washout durch Laugenwäschen, abrasivem Sandverschleiß und EDM-Laufflächen-Pitting.`
+};
+
+const GENERATED_REPORTS = [
+  {
+    id: 'doc_deep_research_report',
+    filename: 'umfassender-deep-research-bericht-zur-waelzlagerauslegung.md',
+    title: 'Umfassender Deep Research Bericht zur Wälzlagerauslegung für taktische UAVs unter militärischen Grenzlasten',
+    category: 'Deep Research'
+  },
+  {
+    id: 'doc_decision_brief',
+    filename: 'entscheidungsvorlage-zur-schmierstoff-und-dichtungsauswahl.md',
+    title: 'Entscheidungsvorlage zur Schmierstoff- und Dichtungsauswahl für arktische und chemische Einsatzbedingungen',
+    category: 'Entscheidungsvorlage'
+  },
+  {
+    id: 'doc_feasibility_study',
+    filename: 'machbarkeitsstudie-zur-beruehrungslosen-frueherkennung-von-edm-pitting.md',
+    title: 'Machbarkeitsstudie zur berührungslosen Früherkennung von EDM-Laufflächen-Pitting an Spindellagern unter Radarstörungen',
+    category: 'Machbarkeitsstudie'
+  },
+  {
+    id: 'doc_market_research',
+    filename: 'marktanalyse-fuer-hochrobuste-outrunner-motoren.md',
+    title: 'Marktanalyse für hochrobuste, zivil-militärische Outrunner-Motoren und Wälzlagerungen (< 25 kg MTOW)',
+    category: 'Markt & Wettbewerb'
+  },
+  {
+    id: 'doc_project_description',
+    filename: 'projektbeschreibung-entwicklung-eines-resonanzresistenten-spindellagersystems.md',
+    title: 'Projektbeschreibung – Entwicklung eines resonanzresistenten Spindellagersystems für FPV-Kampfdrohnen im aktiven Störumfeld',
+    category: 'Projektbeschreibung'
+  },
+  {
+    id: 'doc_source_review',
+    filename: 'quellenreview-und-datenabdeckungs-kompendium-der-323-referenzen.md',
+    title: 'Quellenreview und Datenabdeckungs-Kompendium der 323 wissenschaftlichen, militärischen und industriellen Referenzen',
+    category: 'Quellenreview'
+  },
+  {
+    id: 'doc_literature_review',
+    filename: 'wissenschaftlicher-stand-der-technik-zu-aeroelastischem-flattern.md',
+    title: 'Wissenschaftlicher Stand der Technik zu aeroelastischem Flattern und dynamic-stall-induzierten Biegebewegungen im Sturzflug',
+    category: 'Stand der Technik'
+  },
+  {
+    id: 'doc_technology_screening',
+    filename: 'technologie-screening-von-wellen-und-gehaeusewerkstoffen.md',
+    title: 'Technologie-Screening von Wellen- und Gehäusewerkstoffen für ultraleichte Drohnen-Spindellagerungen',
+    category: 'Technologie-Screening'
+  },
+  {
+    id: 'doc_competitive_analysis',
+    filename: 'strukturierte-wettbewerberanalyse-triebwerks-waelzlagerhersteller.md',
+    title: 'Strukturierte Wettbewerberanalyse für Triebwerks- und Wälzlagerhersteller im Bereich Class 1-2 UAS',
+    category: 'Wettbewerberanalyse'
+  },
+  {
+    id: 'doc_whitepaper',
+    filename: 'whitepaper-cyber-physische-schutzstrategien-esc-resonanzangriffe.md',
+    title: 'Whitepaper – Cyber-physische Schutzstrategien gegen ESC-Resonanzangriffe auf Drohnen-Antriebslager',
+    category: 'Whitepaper'
+  },
+  {
+    id: 'doc_requirements_extraction',
+    filename: 'systematische-anforderungsextraktion-stanag-mil-std.md',
+    title: 'Systematische Anforderungsextraktion aus militärischen STANAG-Lufttüchtigkeits- und MIL-STD-Härteprüfvorschriften',
+    category: 'Spezifikation'
+  },
+  {
+    id: 'doc_risk_assessment',
+    filename: 'risikoanalyse-fmea-spindellager-gefechtsbedingungen.md',
+    title: 'Risikoanalyse und Fehlermöglichkeits- und Einflussanalyse (FMEA) für Spindellagerschäden unter realen Gefechtsbedingungen',
+    category: 'Risiko & FMEA'
+  }
+];
+
+function getPromptForFilename(filename) {
+  const f = filename.toLowerCase();
+  if (f.includes('schmierstoff') || f.includes('entscheidung')) {
+    return DOCUMENT_PROMPTS['doc_decision_brief.md'];
+  }
+  if (f.includes('edm') || f.includes('machbarkeit') || f.includes('pitting')) {
+    return DOCUMENT_PROMPTS['doc_feasibility_study.md'];
+  }
+  if (f.includes('marktanalyse') || f.includes('outrunner')) {
+    return DOCUMENT_PROMPTS['doc_market_research.md'];
+  }
+  if (f.includes('projektbeschreibung') || f.includes('resonanzresistenz')) {
+    return DOCUMENT_PROMPTS['doc_project_description.md'];
+  }
+  if (f.includes('quellenreview') || f.includes('kompendium') || f.includes('323-referenzen')) {
+    return DOCUMENT_PROMPTS['doc_source_review.md'];
+  }
+  if (f.includes('aeroelastisch') || f.includes('flattern') || f.includes('stand-der-technik') || f.includes('wissenschaftlicher-stand')) {
+    return DOCUMENT_PROMPTS['doc_literature_review.md'];
+  }
+  if (f.includes('werkstoff') || f.includes('screening')) {
+    return DOCUMENT_PROMPTS['doc_technology_screening.md'];
+  }
+  if (f.includes('wettbewerb') || f.includes('triebwerks-waelzlagerhersteller')) {
+    return DOCUMENT_PROMPTS['doc_competitive_analysis.md'];
+  }
+  if (f.includes('whitepaper') || f.includes('cyber-physisch')) {
+    return DOCUMENT_PROMPTS['doc_whitepaper.md'];
+  }
+  if (f.includes('anforderung') || f.includes('stanag')) {
+    return DOCUMENT_PROMPTS['doc_requirements_extraction.md'];
+  }
+  if (f.includes('risiko') || f.includes('fmea')) {
+    return DOCUMENT_PROMPTS['doc_risk_assessment.md'];
+  }
+  if (f.includes('umfassender-deep-research') || f.includes('waelzlagerauslegung')) {
+    return DOCUMENT_PROMPTS['doc_deep_research_report.md'];
+  }
+  return 'Führe eine umfassende Recherche und Aggregation aller 322 wissenschaftlichen und empirischen Quellen durch. Konsolidiere die Datenpunkte (816 Messungen) zu einer detaillierten Systemanalyse zur Wälzlagerauslegung für Drohnenantriebe unter 25 kg MTOW.';
+}
+
+function showPromptViewer(filename) {
+  const promptText = getPromptForFilename(filename);
+  
+  const backdrop = document.createElement("div");
+  backdrop.className = "research-modal-backdrop";
+  backdrop.style.zIndex = "10000";
+  backdrop.innerHTML = `
+    <div class="research-modal" style="position: relative;">
+      <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--research-line); padding-bottom: 10px;">
+        <div>
+          <span style="font-size: 10px; color: var(--research-accent); text-transform: uppercase; font-weight: 800; letter-spacing: 0.5px; display: block; margin-bottom: 2px;">KI-Generierung</span>
+          <h3 style="font-size: 14px; font-weight: 700; margin: 0; color: var(--research-text);">System-Prompt des Fachberichts</h3>
+        </div>
+        <button type="button" class="research-map-reset" style="padding: 4px 8px; margin: 0;" onclick="this.closest('.research-modal-backdrop').remove()">Schließen</button>
+      </div>
+      <div style="font-family: monospace; font-size: 11px; line-height: 1.6; color: var(--research-text); max-height: 380px; overflow-y: auto; white-space: pre-wrap; background: var(--research-surface-2); padding: 12px; border-radius: 6px; border: 1px solid var(--research-line); box-shadow: inset 0 2px 6px rgba(0,0,0,0.15); text-align: left;">\${escapeHtml(promptText)}</div>
+    </div>
+  `;
+  document.body.appendChild(backdrop);
+}
+
+function parseMarkdown(md) {
+  if (window.marked && typeof window.marked.parse === 'function') {
+    return window.marked.parse(md);
+  }
+  
+  let html = md;
+  // Basic escaping to avoid pure tag injections
+  html = html
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  
+  // Headers
+  html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+  html = html.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+  html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+  
+  // Bold & Italic
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.*?)\*/g, '<em>$1</em>');
+  
+  // Pre blocks & Code blocks
+  html = html.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
+  
+  // Basic Table support
+  const lines = html.split('\n');
+  let inTable = false;
+  let tableRows = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('|') && line.endsWith('|')) {
+      if (!inTable) {
+        inTable = true;
+        tableRows = [];
+      }
+      if (line.includes('---')) continue;
+      const cells = line.split('|').map(c => c.trim()).filter((c, idx, arr) => idx > 0 && idx < arr.length - 1);
+      const isHeader = tableRows.length === 0;
+      const cellTag = isHeader ? 'th' : 'td';
+      const rowHtml = `<tr>${cells.map(c => `<${cellTag}>${c}</${cellTag}>`).join('')}</tr>`;
+      tableRows.push(rowHtml);
+      lines[i] = '';
+    } else {
+      if (inTable) {
+        inTable = false;
+        lines[i - 1] = `<table class="research-data-table">${tableRows.join('')}</table>`;
+      }
+    }
+  }
+  html = lines.filter(l => l !== '').join('\n');
+  
+  // Lists
+  html = html.replace(/^\s*-\s+(.*$)/gim, '<li>$1</li>');
+  html = html.replace(/(<li>.*<\/li>)/g, '<ul>$1</ul>');
+  
+  // Paragraphs
+  html = html.replace(/^\s*([^<\n].*)$/gim, '<p>$1</p>');
+  
+  // Restore basic tags
+  html = html
+    .replace(/&lt;h1&gt;/gi, '<h1>').replace(/&lt;\/h1&gt;/gi, '</h1>')
+    .replace(/&lt;h2&gt;/gi, '<h2>').replace(/&lt;\/h2&gt;/gi, '</h2>')
+    .replace(/&lt;h3&gt;/gi, '<h3>').replace(/&lt;\/h3&gt;/gi, '</h3>')
+    .replace(/&lt;p&gt;/gi, '<p>').replace(/&lt;\/p&gt;/gi, '</p>')
+    .replace(/&lt;ul&gt;/gi, '<ul>').replace(/&lt;\/ul&gt;/gi, '</ul>')
+    .replace(/&lt;li&gt;/gi, '<li>').replace(/&lt;\/li&gt;/gi, '</li>')
+    .replace(/&lt;strong&gt;/gi, '<strong>').replace(/&lt;\/strong&gt;/gi, '</strong>')
+    .replace(/&lt;em&gt;/gi, '<em>').replace(/&lt;\/em&gt;/gi, '</em>')
+    .replace(/&lt;code&gt;/gi, '<code>').replace(/&lt;\/code&gt;/gi, '</code>')
+    .replace(/&lt;pre&gt;/gi, '<pre>').replace(/&lt;\/pre&gt;/gi, '</pre>')
+    .replace(/&lt;table class="research-data-table"&gt;/gi, '<table class="research-data-table">').replace(/&lt;\/table&gt;/gi, '</table>')
+    .replace(/&lt;tr&gt;/gi, '<tr>').replace(/&lt;\/tr&gt;/gi, '</tr>')
+    .replace(/&lt;th&gt;/gi, '<th>').replace(/&lt;\/th&gt;/gi, '</th>')
+    .replace(/&lt;td&gt;/gi, '<td>').replace(/&lt;\/td&gt;/gi, '</td>');
+  
+  return html;
+}
+
+function renderReportsWorkbench(task) {
+  const reports = GENERATED_REPORTS;
+  const selectedReportId = state.selectedReportId || reports[0].id;
+  const selectedReport = reports.find(r => r.id === selectedReportId) || reports[0];
+  
+  if (!state.reportContents) {
+    state.reportContents = {};
+  }
+  
+  const content = state.reportContents[selectedReport.id];
+  if (content === undefined) {
+    state.reportContents[selectedReport.id] = null;
+    fetch(`/runtime/business-os/documents/generated/${selectedReport.filename}`)
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.text();
+      })
+      .then(text => {
+        state.reportContents[selectedReport.id] = text;
+        renderCenter();
+      })
+      .catch(err => {
+        state.reportContents[selectedReport.id] = `Fehler beim Laden des Fachberichts: ${err.message}`;
+        renderCenter();
+      });
+  }
+  
+  const viewerContent = content === null 
+    ? `<div style="padding: 40px; text-align: center; color: var(--research-muted);"><span class="research-spinner" style="display:inline-block; width:18px; height:18px; border:2px solid var(--research-accent); border-top-color:transparent; border-radius:50%; animation:spin 1s linear infinite; margin-right:8px; vertical-align:middle;"></span>Lade Fachbericht...</div>`
+    : content.startsWith('Fehler')
+      ? `<div style="padding: 40px; text-align: center; color: var(--research-warn);">${escapeHtml(content)}</div>`
+      : `
+        <div class="ai-warning-banner" style="background: color-mix(in srgb, var(--research-accent) 6%, var(--research-surface)); border: 1px solid color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); border-radius: 8px; padding: 14px 18px; margin-bottom: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
+          <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <span style="font-size: 1.4rem; line-height: 1;">🤖</span>
+              <div>
+                <div style="font-weight: 700; font-size: 12px; color: var(--research-text);">KI-generierter Fachbericht</div>
+                <div style="font-size: 11px; color: var(--research-muted); margin-top: 2px;">Erstellt auf Basis des aggregierten Wälzlager-Wissens (323 Referenzen, 816 Messpunkte).</div>
+              </div>
+            </div>
+            <button type="button" class="research-button primary" onclick="window.showPromptViewer('${selectedReport.filename}')" style="margin: 0; background: color-mix(in srgb, var(--research-accent) 12%, var(--research-surface-2)); border-color: color-mix(in srgb, var(--research-accent) 25%, var(--research-line)); color: var(--research-accent); font-weight: 800; font-size: 11px; padding: 0 12px; height: 28px; border-radius: 6px;">
+              Prompt im Modal ⚡
+            </button>
+          </div>
+          <div style="border-top: 1px dashed var(--research-line); padding-top: 10px; margin-top: 10px; text-align: left;">
+            <details style="width: 100%;">
+              <summary style="font-size: 11px; color: var(--research-accent); font-weight: 700; cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 6px;">
+                <span>▶ System-Prompt der KI-Generierung einblenden</span>
+              </summary>
+              <div style="margin-top: 8px; background: var(--research-surface-2); border: 1px solid var(--research-line); border-radius: 6px; padding: 10px; font-family: monospace; font-size: 10px; line-height: 1.5; color: var(--research-text); max-height: 180px; overflow-y: auto; white-space: pre-wrap; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);">${escapeHtml(getPromptForFilename(selectedReport.filename))}</div>
+            </details>
+          </div>
+        </div>
+        <div class="markdown-body">${parseMarkdown(content)}</div>
+      `;
+      
+  return `
+    <div class="explorer-layout">
+      <div class="explorer-sidebar">
+        ${reports.map((report) => {
+          const isActive = report.id === selectedReportId;
+          return `
+            <button type="button" class="doc-item${isActive ? ' active' : ''}" onclick="window.selectReport('${report.id}')">
+              <div class="doc-item-cat">${escapeHtml(report.category)}</div>
+              <div style="font-weight: 700;">${escapeHtml(report.title)}</div>
+              <div style="font-size: 10px; color: var(--research-muted); margin-top: 2px;">
+                ${escapeHtml(report.filename)}
+              </div>
+            </button>
+          `;
+        }).join('')}
+      </div>
+      <div class="explorer-viewer" id="markdown-viewer">
+        ${viewerContent}
+      </div>
+    </div>
+  `;
 }
 
 export const __researchTestHooks = {

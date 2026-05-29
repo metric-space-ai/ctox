@@ -10,17 +10,17 @@ Der Projektfortschritt wird ueber Wellengewichtung berechnet. Jede Welle hat ein
 | Welle | Gewicht | Status | Fortschritt |
 | --- | ---: | --- | ---: |
 | 0. Baseline & Architekturvertrag | 5% | Abgeschlossen | 100% |
-| 1. Datenmodell, Schemas & Migrationen | 12% | In Arbeit | 75% |
-| 2. Command Bus & Approval-Gate Backend | 12% | In Arbeit | 75% |
-| 3. Outbound UI: Lead Queue, Engagement Cockpit, Approval Inbox | 14% | In Arbeit | 75% |
-| 4. Campaign Settings, Strategie & Sequenz-Simulation | 10% | In Arbeit | 75% |
-| 5. CTOX Skills, Runbooks & Draft Automation | 10% | In Arbeit | 25% |
-| 6. Kommunikationskanaele, Mailserver, Sender Accounts & Deliverability | 10% | In Arbeit | 75% |
-| 7. Reply Loop, Thread Matching & Response Drafting | 9% | In Arbeit | 75% |
-| 8. Scheduling & Terminfindung | 7% | In Arbeit | 50% |
-| 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 50% |
-| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 90% |
-| **Gesamt** | **100%** | **In Arbeit** | **70%** |
+| 1. Datenmodell, Schemas & Migrationen | 12% | In Arbeit | 90% |
+| 2. Command Bus & Approval-Gate Backend | 12% | Abgeschlossen | 100% |
+| 3. Outbound UI: Lead Queue, Engagement Cockpit, Approval Inbox | 14% | In Arbeit | 80% |
+| 4. Campaign Settings, Strategie & Sequenz-Simulation | 10% | In Arbeit | 90% |
+| 5. CTOX Skills, Runbooks & Draft Automation | 10% | In Arbeit | 50% |
+| 6. Kommunikationskanaele, Mailserver, Sender Accounts & Deliverability | 10% | In Arbeit | 90% |
+| 7. Reply Loop, Thread Matching & Response Drafting | 9% | Abgeschlossen | 100% |
+| 8. Scheduling & Terminfindung | 7% | In Arbeit | 60% |
+| 9. Automation Scheduler, Limits & Stop-Regeln | 6% | In Arbeit | 80% |
+| 10. End-to-End Hardening, Observability & Release Gates | 5% | In Arbeit | 98% |
+| **Gesamt** | **100%** | **In Arbeit** | **84%** |
 
 Fortschritt je Welle:
 
@@ -144,7 +144,7 @@ Aufgaben:
 - [x] Persistenzpfad festlegen: Neue Collections laufen additiv ueber den bestehenden generischen Business-OS `business_records`/RxDB-Peer-Pfad; dedizierte SQLite-Fachtabellen werden erst eingefuehrt, wenn Welle 2/9 echte Query- oder Transaktionsanforderungen zeigen.
 - [x] Projektionen im nativen RxDB Peer ueber den Schema-Contract registrieren.
 - [x] Pull-/Push-Verhalten fuer neue Collections ueber den bestehenden generischen Sync-Pfad definieren.
-- [ ] Tombstone- und Konfliktstrategie fuer Messages und Approvals mit Backend-State-Machine konkret pruefen.
+- [x] Tombstone- und Konfliktstrategie fuer Messages und Approvals mit Backend-State-Machine konkret pruefen.
 - [ ] Statuswerte und erlaubte Uebergaenge im Backend validieren.
 
 Mindestfelder:
@@ -161,7 +161,7 @@ Akzeptanzkriterien:
 - [x] Browser und native Peer kennen alle neuen Collections.
 - [x] Bestehende Outbound-Daten bleiben lesbar, da die Aenderung rein additive Collections einfuehrt.
 - [x] Schema-Contract-Test und Hash-Check sind gruen.
-- [ ] Leere Collections funktionieren ohne UI-Fehler.
+- [x] Leere Collections funktionieren ohne UI-Fehler.
 
 Umsetzung:
 
@@ -214,11 +214,11 @@ Aufgaben:
 - [x] Harte Versandregel: `send_approved` akzeptiert nur `approval_status = approved`.
 - [x] Versandregel prueft Sender-Account, Empfaenger, Suppression und einfache Account-Limits.
 - [x] Versandregel ist kanalbewusst: E-Mail braucht Mail-Ziel und Sender-Account, physischer Brief braucht Postadresse und manuellen Versandnachweis.
-- [ ] Versandregel prueft Bounce, Opt-out und providerfaehige Sender-Account-Health.
+- [x] Versandregel prueft Bounce, Opt-out und providerfaehige Sender-Account-Health.
 - [x] Jede Command-Ausfuehrung schreibt replizierbare Command-Result- und Domain-Record-Metadaten.
 - [x] Pause, Resume und Close schreiben nachvollziehbare Engagement-/Message-State-Uebergaenge.
-- [ ] Fehlerstatus und blockierende Gruende in replizierbare Result-Felder schreiben.
-- [ ] Idempotenz fuer wiederholte Command-Verarbeitung sicherstellen.
+- [x] Fehlerstatus und blockierende Gruende in replizierbare Result-Felder schreiben.
+- [x] Idempotenz fuer wiederholte Command-Verarbeitung sicherstellen.
 - [x] Tests fuer zentrale unerlaubte State-Uebergaenge ergaenzen.
 - [x] Provider-Queue-Pfad sicher an Mailserver/Channel-Review-Modell anbinden.
 
@@ -227,10 +227,10 @@ Akzeptanzkriterien:
 - [x] Nicht freigegebene Nachricht kann nicht gesendet werden.
 - [x] Freigegebene Nachricht ohne Sender kann nicht gesendet werden.
 - [x] Physischer Brief ohne Postadresse kann nicht freigegeben werden.
-- [ ] Freigegebene Nachricht mit Suppression/Opt-out kann nicht gesendet werden.
+- [x] Freigegebene Nachricht mit Suppression/Opt-out kann nicht gesendet werden.
 - [x] Erfolgreich markierter physischer Brief aktualisiert Message, Engagement und Audit.
 - [x] Erfolgreiches Einreihen in die Mailserver-Queue aktualisiert Message, Engagement und Audit-Metadaten.
-- [ ] Fehlgeschlagener Versand bleibt retry-faehig ohne Draft-Verlust.
+- [x] Fehlgeschlagener Versand bleibt retry-faehig ohne Draft-Verlust.
 
 Umsetzung:
 
@@ -282,7 +282,7 @@ Aufgaben:
 - [x] Pause/Cancel Flow mit Grund bauen.
 - [x] Resume/Close Flow bauen.
 - [x] Empty- und Error-Basiszustaende fuer Active Outreach bauen.
-- [ ] Loading- und Blocked States fuer Provider/Account-Health bauen.
+- [x] Loading- und Blocked States fuer Provider/Account-Health bauen.
 - [x] UI-Smoke fuer Outbound-Modul laden.
 - [ ] UI gegen grosse Datenmengen testen.
 
@@ -292,7 +292,7 @@ Akzeptanzkriterien:
 - [ ] Nutzer kann Drafts bearbeiten, freigeben oder mit Kommentar ablehnen.
 - [x] Nutzer kann physische Briefe als PDF/Print-Datei vorbereiten und nach Freigabe als verschickt markieren.
 - [x] Keine UI-Aktion erzeugt direkten Versand ohne Approval-Command.
-- [ ] Timeline zeigt Draft, Approval, Versand, Antwort und Stop-Gruende vollstaendig.
+- [x] Timeline zeigt Draft, Approval, Versand, Antwort und Stop-Gruende vollstaendig.
 - [ ] Detailansicht fuer Threads und Nachrichten liegt in `conversations`; Outbound zeigt nur Kurzstatus und stabile Links.
 - [x] UI-Smoke deckt das Laden des Active-Outbound-Moduls ab.
 - [ ] UI-Smoke deckt Lead Queue, Assignment, Approval Inbox und Cockpit mit Testdaten ab.
@@ -364,7 +364,7 @@ Akzeptanzkriterien:
 - [x] Settings erzeugen oder aktualisieren `outbound_sequences`.
 - [x] Simulation zeigt Initial-Mail, Follow-ups, Reply Handling und Scheduling Gates.
 - [x] Aenderungen wirken auf neu vorbereitete Drafts.
-- [ ] Bestehende aktive Engagements behalten nachvollziehbar ihre Version der Strategie oder erhalten einen expliziten Reapply-Flow.
+- [x] Bestehende aktive Engagements behalten nachvollziehbar ihre Version der Strategie oder erhalten einen expliziten Reapply-Flow.
 
 Umsetzung:
 
@@ -403,9 +403,9 @@ Skillbooks/Runbooks:
 
 Aufgaben:
 
-- [ ] Skillbook fuer Initial-Mail und Follow-ups definieren.
-- [ ] Skillbook fuer Reply-Klassifikation und Antwortentwurf definieren.
-- [ ] Skillbook fuer Terminfindung definieren.
+- [x] Skillbook fuer Initial-Mail und Follow-ups definieren.
+- [x] Skillbook fuer Reply-Klassifikation und Antwortentwurf definieren.
+- [x] Skillbook fuer Terminfindung definieren.
 - [x] Knowledge Writeback Contracts fuer Messages, Approvals und Meetings als `outbound.draft.prepare` Payload-/Collection-Vertrag definieren.
 - [x] Draft Automation Command an Skillbook/Runbook-Kontext binden.
 - [x] Follow-up-Draft beruecksichtigt bisherige Kommunikation.
@@ -438,10 +438,14 @@ Verifikation:
 - `cargo test -q outbound_draft_prepare_creates_approval_gated_automated_messages -- --nocapture`
 - Browser-Smoke: `BUSINESS_OS_CONNECTION_SMOKE_MODES=direct BUSINESS_OS_DIRECT_URL='http://127.0.0.1:8766/#outbound' ... node src/core/rxdb/tools/business_os_connection_modes_smoke.js`
 
-Offen fuer 50%:
+Stand 50%:
 
-- Echte Skill-/Runbook-Items fuer `business-os.outbound.message_drafting.v1`, `reply_handling.v1` und `scheduling.v1` als Knowledge-Struktur persistieren.
-- Template-Drafting durch Skill-/Runbook-gestuetzte Kontextauflosung ersetzen.
+- [x] Echte Skill-/Runbook-Items fuer `business-os.outbound.message_drafting.v1`, `reply_handling.v1` und `scheduling.v1` als Knowledge-Struktur persistieren (workflow_backbone, routing_taxonomy, non_negotiable_rules, stop_rules in `outbound_handle_skillbook_seed_defaults`).
+- [x] Template-Drafting an Skillbook-Kontext koppeln: `outbound_generate_automated_draft` zieht ueber `outbound_skillbook_guidance` Mission und Leitplanke des aufgeloesten Skillbooks in die Strategie, falls kein expliziter `strategy_text` vorliegt.
+- [x] Agentengestuetzter Drafting-Pfad: `outbound.pipeline.outreach_draft` routet jetzt auf die neue System-Skill `business-os-outbound-message-drafting`; der Agent schreibt das Ergebnis ausschliesslich ueber `ctox business-os commands dispatch` (`outbound.pipeline.write_outreach_draft`) auf den Command Bus zurueck.
+
+Offen fuer 75%:
+
 - Follow-up-Timing an Scheduler/Sequenzregeln koppeln, statt manuellem Cockpit-Ausloeser.
 - Reply-Inbound-Events automatisch zu `outbound.reply.classify` und anschliessendem Reply-Draft fuehren.
 
@@ -467,8 +471,8 @@ Aufgaben:
 - [ ] Bestehende Mailserver-Domain/User-Verwaltung in Sender-Account-Modell integrieren.
 - [ ] Sender Account Health berechnen: Domain, DKIM, SPF, DMARC, SMTP, Tageslimit.
 - [ ] Account-Auswahl pro Campaign und Engagement validieren.
-- [ ] Daily Send Limits und Sendefenster erzwingen.
-- [ ] Bounce- und Fehlerstatus in Engagement zurueckfuehren.
+- [x] Daily Send Limits und Sendefenster erzwingen.
+- [x] Bounce- und Fehlerstatus in Engagement zurueckfuehren.
 - [ ] Signatur und Persona pro Sender pflegen.
 - [ ] Kalenderkonto optional an Sender binden.
 - [x] UI-Warnungen fuer Deliverability-Probleme anzeigen.
@@ -484,7 +488,7 @@ Akzeptanzkriterien:
 - [x] Jede aktive E-Mail-Campaign besitzt ein sichtbares Kampagnen-Postfach in Conversations.
 - [x] Outbound kann aus Campaign, Engagement und Message direkt in die passende Conversations-Ansicht springen.
 - [x] Backend blockiert Versand bei fehlendem/gesperrtem Account.
-- [ ] Tageslimits werden auch bei parallelen Commands eingehalten.
+- [x] Tageslimits werden auch bei parallelen Commands eingehalten.
 - [ ] Mailserver-Konfiguration bleibt global, Campaign-Regeln bleiben Campaign-spezifisch.
 
 Umsetzung:
@@ -537,7 +541,7 @@ Aufgaben:
 - [x] Reply-Klassifikation implementieren: positiv, negativ, objection, out-of-office, referral, unsubscribe, unclear.
 - [x] CTOX erstellt Antwortentwurf oder Scheduling-Entwurf.
 - [x] Follow-up Scheduler stoppt bei Antwort automatisch.
-- [ ] UI zeigt Antwort prominent in Timeline und Approval Inbox.
+- [x] UI zeigt Antwort prominent in Timeline und Approval Inbox.
 - [x] Outbound zeigt Antwort nur als Status-/CTA-Zusammenfassung und verlinkt fuer Details in Conversations.
 - [x] Manuelle Reclassification ermoeglichen.
 
@@ -546,8 +550,8 @@ Akzeptanzkriterien:
 - [x] Antwort auf gesendete Mail landet im richtigen Engagement.
 - [x] Antwort ist in Conversations im Kampagnen-Postfach sichtbar und mit Outbound verlinkt.
 - [x] Positive Antwort erzeugt Scheduling- oder Reply-Draft.
-- [ ] Unsubscribe erzeugt Suppression und stoppt Engagement.
-- [ ] Out-of-office erzeugt neue Warte-/Retry-Planung, aber keinen Versand ohne Approval.
+- [x] Unsubscribe erzeugt Suppression und stoppt Engagement.
+- [x] Out-of-office erzeugt neue Warte-/Retry-Planung, aber keinen Versand ohne Approval.
 
 Umsetzung:
 
@@ -588,7 +592,7 @@ Akzeptanzkriterien:
 
 - [x] Positive Antwort kann in Scheduling ueberfuehrt werden.
 - [x] CTOX bereitet konkrete Terminvorschlaege vor.
-- [ ] Nutzer kann Scheduling-Nachricht freigeben oder bearbeiten.
+- [x] Nutzer kann Scheduling-Nachricht freigeben oder bearbeiten.
 - [x] Gebuchter Termin schliesst Engagement sauber ab oder markiert naechsten Schritt.
 
 ## Welle 9: Automation Scheduler, Limits & Stop-Regeln
@@ -603,7 +607,7 @@ Aufgaben:
 - [x] Follow-up-Drafts automatisch vorbereiten.
 - [ ] Scheduler beachtet Werktage, Sendefenster und Campaign-Zeitzone.
 - [x] Scheduler beachtet Replies, Bounces, Opt-outs, Pausen und Closures.
-- [ ] Scheduler beachtet Account- und Campaign-Limits.
+- [x] Scheduler beachtet Account- und Campaign-Limits.
 - [ ] UI zeigt "Warum jetzt?" fuer vorbereitete Aktionen.
 - [ ] Reapply-Strategie fuer geaenderte Campaign Settings bauen.
 
@@ -611,8 +615,8 @@ Akzeptanzkriterien:
 
 - [x] Scheduler erzeugt nur Drafts, keine Sends.
 - [x] Kein Follow-up nach Antwort, Bounce, Opt-out oder Pause.
-- [ ] Drafts werden nachvollziehbar mit Sequenzversion erzeugt.
-- [ ] Nutzer kann Automation pro Engagement und Campaign pausieren.
+- [x] Drafts werden nachvollziehbar mit Sequenzversion erzeugt.
+- [x] Nutzer kann Automation pro Engagement und Campaign pausieren.
 
 ## Welle 10: End-to-End Hardening, Observability & Release Gates
 
@@ -624,14 +628,14 @@ Aufgaben:
 
 - [x] End-to-End Browser Smoke fuer Lead -> Assignment -> Draft -> Approval -> Mailserver-Queue bauen.
 - [x] End-to-End Browser Smoke fuer Reply -> Scheduling -> Meeting bauen.
-- [ ] Backend-Tests fuer alle State-Uebergaenge bauen.
-- [ ] Approval-Gate Negativtests bauen.
-- [ ] Mailserver-Fehler-, Bounce- und Retrytests bauen.
-- [ ] Reply Matching Tests bauen.
+- [x] Backend-Tests fuer alle State-Uebergaenge bauen.
+- [x] Approval-Gate Negativtests bauen.
+- [x] Mailserver-Fehler-, Bounce- und Retrytests bauen.
+- [x] Reply Matching Tests bauen.
 - [x] Scheduling Tests bauen.
 - [x] Audit-Export oder Debug-Panel bauen.
 - [ ] Observability: Command IDs, Task IDs, Message IDs und Engagement IDs verlinken.
-- [ ] Observability: Outbound-IDs und Communication-IDs sind beidseitig verlinkt und im Debug-/Statuspfad sichtbar.
+- [x] Observability: Outbound-IDs und Communication-IDs sind beidseitig verlinkt und im Debug-/Statuspfad sichtbar.
 - [x] Business-OS Datenpfad als RxDB-only verifizieren; HTTP ist nur fuer ChatGPT-Subscription-Login erlaubt.
 - [ ] Performance bei grossen Campaigns pruefen.
 - [ ] Dokumentation fuer Betrieb und Troubleshooting schreiben.
@@ -640,7 +644,7 @@ Akzeptanzkriterien:
 
 - [x] Komplettfluss funktioniert lokal im Browser-Smoke: Lead -> Assignment -> Draft -> Approval -> Send -> Reply -> Scheduling -> Meeting.
 - [x] Browser/Rust-Smoke zeigt native RxDB/WebRTC-Replikation fuer `desktop_files` und `desktop_file_chunks` ohne HTTP-RxDB-Bridge.
-- [ ] Kein automatisierter Test kann ungeprueften Versand ausloesen.
+- [x] Kein automatisierter Test kann ungeprueften Versand ausloesen.
 - [ ] Alle kritischen Fehler sind in UI und Logs diagnostizierbar.
 - [ ] Release-Gate laeuft in CI oder als dokumentierter lokaler Check.
 
@@ -740,3 +744,22 @@ Diese Aufgaben laufen parallel zu mehreren Wellen und duerfen nicht bis zum Ende
 | 2026-05-28 | RxDB-only-Vertrag wiederhergestellt | Der HTTP-RxDB-Bridge-Ansatz widersprach der Architekturregel; CTOX und Business OS duerfen Daten nur ueber RxDB/WebRTC synchronisieren, ausgenommen ChatGPT-Subscription-Login | HTTP-Pull/Push-Bridge und Frontend-Runtime-Settings-/Harness-HTTP-Lesewege entfernt; Guard erlaubt im Frontend nur noch den externen Subscription-Callback; Browser/Rust-Smoke ist gruen mit nativen DataChannels fuer `desktop_file_chunks`; Welle 10 steigt auf 90%, Gesamtfortschritt auf 70% |
 | 2026-05-28 | HTTP-Daten-APIs hart gesperrt | Auch verbliebene Core-Server-Routen duerfen nicht als alter Business-OS-Datenkanal erreichbar bleiben | `/api/business-os...` liefert serverseitig 410 ausser fuer ChatGPT-Subscription-Login; Runtime-Settings-HTTP-Route ist entfernt; ctox.dev prueft den lokalen Login-Server per TCP statt `/api/business-os/status`; lokaler Gate-Test bestaetigt 410 fuer Status und erlaubten Device-Code-Start |
 | 2026-05-28 | ChatGPT-Subscription-Start auf RxDB-Command umgestellt | Der Browser rief noch direkt `/api/business-os/ctox/subscription-auth/start` auf und erzeugte auf der remote Instanz instabile `about:blank`/Callback-Flows | Settings dispatcht `ctox.subscription_auth.start` ueber `business_commands` mit `device_code`; der native Consumer liefert `auth.openai.com/codex/device` und pollt serverseitig; RxDB-Command-Autorisierung liest Rollen aus `business_users` statt aus Client-Claims; Guard und Rust-Test decken Regressionen ab; Gesamtfortschritt auf 71% |
+| 2026-05-29 | Legacy-Outreach-Gateway entfernt und auf Command Bus migriert | `generateOutreachForContact` rief noch den externen `leadgenservice.ngrok.io`-Dienst mit einem hartkodierten Bearer-Token im Quelltext auf — ein Datenvertrags- und Secret-Verstoss | Hartkodiertes `DEFAULT_API_URL`/`DEFAULT_TOKEN_ID`, der `fetch`-/Poll-Pfad, die Gateway-URL/Token-Settings und der tote `normalizeDraftResult`-Parser sind aus `outbound/index.js` entfernt; Outreach-Generierung dispatcht jetzt den agentengestuetzten Command `outbound.pipeline.outreach_draft` und der Spinner laeuft ueber das persistierte `contact.outreach_generating`-Flag, das der Agent ueber `outbound.pipeline.write_outreach_draft` zuruecksetzt; Backend-Writeback und Skill-Routing waren bereits verdrahtet; Welle 5 bleibt bei 25%, da echte Drafting-Skills noch folgen |
+| 2026-05-29 | Welle 5 auf 50%: echte Skillbooks und Skill-gestuetztes Drafting | Die drei Default-Skillbooks waren skelettartig (leeres `workflow_backbone`/`routing_taxonomy`) und `outbound.pipeline.outreach_draft` routete auf die Scraping-Skill `universal-scraping` statt auf eine Drafting-Skill | `outbound_handle_skillbook_seed_defaults` seedet `message_drafting.v1`, `reply_handling.v1` und `scheduling.v1` jetzt mit echtem Mission-/Backbone-/Routing-/Stop-Inhalt; neue System-Skill `business-os-outbound-message-drafting` (Cluster communication) instruiert den Agenten, Drafts zu erstellen und nur ueber `outbound.pipeline.write_outreach_draft` zurueckzuschreiben; `suggested_skill_for_command` routet `outbound.pipeline.outreach_draft` auf die neue Skill; neuer CLI-Pfad `ctox business-os commands dispatch` gibt dem Agenten den Command-Bus-Writeback ohne HTTP; `outbound_generate_automated_draft` zieht via `outbound_skillbook_guidance` die Skillbook-Mission in den deterministischen Fallback; `outbound_skillbook_seed_defaults_carry_real_backbone_and_guidance`, `write_outreach_draft`- und `draft_prepare`-Tests sowie `cargo build` sind gruen; Gesamtfortschritt auf 71% |
+| 2026-05-29 | Welle 3 auf 80%: Blocked-States und vollstaendige Timeline | Die Versand-Queue zeigte blockierte Sends nicht an und die Engagement-Timeline kannte weder `send_blocked` noch Antwort-/Stop-Gruende vollstaendig; die neuen Backend-Felder (`send_block_reason`, `retryable`, `last_send_error`) waren in der UI unsichtbar | `renderReadyToSendItem` markiert blockierte Nachrichten mit Grund-Badge (`prettyBlockReason`) und Retry-Button; `renderEngagementTimeline` ergaenzt `send_blocked`-Eintraege; neue DE/EN-Locale-Keys (`retrySend`, `sendBlocked`, `block*`); CSS fuer Blocked-Item/Badge und Timeline-Kinds `blocked`/`reply`; `node --check` (ESM) und `outbound.test.mjs` sind gruen; Welle 3 steigt auf 80%, Gesamtfortschritt auf 73% |
+| 2026-05-29 | Welle 6 auf 90%: atomare Tageslimits und Fehlerfeedback in Engagement | Tageslimits wurden vor dem Queueing nur read-only geprueft und danach nicht-atomar hochgezaehlt; bei parallelen `send_approved`-Commands (jeweils eigene Connection) konnten zwei Sends gleichzeitig passieren (TOCTOU), und Sendefehler erreichten das Engagement nicht | `outbound_increment_account_send_count` ist durch `outbound_reserve_account_send_slot` ersetzt, das Pruefung+Inkrement in einer `BEGIN IMMEDIATE`-Transaktion serialisiert und vor dem Provider-Queueing eine Slot-Reservierung vornimmt; ein Queue-Fehler gibt den Slot ueber `outbound_release_account_send_slot` wieder frei; `outbound_record_send_failure` schreibt den Block-Grund (`last_send_block_reason`, `last_send_error`, Status `send_blocked`) zusaetzlich auf das Engagement; neue Tests `outbound_daily_limit_enforced_under_parallel_commands` (6 echte Threads, Cap 3, kein Overshoot) und `outbound_send_failure_reflects_block_onto_engagement` sind gruen, `cargo check` ist sauber; Welle 6 steigt auf 90%, Gesamtfortschritt auf 72% |
+| 2026-05-29 | Welle 9 auf 80%: Scheduler respektiert Campaign-Pause | Der Scheduler pruefte nur den Engagement-Status (`paused` etc.), nicht den Campaign-Status — eine pausierte oder geschlossene Campaign haette ueber ihre Engagements weiterhin automatische Follow-ups erzeugt; die Akzeptanz "Nutzer kann Automation pro Engagement und Campaign pausieren" war damit fuer die Campaign-Ebene offen | `outbound_handle_scheduler_tick` baut pro Tick einmalig eine `campaign_status`-Map (`outbound_campaigns`) und ueberspringt faellige Engagements, deren Campaign `paused`/`closed`/`setup_required` ist, mit der Skip-Aktion `followup_skipped_campaign_paused` (kein Draft); Engagement-Pause war bereits ueber `outbound.message.pause` (setzt auch das Engagement auf `paused`, vom Scheduler beachtet) abgedeckt; neuer Test `outbound_scheduler_tick_skips_paused_campaign` gruen, volle Suite 73 Tests gruen, rustfmt sauber; Welle 9 steigt auf 80%, Gesamtfortschritt auf 77% |
+| 2026-05-29 | Welle 9 auf 70%: Scheduler-Drafts tragen die Sequenzversion | Vom Scheduler erzeugte Follow-up-Drafts waren nicht auf die zugrunde liegende Sequenzrevision zurueckfuehrbar — die Akzeptanz "Drafts werden nachvollziehbar mit Sequenzversion erzeugt" war offen | Neuer Helfer `outbound_engagement_sequence_context` liest `sequence_id` und die Version (Snapshot-`updated_at_ms`, sonst `version`, sonst 0) aus dem Engagement, das `outbound.engagement.reapply_sequence` projiziert; `outbound_prepare_due_followup_draft` stempelt `sequence_id`/`sequence_version` in die Message-Payload; neuer Test `outbound_scheduler_draft_carries_sequence_version` (Snapshot v=424242 -> Draft traegt id+version) gruen, volle Suite 72 Tests gruen, rustfmt sauber; Welle 9 steigt auf 70%, Gesamtfortschritt bleibt 76% |
+| 2026-05-29 | Welle 9 auf 60%: Scheduler respektiert Sender-Account-Limits | `outbound_prepare_due_followup_draft` pruefte nur Suppression, nicht aber die Health/Tageskappe des Sender-Accounts — bei erschoepftem Limit haette der Scheduler unsendbare Drafts aufgehaeuft, die sofort am Send-Gate abgeprallt waeren | Vor der Draft-Generierung ruft der Scheduler (nur E-Mail-Kanal, gesetzter Sender) den read-only Gate `outbound_enforce_account_limit`; bei `blocked`/erschoepftem Limit wird der Follow-up zurueckgestellt (Skip-Aktion `followup_skipped_account_limit`, Engagement-Felder `scheduler_last_skip_reason=account_limit`/`scheduler_last_skip_detail`), `next_action_at_ms` bleibt faellig fuer einen spaeteren Retry nach Tagesreset; neuer Test `outbound_scheduler_tick_skips_when_account_limit_exhausted` (Cap 2/2, kein Draft, Skip-Grund persistiert, weiterhin faellig) gruen, volle Suite 71 Tests gruen, rustfmt sauber; Welle 9 steigt auf 60%, Gesamtfortschritt auf 76% |
+| 2026-05-29 | Welle 7 auf 95%: Antwort und terminaler Stop in der Timeline sichtbar | Die Reply-Klassifikation und die Reply-Inbox existierten bereits, aber der durch ein Unsubscribe ausgeloeste Hard-Stop des Engagements (`status=stopped`, `stop_reason`) war in der Timeline unsichtbar | `renderEngagementTimeline` ergaenzt einen terminalen `stopped`-Eintrag mit Grund (`prettyStopReason` fuer `unsubscribe`/`bounce`/`complaint`); neue CSS-Klasse `outbound-outreach-timeline-stopped` (rot) und DE/EN-Locale-Keys (`engagementStopped`, `stopBounce`, `stopComplaint`); `node --check` (ESM) und JSON-Validierung gruen; Akzeptanz "UI zeigt Antwort prominent in Timeline und Approval Inbox" erfuellt; Welle 7 steigt auf 95%, Gesamtfortschritt auf 75% |
+| 2026-05-29 | Welle 7 auf 85%: Unsubscribe-Antwort erzeugt Suppression und stoppt Engagement | `outbound.reply.classify` und `outbound.reply.match` setzten nur den Engagement-Status, eine als `unsubscribe`/`bounce`/`complaint` klassifizierte Antwort blockierte aber keine kuenftigen Sends — die Akzeptanz "Unsubscribe erzeugt Suppression und stoppt Engagement" war offen | Neue Helfer `outbound_reply_suppression_reason` (Klassifikation -> kanonischer Grund) und `outbound_apply_reply_suppression` legen bei Hard-Stop-Antworten idempotent einen aktiven `outbound_suppression_entries`-Eintrag fuer den Empfaenger an (greift in den bestehenden `outbound_recipient_suppression_reason`-Sendegate) und hard-stoppen das Engagement (`status=stopped`, `stop_reason`); beide Reply-Handler rufen den Helfer und geben die `suppression_id` zurueck; neuer Test `outbound_unsubscribe_reply_creates_suppression_and_blocks_send` (Unsubscribe -> Suppression -> Engagement gestoppt -> Folgesend ueber den Approval-Gate blockiert -> zweites Unsubscribe idempotent) gruen; der parallele Tageslimit-Test wurde gegen transiente SQLite-Lock-Contention robust gemacht, ohne die No-Overshoot-Garantie aufzuweichen; volle Outbound-Suite (70 Tests) 6x gruen, rustfmt sauber; Welle 7 steigt auf 85%, Gesamtfortschritt auf 74% |
+| 2026-05-29 | Welle 10 auf 92%: Approval-Gate Negativtests fuer Reject und Change-Request | Die bestehenden Approval-Gate-Negativtests deckten nur "noch nie freigegeben" und "Revision nach Freigabe geaendert" ab; ein abgelehnter (`reject`) oder zu Aenderungen zurueckgegebener (`request_changes`) Draft, der dann doch versendet wird, war nicht negativ getestet — die Akzeptanz "Kein automatisierter Test kann ungeprueften Versand ausloesen" war damit unvollstaendig belegt | Neuer Test `outbound_send_approved_blocked_after_rejection_or_change_request` faehrt zwei Drafts ueber prepare -> request_approval -> reject bzw. request_changes und verlangt, dass `outbound.message.send_approved` in beiden Faellen mit "must be approved" abprallt (der Send-Gate prueft `approval_status == "approved"`, das nach reject/request_changes auf `rejected`/`changes_requested` steht); Test gruen, rustfmt sauber; Welle 10 steigt auf 92%, Gesamtfortschritt bleibt 77% |
+| 2026-05-29 | Welle 10 auf 94%: Reply-Matching-Test fuer den Erhalt bereits versendeter Nachrichten | Der bestehende Reply-Matching-Test deckte nur das Stornieren eines noch nicht versendeten Follow-up-Drafts ab; die wichtige Invariante "ein eingehender Reply storniert nur ungesendete Folgemails, niemals bereits versendete/gequeuete Nachrichten im Thread" (der Handler ueberspringt `sent`/`delivered`/`queued_for_provider`) war nicht getestet | Neuer Test `outbound_reply_match_preserves_already_sent_messages` legt ein Engagement mit zwei Nachrichten an (eine auf `queued_for_provider` gesetzte Initialmail, ein Follow-up-Draft), feuert `outbound.reply.match` (positive) und verlangt, dass nur der Draft storniert (`cancelled`) wird, waehrend die gequeuete Nachricht unveraendert `queued_for_provider` bleibt; Test gruen, rustfmt sauber; Welle 10 steigt auf 94%, Gesamtfortschritt bleibt 77% |
+| 2026-05-29 | Welle 10 auf 96%: Mailserver-Retry-Idempotenz getestet | Der `send_approved`-Handler erkennt bereits gequeuete Nachrichten (`queued_for_provider`+`provider_queue_id`+`provider_send_executed`) und antwortet als No-op-Replay, aber diese Retry-Safety-Invariante war ungetestet — ein erneuter Versand desselben Auftrags haette sonst eine zweite Mailserver-Zeile und einen Doppel-Zaehlerstand verursachen koennen | Neuer Test `outbound_send_approved_is_idempotent_for_already_queued_message` versendet eine freigegebene Nachricht (Account-Limit 5) und feuert dann denselben Versand mit zweitem `command_id` (umgeht die Command-Bus-Dedup); verlangt `idempotent=true`, identische `provider_queue_id`, genau eine `stalwart_smtp_queue`-Zeile und `daily_sent_count` unveraendert auf 1; volle Outbound-Suite 76 Tests gruen, rustfmt sauber; Welle 10 steigt auf 96%, Gesamtfortschritt bleibt 77% |
+| 2026-05-29 | Welle 10 auf 97%: Vorwaerts-State-Machine des Engagements getestet | Pause/Resume/Close und die terminalen Zustaende (reply_received, stopped) waren getestet, aber der Vorwaertspfad des Engagement-Status entlang der Approval-/Send-Kette war nicht in einem Test dokumentiert | Neuer Test `outbound_engagement_status_advances_through_approval_and_send` fuehrt ein Engagement durch create -> prepare -> request_approval -> approve -> send_approved und verlangt nach jedem Schritt den korrekten Engagement-Status (`draft_prepared` -> `awaiting_approval` -> `approved_for_send` -> `scheduled_to_send`, da E-Mail ueber die Mailserver-Queue laeuft und nicht wie der physische Brief sofort auf `sent` springt); volle Outbound-Suite 77 Tests gruen, rustfmt sauber; Welle 10 steigt auf 97%, Gesamtfortschritt bleibt 77% |
+| 2026-05-29 | Welle 8 auf 60%: Scheduling-Nachricht bearbeitbar und freigebbar belegt | Der bestehende Scheduling-Test bewies nur, dass ein Scheduling-Draft approval-gated erzeugt wird; die Akzeptanz "Nutzer kann Scheduling-Nachricht freigeben oder bearbeiten" (Bearbeiten + Freigeben) war nicht durchgespielt | Neuer Test `outbound_scheduling_message_can_be_edited_and_approved` erzeugt einen Scheduling-Draft (`outbound.draft.prepare`, `draft_kind=scheduling`), editiert Betreff/Text via `outbound.message.update_draft` (setzt `approval_status` zurueck auf `draft`, persistiert die Aenderung), fordert Freigabe an und genehmigt; verlangt `approval_status=approved`, dass die Edits die Freigabe ueberleben und dass die Approval an die editierte Revision bindet (`outbound_has_matching_approval`); volle Outbound-Suite 78 Tests gruen, rustfmt sauber; Welle 8 steigt auf 60%, Gesamtfortschritt bleibt 77% |
+| 2026-05-29 | Welle 2 abgeschlossen (100%): Bounce/Opt-out/Sender-Health, Fehlerfelder und Idempotenz verifiziert | Die letzten drei offenen Welle-2-Punkte (Versandregel prueft Bounce/Opt-out/Sender-Account-Health, blockierende Gruende in replizierbaren Result-Feldern, Idempotenz) waren funktional implementiert, aber nicht alle als abgeschlossen markiert bzw. getestet | Neuer Test `outbound_send_gate_blocks_bounce_and_unhealthy_sender` belegt, dass eine als `bounce` gefuehrte Suppression den Send blockiert und ein nicht-provider-faehiger (`status=suspended`) Sender-Account auch fuer einen sauberen Empfaenger abgelehnt wird (`not eligible`); Fehlerfelder (`send_block_reason`/`last_send_error`/`retryable`, Engagement `last_send_block_reason`) waren bereits ueber `outbound_send_failure_reflects_block_onto_engagement` und die Idempotenz ueber `outbound_send_approved_is_idempotent_for_already_queued_message` plus Command-Bus-Dedup abgedeckt; alle Welle-2-Aufgaben und Akzeptanzkriterien sind erfuellt; volle Outbound-Suite 79 Tests gruen, rustfmt sauber; Welle 2 steigt auf 100% (abgeschlossen), Gesamtfortschritt auf 81% |
+| 2026-05-29 | Welle 1 auf 90%: Tombstone-/Konfliktstrategie fuer Approvals und Leerzustand belegt | Die Tombstone-/Konfliktstrategie war nur fuer Messages getestet und der Leerzustand der Collections war nicht explizit als erfuellt markiert | Neuer Test `outbound_tombstone_and_conflict_strategy_for_approvals` belegt fuer `outbound_approvals` Last-Write-Wins bei konkurrierenden Upserts (spaeterer Schreiber gewinnt), dass ein getombstonter Approval nicht mehr ladbar ist (kann keinen Send re-gaten) und dass ein Re-Upsert den Tombstone mit neuer Revision wiederbelebt (Tombstone-vs-Write-Konflikt zugunsten des Live-Writes); der Leerzustand ist ueber `outbound_empty_collections_load_without_errors` (alle Outbound-Collections laden leer ohne Fehler) abgedeckt; offen bleibt nur die explizite Status-Uebergangs-Validierung (Transition-Matrix), die gegen die vollstaendigen legitimen Flows entworfen werden muss, um Regressionen zu vermeiden; volle Outbound-Suite 80 Tests gruen, rustfmt sauber; Welle 1 steigt auf 90%, Gesamtfortschritt auf 83% |
+| 2026-05-29 | Welle 10 auf 98%: beidseitige Outbound-/Communication-ID-Verlinkung getestet | Der Sync-Pfad `outbound_sync_email_message_to_communication` schreibt die Outbound-IDs in die Communication-Message-Metadaten und die Communication-Keys zurueck auf die Outbound-Nachricht, aber diese beidseitige Verlinkung (Grundlage von Observability 637/638) war nicht in einem Test verankert | Neuer Test `outbound_send_links_message_to_communication_thread_bidirectionally` versendet eine freigegebene E-Mail (create -> prepare -> request_approval -> approve -> send_approved) und verlangt, dass (a) die Outbound-Nachricht nach dem Send nicht-leere `communication_message_key`/`thread_key` traegt und (b) der `communication_messages`-Datensatz in der core_db die `outbound_engagement_id`/`outbound_message_id`-Rueckverweise und denselben `communication_thread_key` fuehrt — der Link ist von beiden Seiten aufloesbar; volle Outbound-Suite 81 Tests gruen, rustfmt sauber; Welle 10 steigt auf 98%, Gesamtfortschritt bleibt 83% |
+| 2026-05-29 | Welle 7 abgeschlossen (100%): Out-of-office plant Warte-/Retry statt Hard-Stop, Versand bleibt approval-gated | Eine als `out_of_office` klassifizierte Antwort lief in denselben Pfad wie ein Hard-Reply: Status `reply_received`, vom Scheduler dauerhaft uebersprungen — die Sequenz waere also nie wieder aufgenommen worden, was der Akzeptanz "Out-of-office erzeugt neue Warte-/Retry-Planung, aber keinen Versand ohne Approval" widersprach | Neuer Helfer `outbound_apply_out_of_office_wait` setzt bei OOO-Klassifikation einen Wartepunkt `next_action_at_ms` (aus `ooo_until`, sonst Default-Hold 3 Tage) und merkt `reply_wait_reason=out_of_office`; der Scheduler behandelt `reply_received`+`reply_classification=out_of_office` als dokumentierte Ausnahme (Skillbook `reply_handling`: "Follow-up nach OOO-Datum neu planen") und nimmt das Engagement nach Faelligkeit wieder auf, wobei der erzeugte Follow-up wie jeder Draft `approval_status=awaiting_approval`/`send_status=awaiting_approval` traegt (kein Versand ohne Freigabe); neuer Test `outbound_out_of_office_reply_schedules_gated_retry_without_send` belegt Wait-Plan -> faelliger Tick -> genau ein approval-gated Resume-Draft, kein Send; volle Outbound-Suite 83 Tests gruen, rustfmt sauber; Welle 7 steigt auf 100% (abgeschlossen), Gesamtfortschritt bleibt 84% |
+| 2026-05-29 | Welle 4 auf 90%: aktive Engagements bleiben bis zum expliziten Reapply auf ihrer Sequenzversion gepinnt | Die Draft-Generierung las bereits den auf dem Engagement eingefrorenen `sequence_snapshot` (ueber `outbound_engagement_sequence_context`), aber die Akzeptanz "bestehende aktive Engagements behalten nachvollziehbar ihre Strategie-Version oder erhalten einen expliziten Reapply-Flow" war nicht durch einen Test belegt — eine Live-Aenderung der Campaign-Sequenz haette theoretisch laufende Engagements still umversionieren koennen | Neuer Test `outbound_active_engagement_keeps_sequence_version_until_explicit_reapply` pinnt ein Engagement ueber `outbound.engagement.reapply_sequence` auf Sequenz-Revision v1 (`updated_at_ms=100`), schreibt dann die geteilte `outbound_sequences`-Zeile auf v2 (`updated_at_ms=200`) und verlangt, dass die Engagement-Version unveraendert 100 bleibt (kein stilles Re-Versioning), bis ein zweiter expliziter Reapply sie auf 200 rollt und `sequence_reapplied_at_ms` nachvollziehbar stempelt; volle Outbound-Suite 82 Tests gruen, rustfmt sauber; Welle 4 steigt auf 90%, Gesamtfortschritt auf 84% |

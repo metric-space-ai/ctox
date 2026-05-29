@@ -2945,6 +2945,15 @@
   border-radius: 6px;
   background: color-mix(in srgb, var(--outbound-line) 15%, transparent);
 }
+.outbound-outreach-ready-blocked {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+}
+.outbound-outreach-badge-blocked {
+  margin-top: 4px;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fcd34d;
+}
 .outbound-outreach-replies {
   list-style: none;
   padding: 0;
@@ -2989,7 +2998,10 @@
 .outbound-outreach-timeline-queued { border-left-color: #8b5cf6; }
 .outbound-outreach-timeline-sent { border-left-color: #10b981; }
 .outbound-outreach-timeline-cancelled { border-left-color: #ef4444; }
+.outbound-outreach-timeline-blocked { border-left-color: #f59e0b; }
+.outbound-outreach-timeline-reply { border-left-color: #a855f7; }
 .outbound-outreach-timeline-approval { border-left-color: #6366f1; }
+.outbound-outreach-timeline-stopped { border-left-color: #dc2626; }
 .outbound-outreach-modal {
   position: fixed;
   inset: 0;

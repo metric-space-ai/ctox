@@ -3845,7 +3845,11 @@ fn compute_module_bundle(app_root: &Path, module_id: &str) -> anyhow::Result<Mod
     for file in &files {
         digest_input.push_str(file.get("path").and_then(Value::as_str).unwrap_or_default());
         digest_input.push('\0');
-        digest_input.push_str(file.get("sha256").and_then(Value::as_str).unwrap_or_default());
+        digest_input.push_str(
+            file.get("sha256")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+        );
         digest_input.push('\n');
     }
     let sha256 = hex_sha256(digest_input.as_bytes());
@@ -3853,7 +3857,19 @@ fn compute_module_bundle(app_root: &Path, module_id: &str) -> anyhow::Result<Mod
 }
 
 fn version_summary_row(conn: &Connection, version_id: &str) -> anyhow::Result<Value> {
-    let (vid, module_id, seq, origin, label, sha, sealed, created_by, created_at, updated_at, files_json): (
+    let (
+        vid,
+        module_id,
+        seq,
+        origin,
+        label,
+        sha,
+        sealed,
+        created_by,
+        created_at,
+        updated_at,
+        files_json,
+    ): (
         String,
         String,
         i64,
@@ -4143,7 +4159,10 @@ pub fn rollback_module_to_version(
     let mut restored = 0usize;
     for file in &target_files {
         let path = file.get("path").and_then(Value::as_str).unwrap_or_default();
-        let content = file.get("content").and_then(Value::as_str).unwrap_or_default();
+        let content = file
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if path.is_empty() {
             continue;
         }
@@ -4181,8 +4200,7 @@ pub fn rollback_module_to_version(
             let _ = write_module_source_snapshot(root, &module_id, &rel, &content, Some(&prev_sha));
         }
         if abs.is_file() {
-            fs::remove_file(&abs)
-                .with_context(|| format!("failed to remove {}", abs.display()))?;
+            fs::remove_file(&abs).with_context(|| format!("failed to remove {}", abs.display()))?;
             removed += 1;
         }
     }
@@ -6150,9 +6168,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             );
         }
         "ctox.module.list_versions" => {
-            let request: ModuleVersionListRequest =
-                serde_json::from_value(command.payload.clone())
-                    .context("invalid ctox.module.list_versions payload")?;
+            let request: ModuleVersionListRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.module.list_versions payload")?;
             let outcome = list_module_versions(root, request)?;
             return write_rxdb_control_command_outcome(
                 root,
@@ -6488,6 +6505,7 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.dev.seed_test_data"
             | "outbound.engagement.reapply_sequence"
             | "outbound.scheduling.update_slots"
+            | "outbound.pipeline.write_outreach_draft"
     )
 }
 
@@ -6504,6 +6522,91 @@ fn handle_outbound_active_command(
     let now = now_ms() as i64;
     let conn = open_store(root)?;
     match command.command_type.as_str() {
+        // Writeback target for the LLM-generated outreach draft. The CTOX agent
+        // (running the `outbound.pipeline.outreach_draft` mission-queue task)
+        // calls this command to persist the generated subject/body/follow-ups
+        // back into the pipeline item's contact. The whole loop stays on the
+        // RxDB command bus — there is no external email gateway.
+        "outbound.pipeline.write_outreach_draft" => {
+            let pipeline_id = outbound_required_from_payload_or_record(
+                command,
+                &["pipeline_id", "id"],
+                "pipeline_id is required",
+            )?;
+            let contact_index = command
+                .payload
+                .get("contact_index")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            anyhow::ensure!(contact_index >= 0, "contact_index must be >= 0");
+            let messages = command
+                .payload
+                .get("messages")
+                .filter(|value| value.is_object())
+                .cloned()
+                .context("messages object is required")?;
+            let mut item = outbound_load_required(
+                &conn,
+                "outbound_pipeline_items",
+                &pipeline_id,
+                "pipeline item not found",
+            )?;
+            let idx = contact_index as usize;
+            {
+                let contacts = item
+                    .get_mut("contacts")
+                    .and_then(Value::as_array_mut)
+                    .context("pipeline item has no contacts array")?;
+                anyhow::ensure!(idx < contacts.len(), "contact_index out of range");
+                let contact = &mut contacts[idx];
+                if !contact.is_object() {
+                    *contact = serde_json::json!({});
+                }
+                let contact_obj = contact
+                    .as_object_mut()
+                    .context("pipeline contact is not an object")?;
+                let target = contact_obj
+                    .entry("messages")
+                    .or_insert_with(|| serde_json::json!({}));
+                if !target.is_object() {
+                    *target = serde_json::json!({});
+                }
+                let target_obj = target
+                    .as_object_mut()
+                    .context("contact messages is not an object")?;
+                for key in [
+                    "message_mail_subject",
+                    "message_mail_body",
+                    "message_followup_1",
+                    "message_followup_2",
+                ] {
+                    if let Some(value) = messages.get(key).and_then(Value::as_str) {
+                        target_obj.insert(key.to_string(), Value::String(value.to_string()));
+                    }
+                }
+                // Clear the generating flag so the UI spinner resolves via sync.
+                contact_obj.insert("outreach_generating".to_string(), Value::Bool(false));
+                contact_obj.insert(
+                    "outreach_status".to_string(),
+                    Value::String("drafted".to_string()),
+                );
+            }
+            outbound_put_i64(&mut item, "updated_at_ms", now);
+            upsert_business_record(
+                &conn,
+                "outbound_pipeline_items",
+                &pipeline_id,
+                now,
+                item.clone(),
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "collection": "outbound_pipeline_items",
+                "pipeline_id": pipeline_id,
+                "contact_index": contact_index,
+                "messages": messages
+            }))
+        }
         "outbound.engagement.create" => {
             let engagement_id = outbound_id_from_command(command, &["engagement_id", "id"], "eng")?;
             let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
@@ -6684,11 +6787,19 @@ fn handle_outbound_active_command(
                 &engagement_id,
             )?;
             let latest_message = outbound_latest_message(&previous_messages);
+            let resolved_skillbook_id = outbound_first_string(&[
+                outbound_string(&command.payload, &["skillbook_id"]),
+                outbound_string(&command.payload, &["payload", "skillbook_id"]),
+                outbound_string(&engagement, &["payload", "skillbook_id"]),
+            ])
+            .unwrap_or_else(|| "business-os.outbound.message_drafting.v1".to_string());
+            let skillbook_guidance = outbound_skillbook_guidance(&conn, &resolved_skillbook_id)?;
             let generated = outbound_generate_automated_draft(
                 &engagement,
                 latest_message.as_ref(),
                 &command.payload,
                 &draft_kind,
+                skillbook_guidance.as_deref(),
             );
             let subject = outbound_first_string(&[
                 outbound_string(&command.payload, &["subject"]),
@@ -6731,14 +6842,7 @@ fn handle_outbound_active_command(
             outbound_payload_insert(
                 &mut message,
                 "skillbook_id",
-                Value::String(
-                    outbound_first_string(&[
-                        outbound_string(&command.payload, &["skillbook_id"]),
-                        outbound_string(&command.payload, &["payload", "skillbook_id"]),
-                        outbound_string(&engagement, &["payload", "skillbook_id"]),
-                    ])
-                    .unwrap_or_else(|| "business-os.outbound.message_drafting.v1".to_string()),
-                ),
+                Value::String(resolved_skillbook_id.clone()),
             );
             outbound_payload_insert(
                 &mut message,
@@ -7032,7 +7136,11 @@ fn handle_outbound_active_command(
                 &message_id,
                 "message not found",
             )?;
-            outbound_enforce_send_gate(&conn, &message)?;
+            if let Err(err) = outbound_enforce_send_gate(&conn, &message) {
+                let reason = err.to_string();
+                outbound_record_send_failure(&conn, &message_id, &mut message, &reason, now)?;
+                return Err(err);
+            }
             let channel =
                 outbound_string(&message, &["channel"]).unwrap_or_else(|| "email".to_string());
 
@@ -7115,8 +7223,30 @@ fn handle_outbound_active_command(
                     "idempotent": true
                 }));
             }
-            let provider_queue_id = outbound_queue_email_delivery(root, &message)
-                .context("failed to queue approved outbound email")?;
+            // Atomically reserve a daily send slot BEFORE handing the message to
+            // the provider. The reservation enforces the per-account daily cap
+            // under parallel commands (the check+increment is serialized by a
+            // BEGIN IMMEDIATE transaction), so two concurrent sends cannot both
+            // pass when only one slot remains.
+            let sender_account_id = outbound_required_string(&message, &["sender_account_id"])?;
+            if let Err(err) = outbound_reserve_account_send_slot(&conn, &sender_account_id, now) {
+                let reason = err.to_string();
+                outbound_record_send_failure(&conn, &message_id, &mut message, &reason, now)?;
+                return Err(err);
+            }
+            let provider_queue_id = match outbound_queue_email_delivery(root, &message)
+                .context("failed to queue approved outbound email")
+            {
+                Ok(id) => id,
+                Err(err) => {
+                    // The send never reached the provider; release the reserved
+                    // slot so the daily counter stays accurate for retries.
+                    let _ = outbound_release_account_send_slot(&conn, &sender_account_id, now);
+                    let reason = err.to_string();
+                    outbound_record_send_failure(&conn, &message_id, &mut message, &reason, now)?;
+                    return Err(err);
+                }
+            };
             outbound_put_string(
                 &mut message,
                 "provider_message_id",
@@ -7144,13 +7274,16 @@ fn handle_outbound_active_command(
                 Value::Number(serde_json::Number::from(now)),
             );
             outbound_put_string(&mut message, "send_status", "queued_for_provider");
+            // A successful (re)send clears any prior failure markers so the
+            // message no longer looks blocked after a retry.
+            outbound_payload_insert(&mut message, "send_block_reason", Value::Null);
+            outbound_payload_insert(&mut message, "last_send_error", Value::Null);
+            outbound_payload_insert(&mut message, "retryable", Value::Bool(false));
             outbound_sync_email_message_to_communication(
                 root,
                 &mut message,
                 "queued_for_provider",
             )?;
-            let sender_account_id = outbound_required_string(&message, &["sender_account_id"])?;
-            outbound_increment_account_send_count(&conn, &sender_account_id, now)?;
             outbound_put_i64(&mut message, "updated_at_ms", now);
             upsert_business_record(
                 &conn,
@@ -7385,9 +7518,12 @@ fn handle_outbound_active_command(
             outbound_payload_insert(
                 &mut engagement,
                 "reply_classification",
-                Value::String(classification),
+                Value::String(classification.clone()),
             );
             outbound_merge_fields(&mut engagement, &command.payload, &["reply_message_id"]);
+            if classification == "out_of_office" {
+                outbound_apply_out_of_office_wait(&mut engagement, &command.payload, now);
+            }
             outbound_put_i64(&mut engagement, "updated_at_ms", now);
             upsert_business_record(
                 &conn,
@@ -7396,7 +7532,18 @@ fn handle_outbound_active_command(
                 now,
                 engagement.clone(),
             )?;
-            Ok(serde_json::json!({ "ok": true, "engagement": engagement }))
+            let suppression_id = outbound_apply_reply_suppression(
+                &conn,
+                &engagement,
+                &engagement_id,
+                &classification,
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "ok": true,
+                "engagement": engagement,
+                "suppression_id": suppression_id,
+            }))
         }
         "outbound.scheduling.prepare" => {
             let request_id =
@@ -7791,52 +7938,189 @@ fn outbound_handle_skillbook_save(
 /// reply_handling, scheduling) if they do not yet exist. Idempotent: returns
 /// the list of newly seeded ids, empty if everything is already present.
 fn outbound_handle_skillbook_seed_defaults(conn: &Connection, now: i64) -> anyhow::Result<Value> {
-    let defaults: [(&str, &str, &str); 3] = [
-        (
-            "business-os.outbound.message_drafting.v1",
-            "Initial- und Follow-up-Drafts vorbereiten",
-            "Initial- und Follow-up-Drafts vorbereiten, ohne ohne Freigabe zu senden.",
-        ),
-        (
-            "business-os.outbound.reply_handling.v1",
-            "Antworten klassifizieren und Reply-Drafts vorbereiten",
-            "Antworten klassifizieren, Reply-Drafts vorbereiten, Sequenz auf Antwort reagieren lassen.",
-        ),
-        (
-            "business-os.outbound.scheduling.v1",
-            "Terminfindung vorbereiten",
-            "Termine vorschlagen, Slots auf Kalenderkonflikte pruefen, Meeting nach Freigabe buchen.",
-        ),
+    let defaults: [Value; 3] = [
+        outbound_default_message_drafting_skillbook(),
+        outbound_default_reply_handling_skillbook(),
+        outbound_default_scheduling_skillbook(),
     ];
     let mut seeded = Vec::new();
-    for (id, title, mission) in defaults {
-        if outbound_load_record(conn, "outbound_skillbooks", id)?.is_some() {
+    for mut record in defaults {
+        let id = record
+            .get("skillbook_id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .context("default skillbook is missing skillbook_id")?;
+        if outbound_load_record(conn, "outbound_skillbooks", &id)?.is_some() {
             continue;
         }
-        let record = serde_json::json!({
-            "id": id,
-            "skillbook_id": id,
-            "title": title,
-            "mission": mission,
-            "non_negotiable_rules": [
-                "Keine Nachricht ohne explizite Freigabe versenden",
-                "Suppression-, Bounce- und Opt-out-Listen jederzeit respektieren",
-            ],
-            "workflow_backbone": [],
-            "routing_taxonomy": [],
-            "stop_rules": [
-                "stop on reply",
-                "stop on bounce",
-                "stop on opt-out",
-            ],
-            "created_at_ms": now,
-            "updated_at_ms": now,
-            "version_number": 1,
-        });
-        upsert_business_record(conn, "outbound_skillbooks", id, now, record)?;
-        seeded.push(id.to_string());
+        outbound_put_i64(&mut record, "created_at_ms", now);
+        outbound_put_i64(&mut record, "updated_at_ms", now);
+        upsert_business_record(conn, "outbound_skillbooks", &id, now, record)?;
+        seeded.push(id);
     }
     Ok(serde_json::json!({ "ok": true, "seeded": seeded }))
+}
+
+/// Canonical message-drafting skillbook. Drives both the agent-backed
+/// `outbound.pipeline.outreach_draft` loop (via the
+/// `business-os-outbound-message-drafting` skill) and the deterministic
+/// `outbound.draft.prepare` fallback. The whole loop stays on the RxDB command
+/// bus and never sends without an explicit approval.
+fn outbound_default_message_drafting_skillbook() -> Value {
+    serde_json::json!({
+        "id": "business-os.outbound.message_drafting.v1",
+        "skillbook_id": "business-os.outbound.message_drafting.v1",
+        "title": "Initial- und Follow-up-Drafts vorbereiten",
+        "mission": "Personalisierte Erst- und Follow-up-Anschreiben fuer eine Outbound-Campaign entwerfen, die an die ICP-Beschreibung, das konkrete Unternehmen und die Zielperson anknuepfen und ausschliesslich als freigabepflichtige Drafts entstehen.",
+        "non_negotiable_rules": [
+            "Keine Nachricht ohne explizite Freigabe versenden",
+            "Keinen externen Dienst und keine HTTP-Schnittstelle aufrufen; ausschliesslich ueber den CTOX-Command-Bus arbeiten",
+            "Suppression-, Bounce- und Opt-out-Listen jederzeit respektieren",
+            "Keine Fakten erfinden; nur belegte Rechercheergebnisse und vom Operator gepflegte Angaben verwenden",
+            "Sprache und Anrede an die Zielperson anpassen (Standard: Deutsch, Sie-Form)",
+        ],
+        "workflow_backbone": [
+            {
+                "step": "context_intake",
+                "title": "Kontext aufnehmen",
+                "detail": "drafting_request lesen: ICP-/Produktbeschreibung, CTA, Signatur, Landingpage-Checkliste, Prompt-Vorlagen sowie Unternehmens- und Personendaten.",
+            },
+            {
+                "step": "anchor_selection",
+                "title": "Anknuepfungspunkt waehlen",
+                "detail": "Aus Homepage-Summary und Personendaten den staerksten, belegbaren Anknuepfungspunkt zwischen Angebot und Empfaenger ableiten.",
+            },
+            {
+                "step": "initial_draft",
+                "title": "Erstanschreiben entwerfen",
+                "detail": "Betreff plus knappen Body mit einem klaren CTA schreiben; Signatur anhaengen; keine erfundenen Aussagen.",
+            },
+            {
+                "step": "followups",
+                "title": "Zwei Follow-ups entwerfen",
+                "detail": "Zwei kurze, eskalationsarme Follow-ups verfassen, die ohne Antwort hoeflich nachfassen und sich auf das Erstanschreiben beziehen.",
+            },
+            {
+                "step": "writeback",
+                "title": "Ergebnis zurueckschreiben",
+                "detail": "message_mail_subject, message_mail_body, message_followup_1 und message_followup_2 ausschliesslich ueber den Command outbound.pipeline.write_outreach_draft persistieren.",
+            },
+        ],
+        "routing_taxonomy": [
+            { "intent": "initial", "route": "Erstanschreiben entwerfen", "stop": "Draft als awaiting_approval ablegen" },
+            { "intent": "followup", "route": "Naechstes Follow-up aus der Sequenz entwerfen", "stop": "stop on reply" },
+            { "intent": "reply_received", "route": "An reply_handling.v1 uebergeben", "stop": "Keine weitere Sequenznachricht senden" },
+        ],
+        "stop_rules": [
+            "stop on reply",
+            "stop on bounce",
+            "stop on opt-out",
+            "stop on suppression match",
+        ],
+        "version_number": 1,
+    })
+}
+
+/// Canonical reply-handling skillbook: classify inbound replies and stage a
+/// reply draft instead of letting an automated sequence keep firing.
+fn outbound_default_reply_handling_skillbook() -> Value {
+    serde_json::json!({
+        "id": "business-os.outbound.reply_handling.v1",
+        "skillbook_id": "business-os.outbound.reply_handling.v1",
+        "title": "Antworten klassifizieren und Reply-Drafts vorbereiten",
+        "mission": "Eingehende Antworten klassifizieren, die laufende Sequenz anhalten und einen passenden, freigabepflichtigen Reply-Draft vorbereiten.",
+        "non_negotiable_rules": [
+            "Bei jeder Antwort die automatische Sequenz anhalten, bevor weiter entworfen wird",
+            "Opt-out und Unsubscribe sofort in die Suppression-Liste ueberfuehren",
+            "Keine Antwort ohne explizite Freigabe versenden",
+            "Keinen externen Dienst aufrufen; nur ueber den CTOX-Command-Bus arbeiten",
+        ],
+        "workflow_backbone": [
+            {
+                "step": "classify",
+                "title": "Antwort klassifizieren",
+                "detail": "Antwort in positive_reply, question, objection, not_interested, out_of_office oder unsubscribe einsortieren.",
+            },
+            {
+                "step": "halt_sequence",
+                "title": "Sequenz anhalten",
+                "detail": "Bei jeder echten Antwort die laufende Follow-up-Sequenz pausieren, damit keine widerspruechliche Nachricht hinausgeht.",
+            },
+            {
+                "step": "route",
+                "title": "Folgeaktion routen",
+                "detail": "Auf Basis der Klassifikation Reply-Draft, Terminfindung, Suppression oder manuelle Eskalation auswaehlen.",
+            },
+            {
+                "step": "draft_reply",
+                "title": "Reply-Draft vorbereiten",
+                "detail": "Knappe, kontextbezogene Antwort als freigabepflichtigen Draft ablegen.",
+            },
+        ],
+        "routing_taxonomy": [
+            { "intent": "positive_reply", "route": "Reply-Draft oder Terminfindung vorbereiten", "stop": "Sequenz beendet" },
+            { "intent": "question", "route": "Antwort mit Klaerung entwerfen", "stop": "Sequenz pausiert" },
+            { "intent": "objection", "route": "Einwand-Antwort entwerfen", "stop": "Sequenz pausiert" },
+            { "intent": "not_interested", "route": "Hoeflich schliessen", "stop": "Engagement schliessen" },
+            { "intent": "out_of_office", "route": "Follow-up nach OOO-Datum neu planen", "stop": "stop until ooo_until" },
+            { "intent": "unsubscribe", "route": "In Suppression-Liste ueberfuehren", "stop": "stop on opt-out" },
+        ],
+        "stop_rules": [
+            "stop on opt-out",
+            "stop on unsubscribe",
+            "stop sequence on any human reply",
+        ],
+        "version_number": 1,
+    })
+}
+
+/// Canonical scheduling skillbook: propose meeting slots, check them against
+/// the calendar, and book only after an explicit approval.
+fn outbound_default_scheduling_skillbook() -> Value {
+    serde_json::json!({
+        "id": "business-os.outbound.scheduling.v1",
+        "skillbook_id": "business-os.outbound.scheduling.v1",
+        "title": "Terminfindung vorbereiten",
+        "mission": "Auf Terminwunsch passende Slots vorschlagen, gegen Kalenderkonflikte und Arbeitszeiten pruefen und das Meeting erst nach Freigabe buchen.",
+        "non_negotiable_rules": [
+            "Slots nur innerhalb der konfigurierten Arbeitszeiten und Limits vorschlagen",
+            "Kein Meeting ohne explizite Freigabe buchen",
+            "Bei Kalenderkonflikt einen Alternativslot anbieten statt zu ueberbuchen",
+        ],
+        "workflow_backbone": [
+            {
+                "step": "collect_constraints",
+                "title": "Rahmen sammeln",
+                "detail": "Dauer, Zeitzone, bevorzugte Fenster und Arbeitszeiten der Campaign ermitteln.",
+            },
+            {
+                "step": "propose_slots",
+                "title": "Slots vorschlagen",
+                "detail": "Zwei bis drei konkrete Slots vorschlagen, die innerhalb der Limits liegen.",
+            },
+            {
+                "step": "check_conflicts",
+                "title": "Konflikte pruefen",
+                "detail": "Vorgeschlagene Slots gegen Kalender und bestehende Buchungen pruefen und Konflikte aussortieren.",
+            },
+            {
+                "step": "book_on_approval",
+                "title": "Nach Freigabe buchen",
+                "detail": "Erst nach Operator-Freigabe per outbound.scheduling.mark_booked buchen.",
+            },
+        ],
+        "routing_taxonomy": [
+            { "intent": "slot_request", "route": "Slots vorschlagen", "stop": "Auf Empfaengerwahl warten" },
+            { "intent": "slot_confirmed", "route": "Buchung nach Freigabe vorbereiten", "stop": "stop until approved" },
+            { "intent": "conflict", "route": "Alternativslot vorschlagen", "stop": "Nicht ueberbuchen" },
+        ],
+        "stop_rules": [
+            "stop on reply",
+            "stop until approved before booking",
+            "stop on calendar conflict",
+        ],
+        "version_number": 1,
+    })
 }
 
 /// Persist a per-campaign letter template (salutation, body, closing).
@@ -7991,19 +8275,49 @@ fn outbound_handle_scheduler_tick(
     }
     drop(stmt);
 
+    // Campaign-level pause: an engagement whose campaign is paused/closed/not yet
+    // active must not get an automated follow-up. Cache campaign statuses once so
+    // a tick over many engagements stays a single sweep.
+    let mut campaign_status: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'outbound_campaigns' AND deleted = 0",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows.flatten() {
+            if let Ok(campaign) = serde_json::from_str::<Value>(&row) {
+                if let Some(id) = outbound_string(&campaign, &["id"]) {
+                    let status =
+                        outbound_string(&campaign, &["status"]).unwrap_or_else(|| "active".into());
+                    campaign_status.insert(id, status);
+                }
+            }
+        }
+    }
+
     for engagement in engagements {
         let status = outbound_string(&engagement, &["status"]).unwrap_or_else(|| "".to_string());
-        if matches!(
-            status.as_str(),
-            "closed"
-                | "cancelled"
-                | "meeting_booked"
-                | "paused"
-                | "reply_received"
-                | "bounced"
-                | "unsubscribed"
-                | "suppressed"
-        ) {
+        // Out-of-office is the documented exception to the reply halt: the
+        // engagement stays `reply_received` for the UI but the scheduler resumes
+        // the follow-up after its OOO hold (the produced draft is approval-gated).
+        let is_out_of_office_wait = status == "reply_received"
+            && outbound_string(&engagement, &["payload", "reply_classification"]).as_deref()
+                == Some("out_of_office");
+        if !is_out_of_office_wait
+            && matches!(
+                status.as_str(),
+                "closed"
+                    | "cancelled"
+                    | "meeting_booked"
+                    | "paused"
+                    | "reply_received"
+                    | "bounced"
+                    | "unsubscribed"
+                    | "suppressed"
+            )
+        {
             continue;
         }
         let next_action = engagement
@@ -8024,6 +8338,19 @@ fn outbound_handle_scheduler_tick(
         let Some(engagement_id) = outbound_string(&engagement, &["id"]) else {
             continue;
         };
+        if let Some(campaign_id) = outbound_string(&engagement, &["campaign_id"]) {
+            if let Some(camp_status) = campaign_status.get(&campaign_id) {
+                if matches!(camp_status.as_str(), "paused" | "closed" | "setup_required") {
+                    actions.push(serde_json::json!({
+                        "kind": "followup_skipped_campaign_paused",
+                        "engagement_id": engagement_id,
+                        "campaign_id": campaign_id,
+                        "campaign_status": camp_status,
+                    }));
+                    continue;
+                }
+            }
+        }
         if dry_run {
             actions.push(serde_json::json!({
                 "kind": "followup_due",
@@ -8142,12 +8469,59 @@ fn outbound_prepare_due_followup_draft(
             (sender, email, String::new())
         };
 
+    // Respect the sender account's health and daily cap: do not pile up scheduler
+    // drafts that would only bounce off the send gate. When the account is blocked
+    // or its daily cap is already exhausted, defer the follow-up — leave the due
+    // marker in place so a later tick (after a daily reset) retries — and record a
+    // skip reason instead of generating an unsendable draft.
+    if channel != "physical_letter" && !sender_account_id.is_empty() {
+        if let Err(limit_err) = outbound_enforce_account_limit(conn, &sender_account_id) {
+            let detail = limit_err.to_string();
+            outbound_payload_insert(
+                &mut engagement,
+                "scheduler_last_skip_reason",
+                Value::String("account_limit".to_string()),
+            );
+            outbound_payload_insert(
+                &mut engagement,
+                "scheduler_last_skip_detail",
+                Value::String(detail.clone()),
+            );
+            outbound_payload_insert(
+                &mut engagement,
+                "scheduler_last_skip_at_ms",
+                Value::Number(serde_json::Number::from(now)),
+            );
+            outbound_put_i64(&mut engagement, "updated_at_ms", now);
+            upsert_business_record(
+                conn,
+                "outbound_engagements",
+                &engagement_id,
+                now,
+                engagement,
+            )?;
+            return Ok(serde_json::json!({
+                "kind": "followup_skipped_account_limit",
+                "engagement_id": engagement_id,
+                "sender_account_id": sender_account_id,
+                "reason": detail,
+            }));
+        }
+    }
+
     let latest_message = outbound_latest_message(&previous_messages);
+    let scheduler_skillbook_id = outbound_first_string(&[
+        outbound_string(&command.payload, &["skillbook_id"]),
+        outbound_string(&engagement, &["payload", "skillbook_id"]),
+    ])
+    .unwrap_or_else(|| "business-os.outbound.message_drafting.v1".to_string());
+    let scheduler_skillbook_guidance = outbound_skillbook_guidance(conn, &scheduler_skillbook_id)?;
     let generated = outbound_generate_automated_draft(
         &engagement,
         latest_message.as_ref(),
         &command.payload,
         &draft_kind,
+        scheduler_skillbook_guidance.as_deref(),
     );
     let subject = outbound_first_string(&[
         outbound_string(&command.payload, &["subject"]),
@@ -8188,6 +8562,17 @@ fn outbound_prepare_due_followup_draft(
         Value::String("business-os.outbound.scheduler.v1".to_string()),
     );
     outbound_payload_insert(&mut message, "generated_draft", generated);
+    // Stamp the sequence revision the draft was produced from so each scheduler
+    // draft is auditable back to its sequence version.
+    let (sequence_id, sequence_version) = outbound_engagement_sequence_context(&engagement);
+    if let Some(seq) = sequence_id {
+        outbound_payload_insert(&mut message, "sequence_id", Value::String(seq));
+    }
+    outbound_payload_insert(
+        &mut message,
+        "sequence_version",
+        Value::Number(serde_json::Number::from(sequence_version)),
+    );
     if let Some(previous) = latest_message
         .as_ref()
         .and_then(|message| outbound_string(message, &["id"]))
@@ -8326,6 +8711,28 @@ fn outbound_handle_engagement_reapply_sequence(
         "engagement": engagement,
         "sequence_id": sequence_id,
     }))
+}
+
+/// Extract the sequence-version context recorded on an engagement so a generated
+/// draft can be traced back to the exact sequence revision it was produced from.
+/// The version is the snapshot timestamp captured by
+/// `outbound.engagement.reapply_sequence` (falling back to an explicit `version`
+/// field), defaulting to 0 when no sequence has been projected yet.
+fn outbound_engagement_sequence_context(engagement: &Value) -> (Option<String>, i64) {
+    let sequence_id = outbound_first_string(&[
+        outbound_string(engagement, &["payload", "sequence_id"]),
+        outbound_string(engagement, &["sequence_id"]),
+    ]);
+    let version = engagement
+        .pointer("/payload/sequence_snapshot/updated_at_ms")
+        .and_then(Value::as_i64)
+        .or_else(|| {
+            engagement
+                .pointer("/payload/sequence_snapshot/version")
+                .and_then(Value::as_i64)
+        })
+        .unwrap_or(0);
+    (sequence_id, version)
 }
 
 /// Persist updated proposed_slots (or other slot metadata) into an existing
@@ -8537,6 +8944,9 @@ fn outbound_handle_reply_match(
         engagement.clone(),
     )?;
 
+    let suppression_id =
+        outbound_apply_reply_suppression(conn, &engagement, &engagement_id, &classification, now)?;
+
     let pending_messages = outbound_load_records_by_string_field(
         conn,
         "outbound_messages",
@@ -8600,6 +9010,7 @@ fn outbound_handle_reply_match(
         "classification": classification,
         "reply_message_key": reply_message_key,
         "cancelled_message_ids": cancelled,
+        "suppression_id": suppression_id,
     }))
 }
 
@@ -9083,38 +9494,118 @@ fn outbound_header_value(value: &str) -> String {
         .join(" ")
 }
 
-fn outbound_increment_account_send_count(
+/// Atomically reserve one daily send slot for the sender account, enforcing the
+/// per-account daily cap under concurrent commands. The check-and-increment runs
+/// inside a `BEGIN IMMEDIATE` transaction so two parallel `send_approved`
+/// commands cannot both pass when only one slot remains: the second writer blocks
+/// on the write lock (WAL + busy_timeout), then reads the already-incremented
+/// count. Bails — leaving the counter untouched, since the transaction rolls back
+/// on the early return — when the account is blocked, ineligible, or already at
+/// its cap. Mirrors the read-only checks in `outbound_enforce_account_limit` so
+/// the cheap early gate and the authoritative reservation agree.
+fn outbound_reserve_account_send_slot(
     conn: &Connection,
     sender_account_id: &str,
     now: i64,
 ) -> anyhow::Result<()> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
         .unwrap_or_else(|| sender_account_id.to_string());
-    let existing = outbound_load_record(conn, "outbound_account_limits", &canonical)?.or(
-        outbound_load_record(conn, "outbound_account_limits", sender_account_id)?,
+    let existing = outbound_load_record(&tx, "outbound_account_limits", &canonical)?.or(
+        outbound_load_record(&tx, "outbound_account_limits", sender_account_id)?,
     );
     let Some(mut limit) = existing else {
+        // No limit record: no cap configured, nothing to reserve.
+        tx.commit()?;
         return Ok(());
     };
-    let sent_today = limit
+    // Re-validate eligibility under the lock so a block applied by a concurrent
+    // command takes effect on the very next send.
+    let blocked = limit
+        .get("blocked")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    anyhow::ensure!(
+        !blocked,
+        "sender account is blocked for outbound communication"
+    );
+    let status = outbound_string(&limit, &["status"]).unwrap_or_else(|| "active".to_string());
+    anyhow::ensure!(
+        !matches!(
+            status.as_str(),
+            "blocked" | "locked" | "suspended" | "disabled"
+        ),
+        "sender account status `{status}` is not eligible to send"
+    );
+    let current = limit
         .get("sent_today")
         .and_then(Value::as_i64)
         .or_else(|| limit.get("daily_sent_count").and_then(Value::as_i64))
-        .unwrap_or(0)
-        + 1;
-    outbound_put_i64(&mut limit, "sent_today", sent_today);
-    outbound_put_i64(&mut limit, "daily_sent_count", sent_today);
+        .unwrap_or(0);
+    let next = current + 1;
+    if let Some(limit_value) = limit.get("daily_limit").and_then(Value::as_i64) {
+        // daily_limit semantics: <= 0 means "no daily cap configured".
+        if limit_value > 0 {
+            anyhow::ensure!(next <= limit_value, "sender account daily limit exhausted");
+        }
+    }
+    outbound_put_i64(&mut limit, "sent_today", next);
+    outbound_put_i64(&mut limit, "daily_sent_count", next);
     if let Some(limit_value) = limit.get("daily_limit").and_then(Value::as_i64) {
         if limit_value > 0 {
             outbound_put_i64(
                 &mut limit,
                 "remaining_today",
-                limit_value.saturating_sub(sent_today).max(0),
+                limit_value.saturating_sub(next).max(0),
             );
         }
     }
     outbound_put_i64(&mut limit, "updated_at_ms", now);
-    upsert_business_record(conn, "outbound_account_limits", &canonical, now, limit)
+    upsert_business_record(&tx, "outbound_account_limits", &canonical, now, limit)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Release a previously reserved daily send slot, decrementing the counter under
+/// a `BEGIN IMMEDIATE` transaction. Used when a send was reserved but never
+/// reached the provider (queue failure), so the daily counter stays accurate for
+/// a later retry. Never drops below zero.
+fn outbound_release_account_send_slot(
+    conn: &Connection,
+    sender_account_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let canonical = outbound_email_account_key_from(Some(sender_account_id.to_string()))
+        .unwrap_or_else(|| sender_account_id.to_string());
+    let existing = outbound_load_record(&tx, "outbound_account_limits", &canonical)?.or(
+        outbound_load_record(&tx, "outbound_account_limits", sender_account_id)?,
+    );
+    let Some(mut limit) = existing else {
+        tx.commit()?;
+        return Ok(());
+    };
+    let current = limit
+        .get("sent_today")
+        .and_then(Value::as_i64)
+        .or_else(|| limit.get("daily_sent_count").and_then(Value::as_i64))
+        .unwrap_or(0);
+    let next = (current - 1).max(0);
+    outbound_put_i64(&mut limit, "sent_today", next);
+    outbound_put_i64(&mut limit, "daily_sent_count", next);
+    if let Some(limit_value) = limit.get("daily_limit").and_then(Value::as_i64) {
+        if limit_value > 0 {
+            outbound_put_i64(
+                &mut limit,
+                "remaining_today",
+                limit_value.saturating_sub(next).max(0),
+            );
+        }
+    }
+    outbound_put_i64(&mut limit, "updated_at_ms", now);
+    upsert_business_record(&tx, "outbound_account_limits", &canonical, now, limit)?;
+    tx.commit()?;
+    Ok(())
 }
 
 fn outbound_load_record(
@@ -9188,11 +9679,40 @@ fn outbound_latest_message(messages: &[Value]) -> Option<Value> {
         .cloned()
 }
 
+/// Resolve a persisted outbound skillbook into a one-line strategy hint for the
+/// deterministic draft fallback: its mission plus the first non-negotiable rule.
+/// Returns `None` when the skillbook is absent or carries no usable text, so the
+/// caller falls back to the generic strategy line.
+fn outbound_skillbook_guidance(
+    conn: &Connection,
+    skillbook_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(skillbook) = outbound_load_record(conn, "outbound_skillbooks", skillbook_id)? else {
+        return Ok(None);
+    };
+    let mission = outbound_string(&skillbook, &["mission"]).unwrap_or_default();
+    let first_rule = skillbook
+        .get("non_negotiable_rules")
+        .and_then(Value::as_array)
+        .and_then(|rules| rules.first())
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let guidance = match (mission.trim().is_empty(), first_rule.trim().is_empty()) {
+        (true, true) => return Ok(None),
+        (false, true) => mission,
+        (true, false) => first_rule,
+        (false, false) => format!("{mission} Leitplanke: {first_rule}."),
+    };
+    Ok(Some(guidance))
+}
+
 fn outbound_generate_automated_draft(
     engagement: &Value,
     latest_message: Option<&Value>,
     request: &Value,
     draft_kind: &str,
+    skillbook_guidance: Option<&str>,
 ) -> Value {
     let contact_name = outbound_first_string(&[
         outbound_string(engagement, &["payload", "contact_name"]),
@@ -9223,6 +9743,7 @@ fn outbound_generate_automated_draft(
         outbound_string(request, &["strategy_text"]),
         outbound_string(request, &["payload", "strategy_text"]),
         outbound_string(engagement, &["payload", "strategy_text"]),
+        skillbook_guidance.map(str::to_string),
     ])
     .unwrap_or_else(|| "Kontextbezogen, knapp und ohne erfundene Aussagen schreiben.".to_string());
     let body_text = match draft_kind {
@@ -9491,11 +10012,106 @@ fn outbound_enforce_send_gate(conn: &Connection, message: &Value) -> anyhow::Res
         _ => {
             let sender_account_id = outbound_required_string(message, &["sender_account_id"])?;
             let recipient_email = outbound_required_string(message, &["recipient_email"])?;
-            anyhow::ensure!(
-                !outbound_recipient_suppressed(conn, &recipient_email)?,
-                "recipient is suppressed for outbound communication"
-            );
+            if let Some(reason) = outbound_recipient_suppression_reason(conn, &recipient_email)? {
+                anyhow::bail!(
+                    "recipient is suppressed for outbound communication (reason: {reason})"
+                );
+            }
             outbound_enforce_account_limit(conn, &sender_account_id)?;
+        }
+    }
+    Ok(())
+}
+
+/// Map a send-gate / provider-queue error into a stable, replicable block-reason
+/// code so the UI and downstream automation can branch on the cause instead of
+/// parsing free-form text.
+fn outbound_classify_send_block(error: &str) -> &'static str {
+    let lowered = error.to_ascii_lowercase();
+    if lowered.contains("suppress") {
+        "recipient_suppressed"
+    } else if lowered.contains("blocked") || lowered.contains("not eligible") {
+        "sender_blocked"
+    } else if lowered.contains("limit") {
+        "sender_limit_exhausted"
+    } else if lowered.contains("approv") {
+        "approval_required"
+    } else if lowered.contains("queue") || lowered.contains("provider") {
+        "provider_queue_failed"
+    } else if lowered.contains("recipient_address") || lowered.contains("recipient_email") {
+        "missing_recipient"
+    } else if lowered.contains("sender_account") {
+        "missing_sender"
+    } else {
+        "send_blocked"
+    }
+}
+
+/// Persist a failed send attempt onto the message without destroying the draft.
+/// The draft body, subject, and `approval_status = approved` are untouched, so a
+/// later `outbound.message.send_approved` can retry once the blocking condition
+/// clears. Records the reason code, last error, attempt count, and timestamp in
+/// replicable payload fields, and reflects a non-final `send_status`.
+fn outbound_record_send_failure(
+    conn: &Connection,
+    message_id: &str,
+    message: &mut Value,
+    error: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    let reason = outbound_classify_send_block(error);
+    let attempts = message
+        .get("payload")
+        .and_then(|payload| payload.get("send_attempts"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+        + 1;
+    outbound_put_string(message, "send_status", "send_blocked");
+    outbound_payload_insert(
+        message,
+        "send_block_reason",
+        Value::String(reason.to_string()),
+    );
+    outbound_payload_insert(message, "last_send_error", Value::String(error.to_string()));
+    outbound_payload_insert(
+        message,
+        "send_attempts",
+        Value::Number(serde_json::Number::from(attempts)),
+    );
+    outbound_payload_insert(
+        message,
+        "last_send_attempt_at_ms",
+        Value::Number(serde_json::Number::from(now)),
+    );
+    // Stays retry-able: the message is not marked final and remains approved.
+    outbound_payload_insert(message, "retryable", Value::Bool(true));
+    outbound_put_i64(message, "updated_at_ms", now);
+    upsert_business_record(conn, "outbound_messages", message_id, now, message.clone())?;
+    // Reflect the blocking condition back onto the owning engagement so the
+    // pipeline/timeline UI and downstream automation can see why the send did
+    // not go out, with the same reason code persisted on the message.
+    if let Some(engagement_id) = outbound_string(message, &["engagement_id"]) {
+        if !engagement_id.trim().is_empty() {
+            if let Some(mut engagement) =
+                outbound_load_record(conn, "outbound_engagements", &engagement_id)?
+            {
+                outbound_put_string(&mut engagement, "status", "send_blocked");
+                outbound_put_string(
+                    &mut engagement,
+                    "last_send_block_reason",
+                    reason.to_string(),
+                );
+                outbound_put_string(&mut engagement, "last_send_error", error.to_string());
+                outbound_put_i64(&mut engagement, "last_send_block_at_ms", now);
+                outbound_put_i64(&mut engagement, "updated_at_ms", now);
+                upsert_business_record(
+                    conn,
+                    "outbound_engagements",
+                    &engagement_id,
+                    now,
+                    engagement,
+                )?;
+            }
         }
     }
     Ok(())
@@ -9526,6 +10142,143 @@ fn outbound_has_matching_approval(
 }
 
 fn outbound_recipient_suppressed(conn: &Connection, recipient_email: &str) -> anyhow::Result<bool> {
+    Ok(outbound_recipient_suppression_reason(conn, recipient_email)?.is_some())
+}
+
+/// Map a reply classification onto a canonical suppression reason, returning
+/// `None` for classifications that should not block future sends (e.g.
+/// `interested`, `unclear`, `auto_reply`). Hard stop signals — the recipient
+/// asking to be removed, marking the message as spam, or bouncing — translate
+/// into an active suppression so the send gate refuses any later outbound
+/// message to the address.
+fn outbound_reply_suppression_reason(classification: &str) -> Option<&'static str> {
+    match classification.trim().to_ascii_lowercase().as_str() {
+        "unsubscribe" | "opt_out" | "opt-out" | "optout" | "remove" => Some("unsubscribe"),
+        "complaint" | "spam_complaint" | "spam" | "abuse" => Some("complaint"),
+        "bounce" | "hard_bounce" | "undeliverable" => Some("bounce"),
+        _ => None,
+    }
+}
+
+/// When a reply is classified as a hard stop signal, register an active
+/// suppression entry for the engagement's recipient so future sends are blocked
+/// by [`outbound_recipient_suppression_reason`]. Idempotent: a recipient that is
+/// already actively suppressed is left untouched. Returns the suppression id
+/// when a new entry is written.
+/// Out-of-office is the one reply class that does not stop the sequence: it
+/// schedules a wait/retry. The follow-up resumes after `ooo_until` (when the
+/// auto-reply names a return date) or after a default hold otherwise. The
+/// engagement keeps `status = reply_received` so the UI still surfaces the
+/// reply; the scheduler honours the OOO exception and the resumed follow-up is
+/// still approval-gated — no send happens without a fresh approval.
+/// ref: skillbook reply_handling routing `out_of_office` -> "Follow-up nach OOO-Datum neu planen".
+fn outbound_apply_out_of_office_wait(engagement: &mut Value, payload: &Value, now: i64) {
+    const OOO_DEFAULT_WAIT_MS: i64 = 3 * 24 * 60 * 60 * 1000;
+    let resume_at = payload
+        .get("ooo_until")
+        .and_then(Value::as_i64)
+        .filter(|until| *until > now)
+        .unwrap_or(now + OOO_DEFAULT_WAIT_MS);
+    outbound_put_i64(engagement, "next_action_at_ms", resume_at);
+    outbound_payload_insert(
+        engagement,
+        "next_action_at_ms",
+        Value::Number(serde_json::Number::from(resume_at)),
+    );
+    outbound_payload_insert(
+        engagement,
+        "reply_wait_reason",
+        Value::String("out_of_office".to_string()),
+    );
+    outbound_payload_insert(
+        engagement,
+        "ooo_until",
+        Value::Number(serde_json::Number::from(resume_at)),
+    );
+}
+
+fn outbound_apply_reply_suppression(
+    conn: &Connection,
+    engagement: &Value,
+    engagement_id: &str,
+    classification: &str,
+    now: i64,
+) -> anyhow::Result<Option<String>> {
+    let Some(reason) = outbound_reply_suppression_reason(classification) else {
+        return Ok(None);
+    };
+    let recipient = outbound_first_string(&[
+        outbound_string(engagement, &["recipient_email"]),
+        outbound_string(engagement, &["payload", "recipient_email"]),
+        outbound_string(engagement, &["payload", "contact_email"]),
+    ])
+    .unwrap_or_default()
+    .trim()
+    .to_ascii_lowercase();
+    if recipient.is_empty() || !recipient.contains('@') {
+        return Ok(None);
+    }
+    // Idempotent: do not stack duplicate entries for an already-suppressed recipient.
+    if outbound_recipient_suppression_reason(conn, &recipient)?.is_some() {
+        return Ok(None);
+    }
+    let domain = recipient.split('@').nth(1).unwrap_or_default().to_string();
+    let suppression_id = format!(
+        "supp_reply_{}",
+        channels::stable_digest(&format!("{recipient}|{reason}"))
+    );
+    let record = serde_json::json!({
+        "id": suppression_id,
+        "email": recipient,
+        "domain": domain,
+        "status": "active",
+        "reason": reason,
+        "suppression_reason": reason,
+        "source": "reply_classification",
+        "engagement_id": engagement_id,
+        "created_at_ms": now,
+        "updated_at_ms": now,
+    });
+    upsert_business_record(
+        conn,
+        "outbound_suppression_entries",
+        &suppression_id,
+        now,
+        record,
+    )?;
+
+    // Hard-stop the engagement so the automation scheduler will not reapply the
+    // sequence. The reply handler already cancels pending drafts; this records
+    // the terminal stop reason on the engagement itself.
+    if let Some(mut engagement) = outbound_load_record(conn, "outbound_engagements", engagement_id)?
+    {
+        outbound_put_string(&mut engagement, "status", "stopped".to_string());
+        outbound_payload_insert(
+            &mut engagement,
+            "stop_reason",
+            Value::String(reason.to_string()),
+        );
+        outbound_payload_insert(
+            &mut engagement,
+            "stopped_at_ms",
+            Value::Number(serde_json::Number::from(now)),
+        );
+        outbound_put_i64(&mut engagement, "updated_at_ms", now);
+        upsert_business_record(conn, "outbound_engagements", engagement_id, now, engagement)?;
+    }
+
+    Ok(Some(suppression_id))
+}
+
+/// Return the suppression reason (e.g. `bounce`, `opt_out`, `unsubscribe`,
+/// `manual`) when the recipient or its domain is on an active suppression
+/// entry, or `None` when the recipient is clear to receive. Email match takes
+/// precedence over a domain-level block. The reason is surfaced so the send
+/// gate can write a precise blocking reason instead of a generic message.
+fn outbound_recipient_suppression_reason(
+    conn: &Connection,
+    recipient_email: &str,
+) -> anyhow::Result<Option<String>> {
     let recipient = recipient_email.trim().to_ascii_lowercase();
     let domain = recipient.split('@').nth(1).unwrap_or_default().to_string();
     let mut stmt = conn.prepare(
@@ -9535,12 +10288,18 @@ fn outbound_recipient_suppressed(conn: &Connection, recipient_email: &str) -> an
            AND deleted = 0",
     )?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut domain_reason: Option<String> = None;
     for row in rows {
         let payload: Value = serde_json::from_str(&row?)?;
         let status = outbound_string(&payload, &["status"]).unwrap_or_else(|| "active".to_string());
         if matches!(status.as_str(), "inactive" | "deleted" | "expired") {
             continue;
         }
+        let reason = outbound_first_string(&[
+            outbound_string(&payload, &["reason"]),
+            outbound_string(&payload, &["suppression_reason"]),
+        ])
+        .unwrap_or_else(|| "suppressed".to_string());
         let suppressed_email = outbound_string(&payload, &["email"])
             .or_else(|| outbound_string(&payload, &["recipient_email"]))
             .unwrap_or_default()
@@ -9549,13 +10308,13 @@ fn outbound_recipient_suppressed(conn: &Connection, recipient_email: &str) -> an
             .unwrap_or_default()
             .to_ascii_lowercase();
         if !suppressed_email.is_empty() && suppressed_email == recipient {
-            return Ok(true);
+            return Ok(Some(reason));
         }
-        if !suppressed_domain.is_empty() && suppressed_domain == domain {
-            return Ok(true);
+        if !suppressed_domain.is_empty() && suppressed_domain == domain && domain_reason.is_none() {
+            domain_reason = Some(reason);
         }
     }
-    Ok(false)
+    Ok(domain_reason)
 }
 
 fn outbound_enforce_account_limit(
@@ -13078,6 +13837,8 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
 fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
     if is_source_parse_command(&command.command_type) {
         Some("business-os-import-parser".to_string())
+    } else if command.command_type == "outbound.pipeline.outreach_draft" {
+        Some("business-os-outbound-message-drafting".to_string())
     } else if is_outbound_research_command(&command.command_type) {
         Some("universal-scraping".to_string())
     } else if command.command_type.starts_with("research.systematic.") {
@@ -13605,8 +14366,9 @@ mod tests {
         write_widget_module(&app_root, "export const v = 1;\n")?;
 
         // Install baseline (v0): sealed boundary.
-        let v0 = record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
-            .expect("install version recorded");
+        let v0 =
+            record_module_version(root, &app_root, "widget", "install", "Installed", "tester")?
+                .expect("install version recorded");
         let v0_id = v0
             .get("version_id")
             .and_then(Value::as_str)
@@ -13667,7 +14429,10 @@ mod tests {
             .join("widget")
             .join("extra.js")
             .is_file());
-        assert_eq!(baseline_sha, compute_module_bundle(&app_root, "widget")?.sha256);
+        assert_eq!(
+            baseline_sha,
+            compute_module_bundle(&app_root, "widget")?.sha256
+        );
 
         // A sealed rollback boundary is now the newest version.
         let listed = list_module_versions(
@@ -13708,14 +14473,21 @@ mod tests {
         let clean = module_version_states(root, &app_root)?;
         let clean_state = clean.get("widget").expect("widget state present");
         assert_eq!(
-            clean_state.get("baseline_bundle_sha256").and_then(Value::as_str),
+            clean_state
+                .get("baseline_bundle_sha256")
+                .and_then(Value::as_str),
             Some(baseline_sha.as_str())
         );
         assert_eq!(
-            clean_state.get("current_bundle_sha256").and_then(Value::as_str),
+            clean_state
+                .get("current_bundle_sha256")
+                .and_then(Value::as_str),
             Some(baseline_sha.as_str())
         );
-        assert_eq!(clean_state.get("modified").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            clean_state.get("modified").and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             clean_state.get("baseline_origin").and_then(Value::as_str),
             Some("install")
@@ -13725,17 +14497,33 @@ mod tests {
         save_widget_source(root, "index.js", "export const v = 99;\n")?;
         let dirty = module_version_states(root, &app_root)?;
         let dirty_state = dirty.get("widget").expect("widget state present");
-        assert_eq!(dirty_state.get("modified").and_then(Value::as_bool), Some(true));
         assert_eq!(
-            dirty_state.get("baseline_bundle_sha256").and_then(Value::as_str),
+            dirty_state.get("modified").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            dirty_state
+                .get("baseline_bundle_sha256")
+                .and_then(Value::as_str),
             Some(baseline_sha.as_str())
         );
         assert_ne!(
-            dirty_state.get("current_bundle_sha256").and_then(Value::as_str),
+            dirty_state
+                .get("current_bundle_sha256")
+                .and_then(Value::as_str),
             Some(baseline_sha.as_str())
         );
-        let versions = dirty_state.get("versions").and_then(Value::as_array).unwrap();
-        assert_eq!(versions.len() as i64, dirty_state.get("version_count").and_then(Value::as_i64).unwrap());
+        let versions = dirty_state
+            .get("versions")
+            .and_then(Value::as_array)
+            .unwrap();
+        assert_eq!(
+            versions.len() as i64,
+            dirty_state
+                .get("version_count")
+                .and_then(Value::as_i64)
+                .unwrap()
+        );
         Ok(())
     }
 
@@ -13908,6 +14696,89 @@ mod tests {
         assert!(
             activity_count >= 6,
             "expected activities for every Customers transition"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_write_outreach_draft_persists_messages_into_pipeline_contact() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        let conn = open_store(root)?;
+        upsert_business_record(
+            &conn,
+            "outbound_pipeline_items",
+            "pipe_one",
+            1,
+            serde_json::json!({
+                "id": "pipe_one",
+                "campaign_id": "camp",
+                "company_id": "company_one",
+                "company_name": "Beispiel GmbH",
+                "stage": "contact_research",
+                "contacts": [
+                    { "name": "Erika Muster", "email": "erika@example.test" }
+                ],
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(conn);
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_outreach_writeback",
+                "command_id": "cmd_outreach_writeback",
+                "module": "outbound",
+                "command_type": "outbound.pipeline.write_outreach_draft",
+                "record_id": "pipe_one",
+                "status": "pending_sync",
+                "payload": {
+                    "pipeline_id": "pipe_one",
+                    "contact_index": 0,
+                    "messages": {
+                        "message_mail_subject": "Kurzer Austausch zu Beispiel GmbH",
+                        "message_mail_body": "Hallo Erika, ...",
+                        "message_followup_1": "Kurzer Nachtrag ...",
+                        "message_followup_2": "Letztes Follow-up ..."
+                    }
+                },
+                "client_context": actor
+            }),
+        )?;
+
+        let conn = open_store(root)?;
+        let item = outbound_load_required(
+            &conn,
+            "outbound_pipeline_items",
+            "pipe_one",
+            "pipeline item",
+        )?;
+        let contact = item
+            .pointer("/contacts/0")
+            .cloned()
+            .expect("contact present");
+        assert_eq!(
+            outbound_string(&contact, &["messages", "message_mail_subject"]).as_deref(),
+            Some("Kurzer Austausch zu Beispiel GmbH")
+        );
+        assert_eq!(
+            outbound_string(&contact, &["messages", "message_followup_2"]).as_deref(),
+            Some("Letztes Follow-up ...")
+        );
+        assert_eq!(
+            contact
+                .pointer("/outreach_generating")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            outbound_string(&contact, &["outreach_status"]).as_deref(),
+            Some("drafted")
         );
         Ok(())
     }
@@ -14492,6 +15363,83 @@ mod tests {
     }
 
     #[test]
+    fn outbound_send_approved_blocked_after_rejection_or_change_request() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let prepare = |message_id: &str| {
+            serde_json::json!({
+                "id": format!("cmd_prepare_{message_id}"),
+                "command_id": format!("cmd_prepare_{message_id}"),
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": message_id,
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": format!("eng_{message_id}"),
+                    "campaign_id": "camp_test",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            })
+        };
+        let decide = |message_id: &str, command_type: &str| {
+            serde_json::json!({
+                "id": format!("cmd_{command_type}_{message_id}"),
+                "command_id": format!("cmd_{command_type}_{message_id}"),
+                "module": "outbound",
+                "command_type": format!("outbound.message.{command_type}"),
+                "record_id": message_id,
+                "status": "pending_sync",
+                "payload": { "message_id": message_id },
+                "client_context": actor.clone()
+            })
+        };
+        let send = |message_id: &str| {
+            serde_json::json!({
+                "id": format!("cmd_send_{message_id}"),
+                "command_id": format!("cmd_send_{message_id}"),
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": message_id,
+                "status": "pending_sync",
+                "payload": { "message_id": message_id },
+                "client_context": actor.clone()
+            })
+        };
+
+        // Rejected message: request approval, reject, then sending must be blocked.
+        accept_rxdb_business_command(root, prepare("msg_reject"))?;
+        accept_rxdb_business_command(root, decide("msg_reject", "request_approval"))?;
+        accept_rxdb_business_command(root, decide("msg_reject", "reject"))?;
+        let rejected_send = accept_rxdb_business_command(root, send("msg_reject"))
+            .expect_err("send must be blocked after rejection");
+        assert!(
+            rejected_send.to_string().contains("must be approved"),
+            "{rejected_send}"
+        );
+
+        // Change-requested message: request approval, request changes, send blocked.
+        accept_rxdb_business_command(root, prepare("msg_changes"))?;
+        accept_rxdb_business_command(root, decide("msg_changes", "request_approval"))?;
+        accept_rxdb_business_command(root, decide("msg_changes", "request_changes"))?;
+        let changes_send = accept_rxdb_business_command(root, send("msg_changes"))
+            .expect_err("send must be blocked after change request");
+        assert!(
+            changes_send.to_string().contains("must be approved"),
+            "{changes_send}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn outbound_sequence_save_persists_strategy_policy_and_touchpoints() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -14770,6 +15718,288 @@ mod tests {
     }
 
     #[test]
+    fn outbound_scheduling_message_can_be_edited_and_approved() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        let cmd = |id: &str, command_type: &str, record_id: &str, payload: Value| {
+            serde_json::json!({
+                "id": id, "command_id": id, "module": "outbound",
+                "command_type": command_type, "record_id": record_id,
+                "status": "pending_sync", "payload": payload,
+                "client_context": actor.clone()
+            })
+        };
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_eng",
+                "outbound.engagement.create",
+                "eng_sch",
+                serde_json::json!({
+                    "campaign_id": "camp_sch",
+                    "company_id": "co_sch",
+                    "contact_id": "ct_sch",
+                    "payload": { "contact_email": "lead@example.com" }
+                }),
+            ),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_assign",
+                "outbound.engagement.assign_sender",
+                "eng_sch",
+                serde_json::json!({
+                    "engagement_id": "eng_sch",
+                    "sender_account_id": "sender@example.com"
+                }),
+            ),
+        )?;
+        let prepared = accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_prepare",
+                "outbound.draft.prepare",
+                "msg_sch",
+                serde_json::json!({
+                    "message_id": "msg_sch",
+                    "engagement_id": "eng_sch",
+                    "draft_kind": "scheduling",
+                    "duration_minutes": 30
+                }),
+            ),
+        )?;
+        assert_eq!(
+            prepared
+                .pointer("/result/message/message_type")
+                .and_then(Value::as_str),
+            Some("scheduling")
+        );
+
+        // The user edits the auto-generated scheduling proposal before approving.
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_edit",
+                "outbound.message.update_draft",
+                "msg_sch",
+                serde_json::json!({
+                    "message_id": "msg_sch",
+                    "subject": "Terminvorschlag (angepasst)",
+                    "body_text": "Passt Ihnen Dienstag 10:00 oder Mittwoch 14:00?"
+                }),
+            ),
+        )?;
+        {
+            let conn = open_store(root)?;
+            let edited = outbound_load_required(&conn, "outbound_messages", "msg_sch", "message")?;
+            // Editing resets the approval so the change cannot bypass the gate.
+            assert_eq!(
+                outbound_string(&edited, &["approval_status"]).as_deref(),
+                Some("draft")
+            );
+            assert_eq!(
+                outbound_string(&edited, &["subject"]).as_deref(),
+                Some("Terminvorschlag (angepasst)")
+            );
+            assert_eq!(
+                outbound_string(&edited, &["body_text"]).as_deref(),
+                Some("Passt Ihnen Dienstag 10:00 oder Mittwoch 14:00?")
+            );
+        }
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_request",
+                "outbound.message.request_approval",
+                "msg_sch",
+                serde_json::json!({ "message_id": "msg_sch" }),
+            ),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "sch_approve",
+                "outbound.message.approve",
+                "msg_sch",
+                serde_json::json!({ "message_id": "msg_sch" }),
+            ),
+        )?;
+
+        let conn = open_store(root)?;
+        let approved = outbound_load_required(&conn, "outbound_messages", "msg_sch", "message")?;
+        assert_eq!(
+            outbound_string(&approved, &["approval_status"]).as_deref(),
+            Some("approved"),
+            "the edited scheduling message must be approvable"
+        );
+        assert_eq!(
+            outbound_string(&approved, &["subject"]).as_deref(),
+            Some("Terminvorschlag (angepasst)"),
+            "the edit must survive the approval"
+        );
+        // The approval must match the edited revision.
+        let revision_id = outbound_string(&approved, &["revision_id"])
+            .unwrap_or_else(|| outbound_message_revision(&approved));
+        assert!(
+            outbound_has_matching_approval(&conn, "msg_sch", &revision_id)?,
+            "approval must bind to the edited revision"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_send_gate_blocks_bounce_and_unhealthy_sender() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        let cmd = |id: &str, command_type: &str, record_id: &str, payload: Value| {
+            serde_json::json!({
+                "id": id, "command_id": id, "module": "outbound",
+                "command_type": command_type, "record_id": record_id,
+                "status": "pending_sync", "payload": payload,
+                "client_context": actor.clone()
+            })
+        };
+        let approve_message = |eng: &str,
+                               msg: &str,
+                               sender: &str,
+                               recipient: &str|
+         -> anyhow::Result<()> {
+            accept_rxdb_business_command(
+                root,
+                cmd(
+                    &format!("c_eng_{msg}"),
+                    "outbound.engagement.create",
+                    eng,
+                    serde_json::json!({"campaign_id":"camp_217","company_id":"co","contact_id":"ct"}),
+                ),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                cmd(
+                    &format!("c_prep_{msg}"),
+                    "outbound.message.prepare",
+                    msg,
+                    serde_json::json!({
+                        "engagement_id": eng, "campaign_id": "camp_217",
+                        "sender_account_id": sender, "recipient_email": recipient,
+                        "subject": "Intro", "body_text": "Hello"
+                    }),
+                ),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                cmd(
+                    &format!("c_req_{msg}"),
+                    "outbound.message.request_approval",
+                    msg,
+                    serde_json::json!({"message_id": msg}),
+                ),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                cmd(
+                    &format!("c_apv_{msg}"),
+                    "outbound.message.approve",
+                    msg,
+                    serde_json::json!({"message_id": msg}),
+                ),
+            )?;
+            Ok(())
+        };
+
+        // (1) A hard bounce recorded as a suppression entry blocks the send.
+        approve_message(
+            "eng_bounce",
+            "msg_bounce",
+            "sender@example.com",
+            "bounced@example.com",
+        )?;
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_suppression_entries",
+                "supp_bounce_217",
+                1000,
+                serde_json::json!({
+                    "id": "supp_bounce_217",
+                    "email": "bounced@example.com",
+                    "reason": "bounce",
+                    "status": "active",
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+        let bounce_blocked = accept_rxdb_business_command(
+            root,
+            cmd(
+                "c_send_bounce",
+                "outbound.message.send_approved",
+                "msg_bounce",
+                serde_json::json!({"message_id": "msg_bounce"}),
+            ),
+        )
+        .expect_err("bounce suppression must block the send");
+        assert!(
+            bounce_blocked.to_string().contains("suppressed"),
+            "{bounce_blocked}"
+        );
+
+        // (2) A sender account that is not provider-eligible (suspended) is rejected
+        //     even for a perfectly clean recipient.
+        approve_message(
+            "eng_health",
+            "msg_health",
+            "email:sick@example.com",
+            "clean@example.com",
+        )?;
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_account_limits",
+                "email:sick@example.com",
+                1000,
+                serde_json::json!({
+                    "id": "email:sick@example.com",
+                    "sender_account_id": "email:sick@example.com",
+                    "status": "suspended",
+                    "blocked": false,
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+        let health_blocked = accept_rxdb_business_command(
+            root,
+            cmd(
+                "c_send_health",
+                "outbound.message.send_approved",
+                "msg_health",
+                serde_json::json!({"message_id": "msg_health"}),
+            ),
+        )
+        .expect_err("unhealthy sender account must block the send");
+        assert!(
+            health_blocked.to_string().contains("not eligible"),
+            "{health_blocked}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn outbound_pause_resume_and_close_updates_engagement_state() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -14910,6 +16140,99 @@ mod tests {
     }
 
     #[test]
+    fn outbound_engagement_status_advances_through_approval_and_send() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        let cmd = |id: &str, command_type: &str, record_id: &str, payload: Value| {
+            serde_json::json!({
+                "id": id, "command_id": id, "module": "outbound",
+                "command_type": command_type, "record_id": record_id,
+                "status": "pending_sync", "payload": payload,
+                "client_context": actor.clone()
+            })
+        };
+        let engagement_status = |id: &str| -> anyhow::Result<String> {
+            let conn = open_store(root)?;
+            let eng = outbound_load_required(&conn, "outbound_engagements", id, "engagement")?;
+            Ok(outbound_string(&eng, &["status"]).unwrap_or_default())
+        };
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "fwd_create",
+                "outbound.engagement.create",
+                "eng_fwd",
+                serde_json::json!({
+                    "campaign_id": "camp_fwd",
+                    "company_id": "co_fwd",
+                    "contact_id": "ct_fwd"
+                }),
+            ),
+        )?;
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "fwd_prepare",
+                "outbound.message.prepare",
+                "msg_fwd",
+                serde_json::json!({
+                    "engagement_id": "eng_fwd",
+                    "campaign_id": "camp_fwd",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello"
+                }),
+            ),
+        )?;
+        assert_eq!(engagement_status("eng_fwd")?, "draft_prepared");
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "fwd_request",
+                "outbound.message.request_approval",
+                "msg_fwd",
+                serde_json::json!({ "message_id": "msg_fwd" }),
+            ),
+        )?;
+        assert_eq!(engagement_status("eng_fwd")?, "awaiting_approval");
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "fwd_approve",
+                "outbound.message.approve",
+                "msg_fwd",
+                serde_json::json!({ "message_id": "msg_fwd" }),
+            ),
+        )?;
+        assert_eq!(engagement_status("eng_fwd")?, "approved_for_send");
+
+        accept_rxdb_business_command(
+            root,
+            cmd(
+                "fwd_send",
+                "outbound.message.send_approved",
+                "msg_fwd",
+                serde_json::json!({ "message_id": "msg_fwd" }),
+            ),
+        )?;
+        // Email goes through the mailserver queue, so the engagement lands on
+        // `scheduled_to_send` (queued for provider), not the physical-letter
+        // immediate `sent`.
+        assert_eq!(engagement_status("eng_fwd")?, "scheduled_to_send");
+
+        Ok(())
+    }
+
+    #[test]
     fn outbound_empty_collections_load_without_errors() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -14988,6 +16311,95 @@ mod tests {
             reloaded.is_some(),
             "re-upserted record must replace the tombstone"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_tombstone_and_conflict_strategy_for_approvals() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+
+        // Initial approval decision.
+        upsert_business_record(
+            &conn,
+            "outbound_approvals",
+            "apv_conflict",
+            1000,
+            serde_json::json!({
+                "id": "apv_conflict",
+                "message_id": "msg_x",
+                "revision_id": "rev_1",
+                "decision": "approved",
+                "created_at_ms": 1000,
+                "updated_at_ms": 1000,
+            }),
+        )?;
+
+        // A conflicting write (no tombstone) is last-write-wins: the later payload
+        // overwrites the earlier one for the same (collection, record_id).
+        upsert_business_record(
+            &conn,
+            "outbound_approvals",
+            "apv_conflict",
+            1500,
+            serde_json::json!({
+                "id": "apv_conflict",
+                "message_id": "msg_x",
+                "revision_id": "rev_1",
+                "decision": "changes_requested",
+                "created_at_ms": 1000,
+                "updated_at_ms": 1500,
+            }),
+        )?;
+        let after_conflict =
+            outbound_load_required(&conn, "outbound_approvals", "apv_conflict", "approval")?;
+        assert_eq!(
+            outbound_string(&after_conflict, &["decision"]).as_deref(),
+            Some("changes_requested"),
+            "the latest write must win for a conflicting approval upsert"
+        );
+
+        // Tombstone the approval: a deleted approval must not be loadable, so a
+        // resolved/withdrawn approval cannot silently re-gate a send.
+        conn.execute(
+            "UPDATE business_records SET deleted = 1 WHERE collection = 'outbound_approvals' AND record_id = 'apv_conflict'",
+            [],
+        )?;
+        assert!(
+            outbound_load_record(&conn, "outbound_approvals", "apv_conflict")?.is_none(),
+            "a tombstoned approval must not be loadable"
+        );
+
+        // Re-upsert resurrects the tombstone (deleted reset to 0) with the new
+        // payload — the state machine resolves a tombstone-vs-write conflict in
+        // favor of the live write so a re-issued approval is not lost.
+        upsert_business_record(
+            &conn,
+            "outbound_approvals",
+            "apv_conflict",
+            2000,
+            serde_json::json!({
+                "id": "apv_conflict",
+                "message_id": "msg_x",
+                "revision_id": "rev_2",
+                "decision": "approved",
+                "created_at_ms": 1000,
+                "updated_at_ms": 2000,
+            }),
+        )?;
+        let resurrected =
+            outbound_load_required(&conn, "outbound_approvals", "apv_conflict", "approval")?;
+        assert_eq!(
+            outbound_string(&resurrected, &["decision"]).as_deref(),
+            Some("approved")
+        );
+        assert_eq!(
+            outbound_string(&resurrected, &["revision_id"]).as_deref(),
+            Some("rev_2"),
+            "the resurrected approval carries the new revision binding"
+        );
+
         Ok(())
     }
 
@@ -15369,6 +16781,49 @@ mod tests {
     }
 
     #[test]
+    fn outbound_skillbook_seed_defaults_carry_real_backbone_and_guidance() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        outbound_handle_skillbook_seed_defaults(&conn, now)?;
+
+        let drafting = outbound_load_required(
+            &conn,
+            "outbound_skillbooks",
+            "business-os.outbound.message_drafting.v1",
+            "message drafting skillbook",
+        )?;
+        let backbone = drafting
+            .get("workflow_backbone")
+            .and_then(Value::as_array)
+            .expect("workflow_backbone array");
+        assert!(
+            !backbone.is_empty(),
+            "message drafting skillbook must have a real workflow backbone"
+        );
+        assert!(backbone
+            .iter()
+            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
+        let routing = drafting
+            .get("routing_taxonomy")
+            .and_then(Value::as_array)
+            .expect("routing_taxonomy array");
+        assert!(!routing.is_empty(), "routing taxonomy must be populated");
+
+        let guidance =
+            outbound_skillbook_guidance(&conn, "business-os.outbound.message_drafting.v1")?
+                .expect("guidance present");
+        assert!(guidance.contains("Leitplanke:"));
+
+        assert!(
+            outbound_skillbook_guidance(&conn, "does-not-exist")?.is_none(),
+            "missing skillbook yields no guidance"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn outbound_skillbook_save_bumps_version_number() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -15645,6 +17100,353 @@ mod tests {
     }
 
     #[test]
+    fn outbound_out_of_office_reply_schedules_gated_retry_without_send() -> anyhow::Result<()> {
+        // Welle 7 (554): an out-of-office reply must not stop the sequence like a
+        // hard reply — it schedules a wait/retry, and the resumed follow-up is
+        // still approval-gated (no send without a fresh approval).
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_ooo",
+                1000,
+                serde_json::json!({
+                    "id":"eng_ooo",
+                    "campaign_id":"camp_ooo",
+                    "sender_account_id":"email:scheduler@example.com",
+                    "status":"sent",
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"OOO GmbH",
+                        "contact_email":"lead@example.com"
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+
+        // Classify the reply as out-of-office. Unlike unsubscribe/bounce this is
+        // not a hard stop: the engagement stays reply_received for the UI but a
+        // future wait/retry plan is recorded.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"cls_ooo","command_id":"cls_ooo","module":"outbound",
+                "command_type":"outbound.reply.classify","record_id":"eng_ooo",
+                "status":"pending_sync",
+                "payload":{"engagement_id":"eng_ooo","classification":"out_of_office","reply_message_id":"reply_1"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let after_classify =
+            outbound_load_required(&conn, "outbound_engagements", "eng_ooo", "engagement")?;
+        assert_eq!(
+            outbound_string(&after_classify, &["status"]).as_deref(),
+            Some("reply_received"),
+            "OOO keeps reply_received for the UI"
+        );
+        assert_eq!(
+            outbound_string(&after_classify, &["payload", "reply_wait_reason"]).as_deref(),
+            Some("out_of_office"),
+            "a wait/retry plan is recorded"
+        );
+        let planned = after_classify
+            .get("next_action_at_ms")
+            .and_then(Value::as_i64)
+            .expect("OOO must schedule a future retry");
+        assert!(planned > 1000, "retry is scheduled into the future");
+
+        // Force the hold to be due, then run a scheduler tick.
+        let mut due_engagement = after_classify.clone();
+        outbound_put_i64(&mut due_engagement, "next_action_at_ms", 1);
+        upsert_business_record(
+            &conn,
+            "outbound_engagements",
+            "eng_ooo",
+            2000,
+            due_engagement,
+        )?;
+        drop(conn);
+
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_ooo","command_id":"tick_ooo","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let actions = r
+            .pointer("/result/actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            actions.iter().any(|action| {
+                action.get("kind").and_then(Value::as_str) == Some("followup_draft_prepared")
+                    && action.get("engagement_id").and_then(Value::as_str) == Some("eng_ooo")
+            }),
+            "OOO retry must resume the follow-up, actions={actions:?}"
+        );
+
+        // The resumed follow-up is approval-gated: not sent, not queued.
+        let conn = open_store(root)?;
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_ooo",
+        )?;
+        assert_eq!(messages.len(), 1, "exactly one resumed draft");
+        assert_eq!(
+            outbound_string(&messages[0], &["approval_status"]).as_deref(),
+            Some("awaiting_approval"),
+            "resumed OOO follow-up requires approval"
+        );
+        assert_eq!(
+            outbound_string(&messages[0], &["send_status"]).as_deref(),
+            Some("awaiting_approval"),
+            "no send happens without approval"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_tick_skips_when_account_limit_exhausted() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_cap_due",
+                1000,
+                serde_json::json!({
+                    "id":"eng_cap_due",
+                    "campaign_id":"camp_cap_due",
+                    "sender_account_id":"email:capped@example.com",
+                    "status":"sent",
+                    "next_action_at_ms":1,
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"Capped GmbH",
+                        "contact_email":"lead@example.com"
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+            // The sender account has already exhausted its daily cap.
+            upsert_business_record(
+                &conn,
+                "outbound_account_limits",
+                "email:capped@example.com",
+                1000,
+                serde_json::json!({
+                    "id":"email:capped@example.com",
+                    "daily_limit":2,
+                    "daily_sent_count":2,
+                    "remaining_today":0,
+                    "status":"active",
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_cap","command_id":"tick_cap","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let actions = r
+            .pointer("/result/actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            actions.iter().any(|action| {
+                action.get("kind").and_then(Value::as_str) == Some("followup_skipped_account_limit")
+            }),
+            "scheduler must skip when the sender cap is exhausted, actions={actions:?}"
+        );
+        let conn = open_store(root)?;
+        // No unsendable draft was created.
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_cap_due",
+        )?;
+        assert!(
+            messages.is_empty(),
+            "no follow-up draft may be created when the account cap is exhausted"
+        );
+        // The engagement records the skip reason and stays due for a later retry
+        // (the daily cap resets), so next_action_at_ms is not zeroed out.
+        let engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_cap_due", "engagement")?;
+        assert_eq!(
+            outbound_string(&engagement, &["payload", "scheduler_last_skip_reason"]).as_deref(),
+            Some("account_limit")
+        );
+        assert_eq!(
+            engagement.get("next_action_at_ms").and_then(Value::as_i64),
+            Some(1),
+            "a capped follow-up must remain due for a later retry"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_draft_carries_sequence_version() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_seq",
+                1000,
+                serde_json::json!({
+                    "id":"eng_seq",
+                    "campaign_id":"camp_seq",
+                    "sender_account_id":"email:scheduler@example.com",
+                    "status":"sent",
+                    "next_action_at_ms":1,
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"Sequence GmbH",
+                        "contact_email":"lead@example.com",
+                        "sequence_id":"seq_v3",
+                        "sequence_snapshot":{ "id":"seq_v3", "updated_at_ms": 424242 }
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_seq","command_id":"tick_seq","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_seq",
+        )?;
+        assert_eq!(messages.len(), 1);
+        // The draft must be traceable to the exact sequence revision.
+        assert_eq!(
+            outbound_string(&messages[0], &["payload", "sequence_id"]).as_deref(),
+            Some("seq_v3")
+        );
+        assert_eq!(
+            messages[0]
+                .pointer("/payload/sequence_version")
+                .and_then(Value::as_i64),
+            Some(424242)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scheduler_tick_skips_paused_campaign() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_campaigns",
+                "camp_paused",
+                1000,
+                serde_json::json!({
+                    "id":"camp_paused",
+                    "status":"paused",
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+            upsert_business_record(
+                &conn,
+                "outbound_engagements",
+                "eng_paused_camp",
+                1000,
+                serde_json::json!({
+                    "id":"eng_paused_camp",
+                    "campaign_id":"camp_paused",
+                    "sender_account_id":"email:scheduler@example.com",
+                    "status":"sent",
+                    "next_action_at_ms":1,
+                    "payload":{
+                        "contact_name":"Lead",
+                        "company_name":"Paused GmbH",
+                        "contact_email":"lead@example.com"
+                    },
+                    "created_at_ms":1000,
+                    "updated_at_ms":1000
+                }),
+            )?;
+        }
+        let r = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"tick_paused","command_id":"tick_paused","module":"outbound",
+                "command_type":"outbound.scheduler.tick","record_id":"",
+                "status":"pending_sync","payload":{},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let actions = r
+            .pointer("/result/actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            actions.iter().any(|action| {
+                action.get("kind").and_then(Value::as_str)
+                    == Some("followup_skipped_campaign_paused")
+            }),
+            "scheduler must skip engagements of a paused campaign, actions={actions:?}"
+        );
+        let conn = open_store(root)?;
+        let messages = outbound_load_records_by_string_field(
+            &conn,
+            "outbound_messages",
+            "engagement_id",
+            "eng_paused_camp",
+        )?;
+        assert!(
+            messages.is_empty(),
+            "a paused campaign must not produce follow-up drafts"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn outbound_scheduler_tick_does_not_follow_up_after_reply() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -15748,6 +17550,104 @@ mod tests {
         )
         .expect_err("missing sequence_id must error");
         assert!(err.to_string().contains("sequence_id"), "{err}");
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
+    ) -> anyhow::Result<()> {
+        // Welle 4 (367): a live campaign sequence change must not silently
+        // re-version active engagements. Each engagement stays pinned to the
+        // sequence snapshot it captured until an explicit reapply flow runs.
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({"actor":{"id":"t","role":"admin"}});
+
+        // Sequence revision v1.
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_sequences",
+                "seq_367",
+                100,
+                serde_json::json!({
+                    "id":"seq_367","campaign_id":"camp_367",
+                    "updated_at_ms":100,"touchpoints":[{"day":0}]
+                }),
+            )?;
+        }
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"e367","command_id":"e367","module":"outbound",
+                "command_type":"outbound.engagement.create","record_id":"e367",
+                "status":"pending_sync",
+                "payload":{"campaign_id":"camp_367","company_id":"c","contact_id":"x"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        // Pin the engagement to v1 via the explicit reapply flow.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"rs1","command_id":"rs1","module":"outbound",
+                "command_type":"outbound.engagement.reapply_sequence","record_id":"e367",
+                "status":"pending_sync",
+                "payload":{"engagement_id":"e367","sequence_id":"seq_367"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let engagement =
+            outbound_load_required(&conn, "outbound_engagements", "e367", "engagement")?;
+        let (_, pinned_version) = outbound_engagement_sequence_context(&engagement);
+        assert_eq!(pinned_version, 100, "engagement pinned to sequence v1");
+
+        // Campaign edits the sequence (new revision v2). This re-writes the
+        // shared sequence record but must not touch existing engagements.
+        upsert_business_record(
+            &conn,
+            "outbound_sequences",
+            "seq_367",
+            200,
+            serde_json::json!({
+                "id":"seq_367","campaign_id":"camp_367",
+                "updated_at_ms":200,"touchpoints":[{"day":0},{"day":3}]
+            }),
+        )?;
+        let engagement_after_edit =
+            outbound_load_required(&conn, "outbound_engagements", "e367", "engagement")?;
+        let (_, still_pinned) = outbound_engagement_sequence_context(&engagement_after_edit);
+        assert_eq!(
+            still_pinned, 100,
+            "a live sequence edit must not silently re-version an active engagement"
+        );
+        drop(conn);
+
+        // Explicit reapply rolls the engagement forward to v2.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id":"rs2","command_id":"rs2","module":"outbound",
+                "command_type":"outbound.engagement.reapply_sequence","record_id":"e367",
+                "status":"pending_sync",
+                "payload":{"engagement_id":"e367","sequence_id":"seq_367"},
+                "client_context":actor.clone()
+            }),
+        )?;
+        let conn = open_store(root)?;
+        let reapplied =
+            outbound_load_required(&conn, "outbound_engagements", "e367", "engagement")?;
+        let (_, new_version) = outbound_engagement_sequence_context(&reapplied);
+        assert_eq!(new_version, 200, "explicit reapply rolls forward to v2");
+        assert!(
+            reapplied
+                .pointer("/payload/sequence_reapplied_at_ms")
+                .and_then(Value::as_i64)
+                .is_some(),
+            "reapply stamps a traceable timestamp"
+        );
         Ok(())
     }
 
@@ -16207,6 +18107,637 @@ mod tests {
         )
         .expect_err("send must be blocked by suppression");
         assert!(blocked.to_string().contains("suppressed"), "{blocked}");
+
+        // The failed send must persist a structured, replicable block reason
+        // onto the message WITHOUT destroying the approved draft, so it stays
+        // retry-able.
+        let conn = open_store(root)?;
+        let msg = outbound_load_required(&conn, "outbound_messages", "msg_supp", "message")?;
+        assert_eq!(
+            outbound_string(&msg, &["send_status"]).as_deref(),
+            Some("send_blocked")
+        );
+        assert_eq!(
+            outbound_string(&msg, &["payload", "send_block_reason"]).as_deref(),
+            Some("recipient_suppressed")
+        );
+        assert_eq!(
+            outbound_string(&msg, &["approval_status"]).as_deref(),
+            Some("approved"),
+            "approval and draft must survive a blocked send"
+        );
+        assert_eq!(
+            outbound_string(&msg, &["body_text"]).as_deref(),
+            Some("Hello")
+        );
+        assert_eq!(
+            msg.pointer("/payload/retryable").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            msg.pointer("/payload/send_attempts")
+                .and_then(Value::as_i64),
+            Some(1)
+        );
+        // Lift the suppression and retry: the same approved draft must now queue.
+        upsert_business_record(
+            &conn,
+            "outbound_suppression_entries",
+            "supp_blocked",
+            2000,
+            serde_json::json!({
+                "id": "supp_blocked",
+                "email": "blocked@example.com",
+                "reason": "unsubscribe",
+                "status": "inactive",
+                "created_at_ms": 1000,
+                "updated_at_ms": 2000
+            }),
+        )?;
+        drop(conn);
+        let retried = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_supp_retry",
+                "command_id": "cmd_send_supp_retry",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_supp",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_supp" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            retried.pointer("/result/ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        let conn = open_store(root)?;
+        let msg = outbound_load_required(&conn, "outbound_messages", "msg_supp", "message")?;
+        assert_eq!(
+            outbound_string(&msg, &["send_status"]).as_deref(),
+            Some("queued_for_provider")
+        );
+        assert_eq!(
+            msg.pointer("/payload/retryable").and_then(Value::as_bool),
+            Some(false),
+            "successful retry clears the retryable flag"
+        );
+        assert!(
+            msg.pointer("/payload/send_block_reason").is_none()
+                || msg.pointer("/payload/send_block_reason") == Some(&Value::Null),
+            "successful retry clears the block reason"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_send_approved_is_idempotent_for_already_queued_message() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mbx_idem", "command_id": "cmd_mbx_idem", "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link", "record_id": "camp_idem",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_idem","mailbox_address":"idem@example.com","mailbox_status":"ready"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_account_limits",
+                "email:idem@example.com",
+                1000,
+                serde_json::json!({
+                    "id": "email:idem@example.com",
+                    "sender_account_id": "email:idem@example.com",
+                    "status": "active",
+                    "blocked": false,
+                    "daily_limit": 5,
+                    "daily_sent_count": 0,
+                    "sent_today": 0,
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_idem", "command_id": "cmd_eng_idem", "module": "outbound",
+                "command_type": "outbound.engagement.create", "record_id": "eng_idem",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_idem","company_id":"co_idem","contact_id":"ct_idem"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_prep_idem", "command_id": "cmd_prep_idem", "module": "outbound",
+                "command_type": "outbound.message.prepare", "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_idem", "campaign_id": "camp_idem",
+                    "sender_account_id": "email:idem@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Hi", "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_idem", "command_id": "cmd_req_idem", "module": "outbound",
+                "command_type": "outbound.message.request_approval", "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_idem"}, "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_idem", "command_id": "cmd_apv_idem", "module": "outbound",
+                "command_type": "outbound.message.approve", "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_idem"}, "client_context": actor.clone()
+            }),
+        )?;
+
+        // Two distinct command envelopes (different command_id, so the command
+        // bus does not dedupe at the command level) targeting the same message.
+        let send_cmd = |cmd_id: &str| {
+            serde_json::json!({
+                "id": cmd_id, "command_id": cmd_id, "module": "outbound",
+                "command_type": "outbound.message.send_approved", "record_id": "msg_idem",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_idem"}, "client_context": actor.clone()
+            })
+        };
+        let first = accept_rxdb_business_command(root, send_cmd("cmd_send_idem_1"))?;
+        let queue_id = first
+            .pointer("/result/provider_queue_id")
+            .and_then(Value::as_str)
+            .context("first send must return provider_queue_id")?
+            .to_string();
+        assert_eq!(
+            first.pointer("/result/idempotent").and_then(Value::as_bool),
+            None,
+            "the first send is not an idempotent replay"
+        );
+
+        // Re-dispatch the very same approved+queued message. It must be a no-op
+        // replay: same queue id, no second mailserver row, no double-count.
+        let second = accept_rxdb_business_command(root, send_cmd("cmd_send_idem_2"))?;
+        assert_eq!(
+            second
+                .pointer("/result/idempotent")
+                .and_then(Value::as_bool),
+            Some(true),
+            "a re-send of a queued message must be flagged idempotent"
+        );
+        assert_eq!(
+            second
+                .pointer("/result/provider_queue_id")
+                .and_then(Value::as_str),
+            Some(queue_id.as_str()),
+            "idempotent replay keeps the original queue id"
+        );
+
+        let queue_conn = Connection::open(crate::paths::core_db(root))?;
+        let queued_count: i64 = queue_conn.query_row(
+            "SELECT COUNT(*) FROM stalwart_smtp_queue WHERE to_addr = 'lead@example.com'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            queued_count, 1,
+            "no duplicate mailserver queue row on replay"
+        );
+        drop(queue_conn);
+
+        let conn = open_store(root)?;
+        let limit = outbound_load_required(
+            &conn,
+            "outbound_account_limits",
+            "email:idem@example.com",
+            "limit",
+        )?;
+        assert_eq!(
+            limit.get("daily_sent_count").and_then(Value::as_i64),
+            Some(1),
+            "idempotent replay must not increment the daily counter"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_send_links_message_to_communication_thread_bidirectionally() -> anyhow::Result<()> {
+        // Welle 10 (637/638): after an approved email is sent, the outbound
+        // message and the communication thread must reference each other so the
+        // link is traceable from either side (debug/status surfaces read it).
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mbx_link", "command_id": "cmd_mbx_link", "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link", "record_id": "camp_link",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_link","mailbox_address":"link@example.com","mailbox_status":"ready"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_link", "command_id": "cmd_eng_link", "module": "outbound",
+                "command_type": "outbound.engagement.create", "record_id": "eng_link",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_link","company_id":"co_link","contact_id":"ct_link"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_prep_link", "command_id": "cmd_prep_link", "module": "outbound",
+                "command_type": "outbound.message.prepare", "record_id": "msg_link",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_link", "campaign_id": "camp_link",
+                    "sender_account_id": "email:link@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Hi", "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_link", "command_id": "cmd_req_link", "module": "outbound",
+                "command_type": "outbound.message.request_approval", "record_id": "msg_link",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_link"}, "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_link", "command_id": "cmd_apv_link", "module": "outbound",
+                "command_type": "outbound.message.approve", "record_id": "msg_link",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_link"}, "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_link", "command_id": "cmd_send_link", "module": "outbound",
+                "command_type": "outbound.message.send_approved", "record_id": "msg_link",
+                "status": "pending_sync",
+                "payload": {"message_id":"msg_link"}, "client_context": actor.clone()
+            }),
+        )?;
+
+        // Outbound side carries the communication keys written back by the sync.
+        let conn = open_store(root)?;
+        let message = outbound_load_required(&conn, "outbound_messages", "msg_link", "message")?;
+        let message_key = message
+            .get("communication_message_key")
+            .and_then(Value::as_str)
+            .context("outbound message must carry communication_message_key after send")?
+            .to_string();
+        let thread_key = message
+            .get("thread_key")
+            .and_then(Value::as_str)
+            .context("outbound message must carry thread_key after send")?
+            .to_string();
+        assert!(
+            !message_key.is_empty() && !thread_key.is_empty(),
+            "communication keys must be non-empty"
+        );
+        drop(conn);
+
+        // Communication side carries the outbound identifiers in its metadata.
+        let channel_conn = Connection::open(crate::paths::core_db(root))?;
+        let metadata_json: String = channel_conn.query_row(
+            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+            [&message_key],
+            |row| row.get(0),
+        )?;
+        let metadata: Value = serde_json::from_str(&metadata_json)?;
+        assert_eq!(
+            metadata
+                .get("outbound_engagement_id")
+                .and_then(Value::as_str),
+            Some("eng_link"),
+            "communication message metadata must back-reference the engagement"
+        );
+        assert_eq!(
+            metadata.get("outbound_message_id").and_then(Value::as_str),
+            Some("msg_link"),
+            "communication message metadata must back-reference the outbound message"
+        );
+        assert_eq!(
+            metadata
+                .get("communication_thread_key")
+                .and_then(Value::as_str),
+            Some(thread_key.as_str()),
+            "thread key must match on both sides of the link"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_daily_limit_enforced_under_parallel_commands() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        let n: usize = 6;
+        let cap: i64 = 3;
+
+        // Establish the campaign + account_limits row, then pin a hard daily cap.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_mbx_cap", "command_id": "cmd_mbx_cap", "module": "outbound",
+                "command_type": "outbound.campaign.mailbox.link", "record_id": "camp_cap",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_cap","mailbox_address":"cap@example.com","mailbox_status":"ready"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_account_limits",
+                "email:cap@example.com",
+                1000,
+                serde_json::json!({
+                    "id": "email:cap@example.com",
+                    "sender_account_id": "email:cap@example.com",
+                    "status": "active",
+                    "blocked": false,
+                    "daily_limit": cap,
+                    "daily_sent_count": 0,
+                    "sent_today": 0,
+                    "created_at_ms": 1000,
+                    "updated_at_ms": 1000
+                }),
+            )?;
+        }
+
+        // Build N independent approved messages, all sharing the one sender.
+        for i in 0..n {
+            let eng = format!("eng_cap_{i}");
+            let msg = format!("msg_cap_{i}");
+            accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": format!("c_eng_{i}"), "command_id": format!("c_eng_{i}"),
+                    "module": "outbound", "command_type": "outbound.engagement.create",
+                    "record_id": eng, "status": "pending_sync",
+                    "payload": {"campaign_id":"camp_cap","company_id":format!("co_{i}"),"contact_id":format!("ct_{i}")},
+                    "client_context": actor.clone()
+                }),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": format!("c_prep_{i}"), "command_id": format!("c_prep_{i}"),
+                    "module": "outbound", "command_type": "outbound.message.prepare",
+                    "record_id": msg, "status": "pending_sync",
+                    "payload": {
+                        "engagement_id": eng, "campaign_id": "camp_cap",
+                        "sender_account_id": "email:cap@example.com",
+                        "recipient_email": format!("lead{i}@example.com"),
+                        "subject": "Hi", "body_text": "Hello"
+                    },
+                    "client_context": actor.clone()
+                }),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": format!("c_req_{i}"), "command_id": format!("c_req_{i}"),
+                    "module": "outbound", "command_type": "outbound.message.request_approval",
+                    "record_id": msg, "status": "pending_sync",
+                    "payload": {"message_id": msg}, "client_context": actor.clone()
+                }),
+            )?;
+            accept_rxdb_business_command(
+                root,
+                serde_json::json!({
+                    "id": format!("c_apv_{i}"), "command_id": format!("c_apv_{i}"),
+                    "module": "outbound", "command_type": "outbound.message.approve",
+                    "record_id": msg, "status": "pending_sync",
+                    "payload": {"message_id": msg}, "client_context": actor.clone()
+                }),
+            )?;
+        }
+
+        // Fire all N sends concurrently — each opens its own connection, exactly
+        // the parallel-command scenario the atomic reservation must survive.
+        let root_buf = root.to_path_buf();
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let r = root_buf.clone();
+                let actor = actor.clone();
+                std::thread::spawn(move || {
+                    accept_rxdb_business_command(
+                        &r,
+                        serde_json::json!({
+                            "id": format!("c_send_{i}"), "command_id": format!("c_send_{i}"),
+                            "module": "outbound", "command_type": "outbound.message.send_approved",
+                            "record_id": format!("msg_cap_{i}"), "status": "pending_sync",
+                            "payload": {"message_id": format!("msg_cap_{i}")},
+                            "client_context": actor
+                        }),
+                    )
+                })
+            })
+            .collect();
+
+        let mut ok = 0usize;
+        let mut limit_blocked = 0usize;
+        let mut transient = 0usize;
+        for handle in handles {
+            match handle.join().expect("send thread panicked") {
+                Ok(_) => ok += 1,
+                Err(err) => {
+                    let msg = err.to_string();
+                    if msg.contains("daily limit") {
+                        limit_blocked += 1;
+                    } else if msg.contains("locked") {
+                        // SQLite write-lock contention under heavy parallel load is a
+                        // transient failure. It may strike before the slot reservation
+                        // (no slot consumed) or after it commits but before the message
+                        // upsert (a leaked-but-counted slot). Either way the slot is
+                        // never double-counted and the counter cannot exceed the cap, so
+                        // the no-overshoot guarantee holds; only the realized send count
+                        // drops. The approved draft stays retryable.
+                        transient += 1;
+                    } else {
+                        panic!("unexpected send error: {err}");
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            ok + limit_blocked + transient,
+            n,
+            "every attempt is accounted for"
+        );
+        // The core safety guarantee: parallel sends may never exceed the cap.
+        assert!(
+            ok <= cap as usize,
+            "parallel sends overshot the cap: {ok} > {cap}"
+        );
+        let conn = open_store(root)?;
+        let limit = outbound_load_required(
+            &conn,
+            "outbound_account_limits",
+            "email:cap@example.com",
+            "limit",
+        )?;
+        let counter = limit
+            .get("daily_sent_count")
+            .and_then(Value::as_i64)
+            .expect("daily_sent_count present");
+        // The no-overshoot guarantee: the reservation never lets the counter exceed
+        // the cap, and every realized send is reflected in it.
+        assert!(
+            counter <= cap,
+            "parallel sends overshot the daily cap: {counter} > {cap}"
+        );
+        assert!(
+            counter >= ok as i64,
+            "every successful send must be counted: counter {counter} < ok {ok}"
+        );
+        assert_eq!(
+            limit.get("remaining_today").and_then(Value::as_i64),
+            Some(cap - counter)
+        );
+        // Absent transient contention the cap is fully reached, the rest hard-blocked,
+        // and the counter lands exactly on the cap with no leaked slots.
+        if transient == 0 {
+            assert_eq!(ok, cap as usize, "exactly the cap may pass");
+            assert_eq!(limit_blocked, n - cap as usize, "the rest must be blocked");
+            assert_eq!(counter, cap, "counter must land exactly on the cap");
+            assert_eq!(counter, ok as i64, "no leaked slots without contention");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_send_failure_reflects_block_onto_engagement() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_ef", "command_id": "cmd_eng_ef", "module": "outbound",
+                "command_type": "outbound.engagement.create", "record_id": "eng_ef",
+                "status": "pending_sync",
+                "payload": {"campaign_id":"camp_ef","company_id":"co_ef","contact_id":"ct_ef"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_ef", "command_id": "cmd_msg_ef", "module": "outbound",
+                "command_type": "outbound.message.prepare", "record_id": "msg_ef",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_ef", "campaign_id": "camp_ef",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "blocked@example.com",
+                    "subject": "Intro", "body_text": "Hello"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        {
+            let conn = open_store(root)?;
+            upsert_business_record(
+                &conn,
+                "outbound_suppression_entries",
+                "supp_ef",
+                1000,
+                serde_json::json!({
+                    "id": "supp_ef", "email": "blocked@example.com",
+                    "reason": "bounce", "status": "active",
+                    "created_at_ms": 1000, "updated_at_ms": 1000
+                }),
+            )?;
+        }
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_ef", "command_id": "cmd_req_ef", "module": "outbound",
+                "command_type": "outbound.message.request_approval", "record_id": "msg_ef",
+                "status": "pending_sync", "payload": {"message_id":"msg_ef"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_ef", "command_id": "cmd_apv_ef", "module": "outbound",
+                "command_type": "outbound.message.approve", "record_id": "msg_ef",
+                "status": "pending_sync", "payload": {"message_id":"msg_ef"},
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_ef", "command_id": "cmd_send_ef", "module": "outbound",
+                "command_type": "outbound.message.send_approved", "record_id": "msg_ef",
+                "status": "pending_sync", "payload": {"message_id":"msg_ef"},
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("send must be blocked");
+
+        // The engagement must carry the structured block reason so the timeline UI
+        // can show why the send did not go out.
+        let conn = open_store(root)?;
+        let eng = outbound_load_required(&conn, "outbound_engagements", "eng_ef", "engagement")?;
+        assert_eq!(
+            outbound_string(&eng, &["status"]).as_deref(),
+            Some("send_blocked")
+        );
+        assert_eq!(
+            outbound_string(&eng, &["last_send_block_reason"]).as_deref(),
+            Some("recipient_suppressed")
+        );
+        assert!(
+            outbound_string(&eng, &["last_send_error"]).is_some(),
+            "engagement records the underlying error text"
+        );
         Ok(())
     }
 
@@ -16622,6 +19153,301 @@ mod tests {
         assert_eq!(
             outbound_string(&message, &["payload", "cancelled_reason"]).as_deref(),
             Some("reply_received")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_reply_match_preserves_already_sent_messages() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_keep",
+                "command_id": "cmd_eng_keep",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_keep",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_keep",
+                    "company_id": "co_keep",
+                    "contact_id": "ct_keep"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        // An already-queued initial message and a not-yet-sent follow-up draft.
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_sent",
+                "command_id": "cmd_msg_sent",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_sent",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_keep",
+                    "campaign_id": "camp_keep",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Intro",
+                    "body_text": "Hello",
+                    "message_type": "initial"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_draft",
+                "command_id": "cmd_msg_draft",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_draft",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_keep",
+                    "campaign_id": "camp_keep",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "lead@example.com",
+                    "subject": "Follow-up",
+                    "body_text": "Checking in",
+                    "message_type": "followup"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        {
+            let conn = open_store(root)?;
+            let mut sent =
+                outbound_load_required(&conn, "outbound_messages", "msg_sent", "message")?;
+            outbound_put_string(&mut sent, "send_status", "queued_for_provider");
+            upsert_business_record(
+                &conn,
+                "outbound_messages",
+                "msg_sent",
+                now_ms() as i64,
+                sent,
+            )?;
+        }
+
+        let res = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_reply_keep",
+                "command_id": "cmd_reply_keep",
+                "module": "outbound",
+                "command_type": "outbound.reply.match",
+                "record_id": "eng_keep",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_keep",
+                    "reply_message_id": "email:inbox/lead-reply-keep",
+                    "classification": "positive"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let cancelled_ids = res
+            .pointer("/result/cancelled_message_ids")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(
+            cancelled_ids.len(),
+            1,
+            "only the un-sent draft may be cancelled"
+        );
+        assert_eq!(cancelled_ids[0].as_str(), Some("msg_draft"));
+
+        let conn = open_store(root)?;
+        let sent = outbound_load_required(&conn, "outbound_messages", "msg_sent", "message")?;
+        assert_eq!(
+            outbound_string(&sent, &["send_status"]).as_deref(),
+            Some("queued_for_provider"),
+            "already-queued message must be preserved"
+        );
+        let draft = outbound_load_required(&conn, "outbound_messages", "msg_draft", "message")?;
+        assert_eq!(
+            outbound_string(&draft, &["send_status"]).as_deref(),
+            Some("cancelled")
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_unsubscribe_reply_creates_suppression_and_blocks_send() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        });
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_eng_unsub",
+                "command_id": "cmd_eng_unsub",
+                "module": "outbound",
+                "command_type": "outbound.engagement.create",
+                "record_id": "eng_unsub",
+                "status": "pending_sync",
+                "payload": {
+                    "campaign_id": "camp_unsub",
+                    "company_id": "co_unsub",
+                    "contact_id": "ct_unsub",
+                    "payload": { "contact_email": "stop@example.com" }
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+
+        // The recipient replies asking to be removed. The reply must register an
+        // active suppression entry so any later send to that address is refused.
+        let res = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_reply_unsub",
+                "command_id": "cmd_reply_unsub",
+                "module": "outbound",
+                "command_type": "outbound.reply.match",
+                "record_id": "eng_unsub",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_unsub",
+                    "reply_message_id": "email:inbox/unsub-1",
+                    "classification": "unsubscribe"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let suppression_id = res
+            .pointer("/result/suppression_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        assert!(
+            suppression_id.is_some(),
+            "unsubscribe reply must create a suppression entry, got {res:?}"
+        );
+
+        let conn = open_store(root)?;
+        let reason = outbound_recipient_suppression_reason(&conn, "stop@example.com")?;
+        assert_eq!(reason.as_deref(), Some("unsubscribe"));
+        // The engagement must be hard-stopped, not merely marked reply_received.
+        let engagement =
+            outbound_load_required(&conn, "outbound_engagements", "eng_unsub", "engagement")?;
+        assert_eq!(
+            outbound_string(&engagement, &["status"]).as_deref(),
+            Some("stopped")
+        );
+        assert_eq!(
+            outbound_string(&engagement, &["payload", "stop_reason"]).as_deref(),
+            Some("unsubscribe")
+        );
+        drop(conn);
+
+        // A fresh approved draft to the now-suppressed recipient must be refused
+        // by the send gate (the suppression was created purely by the reply).
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_msg_after_unsub",
+                "command_id": "cmd_msg_after_unsub",
+                "module": "outbound",
+                "command_type": "outbound.message.prepare",
+                "record_id": "msg_after_unsub",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_unsub",
+                    "campaign_id": "camp_unsub",
+                    "sender_account_id": "sender@example.com",
+                    "recipient_email": "stop@example.com",
+                    "subject": "One more thing",
+                    "body_text": "Following up again",
+                    "message_type": "followup"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_req_after_unsub",
+                "command_id": "cmd_req_after_unsub",
+                "module": "outbound",
+                "command_type": "outbound.message.request_approval",
+                "record_id": "msg_after_unsub",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_after_unsub" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_apv_after_unsub",
+                "command_id": "cmd_apv_after_unsub",
+                "module": "outbound",
+                "command_type": "outbound.message.approve",
+                "record_id": "msg_after_unsub",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_after_unsub" },
+                "client_context": actor.clone()
+            }),
+        )?;
+        let blocked = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_send_after_unsub",
+                "command_id": "cmd_send_after_unsub",
+                "module": "outbound",
+                "command_type": "outbound.message.send_approved",
+                "record_id": "msg_after_unsub",
+                "status": "pending_sync",
+                "payload": { "message_id": "msg_after_unsub" },
+                "client_context": actor.clone()
+            }),
+        )
+        .expect_err("send to a suppressed recipient must be blocked");
+        assert!(
+            blocked.to_string().contains("suppressed"),
+            "expected suppression block, got: {blocked}"
+        );
+
+        // Idempotent: a second unsubscribe reply must not create a duplicate entry.
+        let res2 = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_reply_unsub_2",
+                "command_id": "cmd_reply_unsub_2",
+                "module": "outbound",
+                "command_type": "outbound.reply.match",
+                "record_id": "eng_unsub",
+                "status": "pending_sync",
+                "payload": {
+                    "engagement_id": "eng_unsub",
+                    "reply_message_id": "email:inbox/unsub-2",
+                    "classification": "unsubscribe"
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert!(
+            res2.pointer("/result/suppression_id")
+                .map(Value::is_null)
+                .unwrap_or(true),
+            "second unsubscribe must be a no-op, got {res2:?}"
         );
 
         Ok(())

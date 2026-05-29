@@ -443,6 +443,15 @@ fn handle_business_os_commands(root: &Path, args: &[String]) -> anyhow::Result<(
                 crate::business_os::store::process_source_parse_command(root, command_id)?;
             print_json(&serde_json::to_value(accepted)?)
         }
+        Some("dispatch") => {
+            // Agent-facing entry point for writeback commands (e.g. the
+            // `outbound.pipeline.write_outreach_draft` draft writeback). The
+            // document is fed through the exact same RxDB command-bus path the
+            // native peer uses — no HTTP, no external gateway.
+            let document = read_command_document(args)?;
+            let accepted = crate::business_os::store::accept_rxdb_business_command(root, document)?;
+            print_json(&accepted)
+        }
         Some("--help") | Some("-h") | None => {
             println!("{}", business_os_usage());
             Ok(())
@@ -1244,7 +1253,7 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -1286,6 +1295,25 @@ fn flag_values<'a>(args: &'a [String], flag: &str) -> Vec<&'a str> {
             }
         })
         .collect()
+}
+
+/// Read a business command document for `commands dispatch` from one of:
+/// `--input <path>` (JSON file), `--json <inline>`, or the first positional
+/// argument as inline JSON. Always parsed locally; never fetched over a network.
+fn read_command_document(args: &[String]) -> anyhow::Result<serde_json::Value> {
+    let raw = if let Some(path) = flag_value(args, "--input") {
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read command document from {path}"))?
+    } else if let Some(inline) = flag_value(args, "--json") {
+        inline.to_string()
+    } else if let Some(inline) = args.get(1).filter(|value| !value.starts_with("--")) {
+        inline.to_string()
+    } else {
+        anyhow::bail!(
+            "usage: ctox business-os commands dispatch (--input <path> | --json <json> | <json>)"
+        );
+    };
+    serde_json::from_str(&raw).context("command document is not valid JSON")
 }
 
 fn apply_mcp_policy_flag(

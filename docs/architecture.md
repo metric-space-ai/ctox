@@ -12,6 +12,7 @@ The active tree is intentionally narrow:
 - `src/apps/` contains app surfaces: Desktop, Business OS, and the web app area.
 - `src/tools/` contains supporting source packages such as web, PDF, document,
   and speech tooling.
+- `src/skills/` contains the system and user skill catalog and pack management (which is embedded at compile-time and imported into SQLite at service start).
 - `src/scripts/` contains only source-side build helpers that are still active.
 - `docs/` contains technical documentation, RFCs, legal notices, and the
   GitHub Pages site under `docs/site/`.

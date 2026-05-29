@@ -205,16 +205,48 @@ Deterministic recovery loop for stuck or degraded states.
 ## Enforcement Rules
 
 ### Safety Gates
-The kernel asserts the following rules during `validate_transition` calls:
+The transition kernel asserts the following programmatic safety gates during `validate_transition` calls:
 
 1. **Founder Protected Lane (`validate_founder_communication`)**:
-   - Outbound founder communication (`Sending` / `Sent` states) **must** run in the `P0FounderCommunication` lane and requires a valid review audit.
-   - Outbound founder emails are blocked if the message body or recipient list differs from the approved draft.
+   - Outbound founder/owner/admin communication (`Sending` / `Sent` states) **must** run in the `P0FounderCommunication` lane.
+   - Outbound founder emails are blocked if the outgoing message body hash or recipient list hash differs from the approved draft.
    - Founder items cannot be superseded or spilled to external ticket systems.
-2. **Outcome Witnessing (`validate_outcome_witness`)**:
-   - Moving to a terminal state (`Completed`, `Closed`, `Sent`, `Done`) requires explicit validation: all expected technical artifacts must exist in their expected terminal state. Missing deliverables raise a `WP-Outcome-Missing` violation.
-3. **Required Reviews (`validate_review_gate`)**:
-   - Owner-visible work closures require a durable review audit key and `completion_review_verdict=pass`.
-   - Rejections during review checkpoints must resume the `main_agent` instead of spawning review-owned subtasks.
-4. **Verification Gates (`validate_ticket_closure`)**:
-   - WorkItem or Ticket closures require passing `verification_runs` evidence.
+2. **Required Reviews (`validate_review_gate`)**:
+   - Owner-visible completion claims (`Closed` / `Delivered` states) require a durable review audit key.
+   - Review-required terminal success requires `completion_review_verdict=pass` and verification/validator evidence.
+   - Rejections or rework required during review checkpoints must target the reviewed entity and resume the `main_agent` instead of spawning review-owned subtasks.
+3. **Rework Required Verification (`validate_rework_required_gate`)**:
+   - Moving to `ReworkRequired` requires a durable review rejection/checkpoint or validator rework witness.
+4. **Harness Static Model Consistency (`validate_review_harness_static_model`)**:
+   - Ensures the review harness state transitions have no cycles without consuming budget, terminal success ends in `Passed` via `ValidatorPass`, and `ReviewPassed` only enters the validation gate.
+5. **Terminal Failure Reasons (`validate_terminal_failure_gate`)**:
+   - Moving QueueItem, WorkItem, or Ticket to `Failed` (unless in `P3Housekeeping`) requires durable `failure_reason` and `failure_class` metadata.
+6. **Work Success Validation (`validate_work_terminal_success_gate`)**:
+   - Work success (`Completed` or `Closed`) requires completion review and validation proof, or an explicit terminal policy proof.
+7. **Verification Gates (`validate_ticket_closure`)**:
+   - Ticket or WorkItem closures require passing `verification_id` evidence.
+8. **Commitment Schedule Backing (`validate_commitment_backing`)**:
+   - Deadline commitments (`Committed`, `BackingScheduled`, `DueSoon`) require a backing schedule task id before they can activate.
+9. **Schedule Backing Commitments (`validate_schedule_backing`)**:
+   - A schedule backing a commitment cannot be paused or disabled without specifying a replacement schedule task or raising an escalation.
+10. **Deterministic Repair Hot Path (`validate_repair`)**:
+    - Repairing/Restoring transitions must specify the canonical protected hot path being repaired.
+11. **Incident Linkage (`validate_knowledge_capture`)**:
+    - Failure-shield knowledge entries must specify the `incident_id` preventing recurrence.
+12. **Outcome Witnessing (`validate_outcome_witness`)**:
+    - Moving to a terminal state (`Completed`, `Closed`, `Sent`, `Done`) requires explicit validation: all expected technical artifacts must exist in their expected terminal state. Missing deliverables raise a `WP-Outcome-Missing` violation.
+
+### Runtime State Invariants
+In addition to the transition kernel, `src/core/service/state_invariants.rs` evaluates overall runtime state health using five critical programmatic constraints:
+
+1. **Active Work on Closed Mission (`closed_mission_with_open_runtime_work`)**:
+   - Durable runtime work (open plans/queues) is strictly forbidden if the mission state is closed, done, dormant, or not open.
+2. **Idle Allowed with Open Work (`idle_allowed_with_open_runtime_work`)**:
+   - A mission cannot allow idle state (`allow_idle = true`) while there is still open durable runtime work.
+3. **Mission Focus Head Mismatch (`mission_focus_head_mismatch`)**:
+   - The stored mission state must be synchronized to the latest focus continuity head commit ID.
+4. **Continuity Resync Required (`mission_state_requires_continuity_resync`)**:
+   - Stored mission state cache values must exactly match the mission state derived from the latest continuity document.
+5. **Semantic Focus Conflict (`focus_semantic_conflict`)**:
+   - The focus continuity document must not contain duplicate or conflicting values for normalized semantic fields (`Mission`, `Mission state`, `Continuation mode`, `Trigger intensity`, `Current blocker`, `Next slice`, `Done gate`, `Closure confidence`).
+

@@ -138,41 +138,60 @@ ctox channel send --channel tui --account-key tui:local --thread-key local/test 
 
 ## Plans
 
-Create and inspect persistent multi-step plans:
+Create, mutate, and inspect persistent multi-step execution plans:
 
 ```sh
-ctox plan init
-ctox plan draft --title "remote rollout" --prompt "inspect host, patch deploy script, run smoke check"
-ctox plan ingest --title "remote rollout" --prompt "inspect host, patch deploy script, run smoke check"
-ctox plan list
-ctox plan show --goal-id <goal-id>
-ctox plan emit-next --goal-id <goal-id>
+ctox plan init                                         # Initialize plan storage
+ctox plan draft --title <title> --prompt <text>        # Draft a new multi-step plan
+ctox plan ingest --title <title> --prompt <text>       # Ingest/create an active multi-step plan
+ctox plan list                                         # List all plans
+ctox plan show --goal-id <goal-id> [--json]            # Show details of a specific plan
+ctox plan emit-next --goal-id <goal-id> [--json]       # Show the next executable step
+ctox plan tick                                         # Progress all active plans by executing due steps
+ctox plan complete-step --goal-id <id> --step-id <id> [--note <text>] # Mark a step as successfully completed
+ctox plan fail-step --goal-id <id> --step-id <id> [--note <text>] # Mark a step as failed
+ctox plan retry-step --goal-id <id> --step-id <id> [--note <text>] # Queue a step for retry
+ctox plan block-step --goal-id <id> --step-id <id> --reason <text> # Mark a step as blocked
+ctox plan unblock-step --goal-id <id> --step-id <id>   # Unblock a blocked step
 ```
 
 ## Queue
 
-Inspect and manage the execution queue:
+Inspect, manage, and audit the execution queue:
 
 ```sh
-ctox queue list
-ctox queue add --title "run smoke check" --prompt "Run the remote smoke check on host X and summarize failures." --skill "follow-up-orchestrator" --priority high
-ctox queue show --message-key <message-key>
-ctox queue reprioritize --message-key <message-key> --priority urgent
-ctox queue block --message-key <message-key> --reason "waiting for owner approval"
-ctox queue release --message-key <message-key>
-ctox queue complete --message-key <message-key> --note "smoke check passed"
+ctox queue add --title <label> --prompt <text> [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--parent-message-key <key>] # Submit a task
+ctox queue list [--status <pending|leased|blocked|failed|handled|cancelled>]... [--limit <n>] # List queued items
+ctox queue show --message-key <key>                    # Show details for a queued item
+ctox queue edit --message-key <key> [--title <label>] [--prompt <text>] [--thread-key <key>] [--workspace-root <path>] [--clear-workspace-root] [--skill <name>] [--clear-skill] [--priority <urgent|high|normal|low>] # Edit a task
+ctox queue reprioritize --message-key <key> --priority <urgent|high|normal|low> # Update task priority
+ctox queue block --message-key <key> --reason <text>   # Block execution of a task
+ctox queue release --message-key <key> [--priority <urgent|high|normal|low>] [--clear-note] [--note <text>] # Release/unblock a task
+ctox queue complete --message-key <key> [--note <text>] # Mark task successfully completed
+ctox queue fail --message-key <key> --reason <text>    # Mark task as failed
+ctox queue cancel --message-key <key> [--reason <text>] # Cancel task execution
+ctox queue spill --message-key <key> [--ticket-system <name>] [--reason <text>] [--skill <name>] [--publish] # Spill task to external ticket tracker
+ctox queue spill-candidates [--limit <n>]              # List tasks ready for external spilling
+ctox queue spills [--state <spilled|restored>] [--limit <n>] # List spilled queue tasks
+ctox queue restore --message-key <key> [--priority <priority>] [--note <text>] # Restore a spilled task back to queue
+ctox queue cleanup-scope [--all-open] [--match-run-id <id>] [--match-thread-prefix <prefix>] [--dry-run] # Bulk clean/prune queue scope
+ctox queue assert-clean-scope [--all-open] [--match-thread-prefix <prefix>] [--empty] # Assert queue scope matches conditions
+ctox queue repair [--dry-run] [--mechanical]            # Run automated queue cleanup & diagnostic repair pass
 ```
 
 ## Schedule
 
-Work with recurring or time-based work:
+Work with recurring cron-based or time-scheduled execution tasks:
 
 ```sh
-ctox schedule init
-ctox schedule add --name "blocked review" --cron "0 * * * *" --prompt "review blocked tasks"
-ctox schedule list
-ctox schedule tick
-ctox schedule run-now --task-id <task-id>
+ctox schedule init                                     # Initialize the schedule storage
+ctox schedule add --name <label> --cron '<expr>' --prompt <text> [--thread-key <key>] [--skill <name>] # Add recurring task
+ctox schedule list                                     # List scheduled tasks
+ctox schedule pause --task-id <id>                     # Temporarily disable a scheduled task
+ctox schedule resume --task-id <id>                    # Re-enable a paused scheduled task
+ctox schedule remove --task-id <id>                    # Delete a scheduled task
+ctox schedule run-now --task-id <id>                   # Force-trigger a scheduled task immediately
+ctox schedule tick                                     # Progress queue scheduling and emit due tasks
 ```
 
 ## Follow-Up
@@ -252,9 +271,11 @@ ctox chat-prompt-export
 Inspect verification runs and mission assurance evidence:
 
 ```sh
-ctox verification assurance
-ctox verification runs
-ctox verification claims
+ctox verification init                                 # Initialize verification tables in the database
+ctox verification assurance [--conversation-id <id>]    # Snapshot of the overall mission assurance status
+ctox verification runs [--conversation-id <id>] [--limit <n>] # List recent slice verification runs
+ctox verification claims [--conversation-id <id>] [--limit <n>] [--all] # List active or all mission claims
+ctox verification claim-set --conversation-id <id> --kind <kind> --status <status> --subject <text> --summary <text> --evidence <text> [--blocks-closure] [--recheck-policy <always|on_change|never>] [--expires-at <epoch-ms>] [--last-run-id <id>] [--claim-key <id>] # Manually upsert a verification claim
 ```
 
 ## Browser Reference Workspace
@@ -303,19 +324,25 @@ ctox skills disable <skill-name>
 
 ## Strategic Directives
 
-Inspect the high-level goals and mission directives for the daemon loop:
+Inspect and mutate the high-level goals and mission directives for the daemon loop:
 
 ```sh
-ctox strategy show
+ctox strategy show [--conversation-id <id>|--thread-key <key>] # Show the active strategic snapshot
+ctox strategy history [--conversation-id <id>|--thread-key <key>] [--kind <kind>] [--limit <n>] # View directives history
+ctox strategy set --kind <kind> --title <text> (--body <text>|--body-file <path>) [--conversation-id <id>|--thread-key <key>] [--author <name>] [--reason <text>] [--status <active|proposed>] [--triggered-by-inbound <message_key>] # Create/upsert a strategic directive
+ctox strategy propose --kind <kind> --title <text> (--body <text>|--body-file <path>) [--conversation-id <id>|--thread-key <key>] [--author <name>] [--reason <text>] [--triggered-by-inbound <message_key>] # Propose a strategic directive
+ctox strategy activate --directive-id <id> [--decided-by <name>] [--reason <text>] [--triggered-by-inbound <message_key>] # Activate a proposed directive
 ```
 
 ## Governance
 
-Inspect governance decisions, safety overrides, and active block/gate state:
+Inspect governance decisions, safety overrides, active block/gate state, and events:
 
 ```sh
-ctox governance audit
-ctox governance list
+ctox governance init                                  # Initialize the governance tables
+ctox governance snapshot [--conversation-id <id>]      # Show the current active block/gate snapshot (alias: ctox governance status)
+ctox governance inventory                             # List all registered safety and authority gates
+ctox governance events [--conversation-id <id>] [--limit <n>] # List recent safety and authority gate event logs
 ```
 
 ## Mailserver
@@ -323,33 +350,71 @@ ctox governance list
 Manage integrated mailserver accounts for daemon intake/outbound reviewed send:
 
 ```sh
-ctox mailserver list
-ctox mailserver domain add <domain>
-ctox mailserver user add <email> --password <pwd>
-ctox mailserver test-send --to <recipient> --subject <subj> --body <body>
+ctox mailserver list-domains                          # List registered mailserver domains
+ctox mailserver add-domain <domain> [--selector <selector>] [--private-key <key>] # Add a new domain
+ctox mailserver list-users                            # List registered users
+ctox mailserver add-user <email> <password>           # Add a mail user account
+ctox mailserver send-email --from <email> --to <email> --subject <subject> --body <body> # Send a test/outbound email
+```
+
+## Harness Flow
+
+Render visual representation of active and support processes for a message or task chain:
+
+```sh
+ctox harness-flow [--latest] [--message-key <key>] [--work-id <id>] [--width <n>] [--json] # Render the flowchart (ASCII or JSON)
+ctox harness-flow init                                # Initialize the harness flow event ledger
+ctox harness-flow events [--message-key <key>] [--work-id <id>] [--ticket-key <key>] [--limit <n>] # List durable harness ledger events
 ```
 
 ## Forensic Process Mining
 
-Investigate daemon liveness, harness executions, mutation event logs, and conformance drift:
+Investigate daemon liveness, mutation event logs, and structural conformance:
 
 ```sh
-ctox harness-flow                                     # Render visual harness ASCII flowchart
-ctox process-mining spawn-liveness                     # Verify worker liveness & contracts
-ctox harness-mining stuck-cases                       # Detect stuck agent runs
-ctox harness-mining variants                          # Analyze executed harness variants
-ctox harness-mining multiperspective                   # Deep multiperspective conformance audit
+ctox process-mining ensure                             # Reinstall triggers and schema if needed
+ctox process-mining schema                             # Inspect tables and trigger schema details
+ctox process-mining inventory                          # List registered table triggers and versions
+ctox process-mining events [--limit <n>]               # View raw database mutation events
+ctox process-mining cases [--limit <n>]                # List case-id aggregate summaries
+ctox process-mining case <case-id> [--limit <n>]       # Fetch raw events for a specific case
+ctox process-mining explain-case <case-id> [--limit <n>] # Render directly-follows edges for a case
+ctox process-mining objects [--limit <n>]              # View multi-perspective object frequencies
+ctox process-mining transitions [--limit <n>]          # View transition matrix count distribution
+ctox process-mining dfg [--limit <n>]                  # View directly-follows graph frequencies
+ctox process-mining core-liveness                      # Run structural check on the core state machine
+ctox process-mining spawn-liveness                     # Verify worker spawn models & liveness
+ctox process-mining spawn-edges [--limit <n>]          # List parent-to-child subagent spawn trees
+ctox process-mining deadlocks [--limit <n>]            # Detect activities that represent terminal dead ends
+ctox process-mining violations [--limit <n>]          # Inspect raw protocol and transition violations
+ctox process-mining scan-violations                    # Force-execute a protocol violation audit
+ctox process-mining prune [--sqlite-access-window <n>] # Prune high-volume SQLite statement events only
+```
+
+## Harness Mining
+
+Forensic and conformance audit of the autonomous-agent harness retry loops and triggers against the core state machine:
+
+```sh
+ctox harness-mining brief [--stuck-min-attempts <n>] [--conformance-threshold <0..1>] [--drift-threshold <f>] # Cluster health brief
+ctox harness-mining stuck-cases [--min-attempts <n>] [--idle-seconds <s>] [--limit <n>] # Detect stuck agent runs
+ctox harness-mining variants [--entity-type <t>] [--limit <n>] [--cluster] # Trace variant clustering
+ctox harness-mining sojourn [--entity-type <t>] [--limit <n>] # State holding time distribution
+ctox harness-mining conformance [--lane <lane>] [--since <iso8601>] [--window <n>] [--fitness-threshold <0.0..1.0>] # Replay conformance replay fit
+ctox harness-mining alignment [--entity-type <t>] [--limit <n>] # A* alignment synchronous check
+ctox harness-mining causal [--violation-code <code>] [--lookback <n>] [--limit <n>] # Predecessor analysis for violations
+ctox harness-mining drift [--window <n>] [--threshold <f>] # Page-Hinkley concept drift
+ctox harness-mining multiperspective [--entity-type <t>] [--limit <n>] # Data-aware constraint check
+ctox harness-mining audit-tick [--stuck-min-attempts <n>] [--conformance-threshold <0..1>] [--drift-threshold <f>] # Execute audit tick
+ctox harness-mining findings [--status <status>] [--kind <k>] [--limit <n>] # List findings
+ctox harness-mining finding-ack --finding-id <id> [--note <text>] # Acknowledge finding
+ctox harness-mining finding-mitigate --finding-id <id> --by <by> [--note <text>] # Mitigate finding
+ctox harness-mining finding-verify --finding-id <id> [--note <text>] # Verify finding mitigation
 ```
 
 ## Audit Trail Reset and Recovery
 
-CTOX instruments every runtime table with SQLite triggers that record each
-mutation into the process-mining event log. This trail is what makes a mission
-auditable after the fact. Because the instrumentation sits in the write path,
-a corrupted event log or a bad trigger can amplify a bug — failing the very
-writes it only means to observe. `ctox reset` is the stable, scoped recovery
-for that situation. It clears or rebuilds the audit trail only; it never touches
-business data.
+CTOX instruments every runtime table with SQLite triggers that record each mutation into the process-mining event log. This trail is what makes a mission auditable after the fact. Because the instrumentation sits in the write path, a corrupted event log or a bad trigger can amplify a bug — failing the very writes it only means to observe. `ctox reset` is the stable, scoped recovery for that situation. It clears or rebuilds the audit trail only; it never touches business data.
 
 ```sh
 ctox reset process-mining                  # Dry-run: report what a soft reset would delete
@@ -360,21 +425,8 @@ ctox reset all --confirm                   # Soft-reset process-mining + harness
 ctox reset all --hard --confirm            # Hard-reset process-mining + clear harness-mining
 ```
 
-- **Dry-run by default.** Without `--confirm`, `reset` only reports the row
-  counts it would delete (as JSON) and changes nothing. Destructive runs require
-  `--confirm` and execute inside a single transaction.
-- **soft** (default) empties the recorded-data tables (`ctox_process_events`,
-  `ctox_process_context`, the `ctox_pm_*` analysis tables, and the
-  `ctox_core_transition_proofs` / `ctox_core_spawn_edges` evidence) while leaving
-  the schema, mutation triggers, and transition-rule configuration in place.
-- **`--hard`** (process-mining only) first drops every process-mining trigger so
-  a broken instrumentation layer can no longer block live writes, then drops the
-  process-mining tables and rebuilds a clean schema — reinstalling fresh triggers
-  and re-seeding the default transition rules. This is the recovery path when the
-  instrumentation itself is the problem.
-- **Self-recording.** Every `ctox` invocation is itself recorded in the audit
-  trail, so a confirmed reset is immediately followed by a small number of rows
-  describing the reset command run. This is expected: the log faithfully records
-  that a reset happened.
-- For routine retention (trimming only the high-volume `sqlite-access:` events
-  rather than wiping the trail), use `ctox process-mining prune` instead.
+- **Dry-run by default.** Without `--confirm`, `reset` only reports the row counts it would delete (as JSON) and changes nothing. Destructive runs require `--confirm` and execute inside a single transaction.
+- **soft** (default) empties the recorded-data tables (`ctox_process_events`, `ctox_process_context`, the `ctox_pm_*` analysis tables, and the `ctox_core_transition_proofs` / `ctox_core_spawn_edges` evidence) while leaving the schema, mutation triggers, and transition-rule configuration in place.
+- **`--hard`** (process-mining only) first drops every process-mining trigger so a broken instrumentation layer can no longer block live writes, then drops the process-mining tables and rebuilds a clean schema — reinstalling fresh triggers and re-seeding the default transition rules. This is the recovery path when the instrumentation itself is the problem.
+- **Self-recording.** Every `ctox` invocation is itself recorded in the audit trail, so a confirmed reset is immediately followed by a small number of rows describing the reset command run. This is expected: the log faithfully records that a reset happened.
+- For routine retention (trimming only the high-volume `sqlite-access:` events rather than wiping the trail), use `ctox process-mining prune` instead.

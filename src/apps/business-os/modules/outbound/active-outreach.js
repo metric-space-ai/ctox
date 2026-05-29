@@ -508,6 +508,15 @@ function renderEngagementTimeline(engagement, messages) {
     if (msg.send_status === 'sent') {
       entries.push({ ts: msg.sent_at_ms || msg.updated_at_ms || 0, kind: 'sent', label: translate('sent', 'Gesendet'), msgId: msg.id });
     }
+    if (msg.send_status === 'send_blocked') {
+      entries.push({
+        ts: msg.payload?.last_send_attempt_at_ms || msg.updated_at_ms || 0,
+        kind: 'blocked',
+        label: translate('sendBlocked', 'Versand blockiert'),
+        detail: prettyBlockReason(msg.payload?.send_block_reason || ''),
+        msgId: msg.id,
+      });
+    }
     if (msg.send_status === 'cancelled') {
       entries.push({ ts: msg.updated_at_ms || 0, kind: 'cancelled', label: translate('cancelled', 'Abgebrochen'), detail: msg.payload?.cancelled_reason || '', msgId: msg.id });
     }
@@ -518,6 +527,14 @@ function renderEngagementTimeline(engagement, messages) {
       kind: 'approval',
       label: approval.decision === 'approved' ? translate('approvedBy', 'Freigabe') : translate('rejectedBy', 'Ablehnung'),
       detail: approval.comment || '',
+    });
+  }
+  if ((engagement.status || '') === 'stopped' && engagement.payload?.stop_reason) {
+    entries.push({
+      ts: engagement.payload.stopped_at_ms || engagement.updated_at_ms || 0,
+      kind: 'stopped',
+      label: translate('engagementStopped', 'Engagement gestoppt'),
+      detail: prettyStopReason(engagement.payload.stop_reason),
     });
   }
   entries.sort((a, b) => a.ts - b.ts);
@@ -619,16 +636,25 @@ function renderReadyToSendItem(msg) {
     : (msg.recipient_email || '—');
   const subject = msg.subject || msg.payload?.subject || '';
   const busy = stateRef.activeOutreach.busyMessageIds.has(msg.id);
+  // A blocked send stays approved + retry-able: the backend keeps the draft and
+  // records why it could not go out (suppression, limit, queue failure, …).
+  const blocked = (msg.send_status || '') === 'send_blocked';
+  const blockReason = msg.payload?.send_block_reason || '';
+  const lastError = msg.payload?.last_send_error || '';
+  const sendLabel = blocked
+    ? translate('retrySend', 'Erneut versuchen')
+    : translate('queueSend', 'In Mailserver-Queue einreihen');
   return `
-    <li class="outbound-outreach-ready-item">
+    <li class="outbound-outreach-ready-item${blocked ? ' outbound-outreach-ready-blocked' : ''}">
       <div>
         <strong>${escapeFn(subject)}</strong>
         <small>${escapeFn(recipient)}</small>
+        ${blocked ? `<span class="outbound-outreach-badge outbound-outreach-badge-blocked" title="${escapeFn(lastError)}">${escapeFn(translate('sendBlocked', 'Versand blockiert'))}: ${escapeFn(prettyBlockReason(blockReason))}</span>` : ''}
       </div>
       <div class="outbound-outreach-actions-cell">
         ${isPhysical
           ? `<button type="button" class="outbound-button primary" data-action="ao-mark-letter-sent" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('markLetterSent', 'Als verschickt markieren'))}</button>`
-          : `<button type="button" class="outbound-button primary" data-action="ao-send-approved" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('queueSend', 'In Mailserver-Queue einreihen'))}</button>`}
+          : `<button type="button" class="outbound-button primary" data-action="ao-send-approved" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(sendLabel)}</button>`}
         <button type="button" class="outbound-button" data-action="ao-cancel-message" data-message-id="${escapeFn(msg.id)}" ${busy ? 'disabled' : ''}>${escapeFn(translate('cancel', 'Abbrechen'))}</button>
       </div>
     </li>
@@ -937,6 +963,29 @@ function prettyReplyClass(cls) {
     unclear: translate('replyUnclear', 'Unklar'),
   };
   return map[cls] || cls;
+}
+
+function prettyStopReason(reason) {
+  const map = {
+    unsubscribe: translate('replyUnsubscribe', 'Abmeldung'),
+    bounce: translate('stopBounce', 'Bounce'),
+    complaint: translate('stopComplaint', 'Beschwerde'),
+  };
+  return map[reason] || prettyReplyClass(reason);
+}
+
+function prettyBlockReason(reason) {
+  const map = {
+    recipient_suppressed: translate('blockSuppressed', 'Empfänger gesperrt'),
+    sender_blocked: translate('blockSenderBlocked', 'Sender gesperrt'),
+    sender_limit_exhausted: translate('blockLimit', 'Tageslimit erreicht'),
+    approval_required: translate('blockApproval', 'Freigabe erforderlich'),
+    provider_queue_failed: translate('blockQueue', 'Mailserver-Queue fehlgeschlagen'),
+    missing_recipient: translate('blockRecipient', 'Empfänger fehlt'),
+    missing_sender: translate('blockSender', 'Sender fehlt'),
+    send_blocked: translate('blockGeneric', 'Versand blockiert'),
+  };
+  return map[reason] || reason || translate('blockGeneric', 'Versand blockiert');
 }
 
 function formatTimestamp(ms) {

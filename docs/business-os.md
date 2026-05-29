@@ -13,7 +13,9 @@ The application layers are distributed between the host daemon and the web clien
 ```text
 CTOX App (Rust Daemon Host)
   -> Served from the active CTOX instance webserver
-  -> SQLite authoritative state (runtime/ctox.sqlite3)
+  -> SQLite Authoritative state (runtime/business-os.sqlite3)
+  -> SQLite Core daemon database (runtime/ctox.sqlite3)
+  -> SQLite RxDB sync metadata (runtime/business-os-rxdb.sqlite3)
   -> Rust native P2P sync peer (rxdb-rs)
   -> Command validation and agent loop supervision
 
@@ -29,21 +31,24 @@ To support setups behind NAT, residential firewalls, or private networks, the Bu
 
 ## 2. Sync Architecture (CTOX DB / RxDB WebRTC)
 
-Replication between the client browser (IndexedDB) and the daemon (SQLite) is
-handled by the **CTOX DB WebRTC replication contract**. CTOX DB is the
-Business OS runtime id for the CTOX-owned RxDB-derived implementation; it is
-not a drop-in replacement for upstream npm `rxdb`.
+Replication between the client browser (IndexedDB) and the daemon (SQLite) is handled by the **CTOX DB WebRTC replication contract**. CTOX DB is the Business OS runtime id for the CTOX-owned RxDB-derived implementation; it is not a drop-in replacement for upstream npm `rxdb`.
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/business-os.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```
 
-1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
+1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured via `CTOX_BUSINESS_OS_SIGNALING_URLS` or persisted in `runtime/business-os-signaling-urls.json`) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
 2. **P2P Channel**: Once paired, a direct WebRTC channel carries all data sync.
 3. **Rust Core Authority**: The Rust daemon remains the authority for command execution and state-machine transitions. The browser writes command documents to RxDB; the daemon peer consumes, validates, and applies them to the authoritative SQLite database, and replicates the resulting projections back to the client.
+
+### Strict WebRTC-Only Data Path Invariants
+
+To preserve WebRTC-only sync invariants, all record-shaped data must flow exclusively via the WebRTC/RxDB synchronization layer. 
+- **No HTTP Bridge or Fallbacks**: The system has no HTTP endpoints or data proxies for fetching or updating records. Obsolete references, such as the research module's legacy HTTP fallback endpoint for fetching parquet rows, have been completely removed.
+- **Mesh Materialization**: In modules like systematic research and knowledge databases, the authoritative Rust peer materializes records (including tables imported from parquet catalogs) directly into synced collections such as `knowledge_tables`. If a document does not yet carry synced rows locally, the client UI surfaces nothing until P2P replication delivers the data over WebRTC.
 
 ---
 
@@ -73,10 +78,7 @@ Durable, auditable lifecycle actions use `business_commands`:
 - `browser.forward`
 - `browser.reset`
 
-The same command/projection pattern is used by the core Tickets app. Browser
-actions write `ctox.ticket.*` command documents into `business_commands`; CTOX
-executes the native ticket capability and republishes ticket state through
-`ctox_ticket_*` collections over the existing WebRTC data path.
+The same command/projection pattern is used by the core Tickets app. Browser actions write `ctox.ticket.*` command documents into `business_commands`; CTOX executes the native ticket capability and republishes ticket state through `ctox_ticket_*` collections over the existing WebRTC data path.
 
 High-churn browser data uses dedicated replicated collections:
 
@@ -106,8 +108,7 @@ Remote Browser control is native-authorized:
 
 ## 5. Agent Communication: Business OS MCP
 
-Business OS MCP is the supported agent communication channel for external
-software. It is separate from the browser replication path.
+Business OS MCP is the supported agent communication channel for external software. It is separate from the browser replication path.
 
 Use MCP for:
 
@@ -145,9 +146,7 @@ The companion external-agent skill is stored at:
 skills/ctox-business-os-mcp/
 ```
 
-The skill tells Codex or another agent how to use the typed MCP tools safely. It
-does not grant access by itself; access is granted only by the configured MCP
-server token and the CTOX Business OS MCP policy.
+The skill tells Codex or another agent how to use the typed MCP tools safely. It does not grant access by itself; access is granted only by the configured MCP server token and the CTOX Business OS MCP policy.
 
 The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
 
@@ -157,8 +156,7 @@ ctox business-os mcp connect \
   --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
 ```
 
-If the instance is not connected, `/mcp/cto1.kunstmen.com` returns
-`runtime_unavailable` and agents must report that CTOX MCP is not connected.
+If the instance is not connected, `/mcp/cto1.kunstmen.com` returns `runtime_unavailable` and agents must report that CTOX MCP is not connected.
 
 ---
 
@@ -175,7 +173,91 @@ The main entrypoint is the Desktop shell (`modules/desktop/`), providing a light
 
 ---
 
-## 7. Command Reference
+## 7. Module Versioning and Rollback
+
+Business OS supports strict module bundle versioning, automated integrity checks, and a granular rollback system. This replaces the old legacy single `module.json` manifest hashing with a comprehensive, whole-bundle file provenance capture.
+
+### SQLite Versioning Schema
+
+All version records are stored in the authoritative SQLite store (`runtime/business-os.sqlite3`) in the `business_module_versions` table:
+
+```sql
+CREATE TABLE IF NOT EXISTS business_module_versions (
+    version_id TEXT PRIMARY KEY,
+    module_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    origin TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    bundle_sha256 TEXT NOT NULL,
+    files_json TEXT NOT NULL DEFAULT '[]',
+    sealed INTEGER NOT NULL DEFAULT 0,
+    created_by TEXT NOT NULL DEFAULT '',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_business_module_versions_module
+    ON business_module_versions(module_id, seq DESC);
+```
+
+#### Columns Explained:
+- `version_id`: A unique, prefixed identifier for the version (e.g. `modver_{module_id}_{seq}_{uuid}`).
+- `module_id`: The sanitized identifier slug of the business-os module.
+- `seq`: Monotonically increasing sequence number per module.
+- `origin`: The source origin type, including `install`, `manual_release`, `rollback`, `edit`, and `creator_deploy`.
+- `bundle_sha256`: A SHA-256 checksum of the entire directory bundle.
+- `files_json`: A JSON array storing the relative path and full text content of each source file included in the bundle baseline.
+- `sealed`: A boolean integer (`0` or `1`) indicating whether the version boundary has been sealed. Edits coalesce into a single open (`sealed = 0`) working version, whereas actions like installations, rollbacks, and manual releases seal the boundary.
+- `created_by` / `created_at_ms` / `updated_at_ms`: Metadata tracking user sessions and timestamps.
+
+### RxDB Operational Commands
+
+Rollback operations are driven through generic RxDB command documents published by the client browser peer into the replicated `business_commands` collection:
+
+1. **`ctox.module.list_versions`**:
+   - **Request Payload**:
+     ```json
+     {
+       "module_id": "widget"
+     }
+     ```
+   - **Response**: Returns a JSON summary listing of all registered versions under that module, sorted by sequence in descending order.
+
+2. **`ctox.module.rollback_version`**:
+   - **Request Payload**:
+     ```json
+     {
+       "module_id": "widget",
+       "version_id": "modver_widget_1_..."
+     }
+     ```
+   - **Response**: Returns the status of the operation showing the number of restored and removed files:
+     ```json
+     {
+       "ok": true,
+       "module_id": "widget",
+       "rolled_back_to": "modver_widget_1_...",
+       "restored_files": 3,
+       "removed_files": 1
+     }
+     ```
+
+### Rollback Mechanics
+
+When a rollback is triggered, the native daemon performs the following sequence to guarantee integrity and safety:
+1. **Permission Check**: The active session is checked to verify modification rights for the specific module.
+2. **File Restoration**: The baseline file mapping is parsed from the target version's `files_json` field. Each target file's relative path and content are restored on disk (overwriting current edits).
+3. **Removal of Post-Baseline Files**: Files in the current working directory that did not exist in the baseline version are identified. Before removing them from disk, they are snapshot-buffered so that the deletion itself is fully reversible.
+4. **Verification**: A whole-bundle checksum is recalculated and validated against the baseline's `bundle_sha256`.
+5. **Sealing the Boundary**: A new sealed module version record is inserted with the origin `"rollback"`, recording the event in the history timeline.
+
+### Front-End UI Modifications
+
+1. **Visual Modification Badge**: The App Store card and details drawer render a visual modification status badge (`app-mod-state`) indicating whether a module is `Unverändert` (Clean - matching the baseline SHA-256) or `Modifiziert` (Modified - where the live bundle checksum diverges from the baseline).
+2. **App-Class-Aware Timeline Dialog**: The App Store provides a detailed interactive timeline of versions. It tracks and translates version origins into German or English localization states, rendering files count, version sequences (`#seq`), dates, and sealing status (e.g. `Installiert: Release 1.0` or `Bearbeitung · offen`). A "Wiederherstellen" button prompts the user and dispatches the command.
+
+---
+
+## 8. Command Reference
 
 Manage the Business OS instance directly from the CLI:
 
