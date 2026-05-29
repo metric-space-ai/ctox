@@ -73,6 +73,11 @@ const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
 const TICKET_STATE_SYNC_INTERVAL_SECS: u64 = 3;
+/// Knowledge tables are record-shape parquet content that changes far less
+/// often than ticket/queue state, and projecting them reads parquet rows off
+/// disk. A slower interval keeps the parquet I/O light while still surfacing
+/// catalog/row changes to the browser within seconds-to-tens-of-seconds.
+const KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS: u64 = 15;
 const BUSINESS_RECORD_PROJECTION_SYNC_INTERVAL_SECS: u64 = 3;
 const BUSINESS_RECORD_PROJECTION_SYNC_LIMIT: usize = 2_000;
 const TICKET_STATE_SYNC_LIMIT: usize = 500;
@@ -120,6 +125,7 @@ struct NativePeer {
     _runtime_settings_sync: tokio::task::JoinHandle<()>,
     _module_catalog_sync: tokio::task::JoinHandle<()>,
     _ticket_state_sync: tokio::task::JoinHandle<()>,
+    _knowledge_tables_sync: tokio::task::JoinHandle<()>,
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
     _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
     // FIX 2: the status heartbeat now runs on a dedicated OS thread (see
@@ -141,6 +147,7 @@ impl NativePeer {
         self._runtime_settings_sync.abort();
         self._module_catalog_sync.abort();
         self._ticket_state_sync.abort();
+        self._knowledge_tables_sync.abort();
         self._business_record_projection_sync.abort();
         self._browser_runtime_maintenance.abort();
         // FIX 2: stop the dedicated heartbeat OS thread.
@@ -1021,6 +1028,11 @@ async fn run_native_peer(
         Arc::clone(&database),
         Arc::clone(&database_write_lock),
     ));
+    let knowledge_tables_sync = tokio::spawn(sync_knowledge_tables_background_loop(
+        root.clone(),
+        Arc::clone(&database),
+        Arc::clone(&database_write_lock),
+    ));
     let business_record_projection_sync =
         tokio::spawn(sync_business_record_projections_background_loop(
             root.clone(),
@@ -1058,6 +1070,7 @@ async fn run_native_peer(
         _runtime_settings_sync: runtime_settings_sync,
         _module_catalog_sync: module_catalog_sync,
         _ticket_state_sync: ticket_state_sync,
+        _knowledge_tables_sync: knowledge_tables_sync,
         _business_record_projection_sync: business_record_projection_sync,
         _browser_runtime_maintenance: browser_runtime_maintenance,
         _status_heartbeat: Mutex::new(Some(status_heartbeat)),
@@ -1569,6 +1582,23 @@ async fn sync_ticket_state_background_loop(
             eprintln!("[business-os] native rxdb ticket state sync failed: {err:#}");
         }
         tokio::time::sleep(Duration::from_secs(TICKET_STATE_SYNC_INTERVAL_SECS)).await;
+    }
+}
+
+async fn sync_knowledge_tables_background_loop(
+    root: PathBuf,
+    database: Arc<RxDatabase>,
+    database_write_lock: Arc<AsyncMutex<()>>,
+) {
+    loop {
+        let result = {
+            let _guard = database_write_lock.lock().await;
+            sync_knowledge_tables_with_database(&root, &database).await
+        };
+        if let Err(err) = result {
+            eprintln!("[business-os] native rxdb knowledge tables sync failed: {err:#}");
+        }
+        tokio::time::sleep(Duration::from_secs(KNOWLEDGE_TABLES_SYNC_INTERVAL_SECS)).await;
     }
 }
 
@@ -3492,6 +3522,53 @@ async fn sync_ticket_state_with_database(
     Ok(count)
 }
 
+/// Project the record-shape knowledge catalog (`knowledge_data_tables`) into
+/// the `knowledge_tables` RxDB collection, embedding the parquet rows directly
+/// in each doc's payload.
+///
+/// This is the SINGLE native writer of the `knowledge_tables` collection.
+/// `knowledge_tables` is therefore excluded from the generic business-record
+/// projection in [`business_record_projection_collections`] so the two paths do
+/// not fight over the same docs.
+///
+/// Business OS Web Research / Knowledge modules read rows exclusively from the
+/// synced doc payload over RxDB/WebRTC — there is no HTTP data path — so the
+/// rows must ride inside the doc, which is exactly what
+/// [`crate::knowledge::knowledge_tables_rxdb_documents`] produces (with the
+/// parquet path re-resolved to the live state dir, not the possibly-stale path
+/// persisted in the catalog).
+async fn sync_knowledge_tables_with_database(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let root_owned = root.to_path_buf();
+    let documents = tokio::task::spawn_blocking(move || {
+        crate::knowledge::knowledge_tables_rxdb_documents(&root_owned)
+    })
+    .await
+    .context("join native knowledge tables projection load")??;
+
+    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+    let collection = database
+        .collection("knowledge_tables")
+        .context("knowledge_tables collection is not registered")?;
+    let mut count = 0usize;
+    for mut document in documents {
+        if let Some(object) = document.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+            object.insert("_deleted".to_string(), Value::Bool(false));
+            object.insert("is_deleted".to_string(), Value::Bool(false));
+        }
+        collection
+            .incremental_upsert(document)
+            .await
+            .map_err(|err| anyhow::anyhow!("upsert knowledge_tables projection: {err}"))?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 async fn sync_business_record_projections_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4755,7 +4832,17 @@ fn business_record_projection_collections() -> Vec<String> {
     business_os_collections()
         .into_iter()
         .map(|(name, _)| name)
-        .filter(|name| !matches!(name.as_str(), "browser_frames" | "desktop_file_chunks"))
+        // `knowledge_tables` is owned by the dedicated knowledge-tables
+        // projection (`sync_knowledge_tables_with_database`), which embeds
+        // parquet rows in each doc payload. Excluding it here keeps that
+        // rows-bearing projection the single writer, so the generic
+        // business-record projection cannot overwrite it with a row-less doc.
+        .filter(|name| {
+            !matches!(
+                name.as_str(),
+                "browser_frames" | "desktop_file_chunks" | "knowledge_tables"
+            )
+        })
         .collect()
 }
 
@@ -4822,6 +4909,10 @@ mod tests {
         let collections = business_record_projection_collections();
         assert!(!collections.iter().any(|name| name == "browser_frames"));
         assert!(!collections.iter().any(|name| name == "desktop_file_chunks"));
+        // `knowledge_tables` is owned by the dedicated rows-embedding
+        // projection (`sync_knowledge_tables_with_database`); the generic
+        // business-record projection must not also write it.
+        assert!(!collections.iter().any(|name| name == "knowledge_tables"));
         assert!(collections.iter().any(|name| name == "browser_tabs"));
         assert!(collections.iter().any(|name| name == "desktop_files"));
     }

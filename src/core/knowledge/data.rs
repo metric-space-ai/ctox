@@ -697,6 +697,143 @@ pub(super) fn compute_parquet_path(root: &Path, domain: &str, table_key: &str) -
         .join(format!("{table_key}.parquet"))
 }
 
+/// Hard upper bound on rows embedded into a single `knowledge_tables` RxDB
+/// doc. Record-shape knowledge tables in CTOX are small (tens to low
+/// thousands of rows), but the cap keeps a pathological table from inflating
+/// a synced doc to an unbounded size. The browser surfaces still read whatever
+/// rows ride in the doc; the cap is purely a safety valve.
+const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
+
+/// Build the `knowledge_tables` RxDB documents that carry record-shape
+/// knowledge to the Business OS browser surfaces (Web Research + Knowledge).
+///
+/// This is the single native source of truth for that synced collection.
+/// Business OS reads rows exclusively from the synced doc payload over
+/// RxDB/WebRTC — there is no HTTP data path — so the rows must be embedded
+/// here in the doc itself.
+///
+/// For each active catalog row in `knowledge_data_tables` we:
+///   1. RE-RESOLVE the parquet path from `(domain, table_key)` against the
+///      live state dir via [`compute_parquet_path`]. The `parquet_path`
+///      column persisted in the catalog can be stale (it may point at a
+///      deleted/old release dir), so it is never trusted for reading; the
+///      resolved path is what we read and what we re-publish in the doc.
+///   2. Read the parquet rows via the shared Polars helpers
+///      (`scan_table` + `df_to_rows`), capped at
+///      [`KNOWLEDGE_TABLE_RXDB_ROW_CAP`].
+///   3. Emit a doc whose `id` is `table:<table_id>` (matching the
+///      browser/HTTP id scheme), with the rows mirrored at both
+///      `payload.rows` and top-level `rows` (the browser reads either), the
+///      true `row_count`, and the resolved `parquet_path`.
+///
+/// A missing or unreadable parquet file is not fatal: the doc is still
+/// emitted (so the table appears in the catalog UI) but with an empty `rows`
+/// array, and the resolved path is reported so the caller can see what was
+/// expected.
+pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
+    let conn = open_runtime_db(root)?;
+    let mut stmt = conn.prepare(
+        "SELECT table_id, domain, table_key, source_system, title, description,
+                row_count, bytes, updated_at
+         FROM knowledge_data_tables
+         WHERE archived_at IS NULL
+         ORDER BY updated_at DESC, title",
+    )?;
+    let catalog_rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?, // table_id
+                row.get::<_, String>(1)?, // domain
+                row.get::<_, String>(2)?, // table_key
+                row.get::<_, String>(3)?, // source_system
+                row.get::<_, String>(4)?, // title
+                row.get::<_, String>(5)?, // description
+                row.get::<_, i64>(6)?,    // row_count (catalog, may be stale)
+                row.get::<_, i64>(7)?,    // bytes
+                row.get::<_, String>(8)?, // updated_at (rfc3339)
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut documents = Vec::with_capacity(catalog_rows.len());
+    for (table_id, domain, table_key, source_system, title, description, row_count, bytes, updated_at) in
+        catalog_rows
+    {
+        // (1) Re-resolve against the live state dir; never trust the stored path.
+        let resolved_path = compute_parquet_path(root, &domain, &table_key);
+        let resolved_path_str = resolved_path.display().to_string();
+
+        // (2) Read rows (capped). Missing/unreadable parquet is non-fatal.
+        let (rows, resolved_row_count) = if resolved_path.is_file() {
+            match super::parquet_io::read_rows_capped(&resolved_path, KNOWLEDGE_TABLE_RXDB_ROW_CAP) {
+                Ok((rows, count)) => (rows, count),
+                Err(err) => {
+                    eprintln!(
+                        "[knowledge] knowledge_tables projection: failed to read parquet rows for \
+                         {domain}/{table_key} ({}): {err:#}",
+                        resolved_path.display()
+                    );
+                    (Vec::new(), row_count)
+                }
+            }
+        } else {
+            (Vec::new(), row_count)
+        };
+
+        let id = format!("table:{table_id}");
+        let updated_at_ms = rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
+        let rows_value = Value::Array(rows);
+
+        // (3) Mirror rows at payload.rows and top-level rows; refresh
+        //     parquet_path + row_count to the resolved values.
+        let payload = json!({
+            "id": id,
+            "table_id": table_id,
+            "kind": "dataframe",
+            "domain": domain,
+            "table_key": table_key,
+            "source_system": source_system,
+            "title": title,
+            "description": description,
+            "parquet_path": resolved_path_str,
+            "row_count": resolved_row_count,
+            "bytes": bytes,
+            "updated_at": updated_at,
+            "has_table": true,
+            "rows": rows_value.clone(),
+        });
+
+        documents.push(json!({
+            "id": id,
+            "kind": "dataframe",
+            "title": title,
+            "subtitle": format!("{domain} · {resolved_row_count} rows"),
+            "summary": description,
+            "source_path": resolved_path_str,
+            "domain": domain,
+            "table_key": table_key,
+            "row_count": resolved_row_count,
+            "updated_at": updated_at,
+            "updated_at_ms": updated_at_ms,
+            "rows": rows_value,
+            "payload": payload,
+        }));
+    }
+
+    Ok(documents)
+}
+
+/// Parse an RFC3339 timestamp into epoch milliseconds. Returns `None` when the
+/// string is empty or unparseable so the caller can fall back to "now".
+fn rfc3339_to_millis(value: &str) -> Option<i64> {
+    if value.trim().is_empty() {
+        return None;
+    }
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.timestamp_millis())
+}
+
 pub(super) fn validate_identifier(label: &str, value: &str) -> Result<()> {
     if value.is_empty() || value.len() > 128 {
         bail!("{label} must be 1..=128 chars");
@@ -749,3 +886,130 @@ const USAGE_RESTORE: &str = "ctox knowledge data restore --domain X --key Y";
 const USAGE_DELETE: &str = "ctox knowledge data delete --domain X --key Y --confirm <key>";
 const USAGE_TAG: &str = "ctox knowledge data tag --domain X --key Y --tag k=v";
 const USAGE_UNTAG: &str = "ctox knowledge data untag --domain X --key Y --tag k";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Insert a catalog row whose persisted `parquet_path` is deliberately
+    /// STALE (an old/deleted release dir), then write the real parquet at the
+    /// resolved live path. The projection must:
+    ///   - read the rows from the RE-RESOLVED path (not the stale one),
+    ///   - embed them at both `payload.rows` and top-level `rows`,
+    ///   - report the resolved (existing) `parquet_path` and the true
+    ///     `row_count`.
+    #[test]
+    fn knowledge_tables_projection_embeds_rows_and_resolves_live_parquet_path(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "drone_bearing_design";
+        let table_key = "source_catalog";
+        let table_id = "kdt-test-source-catalog";
+
+        // (a) Catalog row with a stale parquet_path that does not exist.
+        let conn = open_runtime_db(root)?;
+        let stale_path = root
+            .join("OLD_RELEASE_DELETED")
+            .join(domain)
+            .join(format!("{table_key}.parquet"));
+        let now = now_rfc3339();
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'agent', 'Source Catalog', 'curated sources',
+                       ?4, '', 999, 0, '{}', NULL, ?5, ?5)",
+            params![
+                table_id,
+                domain,
+                table_key,
+                stale_path.to_string_lossy().into_owned(),
+                now
+            ],
+        )?;
+
+        // (b) Write the real parquet at the LIVE resolved path with 3 rows.
+        let rows = vec![
+            json!({"source_id": "s1", "title": "Bearing handbook", "weight": 0.9}),
+            json!({"source_id": "s2", "title": "Drone load study", "weight": 0.7}),
+            json!({"source_id": "s3", "title": "Material spec", "weight": 0.5}),
+        ];
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        let live_path = compute_parquet_path(root, domain, table_key);
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+        assert!(live_path.is_file(), "live parquet should exist after commit");
+        assert!(!stale_path.exists(), "stale path must not exist");
+
+        // (c) Run the projection.
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        assert_eq!(docs.len(), 1, "exactly one knowledge_tables doc");
+        let doc = &docs[0];
+
+        // id scheme matches the browser/HTTP `table:<id>` convention.
+        assert_eq!(doc["id"].as_str(), Some("table:kdt-test-source-catalog"));
+        assert_eq!(doc["kind"].as_str(), Some("dataframe"));
+
+        // Rows embedded at both top-level and payload.rows.
+        let top_rows = doc["rows"].as_array().expect("top-level rows array");
+        assert_eq!(top_rows.len(), 3, "top-level rows count");
+        let payload_rows = doc["payload"]["rows"]
+            .as_array()
+            .expect("payload.rows array");
+        assert_eq!(payload_rows.len(), 3, "payload.rows count");
+
+        // row_count reflects the REAL parquet, not the stale catalog value (999).
+        assert_eq!(doc["row_count"].as_i64(), Some(3));
+        assert_eq!(doc["payload"]["row_count"].as_i64(), Some(3));
+
+        // parquet_path is the RE-RESOLVED live path, which exists.
+        let resolved = doc["payload"]["parquet_path"]
+            .as_str()
+            .expect("payload.parquet_path");
+        assert_eq!(resolved, live_path.display().to_string());
+        assert!(
+            std::path::Path::new(resolved).is_file(),
+            "resolved parquet_path must point at an existing file"
+        );
+        assert_ne!(
+            resolved,
+            stale_path.display().to_string(),
+            "must not echo the stale catalog path"
+        );
+
+        // updated_at_ms is present (required RxDB field) and parsed from the
+        // catalog rfc3339 stamp.
+        assert!(doc["updated_at_ms"].as_i64().is_some());
+
+        // The actual row content rode through into the doc.
+        let titles: Vec<&str> = payload_rows
+            .iter()
+            .filter_map(|row| row.get("title").and_then(Value::as_str))
+            .collect();
+        assert!(titles.contains(&"Bearing handbook"));
+        Ok(())
+    }
+
+    /// An archived catalog row must not be projected.
+    #[test]
+    fn knowledge_tables_projection_skips_archived() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let conn = open_runtime_db(root)?;
+        let now = now_rfc3339();
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES ('kdt-archived', 'd', 'k', 'agent', 'Archived', '',
+                       '/nope.parquet', '', 0, 0, '{}', ?1, ?1, ?1)",
+            params![now],
+        )?;
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        assert!(docs.is_empty(), "archived tables are not projected");
+        Ok(())
+    }
+}

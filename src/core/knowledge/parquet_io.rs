@@ -214,6 +214,26 @@ pub(super) fn rows_to_df(rows: &[Value]) -> Result<DataFrame> {
     Ok(df)
 }
 
+/// Read up to `cap` rows from the parquet file at `path` and return them as
+/// NDJSON-shaped `Vec<serde_json::Value>` objects together with the number of
+/// rows actually read.
+///
+/// Used by the `knowledge_tables` RxDB projection to embed record-shape rows
+/// directly into the synced doc (no HTTP). Keeps all Polars usage contained in
+/// this helper module so callers do not have to depend on Polars types.
+pub(super) fn read_rows_capped(path: &Path, cap: usize) -> Result<(Vec<Value>, i64)> {
+    let df = scan_table(path)
+        .map_err(cerr)
+        .with_context(|| format!("scan parquet for projection {}", path.display()))?
+        .limit(cap as IdxSize)
+        .collect()
+        .map_err(cerr)
+        .with_context(|| format!("collect parquet rows for projection {}", path.display()))?;
+    let count = df.height() as i64;
+    let rows = df_to_rows(&df)?;
+    Ok((rows, count))
+}
+
 /// Convert a DataFrame to NDJSON-shaped `Vec<serde_json::Value>` of objects.
 pub(super) fn df_to_rows(df: &DataFrame) -> Result<Vec<Value>> {
     if df.height() == 0 {
