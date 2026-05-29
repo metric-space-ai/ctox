@@ -8,8 +8,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use rxdb::plugins::replication_webrtc::{
-    replicate_web_rtc_rs, RTCIceServer, RxWebRTCReplicationPool, SyncOptionsWebRTCRs,
-    WebRTCRsConnectionHandler,
+    RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
@@ -43,10 +42,9 @@ static TEMPORARY_RXDB_DATABASE_LOCK: Mutex<()> = Mutex::new(());
 static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static BROWSER_RUNTIME_COMMAND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
-const NATIVE_SIGNALING_JOIN_STAGGER_MS: u64 = 75;
-/// FIX 3: per-collection signaling/replication bring-up timeout. One slow or
-/// unreachable signaling room must not wedge the whole peer; on timeout we log
-/// and move on to the next collection.
+/// Phase 3: single-session signaling/replication bring-up timeout. One room is
+/// joined once for the whole sync room; if it cannot come up in this window we
+/// log and continue (collections stay locally queryable).
 const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
 const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
@@ -916,64 +914,71 @@ async fn run_native_peer(
         );
     }
 
-    // FIX 3: bring collections up CONCURRENTLY, each guarded by a per-collection
-    // timeout. A slow or unreachable signaling room for one collection must not
-    // serialize or wedge the bring-up of the rest. Each collection's
-    // `replicate_web_rtc_rs` runs in its own task; on timeout or error we log
-    // and continue. Required-collection failures here are tolerated at the
-    // replication layer (the collection is still registered and locally
-    // queryable) — only registration failure of a required collection aborts.
-    let mut bringup_tasks: Vec<(String, tokio::task::JoinHandle<anyhow::Result<WebRtcPool>>)> =
-        Vec::with_capacity(collections.len());
-    let mut staggered = false;
-    for (collection_name, collection) in collections {
-        if staggered {
-            tokio::time::sleep(Duration::from_millis(NATIVE_SIGNALING_JOIN_STAGGER_MS)).await;
-        }
-        staggered = true;
-        let topic = format!("{sync_room}:{collection_name}");
-        let mut options = SyncOptionsWebRTCRs::new(collection, signaling_url.clone(), topic);
-        options.peer_session_id = peer_session_id.clone();
-        options.ice_servers = ice_servers.clone();
-        if collection_name == "desktop_file_chunks" {
-            options.pull_batch_size = 1;
-            options.push_batch_size = 1;
-            options.retry_time = 1_000;
-        }
-        let task_name = collection_name.clone();
-        let handle = tokio::spawn(async move {
-            match tokio::time::timeout(
-                Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-                replicate_web_rtc_rs(options),
+    // Phase 3 (single multiplexed stream): bring up ONE replication session
+    // for the WHOLE sync room. Instead of one signaling socket +
+    // RTCPeerConnection + DataChannel per collection (~88 of each per browser),
+    // we join the bare `sync_room` once with one WebRTCRsConnectionHandler and
+    // register EVERY collection's master handler + fork state behind it. Frames
+    // are demultiplexed by their `collection` field inside the rxdb crate. This
+    // is what collapses the FD/socket explosion that the LimitNOFILE
+    // workaround was papering over.
+    //
+    // Per-collection batch tuning that used to live on each
+    // `SyncOptionsWebRTCRs` (e.g. the tighter `desktop_file_chunks` window) is
+    // now subsumed by the Phase-1 native backpressure + chunking, which is
+    // collection-agnostic; the multiplexed session uses uniform batch sizes.
+    let collection_list: Vec<Arc<RxCollection>> =
+        collections.into_iter().map(|(_, collection)| collection).collect();
+    let collection_count = collection_list.len();
+    let mut pools: Vec<WebRtcPool> = Vec::with_capacity(1);
+    if collection_count == 0 {
+        eprintln!("[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up");
+    } else {
+        let topic = sync_room.clone();
+        let multi_signaling_url = signaling_url.clone();
+        let multi_peer_session_id = peer_session_id.clone();
+        let multi_ice_servers = ice_servers.clone();
+        let bringup = tokio::spawn(async move {
+            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi(
+                collection_list,
+                multi_signaling_url,
+                topic,
+                multi_peer_session_id,
+                multi_ice_servers,
+                None,
+                20,
+                20,
+                5_000,
             )
             .await
-            {
-                Ok(Ok(pool)) => Ok(pool),
-                Ok(Err(err)) => Err(anyhow::anyhow!(
-                    "start WebRTC replication for {task_name}: {err}"
-                )),
-                Err(_) => Err(anyhow::anyhow!(
-                    "WebRTC replication bring-up for {task_name} timed out after {}s",
-                    NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
-                )),
-            }
         });
-        bringup_tasks.push((collection_name, handle));
-    }
-
-    let mut pools = Vec::with_capacity(bringup_tasks.len());
-    for (collection_name, handle) in bringup_tasks {
-        match handle.await {
-            Ok(Ok(pool)) => pools.push(pool),
-            Ok(Err(err)) => {
+        match tokio::time::timeout(
+            Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
+            bringup,
+        )
+        .await
+        {
+            Ok(Ok(Ok(pool))) => {
                 eprintln!(
-                    "[business-os] WebRTC replication bring-up skipped for `{collection_name}`: {err}"
+                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
+                     collections on one connection (room `{sync_room}`)"
+                );
+                pools.push(pool);
+            }
+            Ok(Ok(Err(err))) => {
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication bring-up failed: {err}"
                 );
             }
-            Err(join_err) => {
+            Ok(Err(join_err)) => {
                 eprintln!(
-                    "[business-os] WebRTC replication bring-up task for `{collection_name}` \
-                     panicked: {join_err}"
+                    "[business-os] multiplexed WebRTC replication bring-up task panicked: {join_err}"
+                );
+            }
+            Err(_) => {
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication bring-up timed out after {}s",
+                    NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
                 );
             }
         }

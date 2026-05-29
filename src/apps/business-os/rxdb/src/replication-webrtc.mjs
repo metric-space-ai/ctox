@@ -44,6 +44,264 @@ export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 3 (single multiplexed stream): one CtoxWebRtcNativePeer carries EVERY
+// collection in a sync room. `replicateWebRTC` no longer opens its own peer per
+// collection; instead it joins a process-wide `SharedRoomPeer` keyed by
+// (signalingUrl, room=sync_room). The shared peer owns the single signaling
+// socket + RTCPeerConnection + DataChannel and demultiplexes inbound frames by
+// their `collection` field. Each collection's replication state registers its
+// pull/push handlers and master-change sink into the shared peer.
+// ---------------------------------------------------------------------------
+
+const SHARED_ROOM_PEERS = new Map(); // key -> SharedRoomPeer
+
+function sharedRoomPeerKey(signalingUrl, room) {
+  return `${String(signalingUrl || '')}::${String(room || '')}`;
+}
+
+class SharedRoomPeer {
+  constructor({ key, signalingUrl, room, iceServers, expectedNativePeerId }) {
+    this.key = key;
+    this.signalingUrl = signalingUrl;
+    this.room = room;
+    this.iceServers = iceServers;
+    this.expectedNativePeerId = expectedNativePeerId;
+    // collection name -> registration { collection, state }
+    this.collections = new Map();
+    this.refCount = 0;
+    this.peer = null;
+    // The shared demand-loading transport. Chunks route by requestId globally,
+    // so one transport serves every collection on this connection.
+    this.demandTransport = createDemandLoadingTransport({
+      getPeerId: () => this.activeRemotePeerId,
+    });
+    this.activeRemotePeerId = null;
+    this.started = false;
+    this.peerOpenQueue = Promise.resolve();
+    // Negotiated remote protocol from the room-level handshake, retained so a
+    // collection that registers AFTER the handshake can immediately catch up.
+    this.negotiated = null; // { peerId, remoteProtocol, queryFetchCapable }
+  }
+
+  representativeCollection() {
+    const first = this.collections.keys().next();
+    return first.done ? null : this.collections.get(first.value);
+  }
+
+  register(collection, registration) {
+    this.collections.set(collection, registration);
+    this.refCount += 1;
+    // Catch-up: if the room handshake already completed (this collection
+    // joined after another opened the peer), drive its initial pull/push now
+    // instead of waiting for a peer-open that already fired.
+    if (this.negotiated && this.isPeerOpen(this.negotiated.peerId)) {
+      const { peerId, remoteProtocol, queryFetchCapable } = this.negotiated;
+      Promise.resolve()
+        .then(() => registration.state.onPeerReady(peerId, remoteProtocol, queryFetchCapable))
+        .catch((error) => registration.state.emitError(error));
+    }
+  }
+
+  unregister(collection) {
+    this.collections.delete(collection);
+    this.refCount = Math.max(0, this.refCount - 1);
+    if (this.refCount === 0) {
+      SHARED_ROOM_PEERS.delete(this.key);
+      try { this.peer?.close?.(); } catch {}
+      this.peer = null;
+      this.started = false;
+    }
+  }
+
+  ensurePeer() {
+    if (this.peer) return this.peer;
+    this.peer = createCtoxWebRtcNativePeer({
+      signalingUrl: this.signalingUrl,
+      // Phase 3: the room is the bare sync_room — NOT a per-collection topic.
+      room: this.room,
+      clientId: browserInitiatorPeerId(this.room),
+      role: 'browser',
+      capabilities: BROWSER_CAPABILITIES,
+      iceServers: this.iceServers,
+      expectedNativePeerId: this.expectedNativePeerId || '',
+      protocolPayload: async ({ collection } = {}) => this.buildProtocolPayload(collection),
+      requestHandlers: {
+        masterChangesSince: async ({ params, peerId, collection }) =>
+          this.routeMasterChangesSince(collection, params, peerId),
+        masterWrite: async ({ params, peerId, collection }) =>
+          this.routeMasterWrite(collection, params, peerId),
+        ...this.demandTransport.requestHandlers,
+      },
+    });
+    this.demandTransport.attach(this.peer);
+    this.peer.on('error', (event) => this.fanout('error', event.detail || event));
+    this.peer.on('transport-status', (event) => this.fanout('transport-status', event.detail || event));
+    this.peer.on('peer-open', (event) => {
+      const peerId = event.detail.peerId;
+      this.peerOpenQueue = this.peerOpenQueue
+        .then(() => this.handlePeerOpen(peerId))
+        .catch((error) => this.fanout('handshake-error', error));
+    });
+    this.peer.on('peer-close', (event) => {
+      // A closed peer invalidates the negotiated handshake; a fresh peer-open
+      // will renegotiate and re-drive every collection's catch-up.
+      if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
+        this.negotiated = null;
+      }
+      if (this.activeRemotePeerId === event.detail?.peerId) {
+        this.activeRemotePeerId = null;
+      }
+      this.fanout('peer-close', event.detail);
+    });
+    this.peer.on('peer-state', (event) => this.fanout('peer-state', event.detail));
+    this.peer.on('master-change', (event) => {
+      // Fan a master-change to ONLY the collection it belongs to (when the
+      // push is collection-qualified); otherwise to every collection (V1).
+      const collection = event.detail?.collection || event.collection || null;
+      this.fanoutMasterChange(collection);
+    });
+    return this.peer;
+  }
+
+  start() {
+    this.ensurePeer();
+    if (this.started) return;
+    this.started = true;
+    this.peer.connect();
+  }
+
+  fanout(eventName, detail) {
+    for (const registration of this.collections.values()) {
+      try { registration.state?.onSharedEvent?.(eventName, detail); } catch {}
+    }
+  }
+
+  fanoutMasterChange(collection) {
+    if (collection) {
+      const registration = this.collections.get(collection);
+      registration?.state?.onMasterChange?.();
+      return;
+    }
+    for (const registration of this.collections.values()) {
+      try { registration.state?.onMasterChange?.(); } catch {}
+    }
+  }
+
+  async buildProtocolPayload(collection) {
+    // Resolve the protocol payload for the collection the remote asked about
+    // (multiplex), or the representative when none was tagged.
+    const registration = (collection && this.collections.get(collection))
+      || this.representativeCollection();
+    if (!registration) {
+      return buildProtocolPayload({
+        role: 'browser',
+        peerSessionId: `browser:${this.room}`,
+        peerGeneration: 1,
+        capabilities: BROWSER_CAPABILITIES,
+      });
+    }
+    return registration.state.buildProtocolPayload();
+  }
+
+  async routeMasterChangesSince(collection, params, peerId) {
+    const registration = collection && this.collections.get(collection);
+    if (!registration) {
+      // Unknown collection — return empty changes rather than leaking another
+      // collection's documents.
+      return { documents: [], checkpoint: params?.[0] || null };
+    }
+    return registration.state.masterChangesSince(params, peerId);
+  }
+
+  async routeMasterWrite(collection, params, peerId) {
+    const registration = collection && this.collections.get(collection);
+    if (!registration) return [];
+    return registration.state.masterWrite(params, peerId);
+  }
+
+  async handlePeerOpen(peerId) {
+    // The room-level handshake runs ONCE (off the representative collection).
+    // Every registered collection observes the same open peer.
+    const representative = this.representativeCollection();
+    if (!representative) return;
+    const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
+    const remoteProtocol = await this.peer.request(
+      peerId,
+      'ctoxProtocol',
+      [localProtocol],
+      15000,
+      representative.collection,
+    );
+    const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
+    try {
+      assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
+        requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+        // The single shared peer multiplexes many collections, so the remote's
+        // representative collection may differ from ours; the per-collection
+        // name/hash match is validated implicitly via replication, not at the
+        // room handshake. We still enforce protocol + required capabilities.
+        validateSchema: this.collections.size <= 1,
+      });
+    } catch (error) {
+      this.peer?.removeConnection?.(peerId, 'protocol-incompatible');
+      this.fanout('handshake-error', error);
+      throw error;
+    }
+    if (normalizedRemoteProtocol?.peerSession?.role !== 'ctox_instance') {
+      this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
+      return;
+    }
+    await this.peer.request(peerId, 'token', [], 15000, representative.collection);
+    await this.awaitRemoteMasterReady(peerId);
+    const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
+    this.activeRemotePeerId = peerId;
+    // Retain the negotiated handshake so collections that register later catch
+    // up immediately (see `register`).
+    this.negotiated = { peerId, remoteProtocol: normalizedRemoteProtocol, queryFetchCapable };
+    // Notify every collection that the shared peer is open + protocol-ready, so
+    // each runs its own initial pull/push and (optionally) demand-loading.
+    for (const registration of this.collections.values()) {
+      try {
+        await registration.state.onPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable);
+      } catch (error) {
+        registration.state.emitError(error);
+      }
+    }
+  }
+
+  isPeerOpen(peerId) {
+    const connection = this.peer?.connections?.get?.(peerId);
+    if (!connection) return false;
+    const channelState = connection.channel?.readyState || '';
+    const pcState = connection.peer?.connectionState || '';
+    return channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(pcState);
+  }
+
+  async awaitRemoteMasterReady(peerId) {
+    try {
+      await this.peer.waitForRequest?.(peerId, 'token', 2000);
+    } catch {
+      // Older or non-CTOX peers might not run the symmetric token request.
+    }
+    await delay(100);
+  }
+
+  getTransportStatus() {
+    return this.peer?.getTransportStatus?.() || {};
+  }
+}
+
+function getOrCreateSharedRoomPeer({ signalingUrl, room, iceServers, expectedNativePeerId }) {
+  const key = sharedRoomPeerKey(signalingUrl, room);
+  let shared = SHARED_ROOM_PEERS.get(key);
+  if (!shared) {
+    shared = new SharedRoomPeer({ key, signalingUrl, room, iceServers, expectedNativePeerId });
+    SHARED_ROOM_PEERS.set(key, shared);
+  }
+  return shared;
+}
+
 export async function replicateWebRTC({
   collection,
   topic,
@@ -63,6 +321,7 @@ export async function replicateWebRTC({
 class CtoxWebRtcReplicationState {
   constructor({ collection, topic, pull, push, retryTime, ctox }) {
     this.collection = collection;
+    // Phase 3: `topic` is the bare sync room shared by every collection.
     this.topic = topic;
     this.pull = pull;
     this.push = push;
@@ -73,7 +332,7 @@ class CtoxWebRtcReplicationState {
     this.canceled$ = new CtoxSubject(false);
     this.peerStates$ = new CtoxSubject(new Map());
     this.transportStatus$ = new CtoxSubject({});
-    this.peer = null;
+    this.shared = null;
     this.initialReplicationDeferred = createDeferred();
     this.initialReplication = this.initialReplicationDeferred.promise;
     this.cancelled = false;
@@ -84,79 +343,33 @@ class CtoxWebRtcReplicationState {
     this.periodicPushTimer = null;
     this.pullInProgress = false;
     this.pushInProgress = false;
-    this.peerOpenQueue = Promise.resolve();
     this.activeRemotePeerId = null;
-    this.demandTransport = createDemandLoadingTransport({
-      getPeerId: () => this.activeRemotePeerId,
-    });
     this.demandLoaderActive = false;
+    this.schemaHashValue = null;
+  }
+
+  get peer() {
+    return this.shared?.peer || null;
   }
 
   async start(connectionHandlerCreator) {
-    const schemaHashValue = await this.collection.schema.hash();
+    this.schemaHashValue = await this.collection.schema.hash();
     const signalingUrl = connectionHandlerCreator?.signalingServerUrl;
     const iceServers = connectionHandlerCreator?.config?.iceServers || [];
-    this.peer = createCtoxWebRtcNativePeer({
+    this.shared = getOrCreateSharedRoomPeer({
       signalingUrl,
       room: this.topic,
-      clientId: browserInitiatorPeerId(this.topic),
-      role: 'browser',
-      capabilities: BROWSER_CAPABILITIES,
       iceServers,
       expectedNativePeerId: this.ctox?.expectedNativePeerId || '',
-      protocolPayload: async () => {
-        const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(schemaHashValue);
-        return buildProtocolPayload({
-          collectionName: this.collection.name,
-          schemaVersion: this.collection.schema.version,
-          schemaHash: schemaHashValue,
-          schemaHashSource: schemaHashSource(this.collection.name),
-          peerSessionId: `browser:${this.topic}`,
-          peerGeneration: 1,
-          checkpoint,
-          role: 'browser',
-          capabilities: BROWSER_CAPABILITIES,
-        });
-      },
-      requestHandlers: {
-        masterChangesSince: async ({ peerId, params }) => this.masterChangesSince(params, peerId),
-        masterWrite: async ({ peerId, params }) => this.masterWrite(params, peerId),
-        ...this.demandTransport.requestHandlers,
-      },
     });
-    this.demandTransport.attach(this.peer);
-    this.peer.on('error', (event) => this.error$.next(event.detail || event));
-    this.peer.on('transport-status', (event) => {
-      this.transportStatus$.next(this.decorateTransportStatus(event.detail || event));
+    this.shared.register(this.collection.name, {
+      collection: this.collection.name,
+      state: this,
     });
-    this.peer.on('peer-open', (event) => {
-      const peerId = event.detail.peerId;
-      this.peerOpenQueue = this.peerOpenQueue
-        .then(() => this.handlePeerOpen(peerId))
-        .catch((error) => this.error$.next(error));
-    });
-    this.peer.on('peer-close', (event) => {
-      this.removePeer(event.detail?.peerId, event.detail?.reason || 'peer-close');
-    });
-    this.peer.on('peer-state', (event) => {
-      const state = event.detail?.state || '';
-      if (['closed', 'failed', 'disconnected'].includes(state)) {
-        this.removePeer(event.detail?.peerId, `peer-${state}`);
-      }
-    });
-    this.peer.on('master-change', () => {
-      this.pullFromRemotePeers().catch((error) => this.error$.next(error));
-    });
-    this.peer.connect();
+    this.shared.start();
     this.changeSubscription = this.collection.observe(() => {
       this.pushToRemotePeers().catch((error) => this.error$.next(error));
     });
-    const periodicPullMs = this.periodicPullIntervalMs();
-    if (periodicPullMs > 0) {
-      this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
-      }, periodicPullMs);
-    }
     const periodicPushMs = this.periodicPushIntervalMs();
     if (periodicPushMs > 0) {
       this.periodicPushTimer = setInterval(() => {
@@ -165,35 +378,62 @@ class CtoxWebRtcReplicationState {
     }
   }
 
-  async handlePeerOpen(peerId) {
-    const localProtocol = await this.peer.protocolPayload(peerId);
-    const remoteProtocol = await this.peer.request(peerId, 'ctoxProtocol', [
-      localProtocol,
-    ]);
-    const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
-    try {
-      assertCompatibleProtocol(localProtocol, normalizedRemoteProtocol, {
-        requiredCapabilities: CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
-      });
-    } catch (error) {
-      // Protocol/schema handshake is incompatible. Free the pooled RTC slot and
-      // surface the real error instead of leaking the connection and letting
-      // sync.js's 30s watchdog mislabel it as peer_connect_timeout. The
-      // peer-open caller routes the rethrown error to error$, so we only reject
-      // the initial-replication promise here to avoid a double emit.
-      this.peer?.removeConnection?.(peerId, 'protocol-incompatible');
-      this.rejectInitialReplication(error);
-      throw error;
-    }
-    if (normalizedRemoteProtocol?.peerSession?.role !== 'ctox_instance') {
-      this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
+  // ----- shared peer event sinks (called by SharedRoomPeer) ---------------
+
+  onSharedEvent(eventName, detail) {
+    if (this.cancelled) return;
+    if (eventName === 'error') {
+      this.error$.next(detail?.detail || detail);
       return;
     }
+    if (eventName === 'handshake-error') {
+      this.rejectInitialReplication(detail);
+      this.error$.next(detail);
+      return;
+    }
+    if (eventName === 'transport-status') {
+      this.transportStatus$.next(this.decorateTransportStatus(detail || {}));
+      return;
+    }
+    if (eventName === 'peer-close') {
+      this.removePeer(detail?.peerId, detail?.reason || 'peer-close');
+      return;
+    }
+    if (eventName === 'peer-state') {
+      const stateName = detail?.state || '';
+      if (['closed', 'failed', 'disconnected'].includes(stateName)) {
+        this.removePeer(detail?.peerId, `peer-${stateName}`);
+      }
+    }
+  }
+
+  onMasterChange() {
+    if (this.cancelled) return;
+    this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+  }
+
+  emitError(error) {
+    this.error$.next(error);
+  }
+
+  async buildProtocolPayload() {
+    const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
+    return buildProtocolPayload({
+      collectionName: this.collection.name,
+      schemaVersion: this.collection.schema.version,
+      schemaHash: this.schemaHashValue,
+      schemaHashSource: schemaHashSource(this.collection.name),
+      peerSessionId: `browser:${this.topic}`,
+      peerGeneration: 1,
+      checkpoint,
+      role: 'browser',
+      capabilities: BROWSER_CAPABILITIES,
+    });
+  }
+
+  async onPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
+    if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    await this.peer.request(peerId, 'token', []);
-    await this.awaitRemoteMasterReady(peerId);
-    this.pruneReplacedNativePeers(peerId, normalizedRemoteProtocol);
-    const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     if (queryFetchCapable && !this.demandLoaderActive) {
       try {
@@ -215,7 +455,7 @@ class CtoxWebRtcReplicationState {
       remoteProtocol: normalizedRemoteProtocol,
       queryFetchCapable,
     });
-    this.peerStates$.next(this.retainOnlyNativePeer(peerId, normalizedRemoteProtocol, peerStates));
+    this.peerStates$.next(peerStates);
     this.active$.next(true);
     try {
       this.initialReplication = this.pullFromRemotePeers().then(() => this.pushToRemotePeers());
@@ -227,16 +467,7 @@ class CtoxWebRtcReplicationState {
     }
   }
 
-  async awaitRemoteMasterReady(peerId) {
-    try {
-      await this.peer.waitForRequest?.(peerId, 'token', 2000);
-    } catch {
-      // Older or non-CTOX peers might not run the symmetric token request.
-      // A short yield still avoids sending the first pull before a native
-      // CTOX master subscribes to post-handshake replication requests.
-    }
-    await delay(100);
-  }
+  // ----- pull / push (collection-tagged over the shared peer) -------------
 
   async pullFromRemotePeers() {
     if (this.pullInProgress) return;
@@ -254,11 +485,7 @@ class CtoxWebRtcReplicationState {
     const batchSize = Number(this.pull?.batchSize || 10);
     let checkpoint = this.pullCheckpointsByPeer.get(peerId) || null;
     while (!this.cancelled) {
-      const result = await this.requestMasterChangesSince(
-        peerId,
-        checkpoint,
-        batchSize,
-      );
+      const result = await this.requestMasterChangesSince(peerId, checkpoint, batchSize);
       const documents = Array.isArray(result?.documents) ? result.documents : [];
       if (documents.length) {
         await this.collection.storageCollection.bulkWrite(documents, {
@@ -282,6 +509,7 @@ class CtoxWebRtcReplicationState {
           'masterChangesSince',
           [checkpoint, batchSize],
           timeoutMs,
+          this.collection.name,
         );
       } catch (error) {
         lastError = error;
@@ -332,12 +560,20 @@ class CtoxWebRtcReplicationState {
         newDocumentState: doc,
         assumedMasterState: null,
       }));
-      await this.peer.request(peerId, 'masterWrite', [rows], this.requestTimeoutMsFor('masterWrite'));
+      await this.peer.request(
+        peerId,
+        'masterWrite',
+        [rows],
+        this.requestTimeoutMsFor('masterWrite'),
+        this.collection.name,
+      );
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       if (documents.length < batchSize) break;
     }
   }
+
+  // ----- master handler (when CTOX picks the browser as fork's master) ----
 
   async masterChangesSince(params, peerId = '') {
     const checkpoint = params?.[0] || null;
@@ -372,7 +608,7 @@ class CtoxWebRtcReplicationState {
   }
 
   getTransportStatus() {
-    return this.decorateTransportStatus(this.peer?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {});
+    return this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {});
   }
 
   async cancel() {
@@ -392,17 +628,23 @@ class CtoxWebRtcReplicationState {
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
-    this.peer?.close?.();
+    // Drop this collection from the shared peer. The peer (and its single
+    // connection) is closed only when the last collection unregisters.
+    this.shared?.unregister?.(this.collection.name);
+    this.shared = null;
   }
 
-  /// V1.5 production wiring: build the sidecar + query demand loader and
-  /// attach them to the underlying collection so that `find().exec()` and
-  /// observable queries flow through the on-demand pipeline. Idempotent.
+  /// V1.5 production wiring: build the sidecar + query demand loader and attach
+  /// them to the underlying collection so that `find().exec()` and observable
+  /// queries flow through the on-demand pipeline. Idempotent. Uses the SHARED
+  /// peer's demand transport (chunks route by requestId globally).
   async enableDemandLoading({
     databaseName,
     indexedDbAvailable = typeof globalThis.indexedDB === 'object' && globalThis.indexedDB,
   } = {}) {
     if (this.demandLoaderActive) return this.demandLoader;
+    const demandTransport = this.shared?.demandTransport;
+    if (!demandTransport) return null;
     const dbName = databaseName || `ctox_business_os_v1_5_meta_${this.collection.name}`;
     const backend = indexedDbAvailable
       ? createIndexedDbMetaBackend({ databaseName: dbName })
@@ -426,8 +668,8 @@ class CtoxWebRtcReplicationState {
       sidecar: this.demandSidecar,
       collectionName: this.collection.name,
       schemaVersion: this.collection.schema?.version || 0,
-      requestQueryFetch: (envelope) => this.demandTransport.requestQueryFetch(envelope),
-      requestCancel: ({ requestId }) => this.demandTransport.requestQueryCancel({ requestId }),
+      requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
+      requestCancel: ({ requestId }) => demandTransport.requestQueryCancel({ requestId }),
       status: null,
     });
     if (typeof this.collection.setDemandLoader === 'function') {
@@ -439,7 +681,7 @@ class CtoxWebRtcReplicationState {
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
       requestFileFetch: ({ requestId, fileId, range, knownSequences }) =>
-        this.demandTransport.requestFileFetch({
+        demandTransport.requestFileFetch({
           requestId,
           fileId,
           range,
@@ -470,35 +712,6 @@ class CtoxWebRtcReplicationState {
     this.peerStates$.next(peerStates);
     if (!peerStates.size) this.active$.next(false);
     this.ctox?.onPeerClose?.({ peerId, reason });
-  }
-
-  pruneReplacedNativePeers(activePeerId, remoteProtocol) {
-    if (remoteProtocol?.peerSession?.role !== 'ctox_instance') return;
-    const peerStates = new Map(this.peerStates$.getValue() || new Map());
-    let changed = false;
-    for (const [peerId, state] of peerStates.entries()) {
-      if (peerId === activePeerId) continue;
-      if (state?.remoteProtocol?.peerSession?.role !== 'ctox_instance') continue;
-      peerStates.delete(peerId);
-      this.pullCheckpointsByPeer.delete(peerId);
-      this.pushCheckpointsByPeer.delete(peerId);
-      this.peer?.removeConnection?.(peerId, 'native-peer-replaced');
-      changed = true;
-    }
-    if (changed) this.peerStates$.next(peerStates);
-  }
-
-  retainOnlyNativePeer(activePeerId, remoteProtocol, peerStates) {
-    if (remoteProtocol?.peerSession?.role !== 'ctox_instance') return peerStates;
-    const activeState = peerStates.get(activePeerId);
-    const nextPeerStates = new Map([[activePeerId, activeState]]);
-    for (const peerId of peerStates.keys()) {
-      if (peerId === activePeerId) continue;
-      this.pullCheckpointsByPeer.delete(peerId);
-      this.pushCheckpointsByPeer.delete(peerId);
-      this.peer?.removeConnection?.(peerId, 'native-peer-retained-singleton');
-    }
-    return nextPeerStates;
   }
 
   remoteProtocolForPeer(peerId) {

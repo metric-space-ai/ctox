@@ -356,6 +356,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
                 id: message.id.clone(),
                 result: Value::Null,
                 error: Some(err.to_string()),
+                collection: None,
             };
             let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
             return Err(err);
@@ -430,6 +431,7 @@ pub async fn run_query_fetch<H: WebRTCConnectionHandler>(
         id: message.id.clone(),
         result: json!({ "accepted": true, "requestId": request.request_id }),
         error: None,
+        collection: None,
     };
     let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
 
@@ -734,6 +736,7 @@ async fn send_chunk<H: WebRTCConnectionHandler>(
         id: format!("{}-c{}", request.request_id, sequence),
         method: CTOX_QUERY_RPC_CHUNK.to_string(),
         params: vec![serde_json::to_value(chunk).unwrap_or(Value::Null)],
+        collection: Some(request.collection_name.clone()),
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;
 }
@@ -837,6 +840,7 @@ async fn send_error<H: WebRTCConnectionHandler>(
             id: ack_id.to_string(),
             result: Value::Null,
             error: Some(format!("{code}: {message}")),
+            collection: None,
         };
         let _ = handler.send(peer, WebRTCWireFrame::Response(ack)).await;
     }
@@ -850,6 +854,7 @@ async fn send_error<H: WebRTCConnectionHandler>(
             retryable,
         })
         .unwrap_or(Value::Null)],
+        collection: None,
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;
 }
@@ -1057,6 +1062,7 @@ mod tests {
                 },
                 "window": { "offset": 0, "limit": 1000 }
             })],
+            collection: Some(collection.to_string()),
         }
     }
 
@@ -1177,6 +1183,7 @@ mod tests {
             id: "cancel-1".to_string(),
             method: CTOX_QUERY_RPC_CANCEL.to_string(),
             params: vec![json!({ "requestId": "r4", "reason": "client-abort" })],
+            collection: None,
         };
         let request_id = parse_query_cancel_request(&cancel_message).unwrap();
         assert_eq!(request_id, "r4");

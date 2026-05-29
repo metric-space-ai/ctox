@@ -746,7 +746,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260529-browser-engfix1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260529-mux-phase3');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -756,6 +756,12 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   const iceServers = iceServersFromConfig(config);
   const iceServersHaveTurn = iceServersContainTurn(iceServers);
   const iceServersHaveCredentialedTurn = iceServersContainCredentialedTurn(iceServers);
+  // Phase 3 (single multiplexed stream): the WebRTC room is now the BARE sync
+  // room shared by every collection — one signaling socket + RTCPeerConnection
+  // + DataChannel per browser. `collectionTopic(...)` is retained only as a
+  // human-readable per-collection label for diagnostics, not as the room. The
+  // collection a frame belongs to is now carried in-band on the wire.
+  const room = config.sync_room;
   const topic = collectionTopic(config.sync_room, collection);
   const batchSize = batchSizeFor(collection);
   const initialReplicationStartedAt = new Date().toISOString();
@@ -790,7 +796,9 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   subscriptions.push({ unsubscribe: unregisterSignalingErrorHandler });
   const replicationState = await rxdb.replicateWebRTC({
     collection: rxCollection,
-    topic,
+    // Phase 3: pass the BARE sync room so every collection multiplexes onto a
+    // single shared CtoxWebRtcNativePeer for this room.
+    topic: room,
     connectionHandlerCreator,
     pull: { batchSize },
     push: isReadOnlyProjectionCollection(collection) ? undefined : { batchSize },

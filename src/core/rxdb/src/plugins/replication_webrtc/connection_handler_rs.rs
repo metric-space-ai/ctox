@@ -1855,12 +1855,14 @@ mod tests {
             id: "r1".to_string(),
             result: Value::Null,
             error: None,
+            collection: None,
         }))
         .unwrap();
         let message = serde_json::to_value(WebRTCWireFrame::Message(WebRTCMessage {
             id: "m1".to_string(),
             method: "token".to_string(),
             params: Vec::new(),
+            collection: None,
         }))
         .unwrap();
 
@@ -2057,16 +2059,19 @@ mod tests {
             id: "m1".to_string(),
             method: "token".to_string(),
             params: Vec::new(),
+            collection: None,
         });
         let response = WebRTCWireFrame::Response(WebRTCResponse {
             id: "r1".to_string(),
             result: Value::Null,
             error: None,
+            collection: None,
         });
         let large_write = WebRTCWireFrame::Message(WebRTCMessage {
             id: "m2".to_string(),
             method: "masterWrite".to_string(),
             params: Vec::new(),
+            collection: None,
         });
 
         assert_eq!(classify_send_priority(&token, "{}"), SendPriority::High);

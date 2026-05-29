@@ -18,8 +18,9 @@ pub mod webrtc_types;
 
 pub use connection_handler_rs::{WebRTCRsConfig, WebRTCRsConnectionHandler, WebRTCRsPeer};
 pub use index_mod::{
-    replicate_web_rtc, replicate_web_rtc_rs, replicate_web_rtc_with_options,
-    RxWebRTCReplicationPool, RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
+    master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi, replicate_web_rtc_rs,
+    replicate_web_rtc_rs_multi, replicate_web_rtc_with_options, RxWebRTCReplicationPool,
+    RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
 };
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{
