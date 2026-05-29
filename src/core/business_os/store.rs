@@ -721,7 +721,7 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         signaling_urls_source: signaling.source,
         ice_servers: ice_servers_config(),
         transport: "webrtc",
-        http_bridge_available: false,
+        http_bridge_available: true,
         ctox_instance_required: true,
         native_rxdb_peer_available,
         native_rxdb_peer_reason: if native_rxdb_peer_available {
@@ -1289,6 +1289,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     };
     let harness_flow = harness_flow_projection(root);
     let queue_health = harness_queue_health(root);
+    let web_stack = web_stack_projection(root, &env_map);
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
         "id": "runtime-settings",
@@ -1297,6 +1298,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "updated_at_ms": updated_at_ms,
         "harness_flow": harness_flow,
         "queue_health": queue_health,
+        "web_stack": web_stack,
         "runtime": {
             "source": source,
             "provider": provider,
@@ -1400,6 +1402,101 @@ fn harness_queue_health(root: &Path) -> Value {
             "error": err.to_string()
         }),
     }
+}
+
+fn web_stack_projection(root: &Path, env_map: &BTreeMap<String, String>) -> Value {
+    let mut sources = Vec::new();
+    let mut credential_required = 0usize;
+    let mut credential_configured = 0usize;
+    let mut browser_assist_sources = 0usize;
+
+    for module in ctox_web_stack::sources::list() {
+        let tier = match module.tier() {
+            ctox_web_stack::sources::Tier::P => "P",
+            ctox_web_stack::sources::Tier::S => "S",
+            ctox_web_stack::sources::Tier::C => "C",
+        };
+        let countries = module
+            .countries()
+            .iter()
+            .map(|country| country.as_iso())
+            .collect::<Vec<_>>();
+        let fields = module
+            .authoritative_for()
+            .iter()
+            .map(|field| field.as_str())
+            .collect::<Vec<_>>();
+        let browser_recipe = module.browser_recipe();
+        if browser_recipe.is_some() {
+            browser_assist_sources += 1;
+        }
+        let required_secret = browser_recipe
+            .as_ref()
+            .and_then(|recipe| recipe.required_secret_name)
+            .or_else(|| module.requires_credential());
+        let credential_is_required = required_secret.is_some();
+        let configured = required_secret
+            .map(|secret_name| web_stack_secret_configured(root, env_map, secret_name))
+            .unwrap_or(false);
+        if credential_is_required {
+            credential_required += 1;
+            if configured {
+                credential_configured += 1;
+            }
+        }
+        sources.push(serde_json::json!({
+            "id": module.id(),
+            "aliases": module.aliases(),
+            "tier": tier,
+            "countries": countries,
+            "authoritative_for": fields,
+            "credential": {
+                "required": credential_is_required,
+                "configured": configured,
+                "secret_name": required_secret.unwrap_or_default()
+            },
+            "browser_assist": browser_recipe.as_ref().map(|recipe| serde_json::json!({
+                "source_id": recipe.source_id,
+                "login_url": recipe.login_url,
+                "allowed_domains": recipe.allowed_domains,
+                "required_secret_name": recipe.required_secret_name,
+                "verify_selector": recipe.verify_selector,
+                "credential_selector": recipe.credential_selector,
+                "capture_script_available": recipe.capture_script.is_some(),
+                "secret_value_in_payload": false
+            }))
+        }));
+    }
+
+    serde_json::json!({
+        "ok": true,
+        "mode": "ctox_web_stack",
+        "updated_at_ms": now_ms() as u64,
+        "summary": {
+            "sources": sources.len(),
+            "browser_assist_sources": browser_assist_sources,
+            "credential_required": credential_required,
+            "credential_configured": credential_configured,
+            "credential_missing": credential_required.saturating_sub(credential_configured)
+        },
+        "sources": sources,
+        "secret_value_in_payload": false,
+        "frame_data_in_payload": false
+    })
+}
+
+fn web_stack_secret_configured(
+    root: &Path,
+    env_map: &BTreeMap<String, String>,
+    secret_name: &str,
+) -> bool {
+    env_map
+        .get(secret_name)
+        .or_else(|| env_map.get(&secret_name.to_ascii_uppercase()))
+        .is_some_and(|value| !value.trim().is_empty())
+        || crate::secrets::get_credential(root, secret_name)
+            .is_some_and(|value| !value.trim().is_empty())
+        || env::var(secret_name).is_ok_and(|value| !value.trim().is_empty())
 }
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
@@ -4915,6 +5012,9 @@ pub fn pull_collection_records(
     // directly. No projection table needed; messages/threads/accounts stay
     // single-source-of-truth in channels.
     match collection {
+        "ctox_runtime_settings" => {
+            return pull_runtime_settings_records(root, since_ms, limit);
+        }
         "communication_accounts" => {
             return channels::pull_communication_accounts_for_business_os(root, since_ms, limit);
         }
@@ -4980,6 +5080,9 @@ pub fn pull_collection_record(
         return Ok(None);
     }
     match collection {
+        "ctox_runtime_settings" if record_id == "runtime-settings" => {
+            return Ok(Some(runtime_settings_for_rxdb(root)?));
+        }
         "communication_accounts" | "communication_threads" | "communication_messages" => {
             let pulled = pull_collection_records(root, collection, None, Some(2_000))?;
             return Ok(pulled
@@ -5027,6 +5130,33 @@ pub fn pull_collection_record(
             .cloned());
     }
     Ok(None)
+}
+
+fn pull_runtime_settings_records(
+    root: &Path,
+    since_ms: Option<i64>,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let since_ms = since_ms.unwrap_or(0);
+    let document = runtime_settings_for_rxdb(root)?;
+    let updated_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let documents = if limit == 0 || updated_at_ms < since_ms {
+        Vec::new()
+    } else {
+        vec![document]
+    };
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": "ctox_runtime_settings",
+        "documents": documents,
+        "count": documents.len(),
+        "since_ms": since_ms,
+        "source": "native_runtime_projection"
+    }))
 }
 
 pub fn pull_latest_collection_records(
@@ -13424,6 +13554,44 @@ mod tests {
                 content: content.to_string(),
             },
         )?;
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_projects_web_stack_without_sensitive_payloads() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let runtime_settings = runtime_settings_for_rxdb(temp.path())?;
+        let web_stack = runtime_settings
+            .get("web_stack")
+            .expect("runtime settings include web stack projection");
+        assert_eq!(web_stack.get("ok").and_then(Value::as_bool), Some(true));
+        assert!(
+            web_stack
+                .pointer("/summary/sources")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                > 0,
+            "registered web-stack sources are projected"
+        );
+        assert_eq!(
+            web_stack
+                .get("secret_value_in_payload")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            web_stack
+                .get("frame_data_in_payload")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            serde_json::to_string(web_stack)?.contains("\"capture_script_available\"")
+        );
+        assert!(
+            !serde_json::to_string(web_stack)?.contains("\"capture_script\":"),
+            "browser capture script bodies must stay out of the RxDB projection"
+        );
         Ok(())
     }
 

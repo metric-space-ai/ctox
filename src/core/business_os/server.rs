@@ -203,14 +203,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         respond_options(request)?;
         return Ok(());
     }
-    if path.starts_with("/api/business-os") && !is_subscription_auth_path(path) {
-        respond_status(
-            request,
-            410,
-            "Business OS HTTP data APIs are disabled; use RxDB/WebRTC.",
-        )?;
-        return Ok(());
-    }
     match (method.clone(), path) {
         (Method::Get, "/api/business-os/status") => {
             respond_json(request, &store::status(root)?)?;
@@ -506,6 +498,27 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
             }
         }
+        (Method::Get, "/api/business-os/rxdb/pull") => {
+            let query = parse_query(&url);
+            let collection = query
+                .get("collection")
+                .map(String::as_str)
+                .unwrap_or("business_commands");
+            let since_ms = query
+                .get("since_ms")
+                .and_then(|value| value.parse::<i64>().ok());
+            let limit = query
+                .get("limit")
+                .and_then(|value| value.parse::<usize>().ok());
+            respond_json_value(
+                request,
+                store::pull_collection_records(root, collection, since_ms, limit)?,
+            )?;
+        }
+        (Method::Post, "/api/business-os/rxdb/push") => {
+            let body = read_json(&mut request)?;
+            respond_json_value(request, store::push_collection_records(root, body)?)?;
+        }
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
@@ -672,14 +685,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         _ => respond_status(request, 405, "method not allowed")?,
     }
     Ok(())
-}
-
-fn is_subscription_auth_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/api/business-os/ctox/subscription-auth/start"
-            | "/api/business-os/ctox/subscription-auth/callback"
-    )
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {

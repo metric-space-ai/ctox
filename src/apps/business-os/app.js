@@ -8,7 +8,7 @@ const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
-const APP_BUILD = '20260529-rxdb-rows1';
+const APP_BUILD = '20260529-http-bridge-restore2';
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
@@ -1817,6 +1817,7 @@ async function waitForCriticalSyncCollection(collection, timeoutMs = 18000) {
 function isCriticalSyncCollectionReady(collection) {
   const diagnostics = state.syncDiagnostics?.collections?.[collection];
   if (!diagnostics) return false;
+  if (diagnostics.httpBridgeStatus === 'ready' && diagnostics.httpBridgePulledAt) return true;
   const status = diagnostics.connectionStatus || diagnostics.status || '';
   if (['connected', 'running', 'reused'].includes(status)) return true;
   if (diagnostics.connectedAt || diagnostics.initialReplicationAt) return true;
@@ -2406,7 +2407,8 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
   const stallAfterMs = 45000;
   const entries = requiredCollections.map((collection) => {
     const diagnostics = collections?.[collection] || null;
-    const initialReplicationAt = diagnostics?.initialReplicationAt || null;
+    const httpBridgeReady = isHttpBridgeReady(diagnostics);
+    const initialReplicationAt = diagnostics?.initialReplicationAt || (httpBridgeReady ? diagnostics?.httpBridgePulledAt : null) || null;
     const startedAt = diagnostics?.initialReplicationStartedAt || null;
     const startedMs = startedAt ? Date.parse(startedAt) : NaN;
     const state = initialReplicationAt
@@ -2416,7 +2418,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       ? diagnostics.remoteCapabilities
       : [];
     const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics?.remoteCheckpoint || null);
-    const checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics);
+    const checkpointEpochAdvertised = httpBridgeReady || hasAdvertisedCheckpointEpoch(diagnostics);
     const streamingReady = isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised);
     const stalledForMs = !initialReplicationAt && Number.isFinite(startedMs)
       ? Math.max(0, now - startedMs)
@@ -2426,7 +2428,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
       state,
       status: diagnostics?.status || null,
       connectionStatus: diagnostics?.connectionStatus || null,
-      source: diagnostics?.initialReplicationSource || null,
+      source: httpBridgeReady ? 'http-bridge' : (diagnostics?.initialReplicationSource || null),
       initialReplicationStartedAt: startedAt,
       initialReplicationAt,
       checkpointState: checkpoint?.state || null,
@@ -2466,6 +2468,7 @@ function buildAdvancedStatusInitialSync(requiredCollections, collections) {
 function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
   const status = diagnostics?.connectionStatus || diagnostics?.status || '';
   if (evidence?.hasCollection !== true || !diagnostics) return false;
+  if (isHttpBridgeReady(diagnostics)) return true;
   const initialReplicationComplete = Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
   if (!hasAdvertisedCheckpointEpoch(diagnostics)) return false;
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
@@ -2483,7 +2486,9 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
 }
 
 function isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertised = hasAdvertisedCheckpointEpoch(diagnostics)) {
-  if (!diagnostics || !checkpointEpochAdvertised) return false;
+  if (!diagnostics) return false;
+  if (isHttpBridgeReady(diagnostics)) return true;
+  if (!checkpointEpochAdvertised) return false;
   const status = diagnostics.connectionStatus || diagnostics.status || '';
   if (['failed', 'error', 'stopped', 'pending'].includes(status)) return false;
   const transport = diagnostics.frameTransport || {};
@@ -2500,10 +2505,15 @@ function isRequiredCollectionStreamingReady(diagnostics, checkpointEpochAdvertis
 
 function hasAdvertisedCheckpointEpoch(diagnostics) {
   if (!diagnostics) return false;
+  if (isHttpBridgeReady(diagnostics)) return true;
   const capabilities = Array.isArray(diagnostics.remoteCapabilities) ? diagnostics.remoteCapabilities : [];
   if (!capabilities.includes('ctox-checkpoint-epoch-v1')) return false;
   const checkpoint = sanitizeAdvancedStatusRemoteCheckpoint(diagnostics.remoteCheckpoint || null);
   return Boolean(checkpoint?.state === 'advertised' && checkpoint.epoch);
+}
+
+function isHttpBridgeReady(diagnostics) {
+  return Boolean(diagnostics?.httpBridgeStatus === 'ready' && diagnostics?.httpBridgePulledAt);
 }
 
 async function collectAdvancedStatusCounts() {

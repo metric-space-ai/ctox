@@ -2845,7 +2845,10 @@ async function loadHarnessFlowSnapshot(ctx) {
       || ctx?.db?.collection?.('ctox_runtime_settings');
     if (!collection) return emptyHarnessFlow('rxdb_flow_projection_unavailable');
     const doc = await collection.findOne('runtime-settings').exec();
-    const runtimeSettings = doc?.toJSON?.() || null;
+    let runtimeSettings = doc?.toJSON?.() || null;
+    if (!runtimeSettings?.harness_flow?.ok && !runtimeSettings?.harnessFlow?.ok) {
+      runtimeSettings = await hydrateRuntimeSettingsFromBridge(collection) || runtimeSettings;
+    }
     return runtimeSettings?.harness_flow
       || runtimeSettings?.harnessFlow
       || emptyHarnessFlow('rxdb_flow_projection_unavailable');
@@ -2859,10 +2862,36 @@ async function loadLocalWebStackOverview(ctx) {
   const collection = ctx.db?.raw?.ctox_runtime_settings;
   if (!collection) return { ok: false, error: 'ctox_runtime_settings collection is not available' };
   const doc = await collection.findOne('runtime-settings').exec();
-  const runtimeSettings = doc?.toJSON?.() || null;
+  let runtimeSettings = doc?.toJSON?.() || null;
+  if (!runtimeSettings?.web_stack?.ok) {
+    runtimeSettings = await hydrateRuntimeSettingsFromBridge(collection) || runtimeSettings;
+  }
   const webStack = runtimeSettings?.web_stack || null;
   if (!webStack?.ok) return { ok: false, error: 'Web Stack projection is not available in RxDB' };
   return webStack;
+}
+
+async function hydrateRuntimeSettingsFromBridge(collection) {
+  if (typeof fetch !== 'function') return null;
+  const url = new URL('/api/business-os/rxdb/pull', window.location.href);
+  url.searchParams.set('collection', 'ctox_runtime_settings');
+  url.searchParams.set('since_ms', '0');
+  url.searchParams.set('limit', '1');
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    credentials: 'same-origin',
+    cache: 'no-store',
+  });
+  if (!response.ok) return null;
+  const payload = await response.json();
+  const document = Array.isArray(payload?.documents) ? payload.documents[0] : null;
+  if (!document?.id) return null;
+  if (typeof collection.bulkUpsert === 'function') {
+    await collection.bulkUpsert([document]);
+  } else if (typeof collection.upsert === 'function') {
+    await collection.upsert(document);
+  }
+  return document;
 }
 
 async function refreshWebStackPanel(state) {
