@@ -14,54 +14,73 @@
 //! | `obs.pipe(map(f))`    | `stream.map(f)`                                               |
 
 use std::pin::Pin;
+use std::sync::Arc;
 
 use futures::Stream;
-use tokio::sync::{broadcast, watch};
-use tokio_stream::wrappers::{BroadcastStream, WatchStream};
+use parking_lot::Mutex;
+use tokio::sync::{mpsc, watch};
+use tokio_stream::wrappers::{UnboundedReceiverStream, WatchStream};
 use tokio_stream::StreamExt;
 
 /// Boxed-stream alias mirroring upstream `Observable<T>`.
 pub type RxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 
-/// Default channel buffer for [`RxSubject`]. The exact RxJS semantics are
-/// "unbounded buffering until consumed"; we pick a generous default and let
-/// callers override if hot paths overflow it.
+/// Retained for API compatibility with callers that pass a capacity hint to
+/// [`RxSubject::with_capacity`]. The subject now buffers per-subscriber and
+/// unbounded, so there is no shared ring whose size this would set.
 pub const DEFAULT_SUBJECT_BUFFER: usize = 256;
 
-/// Multi-consumer broadcast subject (RxJS `Subject<T>` analogue).
+/// Multi-consumer subject (RxJS `Subject<T>` analogue).
 ///
-/// Each `subscribe()` returns an independent stream. Items emitted via `next`
-/// after the subscription are observed; items emitted before are not (matches
-/// `Subject` behaviour, not `ReplaySubject`).
+/// Each `subscribe()` returns an independent stream backed by its OWN unbounded
+/// channel. Items emitted via `next` after the subscription are observed; items
+/// emitted before are not (matches `Subject`, not `ReplaySubject`).
+///
+/// This was previously a single `tokio::sync::broadcast` ring of capacity 256
+/// whose stream silently discarded `RecvError::Lagged` — so a momentarily-slow
+/// consumer (e.g. the replication change-stream or the multiplexed transport
+/// response stream under an initial-sync burst) would lose master-change events
+/// and method responses with no error, leaving collections under-synced. Per the
+/// module's stated goal ("unbounded buffering until consumed") `RxSubject` now
+/// fans out to per-subscriber unbounded `mpsc` channels: no shared ring to
+/// overflow, no silent drops, and memory is driven by real backlog exactly as a
+/// RxJS `Subject` would be.
 pub struct RxSubject<T: Clone + Send + 'static> {
-    sender: broadcast::Sender<T>,
+    subscribers: Arc<Mutex<Vec<mpsc::UnboundedSender<T>>>>,
 }
 
 impl<T: Clone + Send + 'static> RxSubject<T> {
     pub fn new() -> Self {
-        Self::with_capacity(DEFAULT_SUBJECT_BUFFER)
+        Self {
+            subscribers: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
-    pub fn with_capacity(buffer: usize) -> Self {
-        let (sender, _) = broadcast::channel(buffer);
-        Self { sender }
+    /// Retained for API compatibility; the capacity hint is unused because the
+    /// subject is now per-subscriber unbounded (nothing to size).
+    pub fn with_capacity(_buffer: usize) -> Self {
+        Self::new()
     }
 
-    /// RxJS `subject.next(value)`. Drops the value silently if there are no
-    /// active subscribers (matches RxJS observable-cold semantics).
+    /// RxJS `subject.next(value)`. Fans the value out to every active subscriber
+    /// and prunes any whose receiver has been dropped. With no subscribers the
+    /// value is dropped (RxJS cold-observable semantics).
     pub fn next(&self, value: T) {
-        let _ = self.sender.send(value);
+        let mut subscribers = self.subscribers.lock();
+        subscribers.retain(|tx| tx.send(value.clone()).is_ok());
     }
 
-    /// RxJS `subject.subscribe()`. Returns an owned stream.
+    /// RxJS `subject.subscribe()`. Returns an owned stream backed by an unbounded
+    /// channel, so a momentarily-slow consumer never loses items.
     pub fn subscribe(&self) -> RxStream<T> {
-        let rx = self.sender.subscribe();
-        Box::pin(BroadcastStream::new(rx).filter_map(|r: Result<T, _>| r.ok()))
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.subscribers.lock().push(tx);
+        Box::pin(UnboundedReceiverStream::new(rx))
     }
 
     /// Number of currently active subscribers.
     pub fn receiver_count(&self) -> usize {
-        self.sender.receiver_count()
+        self.subscribers.lock().len()
     }
 }
 
@@ -74,7 +93,7 @@ impl<T: Clone + Send + 'static> Default for RxSubject<T> {
 impl<T: Clone + Send + 'static> Clone for RxSubject<T> {
     fn clone(&self) -> Self {
         Self {
-            sender: self.sender.clone(),
+            subscribers: Arc::clone(&self.subscribers),
         }
     }
 }
@@ -161,6 +180,42 @@ mod tests {
         let b = sub.next().await;
         assert_eq!(a, Some(1));
         assert_eq!(b, Some(2));
+    }
+
+    #[tokio::test]
+    async fn subject_does_not_drop_items_under_backlog() {
+        // The previous broadcast(256) ring silently dropped everything beyond 256
+        // un-drained items. A per-subscriber unbounded fan-out must lose nothing,
+        // in order, even when the consumer drains long after a large burst.
+        let s = RxSubject::<usize>::new();
+        let mut sub = s.subscribe();
+        const N: usize = 5000;
+        for i in 0..N {
+            s.next(i);
+        }
+        let mut received = Vec::with_capacity(N);
+        for _ in 0..N {
+            received.push(sub.next().await.expect("no item should be dropped"));
+        }
+        assert_eq!(received.len(), N);
+        assert_eq!(received.first(), Some(&0));
+        assert_eq!(received.last(), Some(&(N - 1)));
+        // Strictly increasing => order preserved, nothing skipped.
+        assert!(received.windows(2).all(|w| w[1] == w[0] + 1));
+    }
+
+    #[tokio::test]
+    async fn subject_fans_out_to_multiple_subscribers_without_drops() {
+        let s = RxSubject::<usize>::new();
+        let mut a = s.subscribe();
+        let mut b = s.subscribe();
+        for i in 0..1000 {
+            s.next(i);
+        }
+        for i in 0..1000 {
+            assert_eq!(a.next().await, Some(i));
+            assert_eq!(b.next().await, Some(i));
+        }
     }
 
     #[tokio::test]
