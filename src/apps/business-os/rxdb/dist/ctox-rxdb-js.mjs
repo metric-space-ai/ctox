@@ -838,6 +838,8 @@ var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var RTC_HANDSHAKE_TIMEOUT_MS = 15e3;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
+var SIGNALING_RECONNECT_BASE_MS = 1e3;
+var SIGNALING_RECONNECT_MAX_MS = 3e4;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "ctox_runtime_settings",
   "business_module_catalog",
@@ -942,6 +944,8 @@ var CtoxWebRtcNativePeer = class {
     this.connectionRequests = /* @__PURE__ */ new Map();
     this.forceInitiatorPeers = /* @__PURE__ */ new Set();
     this.closed = false;
+    this.signalingReconnectTimer = null;
+    this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
   }
   on(type, listener) {
     return this.events.on(type, listener);
@@ -953,15 +957,34 @@ var CtoxWebRtcNativePeer = class {
     this.socket = socket;
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: "join", room: this.options.room }));
+      this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
       this.events.emit("signaling-open", { url: redactUrl(url) });
     };
     socket.onmessage = (event) => this.handleSignalingMessage(event.data);
     socket.onerror = () => this.events.emit("error", this.lastControlPlaneError || { code: "ctox_signaling_socket_error" });
-    socket.onclose = () => this.events.emit("signaling-close", {});
+    socket.onclose = () => {
+      this.events.emit("signaling-close", {});
+      if (!this.closed) this.scheduleSignalingReconnect();
+    };
     return this;
+  }
+  scheduleSignalingReconnect() {
+    if (this.closed || this.signalingReconnectTimer) return;
+    const delay = this.signalingReconnectDelayMs;
+    this.signalingReconnectDelayMs = Math.min(delay * 2, SIGNALING_RECONNECT_MAX_MS);
+    this.signalingReconnectTimer = setTimeout(() => {
+      this.signalingReconnectTimer = null;
+      if (this.closed) return;
+      this.events.emit("signaling-reconnect", { delayMs: delay });
+      this.connect();
+    }, delay);
   }
   close() {
     this.closed = true;
+    if (this.signalingReconnectTimer) {
+      clearTimeout(this.signalingReconnectTimer);
+      this.signalingReconnectTimer = null;
+    }
     cancelRtcPeerConnectionRequestsForOwner(this, "peer-close");
     this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {

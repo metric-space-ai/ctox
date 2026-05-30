@@ -27,6 +27,14 @@ const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
 const RTC_HANDSHAKE_TIMEOUT_MS = 15_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
+// Signaling reconnection backoff. Post-multiplex the whole room shares ONE
+// signaling socket; a clean close used to only emit `signaling-close` (which had
+// no listener), so the peer could never re-discover the native side until an
+// external restart. The peer now self-reconnects the socket with exponential
+// backoff and re-joins the room (re-broadcasting the peer list), complementing
+// sync.js's higher-level restart engine.
+const SIGNALING_RECONNECT_BASE_MS = 1_000;
+const SIGNALING_RECONNECT_MAX_MS = 30_000;
 // Single source of truth for the shell-critical collection set. app.js derives
 // its CRITICAL_SYNC_COLLECTIONS from this exported list so the two lists cannot
 // silently drift. Browser_* members only register when the Browser module is
@@ -138,6 +146,8 @@ export class CtoxWebRtcNativePeer {
     this.connectionRequests = new Map();
     this.forceInitiatorPeers = new Set();
     this.closed = false;
+    this.signalingReconnectTimer = null;
+    this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
   }
 
   on(type, listener) {
@@ -151,16 +161,39 @@ export class CtoxWebRtcNativePeer {
     this.socket = socket;
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: 'join', room: this.options.room }));
+      // Reconnect succeeded (or first connect) — reset the backoff.
+      this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
       this.events.emit('signaling-open', { url: redactUrl(url) });
     };
     socket.onmessage = (event) => this.handleSignalingMessage(event.data);
     socket.onerror = () => this.events.emit('error', this.lastControlPlaneError || { code: 'ctox_signaling_socket_error' });
-    socket.onclose = () => this.events.emit('signaling-close', {});
+    socket.onclose = () => {
+      this.events.emit('signaling-close', {});
+      if (!this.closed) this.scheduleSignalingReconnect();
+    };
     return this;
+  }
+
+  scheduleSignalingReconnect() {
+    if (this.closed || this.signalingReconnectTimer) return;
+    const delay = this.signalingReconnectDelayMs;
+    this.signalingReconnectDelayMs = Math.min(delay * 2, SIGNALING_RECONNECT_MAX_MS);
+    this.signalingReconnectTimer = setTimeout(() => {
+      this.signalingReconnectTimer = null;
+      if (this.closed) return;
+      this.events.emit('signaling-reconnect', { delayMs: delay });
+      // Re-open the socket; onopen re-joins the room, which makes the signaling
+      // server re-broadcast the room peer list and re-drive peer (re)connection.
+      this.connect();
+    }, delay);
   }
 
   close() {
     this.closed = true;
+    if (this.signalingReconnectTimer) {
+      clearTimeout(this.signalingReconnectTimer);
+      this.signalingReconnectTimer = null;
+    }
     cancelRtcPeerConnectionRequestsForOwner(this, 'peer-close');
     this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {
