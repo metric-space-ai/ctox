@@ -11,7 +11,7 @@
 #[path = "frame_contract_generated.rs"]
 mod frame_contract_generated;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -32,7 +32,8 @@ use webrtc::runtime::default_runtime;
 use crate::plugins::replication_webrtc::signaling_client::SignalingClient;
 use crate::plugins::replication_webrtc::signaling_protocol::{PeerId, RoomId, ServerToClient};
 use crate::plugins::replication_webrtc::webrtc_types::{
-    PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCResponse, WebRTCWireFrame,
+    PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler, WebRTCMessage, WebRTCResponse,
+    WebRTCWireFrame,
 };
 use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
@@ -58,6 +59,12 @@ const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
 const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
+
+/// Phase 2: transport-control wire method by which a browser tells the native
+/// peer which collections are currently foreground/subscribed. Params shape:
+/// `[[collectionName, …]]` (a single array argument). Frames whose `collection`
+/// is in the most-recently-reported set are sent at High priority.
+pub const ACTIVE_COLLECTIONS_METHOD: &str = "rxdb.activeCollections";
 
 /// Peer identifier assigned by the shared signaling server.
 pub type WebRTCRsPeer = PeerId;
@@ -171,7 +178,39 @@ impl SendPriority {
 struct QueuedSend {
     text: String,
     priority: SendPriority,
+    /// Phase 2: the collection this frame belongs to (from the wire
+    /// `collection` field), retained so the queue can re-bucket the frame when
+    /// the peer's active-collection set changes (`rxdb.activeCollections`).
+    /// `None` for control / handshake frames that are not collection-scoped.
+    collection: Option<String>,
+    /// Phase 2: whether the frame's INTRINSIC priority is High regardless of
+    /// the active set (control frames: responses + handshake). Such frames must
+    /// never be demoted when the active-collection set changes.
+    intrinsic_high: bool,
+    /// Phase 2: whether the frame is an oversized `masterWrite` that should
+    /// stay Low (a large background transfer) even if its collection is active.
+    oversized_write: bool,
     result: tokio::sync::oneshot::Sender<Result<(), RxError>>,
+}
+
+impl QueuedSend {
+    /// Phase 2: (re)classify this frame's priority against the supplied
+    /// active-collection set. Control frames stay High; oversized background
+    /// writes stay Low; otherwise a frame whose collection is active is High
+    /// and everything else is Normal. Centralizing this here keeps `push` and
+    /// the `rxdb.activeCollections`-driven re-bucket in lockstep.
+    fn classify_against(&self, active: &HashSet<String>) -> SendPriority {
+        if self.intrinsic_high {
+            return SendPriority::High;
+        }
+        if self.oversized_write {
+            return SendPriority::Low;
+        }
+        match &self.collection {
+            Some(name) if active.contains(name) => SendPriority::High,
+            _ => SendPriority::Normal,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -196,6 +235,25 @@ impl PeerSendQueue {
             .pop_front()
             .or_else(|| self.normal.pop_front())
             .or_else(|| self.low.pop_front())
+    }
+
+    /// Phase 2: re-bucket every still-queued frame against a new
+    /// active-collection set. Frames whose collection just became active jump
+    /// from Normal → High; frames whose collection left the active set drop
+    /// High → Normal. FIFO order WITHIN a bucket is preserved by re-pushing in
+    /// the original High→Normal→Low drain order. Control frames (intrinsic
+    /// High) and oversized background writes (Low) are unaffected.
+    fn reprioritize(&mut self, active: &HashSet<String>) {
+        let mut items: Vec<QueuedSend> = Vec::with_capacity(
+            self.high.len() + self.normal.len() + self.low.len(),
+        );
+        items.extend(self.high.drain(..));
+        items.extend(self.normal.drain(..));
+        items.extend(self.low.drain(..));
+        for mut item in items.into_iter() {
+            item.priority = item.classify_against(active);
+            self.push(item);
+        }
     }
 }
 
@@ -288,6 +346,12 @@ pub struct WebRTCRsConnectionHandler {
     completed_frame_acks: Arc<Mutex<HashMap<String, CompletedFrameAck>>>,
     pending_frame_acks: Arc<Mutex<HashMap<String, PendingFrameAck>>>,
     send_queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
+    /// Phase 2: per-peer "active collection" set. A browser sends
+    /// `rxdb.activeCollections` (params: `[[collectionNames]]`) whenever its
+    /// foreground/subscribed collections change; frames whose `collection` is
+    /// in this set are sent at High priority so the foreground collection's
+    /// data jumps ahead of background bulk transfers on the shared DataChannel.
+    active_collections: Arc<Mutex<HashMap<WebRTCRsPeer, HashSet<String>>>>,
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
@@ -336,6 +400,7 @@ impl WebRTCRsConnectionHandler {
             completed_frame_acks: Arc::new(Mutex::new(HashMap::new())),
             pending_frame_acks: Arc::new(Mutex::new(HashMap::new())),
             send_queues: Arc::new(Mutex::new(HashMap::new())),
+            active_collections: Arc::new(Mutex::new(HashMap::new())),
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
@@ -710,9 +775,11 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                 })),
             )
         })?;
-        let priority = classify_send_priority(&frame, &text);
-        self.send_queued_text(peer, data_channel, text, priority)
-            .await
+        // Phase 2: derive the collection-aware priority class. Control frames
+        // are intrinsically High; oversized writes are Low; everything else is
+        // High when its collection is in the peer's active set, else Normal.
+        let class = classify_send_frame(&frame, &text);
+        self.send_queued_text(peer, data_channel, class).await
     }
 
     async fn close(&self) -> Result<(), RxError> {
@@ -736,6 +803,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         }
         self.send_queues.lock().clear();
         self.backpressure.lock().clear();
+        self.active_collections.lock().clear();
         self.refresh_send_queue_status();
         Ok(())
     }
@@ -760,21 +828,65 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
 }
 
 impl WebRTCRsConnectionHandler {
+    /// Phase 2: apply an inbound `rxdb.activeCollections` control frame. Parses
+    /// the collection-name array from `params[0]`, replaces the peer's active
+    /// set, and re-buckets anything still queued for that peer so foreground
+    /// frames jump ahead immediately. Idempotent: an unchanged set is a no-op.
+    fn apply_active_collections(&self, peer: &WebRTCRsPeer, message: &WebRTCMessage) {
+        let names: HashSet<String> = message
+            .params
+            .first()
+            .and_then(Value::as_array)
+            .map(|arr: &Vec<Value>| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .map(str::to_string)
+                    .collect::<HashSet<String>>()
+            })
+            .unwrap_or_default();
+        {
+            let mut active_map = self.active_collections.lock();
+            let entry = active_map.entry(peer.clone()).or_default();
+            if *entry == names {
+                return;
+            }
+            *entry = names.clone();
+        }
+        // Re-bucket the existing queue against the new active set so a frame
+        // already waiting for a now-foreground collection is promoted.
+        if let Some(queue) = self.send_queues.lock().get_mut(peer) {
+            queue.reprioritize(&names);
+        }
+        self.refresh_send_queue_status();
+    }
+
     async fn send_queued_text(
         &self,
         peer: &WebRTCRsPeer,
         data_channel: Arc<dyn DataChannel>,
-        text: String,
-        priority: SendPriority,
+        class: SendFrameClass,
     ) -> Result<(), RxError> {
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        // Phase 2: resolve the priority against THIS peer's active-collection
+        // set at enqueue time. A later `rxdb.activeCollections` update will
+        // re-bucket anything still queued via `PeerSendQueue::reprioritize`.
+        let priority = {
+            let active_map = self.active_collections.lock();
+            let empty = HashSet::new();
+            let active = active_map.get(peer).unwrap_or(&empty);
+            class.classify(active)
+        };
         let should_drain = {
             let mut queues = self.send_queues.lock();
             let queue = queues.entry(peer.clone()).or_default();
             let should_drain = !queue.draining;
             queue.push(QueuedSend {
-                text,
+                text: class.text,
                 priority,
+                collection: class.collection,
+                intrinsic_high: class.intrinsic_high,
+                oversized_write: class.oversized_write,
                 result: result_tx,
             });
             if should_drain {
@@ -1645,11 +1757,25 @@ fn install_data_channel(
                             Err(err) => error_subject.next(decode_error("response", err, &text)),
                         }
                     } else {
-                        match serde_json::from_value(value) {
-                            Ok(message) => message_subject.next(PeerWithMessage {
-                                peer: peer_for_task.clone(),
-                                message,
-                            }),
+                        match serde_json::from_value::<WebRTCMessage>(value) {
+                            Ok(message) => {
+                                // Phase 2: `rxdb.activeCollections` is a
+                                // transport-control frame, not a replication
+                                // request. The browser sends it whenever its
+                                // foreground/subscribed collections change.
+                                // Apply it to the per-peer active set + re-bucket
+                                // anything still queued, and do NOT forward it to
+                                // the pool's message stream.
+                                if message.method == ACTIVE_COLLECTIONS_METHOD {
+                                    handler_for_task
+                                        .apply_active_collections(&peer_for_task, &message);
+                                } else {
+                                    message_subject.next(PeerWithMessage {
+                                        peer: peer_for_task.clone(),
+                                        message,
+                                    });
+                                }
+                            }
                             Err(err) => error_subject.next(decode_error("message", err, &text)),
                         }
                     }
@@ -1699,6 +1825,9 @@ fn remove_peer(handler: &Arc<WebRTCRsConnectionHandler>, peer: &str) {
         for task in entry.tasks.drain(..) {
             task.abort();
         }
+        // Phase 2: drop the per-peer active-collection set so it cannot leak
+        // across reconnects (a new connection re-reports its active set).
+        handler.active_collections.lock().remove(peer);
         let peer_id = peer.to_string();
         tokio::spawn(async move {
             if let Some(data_channel) = entry.data_channel {
@@ -1779,14 +1908,63 @@ fn highest_contiguous_seq(received: &[Option<String>]) -> Option<usize> {
     highest
 }
 
-fn classify_send_priority(frame: &WebRTCWireFrame, text: &str) -> SendPriority {
-    match frame {
-        WebRTCWireFrame::Response(_) => SendPriority::High,
-        WebRTCWireFrame::Message(message) => match message.method.as_str() {
-            "ctoxProtocol" | "token" => SendPriority::High,
-            "masterWrite" if text.len() > MAX_INLINE_FRAME_BYTES => SendPriority::Low,
+/// Phase 2: the result of classifying an outbound frame for the
+/// collection-aware send queue. Carries the serialized `text` plus the
+/// metadata needed to (re)bucket the frame whenever the peer's active-
+/// collection set changes.
+struct SendFrameClass {
+    text: String,
+    collection: Option<String>,
+    /// Control / handshake frames that are always High regardless of the
+    /// active set (responses incl. master-change pushes; `ctoxProtocol` /
+    /// `token`).
+    intrinsic_high: bool,
+    /// Oversized `masterWrite` — a large background bulk write that stays Low
+    /// so it never stalls foreground collections, even if its collection is
+    /// active.
+    oversized_write: bool,
+}
+
+impl SendFrameClass {
+    /// Resolve the concrete [`SendPriority`] against an active-collection set.
+    /// Mirrors [`QueuedSend::classify_against`] so the enqueue-time class and
+    /// the re-bucket path agree.
+    fn classify(&self, active: &HashSet<String>) -> SendPriority {
+        if self.intrinsic_high {
+            return SendPriority::High;
+        }
+        if self.oversized_write {
+            return SendPriority::Low;
+        }
+        match &self.collection {
+            Some(name) if active.contains(name) => SendPriority::High,
             _ => SendPriority::Normal,
+        }
+    }
+}
+
+/// Phase 2: classify an outbound frame into a [`SendFrameClass`]. The concrete
+/// priority is resolved later against the peer's active-collection set, but the
+/// intrinsic dimensions (control vs. data, oversized write) are fixed here.
+fn classify_send_frame(frame: &WebRTCWireFrame, text: &str) -> SendFrameClass {
+    match frame {
+        WebRTCWireFrame::Response(response) => SendFrameClass {
+            text: text.to_string(),
+            collection: response.collection.clone(),
+            intrinsic_high: true,
+            oversized_write: false,
         },
+        WebRTCWireFrame::Message(message) => {
+            let intrinsic_high = matches!(message.method.as_str(), "ctoxProtocol" | "token");
+            let oversized_write =
+                message.method == "masterWrite" && text.len() > MAX_INLINE_FRAME_BYTES;
+            SendFrameClass {
+                text: text.to_string(),
+                collection: message.collection.clone(),
+                intrinsic_high,
+                oversized_write,
+            }
+        }
     }
 }
 
@@ -1846,8 +2024,10 @@ fn split_utf8_chunks(text: &str, max_bytes: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    // `WebRTCMessage` / `WebRTCResponse` are now imported at module scope
+    // (used by `apply_active_collections` + the send path) and reach the tests
+    // through this glob.
     use super::*;
-    use crate::plugins::replication_webrtc::webrtc_types::{WebRTCMessage, WebRTCResponse};
 
     #[test]
     fn classifies_wire_frames_by_result_or_error_field() {
@@ -1855,12 +2035,14 @@ mod tests {
             id: "r1".to_string(),
             result: Value::Null,
             error: None,
+            collection: None,
         }))
         .unwrap();
         let message = serde_json::to_value(WebRTCWireFrame::Message(WebRTCMessage {
             id: "m1".to_string(),
             method: "token".to_string(),
             params: Vec::new(),
+            collection: None,
         }))
         .unwrap();
 
@@ -2053,28 +2235,122 @@ mod tests {
 
     #[test]
     fn classifies_send_priority_for_scheduler() {
+        let empty = HashSet::new();
         let token = WebRTCWireFrame::Message(WebRTCMessage {
             id: "m1".to_string(),
             method: "token".to_string(),
             params: Vec::new(),
+            collection: None,
         });
         let response = WebRTCWireFrame::Response(WebRTCResponse {
             id: "r1".to_string(),
             result: Value::Null,
             error: None,
+            collection: None,
         });
         let large_write = WebRTCWireFrame::Message(WebRTCMessage {
             id: "m2".to_string(),
             method: "masterWrite".to_string(),
             params: Vec::new(),
+            collection: Some("documents".to_string()),
         });
 
-        assert_eq!(classify_send_priority(&token, "{}"), SendPriority::High);
-        assert_eq!(classify_send_priority(&response, "{}"), SendPriority::High);
+        // Control frames stay High regardless of the active set.
         assert_eq!(
-            classify_send_priority(&large_write, &"x".repeat(MAX_INLINE_FRAME_BYTES + 1)),
+            classify_send_frame(&token, "{}").classify(&empty),
+            SendPriority::High
+        );
+        assert_eq!(
+            classify_send_frame(&response, "{}").classify(&empty),
+            SendPriority::High
+        );
+        // An oversized masterWrite is Low even when its collection is active.
+        let active_docs: HashSet<String> = ["documents".to_string()].into_iter().collect();
+        assert_eq!(
+            classify_send_frame(&large_write, &"x".repeat(MAX_INLINE_FRAME_BYTES + 1))
+                .classify(&active_docs),
             SendPriority::Low
         );
+    }
+
+    #[test]
+    fn active_collection_frame_is_high_priority_others_normal() {
+        // Phase 2: a normal-sized masterWrite/masterChangesSince for the active
+        // (foreground) collection is High; for a background collection it is
+        // Normal. This is what lets the foreground collection's data jump ahead
+        // of background bulk on the shared DataChannel.
+        let active: HashSet<String> = ["documents".to_string()].into_iter().collect();
+        let foreground = WebRTCWireFrame::Message(WebRTCMessage {
+            id: "f".to_string(),
+            method: "masterChangesSince".to_string(),
+            params: Vec::new(),
+            collection: Some("documents".to_string()),
+        });
+        let background = WebRTCWireFrame::Message(WebRTCMessage {
+            id: "b".to_string(),
+            method: "masterChangesSince".to_string(),
+            params: Vec::new(),
+            collection: Some("customer_accounts".to_string()),
+        });
+        assert_eq!(
+            classify_send_frame(&foreground, "{}").classify(&active),
+            SendPriority::High
+        );
+        assert_eq!(
+            classify_send_frame(&background, "{}").classify(&active),
+            SendPriority::Normal
+        );
+    }
+
+    #[test]
+    fn apply_active_collections_reprioritizes_queued_frames() {
+        // Phase 2: a frame for a background collection is enqueued Normal, then
+        // `rxdb.activeCollections` promotes that collection — the still-queued
+        // frame must be re-bucketed to High and drain ahead of older Normal
+        // frames for other collections.
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+        let make = |collection: &str| {
+            let (tx, _rx) = tokio::sync::oneshot::channel();
+            (
+                QueuedSend {
+                    text: "{}".to_string(),
+                    priority: SendPriority::Normal,
+                    collection: Some(collection.to_string()),
+                    intrinsic_high: false,
+                    oversized_write: false,
+                    result: tx,
+                },
+                _rx,
+            )
+        };
+        let (docs_item, _docs_rx) = make("documents");
+        let (cust_item, _cust_rx) = make("customer_accounts");
+        {
+            let mut queues = handler.send_queues.lock();
+            let queue = queues.entry(peer.clone()).or_default();
+            queue.push(cust_item);
+            queue.push(docs_item);
+            // Both Normal; nothing in High yet.
+            assert_eq!(queue.high.len(), 0);
+            assert_eq!(queue.normal.len(), 2);
+        }
+        // Browser reports `documents` as the active/foreground collection.
+        let msg = WebRTCMessage {
+            id: "ac".to_string(),
+            method: ACTIVE_COLLECTIONS_METHOD.to_string(),
+            params: vec![serde_json::json!(["documents"])],
+            collection: None,
+        };
+        handler.apply_active_collections(&peer, &msg);
+        let mut queues = handler.send_queues.lock();
+        let queue = queues.get_mut(&peer).expect("queue exists");
+        // `documents` promoted to High; the other stays Normal.
+        assert_eq!(queue.high.len(), 1);
+        assert_eq!(queue.normal.len(), 1);
+        let next = queue.pop_next().expect("a frame");
+        assert_eq!(next.collection.as_deref(), Some("documents"));
+        assert_eq!(next.priority, SendPriority::High);
     }
 
     #[test]
@@ -2092,11 +2368,17 @@ mod tests {
         queue.push(QueuedSend {
             text: "{}".to_string(),
             priority: SendPriority::High,
+            collection: None,
+            intrinsic_high: true,
+            oversized_write: false,
             result: high_tx,
         });
         queue.push(QueuedSend {
             text: "{}".to_string(),
             priority: SendPriority::Low,
+            collection: None,
+            intrinsic_high: false,
+            oversized_write: true,
             result: low_tx,
         });
         handler

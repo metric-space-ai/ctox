@@ -152,6 +152,14 @@ export function buildProtocolPayload({
   checkpoint,
   role = 'browser',
   capabilities = [],
+  // Phase 3 schema-validation hardening: the per-collection schema-hash map
+  // for EVERY collection multiplexed on this one connection. Keyed by
+  // collection name. The room handshake runs once off a single representative
+  // collection, so this map is the only place the remote learns the schema
+  // hash/version of the OTHER collections sharing the DataChannel. The remote
+  // validates each entry individually (see `assertCollectionSchemasCompatible`)
+  // instead of skipping schema validation wholesale under multiplex.
+  collectionSchemas = null,
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   return {
@@ -164,6 +172,10 @@ export function buildProtocolPayload({
       schemaHashSource: source || schemaHashSource(collectionName),
       checkpoint: checkpointEvidence,
     } : null,
+    // `{ collectionName: { schemaVersion, schemaHash, schemaHashSource } }`.
+    // Omitted (null) for single-collection rooms so the legacy single-
+    // collection handshake stays byte-identical.
+    collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
     peerSession: {
       role,
       sessionId: peerSessionId || null,
@@ -174,6 +186,20 @@ export function buildProtocolPayload({
       ...capabilities,
     ])).sort(),
   };
+}
+
+function normalizeCollectionSchemas(map) {
+  if (!map || typeof map !== 'object') return null;
+  const out = {};
+  for (const [name, entry] of Object.entries(map)) {
+    if (!name || !entry || typeof entry !== 'object') continue;
+    out[name] = {
+      schemaVersion: Number.isFinite(entry.schemaVersion) ? entry.schemaVersion : null,
+      schemaHash: entry.schemaHash || null,
+      schemaHashSource: entry.schemaHashSource || schemaHashSource(name),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export function assertCompatibleProtocol(local, remote, {
@@ -261,6 +287,55 @@ export function assertCompatibleProtocol(local, remote, {
     });
   }
   return true;
+}
+
+// Phase 3 schema-validation hardening: validate EACH collection's schema hash
+// individually under multiplex. `localSchemas` is `{ name -> { schemaVersion,
+// schemaHash } }` for the collections THIS peer carries on the connection;
+// `remote` is the negotiated remote protocol payload (which carries
+// `collectionSchemas`). Returns a Map<collectionName, Error> for the
+// collections that mismatched (empty Map when all compatible). Collections the
+// remote does not advertise are NOT flagged — the remote simply does not serve
+// them, which is benign (the local fork just never receives rows). This
+// replaces the old `validateSchema: collections.size <= 1` wholesale skip:
+// every collection's hash/version is now checked, and only the mismatched
+// collection is skipped (its error surfaced) rather than disabling validation
+// for the whole room.
+export function assertCollectionSchemasCompatible(localSchemas, remote) {
+  const mismatches = new Map();
+  const remoteSchemas = (remote && typeof remote.collectionSchemas === 'object' && remote.collectionSchemas)
+    ? remote.collectionSchemas
+    : {};
+  for (const [name, local] of Object.entries(localSchemas || {})) {
+    const remoteEntry = remoteSchemas[name];
+    // The remote did not advertise this collection — it does not serve it on
+    // this connection. Not a mismatch; just no rows for that collection.
+    if (!remoteEntry || typeof remoteEntry !== 'object') continue;
+    const localVersion = Number.isFinite(local?.schemaVersion) ? local.schemaVersion : null;
+    const remoteVersion = Number.isFinite(remoteEntry.schemaVersion) ? remoteEntry.schemaVersion : null;
+    if (localVersion !== null && remoteVersion !== null && localVersion !== remoteVersion) {
+      mismatches.set(name, createProtocolCompatibilityError({
+        code: CTOX_PROTOCOL_ERROR_CODES.schemaVersionMismatch,
+        message: `CTOX RxDB schema version mismatch for ${name}.`,
+        expected: localVersion,
+        actual: remoteVersion,
+        collection: name,
+      }));
+      continue;
+    }
+    const localHash = local?.schemaHash || null;
+    const remoteHash = remoteEntry.schemaHash || null;
+    if (localHash && remoteHash && localHash !== remoteHash) {
+      mismatches.set(name, createProtocolCompatibilityError({
+        code: CTOX_PROTOCOL_ERROR_CODES.schemaHashMismatch,
+        message: `CTOX RxDB schema hash mismatch for ${name}.`,
+        expected: localHash,
+        actual: remoteHash,
+        collection: name,
+      }));
+    }
+  }
+  return mismatches;
 }
 
 function normalizeProtocolCollection(payload) {

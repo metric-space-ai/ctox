@@ -223,6 +223,7 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
                 id: message.id.clone(),
                 result: Value::Null,
                 error: Some(err.to_string()),
+                collection: None,
             };
             let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
             return Err(err);
@@ -267,6 +268,7 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
         id: message.id.clone(),
         result: json!({ "accepted": true, "requestId": request.request_id }),
         error: None,
+        collection: None,
     };
     let _ = handler.send(&peer, WebRTCWireFrame::Response(ack)).await;
 
@@ -512,6 +514,7 @@ async fn send_file_chunk<H: WebRTCConnectionHandler>(
             cancelled: if cancelled { Some(true) } else { None },
         })
         .unwrap_or(Value::Null)],
+        collection: Some(request.collection_name.clone()),
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;
 }
@@ -530,6 +533,7 @@ async fn send_file_error<H: WebRTCConnectionHandler>(
             id: ack_id.to_string(),
             result: Value::Null,
             error: Some(format!("{code}: {message}")),
+            collection: None,
         };
         let _ = handler.send(peer, WebRTCWireFrame::Response(ack)).await;
     }
@@ -542,6 +546,7 @@ async fn send_file_error<H: WebRTCConnectionHandler>(
             "message": message,
             "retryable": retryable,
         })],
+        collection: None,
     };
     let _ = handler.send(peer, WebRTCWireFrame::Message(frame)).await;
 }
@@ -643,6 +648,7 @@ mod tests {
                 "fileId": file_id,
                 "knownSequences": known,
             })],
+            collection: Some(collection.to_string()),
         }
     }
 

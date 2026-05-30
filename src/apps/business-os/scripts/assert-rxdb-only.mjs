@@ -459,18 +459,19 @@ function assertSyncWarmupDoesNotBlockBoot() {
     offenders.push('src/apps/business-os/app.js: could not inspect bootstrap boot path');
     return;
   }
-  if (/await\s+startCriticalSyncCollections\s*\(/.test(bootstrapBody)) {
-    offenders.push('src/apps/business-os/app.js: critical RxDB sync warmup blocks Business OS boot');
+  // Phase 2 (subscription-driven priority): app.js no longer choreographs sync.
+  // The critical-sync warmup orchestration (`scheduleCriticalSyncWarmup` /
+  // `startCriticalSyncCollections` / `runCriticalSyncWarmup`) was REMOVED;
+  // replication now starts lazily inside the RxDB layer on first subscription
+  // and the foreground collection is prioritized from real reactive
+  // subscriptions. The guard's intent — "sync must not block boot, and apps must
+  // not hand-order collection sync" — is now enforced by asserting that warmup
+  // orchestration is ABSENT from the boot path, NOT present.
+  if (/startCriticalSyncCollections\s*\(/.test(bootstrapBody)) {
+    offenders.push('src/apps/business-os/app.js: critical RxDB sync warmup must not be choreographed in boot (Phase 2: RxDB starts replication lazily)');
   }
-  const loadModulesAt = bootstrapBody.indexOf('modules = await loadModules');
-  const openModuleAt = bootstrapBody.indexOf('await openModule(');
-  const warmupAt = bootstrapBody.indexOf('scheduleCriticalSyncWarmup();');
-  if (warmupAt === -1) {
-    offenders.push('src/apps/business-os/app.js: missing post-boot critical sync warmup scheduling');
-  } else if (loadModulesAt !== -1 && warmupAt < loadModulesAt) {
-    offenders.push('src/apps/business-os/app.js: critical sync warmup starts before module manifests load');
-  } else if (openModuleAt !== -1 && warmupAt < openModuleAt) {
-    offenders.push('src/apps/business-os/app.js: critical sync warmup starts before the visible workspace opens');
+  if (/scheduleCriticalSyncWarmup\s*\(/.test(bootstrapBody)) {
+    offenders.push('src/apps/business-os/app.js: scheduleCriticalSyncWarmup is removed in Phase 2 (replication is lazy in RxDB, not app-choreographed)');
   }
 
   const catalogBody = appContent.match(/async function loadModuleCatalog\([^)]*\) \{([\s\S]*?)\n\}\n\nasync function readModuleCatalogProjection/)?.[1] || '';
