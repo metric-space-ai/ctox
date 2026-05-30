@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260529-research-rxdb1';
+const APP_BUILD = '20260530-module-allowlist1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -138,6 +138,7 @@ const state = {
   catalogRefreshRunning: false,
   catalogRefreshQueued: false,
   moduleCatalogFingerprint: '',
+  moduleAllowlist: [],
   shellCatalogMergedIds: new Set(),
   initialModuleOpened: false,
   advancedStatusRequiredRestarts: new Map(),
@@ -2855,13 +2856,24 @@ const DESKTOP_APPS = [
   },
 ];
 
+// Desktop apps that remain available even under a module allowlist, because they are
+// generic system/file tools rather than business modules. "Files" (explorer) is the
+// user-facing file browser; file-viewer is its companion viewer (never a launcher icon).
+const DESKTOP_APP_ALWAYS_ALLOWED = new Set(['explorer', 'file-viewer']);
+
 function listDesktopApps() {
   const moduleIds = new Set((state.modules || [])
     .filter((mod) => !moduleLaunchesAsDesktopApp(mod))
     .map((mod) => mod?.id)
     .filter(Boolean));
+  const allow = resolveModuleAllowlist(state.moduleAllowlist);
+  const allowActive = allow.size > 0;
   return DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
+    // Under an active allowlist, only surface allowlisted apps plus the always-available
+    // file tools — so hiding a full-workspace module (e.g. creator) can't make it
+    // resurface as a desktop-app icon.
+    .filter((app) => !allowActive || DESKTOP_APP_ALWAYS_ALLOWED.has(app.id) || allow.has(app.id))
     .map(({ id, title, glyph, defaultWidth, defaultHeight }) => ({
       id,
       title,
@@ -5392,16 +5404,48 @@ async function loadModules(options = {}) {
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed: normalized.allowShellSeed !== false,
   });
-  const modules = await ensurePackagedModuleList(
+  const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
     { allowShellSeed: normalized.allowShellSeed !== false }
   );
+  // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
+  // stays in sync with the tab list. Only overwrite when the synced catalog actually
+  // carries it — the packaged shell seed has no allowed_module_ids and must not clear
+  // a previously-synced restriction.
+  if (Array.isArray(catalog.allowed_module_ids)) {
+    state.moduleAllowlist = catalog.allowed_module_ids;
+  }
+  // Per-instance app allowlist: when the instance scopes its visible apps, the
+  // server projects `allowed_module_ids` into the catalog doc (RxDB data plane)
+  // and `module_allowlist` into the injected launch config (instant at startup,
+  // so there is no flash of disallowed apps before the catalog syncs). Empty/unset
+  // means no restriction — every packaged module is surfaced.
+  const modules = applyModuleAllowlist(merged, catalog.allowed_module_ids);
   return {
     ok: catalog.ok !== false,
     modules,
     governance: catalog.governance || null,
     catalogFingerprint: moduleCatalogFingerprint({ ...catalog, modules }),
   };
+}
+
+function resolveModuleAllowlist(catalogAllowlist) {
+  const fromCatalog = Array.isArray(catalogAllowlist) ? catalogAllowlist : [];
+  const cfg = (typeof window !== 'undefined' && window.CTOX_BUSINESS_OS_CONFIG) || null;
+  const fromConfig = Array.isArray(cfg?.module_allowlist) ? cfg.module_allowlist : [];
+  const allow = new Set();
+  for (const id of [...fromCatalog, ...fromConfig]) {
+    const trimmed = String(id || '').trim();
+    if (trimmed) allow.add(trimmed);
+  }
+  return allow;
+}
+
+function applyModuleAllowlist(modules, catalogAllowlist) {
+  const allow = resolveModuleAllowlist(catalogAllowlist);
+  if (allow.size === 0) return modules; // no restriction configured
+  return normalizeModuleList(modules)
+    .filter((mod) => allow.has(String(mod?.id || '').trim()));
 }
 
 function moduleCatalogFingerprint(catalog) {

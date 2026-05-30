@@ -96,6 +96,11 @@ pub struct BusinessOsSyncConfig {
     pub native_rxdb_peer_available: bool,
     pub native_rxdb_peer_reason: &'static str,
     pub native_rxdb_peer_status: Value,
+    /// Per-instance allowlist of module ids the shell should surface. Empty = show
+    /// every packaged module (no restriction). Sourced from the SQLite runtime store
+    /// (`CTOX_BUSINESS_OS_MODULE_ALLOWLIST`) so it is configurable per instance without
+    /// a rebuild and without a process-env toggle.
+    pub module_allowlist: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -698,6 +703,36 @@ fn process_is_running(_pid: u32) -> bool {
     false
 }
 
+/// Per-instance module allowlist for the Business OS shell.
+///
+/// Read from the persisted SQLite runtime store via `runtime_env::env_or_config`
+/// (key `CTOX_BUSINESS_OS_MODULE_ALLOWLIST`). The value is a comma/whitespace
+/// separated list of module ids (e.g. `desktop,documents,research,knowledge,app-store,ctox`).
+/// An empty/unset value means "no restriction" — the shell surfaces every packaged
+/// module. This is intentionally not a process-env toggle: operators set it in the
+/// runtime store so each instance can scope its visible apps independently.
+pub fn business_os_module_allowlist(root: &Path) -> Vec<String> {
+    let raw = match crate::inference::runtime_env::env_or_config(
+        root,
+        "CTOX_BUSINESS_OS_MODULE_ALLOWLIST",
+    ) {
+        Some(value) => value,
+        None => return Vec::new(),
+    };
+    let mut seen = std::collections::BTreeSet::new();
+    let mut ids = Vec::new();
+    for id in raw.split([',', ';', '\n', '\t', ' ']) {
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if seen.insert(id.to_owned()) {
+            ids.push(id.to_owned());
+        }
+    }
+    ids
+}
+
 pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
     let instance_id = stable_instance_id(root)?;
     let signaling_room_password = business_os_room_password(root)?;
@@ -730,6 +765,7 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
             "CTOX native WebRTC peer is starting or unavailable"
         },
         native_rxdb_peer_status,
+        module_allowlist: business_os_module_allowlist(root),
     })
 }
 
@@ -1529,6 +1565,9 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "templates": templates,
         "governance": governance,
         "version_states": version_states,
+        // Per-instance allowlist that rides the RxDB data plane. Empty = no restriction.
+        // The shell intersects its merged module list with this set when non-empty.
+        "allowed_module_ids": business_os_module_allowlist(root),
         "updated_at_ms": now_ms(),
         "_deleted": false,
     }))
