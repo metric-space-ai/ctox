@@ -756,7 +756,7 @@ pub fn sync_config(root: &Path) -> anyhow::Result<BusinessOsSyncConfig> {
         signaling_urls_source: signaling.source,
         ice_servers: ice_servers_config(),
         transport: "webrtc",
-        http_bridge_available: true,
+        http_bridge_available: false,
         ctox_instance_required: true,
         native_rxdb_peer_available,
         native_rxdb_peer_reason: if native_rxdb_peer_available {

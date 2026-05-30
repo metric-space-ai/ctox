@@ -1026,6 +1026,111 @@ fn plugin_missing_rx_error(plugin_key: &str) -> crate::rx_error::RxError {
     )
 }
 
+/// Test-only collection builders shared across crate test modules (e.g. the
+/// replication-webrtc Phase 3 demux test needs to build multiple in-memory
+/// collections behind one connection). Kept `pub(crate)` + `#[cfg(test)]` so
+/// it never ships in a non-test build.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use std::collections::HashMap;
+
+    use crate::plugins::storage_memory::get_rx_storage_memory;
+    use crate::replication_protocol::default_conflict_handler::DefaultConflictHandler;
+    use crate::rx_schema::create_rx_schema;
+    use crate::types::{
+        HashFunction, HashOutput, JsonSchema, PrimaryKey, RxJsonSchema,
+        RxStorageInstanceCreationParams,
+    };
+
+    struct SupportHashFunction;
+
+    impl HashFunction for SupportHashFunction {
+        fn hash<'a>(&'a self, input: String) -> HashOutput<'a> {
+            Box::pin(async move { format!("hash:{input}") })
+        }
+    }
+
+    fn raw_schema() -> RxJsonSchema {
+        let mut properties = HashMap::new();
+        properties.insert(
+            "id".to_string(),
+            JsonSchema {
+                schema_type: Some("string".to_string()),
+                max_length: Some(100),
+                ..Default::default()
+            },
+        );
+        properties.insert(
+            "age".to_string(),
+            JsonSchema {
+                schema_type: Some("number".to_string()),
+                ..Default::default()
+            },
+        );
+        RxJsonSchema {
+            version: 0,
+            primary_key: PrimaryKey::Simple("id".to_string()),
+            schema_type: "object".to_string(),
+            properties,
+            required: vec!["id".to_string()],
+            indexes: vec![vec!["age".to_string()]],
+            encrypted: Vec::new(),
+            internal_indexes: Vec::new(),
+            key_compression: false,
+            attachments: None,
+            additional_properties: false,
+            extra: HashMap::new(),
+        }
+    }
+
+    /// Build a standalone in-memory `RxCollection` with a fixed `{id, age}`
+    /// schema. Each call uses its own database token so collections are
+    /// independent (used to verify cross-collection isolation under multiplex).
+    pub(crate) async fn test_collection_named(name: &str) -> Arc<RxCollection> {
+        let hash_function = Arc::new(SupportHashFunction);
+        let schema =
+            Arc::new(create_rx_schema(raw_schema(), hash_function.clone(), false).unwrap());
+        let storage = get_rx_storage_memory(());
+        let raw_storage_instance = storage
+            .create_storage_instance(
+                RxStorageInstanceCreationParams {
+                    database_instance_token: format!("db-token-{name}"),
+                    database_name: format!("db-{name}"),
+                    collection_name: name.to_string(),
+                    schema: schema.json_schema.clone(),
+                    options: HashMap::new(),
+                    multi_instance: false,
+                    dev_mode: false,
+                    password: None,
+                },
+                (),
+            )
+            .await
+            .unwrap();
+        let database = RxDatabase::new(
+            &format!("db-{name}"),
+            &format!("db-token-{name}"),
+            &format!("storage-token-{name}"),
+            false,
+            hash_function,
+            storage,
+        );
+        let storage_instance = crate::rx_storage_helper::get_wrapped_storage_instance(
+            Arc::clone(&database),
+            raw_storage_instance,
+            schema.json_schema.clone(),
+        );
+        RxCollection::new_with_schema(
+            name,
+            database,
+            storage_instance,
+            Arc::new(DefaultConflictHandler),
+            schema,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -8,8 +8,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use rxdb::plugins::replication_webrtc::{
-    replicate_web_rtc_rs, RTCIceServer, RxWebRTCReplicationPool, SyncOptionsWebRTCRs,
-    WebRTCRsConnectionHandler,
+    RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
@@ -43,10 +42,9 @@ static TEMPORARY_RXDB_DATABASE_LOCK: Mutex<()> = Mutex::new(());
 static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static BROWSER_RUNTIME_COMMAND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
-const NATIVE_SIGNALING_JOIN_STAGGER_MS: u64 = 75;
-/// FIX 3: per-collection signaling/replication bring-up timeout. One slow or
-/// unreachable signaling room must not wedge the whole peer; on timeout we log
-/// and move on to the next collection.
+/// Phase 3: single-session signaling/replication bring-up timeout. One room is
+/// joined once for the whole sync room; if it cannot come up in this window we
+/// log and continue (collections stay locally queryable).
 const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const CTOX_RXDB_PROTOCOL: &str = "ctox-rxdb-protocol-v1";
 const CTOX_NATIVE_CAPABILITIES: &[&str] = &[
@@ -923,64 +921,78 @@ async fn run_native_peer(
         );
     }
 
-    // FIX 3: bring collections up CONCURRENTLY, each guarded by a per-collection
-    // timeout. A slow or unreachable signaling room for one collection must not
-    // serialize or wedge the bring-up of the rest. Each collection's
-    // `replicate_web_rtc_rs` runs in its own task; on timeout or error we log
-    // and continue. Required-collection failures here are tolerated at the
-    // replication layer (the collection is still registered and locally
-    // queryable) — only registration failure of a required collection aborts.
-    let mut bringup_tasks: Vec<(String, tokio::task::JoinHandle<anyhow::Result<WebRtcPool>>)> =
-        Vec::with_capacity(collections.len());
-    let mut staggered = false;
-    for (collection_name, collection) in collections {
-        if staggered {
-            tokio::time::sleep(Duration::from_millis(NATIVE_SIGNALING_JOIN_STAGGER_MS)).await;
-        }
-        staggered = true;
-        let topic = format!("{sync_room}:{collection_name}");
-        let mut options = SyncOptionsWebRTCRs::new(collection, signaling_url.clone(), topic);
-        options.peer_session_id = peer_session_id.clone();
-        options.ice_servers = ice_servers.clone();
-        if collection_name == "desktop_file_chunks" {
-            options.pull_batch_size = 1;
-            options.push_batch_size = 1;
-            options.retry_time = 1_000;
-        }
-        let task_name = collection_name.clone();
-        let handle = tokio::spawn(async move {
-            match tokio::time::timeout(
-                Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-                replicate_web_rtc_rs(options),
+    // Phase 3 (single multiplexed stream): bring up ONE replication session
+    // for the WHOLE sync room. Instead of one signaling socket +
+    // RTCPeerConnection + DataChannel per collection (~88 of each per browser),
+    // we join the bare `sync_room` once with one WebRTCRsConnectionHandler and
+    // register EVERY collection's master handler + fork state behind it. Frames
+    // are demultiplexed by their `collection` field inside the rxdb crate. This
+    // is what collapses the FD/socket explosion that the LimitNOFILE
+    // workaround was papering over.
+    //
+    // Per-collection batch tuning that used to live on each
+    // `SyncOptionsWebRTCRs` (e.g. the tighter `desktop_file_chunks` window) is
+    // now subsumed by the Phase-1 native backpressure + chunking, which is
+    // collection-agnostic; the multiplexed session uses uniform batch sizes.
+    let collection_list: Vec<Arc<RxCollection>> =
+        collections.into_iter().map(|(_, collection)| collection).collect();
+    let collection_count = collection_list.len();
+    let mut pools: Vec<WebRtcPool> = Vec::with_capacity(1);
+    if collection_count == 0 {
+        eprintln!("[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up");
+    } else {
+        let topic = sync_room.clone();
+        let multi_signaling_url = signaling_url.clone();
+        let multi_peer_session_id = peer_session_id.clone();
+        let multi_ice_servers = ice_servers.clone();
+        let bringup = tokio::spawn(async move {
+            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi(
+                collection_list,
+                multi_signaling_url,
+                topic,
+                multi_peer_session_id,
+                multi_ice_servers,
+                None,
+                20,
+                20,
+                5_000,
             )
             .await
-            {
-                Ok(Ok(pool)) => Ok(pool),
-                Ok(Err(err)) => Err(anyhow::anyhow!(
-                    "start WebRTC replication for {task_name}: {err}"
-                )),
-                Err(_) => Err(anyhow::anyhow!(
-                    "WebRTC replication bring-up for {task_name} timed out after {}s",
-                    NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
-                )),
-            }
         });
-        bringup_tasks.push((collection_name, handle));
-    }
-
-    let mut pools = Vec::with_capacity(bringup_tasks.len());
-    for (collection_name, handle) in bringup_tasks {
-        match handle.await {
-            Ok(Ok(pool)) => pools.push(pool),
-            Ok(Err(err)) => {
+        match tokio::time::timeout(
+            Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
+            bringup,
+        )
+        .await
+        {
+            Ok(Ok(Ok(pool))) => {
                 eprintln!(
-                    "[business-os] WebRTC replication bring-up skipped for `{collection_name}`: {err}"
+                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
+                     collections on one connection (room `{sync_room}`)"
+                );
+                // Phase 4: register demand-fetch file SOURCES on the pool's file
+                // fetch registry so `rxdb.file.fetch` actually serves bytes for
+                // the file-bearing chunk collections (without a source the
+                // dispatcher always returns FILE_NOT_FOUND). The query registry
+                // already auto-registers every multiplexed collection inside
+                // `RxWebRTCReplicationPool::new_multi`.
+                register_demand_file_sources(&pool, &database);
+                pools.push(pool);
+            }
+            Ok(Ok(Err(err))) => {
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication bring-up failed: {err}"
                 );
             }
-            Err(join_err) => {
+            Ok(Err(join_err)) => {
                 eprintln!(
-                    "[business-os] WebRTC replication bring-up task for `{collection_name}` \
-                     panicked: {join_err}"
+                    "[business-os] multiplexed WebRTC replication bring-up task panicked: {join_err}"
+                );
+            }
+            Err(_) => {
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication bring-up timed out after {}s",
+                    NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
                 );
             }
         }
@@ -4151,6 +4163,147 @@ async fn upsert_desktop_file_with_parent(
     Ok(())
 }
 
+/// Phase 4: the file-bearing chunk collections and the chunk-document field
+/// that carries the per-file grouping key. `rxdb.file.fetch` requests a
+/// `(collectionName, fileId)`; the source reads every chunk doc whose key field
+/// equals `fileId`, orders them by `idx`, base64-decodes each `data` field, and
+/// streams the raw bytes back. Each collection is keyed by a different field
+/// because they were authored independently (desktop vs. document/spreadsheet
+/// blobs), but the chunk shape (`idx` + base64 `data`) is uniform.
+const DEMAND_FILE_CHUNK_COLLECTIONS: &[(&str, &str)] = &[
+    ("desktop_file_chunks", "file_id"),
+    ("document_blob_chunks", "blob_id"),
+    ("spreadsheet_blob_chunks", "blob_id"),
+];
+
+/// Phase 4: register a bounded-memory file stream source on the pool's file
+/// fetch registry for each file-bearing chunk collection that is actually
+/// registered on this database. Without this, `rxdb.file.fetch` always returns
+/// FILE_NOT_FOUND (no source). The source closure is sync (it owns the read
+/// loop); it `block_on`s the async storage query to fetch the chunk docs, then
+/// emits decoded bytes chunk-by-chunk so server RAM stays bounded to one chunk.
+fn register_demand_file_sources(pool: &WebRtcPool, database: &Arc<RxDatabase>) {
+    for (collection_name, key_field) in DEMAND_FILE_CHUNK_COLLECTIONS.iter().copied() {
+        // Only register collections the database actually carries (the catalog
+        // is fault-tolerant; an optional chunk collection may be absent).
+        if database.collection(collection_name).is_none() {
+            continue;
+        }
+        let database = Arc::clone(database);
+        let key_field = key_field.to_string();
+        let closure_key_field = key_field.clone();
+        let source: Arc<rxdb::plugins::replication_webrtc::file_fetch_handler::FileChunkStreamFn> =
+            Arc::new(move |collection, file_id, range, emit| {
+                stream_demand_file_chunks(
+                    &database,
+                    collection,
+                    &closure_key_field,
+                    file_id,
+                    range,
+                    emit,
+                )
+            });
+        pool.file_fetch_registry
+            .register_stream_source(collection_name, source);
+        eprintln!(
+            "[business-os] demand-fetch file source registered for `{collection_name}` (key `{key_field}`)"
+        );
+    }
+}
+
+/// Phase 4: stream the bytes of `file_id` from `collection`'s chunk documents.
+/// Reads the chunk docs by the collection's key field, orders by `idx`,
+/// base64-decodes each `data`, and emits one chunk of raw bytes at a time
+/// (honoring an optional byte range). Returns `Err` when the collection is
+/// missing or the query fails; emits nothing (→ FILE_NOT_FOUND upstream) when
+/// the file has no chunks.
+fn stream_demand_file_chunks(
+    database: &Arc<RxDatabase>,
+    collection: &str,
+    key_field: &str,
+    file_id: &str,
+    range: Option<&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange>,
+    emit: &mut dyn FnMut(&[u8]) -> rxdb::rx_error::RxResult<bool>,
+) -> rxdb::rx_error::RxResult<()> {
+    let chunk_collection = database.collection(collection).ok_or_else(|| {
+        rxdb::rx_error::new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(json!({
+                "message": format!("demand-fetch collection {collection} is not registered"),
+            })),
+        )
+    })?;
+    let query = MangoQuery {
+        selector: Some(json!({ key_field: { "$eq": file_id } })),
+        ..Default::default()
+    };
+    // The stream source closure is sync, but the file-fetch dispatcher runs it
+    // inside a tokio task (`tokio::spawn` in index_mod.rs). `block_in_place`
+    // hands the blocking work to a dedicated worker so the async storage query
+    // can be driven to completion without stalling the runtime, keeping the
+    // file-read loop owned by this closure (bounded memory, no full-file
+    // materialization on the wire).
+    let prepared = chunk_collection.find(Some(query))?;
+    let rows = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            prepared.exec(false).await.map_err(|err| {
+                rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(json!({
+                        "message": format!("query {collection} chunks for {file_id}: {err}"),
+                    })),
+                )
+            })
+        })
+    })?;
+    let mut chunk_rows = rows.as_array().cloned().unwrap_or_default();
+    // Order by `idx` so the reassembled byte stream is correct.
+    chunk_rows.sort_by_key(|chunk: &Value| chunk.get("idx").and_then(Value::as_u64).unwrap_or(0));
+
+    // Range support: skip/take a byte window across the decoded chunk stream.
+    let (range_start, range_end) = match range {
+        Some(r) => (r.offset, r.offset.saturating_add(r.length)),
+        None => (0u64, u64::MAX),
+    };
+    let mut emitted_offset: u64 = 0;
+    for chunk in chunk_rows {
+        // Skip redacted/pruned chunks (empty data) so they do not corrupt the
+        // stream; the browser tracks presence separately.
+        let data = chunk.get("data").and_then(Value::as_str).unwrap_or("");
+        if data.is_empty() {
+            continue;
+        }
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
+            .map_err(|err| {
+                rxdb::rx_error::new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(json!({
+                        "message": format!("decode {collection} chunk for {file_id}: {err}"),
+                    })),
+                )
+            })?;
+        let chunk_start = emitted_offset;
+        let chunk_end = emitted_offset.saturating_add(decoded.len() as u64);
+        emitted_offset = chunk_end;
+        // Clip this chunk to the requested byte window.
+        if chunk_end <= range_start || chunk_start >= range_end {
+            continue;
+        }
+        let slice_start = range_start.saturating_sub(chunk_start) as usize;
+        let slice_end = (range_end.min(chunk_end) - chunk_start) as usize;
+        let slice = &decoded[slice_start.min(decoded.len())..slice_end.min(decoded.len())];
+        if slice.is_empty() {
+            continue;
+        }
+        // `emit` returns Ok(false) to stop early (cancel / known-sequence skip).
+        if !emit(slice)? {
+            break;
+        }
+    }
+    Ok(())
+}
+
 async fn prune_desktop_file_chunk_generations(
     database: &Arc<RxDatabase>,
     file_id: &str,
@@ -5130,6 +5283,102 @@ mod tests {
                 "extra": extra,
             })
         );
+    }
+
+    // Multi-thread flavor: `stream_demand_file_chunks` uses
+    // `tokio::task::block_in_place`, which requires the multi-threaded runtime
+    // (matching production, where ctox runs on `rt-multi-thread`).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn demand_file_source_streams_decoded_chunks_in_idx_order() {
+        // Phase 4: a registered file stream source must read the chunk docs by
+        // the collection's key field, order by `idx`, base64-decode each `data`,
+        // and emit the raw bytes in order. This is what makes `rxdb.file.fetch`
+        // serve bytes instead of FILE_NOT_FOUND.
+        let root = tempfile::tempdir().expect("temp root");
+        let database = open_test_database(root.path().join("demand.sqlite3"))
+            .await
+            .expect("open db");
+        database
+            .add_collections(HashMap::from([(
+                "desktop_file_chunks".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("desktop_file_chunks", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("add desktop_file_chunks");
+        let chunks = database
+            .collection("desktop_file_chunks")
+            .expect("desktop_file_chunks collection");
+        // Two chunks for file "f1": "Hello, " then "world!" (base64-encoded),
+        // inserted out of order to prove the source sorts by `idx`.
+        let enc = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        for (idx, payload) in [(1u64, &b"world!"[..]), (0u64, &b"Hello, "[..])] {
+            chunks
+                .incremental_upsert(json!({
+                    "id": format!("f1_{idx}"),
+                    "file_id": "f1",
+                    "idx": idx,
+                    "total": 2,
+                    "encoding": "base64",
+                    "data": enc(payload),
+                    "created_at_ms": 1,
+                }))
+                .await
+                .expect("upsert chunk");
+        }
+
+        let mut collected: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "f1",
+            None,
+            &mut |bytes| {
+                collected.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream chunks");
+        assert_eq!(String::from_utf8(collected).unwrap(), "Hello, world!");
+
+        // A byte range clips the stream across chunk boundaries.
+        let mut ranged: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "f1",
+            Some(&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
+                offset: 7,
+                length: 5,
+            }),
+            &mut |bytes| {
+                ranged.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream ranged");
+        assert_eq!(String::from_utf8(ranged).unwrap(), "world");
+
+        // Unknown file → no bytes emitted (dispatcher maps that to FILE_NOT_FOUND).
+        let mut none: Vec<u8> = Vec::new();
+        stream_demand_file_chunks(
+            &database,
+            "desktop_file_chunks",
+            "file_id",
+            "missing",
+            None,
+            &mut |bytes| {
+                none.extend_from_slice(bytes);
+                Ok(true)
+            },
+        )
+        .expect("stream missing");
+        assert!(none.is_empty());
     }
 
     async fn open_test_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {

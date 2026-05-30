@@ -14,9 +14,11 @@
 //! (`connection_handler_rs`) consumes peer-list changes and signal frames to
 //! drive ICE/SDP exchange with webrtc-rs.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
 
+use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt};
 use parking_lot::Mutex as PlMutex;
 use tokio::net::TcpStream;
@@ -41,7 +43,18 @@ type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
 /// timeout enforced at the bring-up loop.
 const SIGNALING_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Reconnection backoff bounds. Post-multiplex the whole instance shares ONE
+/// signaling socket, so a clean close or network blip used to deafen the native
+/// peer to every browser join until a full process restart. The supervisor now
+/// reconnects with exponential backoff and re-joins the room, which re-broadcasts
+/// the room peer list and re-drives the connection handler to rebuild peers.
+const SIGNALING_RECONNECT_BASE_DELAY: Duration = Duration::from_secs(1);
+const SIGNALING_RECONNECT_MAX_DELAY: Duration = Duration::from_secs(30);
+
 static RUSTLS_CRYPTO_PROVIDER: Once = Once::new();
+
+type WsWrite = SplitSink<WsStream, Message>;
+type WsRead = SplitStream<WsStream>;
 
 pub struct SignalingClient {
     pub url: String,
@@ -52,52 +65,20 @@ pub struct SignalingClient {
     /// Our server-issued peer id, once the `init` frame arrives.
     own_peer_id: RxBehaviorSubject<Option<PeerId>>,
     joined_room: PlMutex<Option<RoomId>>,
-    /// Send half of the WebSocket. `None` until the connect future resolves.
-    writer: TokioMutex<Option<futures::stream::SplitSink<WsStream, Message>>>,
+    /// Send half of the WebSocket. Replaced on every reconnect; `None` only in
+    /// the window between a socket dying and the supervisor re-establishing it.
+    writer: TokioMutex<Option<WsWrite>>,
+    /// Set by `close()` so the reconnect supervisor stops instead of fighting an
+    /// intentional shutdown.
+    closed: Arc<AtomicBool>,
     background_tasks: PlMutex<Vec<JoinHandle<()>>>,
 }
 
 impl SignalingClient {
     /// Connect to a signaling server (e.g. `ws://localhost:8080`).
     pub async fn connect(url: impl Into<String>) -> Result<Arc<Self>, RxError> {
-        install_rustls_crypto_provider();
         let url_string = url.into();
-        let parsed = Url::parse(&url_string).map_err(|e| {
-            new_rx_error(
-                "RC_WEBRTC_SIGNAL",
-                Some(serde_json::json!({
-                    "message": format!("invalid signaling URL: {e}"),
-                    "url": &url_string,
-                })),
-            )
-        })?;
-        let (ws_stream, _resp) =
-            match tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, connect_async(parsed.as_str()))
-                .await
-            {
-                Ok(result) => result.map_err(|e| {
-                    new_rx_error(
-                        "RC_WEBRTC_SIGNAL",
-                        Some(serde_json::json!({
-                            "message": format!("WebSocket connect failed: {e}"),
-                            "url": &url_string,
-                        })),
-                    )
-                })?,
-                Err(_) => {
-                    return Err(new_rx_error(
-                        "RC_WEBRTC_SIGNAL",
-                        Some(serde_json::json!({
-                            "message": format!(
-                                "WebSocket connect timed out after {}s",
-                                SIGNALING_CONNECT_TIMEOUT.as_secs()
-                            ),
-                            "url": &url_string,
-                        })),
-                    ));
-                }
-            };
-        let (write_half, mut read_half) = ws_stream.split();
+        let (write_half, read_half) = establish_ws(&url_string).await?;
         let client = Arc::new(Self {
             url: url_string,
             server_messages: RxSubject::new(),
@@ -105,62 +86,84 @@ impl SignalingClient {
             own_peer_id: RxBehaviorSubject::new(None),
             joined_room: PlMutex::new(None),
             writer: TokioMutex::new(Some(write_half)),
+            closed: Arc::new(AtomicBool::new(false)),
             background_tasks: PlMutex::new(Vec::new()),
         });
 
-        // Reader loop: decode frames, fan out via subjects.
-        let reader_client = Arc::clone(&client);
-        let reader_task: JoinHandle<()> = tokio::spawn(async move {
-            while let Some(item) = read_half.next().await {
-                match item {
-                    Ok(Message::Text(text)) => {
-                        let parsed: Result<ServerToClient, _> = serde_json::from_str(&text);
-                        match parsed {
-                            Ok(frame) => {
-                                match &frame {
-                                    ServerToClient::Init { your_peer_id } => {
-                                        reader_client.own_peer_id.next(Some(your_peer_id.clone()));
-                                    }
-                                    ServerToClient::Joined { other_peer_ids } => {
-                                        reader_client.peer_list.next(other_peer_ids.clone());
-                                    }
-                                    _ => {}
+        // Supervisor: runs the reader loop and, when the socket dies, reconnects
+        // with backoff and re-joins the room so the server re-broadcasts the peer
+        // list (which re-drives the connection handler to rebuild peers). The
+        // fan-out subjects live on the Arc, so existing subscribers keep observing
+        // across reconnects.
+        let supervisor_client = Arc::clone(&client);
+        let supervisor: JoinHandle<()> = tokio::spawn(async move {
+            let mut read_half = read_half;
+            loop {
+                run_reader(&supervisor_client, &mut read_half).await;
+                if supervisor_client.closed.load(Ordering::Acquire) {
+                    return;
+                }
+                // Drop the dead writer so send_frame fails fast until reconnect.
+                *supervisor_client.writer.lock().await = None;
+                let mut delay = SIGNALING_RECONNECT_BASE_DELAY;
+                loop {
+                    if supervisor_client.closed.load(Ordering::Acquire) {
+                        return;
+                    }
+                    tokio::time::sleep(delay).await;
+                    match establish_ws(&supervisor_client.url).await {
+                        Ok((write_half, new_read)) => {
+                            *supervisor_client.writer.lock().await = Some(write_half);
+                            read_half = new_read;
+                            let room = supervisor_client.joined_room.lock().clone();
+                            if let Some(room) = room {
+                                if let Err(e) = supervisor_client
+                                    .send_frame(&ClientToServer::Join { room })
+                                    .await
+                                {
+                                    tracing::warn!(
+                                        target: "ctox_rxdb::signaling_client",
+                                        "re-join after reconnect failed: {e}",
+                                    );
                                 }
-                                reader_client.server_messages.next(frame);
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    target: "ctox_rxdb::signaling_client",
-                                    "received unparseable frame: {e} ({text:?})",
-                                );
-                            }
+                            tracing::info!(
+                                target: "ctox_rxdb::signaling_client",
+                                url = %supervisor_client.url,
+                                "signaling socket reconnected",
+                            );
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                target: "ctox_rxdb::signaling_client",
+                                delay_secs = delay.as_secs(),
+                                "signaling reconnect failed: {e}; backing off",
+                            );
+                            delay = (delay * 2).min(SIGNALING_RECONNECT_MAX_DELAY);
                         }
                     }
-                    Ok(Message::Binary(_)) => {
-                        tracing::warn!(
-                            target: "ctox_rxdb::signaling_client",
-                            "received unexpected binary frame; ignoring",
-                        );
-                    }
-                    Ok(Message::Close(_)) | Err(_) => break,
-                    _ => {}
                 }
             }
         });
-        client.background_tasks.lock().push(reader_task);
+        client.background_tasks.lock().push(supervisor);
 
-        // Keepalive: ping every SIMPLE_PEER_PING_INTERVAL_MS / 2.
+        // Keepalive: ping every SIMPLE_PEER_PING_INTERVAL_MS / 2. Resilient to the
+        // reconnect window — a failed ping (socket momentarily down) is logged and
+        // the loop continues; it resumes once the supervisor restores the writer.
         let ping_client = Arc::clone(&client);
         let ping_task: JoinHandle<()> = tokio::spawn(async move {
             let interval = Duration::from_millis(SIMPLE_PEER_PING_INTERVAL_MS / 2);
             loop {
                 tokio::time::sleep(interval).await;
+                if ping_client.closed.load(Ordering::Acquire) {
+                    break;
+                }
                 if let Err(e) = ping_client.send_frame(&ClientToServer::Ping).await {
                     tracing::debug!(
                         target: "ctox_rxdb::signaling_client",
-                        "keepalive ping failed: {e} — stopping",
+                        "keepalive ping failed: {e} — will retry after reconnect",
                     );
-                    break;
                 }
             }
         });
@@ -221,6 +224,9 @@ impl SignalingClient {
     }
 
     pub async fn close(self: &Arc<Self>) {
+        // Stop the reconnect supervisor before aborting tasks so it does not race
+        // to re-establish a socket we are tearing down on purpose.
+        self.closed.store(true, Ordering::Release);
         // Abort background tasks.
         let tasks = std::mem::take(&mut *self.background_tasks.lock());
         for t in tasks.into_iter() {
@@ -265,4 +271,83 @@ fn install_rustls_crypto_provider() {
     RUSTLS_CRYPTO_PROVIDER.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
+}
+
+/// Open one signaling WebSocket (with the bounded connect timeout) and return its
+/// split write/read halves. Used both for the initial connect and by the
+/// reconnect supervisor.
+async fn establish_ws(url: &str) -> Result<(WsWrite, WsRead), RxError> {
+    install_rustls_crypto_provider();
+    let parsed = Url::parse(url).map_err(|e| {
+        new_rx_error(
+            "RC_WEBRTC_SIGNAL",
+            Some(serde_json::json!({
+                "message": format!("invalid signaling URL: {e}"),
+                "url": url,
+            })),
+        )
+    })?;
+    let (ws_stream, _resp) =
+        match tokio::time::timeout(SIGNALING_CONNECT_TIMEOUT, connect_async(parsed.as_str())).await
+        {
+            Ok(result) => result.map_err(|e| {
+                new_rx_error(
+                    "RC_WEBRTC_SIGNAL",
+                    Some(serde_json::json!({
+                        "message": format!("WebSocket connect failed: {e}"),
+                        "url": url,
+                    })),
+                )
+            })?,
+            Err(_) => {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_SIGNAL",
+                    Some(serde_json::json!({
+                        "message": format!(
+                            "WebSocket connect timed out after {}s",
+                            SIGNALING_CONNECT_TIMEOUT.as_secs()
+                        ),
+                        "url": url,
+                    })),
+                ));
+            }
+        };
+    Ok(ws_stream.split())
+}
+
+/// Decode frames off `read_half` and fan them out via the client's subjects.
+/// Returns when the socket closes or errors, so the supervisor can reconnect.
+async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
+    while let Some(item) = read_half.next().await {
+        match item {
+            Ok(Message::Text(text)) => match serde_json::from_str::<ServerToClient>(&text) {
+                Ok(frame) => {
+                    match &frame {
+                        ServerToClient::Init { your_peer_id } => {
+                            client.own_peer_id.next(Some(your_peer_id.clone()));
+                        }
+                        ServerToClient::Joined { other_peer_ids } => {
+                            client.peer_list.next(other_peer_ids.clone());
+                        }
+                        _ => {}
+                    }
+                    client.server_messages.next(frame);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "ctox_rxdb::signaling_client",
+                        "received unparseable frame: {e} ({text:?})",
+                    );
+                }
+            },
+            Ok(Message::Binary(_)) => {
+                tracing::warn!(
+                    target: "ctox_rxdb::signaling_client",
+                    "received unexpected binary frame; ignoring",
+                );
+            }
+            Ok(Message::Close(_)) | Err(_) => break,
+            _ => {}
+        }
+    }
 }

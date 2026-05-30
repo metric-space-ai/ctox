@@ -26,7 +26,15 @@ use crate::types::RxStorageDefaultCheckpoint;
 pub type WebRTCReplicationCheckpoint = RxStorageDefaultCheckpoint;
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-types.ts:19-21
-#[derive(Debug, Clone, Deserialize, Serialize)]
+//
+// Phase 3 (single multiplexed stream): every plain replication frame now
+// carries an optional `collection` so that one DataChannel can carry every
+// collection at once. The browser tags `masterChangesSince` / `masterWrite`
+// with the source collection; the native demux loop routes the frame to that
+// collection's master handler / fork state. The field is `#[serde(default)]`
+// + skipped-when-`None` so V1 peers (and handshake / demand-fetch frames that
+// already self-describe their collection in `params`) stay wire-compatible.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WebRTCMessage {
     pub id: String,
     /// One of the `RxReplicationHandler` method names (`masterChangesSince`,
@@ -34,16 +42,25 @@ pub struct WebRTCMessage {
     pub method: String,
     #[serde(default)]
     pub params: Vec<Value>,
+    /// Phase 3 multiplex routing key — the collection this frame belongs to.
+    /// `None` for handshake / control frames that are not collection-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
 }
 
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-types.ts:22
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WebRTCResponse {
     pub id: String,
     #[serde(default)]
     pub result: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Phase 3 multiplex routing key — set on the `masterChangeStream$`
+    /// server-push response so the fork side knows which collection's pull
+    /// stream to feed. `None` for request/answer responses (matched by `id`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collection: Option<String>,
 }
 
 /// Single nominal "wire frame" for messages going out over a peer — either a

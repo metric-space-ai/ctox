@@ -165,70 +165,131 @@ impl Default for WebRTCReplicationTuning {
 // ref: rxdb/src/plugins/replication-webrtc/index.ts:230-298
 /// Connection pool that owns the WebRTC connection handler and tracks peer
 /// state. Returned by [`replicate_web_rtc`].
+///
+/// Phase 3 (single multiplexed stream): one pool now serves EVERY collection
+/// in the sync room over ONE [`WebRTCConnectionHandler`] (one signaling room +
+/// one RTCPeerConnection + one DataChannel per peer). The per-collection state
+/// — master replication handler + fork replication state — lives in
+/// collection-keyed maps; the message-stream loop demultiplexes inbound
+/// `masterChangesSince` / `masterWrite` frames to the right collection via the
+/// frame's `collection` field, and one master-change relay task per
+/// (collection, peer) emits a collection-qualified `masterChangeStream$`.
 pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
+    /// First registered collection — kept for back-compat with callers that
+    /// expect a representative collection. Use [`Self::collections`] for the
+    /// full multiplexed set.
     pub collection: Arc<RxCollection>,
     pub connection_handler: Arc<H>,
-    pub master_replication_handler: Arc<dyn RxReplicationHandler>,
+    /// Per-collection master replication handler, keyed by collection name.
+    pub master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>>,
     pub canceled: std::sync::atomic::AtomicBool,
     pub error_subject: RxSubject<RxError>,
     pub query_fetch_registry: Arc<super::query_fetch_handler::QueryFetchRegistry>,
     pub file_fetch_registry: Arc<super::file_fetch_handler::FileFetchRegistry>,
-    peer_states: Mutex<HashMap<H::Peer, PeerState<H>>>,
+    /// Every collection multiplexed onto this connection, keyed by name.
+    collections: HashMap<String, Arc<RxCollection>>,
+    /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
+    peer_states: Mutex<HashMap<H::Peer, PeerState>>,
+    /// Fork replication states keyed by (collection, peer). One entry per
+    /// collection per peer for which CTOX was elected fork.
+    fork_states: Mutex<HashMap<(String, H::Peer), Arc<RxReplicationState>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
-struct PeerState<H: WebRTCConnectionHandler> {
-    _peer: H::Peer,
+struct PeerState {
     sub_tasks: Vec<tokio::task::JoinHandle<()>>,
-    fork_state: Option<Arc<RxReplicationState>>,
 }
 
 impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
+    /// Single-collection constructor (back-compat). Builds a multiplexed pool
+    /// that happens to carry exactly one collection.
     pub fn new(collection: Arc<RxCollection>, connection_handler: Arc<H>) -> Arc<Self> {
-        let master_replication_handler = rx_storage_instance_to_replication_handler(
-            Arc::clone(&collection.storage_instance),
-            Arc::clone(&collection.conflict_handler),
-            collection.database.token.clone(),
-            false, // keep_meta = false (upstream default)
+        Self::new_multi(vec![collection], connection_handler)
+    }
+
+    /// Phase 3 constructor: build a pool that multiplexes every supplied
+    /// collection over one connection handler. All collections are registered
+    /// into the shared query/file fetch registries (keyed by collection name)
+    /// and each gets its own master replication handler.
+    pub fn new_multi(collections: Vec<Arc<RxCollection>>, connection_handler: Arc<H>) -> Arc<Self> {
+        assert!(
+            !collections.is_empty(),
+            "RxWebRTCReplicationPool requires at least one collection"
         );
+        let representative = Arc::clone(&collections[0]);
         let registry = Arc::new(super::query_fetch_handler::QueryFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
-        // Auto-register the collection. The browser will only ask for
-        // collections it has been told about; this is a no-op for unknown
-        // collections.
-        registry.register(Arc::clone(&collection));
         let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
+        let mut master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>> =
+            HashMap::new();
+        let mut collection_map: HashMap<String, Arc<RxCollection>> = HashMap::new();
+        for collection in collections.into_iter() {
+            let handler = rx_storage_instance_to_replication_handler(
+                Arc::clone(&collection.storage_instance),
+                Arc::clone(&collection.conflict_handler),
+                collection.database.token.clone(),
+                false, // keep_meta = false (upstream default)
+            );
+            // Auto-register the collection into the shared registries. The
+            // browser will only ask for collections it has been told about;
+            // this is a no-op for unknown collections.
+            registry.register(Arc::clone(&collection));
+            master_replication_handlers.insert(collection.name.clone(), handler);
+            collection_map.insert(collection.name.clone(), collection);
+        }
         Arc::new(Self {
-            collection,
+            collection: representative,
             connection_handler,
-            master_replication_handler,
+            master_replication_handlers,
             canceled: std::sync::atomic::AtomicBool::new(false),
             error_subject: RxSubject::new(),
             query_fetch_registry: registry,
             file_fetch_registry: file_registry,
+            collections: collection_map,
             peer_states: Mutex::new(HashMap::new()),
+            fork_states: Mutex::new(HashMap::new()),
             tasks: Mutex::new(Vec::new()),
         })
     }
 
-    pub fn add_peer(
-        &self,
-        peer: H::Peer,
-        sub_tasks: Vec<tokio::task::JoinHandle<()>>,
-        fork_state: Option<Arc<RxReplicationState>>,
-    ) {
+    /// All collections multiplexed onto this connection.
+    pub fn collections(&self) -> Vec<Arc<RxCollection>> {
+        self.collections.values().cloned().collect()
+    }
+
+    fn collection_by_name(&self, name: &str) -> Option<Arc<RxCollection>> {
+        self.collections.get(name).cloned()
+    }
+
+    fn master_handler_for(&self, name: &str) -> Option<Arc<dyn RxReplicationHandler>> {
+        self.master_replication_handlers.get(name).cloned()
+    }
+
+    /// Register the per-peer relay sub-tasks (one master-change relay per
+    /// collection for which CTOX is master to this peer). Fork states are
+    /// tracked separately in [`Self::add_fork_state`].
+    pub fn add_peer(&self, peer: H::Peer, sub_tasks: Vec<tokio::task::JoinHandle<()>>) {
         let mut states = self.peer_states.lock();
-        states.insert(
-            peer.clone(),
-            PeerState {
-                _peer: peer,
-                sub_tasks,
-                fork_state,
-            },
-        );
+        let entry = states.entry(peer).or_insert_with(|| PeerState {
+            sub_tasks: Vec::new(),
+        });
+        entry.sub_tasks.extend(sub_tasks);
+    }
+
+    /// Record a per-(collection, peer) fork replication state so cancel
+    /// propagates on `remove_peer` / `cancel`.
+    pub fn add_fork_state(
+        &self,
+        collection: String,
+        peer: H::Peer,
+        fork_state: Arc<RxReplicationState>,
+    ) {
+        self.fork_states
+            .lock()
+            .insert((collection, peer), fork_state);
     }
 
     pub fn remove_peer(&self, peer: &H::Peer) {
@@ -236,11 +297,21 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             for h in state.sub_tasks.into_iter() {
                 h.abort();
             }
-            if let Some(fork) = state.fork_state {
-                tokio::spawn(async move {
-                    fork.cancel().await;
-                });
-            }
+        }
+        // Cancel and drop every fork state bound to this peer (all collections).
+        let drained: Vec<Arc<RxReplicationState>> = {
+            let mut forks = self.fork_states.lock();
+            let keys: Vec<(String, H::Peer)> = forks
+                .keys()
+                .filter(|(_, p)| p == peer)
+                .cloned()
+                .collect();
+            keys.into_iter().filter_map(|k| forks.remove(&k)).collect()
+        };
+        for fork in drained.into_iter() {
+            tokio::spawn(async move {
+                fork.cancel().await;
+            });
         }
     }
 
@@ -251,10 +322,16 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         {
             return;
         }
-        // Cancel all peer sub-tasks.
+        // Cancel all peer sub-tasks + fork states.
         let peers: Vec<H::Peer> = self.peer_states.lock().keys().cloned().collect();
         for p in peers.iter() {
             self.remove_peer(p);
+        }
+        // Cancel any fork states whose peer never had a peer_states entry.
+        let drained: Vec<Arc<RxReplicationState>> =
+            self.fork_states.lock().drain().map(|(_, v)| v).collect();
+        for fork in drained.into_iter() {
+            fork.cancel().await;
         }
         // Cancel pool-level tasks.
         let tasks = std::mem::take(&mut *self.tasks.lock());
@@ -282,10 +359,36 @@ where
     H: WebRTCConnectionHandler + 'static,
 {
     replicate_web_rtc_inner(
-        collection,
+        vec![collection],
         connection_handler,
         is_peer_valid,
         WebRTCReplicationTuning::default(),
+    )
+    .await
+}
+
+/// Phase 3 multiplexed entry point: replicate EVERY supplied collection over
+/// ONE connection handler (one room / RTCPeerConnection / DataChannel per
+/// peer). Frames are demultiplexed by their `collection` field.
+pub async fn replicate_web_rtc_multi<H>(
+    collections: Vec<Arc<RxCollection>>,
+    connection_handler: Arc<H>,
+    is_peer_valid: Option<Arc<dyn Fn(&H::Peer) -> bool + Send + Sync>>,
+    tuning_topic: Option<String>,
+    peer_session_id: Option<Arc<str>>,
+) -> Result<Arc<RxWebRTCReplicationPool<H>>, RxError>
+where
+    H: WebRTCConnectionHandler + 'static,
+{
+    replicate_web_rtc_inner(
+        collections,
+        connection_handler,
+        is_peer_valid,
+        WebRTCReplicationTuning {
+            topic: tuning_topic,
+            peer_session_id,
+            ..WebRTCReplicationTuning::default()
+        },
     )
     .await
 }
@@ -297,7 +400,7 @@ where
     H: WebRTCConnectionHandler + 'static,
 {
     replicate_web_rtc_inner(
-        options.collection,
+        vec![options.collection],
         options.connection_handler,
         options.is_peer_valid,
         WebRTCReplicationTuning {
@@ -322,7 +425,7 @@ pub async fn replicate_web_rtc_rs(
     }
     let handler = WebRTCRsConnectionHandler::new_with_signaling(config).await?;
     replicate_web_rtc_inner(
-        options.collection,
+        vec![options.collection],
         handler,
         options.is_peer_valid,
         WebRTCReplicationTuning {
@@ -336,8 +439,46 @@ pub async fn replicate_web_rtc_rs(
     .await
 }
 
+/// Phase 3: bring up ONE multiplexed replication session for an entire sync
+/// room. Connects one [`SignalingClient`] + one [`WebRTCRsConnectionHandler`]
+/// joined to `topic` (the bare sync room, NOT a per-collection topic) and
+/// registers every supplied collection's master handler + fork state behind
+/// it. This is the native counterpart to the browser's single
+/// `CtoxWebRtcNativePeer` per sync room.
+pub async fn replicate_web_rtc_rs_multi(
+    collections: Vec<Arc<RxCollection>>,
+    signaling_url: String,
+    topic: String,
+    peer_session_id: String,
+    ice_servers: Vec<RTCIceServer>,
+    is_peer_valid: Option<Arc<dyn Fn(&WebRTCRsPeer) -> bool + Send + Sync>>,
+    pull_batch_size: u64,
+    push_batch_size: u64,
+    retry_time: u64,
+) -> Result<Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>, RxError> {
+    let signaling = SignalingClient::connect(signaling_url).await?;
+    let mut config = WebRTCRsConfig::new(signaling, topic.clone());
+    if !ice_servers.is_empty() {
+        config.ice_servers = ice_servers;
+    }
+    let handler = WebRTCRsConnectionHandler::new_with_signaling(config).await?;
+    replicate_web_rtc_inner(
+        collections,
+        handler,
+        is_peer_valid,
+        WebRTCReplicationTuning {
+            topic: Some(topic),
+            peer_session_id: Some(Arc::<str>::from(peer_session_id)),
+            pull_batch_size,
+            push_batch_size,
+            retry_time,
+        },
+    )
+    .await
+}
+
 async fn replicate_web_rtc_inner<H>(
-    collection: Arc<RxCollection>,
+    collections: Vec<Arc<RxCollection>>,
     connection_handler: Arc<H>,
     is_peer_valid: Option<Arc<dyn Fn(&H::Peer) -> bool + Send + Sync>>,
     tuning: WebRTCReplicationTuning,
@@ -348,17 +489,30 @@ where
     // ref: rxdb/src/plugins/replication-webrtc/index.ts:44
     let _ = add_rx_plugin(Arc::new(RxDBLeaderElectionPlugin));
 
+    assert!(
+        !collections.is_empty(),
+        "replicate_web_rtc_inner requires at least one collection"
+    );
+    // Representative collection: every collection in a sync room shares the
+    // same database, so the database-level fields (token, storage_token,
+    // hash_function, multi_instance) used for leadership + master/fork
+    // election are identical across the set. We read them off the first one.
+    let representative = Arc::clone(&collections[0]);
+    let multiplexed = collections.len() > 1;
+
     // ref: rxdb/src/plugins/replication-webrtc/index.ts:58-60
-    if collection.database.multi_instance {
-        collection.database.wait_for_leadership().await;
+    if representative.database.multi_instance {
+        representative.database.wait_for_leadership().await;
     }
 
-    let storage_token = collection.database.storage_token.clone();
+    let storage_token = representative.database.storage_token.clone();
     let request_flag = random_token(Some(10));
     let request_counter = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let peer_session_id = tuning.peer_session_id.clone();
-    let pool =
-        RxWebRTCReplicationPool::<H>::new(Arc::clone(&collection), Arc::clone(&connection_handler));
+    let pool = RxWebRTCReplicationPool::<H>::new_multi(
+        collections.clone(),
+        Arc::clone(&connection_handler),
+    );
 
     // Wire pool-level subscriptions: error$ relay and disconnect → remove_peer.
     {
@@ -387,7 +541,7 @@ where
     {
         let pool_clone = Arc::clone(&pool);
         let handler = Arc::clone(&connection_handler);
-        let collection = Arc::clone(&collection);
+        let representative = Arc::clone(&representative);
         let storage_token = storage_token.clone();
         let peer_session_id = peer_session_id.clone();
         let mut msg_stream = connection_handler.message_stream();
@@ -451,36 +605,83 @@ where
                     }
                     continue;
                 }
+                // Phase 3 demux: the `collection` field on the frame selects
+                // which collection's master handler answers a plain
+                // replication request. Handshake frames (`token` /
+                // `ctoxProtocol`) are room-level and ignore it. When a frame
+                // omits the field (V1 peers / single-collection rooms) we fall
+                // back to the representative collection so the legacy
+                // per-collection contract keeps working unchanged.
+                let frame_collection = item.message.collection.clone();
                 let result = match item.message.method.as_str() {
                     "token" => Some(Value::String(storage_token.clone())),
                     "ctoxProtocol" => {
                         let flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                        // Resolve the protocol payload for the collection the
+                        // remote asked about (if it tagged one); otherwise the
+                        // representative. This keeps the advertised schema
+                        // hash/version aligned with the collection in play.
+                        let target = frame_collection
+                            .as_deref()
+                            .and_then(|name| pool_clone.collection_by_name(name))
+                            .unwrap_or_else(|| Arc::clone(&representative));
+                        // Phase 3 schema-validation hardening: include the
+                        // per-collection schema-hash map so a multiplexing
+                        // browser validates EACH collection individually.
+                        let schemas =
+                            collection_schemas_payload(&pool_clone.collections()).await;
                         Some(
                             ctox_protocol_response_with_flag(
-                                &collection,
+                                &target,
                                 peer_session_id.as_deref(),
                                 flag,
+                                schemas,
                             )
                             .await,
                         )
                     }
-                    "masterChangesSince" | "masterWrite" => Some(
-                        call_master_method(
-                            pool_clone.master_replication_handler.as_ref(),
-                            &item.message.method,
-                            item.message.params.clone(),
-                        )
-                        .await,
-                    ),
+                    "masterChangesSince" | "masterWrite" => {
+                        // Route to the frame's collection master handler. An
+                        // unknown collection means the remote asked about a
+                        // collection this peer does not serve — answer with a
+                        // replication-io error rather than silently dropping.
+                        let target_name = frame_collection
+                            .clone()
+                            .unwrap_or_else(|| representative.name.clone());
+                        match pool_clone.master_handler_for(&target_name) {
+                            Some(master) => Some(
+                                call_master_method(
+                                    master.as_ref(),
+                                    &item.message.method,
+                                    item.message.params.clone(),
+                                )
+                                .await,
+                            ),
+                            None => Some(replication_error_result(
+                                "RC_WEBRTC_PEER",
+                                "replication-io",
+                                "unknown",
+                                serde_json::json!({
+                                    "collection": target_name,
+                                    "message": "no master handler registered for collection",
+                                }),
+                                Vec::new(),
+                            )),
+                        }
+                    }
                     _ => None,
                 };
                 let Some(result) = result else {
                     continue;
                 };
+                // Echo the collection back on the answer so a multiplexing
+                // browser can correlate the response without relying solely on
+                // the request id map.
                 let resp = WebRTCResponse {
                     id: item.message.id,
                     result,
                     error: None,
+                    collection: frame_collection,
                 };
                 let _ = handler
                     .send(&item.peer, WebRTCWireFrame::Response(resp))
@@ -491,11 +692,14 @@ where
     }
 
     // ref: rxdb/src/plugins/replication-webrtc/index.ts:97-221
-    // On new peer: handshake, pick master/fork, register handlers.
+    // On new peer: handshake once (room-level), pick master/fork (room-level
+    // election), then register per-collection handlers/relays across the whole
+    // multiplexed set.
     {
         let pool_clone = Arc::clone(&pool);
         let handler = Arc::clone(&connection_handler);
-        let collection = Arc::clone(&collection);
+        let representative = Arc::clone(&representative);
+        let collections = collections.clone();
         let storage_token = storage_token.clone();
         let request_counter = Arc::clone(&request_counter);
         let mut connect_stream = connection_handler.connect_stream();
@@ -523,7 +727,8 @@ where
                 let pool_clone_outer = Arc::clone(&pool_clone);
                 let pool_clone = Arc::clone(&pool_clone);
                 let handler = Arc::clone(&handler);
-                let collection = Arc::clone(&collection);
+                let representative = Arc::clone(&representative);
+                let collections = collections.clone();
                 let storage_token = storage_token.clone();
                 let request_counter = Arc::clone(&request_counter);
                 let request_flag = request_flag.clone();
@@ -539,16 +744,24 @@ where
                 // 1. CTOX protocol handshake. Rust actively reads the remote
                 // role so Browser/CTOX pairs make the same deterministic
                 // master/fork decision instead of relying on random storage
-                // token ordering after reconnects.
+                // token ordering after reconnects. The handshake is
+                // room-level: the representative collection's protocol payload
+                // stands in for the whole multiplexed set.
                 let req_id = {
                     let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    format!("{}|{}|{}", collection.database.token, request_flag, n)
+                    format!("{}|{}|{}", representative.database.token, request_flag, n)
                 };
                 let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                // Phase 3 schema-validation hardening: carry the per-collection
+                // schema-hash map on the outbound handshake so the remote can
+                // validate each collection individually too (symmetric).
+                let local_collection_schemas =
+                    collection_schemas_payload(&pool_clone.collections()).await;
                 let local_protocol = ctox_protocol_response_with_flag(
-                    &collection,
+                    &representative,
                     peer_session_id.as_deref(),
                     local_flag,
+                    local_collection_schemas.clone(),
                 )
                 .await;
                 let protocol_response = match send_message_and_await_answer(
@@ -558,6 +771,7 @@ where
                         id: req_id,
                         method: "ctoxProtocol".to_string(),
                         params: vec![local_protocol.clone()],
+                        collection: None,
                     },
                 )
                 .await
@@ -571,13 +785,43 @@ where
                         return;
                     }
                 };
+                // The single-collection name/hash check on `local_protocol
+                // .collection` is meaningless under multiplex (the remote's
+                // representative may differ from ours). We still enforce
+                // protocol/capability compatibility at the room level.
+                let collection_for_validation = if multiplexed {
+                    None
+                } else {
+                    local_protocol.get("collection")
+                };
                 if let Err(e) = validate_ctox_protocol_response(
                     &protocol_response.result,
-                    local_protocol.get("collection"),
-                    true,
+                    collection_for_validation,
+                    !multiplexed,
                 ) {
                     pool_clone.error_subject.next(e);
                     return;
+                }
+                // Phase 3 schema-validation hardening: under multiplex, validate
+                // EACH collection's schema hash individually against the remote's
+                // `collectionSchemas` map. A mismatch surfaces the
+                // schemaHashMismatch error for THAT collection and excludes just
+                // it from this peer's master/fork registration — the room itself
+                // stays up and every compatible collection syncs.
+                let mut schema_mismatch_collections: std::collections::HashSet<String> =
+                    std::collections::HashSet::new();
+                if multiplexed {
+                    schema_mismatch_collections = collect_collection_schema_mismatches(
+                        local_collection_schemas.as_ref(),
+                        &protocol_response.result,
+                    );
+                    for collection in collections.iter() {
+                        if let Some(err) =
+                            schema_mismatch_error_for(&schema_mismatch_collections, &collection.name)
+                        {
+                            pool_clone.error_subject.next(err);
+                        }
+                    }
                 }
                 let remote_peer_role = protocol_response
                     .result
@@ -589,7 +833,7 @@ where
                 // 2. Token handshake.
                 let req_id = {
                     let n = request_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    format!("{}|{}|{}", collection.database.token, request_flag, n)
+                    format!("{}|{}|{}", representative.database.token, request_flag, n)
                 };
                 let token_response = match send_message_and_await_answer(
                     Arc::clone(&handler),
@@ -598,6 +842,7 @@ where
                         id: req_id,
                         method: "token".to_string(),
                         params: vec![],
+                        collection: None,
                     },
                 )
                 .await
@@ -616,7 +861,7 @@ where
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                let hash_fn = Arc::clone(&collection.database.hash_function);
+                let hash_fn = Arc::clone(&representative.database.hash_function);
                 let elected_master =
                     is_master_in_webrtc_replication(hash_fn, &storage_token, &peer_token).await;
                 let is_master = if remote_peer_role == "browser" {
@@ -625,53 +870,88 @@ where
                     elected_master
                 };
 
+                // Phase 3: the master/fork decision is room-level, but the
+                // handlers are per-collection. Register one master-change
+                // relay (master path) or one fork replication state (fork
+                // path) PER collection multiplexed on this connection.
                 let mut peer_sub_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
                 if is_master {
                     // ref: rxdb/src/plugins/replication-webrtc/index.ts:134-171
-                    // Master path: relay our master_change_stream + answer method calls.
-                    let pool_for_stream = Arc::clone(&pool_clone);
-                    let handler_for_stream = Arc::clone(&handler);
-                    let peer_for_stream = peer.clone();
-                    let stream_task = tokio::spawn(async move {
-                        let mut master_stream = pool_for_stream
-                            .master_replication_handler
-                            .master_change_stream();
-                        while let Some(ev) = master_stream.next().await {
-                            let resp = WebRTCResponse {
-                                id: "masterChangeStream$".to_string(),
-                                result: serde_json::to_value(&ev).unwrap_or(Value::Null),
-                                error: None,
-                            };
-                            let _ = handler_for_stream
-                                .send(&peer_for_stream, WebRTCWireFrame::Response(resp))
-                                .await;
+                    // Master path: relay each collection's master_change_stream
+                    // tagged with its collection so the fork side can
+                    // demultiplex. Method-call answers are served by the
+                    // message-stream loop above.
+                    for collection in collections.iter() {
+                        let collection_name = collection.name.clone();
+                        // Phase 3 schema-validation hardening: skip a collection
+                        // whose schema mismatched the remote — no master-change
+                        // relay for it, so no rows flow until reconciled.
+                        if schema_mismatch_collections.contains(&collection_name) {
+                            continue;
                         }
-                    });
-                    peer_sub_tasks.push(stream_task);
-                    pool_clone.add_peer(peer, peer_sub_tasks, None);
+                        let Some(master) = pool_clone.master_handler_for(&collection_name) else {
+                            continue;
+                        };
+                        let handler_for_stream = Arc::clone(&handler);
+                        let peer_for_stream = peer.clone();
+                        let stream_task = tokio::spawn(async move {
+                            let mut master_stream = master.master_change_stream();
+                            while let Some(ev) = master_stream.next().await {
+                                let resp = WebRTCResponse {
+                                    // Collection-qualified id avoids the
+                                    // single-id collision when many
+                                    // collections share one DataChannel; the
+                                    // `collection` field carries the same key
+                                    // for routing on the browser.
+                                    id: master_change_stream_id(&collection_name),
+                                    result: serde_json::to_value(&ev).unwrap_or(Value::Null),
+                                    error: None,
+                                    collection: Some(collection_name.clone()),
+                                };
+                                let _ = handler_for_stream
+                                    .send(&peer_for_stream, WebRTCWireFrame::Response(resp))
+                                    .await;
+                            }
+                        });
+                        peer_sub_tasks.push(stream_task);
+                    }
+                    pool_clone.add_peer(peer, peer_sub_tasks);
                 } else {
                     // ref: rxdb/src/plugins/replication-webrtc/index.ts:172-218
-                    // Fork path: build pull.handler / push.handler closures that
-                    // tunnel `masterChangesSince` / `masterWrite` over the peer
-                    // via send_message_and_await_answer, and feed
-                    // `masterChangeStream$` responses into the pull stream.
-                    let fork_state = build_fork_replication_state(
-                        Arc::clone(&collection),
-                        Arc::clone(&handler),
-                        peer.clone(),
-                        peer_token.clone(),
-                        Arc::clone(&request_counter),
-                        request_flag.clone(),
-                        tuning.clone(),
-                    )
-                    .await;
-                    match fork_state {
-                        Ok(state) => {
-                            pool_clone.add_peer(peer, peer_sub_tasks, Some(state));
+                    // Fork path: build one RxReplicationState per collection.
+                    // Each tunnels collection-tagged `masterChangesSince` /
+                    // `masterWrite` over the shared peer and filters the
+                    // collection-qualified `masterChangeStream$` for its pull
+                    // stream.
+                    pool_clone.add_peer(peer.clone(), peer_sub_tasks);
+                    for collection in collections.iter() {
+                        // Phase 3 schema-validation hardening: skip building a
+                        // fork replication state for a schema-mismatched
+                        // collection — it stays quiesced until reconciled.
+                        if schema_mismatch_collections.contains(&collection.name) {
+                            continue;
                         }
-                        Err(e) => {
-                            pool_clone.error_subject.next(e);
-                            pool_clone.add_peer(peer, peer_sub_tasks, None);
+                        let fork_state = build_fork_replication_state(
+                            Arc::clone(collection),
+                            Arc::clone(&handler),
+                            peer.clone(),
+                            peer_token.clone(),
+                            Arc::clone(&request_counter),
+                            request_flag.clone(),
+                            tuning.clone(),
+                        )
+                        .await;
+                        match fork_state {
+                            Ok(state) => {
+                                pool_clone.add_fork_state(
+                                    collection.name.clone(),
+                                    peer.clone(),
+                                    state,
+                                );
+                            }
+                            Err(e) => {
+                                pool_clone.error_subject.next(e);
+                            }
                         }
                     }
                 }
@@ -687,17 +967,51 @@ where
     Ok(pool)
 }
 
-async fn ctox_protocol_response(
-    collection: &Arc<RxCollection>,
-    peer_session_id: Option<&str>,
-) -> Value {
-    ctox_protocol_response_with_flag(collection, peer_session_id, true).await
+/// Phase 3: the collection-qualified `masterChangeStream$` response id. Each
+/// collection's master-change relay emits under its own id so a single
+/// DataChannel can carry every collection's live stream without the responses
+/// colliding. The browser builds the identical id to route inbound
+/// master-change events to the right collection's pull.
+pub fn master_change_stream_id(collection: &str) -> String {
+    format!("masterChangeStream$:{collection}")
+}
+
+/// Phase 3 schema-validation hardening: build the per-collection schema-hash
+/// map (`{ name -> { schemaVersion, schemaHash, schemaHashSource } }`) for
+/// every collection multiplexed on the connection. Returned as a `Value` to
+/// attach to the `ctoxProtocol` handshake payload so the browser can validate
+/// EACH collection individually under multiplex instead of skipping schema
+/// validation wholesale. Returns `None` for single-collection rooms so the
+/// legacy handshake stays byte-identical.
+async fn collection_schemas_payload(collections: &[Arc<RxCollection>]) -> Option<Value> {
+    if collections.len() <= 1 {
+        return None;
+    }
+    let mut map = serde_json::Map::with_capacity(collections.len());
+    for collection in collections.iter() {
+        if let Some(schema) = &collection.schema {
+            map.insert(
+                collection.name.clone(),
+                serde_json::json!({
+                    "schemaVersion": schema.version(),
+                    "schemaHash": schema.hash().await,
+                    "schemaHashSource": CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+                }),
+            );
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
 }
 
 async fn ctox_protocol_response_with_flag(
     collection: &Arc<RxCollection>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    collection_schemas: Option<Value>,
 ) -> Value {
     let checkpoint = collection
         .storage_instance
@@ -717,17 +1031,20 @@ async fn ctox_protocol_response_with_flag(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
+        collection_schemas,
     )
 }
 
+#[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
-    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true)
+    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None)
 }
 
 fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    collection_schemas: Option<Value>,
 ) -> Value {
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
@@ -746,7 +1063,7 @@ fn ctox_protocol_response_payload_with_flag(
             *cap != CTOX_QUERY_FETCH_CAPABILITY || query_demand_loading_enabled
         })
         .collect();
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "protocol": CTOX_RXDB_PROTOCOL,
         "capabilities": advertised_capabilities,
         "collection": collection,
@@ -757,7 +1074,14 @@ fn ctox_protocol_response_payload_with_flag(
         "v1_5": {
             "queryDemandLoadingEnabled": query_demand_loading_enabled,
         },
-    })
+    });
+    // Phase 3 schema-validation hardening: attach the per-collection schema-hash
+    // map under multiplex so the browser validates each collection's schema
+    // individually. Omitted entirely (key absent) for single-collection rooms.
+    if let Some(schemas) = collection_schemas {
+        payload["collectionSchemas"] = schemas;
+    }
+    payload
 }
 
 fn validate_ctox_protocol_response(
@@ -865,6 +1189,76 @@ fn validate_ctox_protocol_response(
     Ok(())
 }
 
+/// Phase 3 schema-validation hardening: compare the local `collectionSchemas`
+/// map against the remote protocol response's `collectionSchemas` map and
+/// return the set of collection names whose schema hash / version mismatched.
+/// Collections the remote does not advertise are NOT flagged (it simply does
+/// not serve them on this connection). This is the native counterpart to the
+/// browser's `assertCollectionSchemasCompatible`.
+fn collect_collection_schema_mismatches(
+    local_collection_schemas: Option<&Value>,
+    remote_protocol: &Value,
+) -> std::collections::HashSet<String> {
+    let mut mismatches = std::collections::HashSet::new();
+    let Some(local_map) = local_collection_schemas.and_then(Value::as_object) else {
+        return mismatches;
+    };
+    let remote_map = remote_protocol
+        .get("collectionSchemas")
+        .and_then(Value::as_object);
+    let Some(remote_map) = remote_map else {
+        // The remote did not advertise per-collection schemas (older peer or
+        // single-collection room on its side). Fall back to no per-collection
+        // flagging — the room-level protocol/capability check already passed.
+        return mismatches;
+    };
+    for (name, local_entry) in local_map.iter() {
+        let Some(remote_entry) = remote_map.get(name) else {
+            continue;
+        };
+        let local_version = local_entry.get("schemaVersion").and_then(Value::as_i64);
+        let remote_version = remote_entry.get("schemaVersion").and_then(Value::as_i64);
+        if let (Some(expected), Some(actual)) = (local_version, remote_version) {
+            if expected != actual {
+                mismatches.insert(name.clone());
+                continue;
+            }
+        }
+        let local_hash = local_entry
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let remote_hash = remote_entry
+            .get("schemaHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !local_hash.is_empty() && !remote_hash.is_empty() && local_hash != remote_hash {
+            mismatches.insert(name.clone());
+        }
+    }
+    mismatches
+}
+
+/// Build the `schemaHashMismatch` error for a collection that was flagged by
+/// [`collect_collection_schema_mismatches`], or `None` when the collection is
+/// compatible. Surfaces the same error code as the single-collection path so
+/// existing browser/native error handling treats it identically.
+fn schema_mismatch_error_for(
+    mismatches: &std::collections::HashSet<String>,
+    collection_name: &str,
+) -> Option<RxError> {
+    if !mismatches.contains(collection_name) {
+        return None;
+    }
+    Some(ctox_protocol_error(
+        CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH,
+        "CTOX RxDB schema hash mismatch",
+        None,
+        None,
+        Some(collection_name.to_string()),
+    ))
+}
+
 fn non_empty(value: &str) -> Option<&str> {
     if value.is_empty() {
         None
@@ -916,6 +1310,10 @@ where
     H: WebRTCConnectionHandler + 'static,
 {
     let db_token = collection.database.token.clone();
+    // Phase 3: every frame this fork emits is tagged with its collection so the
+    // remote master's demux loop routes it to the right master handler, and so
+    // the master-change stream filter below matches the right qualified id.
+    let collection_name = collection.name.clone();
     let next_request_id = {
         let counter = Arc::clone(&request_counter);
         let flag = request_flag.clone();
@@ -930,10 +1328,12 @@ where
         let handler = Arc::clone(&handler);
         let peer = peer.clone();
         let next_request_id = Arc::clone(&next_request_id);
+        let collection_name = collection_name.clone();
         Arc::new(move |checkpoint, batch_size| {
             let handler = Arc::clone(&handler);
             let peer = peer.clone();
             let next_request_id = Arc::clone(&next_request_id);
+            let collection_name = collection_name.clone();
             Box::pin(async move {
                 let id = next_request_id();
                 let answer = send_message_and_await_answer(
@@ -946,6 +1346,7 @@ where
                             checkpoint.clone().unwrap_or(Value::Null),
                             Value::from(batch_size),
                         ],
+                        collection: Some(collection_name),
                     },
                 )
                 .await?;
@@ -977,10 +1378,12 @@ where
         let handler = Arc::clone(&handler);
         let peer = peer.clone();
         let next_request_id = Arc::clone(&next_request_id);
+        let collection_name = collection_name.clone();
         Arc::new(move |rows| {
             let handler = Arc::clone(&handler);
             let peer = peer.clone();
             let next_request_id = Arc::clone(&next_request_id);
+            let collection_name = collection_name.clone();
             Box::pin(async move {
                 let id = next_request_id();
                 let rows_json = serde_json::to_value(&rows).unwrap_or(Value::Null);
@@ -991,6 +1394,7 @@ where
                         id,
                         method: "masterWrite".to_string(),
                         params: vec![rows_json.clone()],
+                        collection: Some(collection_name),
                     },
                 )
                 .await?;
@@ -1017,11 +1421,26 @@ where
     let stream_factory: StreamFactory = {
         let handler = Arc::clone(&handler);
         let peer = peer.clone();
+        let collection_name = collection_name.clone();
         Arc::new(move || {
             let handler = Arc::clone(&handler);
             let peer_for_filter = peer.clone();
+            // Phase 3: match the collection-qualified `masterChangeStream$` id
+            // so this fork's pull only sees its own collection's live changes
+            // off the shared DataChannel. We accept either the qualified id or
+            // the explicit `collection` field (whichever the remote set), and
+            // tolerate the legacy bare id for single-collection / V1 peers.
+            let qualified_id = master_change_stream_id(&collection_name);
+            let collection_name = collection_name.clone();
             let remote_master_events = handler.response_stream().filter_map(move |item| {
-                if item.peer != peer_for_filter || item.response.id != "masterChangeStream$" {
+                if item.peer != peer_for_filter {
+                    return None;
+                }
+                let matches_qualified = item.response.id == qualified_id;
+                let matches_field = item.response.collection.as_deref() == Some(&collection_name);
+                let matches_legacy = item.response.id == "masterChangeStream$"
+                    && item.response.collection.is_none();
+                if !(matches_qualified || matches_field || matches_legacy) {
                     return None;
                 }
                 serde_json::from_value::<RxReplicationMasterChange>(item.response.result.clone())
@@ -1567,5 +1986,378 @@ mod tests {
             error.parameters().get("phase").and_then(Value::as_str),
             Some("rxdb-protocol-handshake")
         );
+    }
+
+    #[test]
+    fn master_change_stream_id_is_collection_qualified() {
+        assert_eq!(
+            master_change_stream_id("documents"),
+            "masterChangeStream$:documents"
+        );
+        assert_ne!(
+            master_change_stream_id("documents"),
+            master_change_stream_id("desktop_files")
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3 schema-validation hardening: per-collection schema validation
+    // under multiplex (replaces the old wholesale `validate_schema` skip).
+    // -------------------------------------------------------------------------
+
+    fn local_schemas_two() -> Value {
+        serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs", "schemaHashSource": "rxdb-rs" },
+            "desktop_files": { "schemaVersion": 0, "schemaHash": "hash-files", "schemaHashSource": "rxdb-rs" },
+        })
+    }
+
+    fn remote_protocol_with_schemas(schemas: Value) -> Value {
+        serde_json::json!({
+            "protocol": CTOX_RXDB_PROTOCOL,
+            "capabilities": CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+            "collectionSchemas": schemas,
+            "peerSession": { "role": "browser" },
+        })
+    }
+
+    #[test]
+    fn per_collection_schema_match_yields_no_mismatch() {
+        let local = local_schemas_two();
+        let remote = remote_protocol_with_schemas(local.clone());
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(
+            mismatches.is_empty(),
+            "matching per-collection hashes must not flag any collection: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn per_collection_schema_hash_mismatch_flags_only_that_collection() {
+        let local = local_schemas_two();
+        // Same `documents` hash, different `desktop_files` hash.
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+            "desktop_files": { "schemaVersion": 0, "schemaHash": "DRIFTED" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert_eq!(mismatches.len(), 1, "only the drifted collection is flagged");
+        assert!(mismatches.contains("desktop_files"));
+        assert!(!mismatches.contains("documents"));
+        // The error builder surfaces the existing schemaHashMismatch code for
+        // the flagged collection, and None for the compatible one.
+        let err = schema_mismatch_error_for(&mismatches, "desktop_files")
+            .expect("flagged collection must produce an error");
+        assert_eq!(err.code(), "RC_WEBRTC_PROTOCOL");
+        assert_eq!(
+            err.parameters().get("code").and_then(Value::as_str),
+            Some(CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH)
+        );
+        assert_eq!(
+            err.parameters().get("collection").and_then(Value::as_str),
+            Some("desktop_files")
+        );
+        assert!(schema_mismatch_error_for(&mismatches, "documents").is_none());
+    }
+
+    #[test]
+    fn per_collection_schema_version_mismatch_flags_collection() {
+        let local = local_schemas_two();
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+            "desktop_files": { "schemaVersion": 9, "schemaHash": "hash-files" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert_eq!(mismatches.len(), 1);
+        assert!(mismatches.contains("desktop_files"));
+    }
+
+    #[test]
+    fn collection_not_advertised_by_remote_is_not_flagged() {
+        let local = local_schemas_two();
+        // Remote only advertises `documents`; `desktop_files` absent → benign.
+        let remote = remote_protocol_with_schemas(serde_json::json!({
+            "documents": { "schemaVersion": 0, "schemaHash": "hash-docs" },
+        }));
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(
+            mismatches.is_empty(),
+            "a collection the remote does not serve must not be flagged: {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn missing_remote_collection_schemas_map_skips_per_collection_check() {
+        let local = local_schemas_two();
+        // Older/single-collection remote: no `collectionSchemas` key at all.
+        let remote = serde_json::json!({
+            "protocol": CTOX_RXDB_PROTOCOL,
+            "capabilities": CTOX_REQUIRED_PROTOCOL_CAPABILITIES,
+        });
+        let mismatches = collect_collection_schema_mismatches(Some(&local), &remote);
+        assert!(mismatches.is_empty());
+    }
+
+    #[tokio::test]
+    async fn collection_schemas_payload_is_none_for_zero_or_one_collection() {
+        // Single-collection (and empty) rooms must keep the legacy handshake
+        // byte-identical: no `collectionSchemas` map. The guard is a pure
+        // length check, so an empty slice exercises the same branch a
+        // one-collection slice would.
+        let payload = collection_schemas_payload(&[]).await;
+        assert!(
+            payload.is_none(),
+            "rooms with <= 1 collection must omit the per-collection schema map"
+        );
+    }
+
+    #[test]
+    fn handshake_payload_omits_collection_schemas_when_none() {
+        // The single-collection handshake payload must not carry the new key,
+        // so the wire stays byte-compatible with V1 peers.
+        let single = ctox_protocol_response_payload_with_flag(
+            serde_json::json!({ "name": "documents" }),
+            Some("rxdb-rs-session"),
+            true,
+            None,
+        );
+        assert!(single.get("collectionSchemas").is_none());
+        // Multiplexed payload carries the map.
+        let multi = ctox_protocol_response_payload_with_flag(
+            serde_json::json!({ "name": "documents" }),
+            Some("rxdb-rs-session"),
+            true,
+            Some(local_schemas_two()),
+        );
+        assert!(multi.get("collectionSchemas").is_some());
+        assert!(multi
+            .pointer("/collectionSchemas/desktop_files/schemaHash")
+            .is_some());
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 3 demux test infrastructure: a mock WebRTCConnectionHandler that
+    // lets a test push inbound `PeerWithMessage`s and observe outbound frames,
+    // so we can drive the multiplexed message-stream loop end to end with two
+    // collections sharing ONE handler and assert frames demultiplex correctly.
+    // -------------------------------------------------------------------------
+
+    use crate::plugins::replication_webrtc::webrtc_types::{
+        PeerWithMessage, PeerWithResponse, WebRTCConnectionHandler,
+    };
+    use crate::rxjs_compat::RxStream;
+    use parking_lot::Mutex as PlMutex;
+    use std::sync::Arc as StdArc;
+
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct MockPeer(String);
+
+    struct MockHandler {
+        connect: crate::rxjs_compat::RxSubject<MockPeer>,
+        disconnect: crate::rxjs_compat::RxSubject<MockPeer>,
+        message: crate::rxjs_compat::RxSubject<PeerWithMessage<MockPeer>>,
+        response: crate::rxjs_compat::RxSubject<PeerWithResponse<MockPeer>>,
+        error: crate::rxjs_compat::RxSubject<RxError>,
+        sent: StdArc<PlMutex<Vec<WebRTCWireFrame>>>,
+    }
+
+    impl MockHandler {
+        fn new() -> StdArc<Self> {
+            StdArc::new(Self {
+                connect: crate::rxjs_compat::RxSubject::new(),
+                disconnect: crate::rxjs_compat::RxSubject::new(),
+                message: crate::rxjs_compat::RxSubject::new(),
+                response: crate::rxjs_compat::RxSubject::new(),
+                error: crate::rxjs_compat::RxSubject::new(),
+                sent: StdArc::new(PlMutex::new(Vec::new())),
+            })
+        }
+
+        /// Feed an inbound request frame as if it arrived from `peer`.
+        fn inject_message(&self, peer: &str, message: WebRTCMessage) {
+            self.message.next(PeerWithMessage {
+                peer: MockPeer(peer.to_string()),
+                message,
+            });
+        }
+
+        /// Collect outbound responses sent back over the channel.
+        fn sent_responses(&self) -> Vec<WebRTCResponse> {
+            self.sent
+                .lock()
+                .iter()
+                .filter_map(|frame| match frame {
+                    WebRTCWireFrame::Response(r) => Some(r.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl WebRTCConnectionHandler for MockHandler {
+        type Peer = MockPeer;
+
+        fn connect_stream(&self) -> RxStream<MockPeer> {
+            self.connect.subscribe()
+        }
+        fn disconnect_stream(&self) -> RxStream<MockPeer> {
+            self.disconnect.subscribe()
+        }
+        fn message_stream(&self) -> RxStream<PeerWithMessage<MockPeer>> {
+            self.message.subscribe()
+        }
+        fn response_stream(&self) -> RxStream<PeerWithResponse<MockPeer>> {
+            self.response.subscribe()
+        }
+        fn error_stream(&self) -> RxStream<RxError> {
+            self.error.subscribe()
+        }
+        async fn send(&self, _peer: &MockPeer, frame: WebRTCWireFrame) -> Result<(), RxError> {
+            self.sent.lock().push(frame);
+            Ok(())
+        }
+        async fn close(&self) -> Result<(), RxError> {
+            Ok(())
+        }
+    }
+
+    fn master_changes_since_frame(id: &str, collection: &str) -> WebRTCMessage {
+        WebRTCMessage {
+            id: id.to_string(),
+            method: "masterChangesSince".to_string(),
+            // checkpoint = null, batch_size = 10
+            params: vec![Value::Null, Value::from(10u64)],
+            collection: Some(collection.to_string()),
+        }
+    }
+
+    /// Phase 3: two collections multiplexed on ONE handler must demultiplex
+    /// `masterChangesSince` frames to the right collection's master handler.
+    /// We insert distinct docs into each collection, push a collection-tagged
+    /// request for each over the single mock handler, and assert each answer
+    /// carries ONLY that collection's documents (and echoes its collection).
+    #[tokio::test]
+    async fn two_collections_demux_master_changes_on_one_handler() {
+        let alpha = crate::rx_collection::test_support::test_collection_named("alpha").await;
+        let beta = crate::rx_collection::test_support::test_collection_named("beta").await;
+        alpha
+            .insert(serde_json::json!({ "id": "alpha-doc", "age": 1 }))
+            .await
+            .expect("insert alpha doc");
+        beta.insert(serde_json::json!({ "id": "beta-doc", "age": 2 }))
+            .await
+            .expect("insert beta doc");
+
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi(
+            vec![StdArc::clone(&alpha), StdArc::clone(&beta)],
+            StdArc::clone(&handler),
+            None,
+            Some("test-room".to_string()),
+            Some(StdArc::<str>::from("rxdb-rs-test")),
+        )
+        .await
+        .expect("bring up multiplexed pool");
+
+        // Both collections are registered behind the one connection.
+        let mut names: Vec<String> = pool
+            .collections()
+            .into_iter()
+            .map(|c| c.name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+
+        // Drive collection-tagged requests over the single handler. A short
+        // yield lets the spawned message-stream loop process each frame.
+        handler.inject_message("browser-1", master_changes_since_frame("req-alpha", "alpha"));
+        handler.inject_message("browser-1", master_changes_since_frame("req-beta", "beta"));
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if handler.sent_responses().len() >= 2 {
+                break;
+            }
+        }
+
+        let responses = handler.sent_responses();
+        let alpha_resp = responses
+            .iter()
+            .find(|r| r.id == "req-alpha")
+            .expect("alpha answer present");
+        let beta_resp = responses
+            .iter()
+            .find(|r| r.id == "req-beta")
+            .expect("beta answer present");
+
+        // Each answer echoes its routing collection ...
+        assert_eq!(alpha_resp.collection.as_deref(), Some("alpha"));
+        assert_eq!(beta_resp.collection.as_deref(), Some("beta"));
+
+        // ... and carries ONLY that collection's document — proving the demux
+        // routed each frame to the correct master handler / storage instance.
+        let alpha_docs: DocumentsWithCheckpoint =
+            serde_json::from_value(alpha_resp.result.clone()).expect("decode alpha changes");
+        let beta_docs: DocumentsWithCheckpoint =
+            serde_json::from_value(beta_resp.result.clone()).expect("decode beta changes");
+        let alpha_ids: Vec<String> = alpha_docs
+            .documents
+            .iter()
+            .filter_map(|d| d.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        let beta_ids: Vec<String> = beta_docs
+            .documents
+            .iter()
+            .filter_map(|d| d.get("id").and_then(Value::as_str).map(str::to_string))
+            .collect();
+        assert_eq!(alpha_ids, vec!["alpha-doc".to_string()]);
+        assert_eq!(beta_ids, vec!["beta-doc".to_string()]);
+
+        pool.cancel().await;
+    }
+
+    /// A frame tagged with a collection the peer does not serve must produce a
+    /// replication-io error answer, never a cross-collection leak.
+    #[tokio::test]
+    async fn unknown_collection_frame_answers_with_io_error() {
+        let alpha = crate::rx_collection::test_support::test_collection_named("alpha2").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi(
+            vec![StdArc::clone(&alpha)],
+            StdArc::clone(&handler),
+            None,
+            Some("test-room-2".to_string()),
+            Some(StdArc::<str>::from("rxdb-rs-test-2")),
+        )
+        .await
+        .expect("bring up pool");
+
+        handler.inject_message(
+            "browser-1",
+            master_changes_since_frame("req-ghost", "does_not_exist"),
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if !handler.sent_responses().is_empty() {
+                break;
+            }
+        }
+
+        let responses = handler.sent_responses();
+        let ghost = responses
+            .iter()
+            .find(|r| r.id == "req-ghost")
+            .expect("ghost answer present");
+        assert_eq!(ghost.collection.as_deref(), Some("does_not_exist"));
+        assert_eq!(ghost.result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(ghost.result["code"], serde_json::json!("RC_WEBRTC_PEER"));
+        assert_eq!(
+            ghost.result["collection"],
+            serde_json::json!("does_not_exist")
+        );
+
+        pool.cancel().await;
     }
 }

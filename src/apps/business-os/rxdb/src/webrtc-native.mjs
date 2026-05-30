@@ -27,6 +27,14 @@ const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
 const RTC_HANDSHAKE_TIMEOUT_MS = 15_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
+// Signaling reconnection backoff. Post-multiplex the whole room shares ONE
+// signaling socket; a clean close used to only emit `signaling-close` (which had
+// no listener), so the peer could never re-discover the native side until an
+// external restart. The peer now self-reconnects the socket with exponential
+// backoff and re-joins the room (re-broadcasting the peer list), complementing
+// sync.js's higher-level restart engine.
+const SIGNALING_RECONNECT_BASE_MS = 1_000;
+const SIGNALING_RECONNECT_MAX_MS = 30_000;
 // Single source of truth for the shell-critical collection set. app.js derives
 // its CRITICAL_SYNC_COLLECTIONS from this exported list so the two lists cannot
 // silently drift. Browser_* members only register when the Browser module is
@@ -138,6 +146,8 @@ export class CtoxWebRtcNativePeer {
     this.connectionRequests = new Map();
     this.forceInitiatorPeers = new Set();
     this.closed = false;
+    this.signalingReconnectTimer = null;
+    this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
   }
 
   on(type, listener) {
@@ -151,16 +161,39 @@ export class CtoxWebRtcNativePeer {
     this.socket = socket;
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: 'join', room: this.options.room }));
+      // Reconnect succeeded (or first connect) — reset the backoff.
+      this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
       this.events.emit('signaling-open', { url: redactUrl(url) });
     };
     socket.onmessage = (event) => this.handleSignalingMessage(event.data);
     socket.onerror = () => this.events.emit('error', this.lastControlPlaneError || { code: 'ctox_signaling_socket_error' });
-    socket.onclose = () => this.events.emit('signaling-close', {});
+    socket.onclose = () => {
+      this.events.emit('signaling-close', {});
+      if (!this.closed) this.scheduleSignalingReconnect();
+    };
     return this;
+  }
+
+  scheduleSignalingReconnect() {
+    if (this.closed || this.signalingReconnectTimer) return;
+    const delay = this.signalingReconnectDelayMs;
+    this.signalingReconnectDelayMs = Math.min(delay * 2, SIGNALING_RECONNECT_MAX_MS);
+    this.signalingReconnectTimer = setTimeout(() => {
+      this.signalingReconnectTimer = null;
+      if (this.closed) return;
+      this.events.emit('signaling-reconnect', { delayMs: delay });
+      // Re-open the socket; onopen re-joins the room, which makes the signaling
+      // server re-broadcast the room peer list and re-drive peer (re)connection.
+      this.connect();
+    }, delay);
   }
 
   close() {
     this.closed = true;
+    if (this.signalingReconnectTimer) {
+      clearTimeout(this.signalingReconnectTimer);
+      this.signalingReconnectTimer = null;
+    }
     cancelRtcPeerConnectionRequestsForOwner(this, 'peer-close');
     this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {
@@ -389,7 +422,10 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
-  request(remotePeerId, method, params = [], timeoutMs = 15000) {
+  // Phase 3 multiplex: callers tag a `collection` so one DataChannel can carry
+  // every collection. The frame's `collection` is the native demux routing
+  // key; responses are still correlated by request `id`.
+  request(remotePeerId, method, params = [], timeoutMs = 15000, collection = null) {
     const id = `${this.options.clientId}|${Date.now()}|${this.requestCounter++}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -414,7 +450,9 @@ export class CtoxWebRtcNativePeer {
         reject(error);
       }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
-      const sent = this.send(remotePeerId, { id, method, params });
+      const frame = { id, method, params };
+      if (collection) frame.collection = collection;
+      const sent = this.send(remotePeerId, frame);
       if (!sent) {
         this.pending.delete(id);
         clearTimeout(timer);
@@ -775,8 +813,18 @@ export class CtoxWebRtcNativePeer {
       return;
     }
     this.events.emit('message', { peerId, payload });
-    if (payload?.id === 'masterChangeStream$') {
-      this.events.emit('master-change', { peerId, result: payload.result });
+    // Phase 3 multiplex: master-change pushes carry a collection-qualified id
+    // (`masterChangeStream$:{collection}`) and/or a `collection` field so the
+    // shared peer can fan the event to the right collection's pull. The bare
+    // `masterChangeStream$` id is still accepted for V1 / single-collection
+    // peers.
+    const masterChangeCollection = masterChangeStreamCollection(payload);
+    if (masterChangeCollection !== null) {
+      this.events.emit('master-change', {
+        peerId,
+        result: payload.result,
+        collection: masterChangeCollection || payload.collection || null,
+      });
       return;
     }
     if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
@@ -793,12 +841,23 @@ export class CtoxWebRtcNativePeer {
     }
     if (payload?.id && payload.method) {
       try {
-        const result = await this.handleRequest(peerId, payload.method, payload.params || []);
-        this.send(peerId, { id: payload.id, result, error: null });
+        const result = await this.handleRequest(
+          peerId,
+          payload.method,
+          payload.params || [],
+          payload.collection || null,
+        );
+        // Echo the routing collection back so a multiplexing remote can
+        // correlate without relying solely on the request-id map.
+        const response = { id: payload.id, result, error: null };
+        if (payload.collection) response.collection = payload.collection;
+        this.send(peerId, response);
       } catch (error) {
         const normalized = serializeFrameError(error, payload.method);
         this.events.emit('error', normalized);
-        this.send(peerId, { id: payload.id, result: null, error: normalized });
+        const response = { id: payload.id, result: null, error: normalized };
+        if (payload.collection) response.collection = payload.collection;
+        this.send(peerId, response);
       }
     }
   }
@@ -981,17 +1040,19 @@ export class CtoxWebRtcNativePeer {
     }
   }
 
-  async handleRequest(peerId, method, params) {
+  async handleRequest(peerId, method, params, collection = null) {
     this.recordObservedRequest(peerId, method);
     if (method === 'token') {
       return this.options.storageToken;
     }
     if (method === 'ctoxProtocol') {
-      return this.protocolPayload(peerId, params);
+      return this.protocolPayload(peerId, params, collection);
     }
     const handler = this.options.requestHandlers?.[method];
     if (typeof handler === 'function') {
-      return handler({ peerId, params, peer: this });
+      // Phase 3 multiplex: pass the frame's collection so a shared peer can
+      // route `masterChangesSince` / `masterWrite` to the right collection.
+      return handler({ peerId, params, collection, peer: this });
     }
     return {
       code: 'ctox_unknown_webrtc_method',
@@ -1035,9 +1096,9 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
-  async protocolPayload(peerId, params = []) {
+  async protocolPayload(peerId, params = [], collection = null) {
     if (typeof this.options.protocolPayload === 'function') {
-      return this.options.protocolPayload({ peerId, params, peer: this });
+      return this.options.protocolPayload({ peerId, params, collection, peer: this });
     }
     return buildProtocolPayload({
       role: this.options.role,
@@ -1565,9 +1626,14 @@ function rtcPeerConnectionOwnerKey(owner, remotePeerId) {
 }
 
 function rtcPeerConnectionPriority(owner) {
-  const collection = collectionNameFromTopic(owner?.options?.room || '');
-  if (SHELL_CRITICAL_COLLECTIONS.has(collection)) return 0;
-  return 10;
+  // Phase 3 (single multiplexed stream): there is now exactly ONE
+  // RTCPeerConnection per (browser, sync room) carrying every collection, so
+  // the per-collection admission gate is obsolete. The single connection is
+  // always critical/always-allowed. The SHELL_CRITICAL_COLLECTIONS set and the
+  // pool machinery are kept for back-compat but no longer gate anything in the
+  // multiplexed path.
+  void owner;
+  return 0;
 }
 
 function noteCriticalRequested(pool, owner) {
@@ -1762,6 +1828,24 @@ function collectionNameFromTopic(topic) {
   return parts.length ? parts[parts.length - 1] : '';
 }
 
+// Phase 3 multiplex: detect a master-change-stream push and extract its
+// collection. Returns the collection name for a qualified id
+// (`masterChangeStream$:{collection}`), `''` for the legacy bare id
+// (collection unknown — fall back to the frame's `collection` field), or
+// `null` when the frame is not a master-change push at all.
+export const MASTER_CHANGE_STREAM_ID = 'masterChangeStream$';
+export function masterChangeStreamId(collection) {
+  return `${MASTER_CHANGE_STREAM_ID}:${collection}`;
+}
+function masterChangeStreamCollection(payload) {
+  const id = payload?.id;
+  if (typeof id !== 'string') return null;
+  if (id === MASTER_CHANGE_STREAM_ID) return '';
+  const prefix = `${MASTER_CHANGE_STREAM_ID}:`;
+  if (id.startsWith(prefix)) return id.slice(prefix.length);
+  return null;
+}
+
 function buildSignalingUrl(options) {
   const url = new URL(options.signalingUrl);
   url.searchParams.set('room', options.room);
@@ -1838,7 +1922,10 @@ function classifySendPriority(payload = {}, text = '') {
     return ['ack', 'resume', 'start'].includes(payload.kind) ? 'high' : 'normal';
   }
   const method = String(payload?.method || '');
-  if (['ctoxProtocol', 'token'].includes(method)) return 'high';
+  // Phase 2: the `rxdb.activeCollections` priority hint must reach the native
+  // peer ahead of any bulk backlog so foreground prioritization takes effect
+  // promptly. Treat it as a control frame (high).
+  if (['ctoxProtocol', 'token', 'rxdb.activeCollections'].includes(method)) return 'high';
   if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
   if (method === 'masterChangesSince') return 'normal';
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
