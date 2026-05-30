@@ -57,6 +57,11 @@ const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
 // watermark before giving up (matches the ack timeout so a wedged peer fails
 // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+// Phase 1 hard size invariant: the SCTP message ceiling for an RTCDataChannel is
+// 16 KiB. A single `send_text` larger than this is dropped by / kills the channel
+// in browsers (the exact failure the transport plan flags as the channel-killer).
+// Every frame put on the wire via `send_json_text` MUST serialize to <= this.
+const MAX_SERIALIZED_FRAME_BYTES: usize = 16384;
 const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
 const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
 
@@ -971,7 +976,7 @@ impl WebRTCRsConnectionHandler {
                 })),
             ));
         }
-        let chunks = split_utf8_chunks(&text, MAX_CHUNK_BYTES);
+        let chunks = split_chunks_for_frame(&text, &transfer_id);
         self.record_status(|status| {
             status.active_transfers = status.active_transfers.saturating_add(1);
         });
@@ -1992,10 +1997,73 @@ async fn send_json_text(data_channel: &Arc<dyn DataChannel>, value: &Value) -> R
             })),
         )
     })?;
+    // Phase 1 hard size invariant (defense-in-depth): never put a message larger
+    // than the SCTP ceiling on the wire. `split_chunks_for_frame` already bounds
+    // the *serialized* chunk size, so this should be unreachable in practice — it
+    // exists to turn any future regression into a loud, contained error instead of
+    // a silently dropped/killed channel.
+    if text.len() > MAX_SERIALIZED_FRAME_BYTES {
+        return Err(new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({
+                "message": "serialized WebRTC transport frame exceeds SCTP message limit",
+                "bytes": text.len(),
+                "maxBytes": MAX_SERIALIZED_FRAME_BYTES,
+            })),
+        ));
+    }
     data_channel
         .send_text(&text)
         .await
         .map_err(|e| webrtc_error("send WebRTC transport frame", e))
+}
+
+/// Byte length of `ch` as it appears inside a serde_json string value (excluding
+/// the surrounding quotes). Mirrors serde_json's default escaping: the two-char
+/// short escapes (`\" \\ \b \f \n \r \t`), `\u00XX` for the remaining C0 controls,
+/// and raw UTF-8 bytes for everything else.
+fn json_escaped_char_len(ch: char) -> usize {
+    match ch {
+        '"' | '\\' | '\u{08}' | '\u{0c}' | '\n' | '\r' | '\t' => 2,
+        c if (c as u32) < 0x20 => 6,
+        c => c.len_utf8(),
+    }
+}
+
+/// Split `text` so that EACH chunk, once wrapped by `transport_chunk_frame` and
+/// serialized, is <= `MAX_SERIALIZED_FRAME_BYTES`. The previous splitter bounded
+/// the *raw* UTF-8 chunk size, but the chunk is then placed in a JSON string whose
+/// escaping (`"`, `\`, control chars) can multiply its serialized length — so an
+/// escape-heavy 10 KiB chunk could serialize to far more than 16 KiB and overrun
+/// the channel. This bounds the serialized frame directly, regardless of content.
+fn split_chunks_for_frame(text: &str, transfer_id: &str) -> Vec<String> {
+    // Conservative wrapper overhead: serialize an empty-data frame with worst-case
+    // numeric widths so the data budget always leaves room for the real frame.
+    let overhead = transport_chunk_frame(transfer_id, usize::MAX, usize::MAX, "")
+        .to_string()
+        .len();
+    let budget = MAX_SERIALIZED_FRAME_BYTES
+        .saturating_sub(overhead + 64)
+        .max(1);
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut chunks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_escaped = 0usize;
+    for ch in text.chars() {
+        let ch_escaped = json_escaped_char_len(ch);
+        if cur_escaped + ch_escaped > budget && !cur.is_empty() {
+            chunks.push(std::mem::take(&mut cur));
+            cur_escaped = 0;
+        }
+        cur.push(ch);
+        cur_escaped += ch_escaped;
+    }
+    if !cur.is_empty() || chunks.is_empty() {
+        chunks.push(cur);
+    }
+    chunks
 }
 
 fn split_utf8_chunks(text: &str, max_bytes: usize) -> Vec<String> {
@@ -2105,6 +2173,52 @@ mod tests {
 
         assert_eq!(chunks.concat(), "aaäbb🙂cc");
         assert!(chunks.iter().all(|chunk| chunk.len() <= 4));
+    }
+
+    #[test]
+    fn split_chunks_for_frame_bounds_serialized_size_even_for_escape_heavy_content() {
+        let transfer_id = "ctox-core-peer-abcdef0123456789|frame|4242";
+        // Worst case for JSON escaping: every byte is a control char (`\u00XX`, 6x)
+        // or a quote/backslash (2x). A raw-byte chunker would have produced frames
+        // far over the 16 KiB SCTP ceiling for this content.
+        let payloads = [
+            "\u{1}".repeat(200_000),                 // all C0 controls -> 6x expansion
+            "\"\\".repeat(150_000),                  // all quotes+backslashes -> 2x
+            "aäb🙂c\u{7}\"".repeat(40_000),          // mixed multibyte + escapes
+            "x".repeat(500_000),                     // plain ASCII (no expansion)
+            String::new(),                            // empty
+        ];
+        for payload in payloads {
+            let chunks = split_chunks_for_frame(&payload, transfer_id);
+            // Reassembly is lossless and order-preserving.
+            assert_eq!(chunks.concat(), payload, "reassembly must equal original");
+            // Every wrapped+serialized chunk frame stays within the SCTP ceiling.
+            for (seq, data) in chunks.iter().enumerate() {
+                let frame = transport_chunk_frame(transfer_id, 0, seq, data);
+                let serialized = serde_json::to_string(&frame).unwrap();
+                assert!(
+                    serialized.len() <= MAX_SERIALIZED_FRAME_BYTES,
+                    "serialized chunk frame {} bytes exceeds {} ceiling",
+                    serialized.len(),
+                    MAX_SERIALIZED_FRAME_BYTES
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn json_escaped_char_len_matches_serde() {
+        for ch in ['a', '"', '\\', '\n', '\t', '\u{08}', '\u{0c}', '\u{1}', 'ä', '🙂'] {
+            let s = ch.to_string();
+            let serialized = serde_json::to_string(&s).unwrap();
+            // serde wraps the value in quotes; strip them to compare inner length.
+            let inner = serialized.len() - 2;
+            assert_eq!(
+                json_escaped_char_len(ch),
+                inner,
+                "escaped length mismatch for {ch:?}"
+            );
+        }
     }
 
     #[test]
