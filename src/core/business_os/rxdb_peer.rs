@@ -934,12 +934,16 @@ async fn run_native_peer(
     // `SyncOptionsWebRTCRs` (e.g. the tighter `desktop_file_chunks` window) is
     // now subsumed by the Phase-1 native backpressure + chunking, which is
     // collection-agnostic; the multiplexed session uses uniform batch sizes.
-    let collection_list: Vec<Arc<RxCollection>> =
-        collections.into_iter().map(|(_, collection)| collection).collect();
+    let collection_list: Vec<Arc<RxCollection>> = collections
+        .into_iter()
+        .map(|(_, collection)| collection)
+        .collect();
     let collection_count = collection_list.len();
     let mut pools: Vec<WebRtcPool> = Vec::with_capacity(1);
     if collection_count == 0 {
-        eprintln!("[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up");
+        eprintln!(
+            "[business-os] no Business OS RxDB collections to replicate; skipping WebRTC bring-up"
+        );
     } else {
         let topic = sync_room.clone();
         let multi_signaling_url = signaling_url.clone();
@@ -980,9 +984,7 @@ async fn run_native_peer(
                 pools.push(pool);
             }
             Ok(Ok(Err(err))) => {
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication bring-up failed: {err}"
-                );
+                eprintln!("[business-os] multiplexed WebRTC replication bring-up failed: {err}");
             }
             Ok(Err(join_err)) => {
                 eprintln!(
@@ -3709,6 +3711,9 @@ async fn upsert_business_record_projection_document(
     collection: &Arc<RxCollection>,
     document: Value,
 ) -> anyhow::Result<()> {
+    if is_projection_tombstone(&document) {
+        return upsert_business_record_projection_tombstone(collection, document).await;
+    }
     match collection.incremental_upsert(document.clone()).await {
         Ok(_) => Ok(()),
         Err(err) if is_recoverable_projection_write_error(&err) => match collection.upsert(document.clone()).await
@@ -3723,6 +3728,119 @@ async fn upsert_business_record_projection_document(
                 }),
         },
         Err(err) => Err(anyhow::anyhow!("{err}")),
+    }
+}
+
+fn is_projection_tombstone(document: &Value) -> bool {
+    document
+        .get("_deleted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+async fn upsert_business_record_projection_tombstone(
+    collection: &Arc<RxCollection>,
+    document: Value,
+) -> anyhow::Result<()> {
+    let schema = collection
+        .schema_required()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    let primary_path = schema.primary_path.clone();
+    let document_id = document
+        .get(&primary_path)
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("projection tombstone missing primary key {primary_path}"))?
+        .to_string();
+
+    let existing = collection
+        .storage_instance
+        .find_documents_by_id(std::slice::from_ref(&document_id), true)
+        .await
+        .map_err(|err| anyhow::anyhow!("load existing projection tombstone target: {err}"))?
+        .into_iter()
+        .next();
+
+    let Some(previous) = existing else {
+        let mut write_data = document;
+        prepare_projection_tombstone_document(schema, &mut write_data);
+        let write_data = fill_object_data_before_insert(schema, write_data)
+            .map_err(|err| anyhow::anyhow!("fill projection tombstone envelope: {err}"))?;
+        collection
+            .insert(write_data)
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow::anyhow!("insert projection tombstone: {err}"))?;
+        return Ok(());
+    };
+
+    let repaired_previous = fill_object_data_before_insert(schema, previous.clone())
+        .map_err(|err| anyhow::anyhow!("repair existing projection tombstone envelope: {err}"))?;
+    let mut next = repaired_previous.clone();
+    if let (Some(next_obj), Some(write_obj)) = (next.as_object_mut(), document.as_object()) {
+        for (key, value) in write_obj {
+            if matches!(key.as_str(), "_rev" | "_attachments" | "_meta") {
+                continue;
+            }
+            next_obj.insert(key.clone(), value.clone());
+        }
+    } else {
+        next = document;
+    }
+    prepare_projection_tombstone_document(schema, &mut next);
+
+    let result = collection
+        .storage_instance
+        .bulk_write(
+            vec![BulkWriteRow {
+                previous: Some(repaired_previous),
+                document: next,
+            }],
+            "business-os-projection-tombstone-upsert",
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("write projection tombstone: {err}"))?;
+    if let Some(err) = result.error.first() {
+        anyhow::bail!("write projection tombstone conflict: {err:?}");
+    }
+    Ok(())
+}
+
+fn prepare_projection_tombstone_document(schema: &rxdb::rx_schema::RxSchema, document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    object.insert("_deleted".to_string(), Value::Bool(true));
+    if schema.json_schema.properties.contains_key("is_deleted") {
+        object.insert("is_deleted".to_string(), Value::Bool(true));
+    }
+    for field in &schema.json_schema.required {
+        if field.starts_with('_') {
+            continue;
+        }
+        let missing = object.get(field).map(Value::is_null).unwrap_or(true);
+        if missing {
+            object.insert(
+                field.clone(),
+                projection_tombstone_required_default(&schema.json_schema, field),
+            );
+        }
+    }
+}
+
+fn projection_tombstone_required_default(schema: &RxJsonSchema, field: &str) -> Value {
+    let Some(property) = schema.properties.get(field) else {
+        return Value::String(String::new());
+    };
+    if let Some(default) = &property.default {
+        return default.clone();
+    }
+    match property.schema_type.as_deref() {
+        Some("boolean") => Value::Bool(false),
+        Some("number") | Some("integer") => Value::from(0),
+        Some("array") => Value::Array(Vec::new()),
+        Some("object") => Value::Object(serde_json::Map::new()),
+        _ => Value::String(String::new()),
     }
 }
 
@@ -5352,10 +5470,12 @@ mod tests {
             "desktop_file_chunks",
             "file_id",
             "f1",
-            Some(&rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
-                offset: 7,
-                length: 5,
-            }),
+            Some(
+                &rxdb::plugins::replication_webrtc::file_fetch_handler::FileRange {
+                    offset: 7,
+                    length: 5,
+                },
+            ),
             &mut |bytes| {
                 ranged.extend_from_slice(bytes);
                 Ok(true)
@@ -6276,6 +6396,81 @@ mod tests {
             .and_then(|meta| meta.get("lwt"))
             .is_some());
         assert!(repaired.get("_rev").and_then(Value::as_str).is_some());
+    }
+
+    #[test]
+    fn sync_business_record_projections_accepts_schema_light_tombstones() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "notes",
+            "note_projection_tombstone",
+            1_000,
+            json!({
+                "id": "note_projection_tombstone",
+                "title": "Projected note",
+                "content": "temporary",
+                "updated_at_ms": 1_000
+            }),
+        )
+        .expect("insert note business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("initial sync") >= 1);
+
+        let conn = store::open_store(root.path()).expect("reopen business store");
+        conn.execute(
+            "UPDATE business_records
+             SET deleted = 1, updated_at_ms = ?3, payload_json = ?4
+             WHERE collection = ?1 AND record_id = ?2",
+            params![
+                "notes",
+                "note_projection_tombstone",
+                2_000_i64,
+                serde_json::to_string(&json!({
+                    "id": "note_projection_tombstone",
+                    "_deleted": true,
+                    "updated_at_ms": 2_000
+                }))
+                .expect("serialize tombstone")
+            ],
+        )
+        .expect("write schema-light tombstone business record");
+        drop(conn);
+
+        assert!(sync_business_record_projections(root.path()).expect("tombstone sync") >= 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let notes_table: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master
+                 WHERE type = 'table' AND name LIKE 'ctox_business_os__notes__v%'
+                 ORDER BY name DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("notes rxdb table");
+        let tombstone_json: String = conn
+            .query_row(
+                &format!("SELECT data FROM {notes_table} WHERE id = 'note_projection_tombstone'"),
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected note tombstone row");
+        let tombstone: Value = serde_json::from_str(&tombstone_json).expect("tombstone json");
+        assert_eq!(
+            tombstone.get("_deleted").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            tombstone.get("title").and_then(Value::as_str),
+            Some("Projected note")
+        );
+        assert_eq!(
+            tombstone.get("updated_at_ms").and_then(Value::as_i64),
+            Some(2_000)
+        );
     }
 
     #[test]
