@@ -1105,6 +1105,13 @@ fn apply_update(
         }
     }
     runtime_invariants.verify_preserved(&layout.state_root)?;
+    // Restart the Business OS web shell so it serves the NEW release's static
+    // assets (app.js / app.css / index.html). The shell reads these from disk per
+    // request, so after the symlink switch a stale `ctox-business-os.service`
+    // process keeps serving the OLD release's UI — the daemon restart above only
+    // covers `ctox.service`, which is exactly why `ctox upgrade --dev` appeared
+    // to "not take effect" for the Business OS frontend.
+    restart_business_os_web_shell();
     manifest.previous_release = previous_release.clone();
     manifest.current_release = Some(release.to_string());
     manifest.updated_at = now_rfc3339();
@@ -1373,6 +1380,40 @@ fn maybe_restart_service(previous_release_root: Option<&Path>) -> Result<()> {
         let _ = service::start_background(previous_release_root);
     }
     Ok(())
+}
+
+/// Best-effort restart of the Business OS web shell (`ctox-business-os.service`,
+/// a systemd `--user` unit) after a release switch, so it serves the new
+/// release's on-disk static assets (`app.js` / `app.css` / `index.html`).
+///
+/// No-op on installs that do not run the web shell (the unit is absent/inactive),
+/// so we never spuriously start it. The daemon restart in the upgrade flow only
+/// covers `ctox.service`; without this, `ctox upgrade --dev` switches the release
+/// but the web shell keeps serving the previous release's UI until a manual
+/// `systemctl --user restart ctox-business-os.service`.
+fn restart_business_os_web_shell() {
+    const WEB_UNIT: &str = "ctox-business-os.service";
+    let is_active = Command::new("systemctl")
+        .args(["--user", "is-active", WEB_UNIT])
+        .output()
+        .map(|out| {
+            let state = String::from_utf8_lossy(&out.stdout);
+            let state = state.trim();
+            state == "active" || state == "activating"
+        })
+        .unwrap_or(false);
+    let is_enabled = Command::new("systemctl")
+        .args(["--user", "is-enabled", WEB_UNIT])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if !is_active && !is_enabled {
+        return;
+    }
+    progress_step("restarting Business OS web shell onto the new release");
+    let _ = Command::new("systemctl")
+        .args(["--user", "restart", WEB_UNIT])
+        .status();
 }
 
 fn prune_old_releases(releases_dir: &Path, manifest: &InstallManifest) {
