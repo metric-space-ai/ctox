@@ -774,6 +774,15 @@ const KNOWLEDGE_COL_MIN = Object.freeze({ left: 300, center: 420 });
 const KNOWLEDGE_COL_LEFT_MAX = 720;
 
 function setupKnowledgeColumnResizing() {
+  // Column resizing is now owned by the shell-global resizer (app.js
+  // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var=
+  // "--knowledge-left-width"]` handle in index.html, inside the
+  // `[data-resize-frame]` root, gets drag/keyboard/persistence for free.
+  // This DIY (createElement + CtoxResizer + ResizeObserver + localStorage)
+  // is retired; we no-op so call sites keep working without dangling refs.
+  return () => {};
+
+  // eslint-disable-next-line no-unreachable
   const root = els.root;
   if (!root) return null;
 

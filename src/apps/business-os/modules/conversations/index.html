@@ -1,4 +1,4 @@
-<main class="conv-module" data-conv-root>
+<main class="conv-module" data-conv-root data-resize-frame>
   <aside class="conv-pane conv-left" aria-label="Conversations">
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
@@ -69,7 +69,7 @@
     </div>
   </aside>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Linke Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--conversations-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <section class="conv-pane conv-center" aria-label="Conversation Detail">
     <header class="conv-center-header" data-conv-detail-header hidden>
@@ -91,7 +91,7 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--conversations-right-width" data-resizer-min="260" data-resizer-max="550" aria-label="Rechte Spaltenbreite anpassen"></button>
 
   <aside class="conv-pane conv-right" aria-label="Conversation Context">
     <div class="conv-right-body">

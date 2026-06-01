@@ -1,4 +1,4 @@
-<div class="shiftflow-app" data-shiftflow-root>
+<div class="shiftflow-app" data-shiftflow-root data-resize-frame>
   <!-- LEFT PANEL: Team, Status & Projects -->
   <aside class="shiftflow-panel shiftflow-left-pane" id="shiftflow-left">
     <header class="ctox-pane-header">
@@ -62,7 +62,7 @@
   </aside>
 
   <!-- LEFT RESIZER -->
-  <div class="shiftflow-col-resizer" role="separator" aria-orientation="vertical" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-shiftflow-col-resizer="left" data-resizer="left"></div>
+  <button class="shiftflow-col-resizer ctox-column-resizer" type="button" data-t-aria="adjustLeftWidth" aria-label="Linke Spaltenbreite anpassen" data-shiftflow-col-resizer="left" data-resizer="left" data-resizer-var="--shiftflow-left-width" data-resizer-min="220" data-resizer-max="480"></button>
 
   <!-- CENTER PANEL: Main Scheduler, Timesheets & Billing -->
   <main class="shiftflow-panel shiftflow-center-pane" id="shiftflow-center">
@@ -181,7 +181,7 @@
   </main>
 
   <!-- RIGHT RESIZER -->
-  <div class="shiftflow-col-resizer" role="separator" aria-orientation="vertical" data-t-aria="adjustRightWidth" aria-label="Rechte Spaltenbreite anpassen" data-shiftflow-col-resizer="right" data-resizer="right"></div>
+  <button class="shiftflow-col-resizer ctox-column-resizer" type="button" data-t-aria="adjustRightWidth" aria-label="Rechte Spaltenbreite anpassen" data-shiftflow-col-resizer="right" data-resizer="right" data-resizer-var="--shiftflow-right-width" data-resizer-min="280" data-resizer-max="520"></button>
 
   <!-- RIGHT PANEL: AI Planner & Detail Inspector -->
   <aside class="shiftflow-panel shiftflow-right-pane" id="shiftflow-right">

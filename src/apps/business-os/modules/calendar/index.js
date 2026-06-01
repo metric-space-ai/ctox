@@ -310,6 +310,14 @@ function unbindEvents() {
 }
 
 function setupResizers(host) {
+  // Column resizing is now owned by the shell-global resizer (app.js
+  // `setupModuleResizers`): the `.ctox-column-resizer[data-resizer-var]`
+  // handles in index.html, inside the `[data-resize-frame]` root, get
+  // drag/keyboard/persistence for free. This DIY (CtoxResizer + localStorage)
+  // is retired; we no-op so call sites keep working without dangling refs.
+  return () => {};
+
+  // eslint-disable-next-line no-unreachable
   const leftResizer = host.querySelector('[data-calendar-col-resizer="left"]');
   const rightResizer = host.querySelector('[data-calendar-col-resizer="right"]');
   const containerEl = els.root || host;

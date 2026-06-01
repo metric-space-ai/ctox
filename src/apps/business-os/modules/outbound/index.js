@@ -5831,6 +5831,13 @@ function fingerprint(value) {
 }
 
 function setupOutboundColumnResizing() {
+  // Column drag/keyboard resizing + width persistence is now owned by the
+  // shell-global resizer (setupModuleResizers in app.js), wired declaratively from
+  // the `.ctox-column-resizer[data-resizer-var]` handle inside the
+  // `[data-resize-frame]` root. We no longer hand-wire CtoxResizer here (that would
+  // double-bind the handle). We only apply the initial left-compact CSS state once
+  // on mount based on the resolved start width, since that visual toggle is a
+  // module-specific concern the shell resizer does not own.
   const root = state.ctx?.host?.querySelector?.('[data-outbound-root]');
   if (!root) return null;
 
@@ -5841,10 +5848,13 @@ function setupOutboundColumnResizing() {
     root.dataset.leftCompact = widthPx <= 360 ? 'true' : 'false';
   };
 
-  // Hydrate persisted width.
+  // Resolve the start width the same way as before (persisted -> default),
+  // matching the shell resizer's storage key so the compact state agrees with the
+  // restored layout.
   let initialWidth = null;
   try {
-    const raw = window.localStorage.getItem(OUTBOUND_LAYOUT_KEY);
+    const raw = window.localStorage.getItem(`ctox.businessOs.moduleColumns.outbound:--outbound-left-width`)
+      ?? window.localStorage.getItem(OUTBOUND_LAYOUT_KEY);
     const stored = Number(raw);
     if (Number.isFinite(stored) && stored > 0) initialWidth = stored;
   } catch {
@@ -5852,28 +5862,9 @@ function setupOutboundColumnResizing() {
   }
   if (!Number.isFinite(initialWidth)) initialWidth = 360;
   const clampedInitial = clampNumber(initialWidth, OUTBOUND_COL_MIN.left, OUTBOUND_COL_LEFT_MAX);
-  root.style.setProperty('--outbound-left-width', `${clampedInitial}px`);
   applyCompact(clampedInitial);
 
-  const resizer = new CtoxResizer({
-    resizerEl: handle,
-    containerEl: root,
-    cssVar: '--outbound-left-width',
-    side: 'left',
-    minWidth: OUTBOUND_COL_MIN.left,
-    maxWidth: OUTBOUND_COL_LEFT_MAX,
-    onResize: (width) => {
-      applyCompact(width);
-      try {
-        window.localStorage.setItem(OUTBOUND_LAYOUT_KEY, String(Math.round(width)));
-      } catch {
-        /* storage unavailable */
-      }
-    },
-  });
-
   return () => {
-    resizer.destroy();
     delete root.dataset.leftCompact;
   };
 }

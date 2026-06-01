@@ -1,4 +1,4 @@
-<main class="tickets-module" data-tickets-root>
+<main class="tickets-module" data-tickets-root data-resize-frame>
   <aside class="tickets-pane tickets-left" aria-label="Tickets">
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
@@ -22,8 +22,8 @@
     </header>
     <div class="tickets-list os-scrollbar" data-ticket-list></div>
   </aside>
-  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--tickets-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
   <section class="tickets-pane tickets-center" aria-label="Ticket detail" data-ticket-detail></section>
-  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--tickets-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Rechte Spaltenbreite anpassen"></button>
   <aside class="tickets-pane tickets-right" aria-label="Ticket operations context" data-ticket-context></aside>
 </main>

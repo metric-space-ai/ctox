@@ -85,6 +85,12 @@ export async function mount(ctx) {
 }
 
 function setupResizers(host) {
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handle inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
+  // avoid double-binding the handle; call sites keep their no-op teardown ref.
+  return () => {};
+  // eslint-disable-next-line no-unreachable
   const leftResizer = host.querySelector('[data-resizer="left"]');
   const containerEl = host.querySelector('[data-reports-root]') || host;
 

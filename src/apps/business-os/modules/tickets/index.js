@@ -234,6 +234,12 @@ function wireUi() {
 }
 
 function setupResizers() {
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handles inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
+  // avoid double-binding the handles; call sites keep their no-op teardown ref.
+  return () => {};
+  // eslint-disable-next-line no-unreachable
   const root = state.ctx.host.querySelector('[data-tickets-root]');
   const left = root.querySelector('[data-resizer="left"]');
   const right = root.querySelector('[data-resizer="right"]');

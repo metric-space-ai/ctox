@@ -553,6 +553,12 @@ async function loadModuleMarkup() {
 }
 
 function setupResizers(root) {
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
+  // handles inside the `[data-resize-frame]` root. This DIY wiring is neutralised to
+  // avoid double-binding the handles; call sites keep their no-op teardown ref.
+  return () => {};
+  // eslint-disable-next-line no-unreachable
   if (!root) return null;
   const saved = readLayout();
   if (saved.left) root.style.setProperty('--customers-left-width', `${saved.left}px`);

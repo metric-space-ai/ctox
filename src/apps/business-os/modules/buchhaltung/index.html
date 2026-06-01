@@ -1,4 +1,4 @@
-<main class="fibu-module" data-fibu-root>
+<main class="fibu-module" data-fibu-root data-resize-frame>
   <!-- Left Spalte: Selector & Navigation (Strictly links and filters only) -->
   <section class="fibu-pane fibu-left" aria-label="Fibu Navigation">
     <div class="fibu-sidebar">
@@ -70,7 +70,7 @@
       </div>
     </div>
   </section>
-  <div class="fibu-col-resizer" data-resizer="left" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+  <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--fibu-left-width" data-resizer-min="240" data-resizer-max="450" title="Spaltenbreite anpassen" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <!-- Center Spalte: Active Workbench (Main Workbench views) -->
   <section class="fibu-pane fibu-center" aria-label="Fibu Arbeitsbereich">
@@ -487,7 +487,7 @@
       </div>
     </div>
   </section>
-  <div class="fibu-col-resizer" data-resizer="right" title="Spaltenbreite anpassen" role="separator" aria-orientation="vertical"></div>
+  <button class="fibu-col-resizer ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--fibu-right-width" data-resizer-min="280" data-resizer-max="500" title="Spaltenbreite anpassen" aria-label="Rechte Spaltenbreite anpassen"></button>
 
   <!-- Right Spalte: Companion & Auxiliary Functions (Complementary OCR viewer & AI chat, completely independent) -->
   <section class="fibu-pane fibu-right" aria-label="Belege & Agenten-Begleiter">
