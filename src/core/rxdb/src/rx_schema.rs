@@ -202,3 +202,154 @@ pub fn is_rx_schema(value: &Value) -> bool {
 pub fn to_typed_rx_json_schema(schema: RxJsonSchema) -> RxJsonSchema {
     schema
 }
+
+/// Conservative production write-path validation.
+///
+/// Peer documents were previously persisted unchecked, so a peer (or a buggy
+/// projection) could corrupt a collection by writing the wrong shape. This guard
+/// rejects only **clear corruption**, so it can never reject a document that
+/// already conforms to the schema:
+///   - the primary-key field must be a present, non-empty string within maxLength;
+///   - every declared `required` field (excluding RxDB-internal `_`-prefixed
+///     fields) must be present and non-null;
+///   - declared scalar fields that ARE present and non-null must have a compatible
+///     JSON type (an integer is accepted where `number` is declared), and declared
+///     strings must respect `maxLength`.
+///
+/// It intentionally does NOT enforce `additionalProperties` (extra fields are
+/// allowed — projections add their own) and treats `null` as acceptable for any
+/// non-required field, to avoid false rejections of live data.
+pub fn validate_write_document(
+    json_schema: &RxJsonSchema,
+    primary_path: &str,
+    doc: &Value,
+) -> Result<(), String> {
+    let obj = match doc.as_object() {
+        Some(obj) => obj,
+        None => return Err("document is not a JSON object".to_string()),
+    };
+
+    match obj.get(primary_path).and_then(Value::as_str) {
+        Some(id) if !id.is_empty() => {
+            if let Some(max) = json_schema
+                .properties
+                .get(primary_path)
+                .and_then(|prop| prop.max_length)
+            {
+                if id.len() as u64 > max {
+                    return Err(format!(
+                        "primary key '{primary_path}' exceeds maxLength {max}"
+                    ));
+                }
+            }
+        }
+        _ => {
+            return Err(format!(
+                "primary key '{primary_path}' must be a present, non-empty string"
+            ))
+        }
+    }
+
+    for req in &json_schema.required {
+        if req.starts_with('_') {
+            continue;
+        }
+        match obj.get(req) {
+            None | Some(Value::Null) => {
+                return Err(format!("required field '{req}' is missing"))
+            }
+            _ => {}
+        }
+    }
+
+    for (name, prop) in &json_schema.properties {
+        if name.starts_with('_') {
+            continue;
+        }
+        let value = match obj.get(name) {
+            Some(value) if !value.is_null() => value,
+            _ => continue,
+        };
+        let Some(declared) = prop.schema_type.as_deref() else {
+            continue;
+        };
+        let type_ok = match declared {
+            "string" => value.is_string(),
+            "number" => value.is_number(),
+            "integer" => value.is_i64() || value.is_u64(),
+            "boolean" => value.is_boolean(),
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            _ => true, // compound/unknown declared types: do not reject
+        };
+        if !type_ok {
+            return Err(format!("field '{name}' has wrong type (expected {declared})"));
+        }
+        if declared == "string" {
+            if let (Some(max), Some(s)) = (prop.max_length, value.as_str()) {
+                if s.len() as u64 > max {
+                    return Err(format!("field '{name}' exceeds maxLength {max}"));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod write_validation_tests {
+    use super::*;
+
+    fn schema() -> RxJsonSchema {
+        serde_json::from_value(json!({
+            "version": 0,
+            "primaryKey": "id",
+            "type": "object",
+            "properties": {
+                "id": { "type": "string", "maxLength": 64 },
+                "title": { "type": "string", "maxLength": 8 },
+                "count": { "type": "number" },
+                "active": { "type": "boolean" },
+                "tags": { "type": "array" }
+            },
+            "required": ["id", "title"],
+            "additionalProperties": true
+        }))
+        .unwrap()
+    }
+
+    fn ok(doc: Value) {
+        assert!(
+            validate_write_document(&schema(), "id", &doc).is_ok(),
+            "expected valid: {doc}"
+        );
+    }
+    fn bad(doc: Value) {
+        assert!(
+            validate_write_document(&schema(), "id", &doc).is_err(),
+            "expected rejected: {doc}"
+        );
+    }
+
+    #[test]
+    fn accepts_conforming_documents_and_extra_props_and_null_optionals() {
+        ok(json!({"id":"a","title":"hi","count":3,"active":true,"_rev":"1-x","_meta":{"lwt":1}}));
+        // extra (additional) property is allowed
+        ok(json!({"id":"a","title":"hi","extra":{"deep":true}}));
+        // null optional field is allowed; integer accepted for number
+        ok(json!({"id":"a","title":"hi","count":null}));
+        ok(json!({"id":"a","title":"hi","count":5}));
+    }
+
+    #[test]
+    fn rejects_clear_corruption() {
+        bad(json!({"title":"hi"})); // missing primary
+        bad(json!({"id":"","title":"hi"})); // empty primary
+        bad(json!({"id":"a"})); // missing required title
+        bad(json!({"id":"a","title":null})); // required null
+        bad(json!({"id":"a","title":"hi","count":"NaN"})); // wrong type
+        bad(json!({"id":"a","title":"way-too-long-title"})); // maxLength 8
+        bad(json!(["not","an","object"])); // not an object
+    }
+}
