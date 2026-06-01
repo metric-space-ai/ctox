@@ -16,6 +16,10 @@ const APP_BUILD = '20260530-rxdb-hardening1';
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
 const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
+// After the fast-retry budget, a module's sync falls back to this slow periodic
+// retry instead of being permanently disabled, so a longer transient failure
+// still recovers on its own without a full app reload.
+const SLOW_MODULE_SYNC_RETRY_MS = 60000;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
 const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
 const CTOX_HEALTH_POLL_MS = 10000;
@@ -3638,15 +3642,21 @@ function startModuleSync(mod) {
 
 function scheduleTransientModuleSyncRetry(mod, error) {
   const retry = Number(state.schemaImportRetries.get(mod.id) || 0) + 1;
-  if (retry > MAX_TRANSIENT_MODULE_SYNC_RETRIES) {
-    state.schemaImportRetries.delete(mod.id);
-    console.warn(`[business-os] schema import unavailable for ${mod.id}; module sync disabled`, error);
-    return;
-  }
   state.schemaImportRetries.set(mod.id, retry);
-  const delayMs = Math.min(15000, 1000 * Math.max(1, Math.min(retry, 8)));
-  if (retry === 1 || retry % 5 === 0) {
-    console.warn(`[business-os] transient schema import failed for ${mod.id}; retrying`, error);
+  // Never permanently disable a module's sync. Use fast exponential retries up to
+  // the budget, then fall back to a slow PERIODIC retry — a transient failure
+  // that outlasts the fast attempts (e.g. a signaling/network blip) must still
+  // recover on its own without a full app reload. The counter is cleared on the
+  // next successful startModuleSync (see registerModuleSchemas().then).
+  const fast = retry <= MAX_TRANSIENT_MODULE_SYNC_RETRIES;
+  const delayMs = fast
+    ? Math.min(15000, 1000 * Math.max(1, Math.min(retry, 8)))
+    : SLOW_MODULE_SYNC_RETRY_MS;
+  if (retry === 1 || (fast && retry % 5 === 0) || (!fast && retry % 10 === 0)) {
+    const mode = fast
+      ? 'retrying'
+      : `slow-retrying every ${Math.round(SLOW_MODULE_SYNC_RETRY_MS / 1000)}s`;
+    console.warn(`[business-os] schema import failed for ${mod.id}; ${mode}`, error);
   }
   const timer = window.setTimeout(() => {
     state.schemaRetryTimers.delete(mod.id);
