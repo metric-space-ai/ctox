@@ -1279,7 +1279,7 @@ function taskMatchesHarnessFlow(task, state) {
 }
 
 function taskStatusSteps(task, state) {
-  const status = normalizeCommandStatus(task.routeStatus || task.status);
+  const status = normalizeCommandStatus(task.status || task.routeStatus);
   const timeline = state.model?.timeline || [];
   const findIndex = (id) => {
     if (!id) return -1;
@@ -2665,7 +2665,7 @@ function mergeBundleWithCommands(bundle, commands, queueTasks = [], bugReports =
     source: doc.source_module || doc.module || 'ctox',
     channel: inferInboundChannel(doc),
     priority: doc.priority || 'normal',
-    status: normalizeCommandStatus(doc.route_status || doc.status),
+    status: normalizeCommandStatus(doc.status || doc.task_status || doc.route_status),
     routeStatus: doc.route_status || '',
     target: doc.command_type || doc.thread_key || 'ctox queue',
     browserContextArtifact: doc.browser_context_artifact || null,
@@ -2829,6 +2829,7 @@ function routeStatusNodeId(status) {
   if (value === 'accepted' || value === 'pending' || value === 'queued') return 'queued';
   if (value === 'leased') return 'leased';
   if (value === 'running' || value === 'working') return 'running';
+  if (value === 'completed' || value === 'done' || value === 'handled') return 'passed';
   if (value === 'failed' || value === 'cancelled' || value === 'canceled' || value === 'blocked' || value === 'stale_missing_native') return 'model-failed';
   return '';
 }

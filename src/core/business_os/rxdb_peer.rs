@@ -3654,7 +3654,200 @@ async fn sync_business_record_projections_with_database(
         }
         since_by_collection.insert(collection_name, max_updated_at_ms.saturating_add(1));
     }
+    count += reconcile_ctox_queue_task_projections(root.as_path(), database).await?;
     Ok(count)
+}
+
+async fn reconcile_ctox_queue_task_projections(
+    root: &Path,
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let queue = database
+        .collection("ctox_queue_tasks")
+        .context("ctox_queue_tasks collection is not registered")?;
+    let commands = database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?;
+    let queue_docs = queue
+        .find(Some(MangoQuery {
+            limit: Some(500),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query ctox_queue_tasks for reconciliation: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec ctox_queue_tasks reconciliation query: {err}"))?;
+    let Some(queue_docs) = queue_docs.as_array() else {
+        return Ok(0);
+    };
+
+    let mut repaired_documents = Vec::new();
+    let mut orphaned_commands = Vec::new();
+    for queue_doc in queue_docs {
+        if queue_doc
+            .get("_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let queue_status = queue_doc
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !matches!(queue_status, "queued" | "running" | "accepted") {
+            continue;
+        }
+        let command_id = queue_doc
+            .get("command_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let Some(command_id) = command_id else {
+            continue;
+        };
+        let command_doc = commands
+            .find_one(Some(MangoQuery {
+                selector: Some(json!({ "id": { "$eq": command_id } })),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query business_command {command_id}: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| anyhow::anyhow!("exec business_command {command_id} query: {err}"))?;
+        if !command_doc.is_object() {
+            continue;
+        }
+
+        let command_status = command_doc
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let command_updated_at_ms = command_doc
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms() as i64);
+        let repaired_status = if let Some(status) = terminal_queue_status_for_command(command_status)
+        {
+            Some((status, command_updated_at_ms, None))
+        } else if matches!(command_status, "accepted" | "pending" | "pending_sync")
+            && projection_queue_task_is_orphaned(root, queue_doc)
+            && projection_document_age_ms(queue_doc, command_updated_at_ms) > 10 * 60 * 1_000
+        {
+            Some((
+                "failed",
+                now_ms() as i64,
+                Some("Queue task is no longer present in the CTOX harness queue; marking the orphaned Business OS projection as failed."),
+            ))
+        } else {
+            None
+        };
+        let Some((repaired_status, repaired_at_ms, error_note)) = repaired_status else {
+            continue;
+        };
+        let mut next = queue_doc.clone();
+        if let Some(object) = next.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+            object.remove("_attachments");
+            object.insert(
+                "status".to_string(),
+                Value::String(repaired_status.to_string()),
+            );
+            object.insert(
+                "route_status".to_string(),
+                Value::String(route_status_for_queue_projection(repaired_status).to_string()),
+            );
+            object.insert(
+                "task_status".to_string(),
+                Value::String(repaired_status.to_string()),
+            );
+            object.insert("updated_at_ms".to_string(), Value::from(repaired_at_ms));
+            if let Some(error_note) = error_note {
+                object.insert("error".to_string(), Value::String(error_note.to_string()));
+            }
+        }
+        upsert_business_record_projection_document(&queue, next.clone())
+            .await
+            .map_err(|err| anyhow::anyhow!("repair ctox_queue_tasks projection: {err}"))?;
+        repaired_documents.push(next);
+        if command_status == "accepted" && repaired_status == "failed" {
+            orphaned_commands.push((command_id.to_string(), repaired_at_ms));
+        }
+    }
+
+    if !repaired_documents.is_empty() {
+        let root = root.to_path_buf();
+        let documents = repaired_documents.clone();
+        tokio::task::spawn_blocking(move || {
+            store::push_collection_records(
+                &root,
+                json!({
+                    "collection": "ctox_queue_tasks",
+                    "documents": documents
+                }),
+            )
+        })
+        .await
+        .context("join ctox_queue_tasks reconciliation writeback")??;
+    }
+    for (command_id, failed_at_ms) in orphaned_commands {
+        let root = root.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            store::mark_business_command_failed(
+                &root,
+                &command_id,
+                "Queue task is no longer present in the CTOX harness queue; no tracked execution is available.",
+                failed_at_ms,
+            )
+        })
+        .await
+        .context("join orphaned business command repair")??;
+    }
+    Ok(repaired_documents.len())
+}
+
+fn terminal_queue_status_for_command(status: &str) -> Option<&'static str> {
+    match status {
+        "completed" | "handled" | "done" => Some("completed"),
+        "failed" | "error" => Some("failed"),
+        "cancelled" | "canceled" => Some("cancelled"),
+        "blocked" => Some("blocked"),
+        _ => None,
+    }
+}
+
+fn route_status_for_queue_projection(status: &str) -> &str {
+    match status {
+        "completed" => "handled",
+        "cancelled" => "cancelled",
+        "failed" => "failed",
+        "blocked" => "blocked",
+        "running" => "leased",
+        _ => "pending",
+    }
+}
+
+fn projection_queue_task_is_orphaned(root: &Path, document: &Value) -> bool {
+    let task_id = document
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(task_id) = task_id else {
+        return false;
+    };
+    channels::load_queue_task(root, task_id)
+        .map(|task| task.is_none())
+        .unwrap_or(false)
+}
+
+fn projection_document_age_ms(document: &Value, fallback_updated_at_ms: i64) -> i64 {
+    let updated_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(fallback_updated_at_ms);
+    (now_ms() as i64).saturating_sub(updated_at_ms)
 }
 
 async fn upsert_business_record_projection(
@@ -6471,6 +6664,199 @@ mod tests {
             tombstone.get("updated_at_ms").and_then(Value::as_i64),
             Some(2_000)
         );
+    }
+
+    #[test]
+    fn reconcile_ctox_queue_task_projections_completes_stale_completed_commands() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_queue_completed",
+                    "command_id": "cmd_queue_completed",
+                    "module": "ctox",
+                    "command_type": "ctox.test.completed",
+                    "record_id": "cmd_queue_completed",
+                    "status": "completed",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": 2_000
+                }))
+                .await
+                .expect("insert completed command");
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            queue
+                .insert(json!({
+                    "id": "task_queue_completed",
+                    "command_id": "cmd_queue_completed",
+                    "title": "completed task",
+                    "status": "queued",
+                    "route_status": "queued",
+                    "task_status": "queued",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": 1_000
+                }))
+                .await
+                .expect("insert stale queue projection");
+
+            assert_eq!(
+                reconcile_ctox_queue_task_projections(root.path(), &database)
+                    .await
+                    .expect("reconcile queue projections"),
+                1
+            );
+
+            let repaired = queue
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "task_queue_completed" } })),
+                    ..Default::default()
+                }))
+                .expect("queue task query")
+                .exec(false)
+                .await
+                .expect("queue task document");
+            assert_eq!(repaired.get("status").and_then(Value::as_str), Some("completed"));
+            assert_eq!(
+                repaired.get("route_status").and_then(Value::as_str),
+                Some("handled")
+            );
+
+            let conn = store::open_store(root.path()).expect("open business store");
+            let payload_json: String = conn
+                .query_row(
+                    "SELECT payload_json
+                     FROM business_records
+                     WHERE collection = 'ctox_queue_tasks' AND record_id = 'task_queue_completed'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("queue task business record");
+            let payload: Value = serde_json::from_str(&payload_json).expect("queue payload");
+            assert_eq!(payload.get("status").and_then(Value::as_str), Some("completed"));
+            assert_eq!(
+                payload.get("route_status").and_then(Value::as_str),
+                Some("handled")
+            );
+        });
+    }
+
+    #[test]
+    fn reconcile_ctox_queue_task_projections_fails_orphaned_accepted_commands() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let stale_at_ms = (now_ms() as i64).saturating_sub(20 * 60 * 1_000);
+            let commands = database
+                .collection("business_commands")
+                .expect("business_commands collection");
+            commands
+                .insert(json!({
+                    "id": "cmd_queue_orphaned",
+                    "command_id": "cmd_queue_orphaned",
+                    "module": "ctox",
+                    "command_type": "ctox.test.orphaned",
+                    "record_id": "cmd_queue_orphaned",
+                    "status": "accepted",
+                    "inbound_channel": "ctox",
+                    "payload": { "ok": true },
+                    "client_context": {},
+                    "updated_at_ms": stale_at_ms
+                }))
+                .await
+                .expect("insert accepted command");
+
+            let queue = database
+                .collection("ctox_queue_tasks")
+                .expect("ctox_queue_tasks collection");
+            queue
+                .insert(json!({
+                    "id": "task_queue_orphaned",
+                    "command_id": "cmd_queue_orphaned",
+                    "title": "orphaned task",
+                    "status": "queued",
+                    "route_status": "queued",
+                    "task_status": "queued",
+                    "module": "ctox",
+                    "source_module": "ctox",
+                    "inbound_channel": "ctox",
+                    "updated_at_ms": stale_at_ms
+                }))
+                .await
+                .expect("insert orphaned queue projection");
+
+            assert_eq!(
+                reconcile_ctox_queue_task_projections(root.path(), &database)
+                    .await
+                    .expect("reconcile queue projections"),
+                1
+            );
+
+            let repaired = queue
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "task_queue_orphaned" } })),
+                    ..Default::default()
+                }))
+                .expect("queue task query")
+                .exec(false)
+                .await
+                .expect("queue task document");
+            assert_eq!(repaired.get("status").and_then(Value::as_str), Some("failed"));
+            assert_eq!(
+                repaired.get("route_status").and_then(Value::as_str),
+                Some("failed")
+            );
+            assert!(repaired.get("error").and_then(Value::as_str).is_some());
+
+            let conn = store::open_store(root.path()).expect("open business store");
+            let command_payload_json: String = conn
+                .query_row(
+                    "SELECT payload_json
+                     FROM business_records
+                     WHERE collection = 'business_commands' AND record_id = 'cmd_queue_orphaned'",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("business command repair record");
+            let command_payload: Value =
+                serde_json::from_str(&command_payload_json).expect("command payload");
+            assert_eq!(
+                command_payload.get("status").and_then(Value::as_str),
+                Some("failed")
+            );
+            assert!(command_payload.get("error").and_then(Value::as_str).is_some());
+        });
     }
 
     #[test]

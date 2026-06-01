@@ -5769,6 +5769,55 @@ pub fn push_collection_records(root: &Path, body: Value) -> anyhow::Result<Value
     }))
 }
 
+pub fn mark_business_command_failed(
+    root: &Path,
+    command_id: &str,
+    error: &str,
+    failed_at_ms: i64,
+) -> anyhow::Result<()> {
+    let command_id = command_id.trim();
+    anyhow::ensure!(!command_id.is_empty(), "command_id is required");
+    let conn = open_store(root)?;
+    conn.execute(
+        "UPDATE business_commands
+         SET status = 'failed', observed_at_ms = ?2
+         WHERE command_id = ?1",
+        params![command_id, failed_at_ms],
+    )?;
+
+    let payload_json = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'business_commands' AND record_id = ?1",
+            params![command_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut payload = payload_json
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": "ctox",
+                "command_type": "",
+                "record_id": command_id
+            })
+        });
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("status".to_string(), Value::String("failed".to_string()));
+        object.insert(
+            "task_status".to_string(),
+            Value::String("failed".to_string()),
+        );
+        object.insert("error".to_string(), Value::String(error.to_string()));
+        object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
+    }
+    upsert_business_record(&conn, "business_commands", command_id, failed_at_ms, payload)?;
+    Ok(())
+}
+
 pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
