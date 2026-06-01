@@ -27,8 +27,8 @@ use crate::types::{
 
 use super::cleanup::cleanup_deleted_documents;
 use super::sql::{
-    all_documents, document_by_id, drop_table, for_each_document, insert_document,
-    quote_identifier, update_document,
+    document_by_id, drop_table, for_each_document, insert_document, quote_identifier,
+    update_document,
 };
 use super::types::{sqlite_error, SharedSqliteConnection};
 
@@ -414,10 +414,24 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 .map_err(sqlite_error)?;
             let mut docs_in_db = HashMap::new();
             {
-                let docs = all_documents(&tx, &table_name)?;
-                for doc in docs {
-                    if let Some(id) = doc.get(&primary_path).and_then(Value::as_str) {
-                        docs_in_db.insert(id.to_string(), doc);
+                // Only load the documents we are actually writing, not the whole
+                // table. `categorize_bulk_write_rows` looks up the current DB state
+                // per write id, so a full-table scan made every bulk_write O(N) in
+                // collection size (O(N^2) over a replication run, all under the
+                // global write mutex) — the dominant scaling risk for large
+                // collections (documents, blob chunks). Fetch by id via the
+                // primary-key index instead.
+                let mut ids: Vec<String> = Vec::with_capacity(document_writes.len());
+                for write in &document_writes {
+                    if let Some(id) = write.document.get(&primary_path).and_then(Value::as_str) {
+                        ids.push(id.to_string());
+                    }
+                }
+                ids.sort_unstable();
+                ids.dedup();
+                for id in ids {
+                    if let Some(doc) = document_by_id(&tx, &table_name, &id)? {
+                        docs_in_db.insert(id, doc);
                     }
                 }
             }
@@ -982,6 +996,90 @@ mod tests {
             .unwrap();
         assert_eq!(docs.len(), 1);
         assert_eq!(docs[0].get("age").and_then(Value::as_i64), Some(1));
+    }
+
+    #[tokio::test]
+    async fn bulk_write_reads_only_written_ids_state_among_many_rows() {
+        // Guards the P1 fix: bulk_write must look up the CURRENT db state only for
+        // the ids being written (via the primary-key index), not scan the whole
+        // table. This test seeds a large collection and verifies that the per-id
+        // lookup still yields correct conflict detection (successful update with
+        // the right previous _rev, untouched neighbour, and a 409 on a stale rev).
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+
+        const N: usize = 400;
+        let seed: Vec<BulkWriteRow> = (0..N)
+            .map(|i| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("k{i}"), "1-a", i as i64, false, 1.0),
+            })
+            .collect();
+        let resp = instance.bulk_write(seed, "seed").await.unwrap();
+        assert!(resp.error.is_empty(), "seed should not error: {:?}", resp.error);
+
+        // Valid update (correct previous rev) + a fresh insert.
+        let resp = instance
+            .bulk_write(
+                vec![
+                    BulkWriteRow {
+                        previous: Some(doc("k200", "1-a", 200, false, 1.0)),
+                        document: doc("k200", "2-b", 9999, false, 2.0),
+                    },
+                    BulkWriteRow {
+                        previous: None,
+                        document: doc("knew", "1-a", 7, false, 1.0),
+                    },
+                ],
+                "write",
+            )
+            .await
+            .unwrap();
+        assert!(
+            resp.error.is_empty(),
+            "valid update+insert must not error: {:?}",
+            resp.error
+        );
+
+        let got = instance
+            .find_documents_by_id(
+                &["k200".to_string(), "k100".to_string(), "knew".to_string()],
+                false,
+            )
+            .await
+            .unwrap();
+        let by_id = |id: &str| got.iter().find(|d| d.get("id").and_then(Value::as_str) == Some(id));
+        assert_eq!(
+            by_id("k200").and_then(|d| d.get("age")).and_then(Value::as_i64),
+            Some(9999),
+            "updated row reflects new state"
+        );
+        assert_eq!(
+            by_id("k100").and_then(|d| d.get("age")).and_then(Value::as_i64),
+            Some(100),
+            "unrelated neighbour untouched"
+        );
+        assert!(by_id("knew").is_some(), "insert present");
+
+        // Stale update (wrong previous rev) must conflict — proves the per-id
+        // current-state lookup is correct, not just blindly overwriting.
+        let resp = instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: Some(doc("k300", "9-stale", 300, false, 1.0)),
+                    document: doc("k300", "2-x", 1, false, 3.0),
+                }],
+                "stale",
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.error.len(), 1, "stale update must conflict");
+        assert_eq!(resp.error[0].status, 409, "conflict status");
     }
 
     #[tokio::test]
