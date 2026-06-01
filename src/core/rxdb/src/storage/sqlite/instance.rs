@@ -1083,6 +1083,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sequential_writes_into_large_collection_stay_correct() {
+        // P7 scale guard: the replication pattern that used to be O(N^2) — many
+        // small writes trickling into a large collection. Seed a big collection,
+        // then apply many scattered sequential single-doc updates and verify each
+        // landed correctly. (Correctness, not a flaky timing assertion; the perf
+        // win is structural — see bulk_write fetching only written ids.)
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("ctox.sqlite3"),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+
+        const N: usize = 1000;
+        let seed: Vec<BulkWriteRow> = (0..N)
+            .map(|i| BulkWriteRow {
+                previous: None,
+                document: doc(&format!("k{i}"), "1-a", i as i64, false, 1.0),
+            })
+            .collect();
+        instance.bulk_write(seed, "seed").await.unwrap();
+
+        // 40 scattered sequential updates, each correct against current state.
+        for step in 0..40usize {
+            let i = (step * 97) % N; // spread across the table
+            let resp = instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: Some(doc(&format!("k{i}"), "1-a", i as i64, false, 1.0)),
+                        document: doc(&format!("k{i}"), "2-b", 100_000 + step as i64, false, 2.0),
+                    }],
+                    "seq",
+                )
+                .await
+                .unwrap();
+            assert!(resp.error.is_empty(), "sequential write {step} must not error: {:?}", resp.error);
+        }
+
+        // Spot-check a couple of updated rows reflect the new state.
+        let got = instance
+            .find_documents_by_id(&["k0".to_string(), "k97".to_string()], false)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 2);
+        for d in &got {
+            assert!(
+                d.get("age").and_then(Value::as_i64).unwrap_or(0) >= 100_000,
+                "updated row must hold the new age"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn query_filters_sorts_and_limits_documents() {
         let dir = tempfile::tempdir().unwrap();
         let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {

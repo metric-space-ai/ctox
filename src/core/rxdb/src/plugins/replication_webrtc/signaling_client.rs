@@ -351,3 +351,82 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+
+    /// Chaos test for the reconnect supervisor (P7 / hardening C): when the
+    /// signaling socket drops mid-session, the client must reconnect AND re-join
+    /// the room on its own — without the caller calling `join` again — so the
+    /// server re-broadcasts the peer list and the connection handler can rebuild.
+    #[tokio::test]
+    async fn signaling_client_reconnects_and_rejoins_after_socket_drop() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let conns = Arc::new(AtomicUsize::new(0));
+        let joins = Arc::new(AtomicUsize::new(0));
+        let conns_s = Arc::clone(&conns);
+        let joins_s = Arc::clone(&joins);
+
+        // Server: accept two connections. On each, send `init`, then read until a
+        // `join` arrives (count it). Drop the FIRST connection right after its join
+        // to force the client's supervisor to reconnect; the SECOND connection's
+        // join therefore proves automatic re-join after reconnect.
+        let server = tokio::spawn(async move {
+            for i in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                conns_s.fetch_add(1, Ordering::SeqCst);
+                let mut ws = accept_async(stream).await.unwrap();
+                ws.send(Message::Text(
+                    r#"{"type":"init","yourPeerId":"p1"}"#.to_string(),
+                ))
+                .await
+                .unwrap();
+                while let Some(Ok(msg)) = ws.next().await {
+                    if let Message::Text(t) = msg {
+                        if t.contains("\"type\":\"join\"") {
+                            joins_s.fetch_add(1, Ordering::SeqCst);
+                            break;
+                        }
+                    }
+                }
+                if i == 0 {
+                    drop(ws); // force reconnect
+                } else {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                }
+            }
+        });
+
+        let client = SignalingClient::connect(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        client.join("room-1".to_string()).await.unwrap();
+
+        // Reconnect backoff base is 1s; allow generous time for conn #2 + re-join.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            if joins.load(Ordering::SeqCst) >= 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        client.close().await;
+        let _ = server.await;
+
+        assert!(
+            conns.load(Ordering::SeqCst) >= 2,
+            "client must reconnect after the socket dropped (saw {} connections)",
+            conns.load(Ordering::SeqCst)
+        );
+        assert!(
+            joins.load(Ordering::SeqCst) >= 2,
+            "client must auto re-join the room after reconnect (saw {} joins)",
+            joins.load(Ordering::SeqCst)
+        );
+    }
+}
