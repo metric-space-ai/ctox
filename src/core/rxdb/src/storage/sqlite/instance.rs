@@ -399,6 +399,7 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         // transaction, error mapping) are unchanged — only WHERE it runs.
         let connection = Arc::clone(&self.connection);
         let schema_has_attachments = self.schema.attachments.is_some();
+        let json_schema = self.schema.clone();
         let primary_path = self.primary_path.clone();
         let table_name = self.table_name.clone();
         let context = context.to_string();
@@ -412,6 +413,49 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
             let tx = conn
                 .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
                 .map_err(sqlite_error)?;
+
+            // Production write-path validation: reject clearly-corrupt peer
+            // documents with a 422 instead of persisting them. Conservative by
+            // design (see rx_schema::validate_write_document) so conforming data is
+            // never rejected. Invalid rows are dropped from this batch; valid rows
+            // proceed through the normal categorize/conflict path unchanged.
+            let mut validation_errors: Vec<crate::types::RxStorageWriteError> = Vec::new();
+            let mut document_writes = document_writes;
+            if document_writes.iter().any(|w| {
+                crate::rx_schema::validate_write_document(&json_schema, &primary_path, &w.document)
+                    .is_err()
+            }) {
+                let mut kept = Vec::with_capacity(document_writes.len());
+                for write in document_writes.drain(..) {
+                    match crate::rx_schema::validate_write_document(
+                        &json_schema,
+                        &primary_path,
+                        &write.document,
+                    ) {
+                        Ok(()) => kept.push(write),
+                        Err(message) => {
+                            let document_id = write
+                                .document
+                                .get(&primary_path)
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            validation_errors.push(crate::types::RxStorageWriteError {
+                                status: 422,
+                                is_error: true,
+                                document_id,
+                                write_row: write,
+                                document_in_db: None,
+                                validation_errors: vec![json!({ "message": message })],
+                                schema: None,
+                                attachment_id: None,
+                            });
+                        }
+                    }
+                }
+                document_writes = kept;
+            }
+
             let mut docs_in_db = HashMap::new();
             {
                 // Only load the documents we are actually writing, not the whole
@@ -442,7 +486,8 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
                 &document_writes,
                 &context,
             );
-            let error = categorized.errors;
+            let mut error = categorized.errors;
+            error.extend(validation_errors);
 
             for row in categorized.bulk_insert_docs.iter() {
                 insert_document(&tx, &table_name, &primary_path, &row.document)?;
