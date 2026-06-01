@@ -1,4 +1,4 @@
-<main class="creator-module" data-creator-root>
+<main class="creator-module" data-creator-root data-resize-frame>
   <!-- Linke Spalte: Sidebar mit Glassmorphic Design -->
   <section class="creator-pane creator-left" aria-label="Configuration & Prompts">
     <div class="creator-sidebar-content">
@@ -106,7 +106,7 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" aria-label="Linke Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--creator-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <!-- Mittlere Spalte: Workbench / Editor & Live Terminal -->
   <section class="creator-pane creator-center" aria-label="Build & Deployment Workbench">
@@ -149,7 +149,7 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="right" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen"></button>
 
   <!-- Rechte Spalte: Bestehende Custom-Apps & CTOX-Generator-Prompts -->
   <section class="creator-pane creator-right" aria-label="Installierte Custom-Apps und CTOX-Prompts">

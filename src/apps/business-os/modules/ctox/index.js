@@ -755,6 +755,13 @@ function applyHarnessColumnWidth(host, width) {
 }
 
 function wireColumnResize(state) {
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handle in
+  // index.html declaratively. We must NOT DIY-wire it here or the handle gets
+  // double-wired. Return a no-op teardown; mount/unmount semantics are preserved.
+  return () => {};
+
+  // eslint-disable-next-line no-unreachable
   const harness = state.ctx.host.querySelector('[data-ctox-harness]');
   const handle = state.ctx.host.querySelector('[data-ctox-column-resizer]');
   if (!harness || !handle) return () => {};

@@ -1,4 +1,4 @@
-<div class="calendar-app" data-calendar-root>
+<div class="calendar-app" data-calendar-root data-resize-frame>
   <!-- LEFT PANEL: Mini-Calendar, Calendars List & Booking Links -->
   <aside class="calendar-panel calendar-left-pane" id="calendar-left">
     <header class="ctox-pane-header">
@@ -38,8 +38,8 @@
     </div>
   </aside>
 
-  <!-- LEFT RESIZER -->
-  <div class="calendar-col-resizer" role="separator" aria-label="Linke Spaltenbreite anpassen" data-calendar-col-resizer="left" data-resizer="left"></div>
+  <!-- LEFT RESIZER (shell-global, app.js setupModuleResizers) -->
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--calendar-left-width" data-resizer-min="250" data-resizer-max="450" aria-label="Linke Spaltenbreite anpassen"></button>
 
   <!-- CENTER PANEL: EventCalendar View -->
   <main class="calendar-panel calendar-center-pane" id="calendar-center">
@@ -67,8 +67,8 @@
     </div>
   </main>
 
-  <!-- RIGHT RESIZER -->
-  <div class="calendar-col-resizer" role="separator" aria-label="Rechte Spaltenbreite anpassen" data-calendar-col-resizer="right" data-resizer="right"></div>
+  <!-- RIGHT RESIZER (shell-global, app.js setupModuleResizers) -->
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--calendar-right-width" data-resizer-min="200" data-resizer-max="400" aria-label="Rechte Spaltenbreite anpassen"></button>
 
   <!-- RIGHT PANEL: Bookings & Active Holds Auditing -->
   <aside class="calendar-panel calendar-right-pane" id="calendar-right">

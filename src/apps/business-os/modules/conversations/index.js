@@ -292,29 +292,16 @@ export async function mount(ctx) {
   root.style.setProperty('--conversations-left-width', `${savedLeftWidth}px`);
   root.style.setProperty('--conversations-right-width', `${savedRightWidth}px`);
 
-  const resizerL = leftResizerEl ? new CtoxResizer({
-    resizerEl: leftResizerEl,
-    containerEl: root,
-    cssVar: '--conversations-left-width',
-    side: 'left',
-    minWidth: 260,
-    maxWidth: 550,
-    onResize: (width) => {
-      localStorage.setItem(leftStorageKey, width);
-    }
-  }) : null;
-
-  const resizerR = rightResizerEl ? new CtoxResizer({
-    resizerEl: rightResizerEl,
-    containerEl: root,
-    cssVar: '--conversations-right-width',
-    side: 'right',
-    minWidth: 260,
-    maxWidth: 550,
-    onResize: (width) => {
-      localStorage.setItem(rightStorageKey, width);
-    }
-  }) : null;
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handles in
+  // index.html declaratively (drag + keyboard + per-module localStorage). We must
+  // NOT DIY-wire them here or each handle gets double-wired. Leave the references in
+  // place (null) so the unmount cleanup below stays valid.
+  const resizerL = null;
+  const resizerR = null;
+  void leftResizerEl;
+  void rightResizerEl;
+  void CtoxResizer;
 
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;

@@ -306,6 +306,14 @@ async function ensureStyles() {
 }
 
 function setupResizers(host) {
+  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
+  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handles in
+  // index.html declaratively (drag + keyboard + per-module localStorage). We must
+  // NOT DIY-wire them here or each handle gets double-wired. Return a no-op teardown;
+  // the mount() call site keeps a valid cleanup reference.
+  return () => {};
+
+  // eslint-disable-next-line no-unreachable
   const containerEl = host.querySelector('[data-creator-root]') || host;
   const resizers = [];
   const configs = [
