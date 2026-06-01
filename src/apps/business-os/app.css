@@ -5099,3 +5099,197 @@ body[data-shell-taskbar-open] .drawer-bottom {
   bottom: calc(var(--shell-taskbar-safe-area) + env(safe-area-inset-bottom, 0px));
   max-height: min(420px, calc(80svh - var(--shell-taskbar-safe-area)));
 }
+
+/* ───────────────────────────────────────────────────────────────────────────
+   Module shell chrome that app.js (commit a47f2f2ca) introduced WITHOUT its CSS.
+   renderModuleAppBar()  -> .module-appbar
+   renderModuleFrame()   -> auto-derived .module-loading-shadow (replaced the old
+                            per-module .module-loading-shell) + .module-loading-note
+   declarative resizing  -> .ctox-column-resizer inside [data-resize-frame]
+   Without these rules the app bar, the loading shell, and the resize handles
+   render unstyled — a blank loading screen and ungrabbable dividers.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Per-module top app bar (icon + title left, actions right). */
+.module-appbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 14px;
+  min-height: 44px;
+  flex: none;
+  border-bottom: 1px solid var(--line, #303b40);
+  background: var(--surface, #171d20);
+}
+.module-appbar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--text, #eef4f6);
+}
+.module-appbar-title > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.module-appbar-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--accent, #6cb8aa);
+}
+.module-appbar-icon svg { width: 100%; height: 100%; }
+.module-appbar-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.module-appbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line, #303b40);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted, #9aa8ae);
+  cursor: pointer;
+}
+.module-appbar-button:hover { color: var(--text, #eef4f6); border-color: var(--accent, #6cb8aa); }
+.module-appbar-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Auto-derived loading shell ("shadow"): applyLoadingShadow() injects the
+   module's own (emptied) index.html into .module-loading-shadow and loads its
+   index.css, then these rules flatten that real markup into a monochrome shimmer
+   so the user sees the SHAPE of the app loading in. Until the markup arrives the
+   generic fallback frame shimmers in its place. */
+.module-content { position: relative; min-height: 0; }
+.module-loading-shadow {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  padding: 12px;
+  background: var(--bg, #101416);
+  pointer-events: none;
+  z-index: 4;
+}
+.module-loading-shadow,
+.module-loading-shadow * {
+  color: transparent !important;
+  text-shadow: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  fill: transparent !important;
+  stroke: transparent !important;
+  outline: none !important;
+}
+.module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
+  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row) {
+  background-color: color-mix(in srgb, var(--surface-2, #20282c) 78%, var(--text, #eef4f6) 7%) !important;
+  border-radius: 6px !important;
+  position: relative;
+  overflow: hidden;
+}
+.module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
+  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%,
+    color-mix(in srgb, var(--text, #eef4f6) 12%, transparent) 50%, transparent 100%);
+  transform: translateX(-100%);
+  animation: ctox-mls-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes ctox-mls-shimmer { 100% { transform: translateX(100%); } }
+
+/* Generic fallback frame + shimmer fillers (renderLoadingShadowFallback /
+   fillEmptyPanes): a 2-pane skeleton shown before the markup is fetched and for
+   panes the module fills from JS. */
+.module-loading-shadow-frame {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(420px, 1.8fr);
+  gap: 12px;
+  height: 100%;
+}
+.module-loading-shadow-pane {
+  border: 1px solid var(--line, #303b40);
+  border-radius: 14px;
+  background: var(--surface, #171d20);
+  padding: 14px;
+  min-height: 0;
+  overflow: hidden;
+}
+.module-loading-shadow-fill { display: flex; flex-direction: column; gap: 12px; }
+.mls-head { height: 18px; width: 45%; }
+.mls-row { height: 12px; width: 100%; }
+.mls-row:nth-child(4n) { width: 70%; }
+
+/* "<App> wird geladen" note, centered over the shadow; fades once the real
+   markup shadow has been injected (is-pending removed). */
+.module-loading-note {
+  position: absolute;
+  inset-block-start: 16px;
+  inset-inline: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  color: var(--muted, #9aa8ae);
+  pointer-events: none;
+}
+.module-loading-note strong { color: var(--text, #eef4f6); font-size: 14px; }
+.module-loading-note span { font-size: 12px; }
+.module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0; }
+
+/* Declarative column resizer handle. Modules put a
+   `.ctox-column-resizer[data-resizer-var]` inside a `[data-resize-frame]` grid
+   track (e.g. research's grid has 12px tracks between columns); setupModuleResizers
+   wires the drag. The handle must fill that track and be grabbable. */
+[data-resize-frame] { position: relative; }
+.ctox-column-resizer {
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  min-width: 8px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+  position: relative;
+  touch-action: none;
+  z-index: 3;
+}
+.ctox-column-resizer::before {
+  content: "";
+  position: absolute;
+  inset-block: 8px;
+  inset-inline-start: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  border-radius: 2px;
+  background: var(--line, #303b40);
+  transition: background 0.12s ease, width 0.12s ease;
+}
+.ctox-column-resizer:hover::before,
+.ctox-column-resizer:focus-visible::before,
+.ctox-column-resizer.is-active::before {
+  background: var(--accent, #6cb8aa);
+  width: 4px;
+}
+.ctox-column-resizer:focus-visible { outline: 2px solid var(--accent, #6cb8aa); outline-offset: -2px; }
+body.is-resizing { cursor: col-resize; user-select: none; }
+body.is-resizing * { cursor: col-resize !important; }
