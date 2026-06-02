@@ -203,10 +203,10 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         respond_options(request)?;
         return Ok(());
     }
-    // RxDB/WebRTC-only data plane: all Business OS HTTP data APIs are hard-disabled.
-    // The ChatGPT subscription-auth flow is the sole HTTP exception (it cannot run
-    // over the WebRTC mesh because it brokers an external OAuth callback).
-    if path.starts_with("/api/business-os") && !is_subscription_auth_path(path) {
+    // RxDB/WebRTC-only data plane: Business OS HTTP data APIs stay disabled by
+    // default. Exceptions are small control bridges that cannot rely on the
+    // browser WebRTC mesh being healthy yet.
+    if path.starts_with("/api/business-os") && !is_business_os_http_exception_path(path) {
         respond_status(
             request,
             410,
@@ -509,15 +509,49 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                 respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
             }
         }
+        (Method::Get, "/api/business-os/commands/status") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let command_id = query_param(&url, "command_id").unwrap_or_default();
+                if command_id.trim().is_empty() {
+                    respond_status(request, 400, "command_id is required")?;
+                } else {
+                    let record = store::pull_business_command_status_record(root, &command_id)?;
+                    respond_json_value(
+                        request,
+                        serde_json::json!({
+                            "ok": record.is_some(),
+                            "command_id": command_id,
+                            "command": record,
+                        }),
+                    )?;
+                }
+            }
+        }
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
         (Method::Post, "/api/business-os/commands") => {
-            respond_status(
-                request,
-                410,
-                "Business OS commands must be written through RxDB",
-            )?;
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else if !store::session_can_manage_all(&session) {
+                respond_status(request, 403, "chef or admin role required")?;
+            } else {
+                let body = read_json(&mut request)?;
+                let mut document = body.get("command").cloned().unwrap_or(body);
+                stamp_business_command_session(&mut document, &session);
+                let stored = super::rxdb_peer::enqueue_business_command_document(root, document)?;
+                respond_json_value(
+                    request,
+                    serde_json::json!({
+                        "ok": true,
+                        "command": stored,
+                    }),
+                )?;
+            }
         }
         // ---------- Channels tab ----------
         (Method::Get, "/api/business-os/channels/accounts") => {
@@ -685,11 +719,48 @@ fn is_subscription_auth_path(path: &str) -> bool {
     )
 }
 
+fn is_business_os_http_exception_path(path: &str) -> bool {
+    is_subscription_auth_path(path)
+        || path == "/api/business-os/commands/status"
+        || path == "/api/business-os/commands"
+}
+
 fn request_session(request: &Request) -> store::BusinessOsSession {
     let auth_header =
         header_value(request, "Authorization").or_else(|| login_cookie_auth_header(request));
     let session_header = header_value(request, "X-CTOX-Business-OS-Session");
     store::session(auth_header.as_deref(), session_header.as_deref())
+}
+
+fn stamp_business_command_session(document: &mut Value, session: &store::BusinessOsSession) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    let context = object
+        .entry("client_context".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    if !context.is_object() {
+        *context = serde_json::json!({});
+    }
+    let Some(context_object) = context.as_object_mut() else {
+        return;
+    };
+    context_object
+        .entry("transport".to_string())
+        .or_insert_with(|| Value::String("business-os-native-command-api".to_string()));
+    if context_object.get("actor").is_some() {
+        return;
+    }
+    if let Some(user) = session.user.as_ref() {
+        context_object.insert(
+            "actor".to_string(),
+            serde_json::json!({
+                "id": user.id.clone(),
+                "display_name": user.display_name.clone(),
+                "role": user.role.clone(),
+            }),
+        );
+    }
 }
 
 fn query_param(url_raw: &str, key: &str) -> Option<String> {

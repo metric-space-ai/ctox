@@ -1694,7 +1694,6 @@ fn install_data_channel(
     let message_subject = handler.message_subject.clone();
     let response_subject = handler.response_subject.clone();
     let connect_subject = handler.connect_subject.clone();
-    let disconnect_subject = handler.disconnect_subject.clone();
     let error_subject = handler.error_subject.clone();
     let handler_for_task = Arc::clone(&handler);
     let data_channel_for_task = Arc::clone(&data_channel);
@@ -1796,7 +1795,6 @@ fn install_data_channel(
                 }
                 DataChannelEvent::OnClose => {
                     backpressure_for_task.clear_high();
-                    disconnect_subject.next(peer_for_task.clone());
                     break;
                 }
                 DataChannelEvent::OnError => {
@@ -1818,6 +1816,7 @@ fn install_data_channel(
             .backpressure
             .lock()
             .remove(&peer_for_task);
+        remove_peer(&handler_for_task, &peer_for_task);
     });
 
     if let Some(entry) = handler.peers.lock().get_mut(&remote_peer_id) {

@@ -56,6 +56,11 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
 const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
+const SETUP_WIZARD_MODULE_ID: &str = "setup-wizard";
+const BUSINESS_PROFILE_COLLECTION: &str = "business_profile";
+const BUSINESS_PROFILE_RECORD_ID: &str = "default";
+const BUSINESS_ONBOARDING_COLLECTION: &str = "business_onboarding_state";
+const BUSINESS_ONBOARDING_RECORD_ID: &str = "default";
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -271,6 +276,36 @@ pub struct RuntimeSettingsRequest {
     pub max_run_secs: Option<u64>,
     #[serde(default)]
     pub api_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BusinessProfileSaveRequest {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub company_name: String,
+    #[serde(default)]
+    pub operator_name: String,
+    #[serde(default)]
+    pub mission_statement: String,
+    #[serde(default)]
+    pub vision_statement: String,
+    #[serde(default)]
+    pub operating_principles: Vec<String>,
+    #[serde(default)]
+    pub communication_paths: Value,
+    #[serde(default)]
+    pub routing_policy: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OnboardingCompleteRequest {
+    #[serde(default)]
+    pub profile_id: String,
+    #[serde(default)]
+    pub setup_module_id: String,
+    #[serde(default = "default_true")]
+    pub uninstall_setup_wizard: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1326,33 +1361,62 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let harness_flow = harness_flow_projection(root);
     let queue_health = harness_queue_health(root);
     let web_stack = web_stack_projection(root, &env_map);
+    let chat_model = env_map
+        .get("CTOX_CHAT_MODEL")
+        .or_else(|| env_map.get("CTOX_CHAT_MODEL_BASE"))
+        .cloned()
+        .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
+        .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
+        .unwrap_or_default();
+    let upstream_base_url = runtime_state
+        .as_ref()
+        .filter(|state| !state.source.is_local())
+        .map(|state| state.upstream_base_url.clone())
+        .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL").cloned())
+        .unwrap_or_default();
+    let fallback_llm_enabled = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
+        && provider.eq_ignore_ascii_case("minimax")
+        && chat_model.eq_ignore_ascii_case("MiniMax-M3")
+        && upstream_base_url.contains("/api/fallback-llm");
+    let fallback_llm_model = env_map
+        .get("CTOX_FALLBACK_LLM_MODEL")
+        .cloned()
+        .filter(|model| !model.trim().is_empty())
+        .unwrap_or_else(|| chat_model.clone());
+    let fallback_llm_notice = env_map
+        .get("CTOX_FALLBACK_LLM_NOTICE")
+        .cloned()
+        .unwrap_or_else(|| {
+            "CTOX nutzt das limitierte Fallback-Modell aus der ctox.dev Cloud-Subscription."
+                .to_owned()
+        });
     let updated_at_ms = now_ms() as u64;
     Ok(serde_json::json!({
         "id": "runtime-settings",
         "ok": true,
         "can_manage": true,
         "updated_at_ms": updated_at_ms,
+        "fallback_llm": {
+            "enabled": fallback_llm_enabled,
+            "provider": "ctox.dev",
+            "upstream_provider": if fallback_llm_enabled { provider.clone() } else { String::new() },
+            "model": fallback_llm_model,
+            "limited": fallback_llm_enabled,
+            "message": if fallback_llm_enabled { fallback_llm_notice } else { String::new() }
+        },
         "harness_flow": harness_flow,
         "queue_health": queue_health,
         "web_stack": web_stack,
         "runtime": {
             "source": source,
             "provider": provider,
-            "chat_model": env_map.get("CTOX_CHAT_MODEL")
-                .or_else(|| env_map.get("CTOX_CHAT_MODEL_BASE"))
-                .cloned()
-                .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
-                .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
-                .unwrap_or_default(),
+            "chat_model": chat_model,
             "preset": preset,
             "context": context,
             "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(1800),
-            "upstream_base_url": runtime_state.as_ref()
-                .filter(|state| !state.source.is_local())
-                .map(|state| state.upstream_base_url.clone())
-                .unwrap_or_default()
+            "upstream_base_url": upstream_base_url
         },
         "auth": {
             "mode": auth_mode,
@@ -1375,6 +1439,15 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "message": diagnostics_message
         }
     }))
+}
+
+fn runtime_env_truthy(value: Option<&String>) -> bool {
+    matches!(
+        value
+            .map(|raw| raw.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "yes" | "on" | "enabled")
+    )
 }
 
 fn harness_flow_projection(root: &Path) -> Value {
@@ -1537,6 +1610,7 @@ fn web_stack_secret_configured(
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let app_root = resolve_business_os_app_root(root)?;
+    ensure_setup_wizard_installed_if_needed(root, &app_root)?;
     let modules = load_module_manifests(&app_root)?;
     let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
@@ -1571,6 +1645,70 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "updated_at_ms": now_ms(),
         "_deleted": false,
     }))
+}
+
+fn ensure_setup_wizard_installed_if_needed(root: &Path, app_root: &Path) -> anyhow::Result<()> {
+    if business_onboarding_completed(root)? {
+        return Ok(());
+    }
+    let source = app_root.join("modules").join(SETUP_WIZARD_MODULE_ID);
+    let target = app_root.join("installed-modules").join(SETUP_WIZARD_MODULE_ID);
+    if !source.join("module.json").is_file() || target.exists() {
+        return Ok(());
+    }
+    copy_dir_recursive(&source, &target)?;
+    let manifest_path = target.join("module.json");
+    let text = fs::read_to_string(&manifest_path)
+        .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+    let mut manifest: Value = serde_json::from_str(&text)
+        .with_context(|| format!("failed to parse {}", manifest_path.display()))?;
+    manifest["id"] = Value::String(SETUP_WIZARD_MODULE_ID.to_owned());
+    manifest["entry"] = Value::String(format!(
+        "installed-modules/{SETUP_WIZARD_MODULE_ID}/index.html"
+    ));
+    manifest["install_scope"] = Value::String("installed".to_owned());
+    manifest["default_installed"] = Value::Bool(false);
+    manifest["source"] = Value::String("installed".to_owned());
+    fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
+        .with_context(|| format!("failed to write {}", manifest_path.display()))?;
+    Ok(())
+}
+
+fn business_onboarding_completed(root: &Path) -> anyhow::Result<bool> {
+    let conn = open_store(root)?;
+    let payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+            params![BUSINESS_ONBOARDING_COLLECTION, BUSINESS_ONBOARDING_RECORD_ID],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(payload) = payload else {
+        return Ok(false);
+    };
+    let value: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+    Ok(onboarding_value_completed(&value))
+}
+
+fn onboarding_value_completed(value: &Value) -> bool {
+    if value.get("_deleted").and_then(Value::as_bool).unwrap_or(false)
+        || value
+            .get("is_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    {
+        return false;
+    }
+    value
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|status| status.eq_ignore_ascii_case("completed"))
+        || value
+            .get("completed_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            > 0
 }
 
 pub fn upsert_user(
@@ -1757,6 +1895,88 @@ pub fn save_runtime_settings_command(
     }))
 }
 
+pub fn save_business_profile_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: BusinessProfileSaveRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    let profile = save_business_profile(root, session, request)?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "saved",
+        "profile": profile
+    }))
+}
+
+pub fn complete_onboarding_command(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: OnboardingCompleteRequest,
+) -> anyhow::Result<Value> {
+    anyhow::ensure!(
+        session_can_manage_all(session),
+        "chef or admin role required"
+    );
+    let app_root = resolve_business_os_app_root(root)?;
+    let conn = open_store(root)?;
+    seed_session_user(&conn, session)?;
+    let now = now_ms() as i64;
+    let profile_id = source_sanitize_slug(if request.profile_id.trim().is_empty() {
+        BUSINESS_PROFILE_RECORD_ID
+    } else {
+        &request.profile_id
+    });
+    let setup_module_id = source_sanitize_slug(if request.setup_module_id.trim().is_empty() {
+        SETUP_WIZARD_MODULE_ID
+    } else {
+        &request.setup_module_id
+    });
+    let completed_by = session_user_id(session).unwrap_or("").to_owned();
+    let onboarding = serde_json::json!({
+        "id": BUSINESS_ONBOARDING_RECORD_ID,
+        "status": "completed",
+        "profile_id": profile_id,
+        "setup_module_id": setup_module_id,
+        "completed_by": completed_by,
+        "completed_at_ms": now,
+        "version": 1,
+        "updated_at_ms": now
+    });
+    upsert_business_record(
+        &conn,
+        BUSINESS_ONBOARDING_COLLECTION,
+        BUSINESS_ONBOARDING_RECORD_ID,
+        now,
+        onboarding,
+    )?;
+
+    let mut deleted_module = false;
+    if request.uninstall_setup_wizard {
+        let target = app_root.join("installed-modules").join(SETUP_WIZARD_MODULE_ID);
+        if target.is_dir() {
+            delete_installed_module(
+                &app_root,
+                root,
+                ModuleDeleteRequest {
+                    module_id: SETUP_WIZARD_MODULE_ID.to_owned(),
+                },
+            )?;
+            deleted_module = true;
+        }
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "status": "completed",
+        "module_id": SETUP_WIZARD_MODULE_ID,
+        "deleted_module": deleted_module
+    }))
+}
+
 pub fn start_subscription_auth_command(
     root: &Path,
     session: &BusinessOsSession,
@@ -1915,6 +2135,72 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         env_map.insert(key_name.to_owned(), api_key.to_owned());
     }
     crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
+}
+
+fn save_business_profile(
+    root: &Path,
+    session: &BusinessOsSession,
+    request: BusinessProfileSaveRequest,
+) -> anyhow::Result<Value> {
+    let conn = open_store(root)?;
+    seed_session_user(&conn, session)?;
+    let now = now_ms() as i64;
+    let profile_id = source_sanitize_slug(if request.id.trim().is_empty() {
+        BUSINESS_PROFILE_RECORD_ID
+    } else {
+        &request.id
+    });
+    anyhow::ensure!(!profile_id.is_empty(), "profile id is required");
+    let existing_payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = ?1 AND record_id = ?2 AND deleted = 0",
+            params![BUSINESS_PROFILE_COLLECTION, profile_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let existing = existing_payload
+        .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+        .unwrap_or(Value::Null);
+    let created_at_ms = existing
+        .get("created_at_ms")
+        .and_then(Value::as_i64)
+        .filter(|value| *value > 0)
+        .unwrap_or(now);
+    let principles = request
+        .operating_principles
+        .into_iter()
+        .map(|item| item.trim().to_owned())
+        .filter(|item| !item.is_empty())
+        .collect::<Vec<_>>();
+    let profile = serde_json::json!({
+        "id": profile_id.clone(),
+        "company_name": request.company_name.trim(),
+        "operator_name": request.operator_name.trim(),
+        "mission_statement": request.mission_statement.trim(),
+        "vision_statement": request.vision_statement.trim(),
+        "operating_principles": principles,
+        "communication_paths": object_or_empty(request.communication_paths),
+        "routing_policy": object_or_empty(request.routing_policy),
+        "created_at_ms": created_at_ms,
+        "updated_at_ms": now
+    });
+    upsert_business_record(
+        &conn,
+        BUSINESS_PROFILE_COLLECTION,
+        &profile_id,
+        now,
+        profile.clone(),
+    )?;
+    Ok(profile)
+}
+
+fn object_or_empty(value: Value) -> Value {
+    if value.is_object() {
+        value
+    } else {
+        serde_json::json!({})
+    }
 }
 
 fn runtime_settings_preset(
@@ -5900,6 +6186,34 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 .context("invalid ctox.runtime_settings.save payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
             let outcome = save_runtime_settings_command(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.business_profile.save" => {
+            let mutation: BusinessProfileSaveRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.business_profile.save payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let outcome = save_business_profile_command(root, &session, mutation)?;
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                outcome,
+            );
+        }
+        "ctox.onboarding.complete" => {
+            let request: OnboardingCompleteRequest = serde_json::from_value(command.payload.clone())
+                .context("invalid ctox.onboarding.complete payload")?;
+            let session = rxdb_authenticated_session(root, &command)?;
+            let outcome = complete_onboarding_command(root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -14385,9 +14699,7 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            serde_json::to_string(web_stack)?.contains("\"capture_script_available\"")
-        );
+        assert!(serde_json::to_string(web_stack)?.contains("\"capture_script_available\""));
         assert!(
             !serde_json::to_string(web_stack)?.contains("\"capture_script\":"),
             "browser capture script bodies must stay out of the RxDB projection"

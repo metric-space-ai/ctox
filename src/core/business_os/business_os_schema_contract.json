@@ -672,6 +672,102 @@
     ],
     "additionalProperties": true
   },
+  "business_onboarding_state": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "status": {
+        "type": "string"
+      },
+      "profile_id": {
+        "type": "string"
+      },
+      "setup_module_id": {
+        "type": "string"
+      },
+      "completed_by": {
+        "type": "string"
+      },
+      "completed_at_ms": {
+        "type": "number"
+      },
+      "dismissed_at_ms": {
+        "type": "number"
+      },
+      "version": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "business_profile": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "company_name": {
+        "type": "string"
+      },
+      "operator_name": {
+        "type": "string"
+      },
+      "mission_statement": {
+        "type": "string"
+      },
+      "vision_statement": {
+        "type": "string"
+      },
+      "operating_principles": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "communication_paths": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "routing_policy": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "company_name",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "business_users": {
     "version": 0,
     "primaryKey": "id",

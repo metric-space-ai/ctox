@@ -32,6 +32,8 @@ export async function openReactSettings({
     commandStatus: '',
     runtimeSettings: null,
     runtimeLoading: false,
+    profileSettings: null,
+    profileLoading: false,
     users: null,
     canManageUsers: false,
     modules: Array.isArray(modules) ? modules : [],
@@ -63,6 +65,11 @@ export async function openReactSettings({
   const ensureRuntimeCollections = async () => {
     await Promise.allSettled([
       sync?.startCollection?.('ctox_runtime_settings'),
+    ]);
+  };
+  const ensureProfileCollections = async () => {
+    await Promise.allSettled([
+      sync?.startCollection?.('business_profile'),
     ]);
   };
   const ensureModuleCatalogCollections = async () => {
@@ -130,6 +137,21 @@ export async function openReactSettings({
     render();
   };
 
+  const refreshProfileSettings = async () => {
+    settingsState.profileLoading = true;
+    render();
+    try {
+      await ensureProfileCollections();
+      settingsState.profileSettings = await loadBusinessProfile({ db });
+      settingsState.commandStatus = '';
+    } catch (error) {
+      settingsState.commandStatus = `Profil konnte nicht geladen werden: ${error.message || error}`;
+      settingsState.profileSettings = defaultBusinessProfile();
+    }
+    settingsState.profileLoading = false;
+    render();
+  };
+
   const render = () => {
     body.innerHTML = settingsTemplate({
       modules,
@@ -145,6 +167,8 @@ export async function openReactSettings({
       commandStatus: settingsState.commandStatus,
       runtimeSettings: settingsState.runtimeSettings,
       runtimeLoading: settingsState.runtimeLoading,
+      profileSettings: settingsState.profileSettings,
+      profileLoading: settingsState.profileLoading,
       users: settingsState.users,
       canManageUsers: settingsState.canManageUsers,
       editingModuleId: settingsState.editingModuleId,
@@ -175,6 +199,9 @@ export async function openReactSettings({
         render();
         if (settingsState.tab === 'runtime' && !settingsState.runtimeSettings) {
           refreshRuntimeSettings();
+        }
+        if (settingsState.tab === 'profile' && !settingsState.profileSettings) {
+          refreshProfileSettings();
         }
         if (settingsState.tab === 'admin' && settingsState.templates === null) {
           refreshManagedModules();
@@ -230,6 +257,22 @@ export async function openReactSettings({
       render();
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
+    body.querySelector('[data-profile-save]')?.addEventListener('click', async () => {
+      const profilePayload = profilePayloadFromForm(body);
+      settingsState.commandStatus = 'Business Profil wird gespeichert...';
+      render();
+      try {
+        settingsState.profileSettings = await saveBusinessProfile(
+          profilePayload,
+          { commandBus, db, session, sync },
+        );
+        settingsState.commandStatus = 'Business Profil gespeichert.';
+      } catch (error) {
+        settingsState.commandStatus = String(error?.message || error);
+      }
+      render();
+    });
+    body.querySelector('[data-profile-refresh]')?.addEventListener('click', refreshProfileSettings);
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
       const authWindow = window.open(CHATGPT_DEVICE_AUTH_URL, 'ctox-chatgpt-subscription');
       settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
@@ -436,6 +479,9 @@ export async function openReactSettings({
 
   render();
   refreshRuntimeSettings();
+  if (settingsState.tab === 'profile') {
+    refreshProfileSettings();
+  }
   if (settingsState.tab === 'channels') {
     ensureChannelCollections().then(refreshChannelAccounts).catch(refreshChannelAccounts);
     startChannelAccountsSub();
@@ -460,6 +506,8 @@ function settingsTemplate({
   commandStatus,
   runtimeSettings,
   runtimeLoading,
+  profileSettings,
+  profileLoading,
   users,
   canManageUsers,
   editingModuleId,
@@ -486,6 +534,7 @@ function settingsTemplate({
 
     <nav class="settings-tabs" aria-label="Settings Bereiche">
       ${tabButton('runtime', 'Runtime', tab)}
+      ${tabButton('profile', 'Profil', tab)}
       ${tabButton('channels', 'Channels', tab)}
       ${tabButton('sync', 'Sync', tab)}
       ${tabButton('users', 'Nutzer', tab)}
@@ -494,6 +543,7 @@ function settingsTemplate({
 
     <div class="settings-scroll">
       ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading) : ''}
+      ${tab === 'profile' ? profilePanel(isAdmin, profileSettings, profileLoading) : ''}
       ${tab === 'channels' ? channelsPanel(channels) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
@@ -586,6 +636,55 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
         <label><span>Founder Review</span><select data-policy-review ${isAdmin ? '' : 'disabled'}><option value="strict-founder-review">Externe Nachrichten immer prüfen</option><option value="internal-autonomy">Interne Tasks autonom</option></select></label>
       </div>
       ${isAdmin ? `<button class="text-button settings-primary" type="button" data-settings-command="policy">Policy prüfen lassen</button>` : ''}
+    </section>
+  `;
+}
+
+function profilePanel(isAdmin, profileSettings, profileLoading) {
+  const profile = {
+    ...defaultBusinessProfile(),
+    ...(profileSettings || {}),
+    communication_paths: {
+      ...defaultBusinessProfile().communication_paths,
+      ...(profileSettings?.communication_paths || {}),
+    },
+    routing_policy: {
+      ...defaultBusinessProfile().routing_policy,
+      ...(profileSettings?.routing_policy || {}),
+    },
+  };
+  const canManage = Boolean(isAdmin);
+  const principles = Array.isArray(profile.operating_principles) ? profile.operating_principles.join('\n') : '';
+  const channels = Array.isArray(profile.communication_paths.preferred_channels)
+    ? profile.communication_paths.preferred_channels.join('\n')
+    : '';
+  return `
+    <section class="settings-section">
+      <header>
+        <h3>Business Profil</h3>
+        <span>${escapeHtml(profileLoading ? 'Profil wird gelesen.' : 'Mission, Vision und operative Leitplanken.')}</span>
+      </header>
+      <div class="settings-grid">
+        <label><span>Organisation</span><input data-profile-company value="${escapeAttr(profile.company_name)}" ${canManage ? '' : 'disabled'} /></label>
+        <label><span>Verantwortlich</span><input data-profile-operator value="${escapeAttr(profile.operator_name)}" ${canManage ? '' : 'disabled'} /></label>
+        <label><span>Mission</span><textarea data-profile-mission ${canManage ? '' : 'disabled'}>${escapeHtml(profile.mission_statement)}</textarea></label>
+        <label><span>Vision</span><textarea data-profile-vision ${canManage ? '' : 'disabled'}>${escapeHtml(profile.vision_statement)}</textarea></label>
+        <label><span>Operating Principles</span><textarea data-profile-principles ${canManage ? '' : 'disabled'}>${escapeHtml(principles)}</textarea></label>
+        <label><span>Kommunikationspfade</span><textarea data-profile-channels ${canManage ? '' : 'disabled'}>${escapeHtml(channels)}</textarea></label>
+        <label><span>Eskalation an</span><input data-profile-escalation value="${escapeAttr(profile.communication_paths.escalation_target || '')}" ${canManage ? '' : 'disabled'} /></label>
+        <label><span>Externe Zusagen</span><select data-profile-external-policy ${canManage ? '' : 'disabled'}>
+          ${option('founder_review', 'Founder Review erforderlich', profile.routing_policy.external_contact)}
+          ${option('chef_review', 'Chef/Admin Review erforderlich', profile.routing_policy.external_contact)}
+          ${option('autonomous_after_policy', 'Autonom nach Policy', profile.routing_policy.external_contact)}
+        </select></label>
+        <label><span>Kommunikationsnotizen</span><textarea data-profile-communication-notes ${canManage ? '' : 'disabled'}>${escapeHtml(profile.communication_paths.notes || '')}</textarea></label>
+      </div>
+      ${canManage ? `
+        <div class="runtime-actions">
+          <button class="text-button settings-primary" type="button" data-profile-save>Profil speichern</button>
+          <button class="text-button" type="button" data-profile-refresh>Neu laden</button>
+        </div>
+      ` : ''}
     </section>
   `;
 }
@@ -976,6 +1075,44 @@ function runtimeSettingsWithDraft(current, draft) {
   };
 }
 
+function defaultBusinessProfile() {
+  return {
+    id: 'default',
+    company_name: '',
+    operator_name: '',
+    mission_statement: '',
+    vision_statement: '',
+    operating_principles: [],
+    communication_paths: {
+      preferred_channels: [],
+      escalation_target: '',
+      notes: '',
+    },
+    routing_policy: {
+      external_contact: 'founder_review',
+    },
+  };
+}
+
+function profilePayloadFromForm(root) {
+  return {
+    id: 'default',
+    company_name: root.querySelector('[data-profile-company]')?.value?.trim() || '',
+    operator_name: root.querySelector('[data-profile-operator]')?.value?.trim() || '',
+    mission_statement: root.querySelector('[data-profile-mission]')?.value?.trim() || '',
+    vision_statement: root.querySelector('[data-profile-vision]')?.value?.trim() || '',
+    operating_principles: lines(root.querySelector('[data-profile-principles]')?.value || ''),
+    communication_paths: {
+      preferred_channels: lines(root.querySelector('[data-profile-channels]')?.value || ''),
+      escalation_target: root.querySelector('[data-profile-escalation]')?.value?.trim() || '',
+      notes: root.querySelector('[data-profile-communication-notes]')?.value?.trim() || '',
+    },
+    routing_policy: {
+      external_contact: root.querySelector('[data-profile-external-policy]')?.value || 'founder_review',
+    },
+  };
+}
+
 
 function resolveRole(session) {
   const user = session?.user || {};
@@ -1067,6 +1204,13 @@ function slugify(value) {
     .replace(/^-+|-+$/g, '');
 }
 
+function lines(value) {
+  return String(value || '')
+    .split(/\n+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function initials(value) {
   return String(value || 'C')
     .split(/\s+/)
@@ -1139,6 +1283,53 @@ async function loadRuntimeSettings({ db } = {}) {
   const data = doc?.toJSON?.();
   if (!data) throw new Error('Runtime-Status noch nicht synchronisiert.');
   return data;
+}
+
+async function loadBusinessProfile({ db } = {}) {
+  const coll = db?.collection?.('business_profile');
+  if (!coll) throw new Error('business_profile collection is required for profile settings');
+  const doc = await coll.findOne('default').exec();
+  const data = doc?.toJSON?.();
+  return data && data._deleted !== true && data.is_deleted !== true
+    ? data
+    : defaultBusinessProfile();
+}
+
+async function saveBusinessProfile(payload, { commandBus, db, session, sync } = {}) {
+  const previousProfile = await loadBusinessProfile({ db }).catch(() => null);
+  await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.business_profile.save',
+    moduleId: 'ctox',
+    recordId: 'default',
+    payload,
+    source: 'business-os-settings',
+  });
+  return waitForBusinessProfileProjection(db, {
+    previousUpdatedAtMs: Number(previousProfile?.updated_at_ms || 0),
+  });
+}
+
+async function waitForBusinessProfileProjection(db, options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 10000);
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  while (Date.now() < deadline) {
+    try {
+      const profile = await loadBusinessProfile({ db });
+      if (Number(profile?.updated_at_ms || 0) > Number(options.previousUpdatedAtMs || 0)) {
+        return profile;
+      }
+      lastError = new Error('Business Profil wurde noch nicht aktualisiert.');
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(300);
+  }
+  throw lastError || new Error('Business Profil wurde nicht synchronisiert.');
 }
 
 async function saveRuntimeSettings(payload, { commandBus, db, session, sync } = {}) {

@@ -1,0 +1,43 @@
+{
+  "id": "setup-wizard",
+  "title": "CTOX Setup",
+  "description": "First-start setup for model runtime, mission, vision, and communication paths.",
+  "entry": "modules/setup-wizard/index.html",
+  "collections": [
+    "business_commands",
+    "business_profile",
+    "business_onboarding_state",
+    "ctox_runtime_settings",
+    "communication_accounts"
+  ],
+  "layout": {
+    "shell": "desktop-window",
+    "launch_kind": "desktop-app",
+    "default_width": 1040,
+    "default_height": 720,
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-setup-wizard\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-setup-wizard\" x1=\"2\" y1=\"2\" x2=\"22\" y2=\"22\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#14b8a6\"/><stop offset=\"1\" stop-color=\"#64748b\"/></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-setup-wizard)\" fill-opacity=\"0.13\" stroke=\"url(#grad-setup-wizard)\" stroke-width=\"2\"/><path d=\"M7 9h7M7 13h10M7 17h5\" stroke=\"url(#grad-setup-wizard)\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><circle cx=\"17.5\" cy=\"8.5\" r=\"2.2\" fill=\"url(#grad-setup-wizard)\" stroke=\"currentColor\" stroke-width=\"0.8\"/></svg>",
+    "left": "setup sections",
+    "center": "configuration form",
+    "right": "readiness summary"
+  },
+  "category": "System",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": [
+    "setup",
+    "onboarding",
+    "runtime",
+    "governance"
+  ],
+  "store": {
+    "summary": "Guided first-start setup for CTOX Business OS.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/setup-wizard",
+    "installable": true,
+    "editable_after_install": false,
+    "distribution": "store-module"
+  },
+  "install_scope": "store",
+  "default_installed": false
+}

@@ -57,12 +57,7 @@ async function writeCommandDocument(db, commandId, doc) {
       continue;
     }
     try {
-      const existing = await collection.findOne(commandId).exec();
-      if (existing) {
-        await existing.incrementalPatch(doc);
-      } else {
-        await collection.insert(doc);
-      }
+      await collection.upsert(doc);
       return;
     } catch (error) {
       if (!isClosedRxDbCollectionError(error)) throw error;

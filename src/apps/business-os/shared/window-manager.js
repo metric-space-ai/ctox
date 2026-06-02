@@ -91,10 +91,12 @@ export function createWindowManager({
     const cascadeOffset = (windows.length * CONST.CASCADE_STEP) % Math.max(80, Math.floor(vp.h / 3));
     let baseX = parseInt(persisted?.x ?? options.x ?? 80 + cascadeOffset, 10);
     let baseY = parseInt(persisted?.y ?? options.y ?? 60 + cascadeOffset, 10);
-    const maxX = Math.max(0, vp.w - 100);
-    const maxY = Math.max(vp.top, vp.h - vp.bottom - 100);
-    if (!Number.isFinite(baseX) || baseX < 0 || baseX > maxX) baseX = 24;
-    if (!Number.isFinite(baseY) || baseY < vp.top || baseY > maxY) baseY = Math.max(vp.top, 24);
+    const maxX = Math.max(0, vp.w - width);
+    const maxY = Math.max(vp.top, vp.h - vp.bottom - height);
+    if (!Number.isFinite(baseX)) baseX = 24;
+    if (!Number.isFinite(baseY)) baseY = Math.max(vp.top, 24);
+    baseX = Math.max(0, Math.min(maxX, baseX));
+    baseY = Math.max(vp.top, Math.min(maxY, baseY));
     winEl.style.left = `${baseX}px`;
     winEl.style.top = `${baseY}px`;
 
@@ -181,7 +183,7 @@ export function createWindowManager({
       ownerId,
       container: winEl.querySelector('[data-window-content]'),
       element: winEl,
-      close: () => destroy(id),
+      close: (options) => destroy(id, options),
       setTitle: (next) => {
         const text = String(next ?? '');
         const winIconKey = ownerId ? ownerId.replace(/^(desktop-app|module):/, '') : '';
@@ -355,9 +357,13 @@ export function createWindowManager({
     persistFor(win);
   }
 
-  function destroy(id) {
+  function destroy(id, options = {}) {
     const win = windows.find((w) => w.id === id);
     if (!win || win._destroying) return;
+    if (options?.animation === 'bug-eat') {
+      destroyWithBugEat(win);
+      return;
+    }
     win._destroying = true;
     win.element.classList.add('is-closing');
     const stackIndex = stack.indexOf(id);
@@ -369,6 +375,56 @@ export function createWindowManager({
       if (idx !== -1) windows.splice(idx, 1);
       bus.emit('window:closed', { id, ownerId: win.ownerId });
     }, 180);
+  }
+
+  function destroyWithBugEat(win) {
+    win._destroying = true;
+    const id = win.id;
+    const stackIndex = stack.indexOf(id);
+    if (stackIndex !== -1) stack.splice(stackIndex, 1);
+    focusNextAfter(id);
+
+    const header = win.element.querySelector('[data-window-header]');
+    const actor = document.createElement('div');
+    actor.className = 'shell-window-bug-eater';
+    actor.innerHTML = bugEaterSvg();
+    document.body.append(actor);
+
+    const source = document.querySelector('.ctox-report-fab, .ctox-bug-actor');
+    const sourceRect = source?.getBoundingClientRect?.();
+    const headerRect = header?.getBoundingClientRect?.() || win.element.getBoundingClientRect();
+    const startX = sourceRect?.left ?? Math.max(20, window.innerWidth - 72);
+    const startY = sourceRect?.top ?? Math.max(20, window.innerHeight - 72);
+    const targetX = Math.max(10, headerRect.right - 70);
+    const targetY = Math.max(10, headerRect.top - 11);
+    actor.style.left = `${startX}px`;
+    actor.style.top = `${startY}px`;
+    actor.style.transform = 'translate3d(0, 0, 0) rotate(-12deg)';
+
+    const biteTrack = document.createElement('div');
+    biteTrack.className = 'shell-window-bite-track';
+    biteTrack.innerHTML = Array.from({ length: 8 }, () => '<span></span>').join('');
+    header?.append(biteTrack);
+    win.element.classList.add('is-bug-eating');
+    header?.classList.add('is-being-eaten');
+
+    requestAnimationFrame(() => {
+      actor.style.transform = `translate3d(${targetX - startX}px, ${targetY - startY}px, 0) rotate(-26deg)`;
+      biteTrack.classList.add('is-active');
+    });
+
+    setTimeout(() => {
+      win.element.classList.add('is-closing');
+      actor.classList.add('is-done');
+    }, 940);
+
+    setTimeout(() => {
+      actor.remove();
+      win.element.remove();
+      const idx = windows.findIndex((w) => w.id === id);
+      if (idx !== -1) windows.splice(idx, 1);
+      bus.emit('window:closed', { id, ownerId: win.ownerId });
+    }, 1220);
   }
 
   function destroyAll() {
@@ -785,6 +841,21 @@ function secureToken() {
     return `${buf[0].toString(36)}${buf[1].toString(36)}`;
   }
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function bugEaterSvg() {
+  return `
+    <svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <g fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 23c0-8 6-14 14-14s14 6 14 14v18c0 8-6 14-14 14s-14-6-14-14z" fill="rgba(239,68,68,.16)"/>
+        <path d="M24 26h-9M24 38h-10M48 26h9M48 38h10M30 12l-5-7M42 12l5-7"/>
+        <path d="M36 9v46M25 31h22M26 43h20"/>
+        <circle cx="31" cy="21" r="2" fill="currentColor" stroke="none"/>
+        <circle cx="41" cy="21" r="2" fill="currentColor" stroke="none"/>
+        <path d="M31 50c2 2 8 2 10 0"/>
+      </g>
+    </svg>
+  `;
 }
 
 function stubBus() {

@@ -11,7 +11,9 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260601-resizer-migration1';
+const SETUP_WIZARD_MODULE_ID = 'setup-wizard';
+const ONBOARDING_DONE_KEY = 'ctox.businessOs.onboarding.completed';
+const APP_BUILD = '20260602-setup-wizard4';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -353,7 +355,7 @@ async function loadSyncModule() {
 
 async function loadCommandBusModule() {
   if (!commandBusModulePromise) {
-    commandBusModulePromise = importBusinessOsModule('./shared/command-bus.js?v=20260521-rxdb-db32', 'command bus');
+    commandBusModulePromise = importBusinessOsModule(`./shared/command-bus.js?v=${APP_BUILD}`, 'command bus');
   }
   return commandBusModulePromise;
 }
@@ -361,8 +363,8 @@ async function loadCommandBusModule() {
 async function loadCoreSchemaModules() {
   if (!coreSchemaModulesPromise) {
     coreSchemaModulesPromise = Promise.all([
-      importBusinessOsModule('./modules/ctox/schema.js?v=20260525-file-viewer-command-reuse1', 'ctox core schema'),
-      importBusinessOsModule('./modules/desktop/schema.js?v=20260525-file-viewer-command-reuse1', 'desktop core schema'),
+      importBusinessOsModule(`./modules/ctox/schema.js?v=${APP_BUILD}`, 'ctox core schema'),
+      importBusinessOsModule(`./modules/desktop/schema.js?v=${APP_BUILD}`, 'desktop core schema'),
     ]).then(([ctox, desktop]) => ({ ctox, desktop }));
   }
   return coreSchemaModulesPromise;
@@ -418,6 +420,8 @@ const shellMessages = {
     agentContext: 'Agent-Kontext',
     webrtcSync: 'WebRTC-Sync',
     ctoxNotWorking: 'CTOX Verbindung prüfen',
+    ctoxFallbackLlm: 'Fallback-LLM aktiv',
+    ctoxFallbackLlmTitle: 'CTOX läuft mit dem limitierten Fallback-Modell. Verbinde einen eigenen LLM-Provider für volle Leistung.',
     ctoxStopped: 'CTOX Service ist gerade nicht verfügbar.',
     ctoxStatusUnavailable: 'CTOX Status ist gerade nicht verfügbar.',
     ctoxLastError: 'Letzter Fehler',
@@ -480,6 +484,8 @@ const shellMessages = {
     agentContext: 'Agent context',
     webrtcSync: 'WebRTC sync',
     ctoxNotWorking: 'Check CTOX connection',
+    ctoxFallbackLlm: 'Fallback LLM active',
+    ctoxFallbackLlmTitle: 'CTOX is running on the limited fallback model. Connect your own LLM provider for full performance.',
     ctoxStopped: 'CTOX service is unavailable right now.',
     ctoxStatusUnavailable: 'CTOX status is unavailable right now.',
     ctoxLastError: 'Last error',
@@ -677,7 +683,7 @@ async function bootstrap() {
 
   setStartupProgress(95, 'Workspace ist bereit. CTOX wird gestartet...');
   try {
-    await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
+    await openModule(await resolveStartupModuleId());
     markBootTiming('shellVisibleMs');
     setStatus(shellText('localWorkspace'));
     scheduleBusinessCompanions();
@@ -694,6 +700,73 @@ async function bootstrap() {
   // stays, scheduled off the idle path.
   scheduleModuleScriptPreload();
   refreshRemoteShellStateInBackground();
+}
+
+async function resolveStartupModuleId() {
+  const hashId = currentHashModuleId();
+  if (hashId) return hashId;
+  const fallbackId = state.modules.some((mod) => mod.id === 'ctox')
+    ? 'ctox'
+    : (state.modules[0]?.id || 'ctox');
+  if (!(await shouldOpenSetupWizardOnStartup())) return fallbackId;
+  const setupModule = await ensureSetupWizardStartupModule();
+  if (setupModule) return SETUP_WIZARD_MODULE_ID;
+  return fallbackId;
+}
+
+async function ensureSetupWizardStartupModule() {
+  const existing = state.modules.find((mod) => mod.id === SETUP_WIZARD_MODULE_ID);
+  if (existing) return existing;
+
+  try {
+    const response = await fetch(`modules/${SETUP_WIZARD_MODULE_ID}/module.json?v=${APP_BUILD}`, {
+      cache: 'no-store',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const manifest = await response.json();
+    const id = String(manifest?.id || '').trim();
+    if (id !== SETUP_WIZARD_MODULE_ID) {
+      throw new Error(`unexpected module id ${id || '(empty)'}`);
+    }
+    const setupModule = {
+      ...manifest,
+      source: manifest.source || 'starter',
+      install_scope: manifest.install_scope || manifest.store?.install_scope || 'starter',
+      default_installed: manifest.default_installed === true,
+    };
+    state.modules = normalizeModuleList([setupModule, ...(state.modules || [])]);
+    state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+    return setupModule;
+  } catch (error) {
+    console.warn('[business-os] setup wizard startup manifest unavailable', error);
+    return null;
+  }
+}
+
+async function shouldOpenSetupWizardOnStartup() {
+  if (localStorage.getItem(ONBOARDING_DONE_KEY) === '1') return false;
+  const coll = state.db?.collection?.('business_onboarding_state');
+  if (!coll) return true;
+  state.sync?.startCollection?.('business_onboarding_state').catch((error) => {
+    console.warn('[business-os] onboarding state sync start failed', error);
+  });
+  try {
+    const doc = await coll.findOne('default').exec();
+    const data = doc?.toJSON?.();
+    if (onboardingStateCompleted(data)) {
+      localStorage.setItem(ONBOARDING_DONE_KEY, '1');
+      return false;
+    }
+  } catch (error) {
+    console.warn('[business-os] onboarding state read failed; showing setup wizard', error);
+  }
+  return true;
+}
+
+function onboardingStateCompleted(data) {
+  if (!data || data._deleted === true || data.is_deleted === true) return false;
+  return data.status === 'completed' || Number(data.completed_at_ms || 0) > 0;
 }
 
 function businessDbName(syncConfig = state.syncConfig) {
@@ -984,7 +1057,7 @@ function deriveOwnerLabel(ownerId) {
   if (ownerId.startsWith('desktop-app:')) {
     const id = ownerId.slice('desktop-app:'.length);
     const entry = DESKTOP_APPS.find((app) => app.id === id);
-    return entry?.title || id;
+    return entry?.title || moduleDisplayTitleFor(id) || id;
   }
   if (ownerId.startsWith('module:')) {
     const id = ownerId.slice('module:'.length);
@@ -2766,6 +2839,7 @@ const MODULE_GLYPHS = {
   notes: '📝',
   'app-store': '🛍',
   'coding-agents': '🤖',
+  'setup-wizard': '⚙️',
 };
 
 function glyphForModule(moduleId) {
@@ -2827,7 +2901,16 @@ function listDesktopApps() {
     .filter(Boolean));
   const allow = resolveModuleAllowlist(state.moduleAllowlist);
   const allowActive = allow.size > 0;
-  return DESKTOP_APPS
+  const desktopModuleApps = (state.modules || [])
+    .filter(moduleLaunchesAsDesktopApp)
+    .map((mod) => ({
+      id: mod.id,
+      title: moduleDisplayTitle(mod),
+      glyph: glyphForModule(mod.id),
+      defaultWidth: mod.layout?.default_width || 1040,
+      defaultHeight: mod.layout?.default_height || 720,
+    }));
+  const staticApps = DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
     // Under an active allowlist, only surface allowlisted apps plus the always-available
     // file tools — so hiding a full-workspace module (e.g. creator) can't make it
@@ -2840,6 +2923,18 @@ function listDesktopApps() {
       defaultWidth,
       defaultHeight,
     }));
+  return uniqueById([...desktopModuleApps, ...staticApps]);
+}
+
+function uniqueById(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items || []) {
+    if (!item?.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  return out;
 }
 
 function moduleLaunchesAsDesktopApp(mod) {
@@ -2851,7 +2946,19 @@ function moduleLaunchesAsDesktopApp(mod) {
 
 async function openDesktopApp(appId, options = {}) {
   if (!state.windowManager) return null;
-  const entry = DESKTOP_APPS.find((app) => app.id === appId);
+  const moduleDef = state.modules.find((item) => item.id === appId);
+  const staticEntry = DESKTOP_APPS.find((app) => app.id === appId);
+  const entry = staticEntry || (moduleDef && moduleLaunchesAsDesktopApp(moduleDef) ? {
+    id: moduleDef.id,
+    title: moduleDisplayTitle(moduleDef),
+    glyph: glyphForModule(moduleDef.id),
+    defaultWidth: moduleDef.layout?.default_width || 1040,
+    defaultHeight: moduleDef.layout?.default_height || 720,
+    loader: () => importBusinessOsModule(
+      `./${moduleBasePath(moduleDef)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(moduleDef.id)}`,
+      `${moduleDef.id} desktop module`,
+    ),
+  } : null);
   if (!entry) {
     console.warn(`[desktop-app] unknown app: ${appId}`);
     return null;
@@ -2865,7 +2972,6 @@ async function openDesktopApp(appId, options = {}) {
   });
   let teardown = null;
   try {
-    const moduleDef = state.modules.find((item) => item.id === appId);
     if (moduleDef) await registerModuleSchemas(moduleDef);
     const appModule = await entry.loader();
     teardown = await appModule.mount(win.container, {
@@ -2873,11 +2979,16 @@ async function openDesktopApp(appId, options = {}) {
       sync: createLiveSyncFacade(),
       commandBus: createLiveCommandBusFacade(),
       session: state.session,
+      preferences: currentShellPreferences(),
+      applyPreferences: applyShellPreferences,
       contextMenu: state.contextMenu,
       notifications: state.notifications,
       locale: shellLang(),
       args: options.args || {},
       openDesktopApp,
+      openModule,
+      openSettings: openSettingsDrawer,
+      refreshModules,
       openBusinessChat,
       reportFileIntegrityError: (error, details = {}) => reportFileIntegrityError(`desktop-app:${entry.id}`, error, {
         appId: entry.id,
@@ -2887,7 +2998,7 @@ async function openDesktopApp(appId, options = {}) {
       pinToTaskbar: pinTaskbarTarget,
       unpinFromTaskbar: unpinTaskbarTarget,
       toggleTaskbarPin,
-      onClose: () => win.close(),
+      onClose: (closeOptions) => win.close(closeOptions),
       setTitle: win.setTitle,
     });
   } catch (error) {
@@ -2983,11 +3094,25 @@ function applyShellLanguage(lang, options = {}) {
   }
 }
 
-function postCurrentPreferencesToModule() {
-  const detail = {
+function currentShellPreferences() {
+  return {
     theme: document.documentElement.dataset.theme === 'light' ? 'light' : 'dark',
     language: document.documentElement.lang === 'en' ? 'en' : 'de',
+    shellStyle: document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows',
   };
+}
+
+function applyShellPreferences(prefs = {}, options = {}) {
+  if (prefs.language) applyShellLanguage(prefs.language, options);
+  if (prefs.theme) applyShellTheme(prefs.theme, options);
+  if (prefs.shellStyle) applyShellStyle(prefs.shellStyle, options);
+  syncHeaderControls();
+  postCurrentPreferencesToModule();
+  return currentShellPreferences();
+}
+
+function postCurrentPreferencesToModule() {
+  const detail = currentShellPreferences();
   window.dispatchEvent(new CustomEvent('ctox-business-os-preferences', { detail }));
   window.postMessage({ type: 'ctox-business-os-language', lang: detail.language }, '*');
   for (const frame of els.host?.querySelectorAll?.('iframe') || []) {
@@ -3144,6 +3269,15 @@ function listLaunchTargets(kind = '') {
       glyph: taskbarMarkForModule(mod),
       module: mod,
     }));
+  const desktopModuleTargets = state.modules
+    .filter(moduleLaunchesAsDesktopApp)
+    .map((mod) => ({
+      id: mod.id,
+      kind: 'app',
+      title: moduleDisplayTitle(mod),
+      glyph: glyphForModule(mod.id),
+      module: mod,
+    }));
   const appTargets = DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
     .map((app) => ({
@@ -3155,6 +3289,10 @@ function listLaunchTargets(kind = '') {
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
+    if (!target?.id || targetsById.has(target.id)) continue;
+    targetsById.set(target.id, target);
+  }
+  for (const target of desktopModuleTargets) {
     if (!target?.id || targetsById.has(target.id)) continue;
     targetsById.set(target.id, target);
   }
@@ -3753,6 +3891,8 @@ function createModuleContext(mod) {
     commandBus: createLiveCommandBusFacade(),
     syncConfig: state.sync?.config,
     session: state.session,
+    preferences: currentShellPreferences(),
+    applyPreferences: applyShellPreferences,
     governance: state.governance,
     eventBus: state.eventBus,
     contextMenu: state.contextMenu,
@@ -4673,6 +4813,13 @@ function renderProfileDrawer() {
           <option value="en"${(prefs.language || document.documentElement.lang) === 'en' ? ' selected' : ''}>English</option>
         </select>
       </label>
+      <label>
+        <span>Theme</span>
+        <select name="theme">
+          <option value="dark"${(prefs.theme || document.documentElement.dataset.theme || 'dark') === 'dark' ? ' selected' : ''}>Dark</option>
+          <option value="light"${(prefs.theme || document.documentElement.dataset.theme) === 'light' ? ' selected' : ''}>Light</option>
+        </select>
+      </label>
       <div class="account-actions">
         <button class="text-button account-primary" type="submit">Speichern</button>
         <button class="text-button" type="button" data-logout>Logout</button>
@@ -4706,11 +4853,13 @@ function renderProfileDrawer() {
       ...readAccountPrefs(),
       displayName: form.get('displayName')?.toString().trim() || '',
       language: form.get('language')?.toString() || 'de',
+      theme: form.get('theme')?.toString() === 'light' ? 'light' : 'dark',
     };
     writeAccountPrefs(prefs);
-    applyShellLanguage(prefs.language);
-    syncHeaderControls();
-    postCurrentPreferencesToModule();
+    applyShellPreferences({
+      language: prefs.language,
+      theme: prefs.theme,
+    });
     renderAccountButton({
       ...state.session,
       user: {
@@ -5244,6 +5393,14 @@ function renderShellCtoxWarning(status) {
   if (!els.ctoxWarning) return;
   const problem = shellCtoxHealthProblem(status);
   if (!problem) {
+    const fallback = status?.runtime_settings?.fallback_llm;
+    if (fallback?.enabled) {
+      els.ctoxWarning.hidden = false;
+      els.ctoxWarning.textContent = shellText('ctoxFallbackLlm');
+      els.ctoxWarning.title = String(fallback.message || shellText('ctoxFallbackLlmTitle'));
+      document.body.dataset.ctoxOperational = 'limited';
+      return;
+    }
     els.ctoxWarning.hidden = true;
     els.ctoxWarning.removeAttribute('title');
     document.body.dataset.ctoxOperational = 'ok';
@@ -6048,7 +6205,6 @@ async function dispatchShellModuleCommand({
 }
 
 async function waitForCommandProjection(db, commandId, timeoutMs = 45000, generation = state.dataPlaneGeneration) {
-  const collection = db?.collection?.('business_commands');
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (isStaleDataPlaneGeneration(generation)) {
@@ -6056,14 +6212,14 @@ async function waitForCommandProjection(db, commandId, timeoutMs = 45000, genera
     }
     let doc = null;
     try {
-      doc = await collection?.findOne(commandId).exec();
+      doc = await readLocalCollectionDocument(db, 'business_commands', commandId);
     } catch (error) {
       if (isClosedRxDbCollectionError(error)) {
         throw createRecoverableDataPlaneAbort(`Aktion ${commandId} wurde durch eine Verbindungsreparatur unterbrochen.`);
       }
       throw error;
     }
-    const data = doc?.toJSON?.();
+    const data = doc?.toJSON?.() || doc;
     if (data && data.status && data.status !== 'pending_sync') {
       if (data.status === 'failed') throw new Error(data.error || `Aktion ${commandId} ist fehlgeschlagen.`);
       return data;
@@ -6071,6 +6227,14 @@ async function waitForCommandProjection(db, commandId, timeoutMs = 45000, genera
     await delay(300);
   }
   throw new Error(`Aktion ${commandId} wurde noch nicht abgeschlossen.`);
+}
+
+async function readLocalCollectionDocument(db, collectionName, id) {
+  const collection = db?.collection?.(collectionName);
+  if (collection?.storageCollection?.findOne) {
+    return collection.storageCollection.findOne(id);
+  }
+  return collection?.findOne?.(id)?.exec?.() || null;
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {

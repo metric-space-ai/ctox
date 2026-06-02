@@ -1,0 +1,35 @@
+<main class="setup-wizard" data-setup-root>
+  <aside class="setup-rail" aria-label="Setup Schritte">
+    <header class="setup-rail-head">
+      <span>CTOX</span>
+      <h2>Setup</h2>
+    </header>
+    <nav class="setup-steps" data-setup-steps></nav>
+    <footer class="setup-rail-foot">
+      <button type="button" class="setup-link-button" data-open-settings>Settings</button>
+      <button type="button" class="setup-link-button" data-skip-setup>Später</button>
+    </footer>
+  </aside>
+  <section class="setup-workbench">
+    <header class="setup-header">
+      <div>
+        <span data-step-kicker>Start</span>
+        <h1 data-step-title>Basis einrichten</h1>
+      </div>
+      <div class="setup-progress" aria-hidden="true"><span data-progress-fill></span></div>
+    </header>
+    <div class="setup-content" data-step-content></div>
+    <footer class="setup-footer">
+      <button type="button" class="setup-secondary" data-back>Zurück</button>
+      <div class="setup-status" data-status></div>
+      <button type="button" class="setup-primary" data-next>Weiter</button>
+    </footer>
+  </section>
+  <aside class="setup-summary" aria-label="Setup Zusammenfassung">
+    <header>
+      <span>Bereitheit</span>
+      <strong data-summary-score>0/4</strong>
+    </header>
+    <div class="setup-summary-list" data-summary-list></div>
+  </aside>
+</main>

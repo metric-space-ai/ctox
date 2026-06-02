@@ -69,6 +69,8 @@ export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = 
 // ---------------------------------------------------------------------------
 
 const SHARED_ROOM_PEERS = new Map(); // key -> SharedRoomPeer
+const SHARED_HANDSHAKE_TIMEOUT_MS = 60000;
+const SHARED_TOKEN_TIMEOUT_MS = 30000;
 
 function sharedRoomPeerKey(signalingUrl, room) {
   return `${String(signalingUrl || '')}::${String(room || '')}`;
@@ -334,7 +336,7 @@ class SharedRoomPeer {
       peerId,
       'ctoxProtocol',
       [localProtocol],
-      15000,
+      SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection,
     );
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
@@ -372,7 +374,7 @@ class SharedRoomPeer {
         registration?.state?.emitError(error);
       }
     }
-    await this.peer.request(peerId, 'token', [], 15000, representative.collection);
+    await this.peer.request(peerId, 'token', [], SHARED_TOKEN_TIMEOUT_MS, representative.collection);
     await this.awaitRemoteMasterReady(peerId);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
