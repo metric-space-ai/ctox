@@ -270,6 +270,8 @@ jobs:
           mkdir -p bundle/target/release
           cp target/${{ matrix.target }}/release/ctox bundle/target/release/
           cp -r src/skills bundle/skills
+          mkdir -p bundle/src/apps
+          cp -r src/apps/business-os bundle/src/apps/business-os
           mkdir -p bundle/rxdb-js
           mkdir -p bundle/rxdb-js/app-local/dist
           mkdir -p bundle/rxdb-js/app-local/src
@@ -292,6 +294,8 @@ jobs:
           New-Item -ItemType Directory -Force bundle\target\release | Out-Null
           Copy-Item "target\${{ matrix.target }}\release\ctox.exe" "bundle\target\release\"
           Copy-Item -Path "src\skills" -Destination "bundle\skills" -Recurse
+          New-Item -ItemType Directory -Force bundle\src\apps | Out-Null
+          Copy-Item -Path "src\apps\business-os" -Destination "bundle\src\apps\business-os" -Recurse
           New-Item -ItemType Directory -Force bundle\rxdb-js | Out-Null
           New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\dist | Out-Null
           New-Item -ItemType Directory -Force bundle\rxdb-js\app-local\src | Out-Null

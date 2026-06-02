@@ -16,6 +16,8 @@ BIN_DIR="${CTOX_BIN_DIR:-$HOME/.local/bin}"
 TOOLS_ROOT="${CTOX_TOOLS_ROOT:-$STATE_ROOT/tools}"
 DEPENDENCIES_ROOT="${CTOX_DEPENDENCIES_ROOT:-$STATE_ROOT/dependencies}"
 CTOX_RELEASE_RETENTION="${CTOX_RELEASE_RETENTION:-2}"
+CTOX_RELEASE_ARTIFACT_URL="${CTOX_RELEASE_ARTIFACT_URL:-}"
+CTOX_RELEASE_ARTIFACT_SHA256="${CTOX_RELEASE_ARTIFACT_SHA256:-}"
 TOOLS_ROOT_EXPLICIT=0
 DEPENDENCIES_ROOT_EXPLICIT=0
 [[ -n "${CTOX_TOOLS_ROOT:-}" ]] && TOOLS_ROOT_EXPLICIT=1
@@ -34,6 +36,7 @@ DEFAULT_MODEL="Qwen/Qwen3.5-27B"
 # ── Internal state ───────────────────────────────────────────────────────────
 SCRIPT_DIR=""
 IS_ONLINE_INSTALL=0
+IS_PREBUILT_INSTALL=0
 PLATFORM=""
 ARCH=""
 ENGINE_FEATURES=""
@@ -253,6 +256,39 @@ cleanup_source_build_artifacts() {
     printf '  %b%bremoving legacy build artifact %s%b\n' "$C_BOLD" "$C_GREY" "$path" "$C_RESET" >&2
     rm -rf "$path"
   done
+}
+
+source_root_has_prebuilt_payload() {
+  local source_root="$1"
+  [[ -x "$source_root/target/release/ctox" || -x "$source_root/bin/ctox" ]]
+}
+
+download_release_artifact() {
+  local url="$1"
+  local artifact_root="$CACHE_ROOT/release-artifact"
+  local archive="$artifact_root/ctox-release.tar.gz"
+  local payload="$artifact_root/payload"
+
+  command -v curl >/dev/null 2>&1 || tui_fatal "curl wird fuer CTOX_RELEASE_ARTIFACT_URL benoetigt."
+  command -v tar >/dev/null 2>&1 || tui_fatal "tar wird fuer CTOX_RELEASE_ARTIFACT_URL benoetigt."
+
+  rm -rf "$payload"
+  mkdir -p "$artifact_root" "$payload"
+  curl -fsSL "$url" -o "$archive"
+
+  if [[ -n "$CTOX_RELEASE_ARTIFACT_SHA256" ]]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+      printf '%s  %s\n' "$CTOX_RELEASE_ARTIFACT_SHA256" "$archive" | sha256sum -c - >/dev/null
+    elif command -v shasum >/dev/null 2>&1; then
+      printf '%s  %s\n' "$CTOX_RELEASE_ARTIFACT_SHA256" "$archive" | shasum -a 256 -c - >/dev/null
+    else
+      tui_fatal "Kein SHA-256 Prueftool gefunden."
+    fi
+  fi
+
+  tar xzf "$archive" -C "$payload"
+  source_root_has_prebuilt_payload "$payload" || tui_fatal "Release-Artefakt enthaelt kein ausfuehrbares CTOX-Binary."
+  printf '%s\n' "$payload"
 }
 
 cleanup_path_is_kept() {
@@ -1995,6 +2031,12 @@ parse_args() {
       --repo=*)
         CTOX_REPO="${1#*=}"
         ;;
+      --release-artifact-url=*)
+        CTOX_RELEASE_ARTIFACT_URL="${1#*=}"
+        ;;
+      --release-artifact-sha256=*)
+        CTOX_RELEASE_ARTIFACT_SHA256="${1#*=}"
+        ;;
       --features=*)
         export CTOX_ENGINE_FEATURES="${1#*=}"
         ;;
@@ -2037,6 +2079,8 @@ parse_args() {
         printf '  --features=<features>       Override engine features (comma or space separated)\n'
         printf '  --branch=<branch>           Git branch to install from (default: main)\n'
         printf '  --repo=<url>                Git repository URL (default: metric-space-ai/ctox)\n'
+        printf '  --release-artifact-url=<url> Install from a prebuilt CTOX .tar.gz artifact\n'
+        printf '  --release-artifact-sha256=<sha256> Verify the prebuilt artifact hash\n'
         printf '  --install-root=<path>       Installation directory (default: ~/.local/lib/ctox)\n'
         printf '  --state-root=<path>         State directory (default: ~/.local/state/ctox)\n'
         printf '  --cache-root=<path>         Cache directory (default: ~/.cache/ctox)\n'
@@ -2064,6 +2108,8 @@ parse_args() {
         printf '  CTOX_SKIP_DESKTOP_HOST_BUILD=1 Skip optional desktop host build on headless/server installs\n'
         printf '  CTOX_REPO                   Same as --repo\n'
         printf '  CTOX_BRANCH                 Same as --branch\n\n'
+        printf '  CTOX_RELEASE_ARTIFACT_URL   Same as --release-artifact-url\n'
+        printf '  CTOX_RELEASE_ARTIFACT_SHA256 Same as --release-artifact-sha256\n\n'
         exit 0
         ;;
       *)
@@ -2083,10 +2129,13 @@ main() {
     DEPENDENCIES_ROOT="$STATE_ROOT/dependencies"
   fi
 
-  # Determine if online install or from existing checkout
-  if [[ -f "$(dirname "${BASH_SOURCE[0]:-$0}")/Cargo.toml" ]]; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+  # Determine if online install, source checkout install, or a prebuilt payload.
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
+  if [[ -f "$SCRIPT_DIR/Cargo.toml" || -x "$SCRIPT_DIR/target/release/ctox" || -x "$SCRIPT_DIR/bin/ctox" ]]; then
     IS_ONLINE_INSTALL=0
+    if [[ ! -f "$SCRIPT_DIR/Cargo.toml" ]] && source_root_has_prebuilt_payload "$SCRIPT_DIR"; then
+      IS_PREBUILT_INSTALL=1
+    fi
   else
     IS_ONLINE_INSTALL=1
   fi
@@ -2225,14 +2274,22 @@ main() {
 
   # ── Step 5: Rust ──
   tui_start_step 5
-  ensure_rust_toolchain
-  local rv; rv="$("$(resolve_cargo)" --version 2>/dev/null | awk '{print $2}')"
-  tui_complete_step 5 "v${rv:-?}"
+  if [[ "$IS_PREBUILT_INSTALL" -eq 1 || -n "$CTOX_RELEASE_ARTIFACT_URL" ]]; then
+    tui_complete_step 5 "uebersprungen (Release-Artefakt)"
+  else
+    ensure_rust_toolchain
+    local rv; rv="$("$(resolve_cargo)" --version 2>/dev/null | awk '{print $2}')"
+    tui_complete_step 5 "v${rv:-?}"
+  fi
 
   # ── Step 6: Source ──
   tui_start_step 6
   local source_root
-  if [[ "$IS_ONLINE_INSTALL" -eq 1 ]]; then
+  if [[ -n "$CTOX_RELEASE_ARTIFACT_URL" ]]; then
+    source_root="$(download_release_artifact "$CTOX_RELEASE_ARTIFACT_URL")"
+    IS_PREBUILT_INSTALL=1
+    tui_complete_step 6 "Release-Artefakt"
+  elif [[ "$IS_ONLINE_INSTALL" -eq 1 ]]; then
     source_root="$CACHE_ROOT/src"
     if [[ -d "$source_root/.git" ]]; then
       (cd "$source_root" && git fetch origin "$CTOX_BRANCH" && git checkout "origin/$CTOX_BRANCH") >/dev/null 2>&1
@@ -2244,7 +2301,11 @@ main() {
     fi
   else
     source_root="$SCRIPT_DIR"
-    tui_complete_step 6 "lokaler Quellcode"
+    if [[ "$IS_PREBUILT_INSTALL" -eq 1 ]]; then
+      tui_complete_step 6 "lokales Release-Artefakt"
+    else
+      tui_complete_step 6 "lokaler Quellcode"
+    fi
   fi
 
   # ── Step 7: Skills sync ──
@@ -2258,10 +2319,14 @@ main() {
   stop_ctox_services
   kill_residual_processes
 
-  build_ctox "$source_root"
-  local feat_short="${ENGINE_FEATURES:-cpu}"
-  [[ -z "$ENGINE_FEATURES" ]] && feat_short="cpu"
-  tui_complete_step 8 "$feat_short"
+  if [[ "$IS_PREBUILT_INSTALL" -eq 1 ]]; then
+    tui_complete_step 8 "uebersprungen (vorgebaut)"
+  else
+    build_ctox "$source_root"
+    local feat_short="${ENGINE_FEATURES:-cpu}"
+    [[ -z "$ENGINE_FEATURES" ]] && feat_short="cpu"
+    tui_complete_step 8 "$feat_short"
+  fi
 
   # ── Step 9: Install layout ──
   tui_start_step 9
