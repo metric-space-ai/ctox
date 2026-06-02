@@ -1266,13 +1266,23 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
         .ok()
         .flatten();
-    let provider = runtime_state
+    let env_provider = crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map);
+    let configured_proxy_base_url = env_map
+        .get("CTOX_LLM_PROXY_BASE_URL")
+        .cloned()
+        .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL").cloned())
+        .unwrap_or_default();
+    let explicit_fallback_llm = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
+        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&configured_proxy_base_url);
+    let provider = if explicit_fallback_llm {
+        env_provider.to_owned()
+    } else {
+        runtime_state
         .as_ref()
         .map(crate::inference::runtime_state::api_provider_for_runtime_state)
         .map(str::to_owned)
-        .unwrap_or_else(|| {
-            crate::inference::runtime_state::infer_api_provider_from_env_map(&env_map)
-        });
+        .unwrap_or_else(|| env_provider.to_owned())
+    };
     let source = runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_owned())
@@ -1368,13 +1378,6 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
         .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
         .unwrap_or_default();
-    let configured_proxy_base_url = env_map
-        .get("CTOX_LLM_PROXY_BASE_URL")
-        .cloned()
-        .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL").cloned())
-        .unwrap_or_default();
-    let explicit_fallback_llm = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
-        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&configured_proxy_base_url);
     let upstream_base_url = if explicit_fallback_llm {
         configured_proxy_base_url.clone()
     } else {
