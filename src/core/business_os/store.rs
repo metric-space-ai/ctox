@@ -1368,21 +1368,38 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         .or_else(|| runtime_state.as_ref().and_then(|state| state.requested_model.clone()))
         .or_else(|| runtime_state.as_ref().and_then(|state| state.active_model.clone()))
         .unwrap_or_default();
-    let upstream_base_url = runtime_state
+    let configured_proxy_base_url = env_map
+        .get("CTOX_LLM_PROXY_BASE_URL")
+        .cloned()
+        .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL").cloned())
+        .unwrap_or_default();
+    let explicit_fallback_llm = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
+        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&configured_proxy_base_url);
+    let upstream_base_url = if explicit_fallback_llm {
+        configured_proxy_base_url.clone()
+    } else {
+        runtime_state
         .as_ref()
         .filter(|state| !state.source.is_local())
         .map(|state| state.upstream_base_url.clone())
         .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL").cloned())
-        .unwrap_or_default();
-    let fallback_llm_enabled = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
-        && provider.eq_ignore_ascii_case("minimax")
-        && chat_model.eq_ignore_ascii_case("MiniMax-M3")
-        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&upstream_base_url);
+        .unwrap_or_default()
+    };
+    let fallback_provider = env_map
+        .get("CTOX_API_PROVIDER")
+        .cloned()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| provider.clone());
     let fallback_llm_model = env_map
         .get("CTOX_FALLBACK_LLM_MODEL")
+        .or_else(|| env_map.get("CTOX_CHAT_MODEL"))
         .cloned()
         .filter(|model| !model.trim().is_empty())
         .unwrap_or_else(|| chat_model.clone());
+    let fallback_llm_enabled = explicit_fallback_llm
+        && fallback_provider.eq_ignore_ascii_case("minimax")
+        && fallback_llm_model.eq_ignore_ascii_case("MiniMax-M3")
+        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&upstream_base_url);
     let fallback_llm_notice = env_map
         .get("CTOX_FALLBACK_LLM_NOTICE")
         .cloned()
@@ -1400,7 +1417,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "enabled": fallback_llm_enabled,
             "provider": "ctox.dev",
             "proxy_base_url": if fallback_llm_enabled { upstream_base_url.clone() } else { String::new() },
-            "upstream_provider": if fallback_llm_enabled { provider.clone() } else { String::new() },
+            "upstream_provider": if fallback_llm_enabled { fallback_provider.clone() } else { String::new() },
             "model": fallback_llm_model,
             "limited": fallback_llm_enabled,
             "message": if fallback_llm_enabled { fallback_llm_notice } else { String::new() }
