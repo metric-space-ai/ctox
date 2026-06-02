@@ -148,6 +148,12 @@ export async function mount(container, ctx = {}) {
     }
   };
 
+  function preferRuntimeSettings(primary, fallback) {
+    if (primary?.fallback_llm?.enabled) return primary;
+    if (fallback?.fallback_llm?.enabled) return fallback;
+    return primary || fallback || null;
+  }
+
   async function loadInitialState() {
     const [profile, runtimeSettings, runtimeSnapshot, communicationAccounts, onboarding] = await Promise.all([
       readDoc(ctx.db, 'business_profile', PROFILE_ID).catch(() => null),
@@ -156,7 +162,7 @@ export async function mount(container, ctx = {}) {
       readCollection(ctx.db, 'communication_accounts').catch(() => []),
       readDoc(ctx.db, 'business_onboarding_state', ONBOARDING_ID).catch(() => null),
     ]);
-    const effectiveRuntimeSettings = runtimeSettings?.fallback_llm?.enabled ? runtimeSettings : (runtimeSnapshot || runtimeSettings);
+    const effectiveRuntimeSettings = preferRuntimeSettings(runtimeSnapshot, runtimeSettings);
     state.profile = mergeProfile(profile);
     state.runtimeSettings = effectiveRuntimeSettings;
     state.runtimeDraft = runtimeDraftFromSettings(effectiveRuntimeSettings);
@@ -171,9 +177,9 @@ export async function mount(container, ctx = {}) {
       render();
     });
     subscribeDoc(ctx.db, 'ctox_runtime_settings', 'runtime-settings', (doc) => {
-      state.runtimeSettings = doc;
+      state.runtimeSettings = preferRuntimeSettings(state.runtimeSettings, doc);
       if (!state.busy) {
-        state.runtimeDraft = runtimeDraftFromSettings(doc);
+        state.runtimeDraft = runtimeDraftFromSettings(state.runtimeSettings);
         render();
       }
     });

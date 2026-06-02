@@ -5420,8 +5420,11 @@ async function loadShellCtoxHealth() {
   await state.sync?.startCollection?.('ctox_runtime_settings');
   const doc = await coll.findOne('runtime-settings').exec();
   let runtime = doc?.toJSON?.();
-  if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
-    runtime = await fetchRuntimeSettingsSnapshot();
+  const runtimeSnapshot = await fetchRuntimeSettingsSnapshot().catch(() => null);
+  if (runtimeSnapshot?.fallback_llm?.enabled) {
+    runtime = runtimeSnapshot;
+  } else if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
+    runtime = runtimeSnapshot;
   }
   if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
     throw new Error('Runtime-Status wurde noch nicht synchronisiert.');
