@@ -267,6 +267,7 @@ export function initBusinessReporter({
   getActiveModule,
   commandBus,
   db = null,
+  sync = null,
 }) {
   if (!session?.authenticated || document.querySelector('[data-ctox-reporter]')) return;
   installReporterStyles();
@@ -275,6 +276,7 @@ export function initBusinessReporter({
     getActiveModule,
     commandBus,
     db,
+    sync,
     modal: null,
     overlay: null,
     attachment: null,
@@ -548,6 +550,7 @@ export async function dispatchBusinessReport({
 async function upsertLocalReport(state, report) {
   const raw = state.db?.raw;
   if (!raw) return;
+  await prepareReportSync(state.sync);
   const id = report.result?.report_id || `report_${crypto.randomUUID?.() || Date.now()}`;
   const taskId = report.result?.task_id || '';
   const commandId = report.result?.command_id || '';
@@ -591,21 +594,59 @@ async function upsertLocalReport(state, report) {
     created_at_ms: report.now,
     updated_at_ms: report.now,
   });
+  await waitForReportSync(state.sync);
 }
 
 async function upsertRx(collection, doc) {
   if (!collection) return;
-  if (typeof collection.upsert === 'function') {
-    await collection.upsert(doc);
+  try {
+    await collection.insert(doc);
     return;
+  } catch (error) {
+    if (!isRxDbConflictError(error)) throw error;
   }
   const existing = await collection.findOne(doc.id).exec();
   if (existing) await existing.patch(doc);
   else await collection.insert(doc);
 }
 
+async function prepareReportSync(sync) {
+  if (!sync?.startCollection) return;
+  await Promise.all([
+    sync.startCollection('business_module_reports').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+    sync.startCollection('ctox_bug_reports').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+  ]);
+}
+
+async function waitForReportSync(sync) {
+  if (!sync?.startCollection) return;
+  await Promise.all([
+    sync.startCollection('business_module_reports').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+    sync.startCollection('ctox_bug_reports').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+  ]);
+}
+
+async function waitForSyncBridgeReady(bridge, timeoutMs = 10000) {
+  const state = bridge?.state;
+  if (!state) return;
+  await Promise.race([
+    Promise.resolve()
+      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+      .catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
 function newId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
+function isRxDbConflictError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB Error-Code: CONFLICT')
+    || message.includes('conflict')
+    || message.includes('document already exists')
+    || message.includes('Document update conflict');
 }
 
 function startMarkup(state) {

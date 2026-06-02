@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260601-resizer-migration1';
+const APP_BUILD = '20260602-command-sync6';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -21,7 +21,7 @@ const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 // still recovers on its own without a full app reload.
 const SLOW_MODULE_SYNC_RETRY_MS = 60000;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
-const RXDB_BOOTSTRAP_VERSION = '20260522-rxdb-db14';
+const RXDB_BOOTSTRAP_VERSION = '20260602-rxdb-command-sync1';
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
@@ -353,7 +353,7 @@ async function loadSyncModule() {
 
 async function loadCommandBusModule() {
   if (!commandBusModulePromise) {
-    commandBusModulePromise = importBusinessOsModule('./shared/command-bus.js?v=20260521-rxdb-db32', 'command bus');
+    commandBusModulePromise = importBusinessOsModule('./shared/command-bus.js?v=20260602-command-sync6', 'command bus');
   }
   return commandBusModulePromise;
 }
@@ -758,6 +758,7 @@ async function openBusinessDataPlane(syncConfig) {
     const { createCommandBus } = await loadCommandBusModule();
     state.commandBus = createCommandBus({
       db: () => state.db,
+      sync: () => state.sync,
       config: syncConfig,
     });
     startShellCtoxHealthMonitor();
@@ -4864,14 +4865,14 @@ async function reportCurrentModule(details = {}) {
 
 function loadBusinessReporterModule() {
   if (!businessReporterModulePromise) {
-    businessReporterModulePromise = import('./shared/business-reporter.js?v=20260520-rxdb-reports1');
+    businessReporterModulePromise = import('./shared/business-reporter.js?v=20260602-command-sync6');
   }
   return businessReporterModulePromise;
 }
 
 function loadBusinessChatModule() {
   if (!businessChatModulePromise) {
-    businessChatModulePromise = import('./shared/business-chat.js?v=20260520-chat-ux-theme1');
+    businessChatModulePromise = import('./shared/business-chat.js?v=20260602-command-sync6');
   }
   return businessChatModulePromise;
 }
@@ -4884,6 +4885,7 @@ function scheduleBusinessCompanions() {
         getActiveModule: () => state.activeModule,
         commandBus: createLiveCommandBusFacade(),
         db: createLiveDbFacade(),
+        sync: createLiveSyncFacade(),
       });
     })
     .catch((error) => {

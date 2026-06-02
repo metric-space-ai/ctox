@@ -1,7 +1,9 @@
-export function createCommandBus({ db }) {
+let commandSyncFlush = Promise.resolve();
+
+export function createCommandBus({ db, sync = null } = {}) {
   return {
     async dispatch(command) {
-      return recordRxdbCommand({ db, command });
+      return recordRxdbCommand({ db, sync, command });
     },
   };
 }
@@ -18,7 +20,11 @@ async function resolveCommandDb(db, timeoutMs = 15000) {
   return current;
 }
 
-async function recordRxdbCommand({ db, command }) {
+async function resolveCommandSync(sync) {
+  return typeof sync === 'function' ? sync() : sync;
+}
+
+async function recordRxdbCommand({ db, sync, command }) {
   const command_id = command.id || `cmd_${crypto.randomUUID()}`;
   const now = Date.now();
   const doc = {
@@ -34,7 +40,16 @@ async function recordRxdbCommand({ db, command }) {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  await writeCommandDocument(db, command_id, doc);
+  try {
+    const bridge = await prepareBusinessCommandsSync({ db, sync });
+    await writeCommandDocument(db, command_id, doc);
+    const pushBridge = await restartBusinessCommandsSync({ sync, fallbackBridge: bridge });
+    await flushCommandSyncBridge(pushBridge, 60000);
+  } catch (error) {
+    error.command_id = command_id;
+    error.status = 'failed';
+    throw error;
+  }
   return {
     ok: true,
     command_id,
@@ -43,6 +58,29 @@ async function recordRxdbCommand({ db, command }) {
     task_status: 'pending_sync',
     transport: 'rxdb-webrtc',
   };
+}
+
+async function prepareBusinessCommandsSync({ db, sync }) {
+  const currentDb = await resolveCommandDb(db, 15000);
+  if (!currentDb?.raw?.business_commands) {
+    throw new Error('business_commands collection is required for RxDB commands');
+  }
+  const currentSync = await resolveCommandSync(sync);
+  const bridge = await currentSync?.startCollection?.('business_commands');
+  await waitForSyncBridgeReady(bridge, 15000);
+  return bridge;
+}
+
+async function restartBusinessCommandsSync({ sync, fallbackBridge }) {
+  const currentSync = await resolveCommandSync(sync);
+  if (typeof currentSync?.restartCollection === 'function') {
+    try {
+      return await currentSync.restartCollection('business_commands');
+    } catch {
+      return fallbackBridge;
+    }
+  }
+  return fallbackBridge;
 }
 
 async function writeCommandDocument(db, commandId, doc) {
@@ -57,12 +95,7 @@ async function writeCommandDocument(db, commandId, doc) {
       continue;
     }
     try {
-      const existing = await collection.findOne(commandId).exec();
-      if (existing) {
-        await existing.incrementalPatch(doc);
-      } else {
-        await collection.insert(doc);
-      }
+      await insertOrPatchCommandDocument(collection, commandId, doc);
       return;
     } catch (error) {
       if (!isClosedRxDbCollectionError(error)) throw error;
@@ -73,8 +106,78 @@ async function writeCommandDocument(db, commandId, doc) {
   throw lastError || new Error('business_commands collection is required for RxDB commands');
 }
 
+async function insertOrPatchCommandDocument(collection, commandId, doc) {
+  try {
+    await collection.insert(doc);
+    return;
+  } catch (error) {
+    if (!isRxDbConflictError(error)) throw error;
+  }
+  const existing = await collection.findOne(commandId).exec();
+  if (existing) {
+    await existing.incrementalPatch(doc);
+  } else {
+    await collection.insert(doc);
+  }
+}
+
+async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
+  const state = bridge?.state;
+  if (!state) return;
+  await Promise.race([
+    Promise.resolve()
+      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+      .catch(() => {}),
+    delay(timeoutMs),
+  ]);
+}
+
+async function flushCommandSyncBridge(bridge, timeoutMs = 60000) {
+  const state = bridge?.state;
+  if (!state) return;
+  commandSyncFlush = commandSyncFlush
+    .catch(() => {})
+    .then(async () => {
+      await withTimeout(Promise.resolve().then(() => state.awaitInitialReplication?.()), Math.min(15000, timeoutMs));
+      const deadline = Date.now() + timeoutMs;
+      let lastError = null;
+      for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt += 1) {
+        try {
+          if (typeof state.pushToRemotePeers === 'function') {
+            await withTimeout(state.pushToRemotePeers(), Math.max(5000, deadline - Date.now()));
+          } else if (typeof state.awaitInSync === 'function') {
+            await withTimeout(state.awaitInSync(), Math.max(5000, deadline - Date.now()));
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+          await delay(300);
+        }
+      }
+      if (lastError) throw lastError;
+    });
+  return commandSyncFlush;
+}
+
+async function withTimeout(promise, timeoutMs) {
+  await Promise.race([
+    Promise.resolve(promise),
+    delay(timeoutMs).then(() => {
+      throw new Error(`Timed out waiting for business_commands sync push after ${timeoutMs}ms`);
+    }),
+  ]);
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRxDbConflictError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB Error-Code: CONFLICT')
+    || message.includes('conflict')
+    || message.includes('document already exists')
+    || message.includes('Document update conflict');
 }
 
 function isClosedRxDbCollectionError(error) {

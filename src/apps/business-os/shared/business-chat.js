@@ -88,7 +88,11 @@ export function initBusinessChat({
     const detail = event.detail || {};
     const text = String(detail.text || detail.message || '').trim();
     if (!text) return;
-    const chat = ensureChat(state, session);
+    const createNewChat = shouldCreateChatForExternalSubmit(detail);
+    const chat = createNewChat ? createChat(state.ownerUserId, state.selectedDate) : ensureChat(state, session);
+    if (createNewChat) state.chats.push(chat);
+    if (detail.title) chat.title = String(detail.title).trim() || chat.title;
+    chat.contextMeta = chatContextMetaFromDetail(detail);
     expandChatOnly(state, chat);
     state.dockCollapsed = false;
     chat.draft = '';
@@ -272,6 +276,13 @@ export function initBusinessChat({
     queueTasksSub?.unsubscribe?.();
     window.clearInterval(timer);
   };
+}
+
+function shouldCreateChatForExternalSubmit(detail = {}) {
+  if (detail.reuseActive === true) return false;
+  if (detail.reuseActive === false) return true;
+  const action = detail.action || detail.client_context?.action || detail.clientContext?.action || '';
+  return action === 'context-chat';
 }
 
 function alignChatWindows(root) {
@@ -1265,7 +1276,7 @@ function formatChatBodyHtml(rawText) {
 
 function messageMarkup(message) {
   const trackId = message.taskId || message.commandId;
-  const tracking = message.commandId || message.taskId
+  const tracking = message.trackable === false ? '' : (message.commandId || message.taskId)
     ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(trackId)}">${escapeHtml(trackButtonLabel(message))}</button>`
     : '';
   const meta = [message.status, message.detail].filter(Boolean).join(' · ');
@@ -1361,10 +1372,12 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
     pendingMessage.createdAt = Date.now();
   } catch (error) {
     const failedCommandId = error?.command_id || error?.commandId || commandId;
-    pendingMessage.text = error?.message || String(error);
+    pendingMessage.text = `Command konnte nicht an CTOX übergeben werden: ${error?.message || String(error)}`;
     pendingMessage.commandId = failedCommandId;
     pendingMessage.taskId = '';
     pendingMessage.status = error?.status || 'failed';
+    pendingMessage.trackable = false;
+    pendingMessage.detail = 'nicht übergeben';
     pendingMessage.createdAt = Date.now();
     if (failedCommandId) chat.lastTrackingId = failedCommandId;
   }
@@ -1382,7 +1395,12 @@ async function syncTrackedMessages({ state, db }) {
       const commandDoc = message.commandId && commands ? await findDoc(commands, message.commandId) : null;
       const taskDoc = (message.taskId || commandDoc?.task_id) && queue ? await findDoc(queue, message.taskId || commandDoc.task_id) : null;
       const nextTaskId = message.taskId || commandDoc?.task_id || taskDoc?.id || '';
-      const nextStatus = taskDoc?.status || commandDoc?.task_status || commandDoc?.status || message.status || '';
+      const orphanedTracking = !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
+      const nextStatus = orphanedTracking ? 'failed' : (taskDoc?.status || commandDoc?.task_status || commandDoc?.status || message.status || '');
+      if (orphanedTracking && message.trackable !== false) {
+        message.trackable = false;
+        changed = true;
+      }
       if (nextTaskId && nextTaskId !== message.taskId) {
         message.taskId = nextTaskId;
         chat.lastTrackingId = nextTaskId;
@@ -1390,6 +1408,9 @@ async function syncTrackedMessages({ state, db }) {
       }
       if (nextStatus && nextStatus !== message.status) {
         message.status = nextStatus;
+        if (orphanedTracking) {
+          message.text = 'CTOX kann diese ältere Aufgabe nicht mehr verfolgen: kein passender Command oder Queue-Task ist vorhanden.';
+        }
         changed = true;
       }
       const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
@@ -1426,8 +1447,12 @@ async function syncTrackedMessages({ state, db }) {
 
 async function findDoc(collection, id) {
   if (!id) return null;
-  const doc = await collection.findOne(id).exec();
-  return doc?.toJSON?.() || null;
+  try {
+    const doc = await collection.findOne(id).exec();
+    return doc?.toJSON?.() || null;
+  } catch {
+    return null;
+  }
 }
 
 function extractOutboundText(doc) {
@@ -1452,6 +1477,15 @@ function extractOutboundText(doc) {
 
 function isFailureStatus(status) {
   return ['failed', 'blocked', 'stale_missing_native'].includes(String(status || '').toLowerCase());
+}
+
+function isActiveTrackingStatus(status) {
+  return ['accepted', 'queued', 'pending', 'pending_sync', 'waiting', 'running', 'processing', 'executing', 'active'].includes(String(status || '').toLowerCase());
+}
+
+function trackingMessageAgeMs(message) {
+  const createdAt = Number(message?.createdAt || 0);
+  return Number.isFinite(createdAt) && createdAt > 0 ? Math.max(0, Date.now() - createdAt) : 0;
 }
 
 function failureText(commandDoc, taskDoc) {

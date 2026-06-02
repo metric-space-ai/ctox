@@ -3655,6 +3655,7 @@ async fn sync_business_record_projections_with_database(
         since_by_collection.insert(collection_name, max_updated_at_ms.saturating_add(1));
     }
     count += reconcile_ctox_queue_task_projections(root.as_path(), database).await?;
+    count += reconcile_business_chat_tracking_projections(database).await?;
     Ok(count)
 }
 
@@ -3848,6 +3849,192 @@ fn projection_document_age_ms(document: &Value, fallback_updated_at_ms: i64) -> 
         .and_then(Value::as_i64)
         .unwrap_or(fallback_updated_at_ms);
     (now_ms() as i64).saturating_sub(updated_at_ms)
+}
+
+async fn reconcile_business_chat_tracking_projections(
+    database: &Arc<RxDatabase>,
+) -> anyhow::Result<usize> {
+    let chats = database
+        .collection("business_chats")
+        .context("business_chats collection is not registered")?;
+    let commands = database
+        .collection("business_commands")
+        .context("business_commands collection is not registered")?;
+    let queue = database
+        .collection("ctox_queue_tasks")
+        .context("ctox_queue_tasks collection is not registered")?;
+    let chat_docs = chats
+        .find(Some(MangoQuery {
+            limit: Some(200),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query business_chats for reconciliation: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec business_chats reconciliation query: {err}"))?;
+    let Some(chat_docs) = chat_docs.as_array() else {
+        return Ok(0);
+    };
+
+    let mut repaired = 0;
+    for chat_doc in chat_docs {
+        if chat_doc
+            .get("_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let mut next = chat_doc.clone();
+        let Some(object) = next.as_object_mut() else {
+            continue;
+        };
+        let Some(messages) = object.get_mut("messages").and_then(Value::as_array_mut) else {
+            continue;
+        };
+
+        let mut changed = false;
+        for message in messages.iter_mut() {
+            let Some(message_object) = message.as_object_mut() else {
+                continue;
+            };
+            let status = message_object
+                .get("status")
+                .and_then(Value::as_str)
+                .map(normalize_chat_tracking_status)
+                .unwrap_or_else(|| "queued".to_string());
+            if !chat_tracking_status_is_active(&status) {
+                continue;
+            }
+            let command_id = message_object
+                .get("commandId")
+                .or_else(|| message_object.get("command_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let task_id = message_object
+                .get("taskId")
+                .or_else(|| message_object.get("task_id"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            if command_id.is_none() && task_id.is_none() {
+                continue;
+            }
+
+            let command_doc = match command_id {
+                Some(command_id) => find_projection_document(&commands, command_id).await?,
+                None => None,
+            };
+            let resolved_task_id = task_id
+                .map(str::to_string)
+                .or_else(|| {
+                    command_doc
+                        .as_ref()
+                        .and_then(|doc| doc.get("task_id").and_then(Value::as_str))
+                        .map(str::to_string)
+                });
+            let task_doc = match resolved_task_id.as_deref() {
+                Some(task_id) => find_projection_document(&queue, task_id).await?,
+                None => None,
+            };
+            let next_status = task_doc
+                .as_ref()
+                .and_then(|doc| doc.get("status").and_then(Value::as_str))
+                .or_else(|| {
+                    command_doc
+                        .as_ref()
+                        .and_then(|doc| doc.get("task_status").and_then(Value::as_str))
+                })
+                .or_else(|| {
+                    command_doc
+                        .as_ref()
+                        .and_then(|doc| doc.get("status").and_then(Value::as_str))
+                })
+                .map(normalize_chat_tracking_status);
+            let orphaned = command_doc.is_none()
+                && task_doc.is_none()
+                && chat_tracking_message_age_ms(message_object) > 10 * 60 * 1_000;
+            let Some(next_status) = next_status.or_else(|| orphaned.then(|| "failed".to_string()))
+            else {
+                continue;
+            };
+
+            if Some(next_status.as_str())
+                != message_object.get("status").and_then(Value::as_str)
+            {
+                message_object.insert("status".to_string(), Value::String(next_status.clone()));
+                changed = true;
+            }
+            if let Some(task_id) = resolved_task_id.as_deref() {
+                if message_object.get("taskId").and_then(Value::as_str) != Some(task_id) {
+                    message_object.insert("taskId".to_string(), Value::String(task_id.to_string()));
+                    changed = true;
+                }
+            }
+            if orphaned {
+                message_object.insert(
+                    "text".to_string(),
+                    Value::String("CTOX kann diese ältere Aufgabe nicht mehr verfolgen: kein passender Command oder Queue-Task ist vorhanden.".to_string()),
+                );
+                message_object.insert("trackable".to_string(), Value::Bool(false));
+                changed = true;
+            }
+        }
+
+        if !changed {
+            continue;
+        }
+        object.remove("_rev");
+        object.remove("_meta");
+        object.remove("_attachments");
+        object.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
+        upsert_business_record_projection_document(&chats, next)
+            .await
+            .map_err(|err| anyhow::anyhow!("repair business_chats tracking projection: {err}"))?;
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
+async fn find_projection_document(
+    collection: &Arc<RxCollection>,
+    id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let document = collection
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ "id": { "$eq": id } })),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query projection document {id}: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec projection document {id} query: {err}"))?;
+    Ok(document.is_object().then_some(document))
+}
+
+fn normalize_chat_tracking_status(status: &str) -> String {
+    match status.trim().to_lowercase().as_str() {
+        "accepted" | "pending" | "pending_sync" | "waiting" => "queued".to_string(),
+        "processing" | "executing" | "active" | "working" | "leased" => "running".to_string(),
+        "success" | "done" | "erledigt" => "completed".to_string(),
+        "error" => "failed".to_string(),
+        value if value.is_empty() => "queued".to_string(),
+        value => value.to_string(),
+    }
+}
+
+fn chat_tracking_status_is_active(status: &str) -> bool {
+    matches!(status, "queued" | "running")
+}
+
+fn chat_tracking_message_age_ms(message: &serde_json::Map<String, Value>) -> i64 {
+    let created_at = message
+        .get("createdAt")
+        .or_else(|| message.get("created_at_ms"))
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    (now_ms() as i64).saturating_sub(created_at)
 }
 
 async fn upsert_business_record_projection(
@@ -6856,6 +7043,80 @@ mod tests {
                 Some("failed")
             );
             assert!(command_payload.get("error").and_then(Value::as_str).is_some());
+        });
+    }
+
+    #[test]
+    fn reconcile_business_chat_tracking_projections_fails_orphaned_messages() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let stale_at_ms = (now_ms() as i64).saturating_sub(20 * 60 * 1_000);
+            let chats = database
+                .collection("business_chats")
+                .expect("business_chats collection");
+            chats
+                .insert(json!({
+                    "id": "chat_orphaned",
+                    "title": "stale chat",
+                    "open": true,
+                    "messages": [
+                        {
+                            "id": "status_cmd_missing",
+                            "role": "ctox",
+                            "text": "Task angelegt und in der CTOX Queue.",
+                            "commandId": "cmd_missing",
+                            "taskId": "task_missing",
+                            "status": "queued",
+                            "createdAt": stale_at_ms
+                        }
+                    ],
+                    "updated_at_ms": stale_at_ms
+                }))
+                .await
+                .expect("insert stale chat projection");
+
+            assert_eq!(
+                reconcile_business_chat_tracking_projections(&database)
+                    .await
+                    .expect("reconcile chat projections"),
+                1
+            );
+
+            let repaired = chats
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "chat_orphaned" } })),
+                    ..Default::default()
+                }))
+                .expect("chat query")
+                .exec(false)
+                .await
+                .expect("chat document");
+            let message = repaired
+                .get("messages")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .expect("chat status message");
+            assert_eq!(message.get("status").and_then(Value::as_str), Some("failed"));
+            assert_eq!(message.get("trackable").and_then(Value::as_bool), Some(false));
+            assert!(
+                message
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .contains("kein passender Command")
+            );
         });
     }
 
