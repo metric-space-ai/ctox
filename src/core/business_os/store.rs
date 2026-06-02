@@ -1399,10 +1399,15 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         .cloned()
         .filter(|model| !model.trim().is_empty())
         .unwrap_or_else(|| chat_model.clone());
-    let fallback_llm_enabled = explicit_fallback_llm
-        && fallback_provider.eq_ignore_ascii_case("minimax")
+    let fallback_llm_enabled = (explicit_fallback_llm
+        || crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&upstream_base_url))
         && fallback_llm_model.eq_ignore_ascii_case("MiniMax-M3")
         && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&upstream_base_url);
+    let display_provider = if fallback_llm_enabled {
+        fallback_provider.clone()
+    } else {
+        provider.clone()
+    };
     let fallback_llm_notice = env_map
         .get("CTOX_FALLBACK_LLM_NOTICE")
         .cloned()
@@ -1430,7 +1435,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "web_stack": web_stack,
         "runtime": {
             "source": source,
-            "provider": provider,
+            "provider": display_provider,
             "chat_model": chat_model,
             "preset": preset,
             "context": context,
