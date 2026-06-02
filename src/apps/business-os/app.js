@@ -720,30 +720,36 @@ async function ensureSetupWizardStartupModule() {
   const existing = state.modules.find((mod) => mod.id === SETUP_WIZARD_MODULE_ID);
   if (existing) return existing;
 
-  try {
-    const response = await fetch(`modules/${SETUP_WIZARD_MODULE_ID}/module.json?v=${APP_BUILD}`, {
-      cache: 'no-store',
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const manifest = await response.json();
-    const id = String(manifest?.id || '').trim();
-    if (id !== SETUP_WIZARD_MODULE_ID) {
-      throw new Error(`unexpected module id ${id || '(empty)'}`);
+  const candidates = [
+    `modules/${SETUP_WIZARD_MODULE_ID}/module.json?v=${APP_BUILD}`,
+    `installed-modules/${SETUP_WIZARD_MODULE_ID}/module.json?v=${APP_BUILD}`,
+  ];
+
+  for (const manifestUrl of candidates) {
+    try {
+      const response = await fetch(manifestUrl, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const manifest = await response.json();
+      const id = String(manifest?.id || '').trim();
+      if (id !== SETUP_WIZARD_MODULE_ID) {
+        throw new Error(`unexpected module id ${id || '(empty)'}`);
+      }
+      const setupModule = {
+        ...manifest,
+        source: manifest.source || 'starter',
+        install_scope: manifest.install_scope || manifest.store?.install_scope || 'starter',
+        default_installed: manifest.default_installed === true,
+      };
+      state.modules = normalizeModuleList([setupModule, ...(state.modules || [])]);
+      state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
+      state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+      return setupModule;
+    } catch (error) {
+      console.warn('[business-os] setup wizard startup manifest unavailable', manifestUrl, error);
     }
-    const setupModule = {
-      ...manifest,
-      source: manifest.source || 'starter',
-      install_scope: manifest.install_scope || manifest.store?.install_scope || 'starter',
-      default_installed: manifest.default_installed === true,
-    };
-    state.modules = normalizeModuleList([setupModule, ...(state.modules || [])]);
-    state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
-    return setupModule;
-  } catch (error) {
-    console.warn('[business-os] setup wizard startup manifest unavailable', error);
-    return null;
   }
+
+  return null;
 }
 
 async function shouldOpenSetupWizardOnStartup() {
@@ -2976,7 +2982,10 @@ async function openDesktopApp(appId, options = {}) {
   });
   let teardown = null;
   try {
-    if (moduleDef) await registerModuleSchemas(moduleDef);
+    const schemaReadyBeforeMount = moduleDef?.id !== SETUP_WIZARD_MODULE_ID;
+    if (moduleDef && schemaReadyBeforeMount) {
+      await registerModuleSchemas(moduleDef);
+    }
     const appModule = await entry.loader();
     teardown = await appModule.mount(win.container, {
       db: createLiveDbFacade(),
@@ -3005,6 +3014,13 @@ async function openDesktopApp(appId, options = {}) {
       onClose: (closeOptions) => win.close(closeOptions),
       setTitle: win.setTitle,
     });
+    if (moduleDef && !schemaReadyBeforeMount) {
+      registerModuleSchemas(moduleDef)
+        .then(() => startModuleSync(moduleDef))
+        .catch((error) => {
+          console.warn(`[desktop-app:${appId}] background schema startup failed`, error);
+        });
+    }
   } catch (error) {
     console.error(`[desktop-app:${appId}] mount failed:`, error);
     win.container.innerHTML = `<p style="padding:16px;color:var(--danger);font-size:12px;">App-Start fehlgeschlagen: ${escapeHtml(String(error?.message || error))}</p>`;
@@ -3579,6 +3595,16 @@ async function openModule(moduleId, options = {}) {
   const mod = state.modules.find((item) => item.id === requestedId) || state.modules[0];
   if (!mod) return;
   if (moduleLaunchesAsDesktopApp(mod) && !options.asModule) {
+    if (mod.id === SETUP_WIZARD_MODULE_ID && !state.activeModule) {
+      if (currentHashModuleId() === mod.id) history.replaceState(null, '', location.pathname + location.search);
+      await openDesktopApp(mod.id, {
+        title: moduleDisplayTitle(mod),
+        width: mod.layout?.default_width || undefined,
+        height: mod.layout?.default_height || undefined,
+        args: options.args || {},
+      });
+      return;
+    }
     const fallbackId = state.activeModule?.id && state.activeModule.id !== mod.id
       ? state.activeModule.id
       : (state.modules.some((item) => item.id === 'ctox')
