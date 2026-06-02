@@ -5419,7 +5419,10 @@ async function loadShellCtoxHealth() {
   if (!coll) throw new Error('ctox_runtime_settings collection is required for shell health');
   await state.sync?.startCollection?.('ctox_runtime_settings');
   const doc = await coll.findOne('runtime-settings').exec();
-  const runtime = doc?.toJSON?.();
+  let runtime = doc?.toJSON?.();
+  if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
+    runtime = await fetchRuntimeSettingsSnapshot();
+  }
   if (!runtime || runtime._deleted === true || runtime.is_deleted === true) {
     throw new Error('Runtime-Status wurde noch nicht synchronisiert.');
   }
@@ -5429,6 +5432,14 @@ async function loadShellCtoxHealth() {
     ctox_service: runtime.service || null,
     runtime_settings: runtime,
   };
+}
+
+async function fetchRuntimeSettingsSnapshot() {
+  const response = await fetch('/api/business-os/runtime-settings', { cache: 'no-store' });
+  if (!response.ok) {
+    throw new Error(`Runtime-Status HTTP ${response.status}`);
+  }
+  return response.json();
 }
 
 function renderShellCtoxWarning(status) {

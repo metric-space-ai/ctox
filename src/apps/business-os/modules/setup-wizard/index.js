@@ -149,15 +149,17 @@ export async function mount(container, ctx = {}) {
   };
 
   async function loadInitialState() {
-    const [profile, runtimeSettings, communicationAccounts, onboarding] = await Promise.all([
+    const [profile, runtimeSettings, runtimeSnapshot, communicationAccounts, onboarding] = await Promise.all([
       readDoc(ctx.db, 'business_profile', PROFILE_ID).catch(() => null),
       readDoc(ctx.db, 'ctox_runtime_settings', 'runtime-settings').catch(() => null),
+      fetchRuntimeSettingsSnapshot().catch(() => null),
       readCollection(ctx.db, 'communication_accounts').catch(() => []),
       readDoc(ctx.db, 'business_onboarding_state', ONBOARDING_ID).catch(() => null),
     ]);
+    const effectiveRuntimeSettings = runtimeSettings?.fallback_llm?.enabled ? runtimeSettings : (runtimeSnapshot || runtimeSettings);
     state.profile = mergeProfile(profile);
-    state.runtimeSettings = runtimeSettings;
-    state.runtimeDraft = runtimeDraftFromSettings(runtimeSettings);
+    state.runtimeSettings = effectiveRuntimeSettings;
+    state.runtimeDraft = runtimeDraftFromSettings(effectiveRuntimeSettings);
     state.preferences = defaultPreferences(ctx);
     state.communicationAccounts = communicationAccounts;
     state.onboarding = onboarding;
@@ -321,7 +323,9 @@ export async function mount(container, ctx = {}) {
     const runtime = state.runtimeDraft;
     const provider = runtime.provider || 'local';
     const authMode = normalizedAuthMode(provider, runtime.auth_mode);
-    const showAuth = provider !== 'local';
+    const fallback = fallbackLlmInfo(state.runtimeSettings);
+    const fallbackActive = fallback.enabled && provider === 'minimax';
+    const showAuth = provider !== 'local' && !fallbackActive;
     const showApiKey = showAuth && authMode === 'api_key';
     return `
       <section class="setup-section">
@@ -329,6 +333,7 @@ export async function mount(container, ctx = {}) {
           <h3>LLM Provider</h3>
           <p>Die Auswahl wird in den regulaeren CTOX Runtime Settings gespeichert.</p>
         </header>
+        ${fallbackActive ? fallbackLlmNotice(fallback) : ''}
         <div class="setup-choice-grid">
           ${PROVIDERS.map((item) => `
             <label class="setup-choice">
@@ -653,10 +658,11 @@ export async function mount(container, ctx = {}) {
   function runtimePayload() {
     const provider = state.runtimeDraft.provider || 'local';
     const authMode = normalizedAuthMode(provider, state.runtimeDraft.auth_mode);
+    const fallback = fallbackLlmInfo(state.runtimeSettings);
     return {
       provider,
       auth_mode: authMode,
-      chat_model: state.runtimeDraft.chat_model || defaultModelForProvider(provider),
+      chat_model: state.runtimeDraft.chat_model || fallback.model || defaultModelForProvider(provider),
       preset: state.runtimeDraft.preset || 'Quality',
       context: state.runtimeDraft.context || '256k',
       max_run_secs: Number(state.runtimeDraft.max_run_secs || 1800),
@@ -703,6 +709,7 @@ export async function mount(container, ctx = {}) {
       return Boolean(state.profile.company_name && state.profile.mission_statement && state.profile.vision_statement);
     }
     if (stepId === 'runtime') {
+      if (fallbackLlmInfo(state.runtimeSettings).enabled) return true;
       const provider = state.runtimeDraft.provider || 'local';
       const authMode = normalizedAuthMode(provider, state.runtimeDraft.auth_mode);
       if (provider === 'local') return true;
@@ -877,16 +884,51 @@ function defaultRuntimeDraft() {
 function runtimeDraftFromSettings(settings) {
   const runtime = settings?.runtime || {};
   const auth = settings?.auth || {};
-  const provider = runtime.provider || 'local';
+  const fallback = fallbackLlmInfo(settings);
+  const provider = fallback.enabled ? 'minimax' : (runtime.provider || 'local');
   return {
     provider,
-    auth_mode: normalizedAuthMode(provider, auth.mode),
-    chat_model: runtime.chat_model || '',
+    auth_mode: fallback.enabled ? 'api_key' : normalizedAuthMode(provider, auth.mode),
+    chat_model: fallback.enabled ? (fallback.model || 'MiniMax-M3') : (runtime.chat_model || ''),
     preset: runtime.preset || 'Quality',
-    context: runtime.context || '256k',
+    context: fallback.enabled ? '128k' : (runtime.context || '256k'),
     max_run_secs: Number(runtime.max_run_secs || 1800),
     api_key: '',
   };
+}
+
+async function fetchRuntimeSettingsSnapshot() {
+  const response = await fetch('/api/business-os/runtime-settings', { cache: 'no-store' });
+  if (!response.ok) throw new Error(`Runtime Settings HTTP ${response.status}`);
+  return response.json();
+}
+
+function fallbackLlmInfo(settings) {
+  const fallback = settings?.fallback_llm || {};
+  const runtime = settings?.runtime || {};
+  const provider = String(runtime.provider || '').toLowerCase();
+  const model = String(fallback.model || runtime.chat_model || '');
+  const proxyBaseUrl = String(fallback.proxy_base_url || runtime.upstream_base_url || '');
+  const enabled = Boolean(fallback.enabled)
+    || (
+      provider === 'minimax'
+      && model.toLowerCase() === 'minimax-m3'
+      && /^https:\/\/llm\.ctox\.dev(?:\/|$)/i.test(proxyBaseUrl)
+    );
+  return {
+    enabled,
+    model: model || 'MiniMax-M3',
+    message: String(fallback.message || 'CTOX laeuft gerade ueber MiniMax-M3 als limitierten ctox.dev Fallback. Fuer die beste Erfahrung verbinde spaeter ein Frontiermodell per Subscription oder API-Key.'),
+  };
+}
+
+function fallbackLlmNotice(fallback) {
+  return `
+    <div class="setup-message setup-warning">
+      <strong>Limitierter Fallback aktiv:</strong>
+      ${escapeHtml(fallback.message)}
+    </div>
+  `;
 }
 
 function normalizedAuthMode(provider, mode) {

@@ -502,6 +502,9 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/sync/config") => {
             respond_json(request, &store::sync_config(root)?)?;
         }
+        (Method::Get, "/api/business-os/runtime-settings") => {
+            respond_json_value(request, store::runtime_settings_for_rxdb(root)?)?;
+        }
         (Method::Post, "/api/business-os/sync/native-peer/restart") => {
             if std::env::var_os("CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS").is_none() {
                 respond_status(request, 403, "native peer restart is not enabled")?;
@@ -723,6 +726,7 @@ fn is_business_os_http_exception_path(path: &str) -> bool {
     is_subscription_auth_path(path)
         || path == "/api/business-os/commands/status"
         || path == "/api/business-os/commands"
+        || path == "/api/business-os/runtime-settings"
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {

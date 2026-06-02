@@ -1377,7 +1377,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let fallback_llm_enabled = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
         && provider.eq_ignore_ascii_case("minimax")
         && chat_model.eq_ignore_ascii_case("MiniMax-M3")
-        && upstream_base_url.contains("/api/fallback-llm");
+        && crate::inference::runtime_state::is_ctox_llm_proxy_base_url(&upstream_base_url);
     let fallback_llm_model = env_map
         .get("CTOX_FALLBACK_LLM_MODEL")
         .cloned()
@@ -1399,6 +1399,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
         "fallback_llm": {
             "enabled": fallback_llm_enabled,
             "provider": "ctox.dev",
+            "proxy_base_url": if fallback_llm_enabled { upstream_base_url.clone() } else { String::new() },
             "upstream_provider": if fallback_llm_enabled { provider.clone() } else { String::new() },
             "model": fallback_llm_model,
             "limited": fallback_llm_enabled,
@@ -2079,6 +2080,15 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
     let chat_model = request.chat_model.trim();
     let preset = request.preset.trim();
     let context = request.context.trim();
+    let fallback_llm_active = runtime_env_truthy(env_map.get("CTOX_FALLBACK_LLM"))
+        && provider.eq_ignore_ascii_case("minimax")
+        && chat_model.eq_ignore_ascii_case("MiniMax-M3")
+        && env_map
+            .get("CTOX_LLM_PROXY_BASE_URL")
+            .map(|value| crate::inference::runtime_state::is_ctox_llm_proxy_base_url(value))
+            .unwrap_or(false);
+    let api_key = request.api_key.trim();
+
     if provider.eq_ignore_ascii_case("local") {
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
         env_map.remove("CTOX_API_PROVIDER");
@@ -2088,11 +2098,17 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
     } else {
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned());
         env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
-        env_map.insert(
-            "CTOX_UPSTREAM_BASE_URL".to_owned(),
-            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
-                .to_owned(),
-        );
+        if fallback_llm_active && api_key.is_empty() {
+            if let Some(proxy_base_url) = env_map.get("CTOX_LLM_PROXY_BASE_URL").cloned() {
+                env_map.insert("CTOX_UPSTREAM_BASE_URL".to_owned(), proxy_base_url);
+            }
+        } else {
+            env_map.insert(
+                "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
+                    .to_owned(),
+            );
+        }
     }
     if !chat_model.is_empty() {
         env_map.insert("CTOX_CHAT_MODEL".to_owned(), chat_model.to_owned());
@@ -2129,10 +2145,12 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         env_map.insert("OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
         env_map.insert("CTOX_OPENAI_AUTH_MODE".to_owned(), "api_key".to_owned());
     }
-    let api_key = request.api_key.trim();
     if !api_key.is_empty() {
         let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(provider);
         env_map.insert(key_name.to_owned(), api_key.to_owned());
+        env_map.remove("CTOX_FALLBACK_LLM");
+        env_map.remove("CTOX_FALLBACK_LLM_MODEL");
+        env_map.remove("CTOX_FALLBACK_LLM_NOTICE");
     }
     crate::inference::runtime_env::save_runtime_env_map(root, &env_map)
 }

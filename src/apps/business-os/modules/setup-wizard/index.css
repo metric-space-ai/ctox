@@ -425,6 +425,12 @@
   font-size: 13px;
 }
 
+.setup-message.setup-warning {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--setup-text);
+}
+
 @media (max-width: 900px) {
   .setup-wizard {
     grid-template-columns: 164px minmax(0, 1fr);
