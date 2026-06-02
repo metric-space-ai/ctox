@@ -20,13 +20,10 @@ const DEFAULT_OPENAI_RESPONSES_BASE_URL: &str = "https://api.openai.com";
 const DEFAULT_ANTHROPIC_RESPONSES_BASE_URL: &str = "https://api.anthropic.com/v1";
 const DEFAULT_OPENROUTER_RESPONSES_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const DEFAULT_AZURE_FOUNDRY_RESPONSES_BASE_URL: &str = "";
-// MiniMax exposes an OpenAI-compatible chat-completions surface at
-// https://api.minimax.io/v1/chat/completions. Keys issued on
-// platform.minimax.io authenticate here as Bearer tokens just like
-// OpenAI's. The base URL deliberately omits the trailing `/v1` because
-// CTOX' gateway concatenates the adapter-emitted upstream_path
-// (`/v1/chat/completions`) onto this base — same convention as
-// DEFAULT_OPENAI_RESPONSES_BASE_URL.
+// MiniMax exposes a Responses surface at https://api.minimax.io/v1/responses.
+// Keys issued on platform.minimax.io authenticate here as Bearer tokens. The
+// base URL deliberately omits the trailing `/v1` because CTOX normalizes API
+// bases through responses_api_base_url(), same as OpenAI.
 const DEFAULT_MINIMAX_RESPONSES_BASE_URL: &str = "https://api.minimax.io";
 const API_PROVIDER_LOCAL: &str = "local";
 const LOCAL_RUNTIME_CANDLE: &str = "candle";
@@ -35,6 +32,8 @@ const API_PROVIDER_ANTHROPIC: &str = "anthropic";
 const API_PROVIDER_OPENROUTER: &str = "openrouter";
 const API_PROVIDER_MINIMAX: &str = "minimax";
 const API_PROVIDER_AZURE_FOUNDRY: &str = "azure_foundry";
+pub const CTOX_LLM_PROXY_API_KEY_ENV: &str = "CTOX_LLM_PROXY_API_KEY";
+pub const CTOX_LLM_PROXY_BASE_URL_ENV: &str = "CTOX_LLM_PROXY_BASE_URL";
 
 fn default_auxiliary_enabled() -> bool {
     true
@@ -361,6 +360,45 @@ pub fn api_key_env_var_for_provider(provider: &str) -> &'static str {
 
 pub fn api_key_env_var_for_upstream_base_url(upstream_base_url: &str) -> &'static str {
     api_key_env_var_for_provider(api_provider_for_upstream_base_url(upstream_base_url))
+}
+
+pub fn is_ctox_llm_proxy_base_url(base_url: &str) -> bool {
+    let trimmed = base_url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    url::Url::parse(trimmed)
+        .ok()
+        .and_then(|url| {
+            let host = url.host_str()?.to_ascii_lowercase();
+            let path = url.path().to_ascii_lowercase();
+            Some(host == "llm.ctox.dev" || (host.ends_with(".ctox.dev") && path.contains("/api/fallback-llm")))
+        })
+        .unwrap_or_else(|| trimmed.to_ascii_lowercase().contains("/api/fallback-llm"))
+}
+
+pub fn use_ctox_llm_proxy_credentials(env_map: &BTreeMap<String, String>) -> bool {
+    env_string(env_map, CTOX_LLM_PROXY_API_KEY_ENV)
+        .is_some_and(|value| !value.trim().is_empty())
+        || env_string(env_map, CTOX_LLM_PROXY_BASE_URL_ENV)
+            .is_some_and(|value| is_ctox_llm_proxy_base_url(&value))
+        || env_string(env_map, "CTOX_UPSTREAM_BASE_URL")
+            .is_some_and(|value| is_ctox_llm_proxy_base_url(&value))
+        || env_string(env_map, "CTOX_FALLBACK_LLM")
+            .is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+}
+
+pub fn api_key_env_var_for_provider_with_env_map(
+    provider: &str,
+    env_map: &BTreeMap<String, String>,
+) -> &'static str {
+    if normalize_api_provider(provider).eq_ignore_ascii_case(API_PROVIDER_MINIMAX)
+        && use_ctox_llm_proxy_credentials(env_map)
+    {
+        CTOX_LLM_PROXY_API_KEY_ENV
+    } else {
+        api_key_env_var_for_provider(provider)
+    }
 }
 
 pub fn local_upstream_base_url(port: u16) -> String {
