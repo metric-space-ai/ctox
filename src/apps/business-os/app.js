@@ -28,6 +28,8 @@ const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
 const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets', 'explorer', 'knowledge', 'app-store', 'research', 'calendar'];
+const DEFAULT_LAUNCHER_MODULE_IDS = new Set(['ctox', 'tickets', 'documents', 'spreadsheets', 'knowledge', 'app-store', 'research', 'calendar']);
+const DEFAULT_LAUNCHER_DESKTOP_APP_IDS = new Set(['explorer']);
 // Shell-critical collections this app eagerly warms at boot. This MUST stay a
 // subset of SHELL_CRITICAL_COLLECTIONS, the single source of truth exported by
 // the ctox-rxdb-js bundle (rxdb/src/webrtc-native.mjs). The browser_* shell
@@ -2903,6 +2905,7 @@ function listDesktopApps() {
   const allowActive = allow.size > 0;
   const desktopModuleApps = (state.modules || [])
     .filter(moduleLaunchesAsDesktopApp)
+    .filter(moduleIsLaunchVisible)
     .map((mod) => ({
       id: mod.id,
       title: moduleDisplayTitle(mod),
@@ -2912,6 +2915,7 @@ function listDesktopApps() {
     }));
   const staticApps = DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
+    .filter((app) => DEFAULT_LAUNCHER_DESKTOP_APP_IDS.has(app.id))
     // Under an active allowlist, only surface allowlisted apps plus the always-available
     // file tools — so hiding a full-workspace module (e.g. creator) can't make it
     // resurface as a desktop-app icon.
@@ -3252,7 +3256,17 @@ function moduleAppearsInSwitcher(mod) {
     && mod.id !== 'desktop'
     && mod.id !== 'notizen'
     && mod.install_scope !== 'internal'
+    && moduleIsLaunchVisible(mod)
     && !moduleLaunchesAsDesktopApp(mod);
+}
+
+function moduleIsLaunchVisible(mod) {
+  if (!mod?.id || mod.id === 'desktop' || mod.install_scope === 'internal') return false;
+  if (DEFAULT_LAUNCHER_MODULE_IDS.has(mod.id)) return true;
+  if (mod.id === SETUP_WIZARD_MODULE_ID) return true;
+  const scope = String(mod.install_scope || mod.store?.install_scope || '').toLowerCase();
+  const source = String(mod.source || '').toLowerCase();
+  return scope === 'installed' || source === 'installed';
 }
 
 function listLaunchTargets(kind = '') {
@@ -3271,6 +3285,7 @@ function listLaunchTargets(kind = '') {
     }));
   const desktopModuleTargets = state.modules
     .filter(moduleLaunchesAsDesktopApp)
+    .filter(moduleIsLaunchVisible)
     .map((mod) => ({
       id: mod.id,
       kind: 'app',
@@ -3280,6 +3295,7 @@ function listLaunchTargets(kind = '') {
     }));
   const appTargets = DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
+    .filter((app) => DEFAULT_LAUNCHER_DESKTOP_APP_IDS.has(app.id))
     .map((app) => ({
       id: app.id,
       kind: 'app',

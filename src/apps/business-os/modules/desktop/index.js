@@ -8,6 +8,8 @@ const STYLE_BUILD = '20260528-desktop-isolated-fix1';
 const LAYOUT_DOC_ID = 'layout';
 const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
 const COMPACT_GRID = { cellW: 88, cellH: 100, offset: 12 };
+const DEFAULT_DESKTOP_MODULE_IDS = new Set(['ctox', 'tickets', 'documents', 'spreadsheets', 'knowledge', 'app-store', 'research', 'calendar']);
+const DEFAULT_DESKTOP_APP_IDS = new Set(['explorer']);
 const ICON_METRICS = {
   width: 96,
   height: 104,
@@ -77,7 +79,7 @@ export async function mount(ctx) {
   };
 
   const launcher = createCtoxLauncher({
-    modules: await loadModuleRegistry(),
+    modules: Array.isArray(ctx.modules) && ctx.modules.length ? ctx.modules : await loadModuleRegistry(),
     apps: ctx.desktopApps || [],
     currentModuleId: ctx.module.id,
     openApp: ctx.openDesktopApp,
@@ -412,7 +414,7 @@ export async function mount(ctx) {
     if (!iconsCollection) return;
     const existing = await iconsCollection.find().exec();
     const existingTargets = new Set(existing.map((doc) => doc.target_module).filter(Boolean));
-    const entries = launcher.entries().filter((entry) => !existingTargets.has(entry.id));
+    const entries = defaultDesktopEntries(launcher).filter((entry) => !existingTargets.has(entry.id));
     if (!entries.length) {
       await renderIcons();
       return;
@@ -548,7 +550,7 @@ export async function mount(ctx) {
     if (!collection) return;
     const existing = await collection.find().exec();
     const grid = currentGrid();
-    const entries = launcherRef.entries();
+    const entries = defaultDesktopEntries(launcherRef);
     const existingById = new Map(existing.map((doc) => [doc.id, doc]));
     const visibleLauncherIcons = existing.filter((doc) => !doc.hidden && launcherRef.knows(doc.target_module));
     const shouldUnhideDefaults = force || !visibleLauncherIcons.length;
@@ -584,6 +586,16 @@ export async function mount(ctx) {
       sort_index: index,
       updated_at_ms: Date.now(),
     };
+  }
+
+  function defaultDesktopEntries(launcherRef) {
+    return launcherRef.entries().filter((entry) => {
+      if (entry.kind === 'app') return DEFAULT_DESKTOP_APP_IDS.has(entry.id);
+      if (DEFAULT_DESKTOP_MODULE_IDS.has(entry.id)) return true;
+      const scope = String(entry.install_scope || entry.store?.install_scope || '').toLowerCase();
+      const source = String(entry.source || '').toLowerCase();
+      return scope === 'installed' || source === 'installed';
+    });
   }
 
   function normalizeIconPatch(doc, seed, grid, shouldUnhide) {
