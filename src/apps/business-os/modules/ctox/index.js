@@ -2961,7 +2961,9 @@ async function requestWebStackAuthAssist(state, source) {
 async function loadLocalCollection(ctx, collectionName) {
   const collection = ctx.db?.raw?.[collectionName];
   if (!collection) return [];
-  const localDocs = await collection.find().exec();
+  const query = collection.find();
+  const previewQuery = typeof query?.limit === 'function' ? query.limit(200) : query;
+  const localDocs = await previewQuery.exec();
   return localDocs
     .map((doc) => doc.toJSON())
     .sort((left, right) => (right.updated_at_ms || 0) - (left.updated_at_ms || 0))
