@@ -3982,8 +3982,37 @@ function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
   };
 }
 var SHARED_ROOM_PEERS = /* @__PURE__ */ new Map();
+var VOLATILE_SIGNALING_QUERY_PARAMS = /* @__PURE__ */ new Set([
+  "client",
+  "role",
+  "peer_role",
+  "instance_id",
+  "instance",
+  "protocol",
+  "cap",
+  "capability",
+  "capabilities",
+  "token",
+  "token_iat",
+  "token_exp"
+]);
 function sharedRoomPeerKey(signalingUrl, room) {
-  return `${String(signalingUrl || "")}::${String(room || "")}`;
+  return `${stableSignalingUrlKey(signalingUrl)}::${String(room || "")}`;
+}
+function stableSignalingUrlKey(signalingUrl) {
+  const raw = String(signalingUrl || "");
+  try {
+    const url = new URL(raw, "ws://local");
+    for (const key of [...url.searchParams.keys()]) {
+      if (VOLATILE_SIGNALING_QUERY_PARAMS.has(key)) {
+        url.searchParams.delete(key);
+      }
+    }
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return raw;
+  }
 }
 var SharedRoomPeer = class {
   constructor({ key, signalingUrl, room, iceServers, expectedNativePeerId }) {
