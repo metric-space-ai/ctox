@@ -6,7 +6,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260527-conversations-diagnostics1';
+const STYLE_BUILD = '20260604-rxdb-shared-catchup1';
 const SUPPORTED_CHANNELS = ['whatsapp', 'email', 'jami', 'teams', 'meeting'];
 const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
   'communication_accounts',

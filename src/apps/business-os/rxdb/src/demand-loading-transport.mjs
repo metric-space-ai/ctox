@@ -18,6 +18,7 @@ const QUERY_STREAM_LIMIT_RETRIES = 6;
 const QUERY_PEER_RETRY_MS = 250;
 const QUERY_PEER_RETRIES = 24;
 const GLOBAL_QUERY_STREAM_STATE_KEY = Symbol.for('ctox.rxdb.query-stream-state.v1');
+const CANCELLED_QUERY_REQUEST_LIMIT = 256;
 
 /// Build the request-handler map that should be merged into
 /// `createCtoxWebRtcNativePeer({ requestHandlers })`. The returned object
@@ -30,6 +31,7 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   const queryCollectors = new Map();   // requestId -> { chunks, resolve, reject, decoded }
   const fileCollectors = new Map();    // requestId -> { chunks, resolve, reject }
   const queryStreamState = getGlobalQueryStreamState();
+  const cancelledQueryRequests = new Map();
 
   function routeQueryChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
@@ -83,10 +85,10 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   function attach(p) { peer = p; }
 
   async function requestQueryFetch(envelope) {
-    return withQueryStreamSlot(() => requestQueryFetchWithRetry(envelope));
+    return withQueryStreamSlot(envelope?.requestId, () => requestQueryFetchWithRetry(envelope));
   }
 
-  function withQueryStreamSlot(fn) {
+  function withQueryStreamSlot(requestId, fn) {
     return new Promise((resolve, reject) => {
       const run = () => {
         queryStreamState.active += 1;
@@ -96,11 +98,11 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
           .finally(() => {
             queryStreamState.active = Math.max(0, queryStreamState.active - 1);
             const next = queryStreamState.queue.shift();
-            if (next) queueMicrotask(next);
+            if (next) queueMicrotask(typeof next === 'function' ? next : next.run);
           });
       };
       if (queryStreamState.active < CLIENT_QUERY_STREAM_LIMIT) run();
-      else queryStreamState.queue.push(run);
+      else queryStreamState.queue.push({ requestId: String(requestId || ''), run, reject });
     });
   }
 
@@ -124,10 +126,12 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
   }
 
   async function requestQueryFetchOnce(envelope) {
+    const requestId = envelope?.requestId;
+    const cancelReason = consumeQueryCancelReason(requestId);
+    if (cancelReason) throw createQueryCancelError(cancelReason);
     if (!peer) throw new Error('demand transport has no peer attached');
-    const peerId = getPeerId();
+    const peerId = resolvePeerId();
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
-    const requestId = envelope.requestId;
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject });
     });
@@ -169,21 +173,37 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  async function requestQueryCancel({ requestId }) {
-    if (!peer || !requestId) return;
-    const peerId = getPeerId();
-    if (!peerId) return;
-    try {
-      await peer.request(peerId, CTOX_QUERY_RPC.cancel, [{ requestId, reason: 'client-abort' }], 2000);
-    } catch {
-      // best-effort
+  async function requestQueryCancel({ requestId, reason = 'client-abort' }) {
+    if (!requestId) return;
+    const matchingRequestIds = matchingQueryRequestIds(requestId);
+    const queuedRequestIds = rejectQueuedQueryRequests(requestId, reason);
+    if (!matchingRequestIds.length && !queuedRequestIds.length) {
+      markQueryCancelled(requestId, reason);
     }
-    queryCollectors.delete(requestId);
+    const error = createQueryCancelError(reason);
+    for (const activeRequestId of matchingRequestIds) {
+      rejectQueryCollector(activeRequestId, error);
+    }
+    const cancelRequestIds = matchingRequestIds.length
+      ? matchingRequestIds
+      : queuedRequestIds.length
+        ? []
+        : [requestId];
+    const peerId = peer ? resolvePeerId() : '';
+    if (peer && peerId) {
+      for (const activeRequestId of cancelRequestIds) {
+        try {
+          await peer.request(peerId, CTOX_QUERY_RPC.cancel, [{ requestId: activeRequestId, reason }], 2000);
+        } catch {
+          // best-effort
+        }
+      }
+    }
   }
 
   async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
     if (!peer) throw new Error('demand transport has no peer attached');
-    const peerId = getPeerId();
+    const peerId = resolvePeerId();
     if (!peerId) throw new Error('PEER_UNAVAILABLE');
     const promise = new Promise((resolve, reject) => {
       fileCollectors.set(requestId, { chunks: [], resolve, reject });
@@ -206,6 +226,109 @@ export function createDemandLoadingTransport({ getPeerId } = {}) {
 
   function pendingQueryCount() { return queryCollectors.size + queryStreamState.queue.length; }
   function pendingFileCount() { return fileCollectors.size; }
+
+  function matchingQueryRequestIds(requestId) {
+    const raw = String(requestId || '');
+    if (!raw) return [];
+    const ids = [];
+    if (queryCollectors.has(raw)) ids.push(raw);
+    const prefix = `${raw}|`;
+    for (const id of queryCollectors.keys()) {
+      if (id !== raw && id.startsWith(prefix)) ids.push(id);
+    }
+    return ids;
+  }
+
+  function rejectQueryCollector(requestId, error) {
+    const slot = queryCollectors.get(requestId);
+    if (!slot) return false;
+    queryCollectors.delete(requestId);
+    slot.reject(error);
+    return true;
+  }
+
+  function rejectQueuedQueryRequests(requestId, reason) {
+    const raw = String(requestId || '');
+    if (!raw) return [];
+    const prefix = `${raw}|`;
+    const remaining = [];
+    const rejectedIds = [];
+    const error = createQueryCancelError(reason);
+    for (const entry of queryStreamState.queue) {
+      const queuedRequestId = queuedQueryRequestId(entry);
+      if (queuedRequestId && (queuedRequestId === raw || queuedRequestId.startsWith(prefix))) {
+        rejectedIds.push(queuedRequestId);
+        entry.reject(error);
+      } else {
+        remaining.push(entry);
+      }
+    }
+    if (rejectedIds.length) {
+      queryStreamState.queue.splice(0, queryStreamState.queue.length, ...remaining);
+    }
+    return rejectedIds;
+  }
+
+  function queuedQueryRequestId(entry) {
+    if (!entry || typeof entry === 'function') return '';
+    return String(entry.requestId || '');
+  }
+
+  function markQueryCancelled(requestId, reason) {
+    const raw = String(requestId || '');
+    if (!raw) return;
+    cancelledQueryRequests.set(raw, reason || 'client-abort');
+    while (cancelledQueryRequests.size > CANCELLED_QUERY_REQUEST_LIMIT) {
+      const oldest = cancelledQueryRequests.keys().next().value;
+      cancelledQueryRequests.delete(oldest);
+    }
+  }
+
+  function consumeQueryCancelReason(requestId) {
+    const raw = String(requestId || '');
+    if (!raw) return '';
+    if (cancelledQueryRequests.has(raw)) {
+      const reason = cancelledQueryRequests.get(raw);
+      cancelledQueryRequests.delete(raw);
+      return reason;
+    }
+    for (const [cancelledRequestId, reason] of cancelledQueryRequests) {
+      if (raw.startsWith(`${cancelledRequestId}|`)) {
+        cancelledQueryRequests.delete(cancelledRequestId);
+        return reason;
+      }
+    }
+    return '';
+  }
+
+  function createQueryCancelError(reason) {
+    const error = new Error(`QUERY_CANCELLED: ${reason || 'client-abort'}`);
+    error.code = 'QUERY_CANCELLED';
+    error.retryable = false;
+    return error;
+  }
+
+  function resolvePeerId() {
+    const configured = getPeerId();
+    if (configured) return configured;
+    return firstOpenPeerId();
+  }
+
+  function firstOpenPeerId() {
+    const entries = peer?.connections?.entries?.();
+    if (!entries) return '';
+    for (const [peerId, connection] of entries) {
+      const channelState = connection?.channel?.readyState || connection?.channelReadyState || '';
+      const peerState = connection?.peer?.connectionState
+        || connection?.peerConnectionState
+        || connection?.connectionState
+        || '';
+      if (channelState === 'open' && !['closed', 'failed', 'disconnected'].includes(String(peerState))) {
+        return peerId;
+      }
+    }
+    return '';
+  }
 
   return {
     requestHandlers,

@@ -1,4 +1,4 @@
-import { FILE_CHUNK_ERROR_CODES, readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity5';
+import { FILE_CHUNK_ERROR_CODES, readStoredFileFromChunks } from '../../shared/file-integrity.js?v=20260604-rxdb-shared-catchup1';
 
 export const manifest = {
   id: 'file-viewer',

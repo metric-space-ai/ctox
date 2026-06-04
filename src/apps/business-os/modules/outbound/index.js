@@ -15,9 +15,9 @@ import {
   handleActiveOutreachAction,
   handleActiveOutreachInput,
   activeOutreachCounts,
-} from './active-outreach.js?v=20260527-outbound-ui-e2e3';
+} from './active-outreach.js?v=20260604-rxdb-shared-catchup1';
 
-const BUILD = '20260527-outbound-ui-e2e3';
+const BUILD = '20260604-rxdb-shared-catchup1';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {

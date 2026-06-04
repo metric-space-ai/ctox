@@ -3356,16 +3356,16 @@ function createQueryDemandLoader({
       for (const [dedupKey, job] of inflightByFingerprint.entries()) {
         const [, fingerprint] = dedupKey.split("|");
         cancelled.push({ dedupKey, fingerprint });
+        try {
+          job.catch?.(() => {
+          });
+        } catch {
+        }
         if (typeof requestCancel === "function") {
           try {
             await requestCancel({ requestId: dedupKey, fingerprint, reason });
           } catch {
           }
-        }
-        try {
-          job.catch?.(() => {
-          });
-        } catch {
         }
       }
       inflightByFingerprint.clear();

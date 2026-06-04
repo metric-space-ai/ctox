@@ -1,4 +1,4 @@
-import { mount as mountBrowserModule } from '../../modules/browser/index.js?v=20260528-windowed-browser1';
+import { mount as mountBrowserModule } from '../../modules/browser/index.js?v=20260604-rxdb-shared-catchup1';
 
 export const manifest = {
   id: 'browser',

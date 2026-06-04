@@ -18,7 +18,7 @@ const HARNESS_STALL_GRACE_MS = 90 * 1000;
 const HARNESS_WAITING_STATUSES = new Set(['queued', 'pending', 'accepted']);
 const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'drafting']);
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260528-harness-health2';
+const CTOX_STYLE_BUILD = '20260604-rxdb-shared-catchup1';
 
 const labels = {
   de: {

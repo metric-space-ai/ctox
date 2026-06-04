@@ -21,7 +21,7 @@ const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 // still recovers on its own without a full app reload.
 const SLOW_MODULE_SYNC_RETRY_MS = 60000;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
-const RXDB_BOOTSTRAP_VERSION = '20260602-rxdb-command-sync1';
+const RXDB_BOOTSTRAP_VERSION = APP_BUILD;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
@@ -281,12 +281,12 @@ const LEGACY_MODULE_ALIASES = new Map(Object.entries(moduleAliases));
 async function loadShellUiModules() {
   if (!shellUiModulesPromise) {
     shellUiModulesPromise = Promise.all([
-      importBusinessOsModule('./shared/event-bus.js?v=20260519-shell-os1', 'shell event bus'),
-      importBusinessOsModule('./shared/notifications.js?v=20260519-shell-os1', 'shell notifications'),
-      importBusinessOsModule('./shared/context-menu.js?v=20260519-shell-os1', 'shell context menu'),
+      importBusinessOsModule(`./shared/event-bus.js?v=${APP_BUILD}`, 'shell event bus'),
+      importBusinessOsModule(`./shared/notifications.js?v=${APP_BUILD}`, 'shell notifications'),
+      importBusinessOsModule(`./shared/context-menu.js?v=${APP_BUILD}`, 'shell context menu'),
       importBusinessOsModule(`./shared/window-manager.js?v=${APP_BUILD}`, 'shell window manager'),
       importBusinessOsModule(`./shared/taskbar.js?v=${APP_BUILD}`, 'shell taskbar'),
-      importBusinessOsModule('./shared/window-switcher.js?v=20260519-shell-os1', 'shell window switcher'),
+      importBusinessOsModule(`./shared/window-switcher.js?v=${APP_BUILD}`, 'shell window switcher'),
     ]).then(([
       eventBus,
       notifications,
@@ -309,14 +309,14 @@ async function loadShellUiModules() {
 
 async function loadShellDialogsModule() {
   if (!shellDialogsModulePromise) {
-    shellDialogsModulePromise = importBusinessOsModule('./shared/dialogs.js?v=20260527-rxdb-release1', 'shell dialogs');
+    shellDialogsModulePromise = importBusinessOsModule(`./shared/dialogs.js?v=${APP_BUILD}`, 'shell dialogs');
   }
   return shellDialogsModulePromise;
 }
 
 async function loadShellIconsModule() {
   if (!shellIconsModulePromise) {
-    shellIconsModulePromise = importBusinessOsModule('./shared/icons.js?v=20260520-svg-icons2', 'shell icons')
+    shellIconsModulePromise = importBusinessOsModule(`./shared/icons.js?v=${APP_BUILD}`, 'shell icons')
       .then((mod) => {
         shellIconsModule = mod;
         return mod;
@@ -353,7 +353,7 @@ async function loadSyncModule() {
 
 async function loadCommandBusModule() {
   if (!commandBusModulePromise) {
-    commandBusModulePromise = importBusinessOsModule('./shared/command-bus.js?v=20260602-command-sync6', 'command bus');
+    commandBusModulePromise = importBusinessOsModule(`./shared/command-bus.js?v=${APP_BUILD}`, 'command bus');
   }
   return commandBusModulePromise;
 }
@@ -361,8 +361,8 @@ async function loadCommandBusModule() {
 async function loadCoreSchemaModules() {
   if (!coreSchemaModulesPromise) {
     coreSchemaModulesPromise = Promise.all([
-      importBusinessOsModule('./modules/ctox/schema.js?v=20260525-file-viewer-command-reuse1', 'ctox core schema'),
-      importBusinessOsModule('./modules/desktop/schema.js?v=20260525-file-viewer-command-reuse1', 'desktop core schema'),
+      importBusinessOsModule(`./modules/ctox/schema.js?v=${APP_BUILD}`, 'ctox core schema'),
+      importBusinessOsModule(`./modules/desktop/schema.js?v=${APP_BUILD}`, 'desktop core schema'),
     ]).then(([ctox, desktop]) => ({ ctox, desktop }));
   }
   return coreSchemaModulesPromise;
@@ -2780,7 +2780,7 @@ const DESKTOP_APPS = [
     glyph: '📁',
     defaultWidth: 720,
     defaultHeight: 460,
-    loader: () => import('./desktop-apps/explorer/app.js?v=20260522-file-chunk-integrity4'),
+    loader: () => import(`./desktop-apps/explorer/app.js?v=${APP_BUILD}`),
   },
   {
     id: 'browser',
@@ -2788,7 +2788,7 @@ const DESKTOP_APPS = [
     glyph: '🌐',
     defaultWidth: 1120,
     defaultHeight: 760,
-    loader: () => import('./desktop-apps/browser/app.js?v=20260528-windowed-browser1'),
+    loader: () => import(`./desktop-apps/browser/app.js?v=${APP_BUILD}`),
   },
   {
     id: 'code-editor',
@@ -2796,7 +2796,7 @@ const DESKTOP_APPS = [
     glyph: '⌘',
     defaultWidth: 980,
     defaultHeight: 640,
-    loader: () => import('./desktop-apps/code-editor/app.js?v=20260519-monaco2'),
+    loader: () => import(`./desktop-apps/code-editor/app.js?v=${APP_BUILD}`),
   },
   {
     id: 'file-viewer',
@@ -2804,7 +2804,7 @@ const DESKTOP_APPS = [
     glyph: '◫',
     defaultWidth: 760,
     defaultHeight: 560,
-    loader: () => import('./desktop-apps/file-viewer/app.js?v=20260525-file-viewer-command-reuse1'),
+    loader: () => import(`./desktop-apps/file-viewer/app.js?v=${APP_BUILD}`),
   },
   {
     id: 'creator',
@@ -2812,7 +2812,7 @@ const DESKTOP_APPS = [
     glyph: '⚙️',
     defaultWidth: 1200,
     defaultHeight: 800,
-    loader: () => import('./desktop-apps/creator/app.js?v=20260521-app-creator1'),
+    loader: () => import(`./desktop-apps/creator/app.js?v=${APP_BUILD}`),
   },
 ];
 
@@ -4865,14 +4865,14 @@ async function reportCurrentModule(details = {}) {
 
 function loadBusinessReporterModule() {
   if (!businessReporterModulePromise) {
-    businessReporterModulePromise = import('./shared/business-reporter.js?v=20260602-command-sync6');
+    businessReporterModulePromise = import(`./shared/business-reporter.js?v=${APP_BUILD}`);
   }
   return businessReporterModulePromise;
 }
 
 function loadBusinessChatModule() {
   if (!businessChatModulePromise) {
-    businessChatModulePromise = import('./shared/business-chat.js?v=20260602-command-sync6');
+    businessChatModulePromise = import(`./shared/business-chat.js?v=${APP_BUILD}`);
   }
   return businessChatModulePromise;
 }

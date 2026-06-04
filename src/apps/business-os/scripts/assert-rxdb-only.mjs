@@ -412,7 +412,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/shared/file-integrity.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity5']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260604-rxdb-shared-catchup1']) {
     if (!fileViewer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }
@@ -422,7 +422,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/desktop-apps/explorer/app.js: uploaded file chunk contract missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260522-file-chunk-integrity5', 'contentHashScheme']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260604-rxdb-shared-catchup1', 'contentHashScheme']) {
     if (!universalImporter.includes(marker)) {
       offenders.push(`src/apps/business-os/shared/universal-importer.js: imported virtual file integrity missing ${marker}`);
     }

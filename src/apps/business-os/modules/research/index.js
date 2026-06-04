@@ -1,6 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const BUILD = '20260529-research-rxdb-rows1';
+const BUILD = '20260604-rxdb-shared-catchup1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 320;

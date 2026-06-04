@@ -1,4 +1,4 @@
-const MATCHING_BUILD = '20260527-source-controls1';
+const MATCHING_BUILD = '20260604-rxdb-shared-catchup1';
 
 export async function mount(ctx) {
   await ensureStyles();

@@ -1,4 +1,4 @@
-const STYLE_BUILD = '20260525-rxdb-browser1';
+const STYLE_BUILD = '20260604-rxdb-shared-catchup1';
 const DEFAULT_SESSION_ID = 'browser_session_default';
 const DEFAULT_TAB_ID = 'browser_tab_default';
 const SYNTHETIC_SESSION_ID = 'browser_session_synthetic';

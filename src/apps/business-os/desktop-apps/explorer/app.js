@@ -4,7 +4,7 @@ import {
   base64ToBytes,
   readStoredFileFromChunks,
   sha256Hex,
-} from '../../shared/file-integrity.js?v=20260522-file-chunk-integrity5';
+} from '../../shared/file-integrity.js?v=20260604-rxdb-shared-catchup1';
 
 export const manifest = {
   id: 'explorer',

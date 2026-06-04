@@ -2,9 +2,9 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { makeIconDraggable } from './iconDrag.js';
-import { getSvgIcon } from '../../shared/icons.js?v=20260520-svg-icons2';
+import { getSvgIcon } from '../../shared/icons.js?v=20260604-rxdb-shared-catchup1';
 
-const STYLE_BUILD = '20260528-desktop-isolated-fix1';
+const STYLE_BUILD = '20260604-rxdb-shared-catchup1';
 const LAYOUT_DOC_ID = 'layout';
 const DEFAULT_GRID = { cellW: 104, cellH: 120, offset: 24 };
 const COMPACT_GRID = { cellW: 88, cellH: 100, offset: 12 };

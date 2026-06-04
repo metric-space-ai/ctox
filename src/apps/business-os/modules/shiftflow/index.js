@@ -2,7 +2,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
-const MOD_BUILD = '20260527-shiftflow-ui-fixes1';
+const MOD_BUILD = '20260604-rxdb-shared-catchup1';
 
 let activeSubscriptions = [];
 let currentWeekStart = getMondayOfCurrentWeek();
