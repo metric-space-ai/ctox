@@ -464,16 +464,12 @@ impl WebRTCRsConnectionHandler {
                     {
                         continue;
                     }
-                    let is_initiator = own_peer_id
-                        .as_ref()
-                        .map(|own| remote_peer_id.as_str() > own.as_str())
-                        .unwrap_or(false);
-                    if let Err(err) = handler
-                        .ensure_peer_connection(remote_peer_id, is_initiator)
-                        .await
-                    {
-                        handler.error_subject.next(err);
-                    }
+                    // Business OS browsers initiate RTC connections. The native
+                    // peer must not pre-register a passive PeerConnection from
+                    // the peer-list alone: doing so can make the later browser
+                    // offer hit the fast path in `ensure_peer_connection` and
+                    // never receive an answer. The responder is created when
+                    // the actual offer arrives in `handle_signal`.
                 }
             }
         });

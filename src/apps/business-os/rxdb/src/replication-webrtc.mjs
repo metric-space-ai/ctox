@@ -942,8 +942,31 @@ class CtoxWebRtcReplicationState {
   }
 }
 
+const BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
+
 function browserInitiatorPeerId(topic) {
-  return `000-browser-${hashString(String(topic || 'ctox'))}`;
+  const origin = browserPeerOriginId();
+  const stableScope = `${String(topic || 'ctox')}|${origin}|${BROWSER_PEER_SESSION_ID}`;
+  return `000-browser-${hashString(stableScope)}`;
+}
+
+function browserPeerOriginId() {
+  try {
+    return String(globalThis.location?.origin || globalThis.location?.host || 'local');
+  } catch {
+    return 'local';
+  }
+}
+
+function createBrowserPeerSessionId() {
+  try {
+    const bytes = new Uint8Array(8);
+    globalThis.crypto?.getRandomValues?.(bytes);
+    if (bytes.some(Boolean)) {
+      return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {}
+  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function hashString(value) {
