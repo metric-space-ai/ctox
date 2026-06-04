@@ -533,6 +533,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     onFatalPeerError?.(error);
   });
   subscriptions.push({ unsubscribe: unregisterSignalingErrorHandler });
+  let nativePeerOpenWatchdog = null;
   const replicationState = await rxdb.replicateWebRTC({
     collection: rxCollection,
     // Phase 3: pass the BARE sync room so every collection multiplexes onto a
@@ -588,7 +589,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
   recordTransportStatus(replicationState.getTransportStatus?.());
   const transportStatusSubscription = replicationState.transportStatus$?.subscribe?.(recordTransportStatus);
   if (transportStatusSubscription) subscriptions.push(transportStatusSubscription);
-  let nativePeerOpenWatchdog = setTimeout(() => {
+  nativePeerOpenWatchdog = setTimeout(() => {
     nativePeerOpenWatchdog = null;
     if (stopped || hasOpenNativePeerState(replicationState)) return;
     const lifecycleEvent = createNativePeerOpenTimeoutEvent(collection, NATIVE_PEER_OPEN_WATCHDOG_MS);
