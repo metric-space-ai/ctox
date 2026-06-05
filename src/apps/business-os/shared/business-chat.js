@@ -1701,10 +1701,20 @@ async function persistChatState({ state, db }) {
       showFollowUp: Boolean(chat.showFollowUp),
       attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
     };
-    const existing = await collection.findOne(chat.id).exec();
-    if (existing) await existing.incrementalPatch(doc);
-    else await collection.insert(doc);
+    try {
+      const existing = await collection.findOne(chat.id).exec();
+      if (existing) await existing.incrementalPatch(doc);
+      else await collection.insert(doc);
+    } catch (error) {
+      if (isVolatileChatPersistenceError(error)) return;
+      throw error;
+    }
   }
+}
+
+function isVolatileChatPersistenceError(error) {
+  const text = String(error?.message || error || '');
+  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
 }
 
 async function hydrateChatsFromRxDb({ state, db, session }) {

@@ -2858,9 +2858,15 @@ async function loadHarnessFlowSnapshot(ctx) {
       || runtimeSettings?.harnessFlow
       || emptyHarnessFlow('rxdb_flow_projection_unavailable');
   } catch (error) {
+    if (isVolatileLocalRxDbError(error)) return emptyHarnessFlow('rxdb_flow_projection_unavailable');
     console.warn('[ctox] harness flow projection unavailable', error);
     return emptyHarnessFlow('rxdb_flow_projection_unavailable');
   }
+}
+
+function isVolatileLocalRxDbError(error) {
+  const text = String(error?.message || error || '');
+  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
 }
 
 async function loadLocalWebStackOverview(ctx) {

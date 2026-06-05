@@ -1146,12 +1146,12 @@ function parsePxOrNull(value) {
 function wireShellActions() {
   window.addEventListener('unhandledrejection', (event) => {
     if (!isVolatileSyncTransportError(event.reason)) return;
-    console.warn('[business-os] ignored volatile local sync transport error', event.reason);
+    console.debug('[business-os] ignored volatile local sync transport error');
     event.preventDefault();
   });
   window.addEventListener('error', (event) => {
     if (!isVolatileSyncTransportError(event.error || event.message)) return;
-    console.warn('[business-os] ignored volatile local sync transport error', event.error || event.message);
+    console.debug('[business-os] ignored volatile local sync transport error');
     event.preventDefault();
   });
   window.addEventListener('message', (event) => {
@@ -1545,7 +1545,7 @@ async function openSettingsDrawer(options = {}) {
 
 function isVolatileSyncTransportError(error) {
   const text = String(error?.message || error || '');
-  return /cannot send after peer is destroyed|ERR_DATA_CHANNEL|Failure to send data|User-Initiated Abort/i.test(text);
+  return /cannot send after peer is destroyed|ERR_DATA_CHANNEL|Failure to send data|User-Initiated Abort|QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|IDBDatabase.*closing|database connection is closing/i.test(text);
 }
 
 function setupShellColumnResizing() {
@@ -6105,14 +6105,17 @@ function createRecoverableDataPlaneAbort(message) {
 }
 
 function isRecoverableDataPlaneAbort(error) {
-  return error?.code === 'CTOX_DATA_PLANE_REBUILT' || isClosedRxDbCollectionError(error);
+  return error?.code === 'CTOX_DATA_PLANE_REBUILT'
+    || isClosedRxDbCollectionError(error)
+    || isVolatileSyncTransportError(error);
 }
 
 function isClosedRxDbCollectionError(error) {
   const message = String(error?.message || error || '');
   return message.includes('RxDB Error-Code: COL21')
     || message.includes('collection is closed')
-    || message.includes('closed collection');
+    || message.includes('closed collection')
+    || /IDBDatabase.*closing|database connection is closing/i.test(message);
 }
 
 function isTransientModuleLoadError(error) {
