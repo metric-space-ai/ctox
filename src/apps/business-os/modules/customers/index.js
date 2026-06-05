@@ -6,7 +6,7 @@ import {
   openUniversalImporter,
 } from '../../shared/universal-importer.js';
 
-const BUILD = '20260604-rxdb-shared-catchup1';
+const BUILD = '20260605-rxdb-cancel1';
 const CUSTOMERS_LAYOUT_KEY = 'ctox.businessOs.customers.columnLayout';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
   'business_commands',

@@ -111,6 +111,11 @@ export function createQueryDemandLoader({
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
           return readLocalDocuments(storageCollection, query, normalizedWindow);
         } catch (error) {
+          if (isQueryCancelledError(error)) {
+            bumpStatus(status, 'queryFetchCancelCount');
+            v15Log('fetch:cancel', { fingerprint, error: String(error?.message ?? error) });
+            return readLocalDocuments(storageCollection, query, normalizedWindow);
+          }
           bumpStatus(status, 'queryFetchErrorCount');
           v15Log('fetch:error', { fingerprint, error: String(error?.message ?? error) });
           throw error;
@@ -285,6 +290,11 @@ function bumpStatus(status, field, delta = 1) {
   if (!status) return;
   if (typeof status[field] !== 'number') status[field] = 0;
   status[field] += delta;
+}
+
+function isQueryCancelledError(error) {
+  return error?.code === 'QUERY_CANCELLED'
+    || String(error?.message || '').includes('QUERY_CANCELLED');
 }
 
 let v15LogSink = null;

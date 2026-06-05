@@ -1,4 +1,4 @@
-import { readStoredFileFromChunks } from './file-integrity.js?v=20260604-rxdb-shared-catchup1';
+import { readStoredFileFromChunks } from './file-integrity.js?v=20260605-rxdb-cancel1';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 

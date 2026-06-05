@@ -2,7 +2,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
-const MOD_BUILD = '20260604-rxdb-shared-catchup1';
+const MOD_BUILD = '20260605-rxdb-cancel1';
 
 let activeSubscriptions = [];
 let currentWeekStart = getMondayOfCurrentWeek();
