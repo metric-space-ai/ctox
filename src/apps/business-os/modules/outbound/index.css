@@ -640,6 +640,62 @@
   to { background-position: 0 0; }
 }
 
+.outbound-left .outbound-funnel {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: none;
+  row-gap: 4px;
+  column-gap: 0;
+}
+
+.outbound-left .outbound-funnel-stage,
+.outbound-left .outbound-funnel-stage:nth-child(1),
+.outbound-left .outbound-funnel-stage:nth-child(3),
+.outbound-left .outbound-funnel-stage:nth-child(5),
+.outbound-left .outbound-funnel-stage:nth-child(7),
+.outbound-left .outbound-funnel-stage:nth-child(9) {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.outbound-left .outbound-funnel-stage {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 44px;
+  gap: 5px 8px;
+  padding: 6px 7px;
+}
+
+.outbound-left .outbound-funnel-stage > span {
+  grid-column: 1;
+}
+
+.outbound-left .outbound-funnel-stage i {
+  grid-column: 2;
+  grid-row: 1;
+  max-width: 96px;
+  text-align: right;
+}
+
+.outbound-left .outbound-funnel-stage em,
+.outbound-left .outbound-funnel-progress {
+  grid-column: 1 / -1;
+}
+
+.outbound-left .outbound-conversion,
+.outbound-left .outbound-conversion:nth-child(2),
+.outbound-left .outbound-conversion:nth-child(4),
+.outbound-left .outbound-conversion:nth-child(6),
+.outbound-left .outbound-conversion:nth-child(8) {
+  grid-column: auto;
+  grid-row: auto;
+}
+
+.outbound-left .outbound-conversion {
+  grid-template-columns: minmax(56px, auto) minmax(122px, 1fr);
+  justify-content: start;
+  text-align: left;
+}
+
 @container (max-width: 360px) {
   .outbound-pane-header {
     min-height: 46px;

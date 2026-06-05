@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260605-campaign-templates-ready2';
+const BUILD = '20260605-campaign-templates-ready3';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
