@@ -7,6 +7,7 @@ use crate::mission::channels;
 use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
+use chrono::{DateTime, FixedOffset};
 use rxdb::plugins::replication_webrtc::{
     RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
@@ -4135,6 +4136,12 @@ fn normalize_business_record_projection_document(
         timestamp_default,
         object,
     );
+    normalize_projection_schema_values(
+        &schema.json_schema.required,
+        &schema.json_schema.properties,
+        timestamp_default,
+        object,
+    );
     if collection_name == "document_versions" {
         object
             .entry("diagnostics".to_string())
@@ -4187,6 +4194,41 @@ fn normalize_projection_required_fields(
     }
 }
 
+fn normalize_projection_schema_values(
+    required: &[String],
+    properties: &HashMap<String, JsonSchema>,
+    timestamp_default: i64,
+    object: &mut serde_json::Map<String, Value>,
+) {
+    let mut remove_fields = Vec::new();
+    for (field, property) in properties {
+        let is_required = required
+            .iter()
+            .any(|required_field| required_field == field);
+        let Some(value) = object.get_mut(field) else {
+            continue;
+        };
+        if value.is_null() && !is_required {
+            remove_fields.push(field.clone());
+            continue;
+        }
+        match projection_normalized_value_for_schema_field(
+            field,
+            property,
+            value,
+            is_required,
+            timestamp_default,
+        ) {
+            ProjectionValueNormalization::Keep => {}
+            ProjectionValueNormalization::Replace(next) => *value = next,
+            ProjectionValueNormalization::Remove => remove_fields.push(field.clone()),
+        }
+    }
+    for field in remove_fields {
+        object.remove(&field);
+    }
+}
+
 fn projection_timestamp_default(object: &serde_json::Map<String, Value>) -> i64 {
     object
         .get("updated_at_ms")
@@ -4209,6 +4251,155 @@ fn json_number_as_i64(value: &Value) -> Option<i64> {
             .as_f64()
             .filter(|number| number.is_finite())
             .map(|number| number as i64)
+    })
+}
+
+enum ProjectionValueNormalization {
+    Keep,
+    Replace(Value),
+    Remove,
+}
+
+fn projection_normalized_value_for_schema_field(
+    field: &str,
+    property: &JsonSchema,
+    value: &Value,
+    is_required: bool,
+    timestamp_default: i64,
+) -> ProjectionValueNormalization {
+    let fallback = || {
+        if is_required {
+            ProjectionValueNormalization::Replace(projection_default_value_for_field(
+                field,
+                property,
+                timestamp_default,
+            ))
+        } else {
+            ProjectionValueNormalization::Remove
+        }
+    };
+    match property.schema_type.as_deref() {
+        Some("number") => {
+            if value.is_number() {
+                ProjectionValueNormalization::Keep
+            } else if let Some(number) = projection_value_as_f64(value, field) {
+                match projection_json_number_from_f64(number) {
+                    Some(number) => ProjectionValueNormalization::Replace(number),
+                    None => fallback(),
+                }
+            } else {
+                fallback()
+            }
+        }
+        Some("integer") => {
+            if value.as_i64().is_some() || value.as_u64().is_some() {
+                ProjectionValueNormalization::Keep
+            } else if let Some(number) = projection_value_as_i64(value, field) {
+                ProjectionValueNormalization::Replace(Value::from(number))
+            } else {
+                fallback()
+            }
+        }
+        Some("string") => match value {
+            Value::String(_) => ProjectionValueNormalization::Keep,
+            Value::Number(number) => {
+                ProjectionValueNormalization::Replace(Value::String(number.to_string()))
+            }
+            Value::Bool(flag) => {
+                ProjectionValueNormalization::Replace(Value::String(flag.to_string()))
+            }
+            _ => fallback(),
+        },
+        Some("boolean") => {
+            if value.is_boolean() {
+                ProjectionValueNormalization::Keep
+            } else if let Some(flag) = projection_value_as_bool(value) {
+                ProjectionValueNormalization::Replace(Value::Bool(flag))
+            } else {
+                fallback()
+            }
+        }
+        Some("array") => {
+            if value.is_array() {
+                ProjectionValueNormalization::Keep
+            } else {
+                fallback()
+            }
+        }
+        Some("object") => {
+            if value.is_object() {
+                ProjectionValueNormalization::Keep
+            } else {
+                fallback()
+            }
+        }
+        _ => ProjectionValueNormalization::Keep,
+    }
+}
+
+fn projection_value_as_f64(value: &Value, field: &str) -> Option<f64> {
+    value.as_f64().or_else(|| {
+        value
+            .as_str()
+            .and_then(|raw| projection_string_as_f64(raw, field))
+    })
+}
+
+fn projection_value_as_i64(value: &Value, field: &str) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        value
+            .as_u64()
+            .and_then(|number| i64::try_from(number).ok())
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|raw| projection_string_as_f64(raw, field))
+                    .filter(|number| number.is_finite() && number.fract() == 0.0)
+                    .map(|number| number as i64)
+            })
+    })
+}
+
+fn projection_json_number_from_f64(number: f64) -> Option<Value> {
+    if !number.is_finite() {
+        return None;
+    }
+    if number.fract() == 0.0 && number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+        return Some(Value::from(number as i64));
+    }
+    serde_json::Number::from_f64(number).map(Value::Number)
+}
+
+fn projection_string_as_f64(raw: &str, field: &str) -> Option<f64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<f64>().ok().or_else(|| {
+        projection_field_accepts_datetime(field).then(|| {
+            DateTime::parse_from_rfc3339(trimmed)
+                .map(|timestamp: DateTime<FixedOffset>| timestamp.timestamp_millis() as f64)
+                .ok()
+        })?
+    })
+}
+
+fn projection_field_accepts_datetime(field: &str) -> bool {
+    matches!(field, "start_time" | "end_time" | "createdAt")
+        || field.ends_with("_at")
+        || field.ends_with("_at_ms")
+        || field.ends_with("_time")
+}
+
+fn projection_value_as_bool(value: &Value) -> Option<bool> {
+    value.as_bool().or_else(|| {
+        value
+            .as_str()
+            .and_then(|raw| match raw.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => Some(true),
+                "false" | "0" | "no" => Some(false),
+                _ => None,
+            })
     })
 }
 
@@ -6908,6 +7099,71 @@ mod tests {
             assert_eq!(
                 requirement.get("updated_at_ms").and_then(Value::as_i64),
                 Some(1_780_632_672_277)
+            );
+        });
+    }
+
+    #[test]
+    fn projection_upsert_coerces_legacy_shift_timestamps() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let shifts = database
+                .collection("planning_shifts")
+                .expect("planning_shifts collection");
+
+            upsert_business_record_projection_document(
+                &shifts,
+                "planning_shifts",
+                json!({
+                    "id": "shift_gen_1",
+                    "employee_id": "emp_clara",
+                    "project_id": "project_gen_2",
+                    "start_time": "2026-05-25T16:10:11.908Z",
+                    "end_time": "2026-05-26T00:10:11.908Z",
+                    "shift_type": "standard_workday",
+                    "is_deleted": false,
+                    "_meta": {
+                        "lwt": 1_780_635_648_436.48_f64
+                    },
+                    "_rev": "2-legacy"
+                }),
+            )
+            .await
+            .expect("upsert legacy planning shift projection");
+
+            let shift = shifts
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "shift_gen_1" } })),
+                    ..Default::default()
+                }))
+                .expect("planning shift query")
+                .exec(false)
+                .await
+                .expect("projected legacy planning shift row");
+            assert_eq!(
+                shift.get("start_time").and_then(Value::as_i64),
+                Some(1_779_725_411_908)
+            );
+            assert_eq!(
+                shift.get("end_time").and_then(Value::as_i64),
+                Some(1_779_754_211_908)
+            );
+            assert_eq!(shift.get("status").and_then(Value::as_str), Some(""));
+            assert_eq!(
+                shift.get("updated_at_ms").and_then(Value::as_i64),
+                Some(1_780_635_648_436)
             );
         });
     }
