@@ -2873,11 +2873,15 @@ fn process_is_running(pid: u32) -> bool {
 }
 
 struct PromptWorkerActivity {
+    root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
+    source_label: String,
+    leased_message_keys: Vec<String>,
+    leased_ticket_event_keys: Vec<String>,
 }
 
 impl PromptWorkerActivity {
-    fn start(state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
+    fn start(root: &Path, state: &Arc<Mutex<SharedState>>, job: &QueuedPrompt) -> Self {
         {
             let mut shared = lock_shared_state(state);
             shared.worker_active_count = shared.worker_active_count.saturating_add(1);
@@ -2891,7 +2895,11 @@ impl PromptWorkerActivity {
             shared.last_progress_epoch_secs = current_epoch_secs();
         }
         Self {
+            root: root.to_path_buf(),
             state: state.clone(),
+            source_label: job.source_label.clone(),
+            leased_message_keys: job.leased_message_keys.clone(),
+            leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
         }
     }
 
@@ -2904,16 +2912,103 @@ impl PromptWorkerActivity {
 
 impl Drop for PromptWorkerActivity {
     fn drop(&mut self) {
-        let mut shared = lock_shared_state(&self.state);
-        shared.worker_active_count = shared.worker_active_count.saturating_sub(1);
-        if shared.worker_active_count == 0 {
-            shared.worker_phase = None;
-            if !shared.busy {
-                shared.current_goal_preview = None;
-                shared.active_source_label = None;
+        let (leaked_message_keys, leaked_ticket_event_keys) = {
+            let mut shared = lock_shared_state(&self.state);
+            let leaked_message_keys = self
+                .leased_message_keys
+                .iter()
+                .filter(|key| shared.leased_message_keys_inflight.contains(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            let leaked_ticket_event_keys = self
+                .leased_ticket_event_keys
+                .iter()
+                .filter(|key| shared.leased_message_keys_inflight.contains(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            release_leased_keys_locked(
+                &mut shared,
+                &leaked_message_keys,
+                &leaked_ticket_event_keys,
+            );
+            shared.worker_active_count = shared.worker_active_count.saturating_sub(1);
+            if shared.worker_active_count == 0 {
+                shared.worker_phase = None;
+                if !shared.busy {
+                    shared.current_goal_preview = None;
+                    shared.active_source_label = None;
+                }
+            }
+            shared.last_progress_epoch_secs = current_epoch_secs();
+            (leaked_message_keys, leaked_ticket_event_keys)
+        };
+
+        if !leaked_message_keys.is_empty() {
+            let failure_reason =
+                "CTOX prompt worker exited before leased Business OS queue task was acknowledged.";
+            let ack_result = channels::ack_leased_messages_with_failure_reason(
+                &self.root,
+                &leaked_message_keys,
+                "failed",
+                failure_reason,
+            );
+            let mut projection_errors = Vec::new();
+            for message_key in &leaked_message_keys {
+                if let Err(err) = crate::business_os::store::fail_business_command_from_queue_error(
+                    &self.root,
+                    message_key,
+                    failure_reason,
+                ) {
+                    projection_errors.push(format!(
+                        "{}: {}",
+                        message_key,
+                        clip_text(&err.to_string(), 180)
+                    ));
+                }
+            }
+            let mut shared = lock_shared_state(&self.state);
+            if let Err(err) = ack_result {
+                push_event_locked(
+                    &mut shared,
+                    format!(
+                        "Failed to fail leaked queue lease(s) for {}: {}",
+                        self.source_label,
+                        clip_text(&err.to_string(), 180)
+                    ),
+                );
+            } else {
+                push_event_locked(
+                    &mut shared,
+                    format!(
+                        "Failed {} leaked queue lease(s) after {} worker exited without acknowledgement",
+                        leaked_message_keys.len(),
+                        self.source_label
+                    ),
+                );
+            }
+            for error in projection_errors {
+                push_event_locked(
+                    &mut shared,
+                    format!("Failed to project leaked Business OS queue lease: {error}"),
+                );
             }
         }
-        shared.last_progress_epoch_secs = current_epoch_secs();
+
+        if !leaked_ticket_event_keys.is_empty() {
+            let ack_result =
+                tickets::ack_leased_ticket_events(&self.root, &leaked_ticket_event_keys, "failed");
+            if let Err(err) = ack_result {
+                let mut shared = lock_shared_state(&self.state);
+                push_event_locked(
+                    &mut shared,
+                    format!(
+                        "Failed to fail leaked ticket event lease(s) for {}: {}",
+                        self.source_label,
+                        clip_text(&err.to_string(), 180)
+                    ),
+                );
+            }
+        }
     }
 }
 
@@ -2923,7 +3018,7 @@ fn start_prompt_worker(
     job: QueuedPrompt,
 ) {
     thread::spawn(move || {
-        let worker_activity = PromptWorkerActivity::start(&state, &job);
+        let worker_activity = PromptWorkerActivity::start(&root, &state, &job);
         match maybe_suppress_fatal_harness_prompt_before_execution(&root, &state, &job) {
             Ok(true) => {
                 eprintln!(
@@ -17317,6 +17412,88 @@ mod tests {
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
         // Genuine non-retryable error.
         assert_eq!(failed_worker_route_status(false, false, false), "failed");
+    }
+
+    #[test]
+    fn worker_activity_drop_fails_unacknowledged_business_os_queue_lease() -> anyhow::Result<()> {
+        let root = temp_root("business-os-leaked-worker-lease");
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                id: Some("cmd_leaked_worker_guard".to_string()),
+                module: "research".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("research".to_string()),
+                payload: serde_json::json!({
+                    "title": "Context task",
+                    "instruction": "Answer OK",
+                    "prompt": "Answer OK"
+                }),
+                client_context: serde_json::json!({
+                    "action": "context-chat",
+                    "module": "research"
+                }),
+            },
+        )?;
+        let task_id = accepted.task_id.expect("queue task id");
+        channels::lease_queue_task(&root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)?;
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.busy = true;
+            track_leased_keys_locked(&mut shared, std::slice::from_ref(&task_id), &[]);
+        }
+        let job = QueuedPrompt {
+            prompt: "Answer OK".to_string(),
+            goal: "Context task".to_string(),
+            preview: "Answer OK".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task_id.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/research/context".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        {
+            let _activity = PromptWorkerActivity::start(&root, &state, &job);
+        }
+
+        assert_eq!(route_status_for(&root, &task_id), "failed");
+        let conn = crate::business_os::store::open_store(&root)?;
+        let command_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = ?1 AND deleted = 0",
+            params![accepted.command_id],
+            |row| row.get(0),
+        )?;
+        let command_projection: Value = serde_json::from_str(&command_payload)?;
+        assert_eq!(
+            command_projection.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            command_projection
+                .get("task_status")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        let queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1 AND deleted = 0",
+            params![task_id],
+            |row| row.get(0),
+        )?;
+        let queue_projection: Value = serde_json::from_str(&queue_payload)?;
+        assert_eq!(
+            queue_projection.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            queue_projection.get("route_status").and_then(Value::as_str),
+            Some("failed")
+        );
+        Ok(())
     }
 
     #[test]
