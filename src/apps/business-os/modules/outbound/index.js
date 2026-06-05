@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260605-campaign-templates-ready1';
+const BUILD = '20260605-campaign-templates-ready2';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -5203,6 +5203,24 @@ function dispatchCampaignSetupPromptTask(campaign, commandId) {
   const template = campaignIdeaTemplateById(campaign.payload?.briefing_template_id || '', campaign.payload?.briefing_language || state.lang);
   const title = `${t('campaignSetupTaskTitle', 'Outbound Campaign einrichten')} · ${campaign.name}`;
   const instruction = campaignSetupPrompt(campaign, commandId, template);
+  const requiredSkills = [OUTBOUND_CAMPAIGN_SETUP_SKILL];
+  const writebackContract = {
+    command_type: 'outbound.campaign.apply_setup',
+    campaign_id: campaign.id,
+    source_command_id: commandId,
+    collection: 'outbound_campaigns',
+    record_id: campaign.id,
+    allowed_top_level_fields: ['status'],
+    allowed_payload_fields: [
+      'campaign_setup',
+      'research_settings',
+      'active_outreach',
+      'communication_strategy',
+      'sequence_strategy',
+      'landing_page',
+      'app_extension_requests',
+    ],
+  };
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
       text: briefing,
@@ -5213,6 +5231,10 @@ function dispatchCampaignSetupPromptTask(campaign, commandId) {
       record_id: campaign.id,
       title,
       instruction,
+      mode: 'data',
+      target: 'data',
+      required_skills: requiredSkills,
+      writeback_contract: writebackContract,
       payload: {
         title,
         instruction,
@@ -5220,26 +5242,10 @@ function dispatchCampaignSetupPromptTask(campaign, commandId) {
         user_message: briefing,
         mode: 'data',
         target: 'data',
-        required_skills: [OUTBOUND_CAMPAIGN_SETUP_SKILL],
+        required_skills: requiredSkills,
         selected_campaign: campaign,
         selected_template: template || null,
-        writeback_contract: {
-          command_type: 'outbound.campaign.apply_setup',
-          campaign_id: campaign.id,
-          source_command_id: commandId,
-          collection: 'outbound_campaigns',
-          record_id: campaign.id,
-          allowed_top_level_fields: ['status'],
-          allowed_payload_fields: [
-            'campaign_setup',
-            'research_settings',
-            'active_outreach',
-            'communication_strategy',
-            'sequence_strategy',
-            'landing_page',
-            'app_extension_requests',
-          ],
-        },
+        writeback_contract: writebackContract,
         thread_key: `business-os/outbound/${campaign.id}`,
       },
       client_context: {
