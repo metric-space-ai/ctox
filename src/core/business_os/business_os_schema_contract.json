@@ -3510,6 +3510,62 @@
     ],
     "additionalProperties": true
   },
+  "iot_dashboards": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "realm": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "scope": {
+        "type": "string"
+      },
+      "scope_ref": {
+        "type": "string"
+      },
+      "view_mode": {
+        "type": "string"
+      },
+      "sort_index": {
+        "type": "number"
+      },
+      "index_text": {
+        "type": "string"
+      },
+      "sort_key": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "realm",
+      "name",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "realm",
+      "sort_key",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "iot_datapoints": {
     "version": 0,
     "primaryKey": "id",
@@ -3700,6 +3756,92 @@
         "realm",
         "updated_at_ms"
       ]
+    ],
+    "additionalProperties": true
+  },
+  "iot_widgets": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "dashboard_id": {
+        "type": "string"
+      },
+      "realm": {
+        "type": "string"
+      },
+      "signal_ref": {
+        "type": "string"
+      },
+      "cond_text": {
+        "type": "string"
+      },
+      "action_prompt": {
+        "type": "string"
+      },
+      "trigger_code": {
+        "type": "string"
+      },
+      "trigger_state": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "trigger_status": {
+        "type": "string"
+      },
+      "render_code": {
+        "type": "string"
+      },
+      "x": {
+        "type": "number"
+      },
+      "y": {
+        "type": "number"
+      },
+      "w": {
+        "type": "number"
+      },
+      "h": {
+        "type": "number"
+      },
+      "sort_index": {
+        "type": "number"
+      },
+      "index_text": {
+        "type": "string"
+      },
+      "sort_key": {
+        "type": "string"
+      },
+      "status_key": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "dashboard_id",
+      "realm",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "realm",
+      "dashboard_id",
+      "sort_key",
+      "status_key",
+      "updated_at_ms"
     ],
     "additionalProperties": true
   },
