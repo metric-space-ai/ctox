@@ -43,6 +43,18 @@ ctox iot rules toggle --id <ruleset-id> --enabled true|false
 ctox iot agent list --realm <realm>
 ctox iot agent configure --realm <realm> --name <name> --kind mqtt --data '<json>'
 ctox iot agent status --id <agent-id>
+
+ctox iot dashboard list --realm <realm>
+ctox iot dashboard upsert --realm <realm> --name <name> [--id <id>] [--scope asset|realm] [--scope-ref <id>]
+ctox iot dashboard delete --id <dashboard-id>
+
+ctox iot widget list --dashboard <dashboard-id>
+ctox iot widget upsert --dashboard <id> --realm <realm> --signal <asset_id>::<attribute> [--id <id>] [--when '<freitext>'] [--then '<auftrags-prompt>'] [--trigger-code '<rhai>'] [--render-code '<js>']
+ctox iot widget delete --id <widget-id>
+ctox iot widget arrange --id <widget-id> --x <n> --y <n> --w <n> --h <n>
+ctox iot widget compile-trigger --id <widget-id>   # enqueue: CTOX writes the Rhai watcher
+ctox iot widget generate-render --id <widget-id>   # enqueue: CTOX writes the render code
+
 ctox iot project all
 ```
 
@@ -69,6 +81,34 @@ ctox iot project all
 - A queue task spawned from an IoT alarm is bounded by CTOX's spawn budget. Do not spawn another task for the same condition unless the parent task explicitly requires a distinct bounded follow-up.
 - JSON attribute conditions are evaluated by the native IoT condition layer. Firing, dedup, recurrence, and loop bounding are CTOX mission/queue/schedule responsibilities.
 - Groovy, JavaScript, Flow rules, forecasting, gateway federation, and non-MQTT production protocol bring-up are deferred scope unless the task explicitly says to work on those capabilities.
+
+## Widget Codegen Workflow (RFC 0011)
+
+An IoT automation **widget** is one standing order, programmed by CTOX in three parts: ① Trigger-Logik (a Rhai watcher in the backend) · ② Widget-Code (`render_code`, sandboxed in the browser) · ③ Auftrags-Prompt (`action_prompt`, spawns a chat when the watcher fires). The human writes prompts (Wenn/Dann); **you write the code**. A queue task whose metadata carries `kind: "iot_trigger_code"` or `kind: "iot_render_code"` is asking you to author part ① or ② and write it back. Never use a heuristic template — author it for the specific Wenn.
+
+### Trigger-Logik (`kind = iot_trigger_code`)
+
+Write a small Rhai program that runs **stateful per datapoint** and calls `fire(grund)` when the widget's free-text "Wenn" holds. Read-only signal API ONLY:
+
+- `signal.last()` · `signal.has_data()` · `signal.age_ms()`
+- `signal.window("15m")` → array · `signal.avg("15m")` / `.min` / `.max` / `.count` · `signal.rate("15m")` (per second)
+- `signals("name")` → another bound signal
+- `state` → a map persisted across calls (for "seit X Minuten", hysteresis, counters): `state.streak = (state.streak ?? 0) + 1`
+- `fire(grund)` → report the condition holds
+
+Windows accept `ms/s/m/h/d`. No file/net/eval; hard op/time limits. The intelligence goes into the code ONCE — there is no LLM per datapoint. Write it back:
+
+```sh
+ctox iot widget upsert --id <id> --dashboard <id> --realm <realm> --signal <ref> --trigger-code '<rhai>'
+```
+
+The upsert validates the program: a runnable one lands `trigger_status = armed`, a broken one `needs_attention` — if so, read the cause and regenerate (self-repair).
+
+### Widget-Code (`kind = iot_render_code`)
+
+Write the body of a JS function `render(host, api)` that renders into the tile element `host`. Sandboxed API ONLY: `api.signal.last()/.window("15m")/.rate("15m")`, `api.draw.line/value/gauge/grid`, `api.fmt`. No `window/document/parent/fetch/eval/import`. Keep it minimal — the visualization is **subordinate** to the order (a value + sparkline usually suffices). Write back with `--render-code '<js>'`.
+
+The watcher runs in the Rust backend per datapoint; on fire it spawns a chat seeded with the `action_prompt` + signal references. You only author the code — you do not run a watch loop yourself.
 
 ## Agent Safety Checks
 

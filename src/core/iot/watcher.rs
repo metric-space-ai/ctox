@@ -372,6 +372,20 @@ pub(crate) fn evaluate(trigger_code: &str, ctx: &SignalContext, state_in: &Value
     }
 }
 
+/// Compile/sandbox-check a watcher program WITHOUT real data — runs it once
+/// against an empty signal context so syntax errors, undefined-function calls,
+/// and sandbox violations (e.g. an unbounded loop) are caught up front. Returns
+/// the error string if the program is not runnable, `None` if it is. Used when a
+/// generated program is written back, to drive the self-repair loop.
+pub(crate) fn validate_program(code: &str) -> Option<String> {
+    let ctx = SignalContext {
+        primary: SignalSeries::default(),
+        named: Vec::new(),
+        now_ms: 0,
+    };
+    evaluate(code, &ctx, &serde_json::json!({})).error
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,6 +524,18 @@ mod tests {
         let out = evaluate(r#"eval("fire(\"x\")")"#, &ctx(series(&[(1, 1.0)]), 100), &json!({}));
         assert!(out.fired.is_empty());
         assert!(out.error.is_some(), "eval must be rejected");
+    }
+
+    #[test]
+    fn validate_program_accepts_valid_rejects_broken() {
+        assert!(validate_program(r#"if signal.last() > 30.0 { fire("x"); }"#).is_none());
+        assert!(validate_program(r#"state.n = (state.n ?? 0) + 1;"#).is_none());
+        // Syntax error.
+        assert!(validate_program("if signal.last( {{{").is_some());
+        // Sandbox: an unbounded loop is rejected up front.
+        assert!(validate_program("loop {}").is_some());
+        // Empty program.
+        assert!(validate_program("   ").is_some());
     }
 
     #[test]

@@ -1385,6 +1385,23 @@ pub(crate) fn widget_upsert(root: &Path, mut req: WidgetUpsertReq, realm: Option
         params![id, req.dashboard_id, req.realm, req.signal_ref, req.cond_text, req.action_prompt, req.trigger_code, req.render_code, req.x, req.y, req.w, req.h, req.sort_index, now],
     )
     .context("failed to upsert widget")?;
+    // If a watcher program was provided (typically written back by the codegen
+    // agent), validate it up front and reflect the result in trigger_status. This
+    // is the self-repair gate: invalid generated code lands as "needs_attention"
+    // so CTOX regenerates it; a runnable program is "armed".
+    if let Some(code) = req.trigger_code.as_deref() {
+        if !code.trim().is_empty() {
+            let status = match crate::iot::watcher::validate_program(code) {
+                None => "armed",
+                Some(_) => "needs_attention",
+            };
+            conn.execute(
+                "UPDATE iot_widgets SET trigger_status = ?2 WHERE id = ?1",
+                params![id, status],
+            )
+            .context("failed to set widget trigger_status")?;
+        }
+    }
     let projection = project_widget(&conn, &id)?;
     Ok(EngineOutcome {
         result: json!({ "widget": { "id": id, "dashboard_id": req.dashboard_id, "signal_ref": req.signal_ref } }),
@@ -1470,6 +1487,176 @@ pub(crate) fn widget_list(root: &Path, dashboard_id: &str) -> Result<Value> {
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(json!({ "widgets": rows }))
+}
+
+// ---- widget codegen (RFC 0011: CTOX programs the watcher + render) ----
+//
+// The human writes prompts (Wenn/Dann); CTOX writes the code. Generation is an
+// AGENT-TURN — never a heuristic template here. These commands enqueue a DURABLE
+// codegen task (mission::channels::create_queue_task) that a model-capable agent
+// leases and completes by writing the code back via `ctox iot widget upsert
+// --trigger-code/--render-code`. No synchronous model call lives in the command
+// path, so the request never blocks and survives a missing/slow model.
+
+struct WidgetCodegenCtx {
+    realm: String,
+    dashboard_id: String,
+    signal_ref: String,
+    cond_text: Option<String>,
+    action_prompt: Option<String>,
+}
+
+fn load_widget_codegen_ctx(
+    conn: &Connection,
+    widget_id: &str,
+    realm: Option<&str>,
+) -> Result<WidgetCodegenCtx> {
+    let row = conn
+        .query_row(
+            "SELECT realm, dashboard_id, signal_ref, cond_text, action_prompt FROM iot_widgets WHERE id = ?1",
+            params![widget_id],
+            |r| {
+                Ok(WidgetCodegenCtx {
+                    realm: r.get(0)?,
+                    dashboard_id: r.get(1)?,
+                    signal_ref: r.get(2)?,
+                    cond_text: r.get(3)?,
+                    action_prompt: r.get(4)?,
+                })
+            },
+        )
+        .optional()
+        .context("failed to load widget for codegen")?;
+    let ctx = row.ok_or_else(|| anyhow!("widget not found: {widget_id}"))?;
+    if let Some(r) = realm {
+        anyhow::ensure!(ctx.realm == r, "widget not found: {widget_id}");
+    }
+    Ok(ctx)
+}
+
+fn enqueue_codegen(
+    root: &Path,
+    widget_id: &str,
+    signal_ref: &str,
+    title: String,
+    prompt: String,
+    kind: &str,
+    priority: &str,
+) -> Result<EngineOutcome> {
+    let task = crate::mission::channels::create_queue_task(
+        root,
+        crate::mission::channels::QueueTaskCreateRequest {
+            title,
+            prompt,
+            thread_key: format!("iot-codegen:{widget_id}"),
+            workspace_root: None,
+            priority: priority.to_string(),
+            suggested_skill: Some("iot-operations".to_string()),
+            parent_message_key: None,
+            extra_metadata: Some(json!({ "kind": kind, "widget_id": widget_id, "signal_ref": signal_ref })),
+        },
+    )?;
+    Ok(EngineOutcome {
+        result: json!({ "queued": task.message_key, "widget_id": widget_id, "kind": kind }),
+        projections: vec![],
+    })
+}
+
+/// `compile_trigger` — ask CTOX to write the Rhai watcher from the widget's
+/// free-text "Wenn". Enqueues a durable codegen task (agent-turn at lease time).
+pub(crate) fn compile_trigger(
+    root: &Path,
+    widget_id: &str,
+    realm: Option<&str>,
+) -> Result<EngineOutcome> {
+    let conn = store::open_iot_store(root)?;
+    ensure_stub_schema(&conn)?;
+    let ctx = load_widget_codegen_ctx(&conn, widget_id, realm)?;
+    let cond = ctx.cond_text.clone().unwrap_or_default();
+    anyhow::ensure!(
+        !cond.trim().is_empty(),
+        "widget {widget_id} has no condition (Wenn) to compile"
+    );
+    let prompt = build_trigger_codegen_prompt(widget_id, &ctx, &cond);
+    enqueue_codegen(
+        root,
+        widget_id,
+        &ctx.signal_ref,
+        format!("IoT-Wächter programmieren: {}", ctx.signal_ref),
+        prompt,
+        "iot_trigger_code",
+        "high",
+    )
+}
+
+/// `generate_render` — ask CTOX to write the (subordinate) widget visualization.
+pub(crate) fn generate_render(
+    root: &Path,
+    widget_id: &str,
+    realm: Option<&str>,
+) -> Result<EngineOutcome> {
+    let conn = store::open_iot_store(root)?;
+    ensure_stub_schema(&conn)?;
+    let ctx = load_widget_codegen_ctx(&conn, widget_id, realm)?;
+    let prompt = build_render_codegen_prompt(widget_id, &ctx);
+    enqueue_codegen(
+        root,
+        widget_id,
+        &ctx.signal_ref,
+        format!("IoT-Widget-Code generieren: {}", ctx.signal_ref),
+        prompt,
+        "iot_render_code",
+        "normal",
+    )
+}
+
+fn build_trigger_codegen_prompt(widget_id: &str, ctx: &WidgetCodegenCtx, cond: &str) -> String {
+    let action = ctx.action_prompt.as_deref().unwrap_or("(noch keine)");
+    format!(
+        "Du bist CTOX und programmierst die Trigger-Logik (den Wächter) eines IoT-Automatisierungs-Widgets.\n\n\
+         Widget-ID: {widget_id}\n\
+         Signal: {signal} (Form <asset_id>::<attribute_name>)\n\
+         Bedingung (Wenn, Freitext): \"{cond}\"\n\
+         Geplante Aktion (Dann): \"{action}\"\n\n\
+         Schreibe ein kleines Rhai-Programm, das pro neuem Datenpunkt STATEFUL laeuft und `fire(grund)` aufruft, \
+         sobald die Bedingung zutrifft. Nur-lesende Signal-API:\n\
+         - signal.last() -> Zahl; signal.has_data() -> bool; signal.age_ms() -> Zahl\n\
+         - signal.window(\"15m\") -> [Zahl]; signal.avg/min/max/count(\"15m\"); signal.rate(\"15m\") (pro Sekunde)\n\
+         - signals(\"name\") -> weiteres gebundenes Signal\n\
+         - state: persistente Map zwischen Aufrufen (\"seit X\", Hysterese, Zaehler), z.B. state.streak = (state.streak ?? 0) + 1\n\
+         - fire(grund): meldet, dass die Bedingung haelt\n\
+         Zeitfenster: ms/s/m/h/d. KEIN Datei-/Netz-Zugriff, kein eval; harte Op-/Zeitlimits.\n\n\
+         Schreibe den Waechter zurueck (validiere vorher, dass er kompiliert):\n\
+         ctox iot widget upsert --id {widget_id} --dashboard {dash} --realm {realm} --signal {signal} --trigger-code '<RHAI>'\n\
+         Gib sonst nichts aus.",
+        widget_id = widget_id,
+        signal = ctx.signal_ref,
+        cond = cond,
+        action = action,
+        dash = ctx.dashboard_id,
+        realm = ctx.realm,
+    )
+}
+
+fn build_render_codegen_prompt(widget_id: &str, ctx: &WidgetCodegenCtx) -> String {
+    format!(
+        "Du bist CTOX und programmierst den Widget-Code (die Visualisierung) eines IoT-Automatisierungs-Widgets. \
+         Die Visualisierung ist dem Auftrag UNTERGEORDNET - schlicht, kein Grafana.\n\n\
+         Widget-ID: {widget_id}\n\
+         Signal: {signal}\n\
+         Bedingung (Wenn): \"{cond}\"\n\n\
+         Schreibe den Rumpf einer JS-Funktion `render(host, api)`, die in das eigene Kachel-Element `host` rendert. \
+         Gesandboxte API (NUR diese): api.signal.last()/.window(\"15m\")/.rate(\"15m\"); api.draw.line/value/gauge/grid; api.fmt. \
+         KEIN Zugriff auf window/document/parent/fetch/eval/import. Halte es minimal (Wert + Sparkline genuegt meist).\n\n\
+         Schreibe den Code zurueck:\n\
+         ctox iot widget upsert --id {widget_id} --dashboard {dash} --realm {realm} --signal {signal} --render-code '<JS>'\n\
+         Gib sonst nichts aus.",
+        widget_id = widget_id,
+        signal = ctx.signal_ref,
+        cond = ctx.cond_text.as_deref().unwrap_or(""),
+        dash = ctx.dashboard_id,
+        realm = ctx.realm,
+    )
 }
 
 // ---- agents ----
@@ -1935,6 +2122,14 @@ pub fn handle_iot_command(root: &Path, args: &[String]) -> Result<()> {
                 .context("failed to parse --h")?;
             print_json(&widget_arrange(root, &id, x, y, w, h, None)?.into_value())
         }
+        ("widget", "compile-trigger") => {
+            let id = required_flag_value(rest, "--id")?;
+            print_json(&compile_trigger(root, &id, None)?.into_value())
+        }
+        ("widget", "generate-render") => {
+            let id = required_flag_value(rest, "--id")?;
+            print_json(&generate_render(root, &id, None)?.into_value())
+        }
 
         // ---- resync ----
         ("project", "all") => {
@@ -2089,6 +2284,20 @@ pub(crate) fn handle_business_command(
                     .ok_or_else(|| anyhow!("ctox.iot.widget.arrange requires {k}"))
             };
             widget_arrange(root, id, coord("x")?, coord("y")?, coord("w")?, coord("h")?, realm)?
+        }
+        "ctox.iot.widget.compile_trigger" => {
+            let id = payload
+                .get("widget_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("ctox.iot.widget.compile_trigger requires widget_id"))?;
+            compile_trigger(root, id, realm)?
+        }
+        "ctox.iot.widget.generate_render" => {
+            let id = payload
+                .get("widget_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("ctox.iot.widget.generate_render requires widget_id"))?;
+            generate_render(root, id, realm)?
         }
         other => bail!("unknown iot command_type: {other}"),
     };
@@ -2364,6 +2573,104 @@ mod tests {
             )
             .unwrap();
         assert_eq!(live, 0, "widget row should be deleted from engine table");
+    }
+
+    // compile_trigger enqueues a durable codegen task (CTOX writes the watcher);
+    // it never generates code synchronously here.
+    #[test]
+    fn compile_trigger_enqueues_durable_codegen_task() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let session = admin_session();
+        handle_business_command(
+            root,
+            "ctox.iot.dashboard.upsert",
+            &json!({ "id": "d1", "realm": "master", "name": "D" }),
+            &session,
+        )
+        .unwrap();
+        handle_business_command(
+            root,
+            "ctox.iot.widget.upsert",
+            &json!({ "id": "w1", "dashboard_id": "d1", "realm": "master", "signal_ref": "a::temp", "cond_text": "wenn zu heiß" }),
+            &session,
+        )
+        .unwrap();
+
+        let out = handle_business_command(
+            root,
+            "ctox.iot.widget.compile_trigger",
+            &json!({ "widget_id": "w1" }),
+            &session,
+        )
+        .unwrap();
+        assert_eq!(out["kind"], "iot_trigger_code");
+        assert!(
+            out["queued"].as_str().unwrap_or("").starts_with("queue:"),
+            "expected a queue task key, got: {out}"
+        );
+
+        // A widget without a Wenn cannot be compiled.
+        handle_business_command(
+            root,
+            "ctox.iot.widget.upsert",
+            &json!({ "id": "w2", "dashboard_id": "d1", "realm": "master", "signal_ref": "a::temp" }),
+            &session,
+        )
+        .unwrap();
+        let err = handle_business_command(
+            root,
+            "ctox.iot.widget.compile_trigger",
+            &json!({ "widget_id": "w2" }),
+            &session,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("no condition"), "got: {err}");
+    }
+
+    // Writing back a watcher program validates it: runnable → armed, broken →
+    // needs_attention (the self-repair gate).
+    #[test]
+    fn widget_upsert_validates_trigger_code_into_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let session = admin_session();
+        handle_business_command(
+            root,
+            "ctox.iot.dashboard.upsert",
+            &json!({ "id": "d1", "realm": "master", "name": "D" }),
+            &session,
+        )
+        .unwrap();
+
+        // Valid program → armed.
+        handle_business_command(
+            root,
+            "ctox.iot.widget.upsert",
+            &json!({ "id": "w1", "dashboard_id": "d1", "realm": "master", "signal_ref": "a::t",
+                     "trigger_code": "if signal.last() > 30.0 { fire(\"x\"); }" }),
+            &session,
+        )
+        .unwrap();
+        let conn = store::open_iot_store(root).unwrap();
+        let status: String = conn
+            .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "armed");
+
+        // Broken program → needs_attention.
+        handle_business_command(
+            root,
+            "ctox.iot.widget.upsert",
+            &json!({ "id": "w1", "dashboard_id": "d1", "realm": "master", "signal_ref": "a::t",
+                     "trigger_code": "this is @@@ not rhai" }),
+            &session,
+        )
+        .unwrap();
+        let status: String = conn
+            .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(status, "needs_attention");
     }
 
     // Forbidden when the session is neither admin nor an authenticated open one.
