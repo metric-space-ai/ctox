@@ -14,7 +14,7 @@ use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
-use rxdb::types::{BulkWriteRow, HashOutput, MangoQuery, RxJsonSchema};
+use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
@@ -4092,10 +4092,11 @@ async fn upsert_business_record_projection_document(
     collection_name: &str,
     mut document: Value,
 ) -> anyhow::Result<()> {
-    normalize_business_record_projection_document(collection_name, &mut document);
     if is_projection_tombstone(&document) {
+        remove_projection_rxdb_envelope(&mut document);
         return upsert_business_record_projection_tombstone(collection, document).await;
     }
+    normalize_business_record_projection_document(collection, collection_name, &mut document)?;
     match collection.incremental_upsert(document.clone()).await {
         Ok(_) => Ok(()),
         Err(err) if is_recoverable_projection_write_error(&err) => match collection.upsert(document.clone()).await
@@ -4113,10 +4114,27 @@ async fn upsert_business_record_projection_document(
     }
 }
 
-fn normalize_business_record_projection_document(collection_name: &str, document: &mut Value) {
+fn normalize_business_record_projection_document(
+    collection: &Arc<RxCollection>,
+    collection_name: &str,
+    document: &mut Value,
+) -> anyhow::Result<()> {
+    let schema = collection
+        .schema_required()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
     let Some(object) = document.as_object_mut() else {
-        return;
+        return Ok(());
     };
+    let timestamp_default = projection_timestamp_default(object);
+    object.remove("_rev");
+    object.remove("_meta");
+    normalize_projection_required_fields(
+        &schema.json_schema.required,
+        &schema.json_schema.properties,
+        &schema.primary_path,
+        timestamp_default,
+        object,
+    );
     if collection_name == "document_versions" {
         object
             .entry("diagnostics".to_string())
@@ -4137,6 +4155,83 @@ fn normalize_business_record_projection_document(collection_name: &str, document
         object
             .entry("created_at_ms".to_string())
             .or_insert(updated_at_ms);
+    }
+    Ok(())
+}
+
+fn remove_projection_rxdb_envelope(document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    object.remove("_rev");
+    object.remove("_meta");
+}
+
+fn normalize_projection_required_fields(
+    required: &[String],
+    properties: &HashMap<String, JsonSchema>,
+    primary_path: &str,
+    timestamp_default: i64,
+    object: &mut serde_json::Map<String, Value>,
+) {
+    for field in required {
+        if field == primary_path || object.contains_key(field) {
+            continue;
+        }
+        if let Some(property) = properties.get(field) {
+            object.insert(
+                field.clone(),
+                projection_default_value_for_field(field, property, timestamp_default),
+            );
+        }
+    }
+}
+
+fn projection_timestamp_default(object: &serde_json::Map<String, Value>) -> i64 {
+    object
+        .get("updated_at_ms")
+        .or_else(|| object.get("created_at_ms"))
+        .or_else(|| object.get("createdAt"))
+        .and_then(json_number_as_i64)
+        .or_else(|| {
+            object
+                .get("_meta")
+                .and_then(Value::as_object)
+                .and_then(|meta| meta.get("lwt"))
+                .and_then(json_number_as_i64)
+        })
+        .unwrap_or(0)
+}
+
+fn json_number_as_i64(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| {
+        value
+            .as_f64()
+            .filter(|number| number.is_finite())
+            .map(|number| number as i64)
+    })
+}
+
+fn projection_default_value_for_field(
+    field: &str,
+    property: &JsonSchema,
+    timestamp_default: i64,
+) -> Value {
+    if let Some(default) = &property.default {
+        return default.clone();
+    }
+    if field.ends_with("_at_ms") || field == "createdAt" {
+        return Value::from(timestamp_default);
+    }
+    match property.schema_type.as_deref() {
+        Some("array") => Value::Array(Vec::new()),
+        Some("boolean") => Value::Bool(false),
+        Some("integer") | Some("number") => Value::from(0),
+        Some("object") => Value::Object(serde_json::Map::new()),
+        Some("string") => Value::String(String::new()),
+        _ if property.items.is_some() => Value::Array(Vec::new()),
+        _ if !property.properties.is_empty() => Value::Object(serde_json::Map::new()),
+        _ => Value::Null,
     }
 }
 
@@ -6758,6 +6853,63 @@ mod tests {
                 .map(Vec::is_empty),
             Some(true)
         );
+    }
+
+    #[test]
+    fn projection_upsert_repairs_legacy_matching_requirements() {
+        let root = tempfile::tempdir().expect("temp root");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+
+        runtime.block_on(async {
+            let database = open_test_database(store::rxdb_store_path(root.path()))
+                .await
+                .expect("open rxdb sqlite");
+            database
+                .add_collections(collection_creators())
+                .await
+                .expect("register collections");
+            let requirements = database
+                .collection("matching_requirements")
+                .expect("matching_requirements collection");
+
+            upsert_business_record_projection_document(
+                &requirements,
+                "matching_requirements",
+                json!({
+                    "id": "src_byteforge_tech",
+                    "kind": "source",
+                    "title": "ByteForge Technologies AG",
+                    "status": "active",
+                    "data": {
+                        "id": "src_byteforge_tech",
+                        "title": "ByteForge Technologies AG"
+                    },
+                    "_meta": {
+                        "lwt": 1_780_632_672_277.48_f64
+                    },
+                    "_rev": "3-legacy"
+                }),
+            )
+            .await
+            .expect("upsert legacy matching requirement projection");
+
+            let requirement = requirements
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "src_byteforge_tech" } })),
+                    ..Default::default()
+                }))
+                .expect("matching requirement query")
+                .exec(false)
+                .await
+                .expect("projected legacy matching requirement row");
+            assert_eq!(
+                requirement.get("updated_at_ms").and_then(Value::as_i64),
+                Some(1_780_632_672_277)
+            );
+        });
     }
 
     #[test]
