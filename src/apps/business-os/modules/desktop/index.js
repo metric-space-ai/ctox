@@ -77,7 +77,7 @@ export async function mount(ctx) {
   };
 
   const launcher = createCtoxLauncher({
-    modules: await loadModuleRegistry(),
+    modules: Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry(),
     apps: ctx.desktopApps || [],
     currentModuleId: ctx.module.id,
     openApp: ctx.openDesktopApp,
@@ -173,6 +173,7 @@ export async function mount(ctx) {
     const sorted = [...docs].sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
     for (const doc of sorted) {
       if (doc.hidden) continue;
+      if (!launcher.knows(doc.target_module)) continue;
       refs.icons.appendChild(buildIcon(doc));
     }
   }

@@ -8,10 +8,12 @@ const businessOsRoot = resolve(here, '../..');
 const registryPath = resolve(businessOsRoot, 'modules/registry.json');
 const appPath = resolve(businessOsRoot, 'app.js');
 const appStorePath = resolve(businessOsRoot, 'modules/app-store/index.js');
+const desktopPath = resolve(businessOsRoot, 'modules/desktop/index.js');
 
 const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
 const appSource = readFileSync(appPath, 'utf8');
 const appStoreSource = readFileSync(appStorePath, 'utf8');
+const desktopSource = readFileSync(desktopPath, 'utf8');
 
 const modules = Array.isArray(registry.modules) ? registry.modules : [];
 const moduleIds = modules.map((mod) => mod.id).filter(Boolean);
@@ -48,6 +50,14 @@ for (const requiredId of ['explorer', 'conversations', 'outbound']) {
 }
 assert.ok(appSource.includes('uncategorized'), 'Start menu must render uncategorized launch targets');
 assert.ok(appSource.includes('!moduleIds.has(app.id)'), 'Desktop app launcher must skip module id collisions');
+assert.ok(
+  desktopSource.includes('Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry()'),
+  'Desktop launcher must use shell-filtered ctx.modules before falling back to registry.json'
+);
+assert.ok(
+  desktopSource.includes('!launcher.knows(doc.target_module)'),
+  'Desktop icons must not render persisted targets outside the current launcher scope'
+);
 
 for (const requiredSnippet of [
   'isLaunchableModule',
