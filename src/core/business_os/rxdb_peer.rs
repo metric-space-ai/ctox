@@ -3645,7 +3645,7 @@ async fn sync_business_record_projections_with_database(
                     max_updated_at_ms = max_updated_at_ms.max(updated_at_ms);
                 }
             }
-            upsert_business_record_projection_document(&collection, document)
+            upsert_business_record_projection_document(&collection, &collection_name, document)
                 .await
                 .map_err(|err| {
                     anyhow::anyhow!("upsert {collection_name} business record projection: {err}")
@@ -3768,7 +3768,7 @@ async fn reconcile_ctox_queue_task_projections(
                 object.insert("error".to_string(), Value::String(error_note.to_string()));
             }
         }
-        upsert_business_record_projection_document(&queue, next.clone())
+        upsert_business_record_projection_document(&queue, "ctox_queue_tasks", next.clone())
             .await
             .map_err(|err| anyhow::anyhow!("repair ctox_queue_tasks projection: {err}"))?;
         repaired_documents.push(next);
@@ -3989,7 +3989,7 @@ async fn reconcile_business_chat_tracking_projections(
         object.remove("_meta");
         object.remove("_attachments");
         object.insert("updated_at_ms".to_string(), Value::from(now_ms() as u64));
-        upsert_business_record_projection_document(&chats, next)
+        upsert_business_record_projection_document(&chats, "business_chats", next)
             .await
             .map_err(|err| anyhow::anyhow!("repair business_chats tracking projection: {err}"))?;
         repaired += 1;
@@ -4080,7 +4080,7 @@ async fn upsert_business_record_projection(
             .await
             .map_err(|err| anyhow::anyhow!("upsert {collection_name} projection: {err}"))?;
     } else {
-        upsert_business_record_projection_document(&collection, document)
+        upsert_business_record_projection_document(&collection, collection_name, document)
             .await
             .map_err(|err| anyhow::anyhow!("upsert {collection_name} projection: {err}"))?;
     }
@@ -4089,8 +4089,10 @@ async fn upsert_business_record_projection(
 
 async fn upsert_business_record_projection_document(
     collection: &Arc<RxCollection>,
-    document: Value,
+    collection_name: &str,
+    mut document: Value,
 ) -> anyhow::Result<()> {
+    normalize_business_record_projection_document(collection_name, &mut document);
     if is_projection_tombstone(&document) {
         return upsert_business_record_projection_tombstone(collection, document).await;
     }
@@ -4108,6 +4110,33 @@ async fn upsert_business_record_projection_document(
                 }),
         },
         Err(err) => Err(anyhow::anyhow!("{err}")),
+    }
+}
+
+fn normalize_business_record_projection_document(collection_name: &str, document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    if collection_name == "document_versions" {
+        object
+            .entry("diagnostics".to_string())
+            .or_insert_with(|| Value::Array(Vec::new()));
+        object
+            .entry("model_json".to_string())
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        object
+            .entry("source_kind".to_string())
+            .or_insert_with(|| Value::String(String::new()));
+        object
+            .entry("blob_id".to_string())
+            .or_insert_with(|| Value::String(String::new()));
+        object
+            .entry("version".to_string())
+            .or_insert_with(|| Value::from(0));
+        let updated_at_ms = object.get("updated_at_ms").cloned().unwrap_or(Value::from(0));
+        object
+            .entry("created_at_ms".to_string())
+            .or_insert(updated_at_ms);
     }
 }
 
@@ -6684,6 +6713,51 @@ mod tests {
             )
             .expect("projected version count");
         assert_eq!(version_count, 1);
+    }
+
+    #[test]
+    fn sync_business_record_projections_repairs_legacy_document_versions() {
+        let root = tempfile::tempdir().expect("temp root");
+        let conn = store::open_store(root.path()).expect("open business store");
+        store::upsert_business_record(
+            &conn,
+            "document_versions",
+            "doc_legacy_v1",
+            1_001,
+            json!({
+                "id": "doc_legacy_v1",
+                "document_id": "doc_legacy",
+                "version": 1,
+                "source_kind": "imported_docx",
+                "blob_id": "doc_blob_legacy",
+                "model_json": {},
+                "created_at_ms": 901,
+                "updated_at_ms": 1_001
+            }),
+        )
+        .expect("insert legacy document version business record");
+        drop(conn);
+
+        let synced = sync_business_record_projections(root.path())
+            .expect("sync business record projections");
+        assert!(synced >= 1);
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let version_json: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__document_versions__v0 WHERE id = 'doc_legacy_v1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("projected legacy document version row");
+        let version: Value = serde_json::from_str(&version_json).expect("document version json");
+        assert_eq!(
+            version
+                .get("diagnostics")
+                .and_then(Value::as_array)
+                .map(Vec::is_empty),
+            Some(true)
+        );
     }
 
     #[test]
