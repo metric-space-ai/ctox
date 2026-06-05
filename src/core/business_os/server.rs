@@ -2757,9 +2757,13 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     let mime = mime_for(&target);
     if target == app_root.join("index.html") {
         let session = request_session(&request);
-        let sync_config = store::sync_config(root)?;
+        let sync_config = if session.authenticated {
+            Some(store::sync_config(root)?)
+        } else {
+            None
+        };
         let html = String::from_utf8(bytes).context("Business OS index.html is not UTF-8")?;
-        bytes = inject_launch_context(html, &session, &sync_config)?.into_bytes();
+        bytes = inject_launch_context(html, &session, sync_config.as_ref())?.into_bytes();
     }
     let mut response = Response::from_data(bytes);
     response.add_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap());
@@ -2772,12 +2776,15 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
 fn inject_launch_context(
     html: String,
     session: &store::BusinessOsSession,
-    sync_config: &store::BusinessOsSyncConfig,
+    sync_config: Option<&store::BusinessOsSyncConfig>,
 ) -> anyhow::Result<String> {
     let script = format!(
         "<script>window.CTOX_BUSINESS_OS_SESSION={};window.CTOX_BUSINESS_OS_CONFIG={};</script>",
         script_json(session)?,
-        script_json(sync_config)?
+        sync_config
+            .map(script_json)
+            .transpose()?
+            .unwrap_or_else(|| "null".to_owned())
     );
     if let Some(idx) = html.find("</head>") {
         let mut injected = String::with_capacity(html.len() + script.len());
@@ -2869,5 +2876,31 @@ fn mime_for(path: &PathBuf) -> &'static str {
         "svg" => "image/svg+xml",
         "wasm" => "application/wasm",
         _ => "application/octet-stream",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unauthenticated_shell_does_not_inject_sync_config() {
+        let session = store::BusinessOsSession {
+            ok: true,
+            authenticated: false,
+            auth_required: true,
+            user: None,
+            login_url: None,
+            reason: Some("invalid_or_missing_session".to_owned()),
+        };
+
+        let html =
+            inject_launch_context("<html><head></head><body></body></html>".to_owned(), &session, None)
+                .expect("inject launch context");
+
+        assert!(html.contains("window.CTOX_BUSINESS_OS_SESSION="));
+        assert!(html.contains("window.CTOX_BUSINESS_OS_CONFIG=null"));
+        assert!(!html.contains("sync_room"));
+        assert!(!html.contains("signaling_room_password"));
     }
 }
