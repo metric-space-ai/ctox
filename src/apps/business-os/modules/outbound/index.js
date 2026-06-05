@@ -17,7 +17,8 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260605-rxdb-cancel1';
+const BUILD = '20260605-campaign-templates-ready1';
+let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
   if (args.length) {
@@ -55,6 +56,7 @@ function getContactFieldDesc(id, fallback) {
 }
 const DEFAULT_CAMPAIGN_ID = 'outbound_default_campaign';
 const DEFAULT_CAMPAIGN_NAME = 'Outbound Firmenqualifizierung';
+const OUTBOUND_CAMPAIGN_SETUP_SKILL = 'business-os-outbound-campaign-setup';
 const OUTBOUND_LAYOUT_KEY = 'ctox.businessOs.outbound.columnLayout';
 const OUTBOUND_CENTER_SPLIT_KEY = 'ctox.businessOs.outbound.centerSplit';
 const OUTBOUND_COL_MIN = Object.freeze({ left: 260, center: 420 });
@@ -144,6 +146,213 @@ const CONTACT_FIELD_DEFS = Object.freeze([
 ]);
 const DEFAULT_CONTACT_FIELD_IDS = Object.freeze(['contact.people', 'contact.status', 'lead.status']);
 const DEFAULT_CONTACT_FIELD_IDS_COMPACT = Object.freeze(['contact.people', 'contact.status']);
+
+const CAMPAIGN_IDEA_TEMPLATES = Object.freeze({
+  de: Object.freeze([
+    {
+      id: 'de-mail-handwerk-nord',
+      title: 'Handwerk in Norddeutschland per E-Mail',
+      text: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per E-Mail anschreiben und unsere Software für digitale Auftragsplanung, Terminabstimmung und Kundenkommunikation verkaufen. Bitte priorisiere Betriebe mit mehreren Teams, sichtbarer Projekt- oder Wartungsarbeit und einer Website, auf der noch viel manuell oder telefonisch organisiert wirkt.',
+    },
+    {
+      id: 'de-letter-hr-webinar',
+      title: 'HR-Agenturen per Brief zum Webinar',
+      text: 'Ich möchte alle Inhaber von HR-Agenturen in Deutschland mit einem physischen Brief zu einem Webinar einladen. Das Webinar erklärt, wie Agenturen mit KI mehr passende Kandidaten identifizieren, Kunden schneller qualifizieren und ihre Vermittlungsprozesse dokumentieren können. Bitte bereite Briefvorlagen als PDF vor und plane nach Versand einen manuellen Nachfass-Schritt.',
+    },
+    {
+      id: 'de-mail-saas-finance',
+      title: 'SaaS-CFOs zu Kostenkontrolle',
+      text: 'Ich möchte CFOs und Gründer von B2B-SaaS-Unternehmen in der DACH-Region per E-Mail ansprechen. Ziel ist ein Beratungsgespräch zu besseren Margen, transparenteren Betriebskosten und planbarerem Cashflow. Bitte finde Unternehmen mit 20 bis 300 Mitarbeitenden, aktivem Wachstum und Hinweisen auf komplexe Tool- oder Infrastrukturkosten.',
+    },
+    {
+      id: 'de-mail-pflegedienste',
+      title: 'Pflegedienste für Tourenplanung',
+      text: 'Ich möchte ambulante Pflegedienste in Nordrhein-Westfalen per E-Mail kontaktieren und eine Lösung für Tourenplanung, Schichtkoordination und automatische Dokumentation verkaufen. Bitte adressiere Geschäftsführung oder Pflegedienstleitung und achte auf Betriebe mit mehreren Standorten oder sichtbarem Personalbedarf.',
+    },
+    {
+      id: 'de-letter-architekten',
+      title: 'Architekturbüros per Brief',
+      text: 'Ich möchte mittelgroße Architekturbüros mit einem hochwertigen Brief anschreiben und ihnen eine Projektcontrolling-Lösung vorstellen. Der Brief soll persönlich wirken, auf laufende Bauprojekte eingehen und einen Termin für eine kurze Demo anbieten. Nach dem markierten Versand sollen Erinnerungen für telefonisches Nachfassen entstehen.',
+    },
+    {
+      id: 'de-mail-it-systemhaeuser',
+      title: 'IT-Systemhäuser für Managed Service',
+      text: 'Ich möchte IT-Systemhäuser im deutschsprachigen Raum per E-Mail ansprechen, die Managed Services anbieten und ihren Support stärker automatisieren wollen. Ziel ist ein Erstgespräch über KI-gestützte Ticket-Triage, Wissensdatenbank und SLA-Reporting. Bitte suche Ansprechpartner in Geschäftsführung, Serviceleitung oder Operations.',
+    },
+    {
+      id: 'de-mail-immobilienverwalter',
+      title: 'Immobilienverwalter für Eigentümerportal',
+      text: 'Ich möchte Immobilienverwaltungen mit 500 bis 5.000 Einheiten in Deutschland per E-Mail anschreiben und ein Eigentümer- und Mieterportal verkaufen. Bitte fokussiere auf Verwaltungen mit vielen Serviceanfragen, Dokumentenprozessen oder sichtbaren Modernisierungsinitiativen.',
+    },
+    {
+      id: 'de-mail-produktion-qm',
+      title: 'Produktion für QM-Automation',
+      text: 'Ich möchte Produktionsunternehmen in Süddeutschland per E-Mail kontaktieren, die komplexe Qualitätsprozesse haben. Verkauft werden soll eine Lösung für digitale Prüfprotokolle, Reklamationsmanagement und Audit-Vorbereitung. Bitte priorisiere Unternehmen mit ISO-Zertifizierungen, Zuliefererrollen und mehreren Standorten.',
+    },
+    {
+      id: 'de-mail-kanzleien',
+      title: 'Kanzleien für Mandantenportal',
+      text: 'Ich möchte Steuerkanzleien mit 10 bis 80 Mitarbeitenden per E-Mail anschreiben und ein Mandantenportal inklusive Dokumentenanforderung, Fristenübersicht und KI-Zusammenfassungen vorstellen. Bitte finde Kanzleien, die digital wirken, aber noch viele manuelle Kontaktpunkte zeigen.',
+    },
+    {
+      id: 'de-mail-webinar-maschinenbau',
+      title: 'Maschinenbau-Webinar',
+      text: 'Ich möchte Entscheider im Maschinenbau zu einem Webinar über Service-Umsatz, Ersatzteilgeschäft und Predictive Maintenance einladen. Die Ansprache soll per E-Mail laufen, mit zwei Follow-ups und einem klaren Link zur Landingpage mit automatischer Anmeldung.',
+    },
+    {
+      id: 'de-letter-aerzte',
+      title: 'Ärztezentren per Brief',
+      text: 'Ich möchte größere Ärztezentren und MVZ per Brief kontaktieren und eine Lösung für Patientenkommunikation und Terminmanagement anbieten. Bitte formuliere die Briefe seriös, ohne aggressive Verkaufssprache, und ermögliche den PDF-Download für den postalischen Versand.',
+    },
+    {
+      id: 'de-mail-agenturen',
+      title: 'Marketing-Agenturen für Reporting',
+      text: 'Ich möchte Marketing-Agenturen per E-Mail anschreiben, die mehrere B2B-Kunden betreuen, und ihnen automatisiertes Reporting mit KI-Kommentaren verkaufen. Bitte suche Agenturen mit Performance-Marketing, SEO oder Paid-Ads-Angeboten und Ansprechpartner in Geschäftsführung oder Client Services.',
+    },
+    {
+      id: 'de-mail-logistik',
+      title: 'Logistik für Disposition',
+      text: 'Ich möchte Logistikunternehmen in Nord- und Ostdeutschland per E-Mail kontaktieren und eine Dispositions- und Kundenstatuslösung verkaufen. Bitte priorisiere Unternehmen mit Fuhrpark, Stückgut, Lager oder Fulfillment und sichtbaren operativen Engpässen.',
+    },
+    {
+      id: 'de-mail-bauzulieferer',
+      title: 'Bauzulieferer für Angebotsprozess',
+      text: 'Ich möchte Bauzulieferer und Baustoffhändler per E-Mail anschreiben, um eine Lösung für schnellere Angebotskalkulation und CRM-Nachverfolgung zu verkaufen. Bitte finde Firmen, bei denen individuelle Angebote, Außendienst oder Projektgeschäft erkennbar sind.',
+    },
+    {
+      id: 'de-letter-vereine-sponsoring',
+      title: 'Vereine per Brief für Sponsoring',
+      text: 'Ich möchte Sportvereine und regionale Kulturvereine per Brief kontaktieren und ein Sponsoring-Angebot vorstellen. Der Brief soll lokal, wertschätzend und konkret sein, mit einem QR-Code zu einer Landingpage und einem manuellen Versandstatus in der App.',
+    },
+    {
+      id: 'de-mail-ecommerce',
+      title: 'E-Commerce für Retourenreduktion',
+      text: 'Ich möchte E-Commerce-Händler mit eigenem Shop per E-Mail anschreiben und eine Lösung zur Reduktion von Retouren und Supporttickets verkaufen. Bitte priorisiere Händler mit erklärungsbedürftigen Produkten, Größen-/Variantenlogik oder hohem Beratungsbedarf.',
+    },
+    {
+      id: 'de-mail-energieberater',
+      title: 'Energieberater für Lead Management',
+      text: 'Ich möchte Energieberater und Sanierungsberater in Deutschland per E-Mail ansprechen und ein Lead-Management-System verkaufen. Bitte suche Unternehmen mit Fördermittelberatung, Wärmepumpen-, PV- oder Sanierungsangeboten und sichtbarer Termin- oder Anfragegenerierung.',
+    },
+    {
+      id: 'de-mail-recruiting-event',
+      title: 'Recruiting-Event für Mittelstand',
+      text: 'Ich möchte mittelständische Arbeitgeber in Niedersachsen zu einem Recruiting-Event einladen. Die Kampagne soll per E-Mail starten, bei Interesse zur Landingpage führen und automatisch Anmeldungen für HR-Leitung oder Geschäftsführung erfassen.',
+    },
+    {
+      id: 'de-letter-hotellerie',
+      title: 'Hotels per Brief',
+      text: 'Ich möchte inhabergeführte Hotels per Brief anschreiben und eine Lösung für Gästekommunikation, Upselling und Bewertungsmanagement vorstellen. Bitte bereite druckbare Briefe vor und markiere danach manuell, welche Hotels tatsächlich angeschrieben wurden.',
+    },
+    {
+      id: 'de-mail-consulting-partner',
+      title: 'Beratungen für Partnerprogramm',
+      text: 'Ich möchte Unternehmensberatungen per E-Mail für ein Partnerprogramm gewinnen. Zielgruppe sind Beratungen mit Digitalisierung, Prozessoptimierung oder CRM-Projekten. Die Ansprache soll auf gemeinsame Kundenprojekte und wiederkehrende Provisionen ausgerichtet sein.',
+    },
+  ]),
+  en: Object.freeze([
+    {
+      id: 'en-mail-trades-north',
+      title: 'Trades in Northern Germany by email',
+      text: 'I want to email 100 trade businesses in Northern Germany and sell our software for digital job planning, appointment coordination, and customer communication. Please prioritize companies with multiple field teams, visible project or maintenance work, and websites that still look heavily phone- or spreadsheet-driven.',
+    },
+    {
+      id: 'en-letter-hr-webinar',
+      title: 'HR agencies by letter for webinar',
+      text: 'I want to send physical letters to owners of HR agencies in Germany inviting them to a webinar. The webinar explains how agencies can use AI to identify better candidates, qualify clients faster, and document placement workflows. Please prepare PDF letter templates and schedule a manual follow-up step after mailing.',
+    },
+    {
+      id: 'en-mail-saas-finance',
+      title: 'SaaS CFOs for cost control',
+      text: 'I want to email CFOs and founders of B2B SaaS companies in the DACH region. The goal is a consulting call about stronger margins, transparent operating costs, and more predictable cash flow. Please find companies with 20 to 300 employees, visible growth, and signs of complex tooling or infrastructure costs.',
+    },
+    {
+      id: 'en-mail-care-services',
+      title: 'Care providers for route planning',
+      text: 'I want to contact outpatient care providers in North Rhine-Westphalia by email and sell a solution for route planning, shift coordination, and automated documentation. Please address management or care service leadership and look for providers with multiple locations or visible hiring pressure.',
+    },
+    {
+      id: 'en-letter-architects',
+      title: 'Architecture firms by letter',
+      text: 'I want to send high-quality physical letters to mid-sized architecture firms and introduce a project controlling solution. The letter should feel personal, refer to active construction projects where possible, and offer a short demo appointment. After the mailing is marked as sent, create reminders for phone follow-up.',
+    },
+    {
+      id: 'en-mail-it-msps',
+      title: 'IT service providers for managed service',
+      text: 'I want to email German-speaking IT service providers that offer managed services and want to automate support operations. The goal is an intro call about AI-powered ticket triage, knowledge base workflows, and SLA reporting. Please look for contacts in management, service leadership, or operations.',
+    },
+    {
+      id: 'en-mail-property-management',
+      title: 'Property managers for owner portal',
+      text: 'I want to email property management companies with 500 to 5,000 units in Germany and sell an owner and tenant portal. Please focus on firms with many service requests, document workflows, or visible modernization initiatives.',
+    },
+    {
+      id: 'en-mail-manufacturing-qm',
+      title: 'Manufacturing for quality automation',
+      text: 'I want to contact manufacturing companies in Southern Germany by email if they have complex quality processes. The offer is a solution for digital inspection reports, complaint management, and audit preparation. Please prioritize companies with ISO certifications, supplier roles, and multiple locations.',
+    },
+    {
+      id: 'en-mail-accounting-firms',
+      title: 'Accounting firms for client portal',
+      text: 'I want to email tax and accounting firms with 10 to 80 employees and present a client portal with document requests, deadline overview, and AI summaries. Please find firms that appear digitally mature but still show many manual client touchpoints.',
+    },
+    {
+      id: 'en-mail-webinar-machinery',
+      title: 'Machinery webinar',
+      text: 'I want to invite decision-makers in mechanical engineering to a webinar about service revenue, spare parts business, and predictive maintenance. The outreach should run by email, include two follow-ups, and point clearly to a landing page with automatic registration.',
+    },
+    {
+      id: 'en-letter-medical-centers',
+      title: 'Medical centers by letter',
+      text: 'I want to contact larger medical centers and outpatient clinics by physical letter and offer a solution for patient communication and appointment management. Please write the letters in a serious tone without aggressive sales language and enable PDF download for postal sending.',
+    },
+    {
+      id: 'en-mail-agencies-reporting',
+      title: 'Marketing agencies for reporting',
+      text: 'I want to contact marketing agencies by email if they serve multiple B2B clients and sell automated reporting with AI commentary. Please find agencies offering performance marketing, SEO, or paid ads and identify contacts in management or client services.',
+    },
+    {
+      id: 'en-mail-logistics',
+      title: 'Logistics for dispatching',
+      text: 'I want to email logistics companies in Northern and Eastern Germany and sell a dispatching and customer status solution. Please prioritize companies with fleets, groupage, warehousing, or fulfillment and visible operational complexity.',
+    },
+    {
+      id: 'en-mail-construction-suppliers',
+      title: 'Construction suppliers for quoting',
+      text: 'I want to contact construction suppliers and building materials dealers by email to sell a solution for faster quote calculation and CRM follow-up. Please find companies where custom quotes, field sales, or project business are visible.',
+    },
+    {
+      id: 'en-letter-clubs-sponsoring',
+      title: 'Clubs by letter for sponsorship',
+      text: 'I want to send physical letters to sports clubs and regional cultural associations to present a sponsorship offer. The letter should be local, respectful, and concrete, with a QR code to a landing page and a manual sent status in the app.',
+    },
+    {
+      id: 'en-mail-ecommerce',
+      title: 'E-commerce for returns reduction',
+      text: 'I want to email e-commerce merchants with their own shops and sell a solution for reducing returns and support tickets. Please prioritize merchants with complex products, size or variant logic, or high advisory needs.',
+    },
+    {
+      id: 'en-mail-energy-consultants',
+      title: 'Energy consultants for lead management',
+      text: 'I want to email energy and renovation consultants in Germany and sell a lead management system. Please find companies offering subsidies, heat pumps, solar, or renovation consulting with visible appointment or inquiry generation.',
+    },
+    {
+      id: 'en-mail-recruiting-event',
+      title: 'Recruiting event for SMEs',
+      text: 'I want to invite mid-sized employers in Lower Saxony to a recruiting event. The campaign should start by email, lead interested contacts to a landing page, and automatically capture registrations for HR leaders or management.',
+    },
+    {
+      id: 'en-letter-hotels',
+      title: 'Hotels by letter',
+      text: 'I want to send physical letters to owner-managed hotels and introduce a solution for guest communication, upselling, and review management. Please prepare printable letters and let the user manually mark which hotels were actually mailed.',
+    },
+    {
+      id: 'en-mail-consulting-partners',
+      title: 'Consultancies for partner program',
+      text: 'I want to email consultancies and recruit them for a partner program. The target group is consultancies working on digitalization, process optimization, or CRM projects. The outreach should focus on joint customer projects and recurring commission.',
+    },
+  ]),
+});
 
 
 const DEFAULT_ICP_CORE =`Wholix ist ein anpassbares CRM + Light-ERP für Solo-Unternehmer bis KMU. Es bündelt Vertrieb, Projekte und Service in einem System und erlaubt eine flexible Datenstruktur (eigene Objekte wie Immobilien/Objekte, Aufträge, Verträge, Tickets), Relationen, Felder und Ansichten. Teams oder einzelne Nutzer erhalten rollenbasierte Menüs/Workspaces. Pipelines (Board/Liste/Kalender) für Sales, Service und Projekte sowie Kollaboration (Kommentare, Aufgaben, Erwähnungen) sind integriert. Automationen und KI-Assistenz unterstützen beim Zusammenfassen, Priorisieren und bei Vorschlägen für nächste Schritte. Reporting über gespeicherte, filterbare Ansichten. Einführung in Tagen statt Monaten ohne Großprojekt. Kommerziell: nutzungsbasierte, paketierte Preise (keine Abrechnung pro User) zur Konsolidierung mehrerer Tools und zur besseren Kostenkontrolle.`;
@@ -479,22 +688,12 @@ const state = {
   lastTbodyHtml: '',
   lastActiveColsKey: '',
   outreachView: false,
+  campaignEditDrafts: new Map(),
 };
 
 export async function mount(ctx) {
   state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
-  t = (key, fallback, ...args) => {
-    let val = messages[key] ?? fallback ?? key;
-    if (args.length) {
-      args.forEach((arg, i) => {
-        val = val.replace(`{${i}}`, arg);
-      });
-    }
-    return val;
-  };
+  await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
   if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
   if (!state.viewMode) state.viewMode = 'expanded';
@@ -539,6 +738,26 @@ export async function mount(ctx) {
     if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
   });
 
+  const preferencesHandler = (event) => {
+    const lang = event?.detail?.language || event?.detail?.lang || '';
+    if (lang) {
+      applyOutboundLanguage(lang).catch((error) => console.warn('[outbound] language update failed', error));
+    }
+  };
+  const languageMessageHandler = (event) => {
+    if (event?.data?.type !== 'ctox-business-os-language' && event?.data?.type !== 'ctox-business-os-preferences') return;
+    const lang = event.data.lang || event.data.language || '';
+    if (lang) {
+      applyOutboundLanguage(lang).catch((error) => console.warn('[outbound] language message failed', error));
+    }
+  };
+  window.addEventListener('ctox-business-os-preferences', preferencesHandler);
+  window.addEventListener('message', languageMessageHandler);
+  state.cleanup.push(() => {
+    window.removeEventListener('ctox-business-os-preferences', preferencesHandler);
+    window.removeEventListener('message', languageMessageHandler);
+  });
+
   const resizeCleanup = setupOutboundColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
   render();
@@ -560,6 +779,29 @@ export async function mount(ctx) {
     state.cleanup = [];
     ctx.host.replaceChildren();
   };
+}
+
+async function applyOutboundLanguage(lang, options = {}) {
+  const nextLang = lang === 'en' ? 'en' : 'de';
+  if (loadedOutboundLang === nextLang && state.lang === nextLang) return;
+  state.lang = nextLang;
+  const messages = await loadModuleMessages(import.meta.url, nextLang, {});
+  loadedOutboundLang = nextLang;
+  t = (key, fallback, ...args) => {
+    let val = messages[key] ?? fallback ?? key;
+    if (args.length) {
+      args.forEach((arg, i) => {
+        val = val.replace(`{${i}}`, arg);
+      });
+    }
+    return val;
+  };
+  configureActiveOutreach({ state, t, escapeHtml, rerender: () => render(true) });
+  if (options.render !== false && state.ctx?.host?.isConnected) {
+    const editor = state.ctx.host.querySelector('.outbound-campaign-edit');
+    if (editor) syncCampaignEditDraftFromEditor(editor);
+    render(true);
+  }
 }
 
 async function ensureStyles() {
@@ -588,6 +830,36 @@ function campaignKnowledgeRefs(campaign) {
     contactsKey: current.contacts_table_key || `campaign_${slug}_contacts`,
     runsKey: current.runs_table_key || `campaign_${slug}_research_runs`,
   };
+}
+
+function campaignTemplateLanguage(lang = state.lang) {
+  return lang === 'en' ? 'en' : 'de';
+}
+
+function campaignIdeaTemplates(lang = state.lang) {
+  return CAMPAIGN_IDEA_TEMPLATES[campaignTemplateLanguage(lang)] || CAMPAIGN_IDEA_TEMPLATES.de;
+}
+
+function campaignIdeaTemplateById(id, lang = state.lang) {
+  return campaignIdeaTemplates(lang).find((template) => template.id === id) || null;
+}
+
+function campaignBriefing(campaign) {
+  return campaign?.payload?.briefing
+    || campaign?.payload?.campaign_idea
+    || campaign?.payload?.scope
+    || campaign?.objective
+    || '';
+}
+
+function campaignBriefingTemplateId(campaign, lang = state.lang) {
+  const id = campaign?.payload?.briefing_template_id || campaign?.payload?.campaign_idea_template_id || '';
+  return campaignIdeaTemplateById(id, lang) ? id : 'custom';
+}
+
+function campaignBriefingSummary(campaign) {
+  const briefing = campaignBriefing(campaign).replace(/\s+/g, ' ').trim();
+  return briefing.length > 180 ? `${briefing.slice(0, 177)}...` : briefing;
 }
 
 function slugId(value) {
@@ -768,11 +1040,12 @@ function nativeRxdbSyncReady() {
     || state.ctx?.sync?.config?.native_rxdb_peer_available === true;
 }
 
-async function waitForBusinessCommandProjection(commandId, startedAtMs) {
+async function waitForBusinessCommandProjection(commandId, startedAtMs, timeoutMs = 45000) {
   const collection = state.ctx?.db?.raw?.business_commands;
   if (!collection) return null;
   const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
-  for (let attempt = 0; attempt < 24; attempt += 1) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
     try {
       const doc = await collection.findOne(commandId).exec();
       const match = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
@@ -790,6 +1063,94 @@ async function waitForBusinessCommandProjection(commandId, startedAtMs) {
     await new Promise((resolve) => window.setTimeout(resolve, 500));
   }
   return null;
+}
+
+async function waitForCampaignProjection(campaignId, minUpdatedAtMs, timeoutMs = 15000) {
+  const collection = state.ctx?.db?.raw?.outbound_campaigns;
+  if (!collection) return null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const doc = await collection.findOne(campaignId).exec();
+      const campaign = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+      if (campaign && Number(campaign.updated_at_ms || 0) >= Number(minUpdatedAtMs || 0)) {
+        return campaign;
+      }
+    } catch (_) {
+      // Native RxDB projection can arrive just after command completion.
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, 400));
+  }
+  return null;
+}
+
+async function dispatchBusinessCommandWithRxdbFallback(command, options = {}) {
+  const commandId = command.id || command.command_id || `cmd_${crypto.randomUUID()}`;
+  const prepared = {
+    ...command,
+    id: commandId,
+  };
+  const collection = state.ctx?.db?.raw?.business_commands;
+  if (collection) {
+    const existing = await collection.findOne(commandId).exec().catch(() => null);
+    if (!existing) {
+      await collection.insert({
+        id: commandId,
+        command_id: commandId,
+        module: prepared.module || 'outbound',
+        command_type: prepared.type || prepared.command_type || '',
+        record_id: prepared.record_id || '',
+        status: 'pending_sync',
+        inbound_channel: prepared.inbound_channel || 'business_os.outbound',
+        payload: prepared.payload || {},
+        client_context: prepared.client_context || { source_module: 'outbound' },
+        updated_at_ms: Date.now(),
+      });
+    }
+    return { ok: true, command_id: commandId, status: 'pending_sync', transport: 'rxdb-local' };
+  }
+  await ensureBusinessCommandsReady(options.readyTimeoutMs || 10000);
+  const dispatchResult = state.ctx?.commandBus?.dispatch
+    ? await withTimeout(state.ctx.commandBus.dispatch(prepared), options.timeoutMs || 5000, null)
+    : null;
+  if (dispatchResult) return dispatchResult;
+  throw new Error('business_commands collection is required for outbound command fallback');
+}
+
+async function enqueueBusinessCommandForProjection(command) {
+  const collection = state.ctx?.db?.raw?.business_commands;
+  if (!collection) throw new Error('business_commands collection is required for outbound command enqueue');
+  const commandId = command.id || command.command_id || `cmd_${crypto.randomUUID()}`;
+  const existing = await collection.findOne(commandId).exec().catch(() => null);
+  if (!existing) {
+    await collection.insert({
+      id: commandId,
+      command_id: commandId,
+      module: command.module || 'outbound',
+      command_type: command.type || command.command_type || '',
+      record_id: command.record_id || '',
+      status: 'pending_sync',
+      inbound_channel: command.inbound_channel || 'business_os.outbound',
+      payload: command.payload || {},
+      client_context: command.client_context || { source_module: 'outbound' },
+      updated_at_ms: Date.now(),
+    });
+  }
+  return { ok: true, command_id: commandId, status: 'pending_sync', transport: 'rxdb-local' };
+}
+
+async function ensureBusinessCommandsReady(timeoutMs = 10000) {
+  const bridge = state.ctx?.sync?.startCollection
+    ? await withTimeout(state.ctx.sync.startCollection('business_commands'), timeoutMs, null)
+    : null;
+  const bridgeState = bridge?.state;
+  if (bridgeState) {
+    await withTimeout(
+      Promise.resolve().then(() => bridgeState.awaitInSync?.() || bridgeState.awaitInitialReplication?.()),
+      timeoutMs,
+      null,
+    );
+  }
 }
 
 function openCampaignRunbook(campaignId) {
@@ -821,7 +1182,12 @@ async function ensureDefaultCampaign() {
     company_count: 0,
     qualified_count: 0,
     pipeline_count: 0,
-    payload: { outbound_only: true },
+    payload: {
+      outbound_only: true,
+      briefing: '',
+      briefing_template_id: '',
+      briefing_language: campaignTemplateLanguage(),
+    },
     created_at_ms: now,
     updated_at_ms: now,
   };
@@ -2058,7 +2424,9 @@ function wireEvents(root) {
 
   root.addEventListener('input', (event) => {
     if (event.target.matches('[data-campaign-edit-field]')) {
-      updateCampaignEditSaveState(event.target.closest('.outbound-campaign-edit'));
+      const editor = event.target.closest('.outbound-campaign-edit');
+      syncCampaignEditDraftFromEditor(editor);
+      updateCampaignEditSaveState(editor);
     }
     if (event.target.matches('[data-search]')) {
       state.search = event.target.value;
@@ -2080,6 +2448,10 @@ function wireEvents(root) {
   });
 
   root.addEventListener('change', (event) => {
+    if (event.target.matches('[data-campaign-idea-template]')) {
+      applyCampaignIdeaTemplate(event.target);
+      return;
+    }
     if (event.target.id === 'status-filter') {
       state.statusFilter = event.target.value;
       render(true);
@@ -2108,6 +2480,18 @@ function wireEvents(root) {
       renderLeft();
     }
   });
+}
+
+function applyCampaignIdeaTemplate(select) {
+  const editor = select?.closest?.('.outbound-campaign-edit');
+  if (!editor) return;
+  const template = campaignIdeaTemplateById(select.value);
+  const briefingField = editor.querySelector('[data-campaign-edit-field="briefing"]');
+  if (template && briefingField) {
+    briefingField.value = template.text;
+  }
+  syncCampaignEditDraftFromEditor(editor);
+  updateCampaignEditSaveState(editor);
 }
 
 function render(force = false) {
@@ -2217,21 +2601,37 @@ function inputImportStatusLabel(metrics) {
 }
 
 function renderCampaignEditItem(campaign) {
-  const subtitle = campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`;
-  const scope = campaign.payload?.scope || campaign.objective || '';
+  const originalSubtitle = campaign.payload?.subtitle || `${campaign.market || 'DACH'} · ${campaign.status || 'active'}`;
+  const originalScope = campaign.payload?.scope || campaign.objective || '';
+  const originalBriefing = campaignBriefing(campaign);
+  const originalTemplateId = campaignBriefingTemplateId(campaign);
+  const draft = state.campaignEditDrafts.get(campaign.id) || {};
+  const name = draft.name ?? campaign.name;
+  const subtitle = draft.subtitle ?? originalSubtitle;
+  const scope = draft.scope ?? originalScope;
+  const briefing = draft.briefing ?? originalBriefing;
+  const templateId = draft.templateId ?? originalTemplateId;
+  const canSave = !!String(name || '').trim()
+    && (String(name || '').trim() !== String(campaign.name || '').trim()
+      || String(subtitle || '').trim() !== String(originalSubtitle || '').trim()
+      || String(scope || '').trim() !== String(originalScope || '').trim()
+      || String(briefing || '').trim() !== String(originalBriefing || '').trim()
+      || String(templateId || 'custom') !== String(originalTemplateId || 'custom'));
   return `
     <article
       class="outbound-campaign-item outbound-campaign-edit"
       aria-current="${campaign.id === state.selectedCampaignId}"
       data-id="${escapeHtml(campaign.id)}"
       data-original-name="${escapeHtml(campaign.name)}"
-      data-original-subtitle="${escapeHtml(subtitle)}"
-      data-original-scope="${escapeHtml(scope)}"
+      data-original-subtitle="${escapeHtml(originalSubtitle)}"
+      data-original-scope="${escapeHtml(originalScope)}"
+      data-original-briefing="${escapeHtml(originalBriefing)}"
+      data-original-template-id="${escapeHtml(originalTemplateId)}"
     >
       <div class="outbound-campaign-edit-grid">
         <label>
           <span>${escapeHtml(t('title', 'Titel'))}</span>
-          <input data-campaign-edit-field="name" value="${escapeHtml(campaign.name)}" required aria-required="true" />
+          <input data-campaign-edit-field="name" value="${escapeHtml(name)}" required aria-required="true" />
         </label>
         <label>
           <span>${escapeHtml(t('subtitle', 'Untertitel'))}</span>
@@ -2241,10 +2641,24 @@ function renderCampaignEditItem(campaign) {
           <span>${escapeHtml(t('scopeIcp', 'Scope / ICP'))}</span>
           <textarea data-campaign-edit-field="scope" rows="3" placeholder="z.B. DACH SaaS, 50-500 MA, hoher Energieverbrauch, kaufkräftige Operations-Teams">${escapeHtml(scope)}</textarea>
         </label>
+        <label>
+          <span>${escapeHtml(t('campaignIdeaTemplate', 'Kampagnenidee'))}</span>
+          <select data-campaign-idea-template>
+            <option value="custom"${templateId === 'custom' ? ' selected' : ''}>${escapeHtml(t('campaignIdeaCustom', 'Freitext / eigene Idee'))}</option>
+            ${campaignIdeaTemplates().map((template) => `
+              <option value="${escapeHtml(template.id)}"${templateId === template.id ? ' selected' : ''}>${escapeHtml(template.title)}</option>
+            `).join('')}
+          </select>
+        </label>
+        <label class="outbound-campaign-briefing">
+          <span>${escapeHtml(t('campaignBriefing', 'Briefing'))}</span>
+          <textarea data-campaign-edit-field="briefing" rows="7" placeholder="${escapeHtml(t('campaignBriefingPlaceholder', 'Beschreibe in natürlicher Sprache, wen die Campaign erreichen soll, über welchen Kanal, welches Angebot verkauft wird und welche Folgeaktionen geplant sind.'))}">${escapeHtml(briefing)}</textarea>
+          <small>${escapeHtml(t('campaignBriefingHelp', 'Dieser Text ist die zentrale Arbeitsanweisung der Campaign und bleibt später jederzeit editierbar.'))}</small>
+        </label>
       </div>
       <div class="outbound-campaign-edit-actions">
         <button class="outbound-button" type="button" data-action="cancel-campaign-edit" data-id="${escapeHtml(campaign.id)}">${escapeHtml(t('cancel', 'Abbrechen'))}</button>
-        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save disabled>${escapeHtml(t('save', 'Speichern'))}</button>
+        <button class="outbound-button primary" type="button" data-action="save-campaign-edit" data-id="${escapeHtml(campaign.id)}" data-campaign-edit-save${canSave ? '' : ' disabled'}>${escapeHtml(t('save', 'Speichern'))}</button>
       </div>
     </article>
   `;
@@ -2257,10 +2671,25 @@ function updateCampaignEditSaveState(editor) {
   const name = editor.querySelector('[data-campaign-edit-field="name"]')?.value?.trim() || '';
   const subtitle = editor.querySelector('[data-campaign-edit-field="subtitle"]')?.value?.trim() || '';
   const scope = editor.querySelector('[data-campaign-edit-field="scope"]')?.value?.trim() || '';
+  const briefing = editor.querySelector('[data-campaign-edit-field="briefing"]')?.value?.trim() || '';
+  const templateId = editor.querySelector('[data-campaign-idea-template]')?.value || 'custom';
   const dirty = name !== (editor.dataset.originalName || '')
     || subtitle !== (editor.dataset.originalSubtitle || '')
-    || scope !== (editor.dataset.originalScope || '');
+    || scope !== (editor.dataset.originalScope || '')
+    || briefing !== (editor.dataset.originalBriefing || '')
+    || templateId !== (editor.dataset.originalTemplateId || 'custom');
   saveButton.disabled = !name || !dirty;
+}
+
+function syncCampaignEditDraftFromEditor(editor) {
+  if (!editor?.dataset?.id) return;
+  state.campaignEditDrafts.set(editor.dataset.id, {
+    name: editor.querySelector('[data-campaign-edit-field="name"]')?.value || '',
+    subtitle: editor.querySelector('[data-campaign-edit-field="subtitle"]')?.value || '',
+    scope: editor.querySelector('[data-campaign-edit-field="scope"]')?.value || '',
+    briefing: editor.querySelector('[data-campaign-edit-field="briefing"]')?.value || '',
+    templateId: editor.querySelector('[data-campaign-idea-template]')?.value || 'custom',
+  });
 }
 
 function renderFunnelStage(campaign, filter, label, sublabel, value, openCount = 0, tone = '') {
@@ -4659,15 +5088,18 @@ async function createCampaign() {
     company_count: 0,
     qualified_count: 0,
     pipeline_count: 0,
-    payload: { outbound_only: true },
+    payload: {
+      outbound_only: true,
+      briefing: '',
+      briefing_template_id: '',
+      briefing_language: campaignTemplateLanguage(),
+    },
     created_at_ms: now,
     updated_at_ms: now,
   };
   await state.ctx.db.raw.outbound_campaigns.insert(campaign);
-  await ensureCampaignKnowledge(campaign).catch((error) => {
-    console.warn('[outbound] campaign knowledge setup failed', error);
-  });
   state.selectedCampaignId = id;
+  state.editingCampaignId = id;
   await loadAll();
   render();
 }
@@ -4685,23 +5117,172 @@ async function saveCampaignInlineEdit(campaignId) {
   }
   const subtitle = editor.querySelector('[data-campaign-edit-field="subtitle"]')?.value?.trim() || '';
   const scope = editor.querySelector('[data-campaign-edit-field="scope"]')?.value?.trim() || '';
+  const briefing = editor.querySelector('[data-campaign-edit-field="briefing"]')?.value?.trim() || '';
+  const templateId = editor.querySelector('[data-campaign-idea-template]')?.value || 'custom';
+  const setupRequired = Boolean(briefing)
+    && (
+      briefing !== (editor.dataset.originalBriefing || '')
+      || templateId !== (editor.dataset.originalTemplateId || 'custom')
+      || scope !== (editor.dataset.originalScope || '')
+    );
+  const setupCommandId = setupRequired ? `cmd_outbound_campaign_setup_${crypto.randomUUID()}` : '';
+  const updateCommandId = `cmd_outbound_campaign_briefing_update_${crypto.randomUUID()}`;
+  const updatedAtMs = Date.now();
   const payload = {
     ...(campaign.payload || {}),
     subtitle,
     scope,
+    briefing,
+    briefing_template_id: templateId === 'custom' ? '' : templateId,
+    briefing_language: campaignTemplateLanguage(),
   };
-  await patchDoc(state.ctx.db.raw.outbound_campaigns, campaign.id, {
+  if (setupRequired) {
+    payload.campaign_setup_task = {
+      command_id: setupCommandId,
+      status: 'requested',
+      skill: OUTBOUND_CAMPAIGN_SETUP_SKILL,
+      requested_at_ms: Date.now(),
+      briefing_template_id: templateId === 'custom' ? '' : templateId,
+      briefing_language: campaignTemplateLanguage(),
+    };
+  }
+  const objective = scope || campaignBriefingSummary({ payload: { briefing } }) || t('campaignObjectiveDefault', 'Outbound Firmenqualifizierung');
+  const nextCampaign = {
+    ...campaign,
     name,
-    objective: scope,
+    objective,
     payload,
-    updated_at_ms: Date.now(),
-  });
-  await ensureCampaignKnowledge({ ...campaign, name, objective: scope, payload }).catch((error) => {
-    console.warn('[outbound] campaign runbook update failed', error);
-  });
+    updated_at_ms: updatedAtMs,
+  };
+  const updateCommand = {
+    id: updateCommandId,
+    command_id: updateCommandId,
+    module: 'outbound',
+    command_type: 'outbound.campaign.briefing.update',
+    record_id: campaign.id,
+    status: 'pending_sync',
+    payload: {
+      campaign_id: campaign.id,
+      name,
+      objective,
+      payload_patch: {
+        subtitle,
+        scope,
+        briefing,
+        briefing_template_id: templateId === 'custom' ? '' : templateId,
+        briefing_language: campaignTemplateLanguage(),
+        ...(setupRequired ? { campaign_setup_task: payload.campaign_setup_task } : {}),
+      },
+    },
+    client_context: {
+      module: 'outbound',
+      action: 'campaign-briefing-update',
+      source: 'outbound-campaign-editor',
+    },
+  };
+  try {
+    await dispatchBusinessCommandWithRxdbFallback(updateCommand, { timeoutMs: 5000 });
+  } catch (error) {
+    showBusinessAlert(error?.message || String(error));
+    return;
+  }
+  state.campaigns = state.campaigns.map((item) => (item.id === campaign.id ? nextCampaign : item));
+  if (setupRequired) {
+    dispatchCampaignSetupPromptTask({
+      ...nextCampaign,
+    }, setupCommandId);
+  }
+  state.campaignEditDrafts.delete(campaign.id);
   state.editingCampaignId = '';
-  await loadAll();
   render();
+}
+
+function dispatchCampaignSetupPromptTask(campaign, commandId) {
+  const briefing = campaignBriefing(campaign);
+  if (!briefing || !commandId) return;
+  const template = campaignIdeaTemplateById(campaign.payload?.briefing_template_id || '', campaign.payload?.briefing_language || state.lang);
+  const title = `${t('campaignSetupTaskTitle', 'Outbound Campaign einrichten')} · ${campaign.name}`;
+  const instruction = campaignSetupPrompt(campaign, commandId, template);
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: briefing,
+      module: 'outbound',
+      source_title: 'Outbound',
+      command_id: commandId,
+      command_type: 'business_os.chat.task',
+      record_id: campaign.id,
+      title,
+      instruction,
+      payload: {
+        title,
+        instruction,
+        prompt: briefing,
+        user_message: briefing,
+        mode: 'data',
+        target: 'data',
+        required_skills: [OUTBOUND_CAMPAIGN_SETUP_SKILL],
+        selected_campaign: campaign,
+        selected_template: template || null,
+        writeback_contract: {
+          command_type: 'outbound.campaign.apply_setup',
+          campaign_id: campaign.id,
+          source_command_id: commandId,
+          collection: 'outbound_campaigns',
+          record_id: campaign.id,
+          allowed_top_level_fields: ['status'],
+          allowed_payload_fields: [
+            'campaign_setup',
+            'research_settings',
+            'active_outreach',
+            'communication_strategy',
+            'sequence_strategy',
+            'landing_page',
+            'app_extension_requests',
+          ],
+        },
+        thread_key: `business-os/outbound/${campaign.id}`,
+      },
+      client_context: {
+        action: 'campaign-setup-briefing',
+        mode: 'data',
+        module: 'outbound',
+        record_type: 'outbound_campaign',
+        record_id: campaign.id,
+        required_skill: OUTBOUND_CAMPAIGN_SETUP_SKILL,
+      },
+    },
+  }));
+}
+
+function campaignSetupPrompt(campaign, commandId, template) {
+  return [
+    `Nutze den CTOX Skill ${OUTBOUND_CAMPAIGN_SETUP_SKILL}.`,
+    '',
+    'Aufgabe:',
+    'Richte die Outbound Campaign anhand des natuerlich formulierten Briefings ein. Verwende keine lokalen Heuristiken der App und keine HTTP-Datenkanaele. Die Outbound-App ist nur der Task-Produzent.',
+    '',
+    'Nicht verhandelbar:',
+    '- Keine Nachricht senden.',
+    '- Keine E-Mail, keinen Brief und keine externe HTTP-Integration ausloesen.',
+    '- Alle Daten- und App-Aenderungen nur ueber CTOX Business OS Commands/RxDB zurueckschreiben.',
+    '- Outbound-Kommunikation bleibt approval-gated.',
+    '- Wenn ein Wunsch nicht durch vorhandene Outbound-Settings abbildbar ist, schreibe ihn als konkreten App-Extension-Request in den Writeback.',
+    '',
+    'Campaign:',
+    `- campaign_id: ${campaign.id}`,
+    `- name: ${campaign.name}`,
+    `- command_id_for_writeback: ${commandId}`,
+    template ? `- selected_template_id: ${template.id}` : '- selected_template_id: custom',
+    '',
+    'User-Briefing:',
+    campaignBriefing(campaign),
+    '',
+    'Erwartetes Ergebnis:',
+    '1. Interpretiere Zielgruppe, Kanal, Angebot, Timing, Landingpage-/Webinar-Wuensche und manuelle Schritte.',
+    '2. Erstelle passende Campaign Settings, Research Settings, Outreach-Strategie und Kommunikations-/Approval-Plan.',
+    '3. Schreibe die Ergebnisse ausschliesslich per Command `outbound.campaign.apply_setup` fuer diese campaign_id zurueck.',
+    '4. Wenn die App eine benoetigte Faehigkeit noch nicht hat, notiere sie unter `app_extension_requests` statt clientseitig zu improvisieren.',
+  ].join('\n');
 }
 
 async function deleteCampaign(campaignId) {
@@ -6728,6 +7309,10 @@ export function buildHiddenCompaniesPanel() {
 }
 
 export const __outboundTestHooks = {
+  campaignBriefing,
+  campaignBriefingSummary,
+  campaignSetupPrompt,
+  campaignIdeaTemplates,
   campaignScopedRows,
   validateOutboundImportPayload,
 };

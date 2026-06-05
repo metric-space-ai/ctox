@@ -6,9 +6,11 @@ use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use rusqlite::params;
+use rusqlite::params_from_iter;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -5402,6 +5404,151 @@ fn pull_rxdb_collection_table_records(
     Ok(None)
 }
 
+fn load_rxdb_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let conn = Connection::open(path)?;
+    let Some(table) = rxdb_collection_table_name(&conn, collection) else {
+        return Ok(None);
+    };
+    let raw = conn
+        .query_row(
+            &format!("SELECT data FROM {table} WHERE id = ?1"),
+            [record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(record_id.to_string()));
+    }
+    Ok(Some(record))
+}
+
+fn upsert_rxdb_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    mut payload: Value,
+) -> anyhow::Result<()> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(());
+    }
+    let conn = Connection::open(path)?;
+    let Some(table) = rxdb_collection_table_name(&conn, collection) else {
+        return Ok(());
+    };
+    if let Some(existing_json) = conn
+        .query_row(
+            &format!("SELECT data FROM {table} WHERE id = ?1"),
+            [record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+    {
+        if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
+            merge_json_object_values(&mut existing, &payload);
+            payload = existing;
+        }
+    }
+    let rev = format!("rev_{}", Uuid::new_v4());
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("id".to_string(), Value::String(record_id.to_string()));
+        object.insert(
+            "updated_at_ms".to_string(),
+            Value::Number(serde_json::Number::from(updated_at_ms)),
+        );
+    }
+    let mut columns = vec!["id".to_string(), "data".to_string()];
+    let mut values = vec![
+        SqlValue::Text(record_id.to_string()),
+        SqlValue::Text(serde_json::to_string(&payload)?),
+    ];
+    let mut updates = vec!["data = excluded.data".to_string()];
+    if let Some(deleted_column) = ["deleted", "_deleted"]
+        .into_iter()
+        .find_map(|column| rxdb_table_has_column(&conn, &table, column).ok().filter(|exists| *exists).map(|_| column))
+    {
+        columns.push(deleted_column.to_string());
+        values.push(SqlValue::Integer(0));
+        updates.push(format!("{deleted_column} = 0"));
+    }
+    if let Some(revision_column) = ["revision", "_rev"]
+        .into_iter()
+        .find_map(|column| rxdb_table_has_column(&conn, &table, column).ok().filter(|exists| *exists).map(|_| column))
+    {
+        columns.push(revision_column.to_string());
+        values.push(SqlValue::Text(rev));
+        updates.push(format!("{revision_column} = excluded.{revision_column}"));
+    }
+    if rxdb_table_has_column(&conn, &table, "lastWriteTime")? {
+        columns.push("lastWriteTime".to_string());
+        values.push(SqlValue::Real(updated_at_ms as f64));
+        updates.push("lastWriteTime = excluded.lastWriteTime".to_string());
+    }
+    let placeholders = (1..=columns.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    conn.execute(
+        &format!(
+            "INSERT INTO {table} ({columns}) VALUES ({placeholders})
+             ON CONFLICT(id) DO UPDATE SET {updates}",
+            columns = columns.join(", "),
+            updates = updates.join(", ")
+        ),
+        params_from_iter(values),
+    )?;
+    Ok(())
+}
+
+fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
+    let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn merge_json_object_values(target: &mut Value, patch: &Value) {
+    let (Some(target_obj), Some(patch_obj)) = (target.as_object_mut(), patch.as_object()) else {
+        *target = patch.clone();
+        return;
+    };
+    for (key, value) in patch_obj {
+        match (target_obj.get_mut(key), value) {
+            (Some(existing), Value::Object(_)) if existing.is_object() => {
+                merge_json_object_values(existing, value);
+            }
+            _ => {
+                target_obj.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 fn is_safe_rxdb_collection_name(collection: &str) -> bool {
     !collection.is_empty()
         && collection
@@ -6791,6 +6938,8 @@ fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.scheduling.mark_booked"
             | "outbound.campaign.mailbox.link"
             | "outbound.campaign.status.set"
+            | "outbound.campaign.briefing.update"
+            | "outbound.campaign.apply_setup"
             | "outbound.provider.reconcile"
             | "outbound.skillbook.save"
             | "outbound.skillbook.seed_defaults"
@@ -7906,6 +8055,12 @@ fn handle_outbound_active_command(
             outbound_handle_campaign_mailbox_link(root, &conn, command, now)
         }
         "outbound.campaign.status.set" => outbound_handle_campaign_status_set(&conn, command, now),
+        "outbound.campaign.briefing.update" => {
+            outbound_handle_campaign_briefing_update(root, &conn, command, now)
+        }
+        "outbound.campaign.apply_setup" => {
+            outbound_handle_campaign_apply_setup(root, &conn, command, now)
+        }
         "outbound.reply.match" => outbound_handle_reply_match(root, &conn, command, now),
         "outbound.provider.reconcile" => {
             outbound_handle_provider_reconcile(root, &conn, command, now)
@@ -9194,6 +9349,147 @@ fn outbound_handle_provider_reconcile(
     }))
 }
 
+fn outbound_handle_campaign_apply_setup(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+    let patch = command
+        .payload
+        .get("campaign_payload_patch")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("campaign_payload_patch object is required"))?;
+    let mut campaign = outbound_load_required_or_rxdb(
+        root,
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        "campaign not found",
+    )?;
+    outbound_put_string(&mut campaign, "id", campaign_id.clone());
+    outbound_put_default_object(&mut campaign, "payload");
+    if let Some(status) = outbound_string(&command.payload, &["status"]) {
+        if matches!(
+            status.as_str(),
+            "setup_required" | "active" | "paused" | "closed"
+        ) {
+            outbound_put_string(&mut campaign, "status", status);
+        }
+    }
+    {
+        let payload = campaign
+            .get_mut("payload")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow::anyhow!("campaign payload object is required"))?;
+        for (key, value) in patch {
+            payload.insert(key.clone(), value.clone());
+        }
+        let apply_command_id = command.id.clone().unwrap_or_default();
+        let source_command_id =
+            outbound_string(&command.payload, &["source_command_id"]).unwrap_or_default();
+        payload.insert(
+            "campaign_setup_task".to_string(),
+            serde_json::json!({
+                "command_id": if source_command_id.is_empty() { apply_command_id.clone() } else { source_command_id.clone() },
+                "apply_command_id": apply_command_id,
+                "source_command_id": source_command_id,
+                "status": "completed",
+                "skill": outbound_string(&command.payload, &["skill"]).unwrap_or_else(|| "business-os-outbound-campaign-setup".to_string()),
+                "applied_at_ms": now,
+            }),
+        );
+    }
+    outbound_put_i64(&mut campaign, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign": campaign,
+        "campaign_id": campaign_id,
+    }))
+}
+
+fn outbound_handle_campaign_briefing_update(
+    root: &Path,
+    conn: &Connection,
+    command: &BusinessCommand,
+    now: i64,
+) -> anyhow::Result<Value> {
+    let campaign_id = outbound_required_string(&command.payload, &["campaign_id"])?;
+    let mut campaign = outbound_load_required_or_rxdb(
+        root,
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        "campaign not found",
+    )?;
+    outbound_put_string(&mut campaign, "id", campaign_id.clone());
+    if let Some(name) = outbound_string(&command.payload, &["name"]) {
+        anyhow::ensure!(!name.trim().is_empty(), "campaign name is required");
+        outbound_put_string(&mut campaign, "name", name.trim().to_string());
+    }
+    if let Some(objective) = outbound_string(&command.payload, &["objective"]) {
+        outbound_put_string(&mut campaign, "objective", objective.trim().to_string());
+    }
+    outbound_put_default_object(&mut campaign, "payload");
+    if let Some(payload_patch) = command
+        .payload
+        .get("payload_patch")
+        .and_then(Value::as_object)
+    {
+        let payload = campaign
+            .get_mut("payload")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| anyhow::anyhow!("campaign payload object is required"))?;
+        for key in [
+            "subtitle",
+            "scope",
+            "briefing",
+            "briefing_template_id",
+            "briefing_language",
+            "campaign_setup_task",
+        ] {
+            if let Some(value) = payload_patch.get(key) {
+                payload.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+    outbound_put_i64(&mut campaign, "updated_at_ms", now);
+    upsert_business_record(
+        conn,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "outbound_campaigns",
+        &campaign_id,
+        now,
+        campaign.clone(),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "campaign": campaign,
+        "campaign_id": campaign_id,
+    }))
+}
+
 fn outbound_handle_reply_match(
     root: &Path,
     conn: &Connection,
@@ -9934,6 +10230,37 @@ fn outbound_load_required(
     message: &str,
 ) -> anyhow::Result<Value> {
     outbound_load_record(conn, collection, record_id)?.with_context(|| message.to_string())
+}
+
+fn outbound_load_record_or_rxdb(
+    root: &Path,
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if let Some(record) = outbound_load_record(conn, collection, record_id)? {
+        return Ok(Some(record));
+    }
+    let Some(record) = load_rxdb_collection_record(root, collection, record_id)? else {
+        return Ok(None);
+    };
+    let updated_at_ms = record
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    upsert_business_record(conn, collection, record_id, updated_at_ms, record.clone())?;
+    Ok(Some(record))
+}
+
+fn outbound_load_required_or_rxdb(
+    root: &Path,
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    message: &str,
+) -> anyhow::Result<Value> {
+    outbound_load_record_or_rxdb(root, conn, collection, record_id)?
+        .with_context(|| message.to_string())
 }
 
 fn outbound_load_records_by_string_field(

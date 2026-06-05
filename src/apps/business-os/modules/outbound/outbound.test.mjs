@@ -59,3 +59,88 @@ test('outbound import validation requires source-specific input', () => {
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [] } }).valid, false);
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [{ name: 'companies.csv' }] } }).valid, true);
 });
+
+test('every campaign idea template is actionable and channel-explicit', () => {
+  for (const lang of ['de', 'en']) {
+    const templates = hooks.campaignIdeaTemplates(lang);
+    const ids = new Set();
+    const titles = new Set();
+
+    assert.equal(templates.length, 20);
+
+    for (const template of templates) {
+      assert.ok(template.id.startsWith(`${lang}-`), `${template.id} should use the language prefix`);
+      assert.equal(ids.has(template.id), false, `${template.id} must be unique`);
+      assert.equal(titles.has(template.title), false, `${template.title} must be unique`);
+      ids.add(template.id);
+      titles.add(template.title);
+
+      assert.ok(template.title.length >= 12, `${template.id} needs a useful title`);
+      assert.ok(template.text.length >= 180, `${template.id} needs a concrete natural-language briefing`);
+      assert.match(template.text, /(?:ich möchte|I want to)/i, `${template.id} should read like a natural user request`);
+
+      if (template.id.includes('-mail-')) {
+        assert.match(template.text, /(?:E-Mail|email)/i, `${template.id} must explicitly name email as the channel`);
+      }
+      if (template.id.includes('-letter-')) {
+        assert.match(template.text, /(?:Brief|Briefe|physical letter|physical letters|letter templates|printable letters)/i, `${template.id} must explicitly name physical letters as the channel`);
+      }
+
+      const prompt = hooks.campaignSetupPrompt(
+        {
+          id: `camp-${template.id}`,
+          name: template.title,
+          payload: {
+            briefing: template.text,
+            briefing_template_id: template.id,
+            briefing_language: lang,
+          },
+        },
+        `cmd-${template.id}`,
+        template,
+      );
+
+      assert.match(prompt, /outbound\.campaign\.apply_setup/);
+      assert.match(prompt, /keine HTTP-Datenkanaele/i);
+    }
+  }
+});
+
+test('campaign briefing save spawns a CTOX chat task for the setup skill', () => {
+  assert.match(bundledSource, /ctox-business-os-chat-submit/);
+  assert.match(bundledSource, /business-os-outbound-campaign-setup/);
+  assert.match(bundledSource, /outbound\.campaign\.briefing\.update/);
+  assert.match(bundledSource, /transport:\s*['"]rxdb-local['"]/);
+  assert.match(bundledSource, /state\.ctx\?\.db\?\.raw\?\.business_commands/);
+  assert.match(bundledSource, /business_os\.chat\.task/);
+  assert.match(bundledSource, /outbound\.campaign\.apply_setup/);
+
+  const prompt = hooks.campaignSetupPrompt(
+    {
+      id: 'camp-1',
+      name: 'Nord-Handwerk',
+      payload: {
+        briefing: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per Mail anschreiben.',
+        briefing_template_id: 'de-mail-handwerk-nord',
+      },
+    },
+    'cmd-setup-1',
+    { id: 'de-mail-handwerk-nord', title: 'Handwerk in Norddeutschland per E-Mail' },
+  );
+
+  assert.match(prompt, /Nutze den CTOX Skill business-os-outbound-campaign-setup/);
+  assert.match(prompt, /keine HTTP-Datenkanaele/i);
+  assert.match(prompt, /outbound\.campaign\.apply_setup/);
+  assert.match(prompt, /cmd-setup-1/);
+});
+
+test('campaign editor keeps template briefing drafts and follows shell language changes', () => {
+  assert.match(bundledSource, /campaignEditDrafts:\s*(?:\/\* @__PURE__ \*\/\s*)?new Map\(\)/);
+  assert.match(bundledSource, /function syncCampaignEditDraftFromEditor/);
+  assert.match(bundledSource, /state\.campaignEditDrafts\.get\(campaign\.id\)/);
+  assert.match(bundledSource, /data-campaign-idea-template/);
+  assert.match(bundledSource, /function applyOutboundLanguage/);
+  assert.match(bundledSource, /ctox-business-os-preferences/);
+  assert.match(bundledSource, /ctox-business-os-language/);
+  assert.match(bundledSource, /syncCampaignEditDraftFromEditor\(editor\);\s*render\(true\);/);
+});

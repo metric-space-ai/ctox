@@ -204,9 +204,9 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         return Ok(());
     }
     // RxDB/WebRTC-only data plane: Business OS HTTP data APIs stay hard-disabled
-    // except for flows that cannot depend on a healthy browser-to-native peer:
-    // subscription auth and the authenticated command fallback.
-    if path.starts_with("/api/business-os") && !is_business_os_http_exception_path(path) {
+    // except for ChatGPT subscription auth, which cannot depend on a healthy
+    // browser-to-native peer before the account is connected.
+    if path.starts_with("/api/business-os") && !is_subscription_auth_path(path) {
         respond_status(
             request,
             410,
@@ -512,19 +512,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
-        (Method::Post, "/api/business-os/commands") => {
-            let session = request_session(&request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let document = read_json(&mut request)?;
-                let document = attach_http_command_session(document, &session);
-                respond_json_value(
-                    request,
-                    store::accept_rxdb_business_command(root, document)?,
-                )?;
-            }
-        }
         // ---------- Channels tab ----------
         (Method::Get, "/api/business-os/channels/accounts") => {
             let session = request_session(&request);
@@ -683,62 +670,12 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     Ok(())
 }
 
-fn is_business_os_http_exception_path(path: &str) -> bool {
+fn is_subscription_auth_path(path: &str) -> bool {
     matches!(
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
-            | "/api/business-os/commands"
     )
-}
-
-fn attach_http_command_session(mut document: Value, session: &store::BusinessOsSession) -> Value {
-    let actor = session
-        .user
-        .as_ref()
-        .map(|user| {
-            serde_json::json!({
-                "id": user.id.clone(),
-                "display_name": user.display_name.clone(),
-                "role": user.role.clone(),
-                "is_admin": user.is_admin
-            })
-        })
-        .unwrap_or(Value::Null);
-    let session_context = serde_json::json!({
-        "source": "business-os-http-command-fallback",
-        "actor": actor
-    });
-    let Some(object) = document.as_object_mut() else {
-        return document;
-    };
-    let mut client_context = object
-        .remove("client_context")
-        .and_then(|value| {
-            if let Value::String(raw) = value {
-                serde_json::from_str::<Value>(&raw).ok()
-            } else {
-                Some(value)
-            }
-        })
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !client_context.is_object() {
-        client_context = serde_json::json!({ "value": client_context });
-    }
-    if let Some(context) = client_context.as_object_mut() {
-        context
-            .entry("transport".to_string())
-            .or_insert_with(|| Value::String("http-fallback".to_string()));
-        context.insert("http_fallback".to_string(), Value::Bool(true));
-        context
-            .entry("actor".to_string())
-            .or_insert_with(|| session_context["actor"].clone());
-        context
-            .entry("http_session".to_string())
-            .or_insert(session_context);
-    }
-    object.insert("client_context".to_string(), client_context);
-    document
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {

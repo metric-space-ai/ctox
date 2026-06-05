@@ -48,22 +48,12 @@ async function recordRxdbCommand({ db, sync, command }) {
     const pushBridge = await restartBusinessCommandsSync({ sync, fallbackBridge: bridge });
     await flushCommandSyncBridge(pushBridge, 60000);
   } catch (error) {
-    try {
-      const fallback = await dispatchCommandViaHttp(doc);
-      const result = normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
-      if (localWriteSucceeded) {
-        await patchLocalCommandAccepted(db, command_id, doc, result, error).catch(() => {});
-      }
-      return result;
-    } catch (fallbackError) {
-      const failed = fallbackError || error;
-      failed.command_id = command_id;
-      failed.status = 'failed';
-      if (error && fallbackError && error !== fallbackError) {
-        failed.sync_error = error.message || String(error);
-      }
-      throw failed;
+    if (localWriteSucceeded) {
+      return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'pending_sync' }, command_id, 'rxdb-local');
     }
+    error.command_id = command_id;
+    error.status = 'failed';
+    throw error;
   }
   return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'accepted' }, command_id, 'rxdb-webrtc');
 }
@@ -127,46 +117,6 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   } else {
     await collection.insert(doc);
   }
-}
-
-async function patchLocalCommandAccepted(db, commandId, doc, result, syncError) {
-  const currentDb = await resolveCommandDb(db, 5000);
-  const collection = currentDb?.raw?.business_commands;
-  if (!collection) return;
-  const updated = {
-    ...doc,
-    status: result.status || 'accepted',
-    task_id: result.task_id || '',
-    task_status: result.task_status || result.status || 'accepted',
-    client_context: {
-      ...(doc.client_context || {}),
-      dispatch_transport: result.transport || 'http-fallback',
-      rxdb_sync_error: syncError?.message || String(syncError || ''),
-    },
-    updated_at_ms: Date.now(),
-  };
-  await insertOrPatchCommandDocument(collection, commandId, updated);
-}
-
-async function dispatchCommandViaHttp(doc) {
-  const response = await fetch('/api/business-os/commands', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(doc),
-  });
-  let payload = null;
-  try {
-    payload = await response.json();
-  } catch {}
-  if (!response.ok || payload?.ok === false) {
-    const message = payload?.error || payload?.message || `HTTP ${response.status}`;
-    throw new Error(`Business command HTTP fallback failed: ${message}`);
-  }
-  return payload || {};
 }
 
 function normalizeAcceptedCommandResult(result, commandId, transport) {
