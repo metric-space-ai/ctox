@@ -3862,14 +3862,44 @@ fn start_prompt_worker(
                                     route_status,
                                 )
                             };
-                            if let Err(ack_err) = ack_result {
-                                push_event_locked(
-                                    &mut shared,
-                                    format!(
-                                        "Failed to update leased queue task(s) after worker error: {}",
-                                        clip_text(&ack_err.to_string(), 180)
-                                    ),
-                                );
+                            match ack_result {
+                                Ok(_) => {
+                                    for message_key in &job.leased_message_keys {
+                                        let projection_result = if route_status == "failed" {
+                                            crate::business_os::store::fail_business_command_from_queue_error(
+                                                &root,
+                                                message_key,
+                                                &compact_error,
+                                            )
+                                            .map(|_| ())
+                                        } else {
+                                            crate::business_os::store::refresh_business_command_queue_task_projection(
+                                                &root,
+                                                message_key,
+                                            )
+                                            .map(|_| ())
+                                        };
+                                        if let Err(projection_err) = projection_result {
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Failed to project Business OS queue worker status for {}: {}",
+                                                    message_key,
+                                                    clip_text(&projection_err.to_string(), 180)
+                                                ),
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(ack_err) => {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Failed to update leased queue task(s) after worker error: {}",
+                                            clip_text(&ack_err.to_string(), 180)
+                                        ),
+                                    );
+                                }
                             }
                         }
                         if !job.leased_ticket_event_keys.is_empty() {
@@ -4309,6 +4339,34 @@ fn start_prompt_worker(
                     &job.leased_message_keys,
                     &job.leased_ticket_event_keys,
                 );
+                if !job.leased_message_keys.is_empty() {
+                    let failure_reason =
+                        "CTOX prompt worker panicked before the turn could finish. See service log.";
+                    let _ = channels::ack_leased_messages_with_failure_reason(
+                        &root,
+                        &job.leased_message_keys,
+                        "failed",
+                        failure_reason,
+                    );
+                    for message_key in &job.leased_message_keys {
+                        if let Err(err) =
+                            crate::business_os::store::fail_business_command_from_queue_error(
+                                &root,
+                                message_key,
+                                failure_reason,
+                            )
+                        {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "Failed to project panicked Business OS queue worker status for {}: {}",
+                                    message_key,
+                                    clip_text(&err.to_string(), 180)
+                                ),
+                            );
+                        }
+                    }
+                }
                 if let Some(work_id) = job.ticket_self_work_id.as_deref() {
                     block_ticket_self_work_item(
                         &root,

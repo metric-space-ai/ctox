@@ -56,6 +56,9 @@ const CHATGPT_AUTH_SECRET_SCOPE: &str = "ctox-auth";
 const CHATGPT_AUTH_SECRET_NAME: &str = "chatgpt_subscription_auth_json";
 const BUSINESS_OS_SECRET_SCOPE: &str = "business-os";
 const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
+const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
+const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
+const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -5822,6 +5825,140 @@ pub fn mark_business_command_failed(
         payload,
     )?;
     Ok(())
+}
+
+pub fn refresh_business_command_queue_task_projection(
+    root: &Path,
+    task_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let Some(command_id) = queue_projection_command_id(&conn, task_id)? else {
+        return Ok(None);
+    };
+    let command = load_business_command(&conn, &command_id)?;
+    let Some(task) = channels::load_queue_task(root, task_id)? else {
+        return Ok(None);
+    };
+    let updated_at_ms = now_ms() as i64;
+    let command_status = conn
+        .query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            params![command_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .unwrap_or_else(|| "accepted".to_string());
+    let mut command_projection = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'business_commands'
+               AND record_id = ?1
+               AND deleted = 0",
+            params![command_id.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": command.module.clone(),
+                "command_type": command.command_type.clone(),
+                "record_id": command.record_id.clone().unwrap_or_default(),
+                "inbound_channel": command_inbound_channel(&command),
+                "payload": command.payload.clone(),
+                "client_context": command.client_context.clone()
+            })
+        });
+    if let Some(object) = command_projection.as_object_mut() {
+        object.insert("status".to_string(), Value::String(command_status.clone()));
+        object.insert(
+            "task_id".to_string(),
+            Value::String(task.message_key.clone()),
+        );
+        object.insert(
+            "task_status".to_string(),
+            Value::String(normalize_queue_status(&task.route_status).to_string()),
+        );
+        if let Some(note) = task.status_note.as_deref() {
+            object.insert(
+                "queue_status_note".to_string(),
+                Value::String(note.to_string()),
+            );
+        }
+        object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    }
+    upsert_business_record(
+        &conn,
+        "business_commands",
+        &command_id,
+        updated_at_ms,
+        command_projection.clone(),
+    )?;
+    refresh_queue_task_projection(
+        root,
+        &conn,
+        &command_id,
+        &command,
+        Some(&task),
+        updated_at_ms,
+    )?;
+    Ok(Some(command_projection))
+}
+
+pub fn fail_business_command_from_queue_error(
+    root: &Path,
+    task_id: &str,
+    error: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let Some(command_id) = queue_projection_command_id(&conn, task_id)? else {
+        return Ok(None);
+    };
+    let command = load_business_command(&conn, &command_id)?;
+    let task = channels::load_queue_task(root, task_id)?;
+    let failed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands
+         SET status = 'failed', observed_at_ms = ?2
+         WHERE command_id = ?1",
+        params![command_id.as_str(), failed_at_ms],
+    )?;
+    let payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "failed",
+        "inbound_channel": command_inbound_channel(&command),
+        "task_id": task_id,
+        "task_status": "failed",
+        "error": error,
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "updated_at_ms": failed_at_ms
+    });
+    upsert_business_record(
+        &conn,
+        "business_commands",
+        &command_id,
+        failed_at_ms,
+        payload.clone(),
+    )?;
+    if let Some(task) = task.as_ref() {
+        refresh_queue_task_projection(
+            root,
+            &conn,
+            &command_id,
+            &command,
+            Some(task),
+            failed_at_ms,
+        )?;
+    }
+    Ok(Some(payload))
 }
 
 pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Result<Value> {
@@ -13966,10 +14103,16 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Execute this Business OS automation through CTOX.");
-    let payload =
-        serde_json::to_string_pretty(&command.payload).unwrap_or_else(|_| "{}".to_string());
-    let context =
-        serde_json::to_string_pretty(&command.client_context).unwrap_or_else(|_| "{}".to_string());
+    let instruction =
+        truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
+    let payload = prompt_json_preview(
+        &command.payload,
+        BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
+    );
+    let context = prompt_json_preview(
+        &command.client_context,
+        BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
+    );
     let required_skills = command
         .payload
         .get("required_skills")
@@ -13984,12 +14127,40 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("\nRequired CTOX skills: {value}\n"))
         .unwrap_or_default();
-    format!(
-        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+    let prompt = format!(
+        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
+    );
+    truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn prompt_json_preview(value: &Value, max_chars: usize) -> String {
+    let raw = serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string());
+    if raw.chars().count() <= max_chars {
+        return raw;
+    }
+    let preview = raw
+        .chars()
+        .take(max_chars.saturating_sub(160))
+        .collect::<String>();
+    let omitted = raw.chars().count().saturating_sub(preview.chars().count());
+    format!(
+        "{preview}\n... truncated {omitted} chars; full JSON is stored on the Business OS command record ..."
     )
+}
+
+fn truncate_text_preserve(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut output = value
+        .chars()
+        .take(max_chars.saturating_sub(80))
+        .collect::<String>();
+    output.push_str("\n... truncated; full text is stored on the Business OS command record ...");
+    output
 }
 
 fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
@@ -14929,6 +15100,133 @@ mod tests {
         );
         assert_eq!(rotated.sync_room, reloaded.sync_room);
         assert!(rotated.sync_room.starts_with("ctox-business-os:"));
+        Ok(())
+    }
+
+    #[test]
+    fn business_chat_queue_prompt_is_bounded_for_large_research_context() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let huge_sources = (0..1_500)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("source_{index}"),
+                    "title": format!("Large source {index}"),
+                    "summary": "x".repeat(2_000),
+                    "measurements": ["rpm", "torque", "vibration", "temperature"]
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_large_research_context",
+                "command_id": "cmd_large_research_context",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe · Web Research",
+                    "instruction": "finde 5 weitere Quellen fuer Simulationsdaten.",
+                    "prompt": "finde 5 weitere Quellen fuer Simulationsdaten.",
+                    "sources": huge_sources
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research",
+                    "browser_context": "y".repeat(2_000_000)
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+
+        assert!(
+            task.prompt.chars().count() <= BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS,
+            "prompt should be bounded, got {} chars",
+            task.prompt.chars().count()
+        );
+        assert!(task.prompt.contains("cmd_large_research_context"));
+        assert!(task.prompt.contains("Payload JSON"));
+        assert!(task.prompt.contains("Client context JSON"));
+        assert!(task.prompt.contains("truncated"));
+        Ok(())
+    }
+
+    #[test]
+    fn queue_worker_failure_marks_business_command_projection_failed() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_failed_queue_chat",
+                "command_id": "cmd_failed_queue_chat",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe · Web Research",
+                    "instruction": "teste Fehlerpfad",
+                    "prompt": "teste Fehlerpfad"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::ack_leased_messages_with_failure_reason(
+            root,
+            std::slice::from_ref(&task_id),
+            "failed",
+            "turn/start failed",
+        )?;
+        let projected =
+            fail_business_command_from_queue_error(root, &task_id, "turn/start failed")?
+                .context("expected business command projection")?;
+
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            projected.get("task_status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            projected.get("error").and_then(Value::as_str),
+            Some("turn/start failed")
+        );
+
+        let conn = open_store(root)?;
+        let queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let queue_projection: Value = serde_json::from_str(&queue_payload)?;
+        assert_eq!(
+            queue_projection.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            queue_projection.get("route_status").and_then(Value::as_str),
+            Some("failed")
+        );
         Ok(())
     }
 
