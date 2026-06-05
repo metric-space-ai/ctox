@@ -4,7 +4,7 @@ Stand: 2026-06-05
 
 Ziel: Die CTOX Business OS Outbound-App wird production-ready auf `cto1.kunstmen.com`: Campaigns werden per natuerlichem Briefing angelegt, CTOX richtet die Campaign ueber einen Skill ein, alle Daten laufen ueber RxDB/native Commands, Kommunikation bleibt approval-gated, E-Mail und physische Briefe sind auditierbar, Conversations ist die Detailansicht fuer Kommunikation.
 
-Aktueller Gesamtstand: **77%**
+Aktueller Gesamtstand: **78%**
 
 Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im Browser mit sauberem Profil, Reload, Console-/Network-Check und Screenshot-/JSON-Evidence bestanden sind.
 
@@ -24,27 +24,28 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 | Welle | Gewicht | Status | Fortschritt | Beitrag |
 | --- | ---: | --- | ---: | ---: |
 | W0 Baseline, Release-Schutz, Deploy-Pfad | 5% | Bestanden | 100% | 5.0% |
-| W1 RxDB-only Runtime und Command Bus | 15% | In Arbeit | 95% | 14.3% |
-| W2 Campaign-Erstellung per natuerlichem Briefing | 15% | In Arbeit | 95% | 14.3% |
+| W1 RxDB-only Runtime und Command Bus | 15% | Bestanden fuer Campaign Setup | 100% | 15.0% |
+| W2 Campaign-Erstellung per natuerlichem Briefing | 15% | In Arbeit | 98% | 14.7% |
 | W3 Research Funnel und Import | 10% | In Arbeit | 85% | 8.5% |
 | W4 Active Outreach Core | 15% | In Arbeit | 75% | 11.3% |
 | W5 Kanaele E-Mail und physischer Brief | 10% | In Arbeit | 65% | 6.5% |
 | W6 Conversations-Integration | 10% | In Arbeit | 55% | 5.5% |
 | W7 Reply Loop, Follow-ups, Terminfindung | 8% | Offen | 15% | 1.2% |
-| W8 Safety, Approval, Audit, Governance | 6% | In Arbeit | 70% | 4.2% |
-| W9 Browser-E2E, Live-Evidence, Regression Gates | 6% | In Arbeit | 60% | 3.6% |
-| **Gesamt** | **100%** | **In Arbeit** |  | **77%** |
+| W8 Safety, Approval, Audit, Governance | 6% | In Arbeit | 80% | 4.8% |
+| W9 Browser-E2E, Live-Evidence, Regression Gates | 6% | In Arbeit | 83% | 5.0% |
+| **Gesamt** | **100%** | **In Arbeit** |  | **78%** |
 
 ## Aktuelle Evidenz
 
 - Frontend-Test `node --test src/apps/business-os/modules/outbound/outbound.test.mjs`: bestanden mit 9 Tests.
-- RxDB-only Guard `node src/apps/business-os/scripts/assert-rxdb-only.mjs`: bestanden.
+- RxDB-only Guard `node src/apps/business-os/scripts/assert-rxdb-only.mjs`: bestanden und verbietet jetzt den Command-HTTP-Fallback explizit.
 - `git diff --check`: bestanden.
-- Live-Stand vor dieser Planaktualisierung: `38e4a8d16`, Build `20260605-outbound-templates-ready3`, Release `branch-main-20260605T162106Z`.
-- Lokale Aenderung fuer Build `20260605-outbound-templates-ready4`: Campaign-Setup spawnt jetzt explizit einen neuen Kontext-Chat (`action: context-chat`, `reuseActive: false`) und bleibt ein `business_os.chat.task` mit `required_skills: ["business-os-outbound-campaign-setup"]` und Writeback `outbound.campaign.apply_setup`.
-- Live-Deployment abgeschlossen: Commit `41a8d7646`, Release `branch-main-20260605T171906Z`, Build `20260605-outbound-templates-ready4`, `ctox.service` aktiv, native RxDB Peer aktiv, DB-Pfad `runtime/business-os-rxdb.sqlite3`, HTTP-Bridge `false`.
-- Release-Cleanup bestaetigt: nach Upgrade liegen nur noch `branch-main-20260605T162106Z` und `branch-main-20260605T171906Z`.
-- Live-Browser-E2E ist noch nicht bestanden: Nach Login zeigt die Shell `CTOX VERBINDUNG PRUEFEN` und `Inhalte werden synchronisiert 0/6`; `Outbound` ist als Tile sichtbar, das Modul rendert im E2E aber nicht zuverlaessig. Evidence: `output/outbound-production-readiness/2026-06-05-live-ready4-outbound-debug.png`.
+- Fix `42a2e3aa5`: Shared Business-OS Command-Bus entfernt den HTTP-Fallback auf `/api/business-os/commands`; bei erfolgreichem lokalem RxDB-Write bleibt der Command `pending_sync`, statt ueber HTTP zu senden.
+- Server-Gate verschaerft: `/api/business-os/commands` ist keine Business-OS-HTTP-Ausnahme mehr; erlaubt bleiben nur ChatGPT-Subscription-Auth Start/Callback.
+- Live-Deployment abgeschlossen: Release `branch-main-20260605T205854Z`, Build `20260605-outbound-templates-ready5`, `ctox.service` aktiv, native RxDB Peer aktiv, DB-Pfad `runtime/business-os-rxdb.sqlite3`, HTTP-Bridge `false`.
+- Release-Cleanup bestaetigt: nach Upgrade liegen nur noch `branch-main-20260605T183820Z` und `branch-main-20260605T205854Z`.
+- Live-Browser-E2E Campaign Setup bestanden: 21 Kampagnenideen sichtbar, Template `de-letter-hr-webinar` fuellt das zentrale Briefing, Speichern erzeugt `ctox-business-os-chat-submit` mit `action: context-chat`, `reuseActive: false`, `command_type: business_os.chat.task`, Skill `business-os-outbound-campaign-setup` und Writeback `outbound.campaign.apply_setup`.
+- Live-E2E Netzwerk-/Runtime-Evidence: `0` Requests auf `/api/business-os/commands`, `0` Console Errors, `0` Page Errors; einziger `failedRequest` war ein erwartbarer navigationsbedingter `GET /` Abort beim Seitenwechsel. Evidence: `output/outbound-production-readiness/2026-06-05-live-ready5-context-chat-e2e-summary.json`, Screenshot: `output/outbound-production-readiness/2026-06-05-live-ready5-context-chat-e2e.png`.
 
 ## W0 Baseline, Release-Schutz, Deploy-Pfad
 
@@ -60,7 +61,7 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 - [x] HTTP-Command-Sonderweg entfernt und durch RxDB-only Guard abgesichert.
 - [x] Outbound Campaign Briefing Update laeuft als `outbound.campaign.briefing.update` ueber `business_commands`.
 - [x] Skill-Writeback-Vertrag fuer Campaign Setup ist `outbound.campaign.apply_setup`.
-- [ ] Live erneut pruefen, dass Outbound keine `/api/business-os/commands` Requests erzeugt.
+- [x] Live erneut pruefen, dass Outbound keine `/api/business-os/commands` Requests erzeugt.
 - [ ] Remaining Active-Outreach-Commands fuer Send, Letter, Reply und Scheduler auf Reload-Persistenz pruefen.
 
 ## W2 Campaign-Erstellung per Natuerlichem Briefing
@@ -72,7 +73,7 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 - [x] Sprachwechsel rendert Templates neu und behaelt Draft-Zustand.
 - [x] Speichern erzeugt normalen CTOX Prompt-Task wie Rechtsklick-Menue.
 - [x] Prompt enthaelt Skill, Template-ID, Template-Titel, RxDB-only-Regel und Writeback-Contract.
-- [ ] Live-Browser beweisen: alle Templates sichtbar, Auswahl funktioniert, ein Speichern erzeugt Chat-Task und keinen HTTP-Command.
+- [x] Live-Browser beweisen: alle Templates sichtbar, Auswahl funktioniert, ein Speichern erzeugt Chat-Task und keinen HTTP-Command.
 - [ ] Echter Skill-Worker-Lauf bis `outbound.campaign.apply_setup` live beweisen, ohne ChatGPT-Login-Automation.
 
 ## W3 Research Funnel und Import
@@ -126,8 +127,8 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 ## W9 Browser-E2E, Live-Evidence, Regression Gates
 
 - [x] Lokale Frontend- und RxDB-only-Tests laufen.
-- [ ] Live-Browser-E2E fuer Campaign Template Flow nach Build `ready4`.
-- [ ] Live-Shell-Sync-Blocker beheben: `Inhalte werden synchronisiert 0/6` darf den Outbound-Modul-Mount nicht blockieren.
+- [x] Live-Browser-E2E fuer Campaign Template Flow nach Build `ready5`.
+- [x] Live-Shell-Sync-Blocker beheben: `Inhalte werden synchronisiert 0/6` darf den Outbound-Modul-Mount nicht blockieren.
 - [ ] Live-Browser-E2E fuer Import/Funnel mit realer Datei.
 - [ ] Live-Browser-E2E fuer Active Outreach, Approval, E-Mail und Brief.
 - [ ] Screenshots fuer 1920px, 1440px, 1024px und mobile Breite.
