@@ -2816,10 +2816,9 @@ const DESKTOP_APPS = [
   },
 ];
 
-// Desktop apps that remain available even under a module allowlist, because they are
-// generic system/file tools rather than business modules. "Files" (explorer) is the
-// user-facing file browser; file-viewer is its companion viewer (never a launcher icon).
-const DESKTOP_APP_ALWAYS_ALLOWED = new Set(['explorer', 'file-viewer']);
+// Companion viewers remain available internally under a module allowlist, but launchable
+// desktop apps like Files must be explicitly allowlisted per tenant.
+const DESKTOP_APP_ALWAYS_ALLOWED = new Set(['file-viewer']);
 
 function listDesktopApps() {
   const moduleIds = new Set((state.modules || [])
