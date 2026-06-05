@@ -4,7 +4,7 @@ Stand: 2026-06-05
 
 Ziel: Die CTOX Business OS Outbound-App wird production-ready auf `cto1.kunstmen.com`: Campaigns werden per natuerlichem Briefing angelegt, CTOX richtet die Campaign ueber einen Skill ein, alle Daten laufen ueber RxDB/native Commands, Kommunikation bleibt approval-gated, E-Mail und physische Briefe sind auditierbar, Conversations ist die Detailansicht fuer Kommunikation.
 
-Aktueller Gesamtstand: **76%**
+Aktueller Gesamtstand: **77%**
 
 Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im Browser mit sauberem Profil, Reload, Console-/Network-Check und Screenshot-/JSON-Evidence bestanden sind.
 
@@ -23,7 +23,7 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 
 | Welle | Gewicht | Status | Fortschritt | Beitrag |
 | --- | ---: | --- | ---: | ---: |
-| W0 Baseline, Release-Schutz, Deploy-Pfad | 5% | In Arbeit | 85% | 4.3% |
+| W0 Baseline, Release-Schutz, Deploy-Pfad | 5% | Bestanden | 100% | 5.0% |
 | W1 RxDB-only Runtime und Command Bus | 15% | In Arbeit | 95% | 14.3% |
 | W2 Campaign-Erstellung per natuerlichem Briefing | 15% | In Arbeit | 95% | 14.3% |
 | W3 Research Funnel und Import | 10% | In Arbeit | 85% | 8.5% |
@@ -32,8 +32,8 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 | W6 Conversations-Integration | 10% | In Arbeit | 55% | 5.5% |
 | W7 Reply Loop, Follow-ups, Terminfindung | 8% | Offen | 15% | 1.2% |
 | W8 Safety, Approval, Audit, Governance | 6% | In Arbeit | 70% | 4.2% |
-| W9 Browser-E2E, Live-Evidence, Regression Gates | 6% | In Arbeit | 70% | 4.2% |
-| **Gesamt** | **100%** | **In Arbeit** |  | **76%** |
+| W9 Browser-E2E, Live-Evidence, Regression Gates | 6% | In Arbeit | 60% | 3.6% |
+| **Gesamt** | **100%** | **In Arbeit** |  | **77%** |
 
 ## Aktuelle Evidenz
 
@@ -42,15 +42,18 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 - `git diff --check`: bestanden.
 - Live-Stand vor dieser Planaktualisierung: `38e4a8d16`, Build `20260605-outbound-templates-ready3`, Release `branch-main-20260605T162106Z`.
 - Lokale Aenderung fuer Build `20260605-outbound-templates-ready4`: Campaign-Setup spawnt jetzt explizit einen neuen Kontext-Chat (`action: context-chat`, `reuseActive: false`) und bleibt ein `business_os.chat.task` mit `required_skills: ["business-os-outbound-campaign-setup"]` und Writeback `outbound.campaign.apply_setup`.
+- Live-Deployment abgeschlossen: Commit `41a8d7646`, Release `branch-main-20260605T171906Z`, Build `20260605-outbound-templates-ready4`, `ctox.service` aktiv, native RxDB Peer aktiv, DB-Pfad `runtime/business-os-rxdb.sqlite3`, HTTP-Bridge `false`.
+- Release-Cleanup bestaetigt: nach Upgrade liegen nur noch `branch-main-20260605T162106Z` und `branch-main-20260605T171906Z`.
+- Live-Browser-E2E ist noch nicht bestanden: Nach Login zeigt die Shell `CTOX VERBINDUNG PRUEFEN` und `Inhalte werden synchronisiert 0/6`; `Outbound` ist als Tile sichtbar, das Modul rendert im E2E aber nicht zuverlaessig. Evidence: `output/outbound-production-readiness/2026-06-05-live-ready4-outbound-debug.png`.
 
 ## W0 Baseline, Release-Schutz, Deploy-Pfad
 
 - [x] Sauberen Deploy-Worktree von dirty Haupt-Checkout getrennt.
 - [x] Divergierenden lokalen Hauptstand nicht blind gepusht.
 - [x] Build-Key fuer neue Outbound-Aenderung erhoeht.
-- [ ] Neue Aenderung committen, pushen und per `ctox upgrade --dev` live deployen.
-- [ ] Live-Service-Status, Release-Symlink und Build-Key pruefen.
-- [ ] Automatische Release-Bereinigung bestaetigen: nur letzte zwei Builds bleiben.
+- [x] Neue Aenderung committen, pushen und per `ctox upgrade --dev` live deployen.
+- [x] Live-Service-Status, Release-Symlink und Build-Key pruefen.
+- [x] Automatische Release-Bereinigung bestaetigen: nur letzte zwei Builds bleiben.
 
 ## W1 RxDB-only Runtime und Command Bus
 
@@ -124,6 +127,7 @@ Production-ready ist erst erreicht, wenn die kritischen Flows lokal und live im 
 
 - [x] Lokale Frontend- und RxDB-only-Tests laufen.
 - [ ] Live-Browser-E2E fuer Campaign Template Flow nach Build `ready4`.
+- [ ] Live-Shell-Sync-Blocker beheben: `Inhalte werden synchronisiert 0/6` darf den Outbound-Modul-Mount nicht blockieren.
 - [ ] Live-Browser-E2E fuer Import/Funnel mit realer Datei.
 - [ ] Live-Browser-E2E fuer Active Outreach, Approval, E-Mail und Brief.
 - [ ] Screenshots fuer 1920px, 1440px, 1024px und mobile Breite.
