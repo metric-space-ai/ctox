@@ -27,6 +27,7 @@ async function resolveCommandSync(sync) {
 async function recordRxdbCommand({ db, sync, command }) {
   const command_id = command.id || `cmd_${crypto.randomUUID()}`;
   const now = Date.now();
+  let localWriteSucceeded = false;
   const doc = {
     id: command_id,
     command_id,
@@ -43,21 +44,28 @@ async function recordRxdbCommand({ db, sync, command }) {
   try {
     const bridge = await prepareBusinessCommandsSync({ db, sync });
     await writeCommandDocument(db, command_id, doc);
+    localWriteSucceeded = true;
     const pushBridge = await restartBusinessCommandsSync({ sync, fallbackBridge: bridge });
     await flushCommandSyncBridge(pushBridge, 60000);
   } catch (error) {
-    error.command_id = command_id;
-    error.status = 'failed';
-    throw error;
+    try {
+      const fallback = await dispatchCommandViaHttp(doc);
+      const result = normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
+      if (localWriteSucceeded) {
+        await patchLocalCommandAccepted(db, command_id, doc, result, error).catch(() => {});
+      }
+      return result;
+    } catch (fallbackError) {
+      const failed = fallbackError || error;
+      failed.command_id = command_id;
+      failed.status = 'failed';
+      if (error && fallbackError && error !== fallbackError) {
+        failed.sync_error = error.message || String(error);
+      }
+      throw failed;
+    }
   }
-  return {
-    ok: true,
-    command_id,
-    status: 'pending_sync',
-    task_id: '',
-    task_status: 'pending_sync',
-    transport: 'rxdb-webrtc',
-  };
+  return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'accepted' }, command_id, 'rxdb-webrtc');
 }
 
 async function prepareBusinessCommandsSync({ db, sync }) {
@@ -119,6 +127,59 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   } else {
     await collection.insert(doc);
   }
+}
+
+async function patchLocalCommandAccepted(db, commandId, doc, result, syncError) {
+  const currentDb = await resolveCommandDb(db, 5000);
+  const collection = currentDb?.raw?.business_commands;
+  if (!collection) return;
+  const updated = {
+    ...doc,
+    status: result.status || 'accepted',
+    task_id: result.task_id || '',
+    task_status: result.task_status || result.status || 'accepted',
+    client_context: {
+      ...(doc.client_context || {}),
+      dispatch_transport: result.transport || 'http-fallback',
+      rxdb_sync_error: syncError?.message || String(syncError || ''),
+    },
+    updated_at_ms: Date.now(),
+  };
+  await insertOrPatchCommandDocument(collection, commandId, updated);
+}
+
+async function dispatchCommandViaHttp(doc) {
+  const response = await fetch('/api/business-os/commands', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(doc),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {}
+  if (!response.ok || payload?.ok === false) {
+    const message = payload?.error || payload?.message || `HTTP ${response.status}`;
+    throw new Error(`Business command HTTP fallback failed: ${message}`);
+  }
+  return payload || {};
+}
+
+function normalizeAcceptedCommandResult(result, commandId, transport) {
+  const taskId = String(result?.task_id || '').trim();
+  const status = String(result?.status || (taskId ? 'accepted' : 'accepted')).trim() || 'accepted';
+  return {
+    ok: result?.ok !== false,
+    command_id: result?.command_id || result?.id || commandId,
+    status,
+    task_id: taskId,
+    task_status: String(result?.task_status || (taskId ? 'queued' : status)).trim() || status,
+    transport,
+  };
 }
 
 async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
