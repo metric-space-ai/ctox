@@ -58,11 +58,26 @@ async function recordRxdbCommand({ db, sync, command }) {
     await flushCommandSyncBridge(pushBridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
   } catch (error) {
     if (localWriteSucceeded) {
-      return normalizeAcceptedCommandResult(
-        { ok: true, command_id, status: 'pending_sync' },
-        command_id,
-        'rxdb-local-pending',
-      );
+      try {
+        const fallback = await dispatchCommandViaHttp(doc);
+        await patchLocalCommandDispatchResult(db, command_id, doc, fallback, 'http-fallback', error);
+        return normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
+      } catch (fallbackError) {
+        await patchLocalCommandDispatchResult(
+          db,
+          command_id,
+          doc,
+          { ok: true, command_id, status: 'pending_sync' },
+          'rxdb-local-pending',
+          fallbackError,
+        );
+        console.warn('[business-os] command HTTP fallback failed', fallbackError);
+        return normalizeAcceptedCommandResult(
+          { ok: true, command_id, status: 'pending_sync' },
+          command_id,
+          'rxdb-local-pending',
+        );
+      }
     }
     error.command_id = command_id;
     error.status = 'failed';
@@ -129,6 +144,55 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
     await existing.incrementalPatch(doc);
   } else {
     await collection.insert(doc);
+  }
+}
+
+async function dispatchCommandViaHttp(doc) {
+  const response = await fetch('/api/business-os/commands', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(doc),
+  });
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok || payload?.ok === false) {
+    const detail = payload?.error || payload?.message || text || response.statusText || `HTTP ${response.status}`;
+    throw new Error(`Business command HTTP fallback failed: ${detail}`);
+  }
+  return payload || { ok: true, command_id: doc.command_id || doc.id, status: 'accepted' };
+}
+
+async function patchLocalCommandDispatchResult(db, commandId, doc, result, transport, error = null) {
+  const currentDb = await resolveCommandDb(db, 1500).catch(() => null);
+  const collection = currentDb?.raw?.business_commands;
+  if (!collection?.findOne) return;
+  const command_id = result?.command_id || result?.id || doc.command_id || commandId;
+  const task_id = String(result?.task_id || '').trim();
+  const status = String(result?.status || (task_id ? 'accepted' : doc.status || 'pending_sync')).trim();
+  const task_status = String(result?.task_status || (task_id ? 'queued' : status)).trim();
+  const patch = {
+    ...doc,
+    command_id,
+    status,
+    task_id,
+    task_status,
+    queue_status_note: result?.queue_status_note || doc.queue_status_note || '',
+    updated_at_ms: Date.now(),
+    client_context: {
+      ...(doc.client_context || {}),
+      dispatch_transport: transport,
+      rxdb_sync_error: error ? String(error?.message || error) : '',
+    },
+  };
+  const existing = await collection.findOne(commandId).exec().catch(() => null);
+  if (existing?.incrementalPatch) {
+    await existing.incrementalPatch(patch).catch(() => {});
   }
 }
 

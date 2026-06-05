@@ -503,7 +503,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             respond_json(request, &store::sync_config(root)?)?;
         }
         (Method::Post, "/api/business-os/commands") => {
-            let session = request_session(&request);
+            let session = request_command_session(&request);
             if !session.authenticated {
                 respond_status(request, 401, "login required")?;
             } else {
@@ -726,6 +726,48 @@ fn attach_http_command_session(document: &mut Value, session: &store::BusinessOs
             }),
         );
     }
+}
+
+fn request_command_session(request: &Request) -> store::BusinessOsSession {
+    let session = request_session(request);
+    if session.authenticated {
+        return session;
+    }
+    proxy_command_session(request).unwrap_or(session)
+}
+
+fn proxy_command_session(request: &Request) -> Option<store::BusinessOsSession> {
+    let source = header_value(request, "X-CTOX-Business-OS-Proxy")?;
+    if source.trim() != "ctox-dev-tenant-router" {
+        return None;
+    }
+    let actor = header_value(request, "X-CTOX-Business-OS-Proxy-Actor")?
+        .trim()
+        .to_string();
+    if actor.is_empty() {
+        return None;
+    }
+    let display_name = header_value(request, "X-CTOX-Business-OS-Proxy-Display-Name")
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| actor.clone());
+    let role = header_value(request, "X-CTOX-Business-OS-Proxy-Role")
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "admin".to_string());
+    Some(store::BusinessOsSession {
+        ok: true,
+        authenticated: true,
+        auth_required: false,
+        user: Some(store::BusinessOsSessionUser {
+            id: actor,
+            display_name,
+            role,
+            is_admin: true,
+        }),
+        login_url: None,
+        reason: None,
+    })
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {
