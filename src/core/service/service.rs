@@ -2244,6 +2244,9 @@ fn handle_request(
         (Method::Get, _) if url.starts_with("/ctox/scrape/targets/") => {
             handle_scrape_api_request(request, root, &url)?;
         }
+        (Method::Post, _) if url.starts_with("/ctox/iot/webhook/") => {
+            handle_iot_webhook_request(request, root, &url)?;
+        }
         _ => {
             respond_json(
                 request,
@@ -2253,6 +2256,72 @@ fn handle_request(
         }
     }
     Ok(())
+}
+
+// spec §5 — inbound webhook route. Thin glue over the tested
+// `crate::iot::webhook::handle_http`: pull the webhook id (last path segment),
+// the `X-Webhook-Token` header, and the JSON body, then delegate. Errors map to
+// 401/400 WITHOUT echoing the message (never leak which ids/secrets exist).
+//
+// Gated to non-unix because the daemon's TCP `tiny_http` listener only exists
+// there; on unix (Linux/macOS) the service speaks over a Unix domain socket
+// (UDS-only, no TCP), so external inbound webhooks are fronted by the operator's
+// HTTP layer calling `crate::iot::webhook::handle_http` / `ctox iot webhook
+// ingest` — the same tested core, no CTOX-run TCP server.
+#[cfg(not(unix))]
+fn handle_iot_webhook_request(
+    mut request: tiny_http::Request,
+    root: &Path,
+    raw_url: &str,
+) -> Result<()> {
+    let path = raw_url.split('?').next().unwrap_or(raw_url);
+    let id = path
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let token = request
+        .headers()
+        .iter()
+        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("x-webhook-token"))
+        .map(|h| h.value.as_str().to_string())
+        .unwrap_or_default();
+    let mut body = String::new();
+    if request.as_reader().read_to_string(&mut body).is_err() {
+        return respond_json(
+            request,
+            StatusCode(400),
+            &serde_json::json!({"ok": false, "error": "bad request"}),
+        );
+    }
+    let payload: serde_json::Value = match serde_json::from_str(&body) {
+        Ok(value) => value,
+        Err(_) => {
+            return respond_json(
+                request,
+                StatusCode(400),
+                &serde_json::json!({"ok": false, "error": "invalid json"}),
+            );
+        }
+    };
+    match crate::iot::webhook::handle_http(root, &id, &token, &payload, 0) {
+        Ok(_) => respond_json(request, StatusCode(202), &serde_json::json!({"ok": true})),
+        Err(err) => {
+            let msg = err.to_string();
+            // Wrong token, missing secret, and unknown id all return 401 with a
+            // generic body so an attacker cannot distinguish them.
+            let code = if msg.contains("rejected")
+                || msg.contains("secret missing")
+                || msg.contains("unknown webhook")
+            {
+                401
+            } else {
+                400
+            };
+            respond_json(request, StatusCode(code), &serde_json::json!({"ok": false}))
+        }
+    }
 }
 
 #[cfg(not(unix))]

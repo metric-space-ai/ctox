@@ -310,7 +310,21 @@ pub(crate) fn ensure_stub_schema(conn: &Connection) -> Result<()> {
             updated_at     TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_iot_widgets_dashboard ON iot_widgets(dashboard_id);
-        CREATE INDEX IF NOT EXISTS idx_iot_widgets_realm ON iot_widgets(realm);",
+        CREATE INDEX IF NOT EXISTS idx_iot_widgets_realm ON iot_widgets(realm);
+
+        -- spec §5 — inbound webhook registry: token (in the secret store) → the
+        -- one signal it may write. Backend-only (no RxDB projection); the service
+        -- HTTP route looks rows up directly.
+        CREATE TABLE IF NOT EXISTS iot_webhooks (
+            id          TEXT PRIMARY KEY,
+            realm       TEXT NOT NULL,
+            signal_ref  TEXT NOT NULL,
+            value_path  TEXT,
+            secret_name TEXT NOT NULL,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_iot_webhooks_realm ON iot_webhooks(realm);",
     )
     .context("failed to create IoT ruleset/agent stub schema")?;
     Ok(())
@@ -2235,6 +2249,15 @@ pub fn handle_iot_command(root: &Path, args: &[String]) -> Result<()> {
                 secret.as_deref(),
                 &headers,
             )?)
+        }
+        ("webhook", "register") => {
+            let req = crate::iot::webhook::WebhookRegisterReq {
+                id: find_flag_value(rest, "--id"),
+                realm: required_flag_value(rest, "--realm")?,
+                signal_ref: required_flag_value(rest, "--signal")?,
+                value_path: find_flag_value(rest, "--path"),
+            };
+            print_json(&crate::iot::webhook::register(root, req)?)
         }
 
         // ---- resync ----

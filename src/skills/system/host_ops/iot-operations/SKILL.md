@@ -55,13 +55,14 @@ ctox iot widget arrange --id <widget-id> --x <n> --y <n> --w <n> --h <n>
 ctox iot widget compile-trigger --id <widget-id>   # enqueue: CTOX writes the Rhai watcher
 ctox iot widget generate-render --id <widget-id>   # enqueue: CTOX writes the render code
 
+ctox iot webhook register --realm <realm> --signal <asset_id>::<attribute> [--id <id>] [--path <dot.path>]
 ctox iot webhook ingest --signal <asset_id>::<attribute> --payload '<json>' [--path <dot.path>] [--ts <epoch-ms>]
 ctox iot webhook send --url <url> --payload '<json>' [--secret-ref <secret-name>] [--header key=value ...]
 
 ctox iot project all
 ```
 
-Webhooks are first-class I/O. **Inbound** (`webhook ingest`) maps an external HTTP payload to a signal datapoint and runs the full inbound path (conditions + widget watchers) — an external HTTP front authenticates the caller, then calls this. **Outbound** (`webhook send`) is how you fulfil a "Dann" like "…und meld's per Webhook ans ERP": POST the payload, attaching `Authorization: Bearer <secret>` when `--secret-ref` resolves in the secret store. Never put a webhook secret in `iot_agents.data` or an env var.
+Webhooks are first-class I/O. **Inbound**: `webhook register` mints a token-gated URL bound to ONE signal (the token is stored in the secret store) — give the operator the returned `ingest_path` + `token`; external senders then `POST /ctox/iot/webhook/<id>` with header `X-Webhook-Token: <token>` and the daemon ingests to that signal (running conditions + widget watchers). `webhook ingest` is the same mapping for a trusted/local caller. **Outbound** (`webhook send`) is how you fulfil a "Dann" like "…und meld's per Webhook ans ERP": POST the payload, attaching `Authorization: Bearer <secret>` when `--secret-ref` resolves in the secret store. Never put a webhook secret in `iot_agents.data` or an env var.
 
 ## Read Workflow
 

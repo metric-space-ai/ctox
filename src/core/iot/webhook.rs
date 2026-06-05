@@ -21,10 +21,13 @@
 // bridge (this is external-device I/O, not business-os sync).
 
 use crate::iot::commands::{self, AttributeWriteReq};
-use crate::iot::Result;
+use crate::iot::{now_iso, store, Result};
 use anyhow::{anyhow, Context};
+use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
+
+const WEBHOOK_SECRET_SCOPE: &str = "iot_webhook";
 
 /// Canonical signal binding form: `"<asset_id>::<attribute_name>"`.
 fn parse_signal_ref(signal_ref: &str) -> Result<(&str, &str)> {
@@ -139,6 +142,102 @@ pub(crate) fn send(
         "status": resp.status,
         "ok": (200..300).contains(&resp.status),
     }))
+}
+
+// ---- inbound registry: token (secret store) → the one signal it may write ----
+
+#[derive(Clone, Debug, serde::Deserialize)]
+pub(crate) struct WebhookRegisterReq {
+    #[serde(default)]
+    pub id: Option<String>,
+    pub realm: String,
+    pub signal_ref: String,
+    #[serde(default)]
+    pub value_path: Option<String>,
+}
+
+/// Register an inbound webhook: mint a bearer token (stored ONLY in the secret
+/// store), bind it to exactly one signal, and return the ingest path + token.
+pub(crate) fn register(root: &std::path::Path, req: WebhookRegisterReq) -> Result<Value> {
+    parse_signal_ref(&req.signal_ref)?; // validate the binding form
+    let conn = store::open_iot_store(root)?;
+    commands::ensure_stub_schema(&conn)?;
+    let id = req
+        .id
+        .clone()
+        .unwrap_or_else(crate::iot::model::Asset::generate_id);
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    crate::secrets::write_secret_record(
+        root,
+        WEBHOOK_SECRET_SCOPE,
+        &id,
+        &token,
+        Some("IoT inbound webhook bearer token".to_string()),
+        json!({ "signal_ref": req.signal_ref }),
+    )
+    .context("failed to store webhook secret")?;
+    let now = now_iso();
+    conn.execute(
+        "INSERT INTO iot_webhooks (id, realm, signal_ref, value_path, secret_name, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?1, ?5, ?5)
+         ON CONFLICT(id) DO UPDATE SET
+            realm = excluded.realm, signal_ref = excluded.signal_ref,
+            value_path = excluded.value_path, updated_at = excluded.updated_at",
+        params![id, req.realm, req.signal_ref, req.value_path, now],
+    )
+    .context("failed to register webhook")?;
+    Ok(json!({
+        "id": id,
+        "token": token,
+        "ingest_path": format!("/ctox/iot/webhook/{id}"),
+        "header": "X-Webhook-Token",
+        "signal_ref": req.signal_ref,
+    }))
+}
+
+/// Constant-time bearer-token compare (length difference short-circuits, which
+/// only leaks length — fine for a random token).
+fn constant_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// The inbound entry the service HTTP route calls: verify the bearer token
+/// against the secret store, then ingest the payload to the bound signal. Any
+/// failure is an error the route maps to 401/404/400. Fully testable without a
+/// running HTTP server.
+pub(crate) fn handle_http(
+    root: &std::path::Path,
+    webhook_id: &str,
+    provided_token: &str,
+    payload: &Value,
+    ts_ms: i64,
+) -> Result<Value> {
+    let conn = store::open_iot_store(root)?;
+    commands::ensure_stub_schema(&conn)?;
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT signal_ref, value_path FROM iot_webhooks WHERE id = ?1",
+            params![webhook_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .context("failed to look up webhook")?;
+    let (signal_ref, value_path) = row.ok_or_else(|| anyhow!("unknown webhook: {webhook_id}"))?;
+    let expected = crate::secrets::read_secret_value(root, WEBHOOK_SECRET_SCOPE, webhook_id)
+        .context("webhook secret missing")?;
+    anyhow::ensure!(
+        constant_eq(provided_token, &expected),
+        "webhook token rejected"
+    );
+    ingest(root, &signal_ref, payload, value_path.as_deref(), ts_ms, None)
 }
 
 #[cfg(test)]
@@ -261,5 +360,51 @@ mod tests {
         assert_eq!(req.body, b"{\"a\":1}");
         // No auth header without a secret; non-http URL rejected.
         assert!(build_outbound(root, "ftp://nope", &json!({}), None, &[]).is_err());
+    }
+
+    #[test]
+    fn constant_eq_compares() {
+        assert!(constant_eq("abc", "abc"));
+        assert!(!constant_eq("abc", "abd"));
+        assert!(!constant_eq("abc", "ab"));
+    }
+
+    // Register an inbound webhook, then the HTTP handler authenticates the bearer
+    // token and ingests to the BOUND signal. Wrong token / unknown id are rejected.
+    #[test]
+    fn register_then_handle_http_authenticates_and_ingests() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        make_asset(root);
+        let reg = register(
+            root,
+            WebhookRegisterReq {
+                id: Some("wh1".to_string()),
+                realm: "master".to_string(),
+                signal_ref: "asset-1::temperature".to_string(),
+                value_path: Some("readings.temp".to_string()),
+            },
+        )
+        .unwrap();
+        let token = reg["token"].as_str().unwrap().to_string();
+        assert!(!token.is_empty());
+        assert_eq!(reg["ingest_path"], "/ctox/iot/webhook/wh1");
+
+        // Wrong token → rejected.
+        let err = handle_http(root, "wh1", "not-the-token", &json!({ "readings": { "temp": 99.0 } }), 0)
+            .unwrap_err();
+        assert!(err.to_string().contains("rejected"), "got: {err}");
+
+        // Unknown webhook id → error.
+        assert!(handle_http(root, "nope", &token, &json!({}), 0).is_err());
+
+        // Valid token → ingested to the bound signal.
+        handle_http(root, "wh1", &token, &json!({ "readings": { "temp": 27.0 } }), 0).unwrap();
+        let conn = store::open_iot_store(root).unwrap();
+        let pts = datapoints::all(&conn, "asset-1", "temperature", 0, i64::MAX).unwrap();
+        assert!(
+            pts.iter().any(|p| p.value.as_numeric() == Some(27.0)),
+            "datapoint should be ingested only for the valid token"
+        );
     }
 }
