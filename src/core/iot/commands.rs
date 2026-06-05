@@ -1462,6 +1462,55 @@ pub(crate) fn widget_arrange(
     })
 }
 
+/// Pause/resume a widget's watcher. Paused → `tick_widget` skips it. Resuming
+/// recomputes the status from the (re-validated) program so a previously broken
+/// watcher does not silently come back "armed".
+pub(crate) fn widget_set_pause(
+    root: &Path,
+    widget_id: &str,
+    paused: bool,
+    realm: Option<&str>,
+) -> Result<EngineOutcome> {
+    let conn = store::open_iot_store(root)?;
+    ensure_stub_schema(&conn)?;
+    let row: Option<(String, Option<String>)> = conn
+        .query_row(
+            "SELECT realm, trigger_code FROM iot_widgets WHERE id = ?1",
+            params![widget_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .context("failed to load widget for pause")?;
+    let (wrealm, trigger_code) = row.ok_or_else(|| anyhow!("widget not found: {widget_id}"))?;
+    if let Some(r) = realm {
+        anyhow::ensure!(wrealm == r, "widget not found: {widget_id}");
+    }
+    let status = if paused {
+        "paused".to_string()
+    } else {
+        match trigger_code.as_deref().filter(|c| !c.trim().is_empty()) {
+            None => "idle".to_string(),
+            Some(c) => {
+                if crate::iot::watcher::validate_program(c).is_none() {
+                    "armed".to_string()
+                } else {
+                    "needs_attention".to_string()
+                }
+            }
+        }
+    };
+    conn.execute(
+        "UPDATE iot_widgets SET trigger_status = ?2, updated_at = ?3 WHERE id = ?1",
+        params![widget_id, status, now_iso()],
+    )
+    .context("failed to set widget pause state")?;
+    let projection = project_widget(&conn, widget_id)?;
+    Ok(EngineOutcome {
+        result: json!({ "widget": { "id": widget_id, "trigger_status": status } }),
+        projections: vec![projection],
+    })
+}
+
 pub(crate) fn widget_list(root: &Path, dashboard_id: &str) -> Result<Value> {
     let conn = store::open_iot_store(root)?;
     ensure_stub_schema(&conn)?;
@@ -2130,6 +2179,14 @@ pub fn handle_iot_command(root: &Path, args: &[String]) -> Result<()> {
             let id = required_flag_value(rest, "--id")?;
             print_json(&generate_render(root, &id, None)?.into_value())
         }
+        ("widget", "pause") => {
+            let id = required_flag_value(rest, "--id")?;
+            print_json(&widget_set_pause(root, &id, true, None)?.into_value())
+        }
+        ("widget", "resume") => {
+            let id = required_flag_value(rest, "--id")?;
+            print_json(&widget_set_pause(root, &id, false, None)?.into_value())
+        }
 
         // ---- webhooks (spec §5: rein & raus) ----
         ("webhook", "ingest") => {
@@ -2347,6 +2404,14 @@ pub(crate) fn handle_business_command(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("ctox.iot.widget.generate_render requires widget_id"))?;
             generate_render(root, id, realm)?
+        }
+        "ctox.iot.widget.pause" => {
+            let id = payload
+                .get("widget_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("ctox.iot.widget.pause requires widget_id"))?;
+            let paused = payload.get("paused").and_then(|v| v.as_bool()).unwrap_or(true);
+            widget_set_pause(root, id, paused, realm)?
         }
         other => bail!("unknown iot command_type: {other}"),
     };
@@ -2720,6 +2785,54 @@ mod tests {
             .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(status, "needs_attention");
+    }
+
+    // Pause stops the watcher; resume recomputes status from the (re-validated)
+    // program so a runnable one comes back "armed".
+    #[test]
+    fn widget_pause_and_resume_recomputes_status() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let session = admin_session();
+        handle_business_command(
+            root,
+            "ctox.iot.dashboard.upsert",
+            &json!({ "id": "d1", "realm": "master", "name": "D" }),
+            &session,
+        )
+        .unwrap();
+        handle_business_command(
+            root,
+            "ctox.iot.widget.upsert",
+            &json!({ "id": "w1", "dashboard_id": "d1", "realm": "master", "signal_ref": "a::t",
+                     "trigger_code": "if signal.last() > 30.0 { fire(\"x\"); }" }),
+            &session,
+        )
+        .unwrap();
+        let conn = store::open_iot_store(root).unwrap();
+        let status = || -> String {
+            conn.query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(status(), "armed");
+
+        handle_business_command(
+            root,
+            "ctox.iot.widget.pause",
+            &json!({ "widget_id": "w1", "paused": true }),
+            &session,
+        )
+        .unwrap();
+        assert_eq!(status(), "paused");
+
+        handle_business_command(
+            root,
+            "ctox.iot.widget.pause",
+            &json!({ "widget_id": "w1", "paused": false }),
+            &session,
+        )
+        .unwrap();
+        assert_eq!(status(), "armed");
     }
 
     // Forbidden when the session is neither admin nor an authenticated open one.
