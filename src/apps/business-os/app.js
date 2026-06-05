@@ -2816,9 +2816,9 @@ const DESKTOP_APPS = [
   },
 ];
 
-// Companion viewers remain available internally under a module allowlist, but launchable
-// desktop apps like Files must be explicitly allowlisted per tenant.
-const DESKTOP_APP_ALWAYS_ALLOWED = new Set(['file-viewer']);
+// Companion viewers remain available internally under a module allowlist, but
+// launchable desktop apps like Files must be explicitly allowlisted per tenant.
+const DESKTOP_APP_ALWAYS_ALLOWED = new Set();
 
 function listDesktopApps() {
   const moduleIds = new Set((state.modules || [])
@@ -3144,8 +3144,10 @@ function listLaunchTargets(kind = '') {
       glyph: taskbarMarkForModule(mod),
       module: mod,
     }));
+  const allow = resolveModuleAllowlist(state.moduleAllowlist);
   const appTargets = DESKTOP_APPS
     .filter((app) => app.id !== 'file-viewer' && !moduleIds.has(app.id))
+    .filter((app) => allow.size === 0 || DESKTOP_APP_ALWAYS_ALLOWED.has(app.id) || allow.has(app.id))
     .map((app) => ({
       id: app.id,
       kind: 'app',

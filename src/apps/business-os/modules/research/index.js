@@ -568,10 +568,22 @@ async function ensureTasksFromKnowledgeBases() {
 
 async function loadKnowledgeBases() {
   const tables = await loadKnowledgeTables();
+  return knowledgeBasesFromTables(tables);
+}
+
+function knowledgeBasesFromTables(tables = []) {
   const byDomain = new Map();
   for (const rawTable of tables) {
-    const table = rawTable?.payload && typeof rawTable.payload === 'object' ? rawTable.payload : rawTable;
-    const domain = table.domain || 'knowledge';
+    const source = rawTable?.payload && typeof rawTable.payload === 'object' ? rawTable.payload : rawTable;
+    const domain = String(source?.domain || '').trim();
+    const tableKey = String(source?.table_key || '').trim();
+    if (!domain || !tableKey) continue;
+    const table = {
+      ...source,
+      id: source.id || rawTable?.id || `${domain}:${tableKey}`,
+      domain,
+      table_key: tableKey,
+    };
     if (!byDomain.has(domain)) {
       byDomain.set(domain, {
         id: domain,
@@ -3149,6 +3161,7 @@ export const __researchTestHooks = {
   collectionDiagnosticRows,
   diagnosticRows,
   disabledTabButton,
+  knowledgeBasesFromTables,
   renderNoTaskCenter,
   validateResearchTaskInput,
   validateSelectedResearchTask,

@@ -49,6 +49,32 @@ test('diagnostic rows distinguish sync failures from local no-data', () => {
   assert.match(rows[0].label, /WebRTC/);
 });
 
+test('knowledge base grouping ignores legacy parquet docs without domain and table key', () => {
+  const grouped = hooks.knowledgeBasesFromTables([
+    {
+      id: 'parquet:legacy-source-catalog',
+      payload: {
+        id: 'parquet:legacy-source-catalog',
+        title: 'source catalog',
+        parquet_path: '/runtime/knowledge/data/drone_bearing_design/source_catalog.parquet',
+      },
+    },
+    {
+      id: 'table:source-catalog',
+      payload: {
+        id: 'table:source-catalog',
+        domain: 'drone_bearing_design',
+        table_key: 'source_catalog',
+        row_count: 22,
+        title: 'Source catalog for drone bearing design load data',
+      },
+    },
+  ]);
+
+  assert.deepEqual(grouped.map((base) => base.domain), ['drone_bearing_design']);
+  assert.equal(grouped[0].tables.length, 1);
+});
+
 test('empty dashboard keeps standard header and disabled workbench controls', () => {
   const markup = hooks.renderNoTaskCenter();
 
