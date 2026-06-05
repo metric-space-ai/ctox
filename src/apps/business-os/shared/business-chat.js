@@ -616,7 +616,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 
     node.querySelectorAll('[data-track-task]').forEach((button) => {
       button.addEventListener('click', () => {
-        openCtoxTask(button.dataset.taskId || '', button.dataset.commandId || '', button.dataset.taskStatus || '');
+        openCtoxTask(button.dataset.taskId || '', button.dataset.commandId || '', button.dataset.taskStatus || '').catch((error) => {
+          console.warn('[business-chat] failed to open CTOX task', error);
+        });
       });
     });
 
@@ -1498,18 +1500,23 @@ function failureText(commandDoc, taskDoc) {
   return 'CTOX konnte die Aufgabe nicht ausführen. Der Task ist in der CTOX Queue fehlgeschlagen.';
 }
 
-function openCtoxTask(taskId, commandId, taskStatus) {
-  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat' };
+async function openCtoxTask(taskId, commandId, taskStatus) {
+  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat', openDrawer: true };
   try {
     sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
   } catch {}
-  window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
   const params = new URLSearchParams();
   if (taskId) params.set('task_id', taskId);
   if (commandId) params.set('command_id', commandId);
   if (taskStatus) params.set('task_status', taskStatus);
   params.set('source', 'business-os-chat');
+  params.set('drawer', '1');
   location.hash = `#ctox?${params.toString()}`;
+  const app = window.CTOX_BUSINESS_OS_APP;
+  if (typeof app?.openModule === 'function' && app.activeModule?.id !== 'ctox') {
+    await app.openModule('ctox');
+  }
+  window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', { detail: focus }));
 }
 
 // Date and Temporal Utilities for Calendar-Scoped Chats
@@ -2310,8 +2317,10 @@ function installChatStyles() {
       grid-template-rows: 38px minmax(0, 1fr) auto;
       width: 264px;
       height: min(320px, calc(100vh - 132px));
-      min-width: 264px;
+      min-width: min(264px, calc(100vw - 24px));
       overflow: hidden;
+      box-sizing: border-box;
+      max-width: min(390px, calc(100vw - 24px));
       border: 1px solid color-mix(in srgb, var(--line) 25%, transparent);
       border-radius: 16px;
       background: color-mix(in srgb, var(--surface) 60%, transparent);
@@ -2600,6 +2609,9 @@ function installChatStyles() {
       padding: 12px;
       background: transparent;
       scrollbar-width: thin;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
     }
     .ctox-chat-messages::-webkit-scrollbar {
       width: 4px;
@@ -2625,7 +2637,7 @@ function installChatStyles() {
     .ctox-chat-message {
       max-width: 88%;
       word-break: break-word;
-      overflow-wrap: break-word;
+      overflow-wrap: anywhere;
       min-width: 0;
       display: block;
       box-sizing: border-box;
@@ -2655,7 +2667,7 @@ function installChatStyles() {
       margin: 0;
       white-space: pre-wrap;
       word-break: break-word;
-      overflow-wrap: break-word;
+      overflow-wrap: anywhere;
       max-width: 100%;
     }
     .ctox-chat-body {
@@ -2663,10 +2675,16 @@ function installChatStyles() {
       max-width: 100%;
       min-width: 0;
       word-break: break-word;
-      overflow-wrap: break-word;
+      overflow-wrap: anywhere;
+      white-space: normal;
     }
     .ctox-chat-body .ctox-chat-text {
+      display: block;
+      max-width: 100%;
+      min-width: 0;
       white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .ctox-chat-body code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -2674,6 +2692,9 @@ function installChatStyles() {
       background: color-mix(in srgb, var(--accent) 12%, var(--surface));
       border-radius: 5px;
       padding: 1px 5px;
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .ctox-chat-body pre.ctox-chat-code {
       margin: 6px 0;
@@ -2687,14 +2708,17 @@ function installChatStyles() {
     .ctox-chat-body pre.ctox-chat-code code {
       background: none;
       padding: 0;
-      white-space: pre;
+      white-space: pre-wrap;
       font-size: 0.88em;
       line-height: 1.45;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .ctox-chat-body a {
       color: var(--accent);
       text-decoration: underline;
-      word-break: break-all;
+      word-break: break-word;
+      overflow-wrap: anywhere;
     }
     .ctox-chat-message footer {
       display: flex;
@@ -2709,9 +2733,9 @@ function installChatStyles() {
     }
     .ctox-chat-message footer span {
       max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: normal;
       min-width: 0;
     }
     .ctox-chat-track {
@@ -2807,6 +2831,9 @@ function installChatStyles() {
       gap: 10px;
       overflow: hidden;
       box-shadow: none !important;
+      min-width: 0;
+      max-width: 100%;
+      box-sizing: border-box;
     }
     .ctox-delegation-glow {
       position: absolute;
@@ -2826,6 +2853,7 @@ function installChatStyles() {
       align-items: center;
       gap: 10px;
       z-index: 1;
+      min-width: 0;
     }
     @keyframes ctoxSpin {
       100% { transform: rotate(360deg); }
@@ -2843,21 +2871,28 @@ function installChatStyles() {
       display: flex;
       flex-direction: column;
       gap: 1px;
+      min-width: 0;
     }
     .ctox-delegation-info strong {
       font-size: 11px;
       font-weight: 760;
       color: var(--text);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .ctox-delegation-info span {
       font-size: 10px;
       color: var(--muted);
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .ctox-delegation-watch-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
+      width: 100%;
+      min-width: 0;
       height: 28px;
       border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
       border-radius: 8px;
@@ -2868,6 +2903,11 @@ function installChatStyles() {
       cursor: pointer;
       z-index: 1;
       transition: transform 0.2s var(--spring-bounce), background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .ctox-delegation-watch-btn span {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
     }
     .ctox-delegation-watch-btn:hover {
       transform: translateY(-1px);

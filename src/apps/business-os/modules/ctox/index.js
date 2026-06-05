@@ -405,6 +405,7 @@ export async function mount(ctx) {
     refreshTimer: null,
     localSubscriptionCleanup: null,
     refreshInFlight: false,
+    focusTaskOpenDrawer: false,
     harnessHealth: null,
     harnessToastId: '',
     harnessToastKey: '',
@@ -2048,6 +2049,26 @@ function getSelectedTask(state) {
   return state.model?.tasks?.find((task) => task.id === state.selectedTaskId) || null;
 }
 
+function getFocusedTask(state) {
+  return state.model?.tasks?.find((task) => isFocusedTask(task, state.focusTask)) || null;
+}
+
+function openFocusedTaskDrawer(state) {
+  const task = getFocusedTask(state);
+  if (!task) return false;
+  state.selectedTaskId = task.id;
+  state.selectedNodeId = '';
+  state.userNavigatedTimeline = false;
+  const groupKey = groupKeyForTask(task);
+  if (groupKey) state.openTaskSections.add(groupKey);
+  const nextIndex = timelineIndexForSelectedTask(state);
+  if (nextIndex !== null) state.selectedStepIndex = nextIndex;
+  state.selectedTaskStepIndex = activeTaskStepIndex(task, state);
+  state.detailDrawer = { type: 'task', taskId: task.id };
+  state.focusTaskOpenDrawer = false;
+  return true;
+}
+
 function timelineIndexForSelectedTask(state) {
   const task = getSelectedTask(state);
   if (!task) return null;
@@ -2789,6 +2810,7 @@ function readFocusTaskFromHash() {
     commandId,
     taskStatus: params.get('task_status') || params.get('status') || '',
     sourceModule: params.get('source') || 'matching',
+    openDrawer: params.get('drawer') === '1' || params.get('open') === 'drawer',
   };
 }
 
@@ -3222,9 +3244,13 @@ function wireShellMessages(state) {
       commandId: detail.commandId || '',
       taskStatus: detail.taskStatus || '',
       sourceModule: detail.sourceModule || 'business-os',
+      openDrawer: Boolean(detail.openDrawer),
     };
+    state.focusTaskOpenDrawer = Boolean(detail.openDrawer);
     reconcileSelection(state);
+    openFocusedTaskDrawer(state);
     render(state);
+    centerSelectedNode(state);
     syncDetailDrawer(state);
   };
   window.addEventListener('message', messageHandler);

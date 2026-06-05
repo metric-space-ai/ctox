@@ -222,6 +222,7 @@ function installAdvancedStatusInterface() {
   };
   window.CTOX_BUSINESS_OS_STATUS = api;
   window.CTOX_BUSINESS_OS_APP = state;
+  state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
 }
 
 async function ensureAdvancedStatusRequiredCollections(requiredCollections) {
