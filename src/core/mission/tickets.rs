@@ -3402,7 +3402,7 @@ fn insert_ticket_self_work_assignment(
     let assignment_id = format!(
         "swa:{}:{}",
         work_id,
-        stable_digest(&(assigned_to.to_string() + &now))
+        stable_digest(&(assigned_to.to_string() + now.as_str()))
     );
     conn.execute(
         r#"
@@ -3444,7 +3444,7 @@ fn insert_ticket_self_work_note(
     let note_id = format!(
         "swn:{}:{}",
         work_id,
-        stable_digest(&(body.to_string() + &now))
+        stable_digest(&(body.to_string() + now.as_str()))
     );
     conn.execute(
         r#"
@@ -7445,7 +7445,7 @@ fn create_ticket_clarification_request(
     let clarification_id = format!(
         "clarification:{}:{}",
         ticket_key,
-        stable_digest(&(question.to_string() + &now))
+        stable_digest(&(question.to_string() + now.as_str()))
     );
     if let Some(case) = case.as_ref() {
         ensure_case_can_request_clarification(case)?;
@@ -8023,7 +8023,7 @@ fn writeback_transition(
             format!(
                 "writeback:{}:{}",
                 case_id,
-                stable_digest(&(state.to_string() + &now))
+                stable_digest(&(state.to_string() + now.as_str()))
             ),
             case_id,
             case.ticket_key,
@@ -8822,7 +8822,7 @@ fn record_failed_writeback(
             format!(
                 "writeback-failed:{}:{}",
                 case.case_id,
-                stable_digest(&(operation.to_string() + error + &now))
+                stable_digest(&(operation.to_string() + error + now.as_str()))
             ),
             case.case_id,
             case.ticket_key,
@@ -8869,7 +8869,7 @@ fn record_audit(conn: &mut Connection, request: AuditRequest<'_>) -> Result<()> 
         "audit:{}:{}:{}",
         request.actor_type,
         request.action_type,
-        stable_digest(&(request.ticket_key.to_string() + &now))
+        stable_digest(&(request.ticket_key.to_string() + now.as_str()))
     );
     conn.execute(
         r#"

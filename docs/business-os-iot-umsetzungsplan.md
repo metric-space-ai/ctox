@@ -66,6 +66,18 @@ Der Mensch schreibt nur Prompts (Wenn/Dann). CTOX **programmiert** Trigger-Code 
 | **P4** | Setup (`openBusinessDialog`) + Editor (3 Tabs, editierbar, „neu generieren") + Webhook in/out | Auftrag anlegen/editieren end-to-end gegen Daemon |
 | **P5** | Agent-gebaute Dashboards; Self-Repair; Zustände (leer/laden/sync/Fehler); Politur; CI-Soak | §8 |
 
+### 7a. Implementierungsstand (P0 ✓ · P1 großteils ✓)
+**P0 ✓** — `docs/rfcs/0011_iot_automation_widgets.md` (Wächter-Runtime Rhai · Render-Sandbox-Modell · Collections-Schema · Commands · Trigger→Chat-Spawn · Sicherheit).
+
+**P1 ✓ (Kernfunktionsweise lokal verifiziert, ohne Modell):**
+- **Collections** `iot_dashboards` + `iot_widgets`: kanonische Quelle `modules/iot/schema.js` → generierter Contract → Hash-Fixture (Parität grün), Registrierung automatisch via `business_os_collections()`.
+- **Commands** (`src/core/iot/commands.rs`): `dashboard_upsert/delete/list`, `widget_upsert/delete/arrange/list` mit Projektionen; geroutet auf **CLI** (`handle_iot_command`) **und** RxDB (`handle_business_command`: `ctox.iot.dashboard.*`/`ctox.iot.widget.*`); Realm session-scoped; Delete = Tombstone.
+- **Wächter-Runtime** (`src/core/iot/watcher.rs`): sandboxed **Rhai** (Op-/Call-/Größen-Limits, `eval` aus, kein FS/Netz); Signal-API `signal.last()/.window/.rate/.avg/.min/.max/.count/.age_ms`, `signals("name")`, persistenter `state`, `fire(grund)`. `evaluate()` ist rein/injizierbar (kein DB/Clock/Modell).
+- **Scheduler/Fire-Pfad** (`src/core/iot/widget_runtime.rs`): `tick_widget` baut `SignalContext` aus den Datapoints → `evaluate` → `state` + `trigger_status` persistiert + reprojiziert → bei `fire`: Alarm + **bewährte** `mission::channels::ingest_iot_event_message`-Kette (budget-begrenzter `iot-event-queue-task` + durable Message, Seed = `action_prompt` + Referenzen). `tick_widgets_for_signal` dispatcht **pro Datenpunkt** (eingehängt in `attribute_write` neben dem Alt-Ruleset-Pfad). Self-Repair: Compile-/Laufzeitfehler → `trigger_status="needs_attention"`.
+- **Tests:** Watcher (Schwellwert/Fenster/Rate/**State-Hysterese**/benannte Signale/**Sandbox-Stopp**/Compile-Fehler/`eval`-Block) + Widget-Runtime (**E2E „Wächter feuert → durable Queue-Task" ohne Modell**, Dispatch-by-Signal, Skip-ohne-Programm, needs_attention) + Command-Roundtrip + Schema-Parität.
+
+**P1 offen (modell-gegated):** `compile_trigger` (Wenn-Freitext → Rhai-Wächter) und `generate_render` (Signal/Absicht → Widget-Code) sind **Agent-Turns** — die Prompt-Assembly/Seam ist baubar, aber die eigentliche Generierung braucht das promotete Chat-Modell (`Qwen/Qwen3.5-27B`, CUDA-only) → Verifikation auf `gpu1-a6000` bzw. per API. CLI/Command nehmen bis dahin von CTOX/Hand geliefertes `trigger_code`/`render_code` direkt entgegen.
+
 ## 8. Qualitäts-Gate
 - [ ] Liest sich als **„meine CTOX-Aufträge"**, nicht als Chart-Dashboard; Politur auf `customers`/`shiftflow`-Niveau.
 - [ ] Pro Widget **drei editierbare CTOX-Teile** (Trigger-Logik · Widget-Code · Auftrags-Prompt), je „neu generieren".

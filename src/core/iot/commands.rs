@@ -830,6 +830,20 @@ pub(crate) fn attribute_write(
         crate::iot::conditions::evaluate_and_emit(root, realm, &eval_event, true, now)?;
     }
 
+    // RFC 0011 — also drive the NEW automation-widget watchers bound to this
+    // signal. Independent of the legacy ruleset path above: a new "Auftrag" uses
+    // the CTOX-generated Rhai watcher (per-datapoint, stateful), not the
+    // deterministic condition template. A bad watcher flips its own widget to
+    // `needs_attention`; it never fails the device write.
+    if let Err(err) =
+        crate::iot::widget_runtime::tick_widgets_for_signal(root, &req.asset_id, &req.name, now)
+    {
+        eprintln!(
+            "ctox::iot::widget_runtime: watcher dispatch failed for {}::{}: {err}",
+            req.asset_id, req.name
+        );
+    }
+
     // Re-read the asset so the projection reflects the post-write current state.
     let asset = store::get_asset(&conn, &req.asset_id)?
         .ok_or_else(|| anyhow!("asset vanished after attribute write: {}", req.asset_id))?;
@@ -1314,7 +1328,7 @@ pub(crate) fn dashboard_list(root: &Path, realm: &str) -> Result<Value> {
     Ok(json!({ "dashboards": rows }))
 }
 
-fn project_widget(conn: &Connection, id: &str) -> Result<(&'static str, String)> {
+pub(crate) fn project_widget(conn: &Connection, id: &str) -> Result<(&'static str, String)> {
     let row: Option<(
         String, String, String, Option<String>, Option<String>, Option<String>,
         Option<String>, Option<String>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>,

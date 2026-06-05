@@ -112,7 +112,7 @@ pub(crate) fn create_local_ticket(
 ) -> Result<LocalTicketRecord> {
     let mut conn = open_local_db(root)?;
     let now = now_iso_string();
-    let ticket_id = format!("LT-{}", stable_digest(&(title.to_string() + &now)));
+    let ticket_id = format!("LT-{}", stable_digest(&(title.to_string() + now.as_str())));
     conn.execute(
         r#"
         INSERT INTO local_tickets (
@@ -421,7 +421,7 @@ fn insert_local_event(
     let now = now_iso_string();
     let event_id = format!(
         "LE-{}",
-        stable_digest(&(ticket_id.to_string() + event_type + &now))
+        stable_digest(&(ticket_id.to_string() + event_type + now.as_str()))
     );
     conn.execute(
         r#"

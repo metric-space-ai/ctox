@@ -48,6 +48,12 @@ regex = "1"
 qrcode = "0.14"
 roxmltree = "0.21"
 rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+# IoT automation-widget trigger runtime (RFC 0011): Rust-native, sandboxed
+# scripting for the CTOX-generated watcher. No FS/net; engine-level op/time limits.
+# NOTE: rhai pulls `smartstring`, whose blanket `impl Add<SmartString> for String`
+# disables the `String + &String` deref-coercion crate-wide. Concatenate with
+# `s + other.as_str()` (not `s + &other`) anywhere in this crate.
+rhai = { version = "1", features = ["serde"] }
 ring = "0.17"
 scraper = "0.24"
 serde = { version = "1", features = ["derive"] }
