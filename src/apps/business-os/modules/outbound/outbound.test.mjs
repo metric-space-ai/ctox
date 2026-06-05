@@ -100,20 +100,37 @@ test('every campaign idea template is actionable and channel-explicit', () => {
         template,
       );
 
+      assert.match(prompt, new RegExp(template.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${template.id} should be included in setup prompt`);
+      assert.match(prompt, new RegExp(template.title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), `${template.id} title should be included in setup prompt`);
       assert.match(prompt, /outbound\.campaign\.apply_setup/);
       assert.match(prompt, /keine HTTP-Datenkanaele/i);
     }
   }
 });
 
+test('campaign briefing uses stored free text as the central campaign instruction', () => {
+  const campaign = {
+    objective: 'Old objective',
+    payload: {
+      scope: 'Old scope',
+      briefing: 'Ich möchte 100 Handwerksbetriebe per Mail anschreiben.',
+    },
+  };
+
+  assert.equal(hooks.campaignBriefing(campaign), 'Ich möchte 100 Handwerksbetriebe per Mail anschreiben.');
+  assert.equal(hooks.campaignBriefingSummary(campaign), 'Ich möchte 100 Handwerksbetriebe per Mail anschreiben.');
+});
+
 test('campaign briefing save spawns a CTOX chat task for the setup skill', () => {
   assert.match(bundledSource, /ctox-business-os-chat-submit/);
   assert.match(bundledSource, /business-os-outbound-campaign-setup/);
   assert.match(bundledSource, /outbound\.campaign\.briefing\.update/);
-  assert.match(bundledSource, /transport:\s*['"]rxdb-local['"]/);
-  assert.match(bundledSource, /state\.ctx\?\.db\?\.raw\?\.business_commands/);
+  assert.match(bundledSource, /function dispatchOutboundPromptTask/);
+  assert.match(bundledSource, /action:\s*['"]context-chat['"]/);
+  assert.match(bundledSource, /reuseActive:\s*false/);
   assert.match(bundledSource, /business_os\.chat\.task/);
   assert.match(bundledSource, /outbound\.campaign\.apply_setup/);
+  assert.doesNotMatch(bundledSource, /\/api\/business-os\/commands/);
 
   const prompt = hooks.campaignSetupPrompt(
     {
@@ -132,15 +149,61 @@ test('campaign briefing save spawns a CTOX chat task for the setup skill', () =>
   assert.match(prompt, /keine HTTP-Datenkanaele/i);
   assert.match(prompt, /outbound\.campaign\.apply_setup/);
   assert.match(prompt, /cmd-setup-1/);
+  assert.match(prompt, /selected_template_id: de-mail-handwerk-nord/);
+  assert.match(prompt, /selected_template_title: Handwerk in Norddeutschland per E-Mail/);
 });
 
-test('campaign editor keeps template briefing drafts and follows shell language changes', () => {
+test('outbound prompt tasks use the same spawned chat event as context menu actions', () => {
+  const events = [];
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    dispatchEvent(event) {
+      events.push(event);
+      return true;
+    },
+  };
+  try {
+    hooks.dispatchOutboundPromptTask({
+      text: 'Bitte richte diese Outbound-Kampagne ein.',
+      commandId: 'cmd-context-chat-1',
+      recordId: 'camp-1',
+      title: 'Outbound Campaign einrichten',
+      instruction: 'Nutze den Outbound Skill.',
+      requiredSkills: ['business-os-outbound-campaign-setup'],
+      writebackContract: { command_type: 'outbound.campaign.apply_setup' },
+      payload: { prompt: 'Bitte richte diese Outbound-Kampagne ein.' },
+      clientContext: { outbound_action: 'campaign-setup-briefing' },
+    });
+  } finally {
+    globalThis.window = previousWindow;
+  }
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'ctox-business-os-chat-submit');
+  assert.equal(events[0].detail.action, 'context-chat');
+  assert.equal(events[0].detail.reuseActive, false);
+  assert.equal(events[0].detail.command_type, 'business_os.chat.task');
+  assert.deepEqual(events[0].detail.required_skills, ['business-os-outbound-campaign-setup']);
+  assert.equal(events[0].detail.writeback_contract.command_type, 'outbound.campaign.apply_setup');
+  assert.equal(events[0].detail.client_context.action, 'context-chat');
+  assert.equal(events[0].detail.client_context.outbound_action, 'campaign-setup-briefing');
+});
+
+test('campaign editor keeps template briefing drafts across rerenders', () => {
   assert.match(bundledSource, /campaignEditDrafts:\s*(?:\/\* @__PURE__ \*\/\s*)?new Map\(\)/);
   assert.match(bundledSource, /function syncCampaignEditDraftFromEditor/);
   assert.match(bundledSource, /state\.campaignEditDrafts\.get\(campaign\.id\)/);
   assert.match(bundledSource, /data-campaign-idea-template/);
+  assert.match(bundledSource, /data-original-briefing=.*escapeHtml\d*\(originalBriefing\)/);
+  assert.match(bundledSource, /data-campaign-edit-save/);
+  assert.match(bundledSource, /saveButton\.disabled = !name \|\| !dirty/);
+  assert.match(bundledSource, /syncCampaignEditDraftFromEditor\(editor\);\s*updateCampaignEditSaveState\(editor\);/);
+});
+
+test('campaign editor rerenders templates when shell language changes', () => {
   assert.match(bundledSource, /function applyOutboundLanguage/);
   assert.match(bundledSource, /ctox-business-os-preferences/);
   assert.match(bundledSource, /ctox-business-os-language/);
   assert.match(bundledSource, /syncCampaignEditDraftFromEditor\(editor\);\s*render\(true\);/);
+  assert.match(bundledSource, /campaignIdeaTemplates\(lang = state\.lang\)/);
 });

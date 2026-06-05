@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260605-campaign-templates-ready3';
+const BUILD = '20260605-campaign-templates-ready4';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -5221,40 +5221,73 @@ function dispatchCampaignSetupPromptTask(campaign, commandId) {
       'app_extension_requests',
     ],
   };
+  dispatchOutboundPromptTask({
+    text: briefing,
+    commandId,
+    recordId: campaign.id,
+    title,
+    instruction,
+    requiredSkills,
+    writebackContract,
+    payload: {
+      title,
+      instruction,
+      prompt: briefing,
+      user_message: briefing,
+      mode: 'data',
+      target: 'data',
+      required_skills: requiredSkills,
+      selected_campaign: campaign,
+      selected_template: template || null,
+      writeback_contract: writebackContract,
+      thread_key: `business-os/outbound/${campaign.id}`,
+    },
+    clientContext: {
+      outbound_action: 'campaign-setup-briefing',
+      mode: 'data',
+      module: 'outbound',
+      record_type: 'outbound_campaign',
+      record_id: campaign.id,
+      required_skill: OUTBOUND_CAMPAIGN_SETUP_SKILL,
+    },
+  });
+}
+
+function dispatchOutboundPromptTask({
+  text,
+  commandId,
+  recordId,
+  title,
+  instruction,
+  requiredSkills = [],
+  writebackContract = null,
+  payload = {},
+  clientContext = {},
+}) {
+  const userText = String(text || '').trim();
+  if (!userText) return;
   window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
     detail: {
-      text: briefing,
+      text: userText,
       module: 'outbound',
       source_title: 'Outbound',
+      action: 'context-chat',
+      reuseActive: false,
       command_id: commandId,
       command_type: 'business_os.chat.task',
-      record_id: campaign.id,
+      record_id: recordId,
       title,
       instruction,
       mode: 'data',
       target: 'data',
       required_skills: requiredSkills,
       writeback_contract: writebackContract,
-      payload: {
-        title,
-        instruction,
-        prompt: briefing,
-        user_message: briefing,
-        mode: 'data',
-        target: 'data',
-        required_skills: requiredSkills,
-        selected_campaign: campaign,
-        selected_template: template || null,
-        writeback_contract: writebackContract,
-        thread_key: `business-os/outbound/${campaign.id}`,
-      },
+      payload,
       client_context: {
-        action: 'campaign-setup-briefing',
-        mode: 'data',
+        ...clientContext,
+        action: 'context-chat',
+        source: 'outbound-prompt-task',
         module: 'outbound',
-        record_type: 'outbound_campaign',
-        record_id: campaign.id,
-        required_skill: OUTBOUND_CAMPAIGN_SETUP_SKILL,
       },
     },
   }));
@@ -5279,6 +5312,7 @@ function campaignSetupPrompt(campaign, commandId, template) {
     `- name: ${campaign.name}`,
     `- command_id_for_writeback: ${commandId}`,
     template ? `- selected_template_id: ${template.id}` : '- selected_template_id: custom',
+    template ? `- selected_template_title: ${template.title}` : '- selected_template_title: custom',
     '',
     'User-Briefing:',
     campaignBriefing(campaign),
@@ -7318,6 +7352,7 @@ export const __outboundTestHooks = {
   campaignBriefing,
   campaignBriefingSummary,
   campaignSetupPrompt,
+  dispatchOutboundPromptTask,
   campaignIdeaTemplates,
   campaignScopedRows,
   validateOutboundImportPayload,
