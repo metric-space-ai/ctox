@@ -1950,64 +1950,88 @@ async function runSelectedResearch() {
     '',
     'Nutze den systematic-research Skill. Starte mit ctox knowledge search, dann ctox web deep-research. Schreibe jede Discovery-Runde sofort nach source_catalog. Lies/prüfe Quellen, extrahiere Fakten nach evidence_points und schreibe nur belegte Optionen mit gewichteten Scores nach evaluation_matrix. Aktualisiere bestehende Zeilen, wenn sich Fokus oder Kriterien ändern, statt parallele Tabellen zu erzeugen.',
   ].filter(Boolean).join('\n');
-  const result = await state.ctx.commandBus.dispatch({
-    module: 'research',
-    type: 'research.systematic.run',
-    record_id: task.id,
-    payload: {
-      title: `Research · ${task.title}`,
-      instruction,
-      prompt: instruction,
-      priority: 'high',
-      required_skills: ['systematic-research'],
-      research_mode: 'library+living_dashboard',
-      thread_key: `business-os/research/${task.id}`,
-      knowledge_domain: task.knowledge_domain,
-      source_catalog_key: task.source_catalog_key,
-      curated_table_key: task.curated_table_key,
-      measurements_table_key: task.measurements_table_key,
-      web_stack_plan: {
-        first_command: `ctox web deep-research --query ${JSON.stringify(task.prompt || task.title)} --depth standard --max-sources 24`,
-        followups: [
-          'ctox web scholarly search --query <refined topic> --with-oa-pdf --only-doi',
-          'ctox web read --url <candidate-url> --query <research focus>',
-          'ctox web search only as fallback for non-technical/vendor lookup gaps',
-        ],
-      },
-      knowledge_contract: {
-        domain: task.knowledge_domain,
-        tables: tableContract,
-        create_missing_tables: missingTables,
-        provenance_required: true,
-      },
-      scoring_contract: {
-        dimensions: scoringDimensions,
-        weights: scoringWeights(scoringDimensions),
-        total_field: 'weighted_total',
-        rule: 'Only score facts supported by a read source or durable Knowledge row; raw discovery candidates stay unscored.',
-      },
-      writeback_contract: {
-        collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
-        dashboard_tables: {
-          source_catalog: task.source_catalog_key || 'source_catalog',
-          evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
-          evidence_points: task.measurements_table_key || 'evidence_points',
-        },
+  const commandId = `cmd_${crypto.randomUUID()}`;
+  const title = `Research · ${task.title}`;
+  const threadKey = `business-os/research/${task.id}`;
+  const payload = {
+    title,
+    instruction,
+    prompt: instruction,
+    priority: 'high',
+    required_skills: ['systematic-research'],
+    research_mode: 'library+living_dashboard',
+    thread_key: threadKey,
+    knowledge_domain: task.knowledge_domain,
+    source_catalog_key: task.source_catalog_key,
+    curated_table_key: task.curated_table_key,
+    measurements_table_key: task.measurements_table_key,
+    web_stack_plan: {
+      first_command: `ctox web deep-research --query ${JSON.stringify(task.prompt || task.title)} --depth standard --max-sources 24`,
+      followups: [
+        'ctox web scholarly search --query <refined topic> --with-oa-pdf --only-doi',
+        'ctox web read --url <candidate-url> --query <research focus>',
+        'ctox web search only as fallback for non-technical/vendor lookup gaps',
+      ],
+    },
+    knowledge_contract: {
+      domain: task.knowledge_domain,
+      tables: tableContract,
+      create_missing_tables: missingTables,
+      provenance_required: true,
+    },
+    scoring_contract: {
+      dimensions: scoringDimensions,
+      weights: scoringWeights(scoringDimensions),
+      total_field: 'weighted_total',
+      rule: 'Only score facts supported by a read source or durable Knowledge row; raw discovery candidates stay unscored.',
+    },
+    writeback_contract: {
+      collections: ['research_runs', 'research_tasks', 'knowledge_tables'],
+      dashboard_tables: {
+        source_catalog: task.source_catalog_key || 'source_catalog',
+        evaluation_matrix: task.curated_table_key || 'evaluation_matrix',
+        evidence_points: task.measurements_table_key || 'evidence_points',
       },
     },
-    client_context: {
+  };
+  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
+    detail: {
+      text: `${runInfoActionLabel(task)}: ${task.title}`,
       module: 'research',
-      source_module: 'research',
-      inbound_channel: 'business_os.research',
-      knowledge_tables: base?.tables || [],
+      source_title: 'Research',
+      command_id: commandId,
+      command_type: 'research.systematic.run',
+      record_id: task.id,
+      title,
+      instruction,
+      thread_key: threadKey,
+      reuseActive: false,
+      payload,
+      client_context: {
+        action: 'research-run-chat',
+        module: 'research',
+        source_module: 'research',
+        inbound_channel: 'business_os.research',
+        knowledge_domain: task.knowledge_domain,
+        knowledge_tables: base?.tables || [],
+      },
     },
-  });
+  }));
+  const result = {
+    ok: true,
+    command_id: commandId,
+    status: 'queued',
+    task_status: 'queued',
+    title,
+    thread_key: threadKey,
+    transport: 'business-chat',
+  };
   const run = {
     id: `research_run_${now}`,
     task_id: task.id,
-    status: result?.task_status || result?.status || 'queued',
-    command_id: result?.command_id || '',
-    task_queue_id: result?.task_id || '',
+    status: result.task_status,
+    command_id: commandId,
+    task_queue_id: '',
     identified_count: state.sourceRows.length,
     accepted_count: state.sourceModels.length,
     used_count: state.sourceModels.length,
@@ -2016,25 +2040,20 @@ async function runSelectedResearch() {
     updated_at_ms: now,
   };
   state.runs = [run, ...state.runs.filter((item) => item.id !== run.id)];
-  if (result?.task_id) {
-    state.queueTasks = [{
-      id: result.task_id,
-      command_id: result.command_id || '',
-      title: `Research · ${task.title}`,
-      status: result.task_status || 'queued',
-      source_module: 'research',
-      command_type: 'research.systematic.run',
-      thread_key: `business-os/research/${task.id}`,
-      updated_at_ms: now,
-    }, ...state.queueTasks.filter((item) => item.id !== result.task_id)];
-  }
   await upsertDoc(state.ctx.db.raw.research_runs, run).catch((error) => {
     console.warn('[research] could not persist run', error);
   });
   await patchDoc(state.ctx.db.raw.research_tasks, task.id, { status: 'collecting', updated_at_ms: now }).catch((error) => {
     console.warn('[research] could not patch task status', error);
   });
+  setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
   render();
+}
+
+function runInfoActionLabel(task) {
+  return researchRunInfo(task).hasRun
+    ? state.t('researchFortsetzen', 'Research fortsetzen')
+    : state.t('researchStarten', 'Research starten');
 }
 
 async function updateTaskAxis(axis, value) {
