@@ -2131,6 +2131,55 @@ pub fn handle_iot_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&generate_render(root, &id, None)?.into_value())
         }
 
+        // ---- webhooks (spec §5: rein & raus) ----
+        ("webhook", "ingest") => {
+            let signal = required_flag_value(rest, "--signal")?;
+            let payload: Value = serde_json::from_str(&required_flag_value(rest, "--payload")?)
+                .context("failed to parse --payload JSON")?;
+            let path = find_flag_value(rest, "--path");
+            let ts = find_flag_value(rest, "--ts")
+                .map(|s| s.parse::<i64>())
+                .transpose()
+                .context("failed to parse --ts")?
+                .unwrap_or(0);
+            // CLI is the trusted operator surface (the HTTP front authenticates the
+            // caller via the webhook secret before reaching here): realm = None.
+            print_json(&crate::iot::webhook::ingest(
+                root,
+                &signal,
+                &payload,
+                path.as_deref(),
+                ts,
+                None,
+            )?)
+        }
+        ("webhook", "send") => {
+            let url = required_flag_value(rest, "--url")?;
+            let payload: Value = serde_json::from_str(&required_flag_value(rest, "--payload")?)
+                .context("failed to parse --payload JSON")?;
+            let secret = find_flag_value(rest, "--secret-ref");
+            // Repeatable `--header key=value`.
+            let mut headers = Vec::new();
+            let mut i = 0;
+            while i < rest.len() {
+                if rest[i] == "--header" {
+                    if let Some((k, v)) = rest.get(i + 1).and_then(|kv| kv.split_once('=')) {
+                        headers.push((k.to_string(), v.to_string()));
+                    }
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            print_json(&crate::iot::webhook::send(
+                root,
+                &url,
+                &payload,
+                secret.as_deref(),
+                &headers,
+            )?)
+        }
+
         // ---- resync ----
         ("project", "all") => {
             // Full idempotent resync: scan EVERY projectable engine row via

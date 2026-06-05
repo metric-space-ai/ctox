@@ -23,6 +23,7 @@ pub(crate) mod projector;
 pub(crate) mod runtime;
 pub(crate) mod store;
 pub(crate) mod watcher;
+pub(crate) mod webhook;
 pub(crate) mod widget_runtime;
 
 // CI soak harness (Phase 7) — reuses the loopback MQTT fixture + runtime
