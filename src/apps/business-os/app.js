@@ -3478,9 +3478,10 @@ async function openModule(moduleId, options = {}) {
   applyLoadingShadow(mod, loadToken);
   els.leftContent.replaceChildren(renderLeftContext(mod));
   els.rightContent.replaceChildren(renderRightContext(mod));
-  loadModuleVersionsDropdown(mod.id);
+  let moduleSyncStart = null;
   try {
     await registerModuleSchemas(mod);
+    moduleSyncStart = startModuleSync(mod);
   } catch (error) {
     console.error(`[business-os] Schema registration failed for ${mod.id}`, error);
     setStatus(`Schema warning: ${error.message || error}`);
@@ -3505,7 +3506,13 @@ async function openModule(moduleId, options = {}) {
     shellColumnResizeSync?.();
   }
   postCurrentPreferencesToModule();
-  startModuleSync(mod);
+  moduleSyncStart?.catch?.(() => {});
+  window.setTimeout(() => {
+    loadModuleVersionsDropdown(mod.id).catch((error) => {
+      if (isRecoverableDataPlaneAbort(error) || isStaleDataPlaneGeneration(state.dataPlaneGeneration)) return;
+      console.warn('[business-os] module versions unavailable:', error);
+    });
+  }, 0);
   syncToastRefresh?.();
   updateNavButtons();
 }
@@ -3620,10 +3627,10 @@ function withMigrationStrategies(collections, migrationStrategies = {}) {
 // because the sync runtime still owns connection-handler + signaling config,
 // and moving that into RxDB is a larger, separately-shippable refactor.
 function startModuleSync(mod) {
-  if (!mod?.id || !state.sync || state.syncStartedModules.has(mod.id)) return;
-  if (state.schemaRetryTimers.has(mod.id)) return;
+  if (!mod?.id || !state.sync || state.syncStartedModules.has(mod.id)) return Promise.resolve(null);
+  if (state.schemaRetryTimers.has(mod.id)) return Promise.resolve(null);
   state.syncStartedModules.add(mod.id);
-  registerModuleSchemas(mod)
+  return registerModuleSchemas(mod)
     .then(() => {
       state.schemaImportRetries.delete(mod.id);
       return state.sync.startModule(mod);
@@ -3915,7 +3922,7 @@ async function loadModuleVersionsDropdown(moduleId) {
     select.style.display = (bundleVersions.length > 0 || snapshots.length > 0) ? 'inline-block' : 'none';
   } catch (error) {
     if (isRecoverableDataPlaneAbort(error) || isStaleDataPlaneGeneration(generation)) return;
-    console.error('[business-os] failed to load module versions:', error);
+    console.warn('[business-os] failed to load module versions:', error);
   }
 }
 
