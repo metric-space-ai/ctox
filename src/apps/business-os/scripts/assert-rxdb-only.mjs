@@ -103,8 +103,14 @@ function contentForForbiddenHttpScan(file, content) {
 function assertBusinessOsServerHttpDataApisAreGated() {
   const serverPath = join(repoRoot, 'src/core/business_os/server.rs');
   const server = readFileSync(serverPath, 'utf8');
-  if (!/path\.starts_with\("\/api\/business-os"\)\s*&&\s*!is_subscription_auth_path\(path\)/.test(server)) {
+  if (!/path\.starts_with\("\/api\/business-os"\)\s*&&\s*!is_business_os_http_exception_path\(path\)/.test(server)) {
     offenders.push('src/core/business_os/server.rs: /api/business-os data APIs must be hard-gated behind the ChatGPT subscription-auth exception');
+  }
+  const exceptionMatch = server.match(/fn\s+is_business_os_http_exception_path[\s\S]*?matches!\s*\([\s\S]*?\)\s*\n\}/)?.[0] || '';
+  if (!exceptionMatch.includes('/api/business-os/ctox/subscription-auth/start')
+    || !exceptionMatch.includes('/api/business-os/ctox/subscription-auth/callback')
+    || exceptionMatch.includes('/api/business-os/commands')) {
+    offenders.push('src/core/business_os/server.rs: Business OS HTTP exceptions must be limited to ChatGPT subscription auth');
   }
   if (!/Business OS HTTP data APIs are disabled; use RxDB\/WebRTC\./.test(server)) {
     offenders.push('src/core/business_os/server.rs: HTTP data API gate must return the RxDB/WebRTC-only contract message');
