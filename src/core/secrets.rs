@@ -1210,6 +1210,12 @@ const SECRET_KEYS: &[&str] = &[
     "CTO_TEAMS_CLIENT_SECRET",
     "CTO_TEAMS_GRAPH_ACCESS_TOKEN",
     "CTOX_WEBRTC_PASSWORD",
+    // IoT protocol-agent device credentials (gateway.rs MQTT/HTTP/WS specs):
+    // password + auth-header values must route to the encrypted secret store, not
+    // the plaintext runtime_env_kv table.
+    "CTO_IOT_MQTT_PASSWORD",
+    "CTO_IOT_HTTP_AUTH_HEADER",
+    "CTO_IOT_WS_AUTH_HEADER",
     "HF_TOKEN",
     "HUGGINGFACE_HUB_TOKEN",
 ];

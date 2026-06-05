@@ -1,0 +1,44 @@
+{
+  "id": "iot",
+  "title": "IoT",
+  "description": "Native IoT workspace: realm/asset tree, typed attribute workbench with live values and history charts over iot_datapoints, alarms, rulesets and protocol-agent connection context. Ported from OpenRemote; reads the CTOX iot_* projections only and writes via business_commands. Shipping scope (Phases 0-7): assets, typed attributes, datapoints (all/interval/lttb), alarms lifecycle, ruleset/agent records, and the MQTT protocol agent with multi-realm isolation, bounded/coalesced telemetry, and secret redaction. DEFERRED (planned, not broken): Groovy/JS/Flow rule execution, HTTP/WebSocket protocol agents beyond MQTT, forecasting/prediction, and gateway federation — see docs/iot-operations.md §Deferred.",
+  "entry": "modules/iot/index.html",
+  "collections": [
+    "business_commands",
+    "iot_realms",
+    "iot_asset_types",
+    "iot_assets",
+    "iot_attributes",
+    "iot_datapoints",
+    "iot_alarms",
+    "iot_agents",
+    "iot_agent_status",
+    "iot_rulesets"
+  ],
+  "source": "local",
+  "core": false,
+  "editable": true,
+  "deletable": true,
+  "layout": {
+    "shell": "full-workspace",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
+    "left": "Realm scope selector, asset hierarchy tree and search/filter",
+    "center": "Selected asset typed-attribute workbench, live values, native datapoint chart and optional map",
+    "right": "Open alarms, ruleset status and protocol agent / connection context"
+  },
+  "category": "Operations",
+  "version": "v1",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": ["iot", "sensors", "assets", "alarms", "telemetry"],
+  "store": {
+    "summary": "Native IoT asset & telemetry workspace (assets, attributes, datapoints, alarms, rulesets, MQTT agent) with multi-realm isolation, bounded/coalesced telemetry and secret redaction. Ported from OpenRemote. DEFERRED (planned, not broken): Groovy/JS/Flow rule execution, non-MQTT protocol agents, forecasting, and gateway federation.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/iot",
+    "installable": true,
+    "editable_after_install": true,
+    "distribution": "ctox-repo-module"
+  },
+  "install_scope": "store",
+  "default_installed": false
+}

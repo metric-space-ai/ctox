@@ -756,8 +756,17 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut documents = Vec::with_capacity(catalog_rows.len());
-    for (table_id, domain, table_key, source_system, title, description, row_count, bytes, updated_at) in
-        catalog_rows
+    for (
+        table_id,
+        domain,
+        table_key,
+        source_system,
+        title,
+        description,
+        row_count,
+        bytes,
+        updated_at,
+    ) in catalog_rows
     {
         // (1) Re-resolve against the live state dir; never trust the stored path.
         let resolved_path = compute_parquet_path(root, &domain, &table_key);
@@ -765,7 +774,8 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
 
         // (2) Read rows (capped). Missing/unreadable parquet is non-fatal.
         let (rows, resolved_row_count) = if resolved_path.is_file() {
-            match super::parquet_io::read_rows_capped(&resolved_path, KNOWLEDGE_TABLE_RXDB_ROW_CAP) {
+            match super::parquet_io::read_rows_capped(&resolved_path, KNOWLEDGE_TABLE_RXDB_ROW_CAP)
+            {
                 Ok((rows, count)) => (rows, count),
                 Err(err) => {
                     eprintln!(
@@ -781,7 +791,8 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         };
 
         let id = format!("table:{table_id}");
-        let updated_at_ms = rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
+        let updated_at_ms =
+            rfc3339_to_millis(&updated_at).unwrap_or_else(|| Utc::now().timestamp_millis());
         let rows_value = Value::Array(rows);
 
         // (3) Mirror rows at payload.rows and top-level rows; refresh
@@ -900,8 +911,8 @@ mod tests {
     ///   - report the resolved (existing) `parquet_path` and the true
     ///     `row_count`.
     #[test]
-    fn knowledge_tables_projection_embeds_rows_and_resolves_live_parquet_path(
-    ) -> anyhow::Result<()> {
+    fn knowledge_tables_projection_embeds_rows_and_resolves_live_parquet_path() -> anyhow::Result<()>
+    {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
         let domain = "drone_bearing_design";
@@ -940,7 +951,10 @@ mod tests {
         let df = super::super::parquet_io::rows_to_df(&rows)?;
         let live_path = compute_parquet_path(root, domain, table_key);
         super::super::parquet_io::commit_parquet(&live_path, df)?;
-        assert!(live_path.is_file(), "live parquet should exist after commit");
+        assert!(
+            live_path.is_file(),
+            "live parquet should exist after commit"
+        );
         assert!(!stale_path.exists(), "stale path must not exist");
 
         // (c) Run the projection.

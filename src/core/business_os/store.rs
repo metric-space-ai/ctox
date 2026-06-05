@@ -5814,7 +5814,13 @@ pub fn mark_business_command_failed(
         object.insert("error".to_string(), Value::String(error.to_string()));
         object.insert("updated_at_ms".to_string(), Value::from(failed_at_ms));
     }
-    upsert_business_record(&conn, "business_commands", command_id, failed_at_ms, payload)?;
+    upsert_business_record(
+        &conn,
+        "business_commands",
+        command_id,
+        failed_at_ms,
+        payload,
+    )?;
     Ok(())
 }
 
@@ -6013,6 +6019,56 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 Some("completed"),
                 outcome,
             );
+        }
+        command_type if is_iot_active_command(command_type) => {
+            // §4A: the executor goes through the SAME iot::commands code path the
+            // `ctox iot` CLI uses. ACL-gate like the management-class families
+            // (ctox.task.update/delete): rxdb_command_session enforces a real
+            // chef/admin role via session_can_manage_all, so an untrusted peer
+            // that falls through to the default `user` role is rejected here with
+            // "chef or admin role required" instead of slipping past the
+            // always-true `authenticated && !auth_required` disjunct downstream.
+            // Then write a completed/failed outcome whose `result.projections` the
+            // rxdb_peer branch reprojects into the iot_* collections. Idempotent: a
+            // replayed command short-circuits on the stored outcome above.
+            let session = rxdb_command_session(root, &command)?;
+            match crate::iot::commands::handle_business_command(
+                root,
+                command_type,
+                &command.payload,
+                &session,
+            ) {
+                Ok(outcome) => {
+                    // Project engine state into the RxDB-visible business_records
+                    // store via iot::projector (same code path as the rxdb_peer
+                    // live stream). Failure to project must not silently drop the
+                    // outcome, so surface it.
+                    project_iot_business_command_outcome(root, &outcome)
+                        .context("project iot business command outcome")?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        command.record_id.as_deref(),
+                        Some("completed"),
+                        outcome,
+                    );
+                }
+                Err(error) => {
+                    let _ = write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "failed",
+                        command.record_id.as_deref(),
+                        Some("failed"),
+                        serde_json::json!({
+                            "ok": false,
+                            "error": error.to_string(),
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
         }
         command_type if command_type.starts_with("ctox.channel.") => {
             let mutation: ChannelCommandRequest = serde_json::from_value(command.payload.clone())
@@ -6557,6 +6613,20 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
     }
     let accepted = record_command(root, command)?;
     Ok(serde_json::to_value(accepted)?)
+}
+
+fn is_iot_active_command(command_type: &str) -> bool {
+    matches!(
+        command_type,
+        "ctox.iot.attribute.write"
+            | "ctox.iot.asset.upsert"
+            | "ctox.iot.asset.delete"
+            | "ctox.iot.alarm.update"
+            | "ctox.iot.ruleset.save"
+            | "ctox.iot.ruleset.toggle"
+            | "ctox.iot.agent.configure"
+            | "ctox.iot.datapoints.query"
+    )
 }
 
 fn is_outbound_active_command(command_type: &str) -> bool {
@@ -14018,6 +14088,224 @@ pub(super) fn upsert_business_record(
     Ok(())
 }
 
+/// Project the outcome of a `ctox.iot.*` business command into the
+/// RxDB-visible `business_records` store. The engine state lives in
+/// `runtime/ctox.sqlite3` (written by the shared `iot::commands` op via
+/// `crate::paths::core_db`); `iot::projector` reads it back and builds the
+/// canonical `iot_*` envelopes, and this integrator writes those rows into the
+/// business-os store (the read source for `pull_collection_records` and the
+/// RxDB peer). No HTTP bridge: every row flows engine -> projector ->
+/// business_records -> RxDB/WebRTC.
+///
+/// Returns the `(collection, record_id)` pairs for the rxdb_peer to stream into
+/// the live RxDB collections. Idempotent: a replayed outcome rewrites identical
+/// envelopes (only `_rev`/`updated_at_ms` advance) and tombstones stay
+/// tombstoned.
+pub(super) fn project_iot_business_command_outcome(
+    root: &Path,
+    result: &Value,
+) -> anyhow::Result<Vec<(&'static str, String)>> {
+    use crate::iot::projector::ReprojectedRecord;
+
+    let records = crate::iot::projector::reproject_business_command_outcome(root, result)?;
+    if records.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open_store(root)?;
+    let mut pairs: Vec<(&'static str, String)> = Vec::new();
+    for record in records {
+        match record {
+            ReprojectedRecord::Rows(rows) => {
+                for row in rows {
+                    upsert_iot_projection_row(
+                        &conn,
+                        row.collection,
+                        &row.record_id,
+                        row.updated_at_ms,
+                        row.payload.clone(),
+                    )?;
+                    pairs.push((row.collection, row.record_id));
+                }
+            }
+            ReprojectedRecord::EchoOnly {
+                collection,
+                record_id,
+            } => {
+                // The executor already wrote the (query-scoped) datapoint window
+                // row into the core db's business_records; mirror it into the
+                // business-os store so the RxDB read path can echo it.
+                if let Some(payload) = read_core_db_business_record(root, collection, &record_id)? {
+                    let updated_at_ms = payload
+                        .get("updated_at_ms")
+                        .and_then(Value::as_i64)
+                        .unwrap_or_else(|| now_ms() as i64);
+                    upsert_iot_projection_row(
+                        &conn,
+                        collection,
+                        &record_id,
+                        updated_at_ms,
+                        payload,
+                    )?;
+                    pairs.push((collection, record_id));
+                }
+            }
+        }
+    }
+    Ok(pairs)
+}
+
+/// Full idempotent resync of EVERY projectable iot engine row into the
+/// RxDB-visible business-os store (`open_store`). This is the bridge `ctox iot
+/// project all` calls: without it, CLI mutations (asset.upsert, attribute.write,
+/// …) only write engine state + an inline core-db row and never reach the
+/// `business-os.sqlite3` store the apps read, so they never replicate over
+/// RxDB/WebRTC. The projector is the canonical envelope producer
+/// (`projector::project_all` reads `runtime/ctox.sqlite3` engine tables, never
+/// writes); this function owns the `business_records` write into the
+/// RxDB-visible store, mirroring `project_iot_business_command_outcome`. No HTTP
+/// bridge: engine -> projector -> business_records -> RxDB/WebRTC. Returns the
+/// `(collection, record_id)` pairs written.
+///
+/// `realm` selects the projection/sync scope: `Some(r)` projects ONLY realm
+/// `r`'s rows into the RxDB-visible store (the session/executor path must use
+/// this so WebRTC never replicates other realms' rows to a paired peer);
+/// `None` is the trusted operator resync (`ctox iot project all`) that mirrors
+/// every realm. Realm isolation on the projection/sync surface is enforced in
+/// `projector::project_all_in_realm`.
+pub(crate) fn project_all_iot(
+    root: &Path,
+    realm: Option<&str>,
+) -> anyhow::Result<Vec<(&'static str, String)>> {
+    let engine = crate::iot::store::open_iot_store(root)?;
+    let rows = crate::iot::projector::project_all_in_realm(&engine, realm)?;
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open_store(root)?;
+    let mut pairs: Vec<(&'static str, String)> = Vec::with_capacity(rows.len());
+    for row in rows {
+        upsert_iot_projection_row(
+            &conn,
+            row.collection,
+            &row.record_id,
+            row.updated_at_ms,
+            row.payload.clone(),
+        )?;
+        pairs.push((row.collection, row.record_id));
+    }
+    Ok(pairs)
+}
+
+/// Project already-canonical IoT rows into the RxDB-visible Business OS store.
+/// Runtime agent pumps use this path after `iot::runtime::run_agent_step`
+/// returns projector rows; command execution uses
+/// `project_iot_business_command_outcome`, which first re-derives rows from a
+/// command outcome. Both converge on the same tombstone-aware upsert below.
+pub(super) fn project_iot_projection_rows(
+    root: &Path,
+    rows: Vec<crate::iot::projector::ProjectionRow>,
+) -> anyhow::Result<Vec<(&'static str, String)>> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = open_store(root)?;
+    let mut pairs = Vec::with_capacity(rows.len());
+    for row in rows {
+        upsert_iot_projection_row(
+            &conn,
+            row.collection,
+            &row.record_id,
+            row.updated_at_ms,
+            row.payload.clone(),
+        )?;
+        pairs.push((row.collection, row.record_id));
+    }
+    Ok(pairs)
+}
+
+/// Tombstone-aware `business_records` upsert for iot projection rows. Unlike
+/// `upsert_business_record` (which always forces `_deleted:false`), this honors a
+/// `_deleted: true` payload so deletion tombstones set the `deleted` column and
+/// reach RxDB as a doc removal.
+fn upsert_iot_projection_row(
+    conn: &Connection,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    mut payload: Value,
+) -> anyhow::Result<()> {
+    let deleted = payload
+        .get("_deleted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let rev = format!("rev_{}", Uuid::new_v4());
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("id".to_string(), Value::String(record_id.to_string()));
+        obj.insert("_rev".to_string(), Value::String(rev.clone()));
+        obj.insert("_deleted".to_string(), Value::Bool(deleted));
+        obj.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    }
+    conn.execute(
+        "INSERT INTO business_records
+            (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(collection, record_id) DO UPDATE SET
+            rev = excluded.rev,
+            deleted = excluded.deleted,
+            updated_at_ms = excluded.updated_at_ms,
+            payload_json = excluded.payload_json",
+        params![
+            collection,
+            record_id,
+            rev,
+            if deleted { 1 } else { 0 },
+            updated_at_ms,
+            serde_json::to_string(&payload)?
+        ],
+    )?;
+    Ok(())
+}
+
+/// Read a single `business_records` row from the core db (ctox.sqlite3). Used
+/// only to mirror executor-written iot_datapoints window rows (which the
+/// projector cannot re-derive) into the business-os store.
+fn read_core_db_business_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let path = crate::paths::core_db(root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let conn = Connection::open(&path)
+        .with_context(|| format!("failed to open core db {}", path.display()))?;
+    let exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_records'",
+            [],
+            |_| Ok(true),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !exists {
+        return Ok(None);
+    }
+    let payload_json: Option<String> = conn
+        .query_row(
+            "SELECT payload_json FROM business_records WHERE collection = ?1 AND record_id = ?2",
+            params![collection, record_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match payload_json {
+        Some(json) => Ok(Some(serde_json::from_str(&json).with_context(|| {
+            format!("invalid core db business_record {collection}/{record_id}")
+        })?)),
+        None => Ok(None),
+    }
+}
+
 fn find_queue_task_for_command(root: &Path, command_id: &str) -> Option<String> {
     let tasks = channels::list_queue_tasks(root, &[], 256).ok()?;
     tasks
@@ -14434,9 +14722,7 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(false)
         );
-        assert!(
-            serde_json::to_string(web_stack)?.contains("\"capture_script_available\"")
-        );
+        assert!(serde_json::to_string(web_stack)?.contains("\"capture_script_available\""));
         assert!(
             !serde_json::to_string(web_stack)?.contains("\"capture_script\":"),
             "browser capture script bodies must stay out of the RxDB projection"
@@ -19646,6 +19932,339 @@ mod tests {
             "console.log('version 2');"
         );
 
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // IoT (ctox.iot.*) business_command + CLI wiring (§4A one code path).
+    // -----------------------------------------------------------------------
+
+    fn iot_admin_actor() -> Value {
+        serde_json::json!({
+            "actor": { "id": "tester", "role": "admin", "display_name": "Tester" }
+        })
+    }
+
+    fn iot_pull_record(root: &Path, collection: &str, record_id: &str) -> Option<Value> {
+        let pulled = pull_collection_records(root, collection, Some(0), Some(2_000)).ok()?;
+        pulled
+            .get("documents")
+            .and_then(Value::as_array)
+            .and_then(|documents| {
+                documents
+                    .iter()
+                    .find(|document| document.get("id").and_then(Value::as_str) == Some(record_id))
+                    .cloned()
+            })
+    }
+
+    // ctox.iot.asset.upsert then ctox.iot.attribute.write over the
+    // business_command executor; the engine state must be projected into the
+    // iot_assets / iot_attributes business_records collections.
+    #[test]
+    fn iot_business_command_projects_into_iot_collections() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let actor = iot_admin_actor();
+
+        let upsert = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_iot_asset_upsert",
+                "command_id": "cmd_iot_asset_upsert",
+                "module": "iot",
+                "command_type": "ctox.iot.asset.upsert",
+                "record_id": "asset-iot-bc-1",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "asset-iot-bc-1",
+                    "realm": "master",
+                    "asset_type": "Thermostat",
+                    "name": "Living room",
+                    "asset_type_info": {
+                        "asset_type": "Thermostat",
+                        "attributes": [{
+                            "name": "temp",
+                            "value_descriptor": {
+                                "name": "number",
+                                "base_type": "Number",
+                                "array_dimensions": 0,
+                                "constraints": [],
+                                "units": null,
+                                "format": null
+                            },
+                            "meta": {}
+                        }]
+                    }
+                },
+                "client_context": actor.clone()
+            }),
+        )?;
+        assert_eq!(
+            upsert.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        let projections = upsert
+            .pointer("/result/projections")
+            .and_then(Value::as_array)
+            .expect("asset upsert reports projections");
+        assert!(projections
+            .iter()
+            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
+
+        let write = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_iot_attr_write",
+                "command_id": "cmd_iot_attr_write",
+                "module": "iot",
+                "command_type": "ctox.iot.attribute.write",
+                "record_id": "asset-iot-bc-1:temp",
+                "status": "pending_sync",
+                "payload": {
+                    "asset_id": "asset-iot-bc-1",
+                    "name": "temp",
+                    "value": 22.5,
+                    "timestamp_ms": 1000
+                },
+                "client_context": actor
+            }),
+        )?;
+        assert_eq!(
+            write.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        // Projection echo: the iot_assets collection carries the asset, the
+        // iot_attributes collection carries the written value.
+        let asset_doc = iot_pull_record(root, "iot_assets", "asset-iot-bc-1")
+            .expect("iot_assets projection present");
+        assert_eq!(asset_doc["name"], "Living room");
+        assert_eq!(asset_doc["realm"], "master");
+        assert_eq!(asset_doc["_deleted"], Value::Bool(false));
+
+        let attr_doc = iot_pull_record(root, "iot_attributes", "asset-iot-bc-1:temp")
+            .expect("iot_attributes projection present");
+        assert_eq!(attr_doc["asset_id"], "asset-iot-bc-1");
+        assert_eq!(attr_doc["data"]["value"], serde_json::json!(22.5));
+        assert_eq!(attr_doc["_deleted"], Value::Bool(false));
+        Ok(())
+    }
+
+    // ACL: the iot executor enforces a real chef/admin role gate at the
+    // business_command edge (rxdb_command_session -> session_can_manage_all).
+    // A trusted non-admin actor — even one spoofing `role: admin` in the
+    // client-supplied context — must be rejected, so an untrusted peer cannot
+    // mutate IoT state by virtue of the always-true authenticated session.
+    #[test]
+    fn iot_business_command_rejects_non_admin_actor() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let now = now_ms() as i64;
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES ('viewer', 'Viewer', 'user', 1, ?1, ?1)",
+            params![now],
+        )?;
+        drop(conn);
+
+        let error = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_iot_asset_upsert_denied",
+                "command_id": "cmd_iot_asset_upsert_denied",
+                "module": "iot",
+                "command_type": "ctox.iot.asset.upsert",
+                "record_id": "asset-denied-1",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "asset-denied-1",
+                    "realm": "master",
+                    "asset_type": "Thermostat",
+                    "name": "Lobby",
+                    "asset_type_info": {
+                        "asset_type": "Thermostat",
+                        "attributes": []
+                    }
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "viewer",
+                        "display_name": "Viewer",
+                        "role": "admin",
+                        "is_admin": true
+                    }
+                }
+            }),
+        )
+        .expect_err("non-admin iot mutation must be rejected");
+        assert!(
+            error.to_string().contains("chef or admin role required"),
+            "unexpected error: {error}"
+        );
+        // The mutation must not have been projected into the RxDB-visible store.
+        assert!(
+            iot_pull_record(root, "iot_assets", "asset-denied-1").is_none(),
+            "denied iot mutation must not project"
+        );
+        Ok(())
+    }
+
+    // `ctox iot project all` is a real full resync (not a silent no-op): it
+    // bridges engine state seeded by the CLI surface into the RxDB-visible
+    // business-os store so it can replicate to apps. Here a CLI asset.upsert
+    // writes engine state but does NOT itself project into business-os.sqlite3;
+    // project_all_iot must then make the iot_assets projection appear.
+    #[test]
+    fn iot_project_all_resyncs_cli_engine_state_into_business_store() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        // CLI surface: seed engine state directly (no business_command bridge).
+        crate::iot::commands::asset_upsert(
+            root,
+            crate::iot::commands::AssetUpsertReq {
+                id: Some("asset-resync-1".into()),
+                realm: "master".into(),
+                asset_type: "Thermostat".into(),
+                name: "Roof".into(),
+                parent_id: None,
+                asset_type_info: Some(serde_json::from_value(serde_json::json!({
+                    "asset_type": "Thermostat",
+                    "attributes": []
+                }))?),
+            },
+            None,
+        )?;
+
+        // Before resync: nothing in the RxDB-visible iot_assets collection.
+        assert!(
+            iot_pull_record(root, "iot_assets", "asset-resync-1").is_none(),
+            "CLI mutation should not reach business-os store before resync"
+        );
+
+        let pairs = project_all_iot(root, None)?;
+        assert!(
+            pairs
+                .iter()
+                .any(|(c, id)| *c == "iot_assets" && id == "asset-resync-1"),
+            "project_all_iot must report the asset projection"
+        );
+
+        // After resync: the asset is now visible to the RxDB read path.
+        let asset_doc = iot_pull_record(root, "iot_assets", "asset-resync-1")
+            .expect("iot_assets projection present after resync");
+        assert_eq!(asset_doc["name"], "Roof");
+        assert_eq!(asset_doc["realm"], "master");
+
+        // Idempotent: a second resync produces the same pair set.
+        let pairs_again = project_all_iot(root, None)?;
+        assert_eq!(pairs, pairs_again, "project_all_iot must be idempotent");
+        Ok(())
+    }
+
+    // §4A one-code-path proof: the `ctox iot` CLI dispatch and the
+    // ctox.iot.* business_command produce the identical persisted engine
+    // result for the same op (attribute write -> read round-trips both ways).
+    #[test]
+    fn iot_cli_and_business_command_one_code_path() -> anyhow::Result<()> {
+        // Seed an identical asset on two separate roots.
+        let cli_temp = tempdir()?;
+        let cli_root = cli_temp.path();
+        let bc_temp = tempdir()?;
+        let bc_root = bc_temp.path();
+
+        let type_info = crate::iot::commands::AssetUpsertReq {
+            id: Some("asset-shared-x".into()),
+            realm: "master".into(),
+            asset_type: "Thermostat".into(),
+            name: "Lab".into(),
+            parent_id: None,
+            asset_type_info: Some(serde_json::from_value(serde_json::json!({
+                "asset_type": "Thermostat",
+                "attributes": [{
+                    "name": "temp",
+                    "value_descriptor": {
+                        "name": "number",
+                        "base_type": "Number",
+                        "array_dimensions": 0,
+                        "constraints": [],
+                        "units": null,
+                        "format": null
+                    },
+                    "meta": {}
+                }]
+            }))?),
+        };
+        crate::iot::commands::asset_upsert(cli_root, type_info.clone(), None)?;
+        crate::iot::commands::asset_upsert(bc_root, type_info, None)?;
+
+        // CLI path: `ctox iot attribute write` then `ctox iot attribute read`
+        // (these are the args the main.rs `Some("iot")` arm forwards). Both
+        // dispatch through iot::commands::handle_iot_command and round-trip.
+        crate::iot::commands::handle_iot_command(
+            cli_root,
+            &[
+                "attribute".into(),
+                "write".into(),
+                "--asset".into(),
+                "asset-shared-x".into(),
+                "--name".into(),
+                "temp".into(),
+                "--value".into(),
+                "21.0".into(),
+                "--ts".into(),
+                "2000".into(),
+            ],
+        )?;
+        crate::iot::commands::handle_iot_command(
+            cli_root,
+            &[
+                "attribute".into(),
+                "read".into(),
+                "--asset".into(),
+                "asset-shared-x".into(),
+                "--name".into(),
+                "temp".into(),
+            ],
+        )?;
+
+        // business_command path: ctox.iot.attribute.write with the same op input.
+        let actor = iot_admin_actor();
+        let outcome = accept_rxdb_business_command(
+            bc_root,
+            serde_json::json!({
+                "id": "cmd_iot_one_path",
+                "command_id": "cmd_iot_one_path",
+                "module": "iot",
+                "command_type": "ctox.iot.attribute.write",
+                "record_id": "asset-shared-x:temp",
+                "status": "pending_sync",
+                "payload": {
+                    "asset_id": "asset-shared-x",
+                    "name": "temp",
+                    "value": 21.0,
+                    "timestamp_ms": 2000
+                },
+                "client_context": actor
+            }),
+        )?;
+        assert_eq!(
+            outcome.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        // Identical result: read back the shared op's value on both roots and
+        // assert they match (one code path -> one persisted result).
+        let cli_read =
+            crate::iot::commands::attribute_read(cli_root, "asset-shared-x", "temp", None)?;
+        let bc_read =
+            crate::iot::commands::attribute_read(bc_root, "asset-shared-x", "temp", None)?;
+        assert_eq!(cli_read, bc_read);
+        assert_eq!(cli_read["attribute"]["value"], serde_json::json!(21.0));
+        assert_eq!(cli_read["attribute"]["timestamp"], serde_json::json!(2000));
         Ok(())
     }
 }

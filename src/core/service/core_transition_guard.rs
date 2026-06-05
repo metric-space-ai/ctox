@@ -787,6 +787,30 @@ fn core_spawner_contracts() -> &'static [CoreSpawnerContract] {
             intervention_skill: "queue-cleanup",
             intervention_effects: BLOCK_OR_CONSOLIDATE,
         },
+        // IoT Phase-4 condition layer: a matched attribute condition raises an
+        // IotAlarm (the spawn parent) and, for flagged matches, spawns a
+        // budget-bounded durable queue task / message. The finite budget BOUNDS
+        // re-firing — there is no firing loop or trigger cap in conditions.rs.
+        CoreSpawnerContract {
+            pattern: "iot-event-queue-task",
+            parent_entity_types: &["IotAlarm"],
+            child_entity_type: "QueueTask",
+            effect: CoreSpawnEffect::QueueExecution,
+            requires_budget: true,
+            max_budget: 64,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
+        CoreSpawnerContract {
+            pattern: "iot-event-message",
+            parent_entity_types: &["IotAlarm"],
+            child_entity_type: "Message",
+            effect: CoreSpawnEffect::ScheduleEmission,
+            requires_budget: true,
+            max_budget: 8,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: BLOCK_OR_CONSOLIDATE,
+        },
     ]
 }
 

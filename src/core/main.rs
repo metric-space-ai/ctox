@@ -13,6 +13,7 @@ mod doc_stack;
 mod execution;
 mod export;
 mod install;
+mod iot;
 mod knowledge;
 mod mission;
 mod paths;
@@ -592,6 +593,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("meeting") => {
             communication::meeting_native::handle_meeting_command(&root, &args[1..])
         }
+        Some("iot") => iot::commands::handle_iot_command(&root, &args[1..]),
         Some("plan") => plan::handle_plan_command(&root, &args[1..]),
         Some("queue") => queue::handle_queue_command(&root, &args[1..]),
         Some("report") => report::cli::handle_command(&root, &args[1..]),

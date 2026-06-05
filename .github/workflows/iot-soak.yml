@@ -1,0 +1,159 @@
+name: IoT Engine Soak
+
+# Phase 7 hardening soak for the native IoT engine. Drives the loopback MQTT
+# fixture + runtime supervisor through many telemetry cycles and a forced
+# reconnect, a business_commands round-trip, and a multi-realm projection
+# isolation pass — asserting bounded/coalesced projection AND that the
+# realm-scoped projection/sync surface never leaks another realm's rows into the
+# RxDB-visible business_records that WebRTC replicates. Secret invariants are
+# proven by the in-crate redaction tests run with the suite (no plaintext
+# credential reaches logs/status/errors). No external broker, no HTTP bridge,
+# single SQLite store — all native Rust (mirrors rxdb-soak.yml shape).
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/iot-soak.yml"
+      - "src/core/iot/**"
+      - "src/core/business_os/**"
+      - "src/apps/business-os/modules/iot/**"
+      - "src/apps/business-os/scripts/assert-rxdb-only.mjs"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/iot-soak.yml"
+      - "src/core/iot/**"
+      - "src/core/business_os/**"
+      - "src/apps/business-os/modules/iot/**"
+      - "src/apps/business-os/scripts/assert-rxdb-only.mjs"
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: "Number of soak cycles"
+        required: true
+        default: "3"
+      events_per_cycle:
+        description: "Telemetry events per cycle per asset"
+        required: true
+        default: "5"
+      assets:
+        description: "Number of linked assets in the inbound soak"
+        required: true
+        default: "5"
+      fail_on_retry:
+        description: "Fail the job when any soak test needed a retry"
+        required: true
+        default: "true"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target
+
+jobs:
+  iot-soak:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: iot-soak
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev
+
+      - name: Build CTOX binary
+        run: cargo build --bin ctox --locked
+
+      - name: Run IoT engine soak
+        env:
+          IOT_SOAK_CYCLES: ${{ github.event.inputs.cycles || '3' }}
+          IOT_SOAK_EVENTS_PER_CYCLE: ${{ github.event.inputs.events_per_cycle || '5' }}
+          IOT_SOAK_ASSETS: ${{ github.event.inputs.assets || '5' }}
+          IOT_SOAK_FAIL_ON_RETRY: ${{ github.event.inputs.fail_on_retry || 'true' }}
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox iot_ci_soak_ \
+            --no-fail-fast -- --test-threads=1 --nocapture | tee iot-soak.log
+
+      - name: Run IoT module + RxDB-only contract checks (no HTTP bridge)
+        run: |
+          set -o pipefail
+          node src/apps/business-os/modules/iot/iot.test.mjs | tee -a iot-soak.log
+          node --test src/apps/business-os/modules/app-store/app-store.test.mjs | tee -a iot-soak.log
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs | tee -a iot-soak.log
+
+      - name: Summarize soak evidence
+        if: always()
+        env:
+          IOT_SOAK_CYCLES: ${{ github.event.inputs.cycles || '3' }}
+          IOT_SOAK_EVENTS_PER_CYCLE: ${{ github.event.inputs.events_per_cycle || '5' }}
+          IOT_SOAK_ASSETS: ${{ github.event.inputs.assets || '5' }}
+          IOT_SOAK_FAIL_ON_RETRY: ${{ github.event.inputs.fail_on_retry || 'true' }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            const log = fs.existsSync("iot-soak.log") ? fs.readFileSync("iot-soak.log","utf8") : "";
+            const names = [
+              "iot_ci_soak_exit_multi_cycle_round_trip",
+              "iot_ci_soak_with_forced_disconnect_and_reconnect",
+              "iot_ci_soak_attribute_write_command_round_trip",
+              "iot_ci_soak_multi_realm_projection_isolation"
+            ];
+            const passed = names.filter(n => log.includes(`${n} ... ok`));
+            const failed = names.filter(n => log.includes(`${n} ... FAILED`));
+            const cycles = parseInt(process.env.IOT_SOAK_CYCLES || "3", 10);
+            const epc = parseInt(process.env.IOT_SOAK_EVENTS_PER_CYCLE || "5", 10);
+            const assets = parseInt(process.env.IOT_SOAK_ASSETS || "5", 10);
+            const flag = (process.env.IOT_SOAK_FAIL_ON_RETRY || "false").trim().toLowerCase();
+            const failOnRetry = flag === "1" || flag === "true" || flag === "yes" || flag === "on";
+            const retriesTolerated = log.match(/tolerated \d+ retr/g) || [];
+            const summary = {
+              passed,
+              failed,
+              fail_on_retry: failOnRetry,
+              retries_tolerated_notes: retriesTolerated,
+              cycles_completed: cycles,
+              events_per_cycle: epc,
+              assets,
+              total_inbound_events: cycles * epc * assets,
+              assertions: {
+                bounded_attribute_projection: "one coalesced iot_attributes row per asset",
+                append_only_datapoints: "one datapoint per applied reading (no fan-out)",
+                forced_reconnect_resubscribe: "agent reconnects + resubscribes under injected clock",
+                business_command_round_trip: "executor write reaches engine + projection",
+                multi_realm_projection_isolation: "realm-scoped projection never leaks another realm; operator (None) sees all",
+                fail_on_retry_gate: failOnRetry
+                  ? "ENFORCED: steady-state inbound/command soaks fail if any pump needed a retry"
+                  : "off: retries reported but tolerated",
+                no_http_bridge: "assert-rxdb-only passed"
+              }
+            };
+            fs.writeFileSync("iot-soak-summary.json", JSON.stringify(summary, null, 2));
+            console.log(JSON.stringify(summary, null, 2));
+            if (failed.length > 0) process.exit(1);
+          '
+
+      - name: Upload soak summary
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: iot-soak-summary
+          path: |
+            iot-soak-summary.json
+            iot-soak.log
+          if-no-files-found: ignore

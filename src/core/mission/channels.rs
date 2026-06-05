@@ -38,7 +38,7 @@ use crate::service::core_state_machine::{
 };
 use crate::service::core_transition_guard::{
     enforce_core_spawn, enforce_core_transition, ensure_core_transition_guard_schema,
-    CoreSpawnRequest,
+    evaluate_core_spawn, CoreSpawnProof, CoreSpawnRequest,
 };
 use crate::service::harness_flow::{
     record_harness_flow_event_lossy, RecordHarnessFlowEventRequest,
@@ -2871,6 +2871,150 @@ pub fn ingest_plan_message(
     refresh_thread(&mut conn, thread_key)?;
     ensure_routing_rows_for_inbound(&conn)?;
     Ok(message_key)
+}
+
+/// Outcome of an IoT-event durable-work emission: which durable message key was
+/// upserted (if any) and the spawn proof recorded in `ctox_core_spawn_edges`.
+#[derive(Debug)]
+pub struct IotEventEmitOutcome {
+    /// The durable `communication_messages` key, present only when the spawn was
+    /// accepted by the budget. Idempotent: the same `dedup_key` always maps to
+    /// the same message key, so repeated matches collapse to ONE durable task.
+    pub message_key: Option<String>,
+    /// The recorded spawn-edge proof (accepted or budget-exhausted/rejected).
+    pub spawn: CoreSpawnProof,
+}
+
+/// Emit ONE durable queue task for a matched IoT condition (§4A surface 3 /
+/// §2A.15). This is the IoT analogue of `ingest_cron_message` /
+/// `ingest_plan_message`: it is CTOX's mission brain doing the firing — there is
+/// NO second automation engine in `iot::conditions`.
+///
+/// Boundedness comes from TWO complementary CTOX-native mechanisms (the plan's
+/// "thin condition layer, not a second engine" decision):
+///   * the durable `message_key` is derived from `dedup_key` and is the
+///     `communication_messages` PRIMARY KEY, so re-firing the same condition
+///     UPSERTs the same row — EXACTLY ONE durable queue task per dedup key
+///     (§2A.15 re-trigger suppression, delegated to `queue.rs`/dedup), and
+///   * every emission is a budget-bounded spawn edge under `budget_key`
+///     (parent `IotAlarm` → child `QueueTask`, the registered
+///     `iot-event-queue-task` contract family), so the *number of re-fires* is
+///     provably bounded by the spawn budget recorded in `ctox_core_spawn_edges`
+///     (§2A.20), not by a ported 100-trigger cap.
+///
+/// When the spawn budget is exhausted the durable message is NOT (re)written and
+/// `message_key` is `None`; the caller treats that as suppressed re-firing.
+#[allow(clippy::too_many_arguments)]
+pub fn ingest_iot_event_message(
+    root: &Path,
+    alarm_id: &str,
+    ruleset_id: &str,
+    asset_id: &str,
+    dedup_key: &str,
+    budget_key: &str,
+    max_attempts: i64,
+    rule_name: &str,
+    body: &str,
+    skill: Option<&str>,
+    observed_at: &str,
+) -> Result<IotEventEmitOutcome> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    ensure_core_transition_guard_schema(&conn)?;
+    ensure_account(
+        &mut conn,
+        "iot:system",
+        "iot",
+        "ctox IoT engine",
+        "system",
+        json!({"source": "iot"}),
+    )?;
+
+    // The durable task key IS the dedup key: the same matched condition for the
+    // same asset/ruleset always resolves to the same `communication_messages`
+    // PRIMARY KEY, so repeated matches UPSERT one row (one durable queue task).
+    let message_key = format!("iot:system::{dedup_key}");
+    let thread_key = format!("iot:{ruleset_id}:{asset_id}");
+    let remote_id = format!("iot-{dedup_key}");
+
+    // Budget-bounded spawn edge (parent IotAlarm → child QueueTask). The child
+    // entity id is the per-fire alarm-scoped key so each accepted re-fire
+    // consumes one unit of the finite budget recorded in ctox_core_spawn_edges.
+    let child_id = format!("iot-qt:{alarm_id}");
+    let mut edge_metadata = BTreeMap::new();
+    edge_metadata.insert("iot_alarm_id".to_string(), alarm_id.to_string());
+    edge_metadata.insert("iot_ruleset_id".to_string(), ruleset_id.to_string());
+    edge_metadata.insert("iot_asset_id".to_string(), asset_id.to_string());
+    edge_metadata.insert("dedup_key".to_string(), dedup_key.to_string());
+    edge_metadata.insert("message_key".to_string(), message_key.clone());
+    let spawn = evaluate_core_spawn(
+        &conn,
+        &CoreSpawnRequest {
+            parent_entity_type: "IotAlarm".to_string(),
+            parent_entity_id: alarm_id.to_string(),
+            child_entity_type: "QueueTask".to_string(),
+            child_entity_id: child_id,
+            spawn_kind: "iot-event-queue-task".to_string(),
+            spawn_reason: "iot_condition_match".to_string(),
+            actor: "iot-conditions".to_string(),
+            checkpoint_key: Some(alarm_id.to_string()),
+            budget_key: Some(budget_key.to_string()),
+            max_attempts: Some(max_attempts),
+            metadata: edge_metadata,
+        },
+    )?;
+    if !spawn.accepted {
+        // Budget exhausted (or otherwise rejected): re-firing is bounded, so we
+        // do NOT (re)write the durable task. One brain, finite budget.
+        return Ok(IotEventEmitOutcome {
+            message_key: None,
+            spawn,
+        });
+    }
+
+    let metadata = json!({
+        "source": "ctox-iot",
+        "iot_alarm_id": alarm_id,
+        "iot_ruleset_id": ruleset_id,
+        "iot_asset_id": asset_id,
+        "dedup_key": dedup_key,
+        "skill": skill,
+    });
+    upsert_communication_message(
+        &mut conn,
+        UpsertMessage {
+            message_key: &message_key,
+            channel: "iot",
+            account_key: "iot:system",
+            thread_key: &thread_key,
+            remote_id: &remote_id,
+            direction: "inbound",
+            folder_hint: "iot",
+            sender_display: "CTOX IoT engine",
+            sender_address: "iot:system",
+            recipient_addresses_json: "[]",
+            cc_addresses_json: "[]",
+            bcc_addresses_json: "[]",
+            subject: rule_name,
+            preview: &preview_text(body, rule_name),
+            body_text: body,
+            body_html: "",
+            raw_payload_ref: "",
+            trust_level: "high",
+            status: "received",
+            seen: false,
+            has_attachments: false,
+            external_created_at: observed_at,
+            observed_at,
+            metadata_json: &serde_json::to_string(&metadata)?,
+        },
+    )?;
+    refresh_thread(&mut conn, &thread_key)?;
+    ensure_routing_rows_for_inbound(&conn)?;
+    Ok(IotEventEmitOutcome {
+        message_key: Some(message_key),
+        spawn,
+    })
 }
 
 #[derive(Debug, Serialize)]

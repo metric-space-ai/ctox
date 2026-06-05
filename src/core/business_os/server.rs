@@ -2894,9 +2894,12 @@ mod tests {
             reason: Some("invalid_or_missing_session".to_owned()),
         };
 
-        let html =
-            inject_launch_context("<html><head></head><body></body></html>".to_owned(), &session, None)
-                .expect("inject launch context");
+        let html = inject_launch_context(
+            "<html><head></head><body></body></html>".to_owned(),
+            &session,
+            None,
+        )
+        .expect("inject launch context");
 
         assert!(html.contains("window.CTOX_BUSINESS_OS_SESSION="));
         assert!(html.contains("window.CTOX_BUSINESS_OS_CONFIG=null"));
