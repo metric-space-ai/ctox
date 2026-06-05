@@ -206,7 +206,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     // RxDB/WebRTC-only data plane: Business OS HTTP data APIs stay hard-disabled
     // except for ChatGPT subscription auth, which cannot depend on a healthy
     // browser-to-native peer before the account is connected.
-    if path.starts_with("/api/business-os") && !is_subscription_auth_path(path) {
+    if path.starts_with("/api/business-os") && !is_business_os_http_exception_path(path) {
         respond_status(
             request,
             410,
@@ -502,6 +502,19 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/sync/config") => {
             respond_json(request, &store::sync_config(root)?)?;
         }
+        (Method::Post, "/api/business-os/commands") => {
+            let session = request_session(&request);
+            if !session.authenticated {
+                respond_status(request, 401, "login required")?;
+            } else {
+                let mut document = read_json(&mut request)?;
+                attach_http_command_session(&mut document, &session);
+                match store::accept_rxdb_business_command(root, document) {
+                    Ok(value) => respond_json_value(request, value)?,
+                    Err(error) => respond_status(request, 500, &error.to_string())?,
+                }
+            }
+        }
         (Method::Post, "/api/business-os/sync/native-peer/restart") => {
             if std::env::var_os("CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS").is_none() {
                 respond_status(request, 403, "native peer restart is not enabled")?;
@@ -670,12 +683,50 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     Ok(())
 }
 
-fn is_subscription_auth_path(path: &str) -> bool {
+fn is_business_os_http_exception_path(path: &str) -> bool {
     matches!(
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
+            | "/api/business-os/commands"
     )
+}
+
+fn attach_http_command_session(document: &mut Value, session: &store::BusinessOsSession) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    let context = object
+        .entry("client_context")
+        .or_insert_with(|| serde_json::json!({}));
+    if !context.is_object() {
+        *context = serde_json::json!({});
+    }
+    if let Some(context_object) = context.as_object_mut() {
+        context_object.insert(
+            "source".to_string(),
+            Value::String("business-os-http-command-fallback".to_string()),
+        );
+        context_object.insert(
+            "transport".to_string(),
+            Value::String("http-fallback".to_string()),
+        );
+        context_object.insert("http_fallback".to_string(), Value::Bool(true));
+        let actor = session
+            .user
+            .as_ref()
+            .map(|user| user.id.clone())
+            .unwrap_or_else(|| "authenticated-user".to_string());
+        context_object.insert("actor".to_string(), Value::String(actor.clone()));
+        context_object.insert(
+            "http_session".to_string(),
+            serde_json::json!({
+                "source": "business-os-http-command-fallback",
+                "actor": actor,
+                "user": session.user,
+            }),
+        );
+    }
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {

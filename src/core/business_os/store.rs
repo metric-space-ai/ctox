@@ -7,10 +7,10 @@ use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 use rusqlite::params;
 use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
-use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -5484,18 +5484,22 @@ fn upsert_rxdb_collection_record(
         SqlValue::Text(serde_json::to_string(&payload)?),
     ];
     let mut updates = vec!["data = excluded.data".to_string()];
-    if let Some(deleted_column) = ["deleted", "_deleted"]
-        .into_iter()
-        .find_map(|column| rxdb_table_has_column(&conn, &table, column).ok().filter(|exists| *exists).map(|_| column))
-    {
+    if let Some(deleted_column) = ["deleted", "_deleted"].into_iter().find_map(|column| {
+        rxdb_table_has_column(&conn, &table, column)
+            .ok()
+            .filter(|exists| *exists)
+            .map(|_| column)
+    }) {
         columns.push(deleted_column.to_string());
         values.push(SqlValue::Integer(0));
         updates.push(format!("{deleted_column} = 0"));
     }
-    if let Some(revision_column) = ["revision", "_rev"]
-        .into_iter()
-        .find_map(|column| rxdb_table_has_column(&conn, &table, column).ok().filter(|exists| *exists).map(|_| column))
-    {
+    if let Some(revision_column) = ["revision", "_rev"].into_iter().find_map(|column| {
+        rxdb_table_has_column(&conn, &table, column)
+            .ok()
+            .filter(|exists| *exists)
+            .map(|_| column)
+    }) {
         columns.push(revision_column.to_string());
         values.push(SqlValue::Text(rev));
         updates.push(format!("{revision_column} = excluded.{revision_column}"));

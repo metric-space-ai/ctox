@@ -1,4 +1,5 @@
-let commandSyncFlush = Promise.resolve();
+const COMMAND_SYNC_PUSH_TIMEOUT_MS = 8000;
+const COMMAND_SYNC_READY_TIMEOUT_MS = 5000;
 
 export function createCommandBus({ db, sync = null } = {}) {
   return {
@@ -42,18 +43,36 @@ async function recordRxdbCommand({ db, sync, command }) {
     updated_at_ms: now,
   };
   try {
-    const bridge = await prepareBusinessCommandsSync({ db, sync });
     await writeCommandDocument(db, command_id, doc);
     localWriteSucceeded = true;
-    const pushBridge = await restartBusinessCommandsSync({ sync, fallbackBridge: bridge });
-    await flushCommandSyncBridge(pushBridge, 60000);
+    const bridge = await withTimeout(
+      prepareBusinessCommandsSync({ db, sync }),
+      COMMAND_SYNC_READY_TIMEOUT_MS,
+      'Timed out waiting for business_commands sync bridge readiness',
+    );
+    const pushBridge = await withTimeout(
+      restartBusinessCommandsSync({ sync, fallbackBridge: bridge }),
+      COMMAND_SYNC_READY_TIMEOUT_MS,
+      'Timed out restarting business_commands sync bridge',
+    );
+    await flushCommandSyncBridge(pushBridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
   } catch (error) {
-    if (localWriteSucceeded) {
-      return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'pending_sync' }, command_id, 'rxdb-local');
+    try {
+      const fallback = await dispatchCommandViaHttp(doc);
+      const result = normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
+      if (localWriteSucceeded) {
+        await patchLocalCommandAccepted(db, command_id, doc, result, error).catch(() => {});
+      }
+      return result;
+    } catch (fallbackError) {
+      const failed = fallbackError || error;
+      failed.command_id = command_id;
+      failed.status = 'failed';
+      if (error && fallbackError && error !== fallbackError) {
+        failed.sync_error = error.message || String(error);
+      }
+      throw failed;
     }
-    error.command_id = command_id;
-    error.status = 'failed';
-    throw error;
   }
   return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'accepted' }, command_id, 'rxdb-webrtc');
 }
@@ -119,6 +138,46 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   }
 }
 
+async function patchLocalCommandAccepted(db, commandId, doc, result, syncError) {
+  const currentDb = await resolveCommandDb(db, 5000);
+  const collection = currentDb?.raw?.business_commands;
+  if (!collection) return;
+  const updated = {
+    ...doc,
+    status: result.status || 'accepted',
+    task_id: result.task_id || '',
+    task_status: result.task_status || result.status || 'accepted',
+    client_context: {
+      ...(doc.client_context || {}),
+      dispatch_transport: result.transport || 'http-fallback',
+      rxdb_sync_error: syncError?.message || String(syncError || ''),
+    },
+    updated_at_ms: Date.now(),
+  };
+  await insertOrPatchCommandDocument(collection, commandId, updated);
+}
+
+async function dispatchCommandViaHttp(doc) {
+  const response = await fetch('/api/business-os/commands', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(doc),
+  });
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {}
+  if (!response.ok || payload?.ok === false) {
+    const message = payload?.error || payload?.message || `HTTP ${response.status}`;
+    throw new Error(`Business command HTTP fallback failed: ${message}`);
+  }
+  return payload || {};
+}
+
 function normalizeAcceptedCommandResult(result, commandId, transport) {
   const taskId = String(result?.task_id || '').trim();
   const status = String(result?.status || (taskId ? 'accepted' : 'accepted')).trim() || 'accepted';
@@ -146,35 +205,21 @@ async function waitForSyncBridgeReady(bridge, timeoutMs = 15000) {
 async function flushCommandSyncBridge(bridge, timeoutMs = 60000) {
   const state = bridge?.state;
   if (!state) return;
-  commandSyncFlush = commandSyncFlush
-    .catch(() => {})
-    .then(async () => {
-      await withTimeout(Promise.resolve().then(() => state.awaitInitialReplication?.()), Math.min(15000, timeoutMs));
-      const deadline = Date.now() + timeoutMs;
-      let lastError = null;
-      for (let attempt = 0; attempt < 3 && Date.now() < deadline; attempt += 1) {
-        try {
-          if (typeof state.pushToRemotePeers === 'function') {
-            await withTimeout(state.pushToRemotePeers(), Math.max(5000, deadline - Date.now()));
-          } else if (typeof state.awaitInSync === 'function') {
-            await withTimeout(state.awaitInSync(), Math.max(5000, deadline - Date.now()));
-          }
-          return;
-        } catch (error) {
-          lastError = error;
-          await delay(300);
-        }
-      }
-      if (lastError) throw lastError;
-    });
-  return commandSyncFlush;
+  await withTimeout(Promise.resolve().then(() => state.awaitInitialReplication?.()), Math.min(3000, timeoutMs));
+  if (typeof state.pushToRemotePeers === 'function') {
+    await withTimeout(state.pushToRemotePeers(), timeoutMs);
+    return;
+  }
+  if (typeof state.awaitInSync === 'function') {
+    await withTimeout(state.awaitInSync(), timeoutMs);
+  }
 }
 
-async function withTimeout(promise, timeoutMs) {
-  await Promise.race([
+async function withTimeout(promise, timeoutMs, message = null) {
+  return Promise.race([
     Promise.resolve(promise),
     delay(timeoutMs).then(() => {
-      throw new Error(`Timed out waiting for business_commands sync push after ${timeoutMs}ms`);
+      throw new Error(message || `Timed out waiting for business_commands sync push after ${timeoutMs}ms`);
     }),
   ]);
 }
