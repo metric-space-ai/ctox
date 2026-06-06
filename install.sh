@@ -1034,6 +1034,8 @@ WorkingDirectory=$wrapper_root
 Environment=CTOX_ROOT=$wrapper_root
 Environment=CTOX_STATE_ROOT=$STATE_ROOT
 $install_root_line
+EnvironmentFile=-%h/.config/ctox/business-os.env
+EnvironmentFile=-%h/.config/ctox/business-bridge.env
 ExecStart=$BIN_DIR/ctox service --foreground
 Restart=always
 RestartSec=5
@@ -1167,6 +1169,12 @@ unset NO_COLOR
 if [[ "\${TERM:-}" == "dumb" || -z "\${TERM:-}" ]]; then
   export TERM=xterm-256color
 fi
+if [[ -f "\${HOME}/.config/ctox/business-os.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "\${HOME}/.config/ctox/business-os.env"
+  set +a
+fi
 if [[ -f "\${HOME}/.config/ctox/business-bridge.env" ]]; then
   set -a
   # shellcheck disable=SC1091
@@ -1198,6 +1206,12 @@ unset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH
 unset NO_COLOR
 if [[ "\${TERM:-}" == "dumb" || -z "\${TERM:-}" ]]; then
   export TERM=xterm-256color
+fi
+if [[ -f "\${HOME}/.config/ctox/business-os.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "\${HOME}/.config/ctox/business-os.env"
+  set +a
 fi
 if [[ -f "\${HOME}/.config/ctox/business-bridge.env" ]]; then
   set -a

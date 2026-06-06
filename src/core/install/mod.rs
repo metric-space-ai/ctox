@@ -2392,7 +2392,7 @@ fn write_launch_wrapper(
         ensure_dir(parent)?;
     }
     let script = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\nunset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH\nunset NO_COLOR\nif [[ \"${{TERM:-}}\" == \"dumb\" || -z \"${{TERM:-}}\" ]]; then\n  export TERM=xterm-256color\nfi\nif [[ -f \"${{HOME}}/.config/ctox/business-bridge.env\" ]]; then\n  set -a\n  # shellcheck disable=SC1091\n  source \"${{HOME}}/.config/ctox/business-bridge.env\"\n  set +a\nfi\nexport CTOX_ROOT=\"{}\"\nexport CTOX_STATE_ROOT=\"{}\"\nexport CTOX_INSTALL_ROOT=\"{}\"\nexec \"{}\" \"$@\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\nunset DYLD_LIBRARY_PATH DYLD_FALLBACK_LIBRARY_PATH DYLD_FRAMEWORK_PATH\nunset NO_COLOR\nif [[ \"${{TERM:-}}\" == \"dumb\" || -z \"${{TERM:-}}\" ]]; then\n  export TERM=xterm-256color\nfi\nif [[ -f \"${{HOME}}/.config/ctox/business-os.env\" ]]; then\n  set -a\n  # shellcheck disable=SC1091\n  source \"${{HOME}}/.config/ctox/business-os.env\"\n  set +a\nfi\nif [[ -f \"${{HOME}}/.config/ctox/business-bridge.env\" ]]; then\n  set -a\n  # shellcheck disable=SC1091\n  source \"${{HOME}}/.config/ctox/business-bridge.env\"\n  set +a\nfi\nexport CTOX_ROOT=\"{}\"\nexport CTOX_STATE_ROOT=\"{}\"\nexport CTOX_INSTALL_ROOT=\"{}\"\nexec \"{}\" \"$@\"\n",
         current_root.display(),
         state_root.display(),
         install_root.display(),
@@ -2481,7 +2481,7 @@ fn refresh_service_unit(
         .map(|entry| format!("Environment=CTOX_INSTALL_ROOT={}\n", entry.display()))
         .unwrap_or_default();
     let contents = format!(
-        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}ExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=CTOX Background Service\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=0\n\n[Service]\nType=simple\nWorkingDirectory={}\nEnvironment=CTOX_ROOT={}\nEnvironment=CTOX_STATE_ROOT={}\n{}EnvironmentFile=-%h/.config/ctox/business-os.env\nEnvironmentFile=-%h/.config/ctox/business-bridge.env\nExecStart={} service --foreground\nRestart=always\nRestartSec=5\nKillMode=control-group\nTimeoutStopSec=20\n\n[Install]\nWantedBy=default.target\n",
         current_root.display(),
         current_root.display(),
         state_root.display(),
