@@ -86,6 +86,7 @@ function contentForForbiddenHttpScan(file, content) {
 
   if (rel === 'src/apps/business-os/shared/react-settings.js') {
     allow(
+      /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
       /['"]\/api\/business-os\/ctox\/subscription-auth\/callback['"]/g,
     );
   }
