@@ -9,7 +9,7 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { createContextMenu } from '../../shared/context-menu.js';
 import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js';
 
-const BUILD = '20260606-iot-automation';
+const BUILD = '20260606b-iot-automation';
 const COLLECTIONS = [
   'iot_realms', 'iot_assets', 'iot_attributes', 'iot_datapoints', 'iot_alarms',
   'iot_dashboards', 'iot_widgets',
@@ -64,6 +64,10 @@ export async function mount(ctx) {
   root?.addEventListener('click', onClick);
   root?.addEventListener('contextmenu', onContextMenu);
   root?.addEventListener('submit', onSubmit);
+  root?.addEventListener('dragstart', onDragStart);
+  root?.addEventListener('dragover', onDragOver);
+  root?.addEventListener('drop', onDrop);
+  root?.addEventListener('dragend', () => { state.dragId = null; clearDragMarks(); });
 
   await reload();
   const subs = COLLECTIONS.map((n) => col(n)?.$?.subscribe?.(() => reload())).filter(Boolean);
@@ -296,7 +300,7 @@ function renderWidgetCard(w) {
   const a = attrOf(aid, attr);
   const last = a && typeof a.value === 'number' ? `${a.value}${unitOf(a)}` : (series.length ? `${series[series.length - 1].v}` : '—');
   return `
-    <div class="iot-widget" data-widget="${esc(w.id)}">
+    <div class="iot-widget" data-widget="${esc(w.id)}" draggable="true">
       <div class="iot-widget-head">
         <span class="iot-status-dot ${st.dot}" title="${esc(st.label)}"></span>
         <span class="iot-widget-title">${esc(signalLabel(w.signal_ref))}</span>
@@ -431,6 +435,55 @@ function onContextMenu(e) {
   if (sig) { e.preventDefault(); openSignalMenu(sig.dataset.asset, sig.dataset.attr, e); return; }
   const wid = e.target.closest('[data-widget]');
   if (wid) { e.preventDefault(); openWidgetMenu(wid.dataset.widget, e); return; }
+}
+
+/* ---------- drag-to-reorder the widget grid (persisted via sort_index) ---------- */
+function clearDragMarks() { state.ctx?.host?.querySelectorAll('.iot-widget.drag-over').forEach((el) => el.classList.remove('drag-over')); }
+function onDragStart(e) {
+  const card = e.target.closest('.iot-widget[data-widget]');
+  if (!card) return;
+  state.dragId = card.dataset.widget;
+  try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', state.dragId); } catch {}
+}
+function onDragOver(e) {
+  if (!state.dragId) return;
+  const card = e.target.closest('.iot-widget[data-widget]');
+  if (!card || card.dataset.widget === state.dragId) return;
+  e.preventDefault();                 // allow drop
+  try { e.dataTransfer.dropEffect = 'move'; } catch {}
+  clearDragMarks();
+  card.classList.add('drag-over');
+}
+function onDrop(e) {
+  const card = e.target.closest('.iot-widget[data-widget]');
+  clearDragMarks();
+  if (!state.dragId || !card) return;
+  e.preventDefault();
+  reorderWidget(state.dragId, card.dataset.widget);
+  state.dragId = null;
+}
+
+// Move the dragged widget before the target in the current dashboard and persist
+// the new order: reassign sort_index 0..n and upsert every widget whose index
+// changed (the desktop "drag → persist position" pattern, by sort order).
+function reorderWidget(draggedId, targetId) {
+  const ws = widgetsOf(state.dashboardId);
+  const from = ws.findIndex((w) => w.id === draggedId);
+  const to = ws.findIndex((w) => w.id === targetId);
+  if (from < 0 || to < 0 || from === to) return;
+  const [moved] = ws.splice(from, 1);
+  ws.splice(to, 0, moved);
+  ws.forEach((w, i) => {
+    if (Number(w.sort_index || 0) !== i) {
+      w.sort_index = i; // optimistic local update so re-render keeps the order
+      dispatch('ctox.iot.widget.upsert', {
+        id: w.id, dashboard_id: w.dashboard_id, realm: w.realm || currentRealm(), signal_ref: w.signal_ref,
+        cond_text: w.cond_text, action_prompt: w.action_prompt, trigger_code: w.trigger_code, render_code: w.render_code,
+        x: w.x, y: w.y, w: w.w, h: w.h, sort_index: i,
+      });
+    }
+  });
+  render();
 }
 
 function openSignalMenu(assetId, attr, event) {

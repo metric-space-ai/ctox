@@ -100,6 +100,9 @@
 /* ---- the automation widget = one standing order to CTOX ---- */
 .iot-widget { background: var(--surface); border: 1px solid var(--line); border-radius: var(--panel-radius);
   padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; position: relative; }
+.iot-widget[draggable="true"] { cursor: grab; }
+.iot-widget[draggable="true"]:active { cursor: grabbing; }
+.iot-widget.drag-over { outline: 2px dashed var(--accent); outline-offset: 3px; }
 .iot-widget-head { display: flex; align-items: center; gap: 8px; }
 .iot-widget-title { flex: 1; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iot-widget-more { opacity: 0; border: none; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; line-height: 1; padding: 0 4px; border-radius: 6px; flex: none; }
