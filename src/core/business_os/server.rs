@@ -688,6 +688,7 @@ fn is_business_os_http_exception_path(path: &str) -> bool {
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
+            | "/api/business-os/commands"
     )
 }
 
