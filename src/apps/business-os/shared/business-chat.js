@@ -2636,6 +2636,8 @@ function installChatStyles() {
     }
     .ctox-chat-message {
       max-width: 88%;
+      min-inline-size: 0;
+      max-inline-size: 88%;
       word-break: break-word;
       overflow-wrap: anywhere;
       min-width: 0;
@@ -2673,7 +2675,9 @@ function installChatStyles() {
     .ctox-chat-body {
       margin: 0;
       max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
       word-break: break-word;
       overflow-wrap: anywhere;
       white-space: normal;
@@ -2681,7 +2685,9 @@ function installChatStyles() {
     .ctox-chat-body .ctox-chat-text {
       display: block;
       max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
+      min-inline-size: 0;
       white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
@@ -2748,13 +2754,19 @@ function installChatStyles() {
       font-size: 11px;
       font-weight: 760;
       max-width: 100%;
+      max-inline-size: 100%;
       min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      display: inline-block;
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      white-space: normal;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       vertical-align: middle;
       box-sizing: border-box;
+      text-align: center;
+      line-height: 1.2;
     }
     .ctox-chat-form {
       display: flex;
