@@ -502,19 +502,6 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/sync/config") => {
             respond_json(request, &store::sync_config(root)?)?;
         }
-        (Method::Post, "/api/business-os/commands") => {
-            let session = request_command_session(&request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let mut document = read_json(&mut request)?;
-                attach_http_command_session(&mut document, &session);
-                match store::accept_rxdb_business_command(root, document) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 500, &error.to_string())?,
-                }
-            }
-        }
         (Method::Post, "/api/business-os/sync/native-peer/restart") => {
             if std::env::var_os("CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS").is_none() {
                 respond_status(request, 403, "native peer restart is not enabled")?;
@@ -688,87 +675,7 @@ fn is_business_os_http_exception_path(path: &str) -> bool {
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
-            | "/api/business-os/commands"
     )
-}
-
-fn attach_http_command_session(document: &mut Value, session: &store::BusinessOsSession) {
-    let Some(object) = document.as_object_mut() else {
-        return;
-    };
-    let context = object
-        .entry("client_context")
-        .or_insert_with(|| serde_json::json!({}));
-    if !context.is_object() {
-        *context = serde_json::json!({});
-    }
-    if let Some(context_object) = context.as_object_mut() {
-        context_object.insert(
-            "source".to_string(),
-            Value::String("business-os-http-command-fallback".to_string()),
-        );
-        context_object.insert(
-            "transport".to_string(),
-            Value::String("http-fallback".to_string()),
-        );
-        context_object.insert("http_fallback".to_string(), Value::Bool(true));
-        let actor = session
-            .user
-            .as_ref()
-            .map(|user| user.id.clone())
-            .unwrap_or_else(|| "authenticated-user".to_string());
-        context_object.insert("actor".to_string(), Value::String(actor.clone()));
-        context_object.insert(
-            "http_session".to_string(),
-            serde_json::json!({
-                "source": "business-os-http-command-fallback",
-                "actor": actor,
-                "user": session.user,
-            }),
-        );
-    }
-}
-
-fn request_command_session(request: &Request) -> store::BusinessOsSession {
-    let session = request_session(request);
-    if session.authenticated {
-        return session;
-    }
-    proxy_command_session(request).unwrap_or(session)
-}
-
-fn proxy_command_session(request: &Request) -> Option<store::BusinessOsSession> {
-    let source = header_value(request, "X-CTOX-Business-OS-Proxy")?;
-    if source.trim() != "ctox-dev-tenant-router" {
-        return None;
-    }
-    let actor = header_value(request, "X-CTOX-Business-OS-Proxy-Actor")?
-        .trim()
-        .to_string();
-    if actor.is_empty() {
-        return None;
-    }
-    let display_name = header_value(request, "X-CTOX-Business-OS-Proxy-Display-Name")
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| actor.clone());
-    let role = header_value(request, "X-CTOX-Business-OS-Proxy-Role")
-        .map(|value| value.trim().to_lowercase())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "admin".to_string());
-    Some(store::BusinessOsSession {
-        ok: true,
-        authenticated: true,
-        auth_required: false,
-        user: Some(store::BusinessOsSessionUser {
-            id: actor,
-            display_name,
-            role,
-            is_admin: true,
-        }),
-        login_url: None,
-        reason: None,
-    })
 }
 
 fn request_session(request: &Request) -> store::BusinessOsSession {

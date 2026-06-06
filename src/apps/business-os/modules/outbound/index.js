@@ -1,5 +1,6 @@
 import {
   decodeBase64Utf8,
+  extractCompanyRowsFromWorkbookFile,
   extractCompanyRowsFromText,
   normalizeCompanyRow,
   openUniversalImporter,
@@ -5452,7 +5453,7 @@ function validateOutboundImportPayload(payload) {
 async function importCompaniesFromPayload(campaign, payload) {
   const now = Date.now();
   const sourceId = `src_${crypto.randomUUID()}`;
-  const rows = extractRowsFromPayload(payload);
+  const rows = await extractRowsFromPayload(payload);
   const sourceStatus = rows.length ? 'imported' : 'queued_parser';
   await state.ctx.db.raw.outbound_sources.insert({
     id: sourceId,
@@ -5784,7 +5785,7 @@ async function queueOutboundImportCommand(campaign, payload, sourceId) {
   return state.ctx.commandBus.dispatch(command);
 }
 
-function extractRowsFromPayload(payload) {
+async function extractRowsFromPayload(payload) {
   if (payload.source_type === 'text') {
     return extractCompanyRowsFromText(payload.source?.text || '');
   }
@@ -5793,6 +5794,10 @@ function extractRowsFromPayload(payload) {
   }
   const rows = [];
   for (const file of payload.source?.files || []) {
+    if (/\.(xlsx)$/i.test(file.name || '')) {
+      rows.push(...await extractCompanyRowsFromWorkbookFile(file));
+      continue;
+    }
     const text = file.text || decodeBase64Utf8(file.base64 || '');
     if (!text || !/\.(csv|tsv|txt)$/i.test(file.name)) continue;
     rows.push(...parseDelimitedText(text).map((row, index) => normalizeCompanyRow(row, index)));
@@ -7355,5 +7360,6 @@ export const __outboundTestHooks = {
   dispatchOutboundPromptTask,
   campaignIdeaTemplates,
   campaignScopedRows,
+  extractRowsFromPayload,
   validateOutboundImportPayload,
 };

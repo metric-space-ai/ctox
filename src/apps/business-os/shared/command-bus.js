@@ -57,40 +57,26 @@ async function recordRxdbCommand({ db, sync, command }) {
     );
     await flushCommandSyncBridge(pushBridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
   } catch (error) {
-    try {
-      const fallback = await dispatchCommandViaHttp({
-        ...doc,
-        client_context: {
-          ...(doc.client_context || {}),
-          rxdb_sync_error: String(error?.message || error || ''),
-          rxdb_local_write_succeeded: localWriteSucceeded,
-        },
-      });
-      await patchLocalCommandDispatchResult(db, command_id, doc, fallback, 'http-fallback', error);
-      return normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
-    } catch (fallbackError) {
-      if (localWriteSucceeded) {
-        await patchLocalCommandDispatchResult(
-          db,
-          command_id,
-          doc,
-          { ok: true, command_id, status: 'pending_sync' },
-          'rxdb-local-pending',
-          fallbackError,
-        );
-        console.warn('[business-os] command HTTP fallback failed', fallbackError);
-        return normalizeAcceptedCommandResult(
-          { ok: true, command_id, status: 'pending_sync' },
-          command_id,
-          'rxdb-local-pending',
-        );
-      }
-      fallbackError.command_id = command_id;
-      fallbackError.status = 'failed';
-      fallbackError.cause = fallbackError.cause || error;
-      console.warn('[business-os] command HTTP fallback failed after local write timeout', fallbackError);
-      throw fallbackError;
+    if (localWriteSucceeded) {
+      await patchLocalCommandDispatchResult(
+        db,
+        command_id,
+        doc,
+        { ok: true, command_id, status: 'pending_sync' },
+        'rxdb-local-pending',
+        error,
+      );
+      console.warn('[business-os] command remains pending until RxDB sync recovers', error);
+      return normalizeAcceptedCommandResult(
+        { ok: true, command_id, status: 'pending_sync' },
+        command_id,
+        'rxdb-local-pending',
+      );
     }
+    error.command_id = command_id;
+    error.status = 'failed';
+    console.warn('[business-os] command RxDB dispatch failed before local write', error);
+    throw error;
   }
   return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'accepted' }, command_id, 'rxdb-webrtc');
 }
@@ -154,27 +140,6 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   } else {
     await collection.insert(doc);
   }
-}
-
-async function dispatchCommandViaHttp(doc) {
-  const response = await fetch('/api/business-os/commands', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(doc),
-  });
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = null;
-  }
-  if (!response.ok || payload?.ok === false) {
-    const detail = payload?.error || payload?.message || text || response.statusText || `HTTP ${response.status}`;
-    throw new Error(`Business command HTTP fallback failed: ${detail}`);
-  }
-  return payload || { ok: true, command_id: doc.command_id || doc.id, status: 'accepted' };
 }
 
 async function patchLocalCommandDispatchResult(db, commandId, doc, result, transport, error = null) {

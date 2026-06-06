@@ -1,9 +1,89 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
+import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
+
+if (typeof globalThis.DOMParser !== 'function') {
+  class TestXmlNode {
+    constructor(name = '', attrs = {}, parent = null) {
+      this.name = name;
+      this.attrs = attrs;
+      this.parent = parent;
+      this.children = [];
+      this.text = '';
+    }
+
+    get textContent() {
+      return `${this.text}${this.children.map((child) => child.textContent).join('')}`;
+    }
+
+    getAttribute(name) {
+      return this.attrs[name] || '';
+    }
+
+    getAttributeNS(_namespace, name) {
+      return this.getAttribute(name) || this.getAttribute(`r:${name}`);
+    }
+
+    querySelector(selector) {
+      return this.querySelectorAll(selector)[0] || null;
+    }
+
+    querySelectorAll(selector) {
+      const parts = String(selector || '').trim().split(/\s+/).filter(Boolean);
+      if (!parts.length) return [];
+      let scope = [this];
+      for (const part of parts) {
+        scope = scope.flatMap((node) => node.descendantsByName(part));
+      }
+      return scope;
+    }
+
+    descendantsByName(name) {
+      const result = [];
+      for (const child of this.children) {
+        if (child.name === name || child.name.endsWith(`:${name}`)) result.push(child);
+        result.push(...child.descendantsByName(name));
+      }
+      return result;
+    }
+  }
+
+  globalThis.DOMParser = class {
+    parseFromString(xml) {
+      const root = new TestXmlNode('#document');
+      const stack = [root];
+      const tokens = String(xml || '').match(/<!--[\s\S]*?-->|<[^>]+>|[^<]+/g) || [];
+      for (const token of tokens) {
+        if (token.startsWith('<!--') || token.startsWith('<?')) continue;
+        if (token.startsWith('</')) {
+          if (stack.length > 1) stack.pop();
+          continue;
+        }
+        if (token.startsWith('<')) {
+          const selfClosing = /\/>\s*$/.test(token);
+          const body = token.replace(/^</, '').replace(/\/?>$/, '').trim();
+          const [name = '', ...attrParts] = body.match(/[^\s=]+(?:=(?:"[^"]*"|'[^']*'))?/g) || [];
+          if (!name || name.startsWith('!')) continue;
+          const attrs = {};
+          attrParts.forEach((part) => {
+            const match = part.match(/^([^=]+)=["']([\s\S]*)["']$/);
+            if (match) attrs[match[1]] = match[2];
+          });
+          const node = new TestXmlNode(name, attrs, stack.at(-1));
+          stack.at(-1).children.push(node);
+          if (!selfClosing) stack.push(node);
+          continue;
+        }
+        stack.at(-1).text += token;
+      }
+      return root;
+    }
+  };
+}
 
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
@@ -58,6 +138,25 @@ test('outbound import validation requires source-specific input', () => {
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'url', source: { url: 'not-a-url' } }).valid, false);
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [] } }).valid, false);
   assert.equal(hooks.validateOutboundImportPayload({ title: 'Import', source_type: 'excel', source: { files: [{ name: 'companies.csv' }] } }).valid, true);
+});
+
+test('outbound import extracts company rows from uploaded Excel workbooks', async () => {
+  const workbookPath = '/Users/michaelwelsch/Downloads/Personalvermittler.xlsx';
+  const buffer = await fs.readFile(workbookPath);
+  const rows = await hooks.extractRowsFromPayload({
+    source_type: 'excel',
+    source: {
+      files: [
+        {
+          name: 'Personalvermittler.xlsx',
+          base64: buffer.toString('base64'),
+        },
+      ],
+    },
+  });
+
+  assert.ok(rows.length > 0, 'expected at least one company row from the uploaded workbook');
+  assert.ok(rows.every((row) => row.name), 'every extracted row needs a company name');
 });
 
 test('every campaign idea template is actionable and channel-explicit', () => {
