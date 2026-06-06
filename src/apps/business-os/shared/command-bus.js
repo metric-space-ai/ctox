@@ -57,12 +57,19 @@ async function recordRxdbCommand({ db, sync, command }) {
     );
     await flushCommandSyncBridge(pushBridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
   } catch (error) {
-    if (localWriteSucceeded) {
-      try {
-        const fallback = await dispatchCommandViaHttp(doc);
-        await patchLocalCommandDispatchResult(db, command_id, doc, fallback, 'http-fallback', error);
-        return normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
-      } catch (fallbackError) {
+    try {
+      const fallback = await dispatchCommandViaHttp({
+        ...doc,
+        client_context: {
+          ...(doc.client_context || {}),
+          rxdb_sync_error: String(error?.message || error || ''),
+          rxdb_local_write_succeeded: localWriteSucceeded,
+        },
+      });
+      await patchLocalCommandDispatchResult(db, command_id, doc, fallback, 'http-fallback', error);
+      return normalizeAcceptedCommandResult(fallback, command_id, 'http-fallback');
+    } catch (fallbackError) {
+      if (localWriteSucceeded) {
         await patchLocalCommandDispatchResult(
           db,
           command_id,
@@ -78,10 +85,12 @@ async function recordRxdbCommand({ db, sync, command }) {
           'rxdb-local-pending',
         );
       }
+      fallbackError.command_id = command_id;
+      fallbackError.status = 'failed';
+      fallbackError.cause = fallbackError.cause || error;
+      console.warn('[business-os] command HTTP fallback failed after local write timeout', fallbackError);
+      throw fallbackError;
     }
-    error.command_id = command_id;
-    error.status = 'failed';
-    throw error;
   }
   return normalizeAcceptedCommandResult({ ok: true, command_id, status: 'accepted' }, command_id, 'rxdb-webrtc');
 }
@@ -193,6 +202,8 @@ async function patchLocalCommandDispatchResult(db, commandId, doc, result, trans
   const existing = await collection.findOne(commandId).exec().catch(() => null);
   if (existing?.incrementalPatch) {
     await existing.incrementalPatch(patch).catch(() => {});
+  } else if (collection.insert) {
+    await collection.insert(patch).catch(() => {});
   }
 }
 

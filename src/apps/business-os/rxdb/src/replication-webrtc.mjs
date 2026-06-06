@@ -1100,6 +1100,19 @@ class CtoxWebRtcReplicationState {
     if (this.collection.name === 'desktop_file_chunks') {
       return method === 'masterChangesSince' ? 45000 : 30000;
     }
+    if (method === 'masterWrite') {
+      if ([
+        'business_commands',
+        'ctox_queue_tasks',
+        'business_chats',
+        'research_runs',
+        'research_notes',
+        'knowledge_items',
+      ].includes(this.collection.name)) {
+        return 60000;
+      }
+      return 45000;
+    }
     return 15000;
   }
 

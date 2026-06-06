@@ -2688,7 +2688,17 @@ function nextHighPriorityInlineSend(queue) {
   return queue.high.splice(index, 1)[0] || null;
 }
 function shouldRecycleConnectionAfterRequestTimeout(method = "") {
-  return ["ctoxProtocol", "token"].includes(String(method || ""));
+  return ["ctoxProtocol", "token", "masterWrite", "masterChangesSince", "rxdb.query.fetch"].includes(String(method || ""));
+}
+function isInteractiveMasterWriteCollection(collection = "") {
+  return [
+    "business_commands",
+    "ctox_queue_tasks",
+    "business_chats",
+    "research_runs",
+    "research_notes",
+    "knowledge_items"
+  ].includes(String(collection || ""));
 }
 function classifySendPriority(payload = {}, text = "") {
   if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
@@ -2705,6 +2715,7 @@ function classifySendPriority(payload = {}, text = "") {
     "rxdb.file.fetch",
     "rxdb.file.cancel"
   ].includes(method)) return "high";
+  if (method === "masterWrite" && isInteractiveMasterWriteCollection(payload?.collection)) return "high";
   if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return "low";
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, "result") || Object.prototype.hasOwnProperty.call(payload, "error"))) {
     return "high";
@@ -5161,6 +5172,19 @@ var CtoxWebRtcReplicationState = class {
   requestTimeoutMsFor(method) {
     if (this.collection.name === "desktop_file_chunks") {
       return method === "masterChangesSince" ? 45e3 : 3e4;
+    }
+    if (method === "masterWrite") {
+      if ([
+        "business_commands",
+        "ctox_queue_tasks",
+        "business_chats",
+        "research_runs",
+        "research_notes",
+        "knowledge_items"
+      ].includes(this.collection.name)) {
+        return 6e4;
+      }
+      return 45e3;
     }
     return 15e3;
   }

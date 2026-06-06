@@ -1917,6 +1917,17 @@ function nextQueuedSend(queue) {
   return null;
 }
 
+function isInteractiveMasterWriteCollection(collection = '') {
+  return [
+    'business_commands',
+    'ctox_queue_tasks',
+    'business_chats',
+    'research_runs',
+    'research_notes',
+    'knowledge_items',
+  ].includes(String(collection || ''));
+}
+
 function classifySendPriority(payload = {}, text = '') {
   if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
     return ['ack', 'resume', 'start'].includes(payload.kind) ? 'high' : 'normal';
@@ -1926,6 +1937,7 @@ function classifySendPriority(payload = {}, text = '') {
   // peer ahead of any bulk backlog so foreground prioritization takes effect
   // promptly. Treat it as a control frame (high).
   if (['ctoxProtocol', 'token', 'rxdb.activeCollections'].includes(method)) return 'high';
+  if (method === 'masterWrite' && isInteractiveMasterWriteCollection(payload?.collection)) return 'high';
   if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
   if (method === 'masterChangesSince') return 'normal';
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
