@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair8';
+const BUILD = '20260606-outbound-ux-repair9';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -5655,28 +5655,26 @@ function validateOutboundImportPayload(payload) {
 
 const OUTBOUND_IMPORT_SYNC_COLLECTIONS = ['outbound_campaigns', 'outbound_sources', 'outbound_companies'];
 
-async function prepareOutboundImportSync(timeoutMs = 20000) {
+async function prepareOutboundImportSync(timeoutMs = 8000) {
   const sync = state.ctx?.sync;
   if (!sync?.startCollection) {
     throw new Error('Outbound Import benötigt aktive RxDB/WebRTC-Synchronisation.');
   }
-  const bridges = [];
-  for (const collection of OUTBOUND_IMPORT_SYNC_COLLECTIONS) {
+  return Promise.all(OUTBOUND_IMPORT_SYNC_COLLECTIONS.map(async (collection) => {
     const bridge = await withTimeoutReject(
       sync.startCollection(collection),
       timeoutMs,
       `RxDB/WebRTC Sync für ${collection} wurde nicht rechtzeitig gestartet.`,
     );
-    await waitForOutboundSyncBridge(bridge, collection, Math.min(timeoutMs, 12000), { allowPush: false });
-    bridges.push({ collection, bridge });
-  }
-  return bridges;
+    await waitForOutboundSyncBridge(bridge, collection, timeoutMs, { allowPush: false });
+    return { collection, bridge };
+  }));
 }
 
-async function flushOutboundImportSync(bridges, timeoutMs = 30000) {
-  for (const { collection, bridge } of bridges || []) {
+async function flushOutboundImportSync(bridges, timeoutMs = 12000) {
+  await Promise.all((bridges || []).map(async ({ collection, bridge }) => {
     await waitForOutboundSyncBridge(bridge, collection, timeoutMs, { allowPush: true });
-  }
+  }));
 }
 
 async function waitForOutboundSyncBridge(bridge, collection, timeoutMs, options = {}) {
@@ -5688,7 +5686,7 @@ async function waitForOutboundSyncBridge(bridge, collection, timeoutMs, options 
       Promise.resolve(initial).catch((error) => {
         throw error;
       }),
-      Math.min(timeoutMs, 12000),
+      timeoutMs,
       `RxDB/WebRTC Initial-Sync für ${collection} wurde nicht rechtzeitig bestätigt.`,
     );
   }
