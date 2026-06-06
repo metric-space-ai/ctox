@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-web-pairing-cache2'
+const APP_BUILD = '20260606-outbound-ux-repair1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -5373,7 +5373,8 @@ function readInjectedDesktopSession() {
 }
 
 function isLocalBusinessOsSurface() {
-  return ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
+  return location.protocol === 'ctox-business-os:'
+    || ['127.0.0.1', 'localhost', '::1'].includes(location.hostname);
 }
 
 async function loadModules(options = {}) {

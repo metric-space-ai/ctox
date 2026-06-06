@@ -16,6 +16,14 @@ export async function openUniversalImporter(ctx, config = {}) {
   const close = () => drawer.remove();
   drawer.querySelector('[data-action="close-importer"]')?.addEventListener('click', close);
   drawer.querySelector('[data-import-source]')?.addEventListener('change', () => updateImporterFields(drawer));
+  drawer.querySelectorAll('[data-import-source-option]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const select = drawer.querySelector('[data-import-source]');
+      if (!select) return;
+      select.value = button.dataset.importSourceOption || 'text';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+  });
 
   // In-memory list of files currently selected (either locally or from Business OS)
   const stagedFiles = [];
@@ -727,11 +735,13 @@ async function buildImportPayload(drawer, config) {
 
 function importerTemplate(config) {
   const sources = config.sources || [
-    { id: 'text', label: 'Text' },
-    { id: 'document', label: 'Dokument' },
+    { id: 'text', label: 'Freitext' },
+    { id: 'document', label: 'PDF / Dokument' },
     { id: 'url', label: 'URL' },
     { id: 'excel', label: 'Excel' },
   ];
+  const defaultSource = config.defaultSource || sources[0]?.id || 'text';
+  const showFileExplorer = config.showFileExplorer !== false;
   return `
     <div class="universal-importer-panel">
       <header>
@@ -745,12 +755,21 @@ function importerTemplate(config) {
         <span>Titel</span>
         <input data-import-title value="${escapeHtml(config.defaultTitle || '')}" placeholder="${escapeHtml(config.titlePlaceholder || 'Importjob benennen')}" />
       </label>
-      <label>
+      <section class="universal-importer-source-choice" aria-label="Importtyp">
         <span>Importtyp</span>
-        <select data-import-source>
-          ${sources.map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.label)}</option>`).join('')}
+        <div>
+          ${sources.map((source) => `
+            <button
+              type="button"
+              data-import-source-option="${escapeHtml(source.id)}"
+              aria-pressed="${source.id === defaultSource ? 'true' : 'false'}"
+            >${escapeHtml(source.label)}</button>
+          `).join('')}
+        </div>
+        <select data-import-source hidden aria-hidden="true" tabindex="-1">
+          ${sources.map((source) => `<option value="${escapeHtml(source.id)}"${source.id === defaultSource ? ' selected' : ''}>${escapeHtml(source.label)}</option>`).join('')}
         </select>
-      </label>
+      </section>
       <div data-source-panel="text">
         <label>
           <span>Inhalt</span>
@@ -759,7 +778,7 @@ function importerTemplate(config) {
       </div>
       <div data-source-panel="excel document">
         <span class="importer-field-title" style="display: block; margin-bottom: 6px; color: var(--muted, oklch(0.48 0.015 235)); font-size: 12px; font-weight: 700; text-transform: uppercase;">Dateien auswählen</span>
-        <div class="importer-split-layout">
+        <div class="importer-split-layout${showFileExplorer ? '' : ' single'}">
           <!-- Left side: Drag & Drop upload -->
           <div class="importer-drag-drop-zone" data-drag-drop-zone>
             <input type="file" multiple class="importer-hidden-file-input" data-local-file-input accept=".csv,.tsv,.txt,.md,.json,.xlsx,.xls,.docx,.pdf" />
@@ -775,6 +794,7 @@ function importerTemplate(config) {
           </div>
 
           <!-- Right side: Business OS File Explorer Widget -->
+          ${showFileExplorer ? `
           <div class="importer-bos-explorer">
             <header class="explorer-widget-header">
               <button type="button" class="explorer-up-btn" data-explorer-up title="Eine Ebene höher">⌃</button>
@@ -786,6 +806,7 @@ function importerTemplate(config) {
               <div class="explorer-loading">Lade Business OS Dateien...</div>
             </div>
           </div>
+          ` : ''}
         </div>
 
         <!-- Staged files display -->
@@ -830,6 +851,11 @@ function importerTemplate(config) {
 
 function updateImporterFields(drawer) {
   const selected = drawer.querySelector('[data-import-source]')?.value || 'text';
+  drawer.querySelectorAll('[data-import-source-option]').forEach((button) => {
+    const active = button.dataset.importSourceOption === selected;
+    button.classList.toggle('is-active', active);
+    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+  });
   for (const panel of drawer.querySelectorAll('[data-source-panel]')) {
     const values = String(panel.dataset.sourcePanel || '').split(/\s+/);
     panel.hidden = !values.includes(selected);

@@ -8,7 +8,6 @@ import {
 } from '../../shared/universal-importer.js';
 import { showBusinessAlert, showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 import {
   configureActiveOutreach,
   loadActiveOutreachData,
@@ -18,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260605-campaign-templates-ready4';
+const BUILD = '20260606-outbound-ux-repair1';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -60,8 +59,9 @@ const DEFAULT_CAMPAIGN_NAME = 'Outbound Firmenqualifizierung';
 const OUTBOUND_CAMPAIGN_SETUP_SKILL = 'business-os-outbound-campaign-setup';
 const OUTBOUND_LAYOUT_KEY = 'ctox.businessOs.outbound.columnLayout';
 const OUTBOUND_CENTER_SPLIT_KEY = 'ctox.businessOs.outbound.centerSplit';
-const OUTBOUND_COL_MIN = Object.freeze({ left: 260, center: 420 });
-const OUTBOUND_COL_LEFT_MAX = 760;
+const OUTBOUND_WORKSPACE_MODE_KEY_PREFIX = 'ctox.businessOs.outbound.workspaceMode.';
+const OUTBOUND_COL_MIN = Object.freeze({ left: 280, center: 420 });
+const OUTBOUND_COL_LEFT_MAX = 520;
 const OUTBOUND_CENTER_MIN = Object.freeze({ left: 360, right: 360 });
 const OUTBOUND_EXPORT_NS = 'urn:schemas-microsoft-com:office:spreadsheet';
 const OUTBOUND_TABLE_RENDER_LIMIT = 250;
@@ -2547,25 +2547,53 @@ function renderCampaignItem(campaign) {
           <span>${escapeHtml(subtitle)}</span>
           ${scope ? `<em>${escapeHtml(scope)}</em>` : ''}
         </button>
-        <div class="outbound-shard-actions" aria-label="Campaign Aktionen">
-          <button type="button" data-icon="runbook" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}></button>
-          <button class="is-primary-action" type="button" data-icon="import" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"><b>Import</b></button>
-          <button type="button" data-icon="edit" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}"></button>
-          <button type="button" data-icon="delete" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}"></button>
-        </div>
       </div>
-      <div class="outbound-funnel" aria-label="Campaign Funnel">
-        ${renderInputFunnelStage(campaign, metrics)}
-        ${renderConversion(metrics.input, metrics.companyResearchDone, campaign, 'company_research')}
-        ${renderFunnelStage(campaign, 'research', 'Research', t('offen', 'offen'), `${metrics.companyResearchDone} / ${metrics.companyResearchTotal}`, metrics.companyResearchOpen)}
-        ${renderConversion(metrics.companyResearchDone, metrics.companyQualified, campaign, 'pipeline')}
-        ${renderFunnelStage(campaign, 'qualified', t('company', 'Firmen'), t('qualifiziert', 'qualifiziert'), `${metrics.companyQualified} / ${metrics.companyQualifiedTotal}`, metrics.pipelineOpen, 'good')}
-        ${renderConversion(metrics.companyQualified, metrics.contactQualified, campaign, 'contact_research')}
-        ${renderFunnelStage(campaign, 'contact_qualified', t('contact_people', 'Kontakte'), t('qualifiziert', 'qualifiziert'), `${metrics.contactQualified} / ${metrics.contactQualifiedTotal}`, metrics.contactOpen)}
-        ${renderConversion(metrics.contactQualified, metrics.leadQualified, campaign, 'lead_qualification')}
-        ${renderFunnelStage(campaign, 'lead_qualified', t('lead_status', 'Leads'), t('qualifiziert', 'qualifiziert'), `${metrics.leadQualified} / ${metrics.leadQualifiedTotal}`, metrics.leadOpen)}
+      <div class="outbound-campaign-metrics" aria-label="${escapeHtml(t('campaignStatus', 'Campaign Status'))}">
+        <span><b>${formatCount(metrics.input)}</b>${escapeHtml(t('inputCompanies', 'Input'))}</span>
+        <span><b>${formatCount(metrics.companyQualified)}</b>${escapeHtml(t('companyQualifiedShort', 'Qualifiziert'))}</span>
+        <span><b>${formatCount(metrics.contactQualified)}</b>${escapeHtml(t('contactsShort', 'Kontakte'))}</span>
+        <span><b>${formatCount(metrics.leadQualified)}</b>${escapeHtml(t('leadsShort', 'Leads'))}</span>
+      </div>
+      ${renderCampaignMiniFunnel(campaign, metrics)}
+      <div class="outbound-shard-actions" aria-label="Campaign Aktionen">
+        <button class="is-primary-action" type="button" data-icon="import" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"><b>${escapeHtml(t('import', 'Import'))}</b></button>
+        <button type="button" data-icon="runbook" data-action="open-campaign-runbook" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" aria-label="${escapeHtml(t('openRunbook', 'Campaign Runbook öffnen'))}" ${knowledge.runbookId ? '' : 'disabled'}></button>
+        <button type="button" data-icon="edit" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Campaign bearbeiten'))}"></button>
+        <button type="button" data-icon="delete" data-action="delete-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}" aria-label="${escapeHtml(t('deleteCampaign', 'Campaign löschen'))}"></button>
       </div>
     </article>
+  `;
+}
+
+function renderCampaignMiniFunnel(campaign, metrics) {
+  const stages = [
+    ['all', t('inputCompanies', 'Input'), metrics.input],
+    ['research', t('researchShort', 'Research'), metrics.companyResearchDone],
+    ['qualified', t('companyQualifiedShort', 'Qualifiziert'), metrics.companyQualified],
+    ['contact_qualified', t('contactsShort', 'Kontakte'), metrics.contactQualified],
+    ['lead_qualified', t('leadsShort', 'Leads'), metrics.leadQualified],
+  ];
+  const max = Math.max(1, ...stages.map(([, , value]) => Number(value || 0)));
+  return `
+    <div class="outbound-mini-funnel" aria-label="Campaign Funnel">
+      ${stages.map(([filter, label, value]) => {
+        const active = campaign.id === state.selectedCampaignId && state.filter === filter;
+        const width = Math.max(4, Math.round((Number(value || 0) / max) * 100));
+        return `
+          <button
+            type="button"
+            data-filter="${escapeHtml(filter)}"
+            data-campaign-id="${escapeHtml(campaign.id)}"
+            aria-pressed="${active}"
+            title="${escapeHtml(`${label}: ${formatCount(value)}`)}"
+          >
+            <span>${escapeHtml(label)}</span>
+            <b>${formatCount(value)}</b>
+            <i style="width:${width}%"></i>
+          </button>
+        `;
+      }).join('')}
+    </div>
   `;
 }
 
@@ -2846,7 +2874,7 @@ function renderCenter(force = false) {
 
     const newHtml = visibleRows.length
       ? visibleRows.map(row => renderCRMCompanyRows(row)).join('')
-      : `<tr><td colspan="${activeCols.length}" class="outbound-table-empty" style="text-align:center; padding: 40px; color: var(--outbound-muted);">${escapeHtml(emptyCompanyMessage)}</td></tr>`;
+      : renderTableEmptyRow(activeCols.length, emptyCompanyMessage);
 
     if (state.lastTbodyHtml !== newHtml) {
       state.lastTbodyHtml = newHtml;
@@ -2870,24 +2898,24 @@ function renderCenter(force = false) {
           ${renderActiveResearchSummary(campaign)}
         </div>
 
-        <label class="outbound-toggle-label" style="display: flex; align-items: center; gap: 6px; font-size: 11px; cursor: pointer; user-select: none; margin-right: 6px; color: var(--outbound-muted);">
-          <input type="checkbox" id="toggle-compact" ${state.viewMode === 'compact' ? 'checked' : ''} style="cursor: pointer; accent-color: var(--outbound-accent);" />
+        <label class="outbound-toggle-label">
+          <input type="checkbox" id="toggle-compact" ${state.viewMode === 'compact' ? 'checked' : ''} />
           <span>${escapeHtml(t('compactView', 'Kompakte Ansicht'))}</span>
         </label>
 
-        <select id="status-filter" style="background: var(--outbound-surface-2); border: 1px solid var(--outbound-line); border-radius: var(--outbound-radius); padding: 4px 8px; font-size: 11px; font-weight: 600; color: var(--outbound-text); cursor: pointer; max-width: 120px; outline: none; margin-right: 6px;">
+        <select id="status-filter" class="outbound-toolbar-select">
           <option value="">${escapeHtml(t('allStatus', 'Alle Status'))}</option>
           ${campaignStatuses.map(s => `<option value="${escapeHtml(s)}" ${state.statusFilter === s ? 'selected' : ''}>${escapeHtml(s)}</option>`).join('')}
         </select>
 
-        <select id="tag-filter" style="background: var(--outbound-surface-2); border: 1px solid var(--outbound-line); border-radius: var(--outbound-radius); padding: 4px 8px; font-size: 11px; font-weight: 600; color: var(--outbound-text); cursor: pointer; max-width: 120px; outline: none; margin-right: 6px;">
+        <select id="tag-filter" class="outbound-toolbar-select">
           <option value="">${escapeHtml(t('allTags', 'Alle Tags'))}</option>
           ${campaignTags.map(t => `<option value="${escapeHtml(t)}" ${state.tagFilter === t ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
         </select>
 
-        <button type="button" id="toggle-hidden-companies" class="outbound-button" data-action="toggle-hidden-companies" style="font-size: 11px; font-weight: 600; padding: 0 8px; min-height: 30px; display: inline-flex; align-items: center; gap: 6px; border-color: var(--outbound-line); color: var(--outbound-text); background: var(--outbound-surface-2); margin-right: 6px; cursor: pointer;">
+        <button type="button" id="toggle-hidden-companies" class="outbound-button outbound-hidden-toggle" data-action="toggle-hidden-companies">
           <span>${escapeHtml(t('hiddenCompanies', 'Versteckte Firmen'))}</span>
-          <span style="background: var(--outbound-accent); color: #000; font-size: 10px; font-weight: 800; padding: 1px 6px; border-radius: 999px;">${hiddenCount}</span>
+          <span>${hiddenCount}</span>
         </button>
 
         <button
@@ -2897,7 +2925,6 @@ function renderCenter(force = false) {
           data-action="export-table"
           title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
           aria-label="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
-          style="margin-right: 6px;"
         ></button>
         <button
           class="outbound-icon-button outbound-icon-mask"
@@ -2906,7 +2933,6 @@ function renderCenter(force = false) {
           data-action="open-research-settings"
           title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
           aria-label="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"
-          style="margin-right: 12px;"
         ></button>
         <div class="outbound-muted outbound-header-counts">${currentSources().length} ${t('importJobsCount', 'Importjobs')} · ${currentCompanies().length} ${t('companiesCount', 'Firmen')} · ${buildActiveTableColumns(settings, state.viewMode).length} ${t('columnsCount', 'Spalten')}</div>
       </div>
@@ -3431,9 +3457,7 @@ function renderQualificationSplit(campaign) {
 
   const rowsHtml = visibleRows.length
     ? `${visibleRows.map(row => renderCRMCompanyRows(row)).join('')}${renderTableLimitRow(rows.length, activeCols.length)}`
-    : `
-    <tr><td colspan="${activeCols.length}" class="outbound-table-empty" style="text-align:center; padding: 40px; color: var(--outbound-muted);">${escapeHtml(emptyCompanyMessage)}</td></tr>
-  `;
+    : renderTableEmptyRow(activeCols.length, emptyCompanyMessage);
   state.lastTbodyHtml = rowsHtml;
 
   const headersHtml = activeCols.map(col => {
@@ -3573,6 +3597,27 @@ function renderTableLimitRow(total, columnCount) {
     <tr>
       <td colspan="${columnCount}" class="outbound-table-empty">
         ${escapeHtml(t('rowsVisibleHint', '{0} von {1} Zeilen sichtbar. Suche oder Filter eingrenzen.', OUTBOUND_TABLE_RENDER_LIMIT, formatCount(total)))}
+      </td>
+    </tr>
+  `;
+}
+
+function renderTableEmptyRow(columnCount, message) {
+  const hasSources = currentSources().length > 0;
+  const title = hasSources
+    ? t('emptyAfterImportTitle', 'Keine Firmen sichtbar')
+    : t('emptyBeforeImportTitle', 'Noch keine Firmen importiert');
+  const detail = hasSources
+    ? message
+    : t('emptyBeforeImportDetail', 'Lege einen Import aus Excel, PDF, URL oder Freitext an. Danach erscheinen die Firmen hier als prüfbare Arbeitsliste.');
+  return `
+    <tr>
+      <td colspan="${columnCount}" class="outbound-table-empty">
+        <div class="outbound-empty-state">
+          <strong>${escapeHtml(title)}</strong>
+          <span>${escapeHtml(detail)}</span>
+          <button class="outbound-button primary" type="button" data-action="import-source">${escapeHtml(t('importJob', 'Importjob anlegen'))}</button>
+        </div>
       </td>
     </tr>
   `;
@@ -5349,12 +5394,14 @@ async function openCompanyImporter() {
   const campaign = selectedCampaign();
   if (!campaign) return;
   const drawer = await openUniversalImporter(state.ctx, {
-    side: 'left',
+    side: 'right',
     moduleId: 'outbound',
     entityType: 'company_source',
     commandType: 'outbound.source.import',
     title: t('importJob', 'Importjob anlegen'),
     kicker: 'Outbound Import',
+    defaultSource: 'excel',
+    showFileExplorer: false,
     defaultTitle: `${campaign.name} Import`,
     helperText: t('importerHelperText', 'URL, PDF, Text oder Excel liefern Unternehmen für den Input-Funnel. Der Importer extrahiert daraus Unternehmen; Personen werden erst später in der Pipeline recherchiert.'),
     filterPromptLabel: t('importFilter', 'Importfilter'),
@@ -5454,7 +5501,10 @@ async function importCompaniesFromPayload(campaign, payload) {
   const now = Date.now();
   const sourceId = `src_${crypto.randomUUID()}`;
   const rows = await extractRowsFromPayload(payload);
-  const sourceStatus = rows.length ? 'imported' : 'queued_parser';
+  const filteredRows = filterRowsForCampaignImport(campaign, payload, rows);
+  const sourceStatus = rows.length
+    ? filteredRows.length ? 'imported' : 'filtered_empty'
+    : 'queued_parser';
   await state.ctx.db.raw.outbound_sources.insert({
     id: sourceId,
     campaign_id: campaign.id,
@@ -5463,7 +5513,7 @@ async function importCompaniesFromPayload(campaign, payload) {
     status: sourceStatus,
     file_name: payload.source?.files?.[0]?.name || '',
     row_count: rows.length,
-    imported_count: rows.length,
+    imported_count: filteredRows.length,
     payload,
     created_at_ms: now,
     updated_at_ms: now,
@@ -5477,14 +5527,43 @@ async function importCompaniesFromPayload(campaign, payload) {
       dispatch: false,
     };
   }
+  if (!filteredRows.length) {
+    await updateCampaignCounts(campaign.id);
+    await loadAll({ skipImportRecovery: true });
+    render();
+    return {
+      status: sourceStatus,
+      message: t('companiesFilteredOut', '0 Firmen importiert. {0} Zeilen wurden durch den Importfilter ausgeschlossen.', rows.length),
+      detail: t('companiesFilteredOutDetail', 'Passe den Importfilter an, wenn diese Quelle trotzdem verarbeitet werden soll.'),
+      dispatch: false,
+    };
+  }
   const refs = await ensureCampaignKnowledge(campaign).catch((error) => {
     console.warn('[outbound] knowledge campaign setup failed', error);
     return campaignKnowledgeRefs(campaign);
   });
-  const filteredRows = filterRowsForCampaignImport(campaign, payload, rows);
-  for (const row of filteredRows) {
-    const companyId = companyIdFromImportRow(campaign, row);
-    const company = {
+  const companyDocs = buildCompanyDocsFromImportRows(campaign, sourceId, filteredRows, now);
+  for (const company of companyDocs) {
+    await upsertDoc(state.ctx.db.raw.outbound_companies, company.id, company);
+  }
+  await appendKnowledgeRows(campaign, refs.companiesKey, filteredRows.map((row) => companyKnowledgeRow(campaign, sourceId, row, now))).catch((error) => {
+    console.warn('[outbound] knowledge companies append failed', error);
+  });
+  await updateCampaignCounts(campaign.id);
+  await loadAll({ skipImportRecovery: true });
+  render();
+  return {
+    status: sourceStatus,
+    message: t('companiesImported', '{0} Firmen importiert.', companyDocs.length),
+    detail: '',
+    dispatch: false,
+  };
+}
+
+function buildCompanyDocsFromImportRows(campaign, sourceId, rows, now = Date.now()) {
+  return Array.from(new Map((rows || []).map((row) => {
+    const companyId = row.company_id || companyIdFromImportRow(campaign, row);
+    return [companyId, {
       id: companyId,
       campaign_id: campaign.id,
       source_id: sourceId,
@@ -5504,19 +5583,8 @@ async function importCompaniesFromPayload(campaign, payload) {
       payload: { imported_row: row.raw || row },
       created_at_ms: now,
       updated_at_ms: now,
-    };
-    await upsertDoc(state.ctx.db.raw.outbound_companies, company.id, company);
-  }
-  await appendKnowledgeRows(campaign, refs.companiesKey, filteredRows.map((row) => companyKnowledgeRow(campaign, sourceId, row, now))).catch((error) => {
-    console.warn('[outbound] knowledge companies append failed', error);
-  });
-  await updateCampaignCounts(campaign.id);
-  return {
-    status: sourceStatus,
-    message: t('companiesImported', '{0} Firmen importiert.', filteredRows.length),
-    detail: '',
-    dispatch: false,
-  };
+    }];
+  })).values());
 }
 
 function runOutboundImportInBackground(campaign, payload, sourceId) {
