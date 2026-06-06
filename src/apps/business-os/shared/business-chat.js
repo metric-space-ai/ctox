@@ -292,10 +292,11 @@ function alignChatWindows(root) {
   const stageInner = root.querySelector('.ctox-chat-stage-inner');
   if (!strip || !stage || !stageInner) return;
 
-  const windows = stageInner.querySelectorAll('.ctox-chat-window');
+  const windows = Array.from(stageInner.querySelectorAll('.ctox-chat-window'));
   const isNarrow = window.innerWidth <= 780;
 
   if (isNarrow) {
+    stageInner.classList.remove('is-side-by-side');
     windows.forEach((win) => {
       win.style.position = '';
       win.style.left = '';
@@ -303,25 +304,94 @@ function alignChatWindows(root) {
     return;
   }
 
-  const scrollLeft = strip.scrollLeft || 0;
+  const hasMaximized = windows.some((win) => win.classList.contains('is-maximized'));
+  stageInner.classList.toggle('has-maximized', hasMaximized);
+
   const rootRect = stageInner.getBoundingClientRect();
+  const gap = 12;
+  const positions = [];
 
   windows.forEach((win) => {
     const chatId = win.dataset.chatId;
     const chip = strip.querySelector(`[data-chat-focus="${chatId}"]`);
+    const winWidth = win.classList.contains('is-maximized') ? 440 : 320;
+    let preferredLeft = 8;
+
     if (chip) {
-      const winWidth = win.classList.contains('is-maximized') ? 440 : 320;
-      const chipCenter = chip.offsetLeft + chip.offsetWidth / 2;
-      let targetLeft = chipCenter - winWidth / 2 - scrollLeft;
-      
-      // Clamp targetLeft so the window stays strictly within stageInner column bounds with 8px safe margins
-      const minLeft = 8;
-      const maxLeft = Math.max(minLeft, rootRect.width - 8 - winWidth);
-      targetLeft = Math.max(minLeft, Math.min(maxLeft, targetLeft));
-      
-      win.style.position = 'absolute';
-      win.style.left = `${targetLeft}px`;
+      const chipRect = chip.getBoundingClientRect();
+      const chipCenter = chipRect.left + chipRect.width / 2;
+      preferredLeft = chipCenter - rootRect.left - winWidth / 2;
     }
+
+    preferredLeft = Math.max(8, Math.min(rootRect.width - 8 - winWidth, preferredLeft));
+    positions.push({
+      win,
+      width: winWidth,
+      left: preferredLeft,
+    });
+  });
+
+  const totalWidthNeeded = positions.reduce((sum, item) => sum + item.width, 0)
+    + Math.max(0, positions.length - 1) * gap;
+  const fitsSideBySide = totalWidthNeeded <= rootRect.width - 16;
+  stageInner.classList.toggle('is-side-by-side', fitsSideBySide);
+
+  if (fitsSideBySide && positions.length > 0) {
+    for (let iteration = 0; iteration < 10; iteration += 1) {
+      for (let index = 0; index < positions.length; index += 1) {
+        if (index === 0) {
+          positions[index].left = Math.max(8, positions[index].left);
+        } else {
+          const previous = positions[index - 1];
+          positions[index].left = Math.max(previous.left + previous.width + gap, positions[index].left);
+        }
+      }
+      for (let index = positions.length - 1; index >= 0; index -= 1) {
+        if (index === positions.length - 1) {
+          positions[index].left = Math.min(rootRect.width - 8 - positions[index].width, positions[index].left);
+        } else {
+          const next = positions[index + 1];
+          positions[index].left = Math.min(next.left - gap - positions[index].width, positions[index].left);
+        }
+      }
+    }
+  } else if (positions.length > 0) {
+    const widestWindow = positions.reduce((max, item) => Math.max(max, item.width), 0);
+    const availableSpan = Math.max(0, rootRect.width - 16 - widestWindow);
+    const naturalStep = positions.length > 1 ? availableSpan / (positions.length - 1) : 0;
+    const carouselStep = positions.length > 1
+      ? Math.max(56, Math.min(142, naturalStep))
+      : 0;
+    const activePositionIndex = positions.findIndex(({ win }) => win.classList.contains('is-active'));
+    const activeIndex = activePositionIndex >= 0
+      ? activePositionIndex
+      : Math.floor(positions.length / 2);
+    const active = positions[activeIndex];
+    const activeLeft = Math.max(
+      8,
+      Math.min(rootRect.width - 8 - active.width, (rootRect.width - active.width) / 2),
+    );
+
+    positions.forEach((item, index) => {
+      item.left = activeLeft + (index - activeIndex) * carouselStep;
+    });
+
+    const leftMost = Math.min(...positions.map((item) => item.left));
+    const rightMost = Math.max(...positions.map((item) => item.left + item.width));
+    if (rightMost - leftMost <= rootRect.width - 16) {
+      let shift = leftMost < 8 ? 8 - leftMost : 0;
+      if (rightMost + shift > rootRect.width - 8) {
+        shift -= rightMost + shift - (rootRect.width - 8);
+      }
+      positions.forEach((item) => {
+        item.left += shift;
+      });
+    }
+  }
+
+  positions.forEach(({ win, left }) => {
+    win.style.position = 'absolute';
+    win.style.left = `${left}px`;
   });
 
   const spacer = stageInner.querySelector('.ctox-chat-stage-spacer');
@@ -1886,14 +1956,12 @@ function installChatStyles() {
     .ctox-chat-dock {
       pointer-events: auto;
       grid-row: 2;
-      justify-self: start;
       display: grid;
-      grid-template-columns: 88px 115px 28px minmax(0, max-content) 28px 34px;
+      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
       align-items: center;
       gap: 8px;
       min-width: 0;
-      width: auto;
-      max-width: 100%;
+      width: 100%;
       padding: 6px;
       border: 1px solid color-mix(in srgb, var(--line) 35%, transparent);
       border-radius: 14px;
@@ -2304,6 +2372,14 @@ function installChatStyles() {
     .ctox-chat-stage-inner.has-maximized {
       height: min(480px, calc(100vh - 132px));
     }
+    .ctox-chat-stage-inner.is-side-by-side .ctox-chat-window {
+      transform: none !important;
+      opacity: 1 !important;
+      filter: none !important;
+    }
+    .ctox-chat-stage-inner.is-side-by-side .ctox-chat-window * {
+      pointer-events: auto !important;
+    }
     .ctox-chat-stage::-webkit-scrollbar {
       display: none;
     }
@@ -2333,7 +2409,7 @@ function installChatStyles() {
       font-family: var(--font-family, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
       font-size: 12px;
       line-height: 1.4;
-      animation: ctoxChatSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) both;
+      animation: ctoxChatSlideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
       flex-shrink: 0;
       transition: 
         left 0.28s var(--spring-ease),

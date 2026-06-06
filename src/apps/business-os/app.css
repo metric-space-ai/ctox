@@ -2257,11 +2257,14 @@ body[data-auth-state="locked"] .topbar {
   gap: 12px;
   height: 100%;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
   padding: 14px;
 }
 
 .settings-head {
   margin: 0;
+  min-width: 0;
 }
 
 .settings-head p {
@@ -2319,17 +2322,22 @@ body[data-auth-state="locked"] .topbar {
 .settings-tabs {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 4px;
+  min-width: 0;
 }
 
 .settings-tabs button {
+  min-width: 0;
   min-height: 30px;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--muted);
   font-weight: 760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-tabs button[aria-current="page"] {
@@ -2342,13 +2350,16 @@ body[data-auth-state="locked"] .topbar {
   align-content: start;
   gap: 10px;
   min-height: 0;
-  overflow: auto;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding-right: 2px;
 }
 
 .settings-section {
   display: grid;
   gap: 10px;
+  min-width: 0;
   padding: 11px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2365,23 +2376,34 @@ body[data-auth-state="locked"] .topbar {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .settings-section h3 {
+  flex: 0 0 auto;
   margin: 0;
   font-size: 13px;
 }
 
 .settings-section header span,
 .settings-note {
+  min-width: 0;
   color: var(--muted);
   font-size: 12px;
 }
 
+.settings-section header span {
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .settings-grid.is-one {
@@ -2401,6 +2423,7 @@ body[data-auth-state="locked"] .topbar {
 .settings-grid select,
 .settings-grid textarea {
   width: 100%;
+  min-width: 0;
   min-height: 32px;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -2455,6 +2478,7 @@ body[data-auth-state="locked"] .topbar {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  min-width: 0;
 }
 
 .runtime-pill {
@@ -2496,6 +2520,7 @@ body[data-auth-state="locked"] .topbar {
 .runtime-auth-status {
   display: grid;
   gap: 6px;
+  min-width: 0;
   padding: 9px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -2582,10 +2607,18 @@ body[data-auth-state="locked"] .topbar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 @media (max-width: 760px) {
+  .settings-grid,
   .runtime-status-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .settings-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -2746,6 +2779,8 @@ body[data-auth-state="locked"] .topbar {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  overflow: hidden;
   padding-top: 2px;
   border-top: 1px solid var(--line);
 }
