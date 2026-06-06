@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair7';
+const BUILD = '20260606-outbound-ux-repair8';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -5653,7 +5653,71 @@ function validateOutboundImportPayload(payload) {
   return { valid: true, message: '' };
 }
 
+const OUTBOUND_IMPORT_SYNC_COLLECTIONS = ['outbound_campaigns', 'outbound_sources', 'outbound_companies'];
+
+async function prepareOutboundImportSync(timeoutMs = 20000) {
+  const sync = state.ctx?.sync;
+  if (!sync?.startCollection) {
+    throw new Error('Outbound Import benötigt aktive RxDB/WebRTC-Synchronisation.');
+  }
+  const bridges = [];
+  for (const collection of OUTBOUND_IMPORT_SYNC_COLLECTIONS) {
+    const bridge = await withTimeoutReject(
+      sync.startCollection(collection),
+      timeoutMs,
+      `RxDB/WebRTC Sync für ${collection} wurde nicht rechtzeitig gestartet.`,
+    );
+    await waitForOutboundSyncBridge(bridge, collection, Math.min(timeoutMs, 12000), { allowPush: false });
+    bridges.push({ collection, bridge });
+  }
+  return bridges;
+}
+
+async function flushOutboundImportSync(bridges, timeoutMs = 30000) {
+  for (const { collection, bridge } of bridges || []) {
+    await waitForOutboundSyncBridge(bridge, collection, timeoutMs, { allowPush: true });
+  }
+}
+
+async function waitForOutboundSyncBridge(bridge, collection, timeoutMs, options = {}) {
+  const bridgeState = bridge?.state;
+  if (!bridgeState) return;
+  const initial = bridgeState.awaitInitialReplication?.() || bridgeState.awaitInSync?.();
+  if (initial) {
+    await withTimeoutReject(
+      Promise.resolve(initial).catch((error) => {
+        throw error;
+      }),
+      Math.min(timeoutMs, 12000),
+      `RxDB/WebRTC Initial-Sync für ${collection} wurde nicht rechtzeitig bestätigt.`,
+    );
+  }
+  if (options.allowPush && typeof bridgeState.pushToRemotePeers === 'function') {
+    await withTimeoutReject(
+      bridgeState.pushToRemotePeers(),
+      timeoutMs,
+      `RxDB/WebRTC Push für ${collection} wurde nicht rechtzeitig bestätigt.`,
+    );
+    return;
+  }
+  if (options.allowPush && typeof bridgeState.awaitInSync === 'function') {
+    await withTimeoutReject(
+      bridgeState.awaitInSync(),
+      timeoutMs,
+      `RxDB/WebRTC Sync für ${collection} wurde nicht rechtzeitig abgeschlossen.`,
+    );
+  }
+}
+
+function withTimeoutReject(promise, timeoutMs, message) {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => window.setTimeout(() => reject(new Error(message)), timeoutMs)),
+  ]);
+}
+
 async function importCompaniesFromPayload(campaign, payload) {
+  const syncBridges = await prepareOutboundImportSync();
   const now = Date.now();
   const sourceId = `src_${crypto.randomUUID()}`;
   const rows = await extractRowsFromPayload(payload);
@@ -5675,6 +5739,7 @@ async function importCompaniesFromPayload(campaign, payload) {
     updated_at_ms: now,
   });
   if (!rows.length) {
+    await flushOutboundImportSync(syncBridges);
     runOutboundImportInBackground(campaign, payload, sourceId);
     return {
       status: sourceStatus,
@@ -5685,6 +5750,7 @@ async function importCompaniesFromPayload(campaign, payload) {
   }
   if (!filteredRows.length) {
     await updateCampaignCounts(campaign.id);
+    await flushOutboundImportSync(syncBridges);
     await loadAll({ skipImportRecovery: true });
     render();
     return {
@@ -5707,6 +5773,7 @@ async function importCompaniesFromPayload(campaign, payload) {
     updated_at_ms: Date.now(),
   });
   await updateCampaignCounts(campaign.id);
+  await flushOutboundImportSync(syncBridges);
   await loadAll({ skipImportRecovery: true });
   render();
   ensureCampaignKnowledge(campaign)
