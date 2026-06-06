@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair4';
+const BUILD = '20260606-outbound-ux-repair5';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -675,6 +675,7 @@ const state = {
   knowledgeWatchTimer: null,
   centerRenderTimer: null,
   operationalRefreshPending: false,
+  importRecoveryPending: false,
   lastOperationalRefreshMs: 0,
   cleanup: [],
   centerResizeCleanup: null,
@@ -1244,8 +1245,67 @@ async function loadAll(options = {}) {
     state.selectedCampaignId = visible[0].id;
   }
   if (options.hydrateKnowledge === true) await hydrateSelectedCampaignFromKnowledge();
+  if (options.skipImportRecovery !== true) {
+    const repaired = await repairDanglingImportedSources();
+    if (repaired) {
+      await loadAll({ ...options, skipImportRecovery: true });
+      return;
+    }
+  }
   if (!state.selectedCompanyId && currentCompanies()[0]) state.selectedCompanyId = currentCompanies()[0].id;
   if (!state.selectedPipelineId && currentPipeline()[0]) state.selectedPipelineId = currentPipeline()[0].id;
+}
+
+async function repairDanglingImportedSources() {
+  if (state.importRecoveryPending) return false;
+  const raw = state.ctx?.db?.raw || {};
+  if (!raw.outbound_sources || !raw.outbound_companies) return false;
+  const companiesBySource = new Map();
+  for (const company of state.companies || []) {
+    if (!company.source_id) continue;
+    companiesBySource.set(company.source_id, (companiesBySource.get(company.source_id) || 0) + 1);
+  }
+  const candidates = (state.sources || []).filter((source) => (
+    ['imported', 'importing'].includes(source.status)
+    && Number(source.row_count || source.imported_count || 0) > 0
+    && !companiesBySource.get(source.id)
+    && source.payload
+  ));
+  if (!candidates.length) return false;
+  state.importRecoveryPending = true;
+  let repaired = false;
+  try {
+    for (const source of candidates) {
+      const campaign = state.campaigns.find((item) => item.id === source.campaign_id) || selectedCampaign();
+      if (!campaign) continue;
+      const rows = await extractRowsFromPayload(source.payload).catch((error) => {
+        console.warn('[outbound] imported source recovery parse failed', error);
+        return [];
+      });
+      const filteredRows = filterRowsForCampaignImport(campaign, source.payload, rows);
+      if (!filteredRows.length) continue;
+      const now = Date.now();
+      const companyDocs = buildCompanyDocsFromImportRows(campaign, source.id, filteredRows, now);
+      const persistedCount = await upsertCompanyDocs(raw.outbound_companies, companyDocs);
+      await patchDoc(raw.outbound_sources, source.id, {
+        status: persistedCount ? 'imported' : 'failed_parser',
+        row_count: rows.length,
+        imported_count: persistedCount,
+        payload: {
+          ...persistableImportPayload(source.payload, { keepFilesContent: false }),
+          recovered_at_ms: now,
+          parsed_row_count: rows.length,
+          persisted_company_count: persistedCount,
+        },
+        updated_at_ms: now,
+      });
+      await updateCampaignCounts(campaign.id);
+      repaired = repaired || persistedCount > 0;
+    }
+  } finally {
+    state.importRecoveryPending = false;
+  }
+  return repaired;
 }
 
 function refreshOperationalStateInBackground() {
