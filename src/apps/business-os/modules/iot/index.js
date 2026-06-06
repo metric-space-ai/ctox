@@ -30,10 +30,24 @@ const state = {
 
 function empty() { return Object.fromEntries(COLLECTIONS.map((c) => [c, []])); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+// i18n: German is the inline fallback (always works offline); en.json supplies
+// English; de.json may override German. `t(key, de, ...args)` substitutes {0},{1}…
+let MESSAGES = {};
+function t(key, de, ...args) {
+  let s = MESSAGES[key] ?? de ?? key;
+  args.forEach((a, i) => { s = s.replace(`{${i}}`, a); });
+  return s;
+}
 function col(name) { const db = state.ctx?.db; return db?.raw?.[name] || db?.collection?.(name) || null; }
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  // Cache-bust the shared i18n module like CSS/HTML below (?v=BUILD), then load
+  // this module's locale messages (German is the inline fallback in t()).
+  try {
+    const { loadModuleMessages } = await import(`../../shared/i18n.js?v=${BUILD}`);
+    MESSAGES = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
+  } catch { MESSAGES = {}; }
   ensureStyles();
   ctx.host.innerHTML = await loadMarkup();
   ctx.left?.replaceChildren?.();
@@ -132,14 +146,16 @@ function datapointSeries(assetId, attrName) {
 function unitOf(attr) { return attr?.unit || (attr?.attribute_name === 'temperature' || attr?.name === 'temperature' ? '°C' : (attr?.attribute_name === 'humidity' || attr?.name === 'humidity' ? '%' : '')); }
 function attrOf(assetId, name) { return attrsOf(assetId).find((x) => (x.attribute_name || x.name) === name) || null; }
 
-const STATUS = {
-  fired: { dot: 'fired', label: 'CTOX handelt' },
-  armed: { dot: 'armed', label: 'CTOX wacht' },
-  needs_attention: { dot: 'attention', label: 'braucht Aufmerksamkeit' },
-  paused: { dot: 'paused', label: 'pausiert' },
-  idle: { dot: 'idle', label: 'Wächter wird programmiert …' },
-};
-function statusOf(w) { return STATUS[w.trigger_status] || (w.trigger_code ? STATUS.armed : STATUS.idle); }
+function statusInfo(key) {
+  return ({
+    fired: { dot: 'fired', label: t('st.fired', 'CTOX handelt') },
+    armed: { dot: 'armed', label: t('st.armed', 'CTOX wacht') },
+    needs_attention: { dot: 'attention', label: t('st.attention', 'braucht Aufmerksamkeit') },
+    paused: { dot: 'paused', label: t('st.paused', 'pausiert') },
+    idle: { dot: 'idle', label: t('st.idle', 'Wächter wird programmiert …') },
+  })[key];
+}
+function statusOf(w) { return statusInfo(w.trigger_status) || (w.trigger_code ? statusInfo('armed') : statusInfo('idle')); }
 
 /* ---------- render ---------- */
 function render() {
@@ -151,7 +167,7 @@ function render() {
 
 function renderLeft() {
   const rs = realms();
-  const realmRows = [`<button class="iot-realm-row" data-act="realm" data-realm="all" aria-pressed="${state.realm === 'all'}"><span>Alle Bereiche</span><span class="iot-realm-count">${allAssets().length}</span></button>`]
+  const realmRows = [`<button class="iot-realm-row" data-act="realm" data-realm="all" aria-pressed="${state.realm === 'all'}"><span>${esc(t('realm.all', 'Alle Bereiche'))}</span><span class="iot-realm-count">${allAssets().length}</span></button>`]
     .concat(rs.map((r) => {
       const key = r.realm || r.id;
       const n = allAssets().filter((a) => a.realm === key).length;
@@ -159,7 +175,7 @@ function renderLeft() {
     }));
 
   const tree = childrenOf(null).map((a) => renderNode(a, 0)).join('') ||
-    `<div class="iot-empty">Noch keine Assets.<br>Lege oben links eins an.</div>`;
+    `<div class="iot-empty">${esc(t('tree.empty', 'Noch keine Assets. Lege oben links eins an.'))}</div>`;
 
   const createForm = state.creating ? renderCreateForm() : '';
 
@@ -168,18 +184,18 @@ function renderLeft() {
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">CTOX IoT</span>
-          <h2 class="ctox-pane-title">Assets & Signale</h2>
+          <h2 class="ctox-pane-title">${esc(t('left.title', 'Assets & Signale'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="iot-btn primary" data-act="new-asset" data-parent="">+ Asset</button>
+          <button class="iot-btn primary" data-act="new-asset" data-parent="">${esc(t('left.newAsset', '+ Asset'))}</button>
         </div>
       </div>
     </header>
     <div class="iot-scroll">
-      <div class="iot-section-label">Bereich</div>
+      <div class="iot-section-label">${esc(t('left.realmSection', 'Bereich'))}</div>
       ${realmRows.join('')}
       ${createForm && !state.creating.parentId ? createForm : ''}
-      <div class="iot-section-label">Struktur · Rechtsklick auf ein Signal = Auftrag</div>
+      <div class="iot-section-label">${esc(t('left.structSection', 'Struktur · Rechtsklick auf ein Signal = Auftrag'))}</div>
       <div class="iot-tree">${tree}</div>
     </div>`;
 }
@@ -196,7 +212,7 @@ function renderNode(asset, depth) {
   const signalRows = open ? signals.map((s) => {
     const name = s.attribute_name || s.name;
     const val = (typeof s.value === 'number') ? `${s.value}${unitOf(s)}` : '';
-    return `<div class="iot-signal" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" style="padding-left:${8 + (depth + 1) * 16}px" title="Rechtsklick: Auftrag von diesem Signal">
+    return `<div class="iot-signal" data-act="signal" data-asset="${esc(asset.id)}" data-attr="${esc(name)}" style="padding-left:${8 + (depth + 1) * 16}px" title="${esc(t('signal.hint', 'Rechtsklick: Auftrag von diesem Signal'))}">
       <span class="iot-signal-glyph">∿</span><span class="iot-signal-name">${esc(name)}</span><span class="iot-signal-val">${esc(val)}</span></div>`;
   }).join('') : '';
   return `
@@ -205,7 +221,7 @@ function renderNode(asset, depth) {
       <span class="iot-status-dot ${dot}"></span>
       <span class="iot-node-name">${esc(asset.name)}</span>
       <span class="iot-node-type">${esc(asset.asset_type)}</span>
-      <button class="iot-node-add" title="Untergeordnetes Asset" data-act="new-asset" data-parent="${esc(asset.id)}">+</button>
+      <button class="iot-node-add" title="${esc(t('node.addChild', 'Untergeordnetes Asset'))}" data-act="new-asset" data-parent="${esc(asset.id)}">+</button>
     </div>
     ${childForm}
     ${signalRows}
@@ -216,14 +232,14 @@ function renderCreateForm() {
   const parent = state.creating.parentId ? assetById(state.creating.parentId) : null;
   return `
     <form class="iot-form" data-form="create">
-      <h4>${parent ? `Asset unter „${esc(parent.name)}"` : 'Neues Asset'}</h4>
-      <div class="iot-field"><label>Name</label><input class="iot-input" name="name" placeholder="z.B. Serverraum" autofocus required></div>
-      <div class="iot-field"><label>Typ</label><select class="iot-select" name="type">
-        ${ASSET_TYPES.map((t) => `<option value="${t}">${t}</option>`).join('')}
+      <h4>${parent ? esc(t('asset.formUnder', 'Asset unter „{0}"', parent.name)) : esc(t('asset.formNew', 'Neues Asset'))}</h4>
+      <div class="iot-field"><label>${esc(t('field.name', 'Name'))}</label><input class="iot-input" name="name" placeholder="${esc(t('asset.namePlaceholder', 'z.B. Serverraum'))}" autofocus required></div>
+      <div class="iot-field"><label>${esc(t('field.type', 'Typ'))}</label><select class="iot-select" name="type">
+        ${ASSET_TYPES.map((ty) => `<option value="${ty}">${ty}</option>`).join('')}
       </select></div>
       <div class="iot-form-actions">
-        <button type="button" class="iot-btn ghost" data-act="cancel-create">Abbrechen</button>
-        <button type="submit" class="iot-btn primary">Anlegen</button>
+        <button type="button" class="iot-btn ghost" data-act="cancel-create">${esc(t('btn.cancel', 'Abbrechen'))}</button>
+        <button type="submit" class="iot-btn primary">${esc(t('btn.create', 'Anlegen'))}</button>
       </div>
     </form>`;
 }
@@ -234,13 +250,13 @@ function renderCenter() {
   const tabs = ds.map((d) => `<button class="iot-dash-tab ${d.id === state.dashboardId ? 'active' : ''}" data-act="select-dash" data-id="${esc(d.id)}">${esc(d.name)}</button>`).join('');
   const toolbar = `
     <div class="iot-dash-head">
-      <div class="iot-dash-tabs">${tabs || '<span class="iot-dash-sub">Noch kein Dashboard</span>'}
-        <button class="iot-dash-tab add" data-act="new-dash" title="Neues Dashboard">+</button>
+      <div class="iot-dash-tabs">${tabs || `<span class="iot-dash-sub">${esc(t('dash.none', 'Noch kein Dashboard'))}</span>`}
+        <button class="iot-dash-tab add" data-act="new-dash" title="${esc(t('dash.new', 'Neues Dashboard'))}">+</button>
       </div>
       <div class="iot-dash-tools">
         <div class="iot-segmented" role="tablist">
-          <button class="${state.viewMode === 'cards' ? 'active' : ''}" data-act="view" data-view="cards">Karten</button>
-          <button class="${state.viewMode === 'list' ? 'active' : ''}" data-act="view" data-view="list">Liste</button>
+          <button class="${state.viewMode === 'cards' ? 'active' : ''}" data-act="view" data-view="cards">${esc(t('view.cards', 'Karten'))}</button>
+          <button class="${state.viewMode === 'list' ? 'active' : ''}" data-act="view" data-view="list">${esc(t('view.list', 'Liste'))}</button>
         </div>
       </div>
     </div>`;
@@ -248,9 +264,9 @@ function renderCenter() {
   if (!ds.length) {
     return toolbar + `<div class="iot-center-empty">
       <div class="iot-center-empty-art">⌖</div>
-      <h3>Beauftrage CTOX, auf deine Signale aufzupassen</h3>
-      <p>Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.</p>
-      <button class="iot-btn primary" data-act="new-dash">+ Dashboard anlegen</button>
+      <h3>${esc(t('empty.title', 'Beauftrage CTOX, auf deine Signale aufzupassen'))}</h3>
+      <p>${t('empty.body', 'Ein Dashboard bündelt <b>Aufträge</b>: pro Auftrag schreibst du <b>Wenn</b> &amp; <b>Dann</b> — CTOX programmiert den Wächter und handelt.')}</p>
+      <button class="iot-btn primary" data-act="new-dash">${esc(t('empty.newDash', '+ Dashboard anlegen'))}</button>
     </div>`;
   }
 
@@ -262,14 +278,14 @@ function renderCenter() {
 function renderCards(widgets) {
   if (!widgets.length) {
     return `<div class="iot-dash-grid"><div class="iot-center-empty inline">
-      <h3>Noch keine Aufträge</h3>
-      <p>Rechtsklick auf ein Signal links → <b>„Auftrag von diesem Signal"</b>, oder:</p>
-      <button class="iot-btn primary" data-act="new-auftrag">+ Auftrag</button>
+      <h3>${esc(t('cards.emptyTitle', 'Noch keine Aufträge'))}</h3>
+      <p>${t('cards.emptyBody', 'Rechtsklick auf ein Signal links → <b>„Auftrag von diesem Signal"</b>, oder:')}</p>
+      <button class="iot-btn primary" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button>
     </div></div>`;
   }
   const cards = widgets.map(renderWidgetCard).join('');
   return `<div class="iot-dash-grid">${cards}
-    <button class="iot-widget iot-add-card" data-act="new-auftrag"><span class="iot-add-plus">+</span><span>Auftrag hinzufügen</span></button>
+    <button class="iot-widget iot-add-card" data-act="new-auftrag"><span class="iot-add-plus">+</span><span>${esc(t('cards.addAuftrag', 'Auftrag hinzufügen'))}</span></button>
   </div>`;
 }
 
@@ -284,19 +300,19 @@ function renderWidgetCard(w) {
       <div class="iot-widget-head">
         <span class="iot-status-dot ${st.dot}" title="${esc(st.label)}"></span>
         <span class="iot-widget-title">${esc(signalLabel(w.signal_ref))}</span>
-        <button class="iot-widget-more" data-act="widget-menu" data-id="${esc(w.id)}" title="Aktionen">⋯</button>
+        <button class="iot-widget-more" data-act="widget-menu" data-id="${esc(w.id)}" title="${esc(t('card.actions', 'Aktionen'))}">⋯</button>
       </div>
       <div class="iot-widget-viz">
-        <div class="iot-render-host" data-render-widget="${esc(w.id)}">${w.render_code ? '' : (series.length > 1 ? sparkSvg(series, 'iot-spark') : '<div class="iot-viz-empty">noch keine Messwerte</div>')}</div>
+        <div class="iot-render-host" data-render-widget="${esc(w.id)}">${w.render_code ? '' : (series.length > 1 ? sparkSvg(series, 'iot-spark') : `<div class="iot-viz-empty">${esc(t('card.noData', 'noch keine Messwerte'))}</div>`)}</div>
         <span class="iot-widget-last">${esc(last)}</span>
       </div>
-      <div class="iot-when"><span class="iot-tag">Wenn</span><span class="iot-when-text">${esc(w.cond_text || 'Bedingung wird mit CTOX festgelegt')}</span></div>
-      <div class="iot-then"><span class="iot-tag then">Dann</span><span class="iot-then-text">${esc(w.action_prompt || 'Aktion wird mit CTOX festgelegt')}</span></div>
+      <div class="iot-when"><span class="iot-tag">${esc(t('tag.when', 'Wenn'))}</span><span class="iot-when-text">${esc(w.cond_text || t('card.condPlaceholder', 'Bedingung wird mit CTOX festgelegt'))}</span></div>
+      <div class="iot-then"><span class="iot-tag then">${esc(t('tag.then', 'Dann'))}</span><span class="iot-then-text">${esc(w.action_prompt || t('card.actionPlaceholder', 'Aktion wird mit CTOX festgelegt'))}</span></div>
       <div class="iot-widget-foot">
         <span class="iot-widget-status ${st.dot}">${esc(st.label)}</span>
-        <button class="iot-foot-btn" data-act="open-editor" data-id="${esc(w.id)}" title="Von CTOX programmierter Code">&lt;/&gt; Code</button>
-        <button class="iot-foot-btn" data-act="edit-cond" data-id="${esc(w.id)}">Wenn ✎</button>
-        <button class="iot-foot-btn" data-act="edit-action" data-id="${esc(w.id)}">Dann ✎</button>
+        <button class="iot-foot-btn" data-act="open-editor" data-id="${esc(w.id)}" title="${esc(t('card.codeHint', 'Von CTOX programmierter Code'))}">&lt;/&gt; ${esc(t('card.code', 'Code'))}</button>
+        <button class="iot-foot-btn" data-act="edit-cond" data-id="${esc(w.id)}">${esc(t('tag.when', 'Wenn'))} ✎</button>
+        <button class="iot-foot-btn" data-act="edit-action" data-id="${esc(w.id)}">${esc(t('tag.then', 'Dann'))} ✎</button>
       </div>
     </div>`;
 }
@@ -314,9 +330,9 @@ function renderList(widgets) {
     </tr>`;
   }).join('');
   return `<div class="iot-dash-grid list"><table class="iot-table">
-    <thead><tr><th>Auftrag · Signal</th><th>Wenn</th><th>Dann</th><th>Status</th><th></th></tr></thead>
+    <thead><tr><th>${esc(t('list.colAuftrag', 'Auftrag · Signal'))}</th><th>${esc(t('tag.when', 'Wenn'))}</th><th>${esc(t('tag.then', 'Dann'))}</th><th>${esc(t('list.colStatus', 'Status'))}</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>
-    <div class="iot-list-foot"><button class="iot-btn" data-act="new-auftrag">+ Auftrag</button></div>
+    <div class="iot-list-foot"><button class="iot-btn" data-act="new-auftrag">${esc(t('cards.newAuftrag', '+ Auftrag'))}</button></div>
   </div>`;
 }
 
@@ -419,10 +435,10 @@ function onContextMenu(e) {
 
 function openSignalMenu(assetId, attr, event) {
   state.menu?.show(event, [
-    { label: 'Auftrag von diesem Signal', icon: '✦', action: () => newAuftrag(signalRef(assetId, attr)) },
-    { label: 'Verlauf öffnen', icon: '∿', action: () => { state.selectedAssetId = assetId; render(); } },
+    { label: t('menu.auftragFromSignal', 'Auftrag von diesem Signal'), icon: '✦', action: () => newAuftrag(signalRef(assetId, attr)) },
+    { label: t('menu.openHistory', 'Verlauf öffnen'), icon: '∿', action: () => { state.selectedAssetId = assetId; render(); } },
     { type: 'separator' },
-    { label: 'Als Webhook-Quelle einrichten', icon: '↘', action: () => registerWebhook(signalRef(assetId, attr)) },
+    { label: t('menu.asWebhook', 'Als Webhook-Quelle einrichten'), icon: '↘', action: () => registerWebhook(signalRef(assetId, attr)) },
   ]);
 }
 
@@ -433,24 +449,24 @@ async function registerWebhook(ref) {
   const path = res && (res.ingest_path || (res.id ? '/ctox/iot/webhook/' + res.id : ''));
   const token = res && res.token;
   const msg = (path || token)
-    ? `Webhook-Quelle für „${signalLabel(ref)}" ist eingerichtet.\n\nExterne Sensoren POSTen an:\n  ${path || '(siehe ctox iot webhook)'}\nmit Header:\n  X-Webhook-Token: ${token || '(im Secret-Store)'}\n\nDer Wert wird zum Signal-Datenpunkt — gebundene Wächter feuern automatisch.`
-    : `Webhook-Quelle für „${signalLabel(ref)}" wurde angelegt.`;
-  await showBusinessAlert(msg, { title: 'Webhook-Quelle', confirmLabel: 'OK' });
+    ? t('webhook.ready', 'Webhook-Quelle für „{0}" ist eingerichtet.\n\nExterne Sensoren POSTen an:\n  {1}\nmit Header:\n  X-Webhook-Token: {2}\n\nDer Wert wird zum Signal-Datenpunkt — gebundene Wächter feuern automatisch.', signalLabel(ref), path || '(siehe ctox iot webhook)', token || '(im Secret-Store)')
+    : t('webhook.created', 'Webhook-Quelle für „{0}" wurde angelegt.', signalLabel(ref));
+  await showBusinessAlert(msg, { title: t('webhook.title', 'Webhook-Quelle'), confirmLabel: t('btn.ok', 'OK') });
 }
 
 function openWidgetMenu(widgetId, event) {
   const w = (state.collections.iot_widgets || []).find((x) => x.id === widgetId); if (!w) return;
   state.menu?.show(event, [
-    { label: 'Editor öffnen (3 CTOX-Teile)', icon: '</>', action: () => openWidgetEditor(widgetId) },
-    { label: 'Bedingung bearbeiten (Wenn)', icon: '✎', action: () => editField(widgetId, 'cond') },
-    { label: 'Aktion bearbeiten (Dann)', icon: '✎', action: () => editField(widgetId, 'action') },
+    { label: t('menu.openEditor', 'Editor öffnen (3 CTOX-Teile)'), icon: '</>', action: () => openWidgetEditor(widgetId) },
+    { label: t('menu.editWhen', 'Bedingung bearbeiten (Wenn)'), icon: '✎', action: () => editField(widgetId, 'cond') },
+    { label: t('menu.editThen', 'Aktion bearbeiten (Dann)'), icon: '✎', action: () => editField(widgetId, 'action') },
     { type: 'separator' },
     {
-      label: w.trigger_status === 'paused' ? 'Fortsetzen' : 'Pausieren',
+      label: w.trigger_status === 'paused' ? t('menu.resume', 'Fortsetzen') : t('menu.pause', 'Pausieren'),
       icon: w.trigger_status === 'paused' ? '▶' : '⏸',
       action: () => dispatch('ctox.iot.widget.pause', { widget_id: widgetId, paused: w.trigger_status !== 'paused' }),
     },
-    { label: 'Auftrag löschen', icon: '🗑', action: () => deleteWidget(w) },
+    { label: t('menu.deleteAuftrag', 'Auftrag löschen'), icon: '🗑', action: () => deleteWidget(w) },
   ]);
 }
 
@@ -465,28 +481,28 @@ function openWidgetEditor(widgetId) {
   let tab = 'auftrag';
   const host = document.createElement('div');
   host.className = 'iot-modal-overlay';
-  const TABS = { auftrag: 'Auftrag', trigger: 'Trigger-Logik', widget: 'Widget-Code' };
+  const TABS = { auftrag: t('ed.tabAuftrag', 'Auftrag'), trigger: t('ed.tabTrigger', 'Trigger-Logik'), widget: t('ed.tabWidget', 'Widget-Code') };
 
   const tabBody = () => {
     if (tab === 'auftrag') return `
-      <label class="iot-ed-label">Wenn — die Bedingung (Freitext)</label>
-      <textarea class="iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="z.B. wenn es länger als 5 Min über 30°C ist">${esc(w.cond_text || '')}</textarea>
-      <label class="iot-ed-label">Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)</label>
-      <textarea class="iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft">${esc(w.action_prompt || '')}</textarea>
-      <div class="iot-ed-actions"><button class="iot-btn primary" data-ed="save-auftrag">Speichern → CTOX programmiert den Wächter neu</button></div>`;
+      <label class="iot-ed-label">${esc(t('ed.whenLabel', 'Wenn — die Bedingung (Freitext)'))}</label>
+      <textarea class="iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(w.cond_text || '')}</textarea>
+      <label class="iot-ed-label">${esc(t('ed.thenLabel', 'Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)'))}</label>
+      <textarea class="iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(w.action_prompt || '')}</textarea>
+      <div class="iot-ed-actions"><button class="iot-btn primary" data-ed="save-auftrag">${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
     if (tab === 'trigger') return `
-      <div class="iot-ed-note">Von CTOX generierte <b>Wächter-Logik</b> (Rhai, läuft im Backend pro Messwert). Status: <b>${esc(statusOf(w).label)}</b></div>
-      <textarea class="iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX">${esc(w.trigger_code || '')}</textarea>
+      <div class="iot-ed-note">${t('ed.triggerNote', 'Von CTOX generierte <b>Wächter-Logik</b> (Rhai, läuft im Backend pro Messwert). Status: <b>{0}</b>', esc(statusOf(w).label))}</div>
+      <textarea class="iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.trigger_code || '')}</textarea>
       <div class="iot-ed-actions">
-        <button class="iot-btn" data-ed="regen-trigger">↻ Neu generieren (CTOX)</button>
-        <button class="iot-btn primary" data-ed="save-trigger">Speichern</button>
+        <button class="iot-btn" data-ed="regen-trigger">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
+        <button class="iot-btn primary" data-ed="save-trigger">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
     return `
-      <div class="iot-ed-note">Von CTOX generierter <b>Widget-Code</b> — <code>render(host, api)</code>, gesandboxt. Die Visualisierung ist dem Auftrag untergeordnet.</div>
-      <textarea class="iot-ed-area code" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX">${esc(w.render_code || '')}</textarea>
+      <div class="iot-ed-note">${t('ed.renderNote', 'Von CTOX generierter <b>Widget-Code</b> — <code>render(host, api)</code>, gesandboxt. Die Visualisierung ist dem Auftrag untergeordnet.')}</div>
+      <textarea class="iot-ed-area code" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.render_code || '')}</textarea>
       <div class="iot-ed-actions">
-        <button class="iot-btn" data-ed="regen-render">↻ Neu generieren (CTOX)</button>
-        <button class="iot-btn primary" data-ed="save-render">Speichern</button>
+        <button class="iot-btn" data-ed="regen-render">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
+        <button class="iot-btn primary" data-ed="save-render">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
   };
   const draw = () => {
@@ -494,13 +510,13 @@ function openWidgetEditor(widgetId) {
       <div class="iot-modal" role="dialog" aria-label="Widget bearbeiten">
         <div class="iot-modal-head">
           <div>
-            <div class="iot-modal-kicker">CTOX-Auftrag · von CTOX programmiert</div>
+            <div class="iot-modal-kicker">${esc(t('ed.kicker', 'CTOX-Auftrag · von CTOX programmiert'))}</div>
             <div class="iot-modal-title">${esc(signalLabel(w.signal_ref))}</div>
           </div>
-          <button class="iot-foot-btn" data-ed="close" aria-label="Schließen">✕</button>
+          <button class="iot-foot-btn" data-ed="close" aria-label="${esc(t('btn.close', 'Schließen'))}">✕</button>
         </div>
         <div class="iot-ed-tabs">
-          ${Object.keys(TABS).map((t) => `<button class="iot-ed-tab ${tab === t ? 'active' : ''}" data-ed-tab="${t}">${TABS[t]}</button>`).join('')}
+          ${Object.keys(TABS).map((tk) => `<button class="iot-ed-tab ${tab === tk ? 'active' : ''}" data-ed-tab="${tk}">${esc(TABS[tk])}</button>`).join('')}
         </div>
         <div class="iot-ed-body">${tabBody()}</div>
       </div>`;
@@ -540,7 +556,7 @@ function openWidgetEditor(widgetId) {
 
 /* ---------- mutations (all real commands; CTOX programs the watcher) ---------- */
 async function newDashboard() {
-  const name = await showBusinessPrompt('Wie soll das Dashboard heißen?', { title: 'Neues Dashboard', confirmLabel: 'Anlegen', defaultValue: 'Mein Dashboard' });
+  const name = await showBusinessPrompt(t('dash.namePrompt', 'Wie soll das Dashboard heißen?'), { title: t('dash.new', 'Neues Dashboard'), confirmLabel: t('btn.create', 'Anlegen'), defaultValue: t('dash.defaultName', 'Mein Dashboard') });
   if (!name) return;
   await dispatch('ctox.iot.dashboard.upsert', { realm: currentRealm(), name: String(name).trim() });
 }
@@ -555,7 +571,7 @@ async function ensureDashboard() {
   const existing = dashboards()[0];
   if (existing) { state.dashboardId = existing.id; return existing.id; }
   const id = genId('dash');
-  await dispatch('ctox.iot.dashboard.upsert', { id, realm: currentRealm(), name: 'Mein Dashboard' });
+  await dispatch('ctox.iot.dashboard.upsert', { id, realm: currentRealm(), name: t('dash.defaultName', 'Mein Dashboard') });
   state.dashboardId = id;
   return id;
 }
@@ -567,16 +583,16 @@ async function newAuftrag(presetSignal) {
   let ref = presetSignal;
   if (!ref) {
     const opts = assetsInRealm().flatMap((a) => numericAttrs(a.id).map((s) => ({ ref: signalRef(a.id, s.attribute_name || s.name), label: `${a.name} · ${s.attribute_name || s.name}` })));
-    if (!opts.length) { await showBusinessPrompt('Lege zuerst ein Asset mit einem numerischen Signal an.', { title: 'Kein Signal', confirmLabel: 'OK' }); return; }
-    const picked = await showBusinessPrompt(`Welches Signal? Schreibe den Namen:\n${opts.map((o) => '• ' + o.label).join('\n')}`, { title: 'Signal wählen', confirmLabel: 'Weiter', defaultValue: opts[0].label });
+    if (!opts.length) { await showBusinessPrompt(t('auftrag.noSignal', 'Lege zuerst ein Asset mit einem numerischen Signal an.'), { title: t('auftrag.noSignalTitle', 'Kein Signal'), confirmLabel: t('btn.ok', 'OK') }); return; }
+    const picked = await showBusinessPrompt(t('auftrag.pickSignal', 'Welches Signal? Schreibe den Namen:') + '\n' + opts.map((o) => '• ' + o.label).join('\n'), { title: t('auftrag.pickTitle', 'Signal wählen'), confirmLabel: t('btn.next', 'Weiter'), defaultValue: opts[0].label });
     if (!picked) return;
     const hit = opts.find((o) => o.label.toLowerCase() === String(picked).trim().toLowerCase()) || opts.find((o) => o.label.toLowerCase().includes(String(picked).trim().toLowerCase()));
-    if (!hit) { await showBusinessPrompt('Signal nicht erkannt — Auftrag abgebrochen.', { title: 'Abgebrochen', confirmLabel: 'OK' }); return; }
+    if (!hit) { await showBusinessPrompt(t('auftrag.signalUnknown', 'Signal nicht erkannt — Auftrag abgebrochen.'), { title: t('auftrag.cancelled', 'Abgebrochen'), confirmLabel: t('btn.ok', 'OK') }); return; }
     ref = hit.ref;
   }
-  const cond = await showBusinessPrompt('Wann soll CTOX handeln? (frei formuliert)', { title: 'Wenn …', message: signalLabel(ref), confirmLabel: 'Weiter', defaultValue: '' });
+  const cond = await showBusinessPrompt(t('auftrag.whenPrompt', 'Wann soll CTOX handeln? (frei formuliert)'), { title: t('dlg.when', 'Wenn …'), message: signalLabel(ref), confirmLabel: t('btn.next', 'Weiter'), defaultValue: '' });
   if (cond === null) return;
-  const action = await showBusinessPrompt('Was soll CTOX dann tun?', { title: 'Dann …', confirmLabel: 'Auftrag anlegen', defaultValue: '' });
+  const action = await showBusinessPrompt(t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), { title: t('dlg.then', 'Dann …'), confirmLabel: t('auftrag.create', 'Auftrag anlegen'), defaultValue: '' });
   if (action === null) return;
 
   const dashId = await ensureDashboard();
@@ -591,8 +607,8 @@ async function newAuftrag(presetSignal) {
 async function editField(widgetId, which) {
   const w = (state.collections.iot_widgets || []).find((x) => x.id === widgetId); if (!w) return;
   const isCond = which === 'cond';
-  const val = await showBusinessPrompt(isCond ? 'Wann soll CTOX handeln?' : 'Was soll CTOX dann tun?', {
-    title: isCond ? 'Wenn …' : 'Dann …', confirmLabel: 'Übernehmen', defaultValue: isCond ? (w.cond_text || '') : (w.action_prompt || ''),
+  const val = await showBusinessPrompt(isCond ? t('auftrag.whenPromptShort', 'Wann soll CTOX handeln?') : t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), {
+    title: isCond ? t('dlg.when', 'Wenn …') : t('dlg.then', 'Dann …'), confirmLabel: t('btn.apply', 'Übernehmen'), defaultValue: isCond ? (w.cond_text || '') : (w.action_prompt || ''),
   });
   if (val === null) return;
   const patch = { id: w.id, dashboard_id: w.dashboard_id, realm: w.realm || currentRealm(), signal_ref: w.signal_ref };
@@ -603,7 +619,7 @@ async function editField(widgetId, which) {
 }
 
 async function deleteWidget(w) {
-  const ok = await showBusinessConfirm(`Auftrag „${signalLabel(w.signal_ref)}" löschen?`, { title: 'Auftrag löschen', confirmLabel: 'Löschen', kind: 'danger' });
+  const ok = await showBusinessConfirm(t('del.confirm', 'Auftrag „{0}" löschen?', signalLabel(w.signal_ref)), { title: t('del.title', 'Auftrag löschen'), confirmLabel: t('btn.delete', 'Löschen'), kind: 'danger' });
   if (!ok) return;
   await dispatch('ctox.iot.widget.delete', { widget_id: w.id });
 }
