@@ -8,6 +8,7 @@ const {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  replicationScanLimit,
   selectBestIndex,
 } = ctoxIndexedDbStorageTestInternals;
 const { normalizeDoc } = ctoxRxdbTestInternals;
@@ -60,6 +61,8 @@ assert(
   !locallyEditedDoc._meta?.ctoxReplicationOrigin,
   'local writes must clear replication origin so browser edits remain pushable',
 );
+assert(replicationScanLimit(10) === 500, 'replication scan limit must cover command batches without unbounded cursor scans');
+assert(replicationScanLimit(200) === 5000, 'replication scan limit must cap large batches');
 
 console.log('ctox-rxdb-js storage index smoke OK');
 

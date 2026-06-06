@@ -4,6 +4,9 @@ import { sha256Hex } from './schema.mjs';
 const DB_VERSION = 1;
 const DOCUMENT_STORE = 'documents';
 const OPEN_DATABASE_TIMEOUT_MS = 4000;
+const REPLICATION_SCAN_MULTIPLIER = 50;
+const REPLICATION_MIN_SCAN_LIMIT = 500;
+const REPLICATION_MAX_SCAN_LIMIT = 5000;
 
 export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_os_js_v1' } = {}) {
   if (!globalThis.indexedDB) {
@@ -188,16 +191,19 @@ export class CtoxIndexedDbCollection {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || '');
     const excludedOriginRole = String(options?.excludeReplicationOriginRole || '').trim();
+    const scanLimit = replicationScanLimit(limit);
     const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
     const index = tx.objectStore(DOCUMENT_STORE).index('collectionLwtId');
     const range = IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, '\uffff'], true, false);
     const documents = [];
     let nextCheckpoint = checkpoint || null;
+    let scanned = 0;
 
     await iterateCursor(index.openCursor(range), (cursor) => {
-      if (!cursor || documents.length >= limit) {
+      if (!cursor || documents.length >= limit || scanned >= scanLimit) {
         return false;
       }
+      scanned += 1;
       const record = cursor.value;
       nextCheckpoint = { lwt: record.lwt, id: record.id };
       if (!documentMatchesReplicationOrigin(record.doc, excludedOriginRole)) {
@@ -326,6 +332,14 @@ function documentMatchesReplicationOrigin(doc, excludedOriginRole) {
   return origin?.role === excludedOriginRole;
 }
 
+function replicationScanLimit(limit) {
+  const batchLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
+  return Math.max(
+    REPLICATION_MIN_SCAN_LIMIT,
+    Math.min(REPLICATION_MAX_SCAN_LIMIT, Math.ceil(batchLimit * REPLICATION_SCAN_MULTIPLIER)),
+  );
+}
+
 function normalizeSchemaIndexes(schema = {}) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
   return indexes.map((index, position) => {
@@ -450,5 +464,6 @@ export const ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  replicationScanLimit,
   selectBestIndex,
 };

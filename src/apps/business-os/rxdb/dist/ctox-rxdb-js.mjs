@@ -439,6 +439,9 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
 var DB_VERSION = 1;
 var DOCUMENT_STORE = "documents";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
+var REPLICATION_SCAN_MULTIPLIER = 50;
+var REPLICATION_MIN_SCAN_LIMIT = 500;
+var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -610,15 +613,18 @@ var CtoxIndexedDbCollection = class {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || "");
     const excludedOriginRole = String(options?.excludeReplicationOriginRole || "").trim();
+    const scanLimit = replicationScanLimit(limit);
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false);
     const documents = [];
     let nextCheckpoint = checkpoint || null;
+    let scanned = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
-      if (!cursor || documents.length >= limit) {
+      if (!cursor || documents.length >= limit || scanned >= scanLimit) {
         return false;
       }
+      scanned += 1;
       const record = cursor.value;
       nextCheckpoint = { lwt: record.lwt, id: record.id };
       if (!documentMatchesReplicationOrigin(record.doc, excludedOriginRole)) {
@@ -748,6 +754,13 @@ function documentMatchesReplicationOrigin(doc, excludedOriginRole) {
   const origin = doc?._meta?.ctoxReplicationOrigin;
   return origin?.role === excludedOriginRole;
 }
+function replicationScanLimit(limit) {
+  const batchLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
+  return Math.max(
+    REPLICATION_MIN_SCAN_LIMIT,
+    Math.min(REPLICATION_MAX_SCAN_LIMIT, Math.ceil(batchLimit * REPLICATION_SCAN_MULTIPLIER))
+  );
+}
 function normalizeSchemaIndexes(schema = {}) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
   return indexes.map((index, position) => {
@@ -855,6 +868,7 @@ var ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  replicationScanLimit,
   selectBestIndex,
   shouldAcceptDocumentWrite
 };
