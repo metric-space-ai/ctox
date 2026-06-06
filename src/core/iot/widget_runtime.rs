@@ -576,7 +576,11 @@ mod tests {
             if !out.fired.is_empty() {
                 fires += 1;
             }
-            assert!(out.error.is_none(), "soak tick {i} errored: {:?}", out.error);
+            assert!(
+                out.error.is_none(),
+                "soak tick {i} errored: {:?}",
+                out.error
+            );
         }
         assert!(fires > 0, "the watcher should have fired during the soak");
 

@@ -5529,7 +5529,20 @@ pub fn repair_queue_projections(
                                 }
                             }
                         }
-                        upsert_business_record(&conn, "ctox_queue_tasks", &task_id, now, payload)?;
+                        upsert_business_record(
+                            &conn,
+                            "ctox_queue_tasks",
+                            &task_id,
+                            now,
+                            payload.clone(),
+                        )?;
+                        upsert_rxdb_collection_record(
+                            root,
+                            "ctox_queue_tasks",
+                            &task_id,
+                            now,
+                            payload,
+                        )?;
                     }
                 }
 
@@ -5539,6 +5552,7 @@ pub fn repair_queue_projections(
                         touched_commands.insert(command_id.to_string());
                         if apply {
                             upsert_command_projection_from_queue_status(
+                                root,
                                 &conn,
                                 command_id,
                                 Some(&task),
@@ -5610,6 +5624,13 @@ pub fn repair_queue_projections(
                                 "ctox_queue_tasks",
                                 &task_id,
                                 now,
+                                payload.clone(),
+                            )?;
+                            upsert_rxdb_collection_record(
+                                root,
+                                "ctox_queue_tasks",
+                                &task_id,
+                                now,
                                 payload,
                             )?;
                         }
@@ -5650,10 +5671,24 @@ pub fn repair_queue_projections(
                                 ),
                             );
                         }
-                        upsert_business_record(&conn, "ctox_queue_tasks", &task_id, now, payload)?;
+                        upsert_business_record(
+                            &conn,
+                            "ctox_queue_tasks",
+                            &task_id,
+                            now,
+                            payload.clone(),
+                        )?;
+                        upsert_rxdb_collection_record(
+                            root,
+                            "ctox_queue_tasks",
+                            &task_id,
+                            now,
+                            payload,
+                        )?;
                         if let Some(command_id) = command_id.as_deref() {
                             touched_commands.insert(command_id.to_string());
                             upsert_command_projection_from_queue_status(
+                                root,
                                 &conn,
                                 command_id,
                                 None,
@@ -5668,7 +5703,7 @@ pub fn repair_queue_projections(
         }
     }
 
-    let redacted = repair_inline_payload_artifacts(&conn, apply, now)?;
+    let redacted = repair_inline_payload_artifacts(root, &conn, apply, now)?;
     if redacted > 0 {
         counters.insert("oversized_inline_artifacts_redacted", redacted);
     }
@@ -14742,6 +14777,7 @@ fn apply_queue_projection_status_fields(
 }
 
 fn upsert_command_projection_from_queue_status(
+    root: &Path,
     conn: &Connection,
     command_id: &str,
     task: Option<&channels::QueueTaskView>,
@@ -14826,6 +14862,13 @@ fn upsert_command_projection_from_queue_status(
         "business_commands",
         command_id,
         updated_at_ms,
+        payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_commands",
+        command_id,
+        updated_at_ms,
         payload,
     )?;
     Ok(())
@@ -14854,6 +14897,7 @@ fn push_repair_action(
 }
 
 fn repair_inline_payload_artifacts(
+    root: &Path,
     conn: &Connection,
     apply: bool,
     updated_at_ms: i64,
@@ -14903,7 +14947,14 @@ fn repair_inline_payload_artifacts(
                     ),
                 );
             }
-            upsert_business_record(conn, &collection, &record_id, updated_at_ms, payload)?;
+            upsert_business_record(
+                conn,
+                &collection,
+                &record_id,
+                updated_at_ms,
+                payload.clone(),
+            )?;
+            upsert_rxdb_collection_record(root, &collection, &record_id, updated_at_ms, payload)?;
         }
     }
     Ok(changed_count)
@@ -16304,6 +16355,48 @@ mod tests {
         Ok(())
     }
 
+    fn create_repair_rxdb_tables(root: &Path) -> anyhow::Result<Connection> {
+        fs::create_dir_all(root.join("runtime"))?;
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__ctox_queue_tasks__v0 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0,
+                data TEXT NOT NULL
+            )",
+            [],
+        )?;
+        Ok(conn)
+    }
+
+    fn insert_rxdb_test_record(
+        conn: &Connection,
+        table: &str,
+        id: &str,
+        payload: Value,
+    ) -> anyhow::Result<()> {
+        conn.execute(
+            &format!(
+                "INSERT INTO {table} (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, 'rev_stale', 0, 1.0, ?2)"
+            ),
+            params![id, serde_json::to_string(&payload)?],
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn repair_queue_projections_updates_failed_canonical_queue_and_command() -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -16340,6 +16433,34 @@ mod tests {
             "failed",
             "Input exceeds the maximum length of 1048576 characters.",
         )?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_repair_failed_queue",
+                "status": "queued",
+                "route_status": "pending",
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_repair_failed_queue",
+            serde_json::json!({
+                "id": "cmd_repair_failed_queue",
+                "command_id": "cmd_repair_failed_queue",
+                "status": "accepted",
+                "route_status": "pending",
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
 
         let dry_run =
             repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
@@ -16369,6 +16490,13 @@ mod tests {
             "dry-run must not mutate stale queue projection"
         );
         drop(conn);
+        let stale_rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected stale rxdb queue row after dry-run")?;
+        assert_eq!(
+            stale_rxdb_queue.get("status").and_then(Value::as_str),
+            Some("queued"),
+            "dry-run must not mutate active RxDB projection"
+        );
 
         let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
         assert_eq!(
@@ -16417,6 +16545,31 @@ mod tests {
         assert_eq!(
             command_projection.get("error").and_then(Value::as_str),
             Some("Input exceeds the maximum length of 1048576 characters.")
+        );
+        let rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected repaired rxdb queue row")?;
+        assert_eq!(
+            rxdb_queue.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            rxdb_queue.get("route_status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            rxdb_queue.get("error").and_then(Value::as_str),
+            Some("Input exceeds the maximum length of 1048576 characters.")
+        );
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_repair_failed_queue")?
+                .context("expected repaired rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("failed")
         );
         Ok(())
     }
@@ -16526,33 +16679,42 @@ mod tests {
         let root = temp.path();
         let conn = open_store(root)?;
         let inline_image = format!("data:image/png;base64,{}", "A".repeat(12_000));
+        let inline_payload = serde_json::json!({
+            "id": "cmd_inline_report_payload",
+            "command_id": "cmd_inline_report_payload",
+            "module": "documents",
+            "command_type": "business_os.bug_report",
+            "status": "accepted",
+            "payload": {
+                "title": "Gleichungen in word editor",
+                "attachment": {
+                    "data_url": inline_image
+                },
+                "strokes": [
+                    [{"x": 1, "y": 2}],
+                    [{"x": 3, "y": 4}]
+                ]
+            },
+            "client_context": {
+                "transport": "business-os-http-command-fallback"
+            }
+        });
         upsert_business_record(
             &conn,
             "business_commands",
             "cmd_inline_report_payload",
             now_ms() as i64,
-            serde_json::json!({
-                "id": "cmd_inline_report_payload",
-                "command_id": "cmd_inline_report_payload",
-                "module": "documents",
-                "command_type": "business_os.bug_report",
-                "status": "accepted",
-                "payload": {
-                    "title": "Gleichungen in word editor",
-                    "attachment": {
-                        "data_url": inline_image
-                    },
-                    "strokes": [
-                        [{"x": 1, "y": 2}],
-                        [{"x": 3, "y": 4}]
-                    ]
-                },
-                "client_context": {
-                    "transport": "business-os-http-command-fallback"
-                }
-            }),
+            inline_payload.clone(),
         )?;
         drop(conn);
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_inline_report_payload",
+            inline_payload,
+        )?;
+        drop(rxdb_conn);
 
         let dry_run =
             repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
@@ -16605,6 +16767,21 @@ mod tests {
                 .and_then(Value::as_str),
             Some("business-os-http-command-fallback"),
             "legacy transport context is counted and quarantined, not rewritten or replayed"
+        );
+        let rxdb_payload =
+            load_rxdb_collection_record(root, "business_commands", "cmd_inline_report_payload")?
+                .context("expected redacted rxdb reporter command row")?;
+        assert_eq!(
+            rxdb_payload
+                .pointer("/payload/attachment/data_url/redacted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            rxdb_payload
+                .pointer("/payload/strokes/redacted")
+                .and_then(Value::as_bool),
+            Some(true)
         );
         Ok(())
     }
