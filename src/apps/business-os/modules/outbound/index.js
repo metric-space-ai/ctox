@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair5';
+const BUILD = '20260606-outbound-ux-repair6';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -2957,14 +2957,13 @@ function renderCenter(force = false) {
       ? t('noCompaniesInCampaign', 'Noch keine Unternehmen in dieser Campaign.')
       : `${t('emptyFilter', 'Keine Firmen für diesen Filter:')} ${currentFilterLabel()}.`;
 
-    const newHtml = visibleRows.length
-      ? visibleRows.map(row => renderCRMCompanyRows(row)).join('')
-      : renderTableEmptyRow(activeCols.length, emptyCompanyMessage);
+    const newHtml = renderVisibleTableRows(rows, visibleRows, activeCols.length);
 
     if (state.lastTbodyHtml !== newHtml) {
       state.lastTbodyHtml = newHtml;
       tbody.innerHTML = newHtml;
     }
+    syncTableEmptyOverlay(scrollUnified, visibleRows.length === 0, emptyCompanyMessage);
 
     setupCenterSplitResizing(root);
     return;
@@ -3540,9 +3539,7 @@ function renderQualificationSplit(campaign) {
   const settings = getCampaignResearchSettings(campaign);
   const activeCols = buildActiveTableColumns(settings, state.viewMode);
 
-  const rowsHtml = visibleRows.length
-    ? `${visibleRows.map(row => renderCRMCompanyRows(row)).join('')}${renderTableLimitRow(rows.length, activeCols.length)}`
-    : '';
+  const rowsHtml = renderVisibleTableRows(rows, visibleRows, activeCols.length);
   state.lastTbodyHtml = rowsHtml;
 
   const headersHtml = activeCols.map(col => {
@@ -3585,6 +3582,26 @@ function renderQualificationSplit(campaign) {
       ${detailPaneHtml}
     </div>
   `;
+}
+
+function renderVisibleTableRows(rows, visibleRows, columnCount) {
+  if (!visibleRows.length) return '';
+  return `${visibleRows.map(row => renderCRMCompanyRows(row)).join('')}${renderTableLimitRow(rows.length, columnCount)}`;
+}
+
+function syncTableEmptyOverlay(scrollContainer, shouldShow, message) {
+  if (!scrollContainer) return;
+  const existing = scrollContainer.querySelector(':scope > .outbound-table-empty-overlay');
+  if (!shouldShow) {
+    existing?.remove();
+    return;
+  }
+  const html = renderTableEmptyState(message).trim();
+  if (existing) {
+    existing.outerHTML = html;
+    return;
+  }
+  scrollContainer.insertAdjacentHTML('beforeend', html);
 }
 
 function renderActiveResearchSummary(campaign) {
@@ -3692,16 +3709,6 @@ function renderTableLimitRow(total, columnCount) {
     <tr>
       <td colspan="${columnCount}" class="outbound-table-empty">
         ${escapeHtml(t('rowsVisibleHint', '{0} von {1} Zeilen sichtbar. Suche oder Filter eingrenzen.', OUTBOUND_TABLE_RENDER_LIMIT, formatCount(total)))}
-      </td>
-    </tr>
-  `;
-}
-
-function renderTableEmptyRow(columnCount, message) {
-  return `
-    <tr>
-      <td colspan="${columnCount}" class="outbound-table-empty">
-        ${renderTableEmptyState(message)}
       </td>
     </tr>
   `;
