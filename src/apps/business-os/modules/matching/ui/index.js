@@ -941,16 +941,132 @@ let matches = [];
 const rawDocCounts = { sources: 0, requirements: 0, objects: 0, matches: 0 };
 let matchingCollectionDiagnostics = null;
 let matchingDiagnosticsPromise = null;
+let matchingRuntimeCtx = null;
+let matchingInitialSyncStartedAt = 0;
+let matchingSyncProgressCleanup = null;
+const MATCHING_SYNC_PROGRESS_ID = 'matching-initial-sync';
+const MATCHING_SYNC_COLLECTIONS = Object.freeze([
+  { name: 'matching_requirements', label: 'Anforderungen' },
+  { name: 'matching_objects', label: 'Objekte' },
+  { name: 'matching_results', label: 'Matches' }
+]);
 
 function hasUnsyncedMatchingData() {
   // True when the RxDB collections hold records but the aggregated UI arrays
   // are still empty. This is the classic "data is there but not yet projected"
   // state — show a sync placeholder instead of "empty database".
-  return (rawDocCounts.sources > 0 || rawDocCounts.requirements > 0)
-    && sources.length === 0;
+  return ((rawDocCounts.sources > 0 || rawDocCounts.requirements > 0) && sources.length === 0)
+    || (rawDocCounts.objects > 0 && objects.length === 0)
+    || (rawDocCounts.matches > 0 && matches.length === 0);
+}
+
+function getShellSyncDiagnosticsSnapshot() {
+  return matchingRuntimeCtx?.sync?.diagnostics
+    || window.ctoxBusinessOsSyncDiagnostics
+    || null;
+}
+
+function getShellSyncCollectionDiagnostic(collectionName) {
+  const collections = getShellSyncDiagnosticsSnapshot()?.collections;
+  if (!collections) return null;
+  if (Array.isArray(collections)) {
+    return collections.find((entry) => entry?.collection === collectionName) || null;
+  }
+  return collections[collectionName] || null;
+}
+
+function isShellSyncCollectionReady(entry) {
+  if (!entry) return false;
+  const status = String(entry.connectionStatus || entry.status || '').toLowerCase();
+  return Boolean(entry.initialReplicationAt)
+    || entry.initialReplicationState === 'complete'
+    || status === 'connected'
+    || status === 'running'
+    || status === 'reused';
+}
+
+function isMatchingCollectionInitialSyncPending(collectionName) {
+  if (!matchingInitialSyncStartedAt) return false;
+  const entry = getShellSyncCollectionDiagnostic(collectionName);
+  if (entry) return !isShellSyncCollectionReady(entry);
+
+  // Avoid a false empty-state flash while the shell is still publishing the
+  // first diagnostics frame for this module.
+  return Date.now() - matchingInitialSyncStartedAt < 15000;
+}
+
+function getMatchingInitialSyncProgress() {
+  let ready = 0;
+  const pendingLabels = [];
+  const missingDiagnostics = [];
+
+  for (const item of MATCHING_SYNC_COLLECTIONS) {
+    const entry = getShellSyncCollectionDiagnostic(item.name);
+    if (isShellSyncCollectionReady(entry)) {
+      ready += 1;
+    } else {
+      pendingLabels.push(item.label);
+      if (!entry) missingDiagnostics.push(item.name);
+    }
+  }
+
+  return {
+    ready,
+    total: MATCHING_SYNC_COLLECTIONS.length,
+    pendingLabels,
+    hasDiagnostics: missingDiagnostics.length < MATCHING_SYNC_COLLECTIONS.length
+  };
+}
+
+function updateMatchingInitialSyncFeedback() {
+  if (!matchingInitialSyncStartedAt) return;
+  const progress = getMatchingInitialSyncProgress();
+  if (progress.ready >= progress.total) {
+    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID, { delayMs: 1200 });
+    return;
+  }
+
+  const pending = progress.pendingLabels.join(', ');
+  syncFeedback.upsertProgress?.(MATCHING_SYNC_PROGRESS_ID, {
+    title: 'Matching wird synchronisiert',
+    detail: pending
+      ? `RxDB lädt gerade: ${pending}.`
+      : 'RxDB bereitet die lokalen Daten vor.',
+    meta: `${progress.ready}/${progress.total}`,
+    value: progress.hasDiagnostics
+      ? (progress.ready / progress.total) * 100
+      : null,
+    indeterminate: !progress.hasDiagnostics,
+    type: 'info'
+  });
+}
+
+function setupMatchingInitialSyncFeedback() {
+  matchingSyncProgressCleanup?.();
+  matchingInitialSyncStartedAt = Date.now();
+  updateMatchingInitialSyncFeedback();
+
+  const onDiagnostics = () => {
+    updateMatchingInitialSyncFeedback();
+    if (getMatchingInitialSyncProgress().ready >= MATCHING_SYNC_COLLECTIONS.length) {
+      window.removeEventListener('ctox-business-os-sync-diagnostics', onDiagnostics);
+    }
+  };
+  window.addEventListener('ctox-business-os-sync-diagnostics', onDiagnostics);
+  matchingSyncProgressCleanup = () => {
+    window.removeEventListener('ctox-business-os-sync-diagnostics', onDiagnostics);
+    syncFeedback.clearProgress?.(MATCHING_SYNC_PROGRESS_ID);
+    matchingInitialSyncStartedAt = 0;
+    matchingSyncProgressCleanup = null;
+  };
+  return matchingSyncProgressCleanup;
 }
 
 function renderCollectionDiagnostic(collectionName, fallbackText) {
+  if (isMatchingCollectionInitialSyncPending(collectionName)) {
+    return 'Daten werden synchronisiert...';
+  }
+
   const entry = matchingCollectionDiagnostics?.collections?.find(item => item.collection === collectionName);
   if (!entry) return fallbackText;
 
@@ -2181,6 +2297,7 @@ async function setupRxdbLiveUiSync() {
 
 // teardown bleibt gleich
 function teardownRxdbLiveUiSync() {
+  matchingSyncProgressCleanup?.();
   __unsubscribeAllRxdbLiveSubs();
   console.log('[rxdb-live] UI sync disabled');
 }
@@ -8738,15 +8855,18 @@ function applyMatchingDefinitionUi(root = getMatchingModuleHost()) {
 // Initial: erst RxDB laden, dann rendern
 // Initial: erst RxDB laden, dann rendern, dann Live-Sync aktivieren
 export async function mountMatchingDashboard(ctx = {}){
+  matchingRuntimeCtx = ctx;
   matchingModuleHost = ctx.host || document.querySelector('[data-matching-module="native"]') || null;
   if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
     setActiveMatchingDefinition(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
   }
   applyMatchingDefinitionUi();
-  syncFeedback.setHostRoot?.(matchingModuleHost);
+  syncFeedback.setHostRoot?.(document.body);
   syncFeedback.ensureHost();
+  setupMatchingInitialSyncFeedback();
   await ensureMatchScoreFormulaUpdate();
   await loadFromRxdb();
+  updateMatchingInitialSyncFeedback();
 
   renderSources();
   renderRequirements();

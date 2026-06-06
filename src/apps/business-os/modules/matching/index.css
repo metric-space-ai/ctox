@@ -2532,7 +2532,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 70%, transparent);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-host{
+.module-root[data-module-root="matching"] .sync-feedback-host,
+body > #sync-feedback-host-matching-view.sync-feedback-host{
   position:fixed;
   right:14px;
   bottom:14px;
@@ -2544,7 +2545,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   max-width:min(380px, 92vw);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback{
+.module-root[data-module-root="matching"] .sync-feedback,
+body > #sync-feedback-host-matching-view .sync-feedback{
   border-radius:10px;
   border:1px solid var(--stroke);
   background:rgba(18,26,36,.92);
@@ -2559,51 +2561,61 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   backdrop-filter:blur(6px);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback.is-visible{
+.module-root[data-module-root="matching"] .sync-feedback.is-visible,
+body > #sync-feedback-host-matching-view .sync-feedback.is-visible{
   opacity:1;
   transform:translateY(0);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-success{
+.module-root[data-module-root="matching"] .sync-feedback-success,
+body > #sync-feedback-host-matching-view .sync-feedback-success{
   border-color:color-mix(in srgb, var(--success) 60%, var(--stroke));
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-info{
+.module-root[data-module-root="matching"] .sync-feedback-info,
+body > #sync-feedback-host-matching-view .sync-feedback-info{
   border-color:color-mix(in srgb, var(--primary) 55%, var(--stroke));
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-warn{
+.module-root[data-module-root="matching"] .sync-feedback-warn,
+body > #sync-feedback-host-matching-view .sync-feedback-warn{
   border-color:color-mix(in srgb, var(--warning) 60%, var(--stroke));
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-error{
+.module-root[data-module-root="matching"] .sync-feedback-error,
+body > #sync-feedback-host-matching-view .sync-feedback-error{
   border-color:color-mix(in srgb, var(--danger) 65%, var(--stroke));
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress{
+.module-root[data-module-root="matching"] .sync-feedback-progress,
+body > #sync-feedback-host-matching-view .sync-feedback-progress{
   min-width:min(360px, 92vw);
   pointer-events:auto;
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-head{
+.module-root[data-module-root="matching"] .sync-feedback-progress-head,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-head{
   display:flex;
   align-items:center;
   gap:10px;
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-title{
+.module-root[data-module-root="matching"] .sync-feedback-progress-title,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-title{
   font-size:12px;
   font-weight:700;
   letter-spacing:.01em;
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-meta{
+.module-root[data-module-root="matching"] .sync-feedback-progress-meta,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-meta{
   margin-left:auto;
   font-size:11px;
   color:var(--muted);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-close{
+.module-root[data-module-root="matching"] .sync-feedback-progress-close,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-close{
   appearance:none;
   border:0;
   background:transparent;
@@ -2615,17 +2627,20 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   margin-left:6px;
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-close:hover{
+.module-root[data-module-root="matching"] .sync-feedback-progress-close:hover,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-close:hover{
   color:var(--text);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-detail{
+.module-root[data-module-root="matching"] .sync-feedback-progress-detail,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-detail{
   margin-top:6px;
   font-size:11px;
   color:var(--muted);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar{
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar{
   position:relative;
   margin-top:8px;
   height:7px;
@@ -2635,7 +2650,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   border:1px solid rgba(255,255,255,.06);
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar > i{
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar > i,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar > i{
   display:block;
   height:100%;
   width:0;
@@ -2644,7 +2660,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   transition:width .2s ease;
 }
 
-.module-root[data-module-root="matching"] .sync-feedback-progress-bar.is-indeterminate > i{
+.module-root[data-module-root="matching"] .sync-feedback-progress-bar.is-indeterminate > i,
+body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterminate > i{
   width:38%;
   animation:sync-feedback-progress-indeterminate 1.1s ease-in-out infinite;
 }

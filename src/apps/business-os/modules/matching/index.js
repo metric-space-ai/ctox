@@ -1,4 +1,4 @@
-const MATCHING_BUILD = '20260605-rxdb-cancel1';
+const MATCHING_BUILD = '20260606-load-sync-feedback1';
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -8,15 +8,34 @@ export async function mount(ctx) {
   ctx.host.dataset.matchingModule = 'native';
   ctx.left?.replaceChildren?.();
   ctx.right?.replaceChildren?.();
-  if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
-    const definitionModule = await import('./ui/matchingDefinition.js');
-    definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
-  }
-  await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
-  const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
-  await matchingUi.mountMatchingDashboard?.(ctx);
+
+  let disposed = false;
+  const dashboardStartup = (async () => {
+    if (ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION) {
+      const definitionModule = await import('./ui/matchingDefinition.js');
+      if (disposed) return;
+      definitionModule.setActiveMatchingDefinition?.(ctx.matchingDefinition || globalThis.CTOX_MATCHING_DEFINITION);
+    }
+    await import(`./ui/businessOsControls.js?v=${MATCHING_BUILD}`);
+    if (disposed) return;
+    const matchingUi = await import(`./ui/index.js?v=${MATCHING_BUILD}`);
+    if (disposed) return;
+    await matchingUi.mountMatchingDashboard?.(ctx);
+  })().catch((error) => {
+    if (disposed) return;
+    console.error('[matching] dashboard startup failed:', error);
+    ctx.notifications?.show?.({
+      type: 'error',
+      title: 'Matching konnte nicht geladen werden',
+      message: String(error?.message || error),
+      time: 9000
+    });
+  });
+
   return () => {
+    disposed = true;
     try { window.teardownRxdbLiveUiSync?.(); } catch {}
+    dashboardStartup.catch(() => {});
     ctx.host.replaceChildren();
     delete ctx.host.dataset.matchingModule;
   };
