@@ -1123,53 +1123,20 @@ async function dispatchBusinessCommandWithRxdbFallback(command, options = {}) {
     ...command,
     id: commandId,
   };
-  const collection = state.ctx?.db?.raw?.business_commands;
-  if (collection) {
-    const existing = await collection.findOne(commandId).exec().catch(() => null);
-    if (!existing) {
-      await collection.insert({
-        id: commandId,
-        command_id: commandId,
-        module: prepared.module || 'outbound',
-        command_type: prepared.type || prepared.command_type || '',
-        record_id: prepared.record_id || '',
-        status: 'pending_sync',
-        inbound_channel: prepared.inbound_channel || 'business_os.outbound',
-        payload: prepared.payload || {},
-        client_context: prepared.client_context || { source_module: 'outbound' },
-        updated_at_ms: Date.now(),
-      });
-    }
-    return { ok: true, command_id: commandId, status: 'pending_sync', transport: 'rxdb-local' };
-  }
   await ensureBusinessCommandsReady(options.readyTimeoutMs || 10000);
   const dispatchResult = state.ctx?.commandBus?.dispatch
-    ? await withTimeout(state.ctx.commandBus.dispatch(prepared), options.timeoutMs || 5000, null)
+    ? await withTimeout(state.ctx.commandBus.dispatch(prepared), options.timeoutMs || 45000, null)
     : null;
   if (dispatchResult) return dispatchResult;
   throw new Error('business_commands collection is required for outbound command fallback');
 }
 
 async function enqueueBusinessCommandForProjection(command) {
-  const collection = state.ctx?.db?.raw?.business_commands;
-  if (!collection) throw new Error('business_commands collection is required for outbound command enqueue');
   const commandId = command.id || command.command_id || `cmd_${crypto.randomUUID()}`;
-  const existing = await collection.findOne(commandId).exec().catch(() => null);
-  if (!existing) {
-    await collection.insert({
-      id: commandId,
-      command_id: commandId,
-      module: command.module || 'outbound',
-      command_type: command.type || command.command_type || '',
-      record_id: command.record_id || '',
-      status: 'pending_sync',
-      inbound_channel: command.inbound_channel || 'business_os.outbound',
-      payload: command.payload || {},
-      client_context: command.client_context || { source_module: 'outbound' },
-      updated_at_ms: Date.now(),
-    });
+  if (!state.ctx?.commandBus?.dispatch) {
+    throw new Error('CTOX command bus is required for outbound command enqueue');
   }
-  return { ok: true, command_id: commandId, status: 'pending_sync', transport: 'rxdb-local' };
+  return state.ctx.commandBus.dispatch({ ...command, id: commandId });
 }
 
 async function ensureBusinessCommandsReady(timeoutMs = 10000) {

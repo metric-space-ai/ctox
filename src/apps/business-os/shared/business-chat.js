@@ -1364,10 +1364,11 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
     const result = await commandBus.dispatch(command);
     const taskId = result.task_id || '';
     const acceptedCommandId = result.command_id || commandId;
+    if (!taskId) {
+      throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
+    }
     chat.lastTrackingId = taskId || acceptedCommandId;
-    pendingMessage.text = taskId
-      ? 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald CTOX ihn verarbeitet.'
-      : 'Command lokal angelegt. CTOX Sync steht aus; noch keine Queue-ID erhalten.';
+    pendingMessage.text = 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald CTOX ihn verarbeitet.';
     pendingMessage.commandId = acceptedCommandId;
     pendingMessage.taskId = taskId;
     pendingMessage.status = result.task_status || result.status || 'queued';
@@ -3453,7 +3454,7 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
         const scheduledMsg = chat.messages[scheduledMsgIdx];
         console.log(`[business-chat] Executing scheduled chat task for chat ${chat.id}`);
         
-        scheduledMsg.status = 'pending_sync';
+        scheduledMsg.status = 'waiting';
         const commandId = scheduledMsg.commandId || `cmd_${crypto.randomUUID()}`;
         chat.lastTrackingId = commandId;
         scheduledMsg.commandId = commandId;
@@ -3503,13 +3504,14 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
             const result = await commandBus.dispatch(command);
             const taskId = result.task_id || '';
             const acceptedCommandId = result.command_id || commandId;
+            if (!taskId) {
+              throw new Error('CTOX hat keine echte Queue-ID zurueckprojiziert.');
+            }
             chat.lastTrackingId = taskId || acceptedCommandId;
             
             const statusMsg = chat.messages.find(m => m.id === `status_${commandId}`);
             if (statusMsg) {
-              statusMsg.text = taskId
-                ? 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.'
-                : 'Command angelegt. Keine CTOX Queue-ID erhalten.';
+              statusMsg.text = 'Task angelegt und in der CTOX Queue. Antwort erscheint hier, sobald der CTOX Service ihn verarbeitet.';
               statusMsg.commandId = acceptedCommandId;
               statusMsg.taskId = taskId;
               statusMsg.status = result.task_status || result.status || 'queued';

@@ -44,6 +44,7 @@ assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
 assertBusinessOsServerHttpDataApisAreGated();
 assertSubscriptionAuthStartsThroughRxdbCommand();
+assertCommandBusRequiresCtoxQueueProjection();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
@@ -133,6 +134,31 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
   }
   if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
+  }
+}
+
+function assertCommandBusRequiresCtoxQueueProjection() {
+  const commandBusPath = join(appRoot, 'shared/command-bus.js');
+  const commandBus = readFileSync(commandBusPath, 'utf8');
+  if (/fetch\s*\(/.test(commandBus) || /\/api\//.test(commandBus)) {
+    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must stay RxDB-only and must not use HTTP');
+  }
+  for (const marker of [
+    'waitForAuthoritativeQueueProjection',
+    'ctox_queue_tasks',
+    'CTOX hat aus diesem RxDB Command keinen echten Queue-Task',
+  ]) {
+    if (!commandBus.includes(marker)) {
+      offenders.push(`src/apps/business-os/shared/command-bus.js: command bus must require real CTOX queue projection (${marker})`);
+    }
+  }
+  if (/rxdb-local-pending|rxdb-local|Command lokal angelegt/.test(commandBus)) {
+    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must not report local pending commands as success');
+  }
+  const chatPath = join(appRoot, 'shared/business-chat.js');
+  const chat = readFileSync(chatPath, 'utf8');
+  if (/Command lokal angelegt|Keine CTOX Queue-ID erhalten/.test(chat)) {
+    offenders.push('src/apps/business-os/shared/business-chat.js: chat must not show local command submission as a task');
   }
 }
 

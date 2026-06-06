@@ -531,8 +531,11 @@ export async function dispatchBusinessReport({
     },
   }), REPORT_DISPATCH_TIMEOUT_MS, 'Report konnte nicht rechtzeitig an CTOX übergeben werden.');
   const taskId = String(dispatchResult?.task_id || '').trim();
-  const status = String(dispatchResult?.status || (taskId ? 'accepted' : 'pending_sync')).trim() || 'pending_sync';
-  const taskStatus = String(dispatchResult?.task_status || (taskId ? 'queued' : status)).trim() || status;
+  if (!taskId) {
+    throw new Error('CTOX hat fuer den Report keine echte Queue-ID zurueckprojiziert.');
+  }
+  const status = String(dispatchResult?.status || 'accepted').trim() || 'accepted';
+  const taskStatus = String(dispatchResult?.task_status || 'queued').trim() || 'queued';
   return {
     ok: dispatchResult?.ok !== false,
     report_id: reportId,
@@ -573,10 +576,7 @@ function countStrokePoints(strokes) {
 
 function reporterStatusText(result) {
   if (result?.task_id) return 'Als CTOX Task angelegt.';
-  if (String(result?.status || '').toLowerCase() === 'pending_sync') {
-    return 'Report lokal gespeichert; CTOX Sync steht aus.';
-  }
-  return 'Report an CTOX übergeben.';
+  return 'Report wurde nicht als CTOX Task bestaetigt.';
 }
 
 function reporterErrorText(error) {

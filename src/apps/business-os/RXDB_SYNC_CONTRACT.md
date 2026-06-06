@@ -135,13 +135,13 @@ Collections are module-owned and registered from each module's `schema.js`.
 The shell registers core CTOX collections first, then each module registers its
 own collections before opening.
 
-Commands are normal replicated documents in `business_commands`. Browser
-dispatch writes a `pending_sync` document locally and returns immediately; it
-does not POST the command to CTOX. The CTOX Rust peer consumes pending command
-documents from `runtime/ctox.sqlite3`, validates them through the existing
-Business OS command acceptance path, writes authoritative status/task fields
-back into `business_commands`, and publishes the created queue task through
-`ctox_queue_tasks`.
+Commands are replicated transport envelopes in `business_commands`, not a
+Business OS task system. Browser dispatch writes a `pending_sync` document
+locally and must not report success until the CTOX Rust peer has consumed it,
+created a real CTOX queue task, written authoritative status/task fields back
+into `business_commands`, and published the created queue task through
+`ctox_queue_tasks`. A local `pending_sync` document without a projected
+`ctox_queue_tasks` row is not a task.
 
 Business OS bug/feature reports are also command documents. Browser reporters
 write `ctox.report.*` into `business_commands`; the Rust peer creates the CTOX

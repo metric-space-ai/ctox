@@ -353,22 +353,7 @@ export async function dispatchImportCommand(ctx, command) {
   if (ctx?.commandBus?.dispatch) {
     return ctx.commandBus.dispatch(command);
   }
-  const collection = ctx?.db?.raw?.business_commands;
-  if (!collection) throw new Error('business_commands collection is required for RxDB commands');
-  const commandId = command.id || `cmd_${crypto.randomUUID()}`;
-  await collection.insert({
-    id: commandId,
-    command_id: commandId,
-    module: command.module,
-    command_type: command.type,
-    record_id: command.record_id || '',
-    status: 'pending_sync',
-    inbound_channel: command.inbound_channel || command.module || '',
-    payload: command.payload || {},
-    client_context: command.client_context || {},
-    updated_at_ms: Date.now(),
-  });
-  return { ok: true, command_id: commandId, status: 'pending_sync', transport: 'rxdb' };
+  throw new Error('CTOX command bus is required for import commands.');
 }
 
 export function readImportStatuses(moduleId = '') {
