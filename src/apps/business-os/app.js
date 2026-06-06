@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-outbound-excel-import1'
+const APP_BUILD = '20260606-web-pairing-session1'
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -5302,7 +5302,7 @@ async function loadSession() {
   if (injected) return injected;
 
   const pairedConfig = await readBusinessOsLaunchConfig();
-  if (pairedConfig && allowsPairingConfigSession()) {
+  if (pairedConfig && allowsPairingConfigSession(pairedConfig)) {
     const user = pairedConfig.session?.user || pairedConfig.user || {};
     const role = normalizeRole(user.role || 'user');
     return {
@@ -5331,8 +5331,14 @@ async function loadSession() {
   };
 }
 
-function allowsPairingConfigSession() {
-  return isLocalBusinessOsSurface() || location.protocol === 'file:';
+function allowsPairingConfigSession(config = null) {
+  if (isLocalBusinessOsSurface() || location.protocol === 'file:') return true;
+  const source = String(config?.source || '').trim().toLowerCase();
+  // A public web-deploy launch URL carries a short-lived pairing credential in
+  // `ctox_config` or explicit URL parameters. That URL is the auth handoff for
+  // RxDB/WebRTC-only instances; stored browser pairing remains restricted to
+  // local/private surfaces.
+  return source === 'url';
 }
 
 function readInjectedDesktopSession() {
