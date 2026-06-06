@@ -897,6 +897,11 @@ where
                         let stream_task = tokio::spawn(async move {
                             let mut master_stream = master.master_change_stream();
                             while let Some(ev) = master_stream.next().await {
+                                if !handler_for_stream
+                                    .is_collection_active_for_peer(&peer_for_stream, &collection_name)
+                                {
+                                    continue;
+                                }
                                 let resp = WebRTCResponse {
                                     // Collection-qualified id avoids the
                                     // single-id collision when many

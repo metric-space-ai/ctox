@@ -826,6 +826,14 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     fn peer_identity(&self, peer: &Self::Peer) -> String {
         peer.to_string()
     }
+
+    fn is_collection_active_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        self.active_collections
+            .lock()
+            .get(peer)
+            .map(|active| active.contains(collection))
+            .unwrap_or(false)
+    }
 }
 
 impl WebRTCRsConnectionHandler {
@@ -2410,6 +2418,26 @@ mod tests {
             classify_send_frame(&background, "{}").classify(&active),
             SendPriority::Normal
         );
+    }
+
+    #[test]
+    fn active_collection_predicate_tracks_control_plane_state() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+
+        assert!(!handler.is_collection_active_for_peer(&peer, "documents"));
+
+        let msg = WebRTCMessage {
+            id: "ac".to_string(),
+            method: ACTIVE_COLLECTIONS_METHOD.to_string(),
+            params: vec![serde_json::json!(["documents", "business_commands"])],
+            collection: None,
+        };
+        handler.apply_active_collections(&peer, &msg);
+
+        assert!(handler.is_collection_active_for_peer(&peer, "documents"));
+        assert!(handler.is_collection_active_for_peer(&peer, "business_commands"));
+        assert!(!handler.is_collection_active_for_peer(&peer, "ctox_ticket_self_work_notes"));
     }
 
     #[test]

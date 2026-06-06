@@ -131,6 +131,14 @@ pub trait WebRTCConnectionHandler: Send + Sync {
     fn peer_identity(&self, peer: &Self::Peer) -> String {
         format!("{:?}", peer)
     }
+
+    /// Whether a collection is currently foreground/active for this peer.
+    /// Generic handlers default to true to preserve the upstream-style
+    /// broadcast behavior; the CTOX WebRTC handler overrides this from the
+    /// `rxdb.activeCollections` control plane.
+    fn is_collection_active_for_peer(&self, _peer: &Self::Peer, _collection: &str) -> bool {
+        true
+    }
 }
 
 /// Soft threshold above which the V1.5 dispatcher yields and waits before
