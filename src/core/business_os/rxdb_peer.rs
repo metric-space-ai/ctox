@@ -9235,13 +9235,13 @@ mod tests {
                     "command_id": "cmd_user_upsert",
                     "module": "ctox",
                     "command_type": "ctox.business_os.user.upsert",
-                    "record_id": "module-owner",
+                    "record_id": "chef",
                     "status": "pending_sync",
                     "inbound_channel": "ctox",
                     "payload": {
-                        "id": "module-owner",
-                        "display_name": "Module Owner",
-                        "role": "founder",
+                        "id": "chef",
+                        "display_name": "Chef",
+                        "role": "chef",
                         "active": true
                     },
                     "client_context": {
@@ -9276,7 +9276,67 @@ mod tests {
                 Some("completed"),
                 "user_command={user_command}"
             );
-            let has_module_owner = user_command
+            let has_chef = user_command
+                .get("result")
+                .and_then(|result| result.get("users"))
+                .and_then(Value::as_array)
+                .map(|users| {
+                    users.iter().any(|user| {
+                        user.get("id").and_then(Value::as_str) == Some("chef")
+                            && user.get("role").and_then(Value::as_str) == Some("chef")
+                    })
+                })
+                .unwrap_or(false);
+            assert!(has_chef, "user_command={user_command}");
+
+            commands
+                .insert(json!({
+                    "id": "cmd_module_owner_upsert",
+                    "command_id": "cmd_module_owner_upsert",
+                    "module": "ctox",
+                    "command_type": "ctox.business_os.user.upsert",
+                    "record_id": "module-owner",
+                    "status": "pending_sync",
+                    "inbound_channel": "ctox",
+                    "payload": {
+                        "id": "module-owner",
+                        "display_name": "Module Owner",
+                        "role": "founder",
+                        "active": true
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "chef",
+                            "display_name": "Chef",
+                            "role": "chef",
+                            "is_admin": false
+                        },
+                        "source": "test"
+                    },
+                    "updated_at_ms": now_ms() as u64
+                }))
+                .await
+                .expect("insert module owner command");
+
+            consume_pending_business_commands(root.path(), &database)
+                .await
+                .expect("consume module owner command");
+
+            let owner_command = commands
+                .find_one(Some(MangoQuery {
+                    selector: Some(json!({ "id": { "$eq": "cmd_module_owner_upsert" } })),
+                    ..Default::default()
+                }))
+                .expect("module owner command query")
+                .exec(false)
+                .await
+                .expect("module owner command document");
+            assert_eq!(
+                owner_command.get("status").and_then(Value::as_str),
+                Some("completed"),
+                "owner_command={owner_command}"
+            );
+            let has_module_owner = owner_command
                 .get("result")
                 .and_then(|result| result.get("users"))
                 .and_then(Value::as_array)
@@ -9287,7 +9347,7 @@ mod tests {
                     })
                 })
                 .unwrap_or(false);
-            assert!(has_module_owner, "user_command={user_command}");
+            assert!(has_module_owner, "owner_command={owner_command}");
 
             commands
                 .insert(json!({

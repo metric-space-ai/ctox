@@ -1,7 +1,5 @@
 import { showBusinessConfirm } from './dialogs.js';
 
-const CHATGPT_DEVICE_AUTH_URL = 'https://auth.openai.com/codex/device';
-
 export async function openReactSettings({
   mount,
   modules = [],
@@ -30,6 +28,7 @@ export async function openReactSettings({
   const settingsState = {
     tab: initialTab || 'runtime',
     commandStatus: '',
+    subscriptionAuth: null,
     runtimeSettings: null,
     runtimeLoading: false,
     users: null,
@@ -143,6 +142,7 @@ export async function openReactSettings({
       canOpenAdmin,
       tab: settingsState.tab,
       commandStatus: settingsState.commandStatus,
+      subscriptionAuth: settingsState.subscriptionAuth,
       runtimeSettings: settingsState.runtimeSettings,
       runtimeLoading: settingsState.runtimeLoading,
       users: settingsState.users,
@@ -231,9 +231,15 @@ export async function openReactSettings({
     });
     body.querySelector('[data-runtime-refresh]')?.addEventListener('click', refreshRuntimeSettings);
     body.querySelector('[data-runtime-authorize-subscription]')?.addEventListener('click', async () => {
-      const authWindow = window.open(CHATGPT_DEVICE_AUTH_URL, 'ctox-chatgpt-subscription');
-      settingsState.commandStatus = 'ChatGPT Login wird geöffnet...';
+      const authWindow = window.open('', 'ctox-chatgpt-subscription');
+      settingsState.subscriptionAuth = { status: 'starting', message: 'Geräte-Code wird bei CTOX angefordert.' };
+      settingsState.commandStatus = 'ChatGPT Login wird vorbereitet...';
       const runtimePayload = runtimePayloadFromForm(body);
+      writeSubscriptionAuthWindow(
+        authWindow,
+        'ChatGPT Login wird vorbereitet',
+        'CTOX fordert den Geräte-Code an. Der Code erscheint gleich in den Settings.',
+      );
       render();
       try {
         settingsState.runtimeSettings = runtimeSettingsWithDraft(
@@ -244,6 +250,13 @@ export async function openReactSettings({
         const payload = await startSubscriptionAuth({ commandBus, db, session, sync });
         if (!payload.auth_url && !payload.verification_url) throw new Error('CTOX hat keine Login-URL geliefert.');
         if (payload.status === 'device_code' && payload.user_code) {
+          settingsState.subscriptionAuth = {
+            status: 'device_code',
+            userCode: payload.user_code,
+            verificationUrl: payload.verification_url || payload.auth_url,
+            source: payload.source || 'ctox',
+            message: 'Code im OpenAI-Fenster eingeben.',
+          };
           settingsState.commandStatus = `ChatGPT Geräte-Code: ${payload.user_code}. Code im OpenAI-Fenster eingeben.`;
           render();
         }
@@ -267,6 +280,10 @@ export async function openReactSettings({
           String(error?.message || error),
           true,
         );
+        settingsState.subscriptionAuth = {
+          status: 'failed',
+          error: String(error?.message || error),
+        };
         settingsState.commandStatus = String(error?.message || error);
       }
       render();
@@ -458,6 +475,7 @@ function settingsTemplate({
   canOpenAdmin,
   tab,
   commandStatus,
+  subscriptionAuth,
   runtimeSettings,
   runtimeLoading,
   users,
@@ -493,7 +511,7 @@ function settingsTemplate({
     </nav>
 
     <div class="settings-scroll">
-      ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading) : ''}
+      ${tab === 'runtime' ? runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth) : ''}
       ${tab === 'channels' ? channelsPanel(channels) : ''}
       ${tab === 'sync' ? syncPanel(syncConfig, isAdmin) : ''}
       ${tab === 'users' ? usersPanel(user, role, isAdmin, users, canManageUsers) : ''}
@@ -508,7 +526,7 @@ function settingsTemplate({
   `;
 }
 
-function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
+function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth = null) {
   if (runtimeLoading && !runtimeSettings) {
     return `
       <section class="settings-section">
@@ -572,7 +590,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading) {
         <label><span>Max Run</span><input data-runtime-timeout inputmode="numeric" value="${escapeAttr(runtime.max_run_secs || 1800)}" ${canManage ? '' : 'disabled'} /></label>
         ${usesApiKey ? `<label><span>${escapeHtml(auth.api_key_name || 'API Key')}</span><input data-runtime-api-key type="password" autocomplete="off" placeholder="${escapeAttr(auth.api_key_configured ? 'gespeichert - leer lassen' : 'API Key eingeben')}" ${canManage ? '' : 'disabled'} /></label>` : ''}
       </div>
-      ${usesSubscription ? subscriptionStatus(auth, canManage) : ''}
+      ${usesSubscription ? subscriptionStatus(auth, canManage, subscriptionAuth) : ''}
       ${canManage ? `
         <div class="runtime-actions">
           <button class="text-button settings-primary" type="button" data-runtime-save>Runtime speichern</button>
@@ -909,8 +927,11 @@ function runtimeDiagnosticMessage(provider, authMode, auth, diagnostics) {
   return message || 'Runtime-Status wird geladen.';
 }
 
-function subscriptionStatus(auth, canManage) {
+function subscriptionStatus(auth, canManage, subscriptionAuth = null) {
   const configured = Boolean(auth.subscription_session_configured);
+  const userCode = String(subscriptionAuth?.userCode || '').trim();
+  const failed = subscriptionAuth?.status === 'failed';
+  const pending = subscriptionAuth?.status === 'starting';
   const lines = [];
   if (auth.subscription_account_email) lines.push(kv('Account', auth.subscription_account_email));
   if (auth.subscription_plan) lines.push(kv('Plan', auth.subscription_plan));
@@ -918,10 +939,30 @@ function subscriptionStatus(auth, canManage) {
     <div class="runtime-auth-status ${configured ? 'is-ok' : 'is-danger'}">
       <strong>${escapeHtml(configured ? 'ChatGPT Subscription verbunden' : 'ChatGPT Subscription verbinden')}</strong>
       <span>${escapeHtml(configured ? 'OpenAI Modelle können diese Subscription verwenden.' : 'Öffnet den ChatGPT Login und speichert die Subscription für OpenAI Modelle.')}</span>
+      ${pending ? `
+        <div class="subscription-device-code is-pending">
+          <span>Geräte-Code</span>
+          <strong>wird angefordert</strong>
+        </div>
+      ` : ''}
+      ${userCode ? `
+        <div class="subscription-device-code">
+          <span>Geräte-Code</span>
+          <strong>${escapeHtml(formatDeviceCode(userCode))}</strong>
+          <em>${escapeHtml(subscriptionAuth?.message || 'Im OpenAI-Fenster eingeben.')}</em>
+        </div>
+      ` : ''}
+      ${failed ? `<div class="subscription-device-error">${escapeHtml(subscriptionAuth.error || 'ChatGPT Login konnte nicht gestartet werden.')}</div>` : ''}
       ${lines.length ? `<dl class="settings-kv">${lines.join('')}</dl>` : ''}
       ${canManage ? `<button class="text-button" type="button" data-runtime-authorize-subscription>${escapeHtml(configured ? 'Subscription erneuern' : 'Subscription verbinden')}</button>` : ''}
     </div>
   `;
+}
+
+function formatDeviceCode(value) {
+  const compact = String(value || '').replace(/[^a-z0-9]/gi, '').toUpperCase();
+  if (compact.length === 9) return `${compact.slice(0, 4)}-${compact.slice(4)}`;
+  return String(value || '').trim().toUpperCase();
 }
 
 function runtimePill(label, value, danger) {
@@ -1182,19 +1223,56 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
 }
 
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
-  const command = await dispatchModuleCommand({
-    commandBus,
-    db,
-    session,
-    sync,
-    commandType: 'ctox.subscription_auth.start',
-    moduleId: 'ctox',
-    recordId: 'subscription-auth',
-    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
-    source: 'business-os-settings',
-    timeoutMs: 180000,
+  try {
+    const command = await dispatchModuleCommand({
+      commandBus,
+      db,
+      session,
+      sync,
+      commandType: 'ctox.subscription_auth.start',
+      moduleId: 'ctox',
+      recordId: 'subscription-auth',
+      payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
+      source: 'business-os-settings',
+      timeoutMs: 30000,
+    });
+    const payload = command.result || command;
+    if (payload?.user_code || payload?.auth_url || payload?.verification_url) {
+      return { ...payload, source: payload.source || 'business_commands' };
+    }
+    throw new Error(`Command ${command.command_id || command.id || ''} lieferte keinen Geräte-Code.`);
+  } catch (error) {
+    const fallback = await startSubscriptionAuthViaHttp();
+    return {
+      ...fallback,
+      source: 'http_control_plane',
+      command_error: String(error?.message || error),
+    };
+  }
+}
+
+async function startSubscriptionAuthViaHttp() {
+  const callbackUrl = new URL('/api/business-os/ctox/subscription-auth/callback', window.location.href).href;
+  const response = await fetch('/api/business-os/ctox/subscription-auth/start', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ callback_url: callbackUrl }),
   });
-  return command.result || command;
+  const text = await response.text();
+  let payload = null;
+  try {
+    payload = text ? JSON.parse(text) : null;
+  } catch {
+    payload = null;
+  }
+  if (!response.ok) {
+    throw new Error(payload?.error || payload?.message || text || `ChatGPT Login konnte nicht gestartet werden (${response.status}).`);
+  }
+  if (!payload?.auth_url && !payload?.verification_url) {
+    throw new Error('CTOX HTTP-Fallback hat keine Login-URL geliefert.');
+  }
+  return payload;
 }
 
 function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {

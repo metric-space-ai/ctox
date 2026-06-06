@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-web-pairing-cache1'
+const APP_BUILD = '20260606-web-pairing-cache2'
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -6566,7 +6566,7 @@ function getFriendlyErrorMessage(error) {
   } else if (msg.includes('IndexedDB lock') || msg.includes('timed out')) {
     title = 'Lokaler Speicher blockiert';
     description = 'Die Verbindung zum lokalen Datenspeicher konnte nicht rechtzeitig hergestellt werden.';
-    advice = 'Möglicherweise ist das Business OS bereits in einem anderen Browser-Tab geöffnet. Bitte schließen Sie alle anderen geöffneten Tabs dieser Anwendung und versuchen Sie es erneut.';
+    advice = 'CTOX setzt den lokalen Browser-Speicher beim nächsten Versuch zurück und synchronisiert ihn neu. Falls ein anderer Tab diese Anwendung offen hält, schließen Sie diesen Tab zuerst.';
   } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
     title = 'Datenstruktur-Aktualisierung';
     description = 'Die Struktur des lokalen Datenspeichers wird an die neue Version angepasst.';
@@ -6586,6 +6586,34 @@ function getFriendlyErrorMessage(error) {
   }
 
   return { title, description, advice };
+}
+
+function isLocalRxDbStartupError(error) {
+  const msg = String(error?.message || error || '');
+  return msg.includes('IndexedDB lock')
+    || msg.includes('IndexedDB open blocked')
+    || msg.includes('RxDB database creation timed out')
+    || msg.includes('RxDB database retry timed out')
+    || msg.includes('RxDB createRxDatabase timed out')
+    || msg.includes('RxDB database reset timed out');
+}
+
+async function resetLocalRxDbBeforeStartupRetry(error) {
+  if (!isLocalRxDbStartupError(error)) return false;
+  setStatus('Lokale RxDB wird neu synchronisiert');
+  try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
+  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
+  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
+  state.sync = null;
+  state.db = null;
+  try {
+    const { resetBusinessDb } = await loadBusinessDbModule();
+    await resetBusinessDb({ name: businessDbName() });
+    return true;
+  } catch (resetError) {
+    console.warn('[business-os] local RxDB startup retry reset failed', resetError);
+    return false;
+  }
 }
 
 function showStartupError(error) {
@@ -6641,7 +6669,12 @@ function showStartupError(error) {
 
   const retryBtn = document.getElementById('startup-retry-btn');
   if (retryBtn) {
-    retryBtn.onclick = () => {
+    retryBtn.onclick = async () => {
+      retryBtn.disabled = true;
+      retryBtn.textContent = isLocalRxDbStartupError(error)
+        ? 'Lokale RxDB wird neu synchronisiert...'
+        : 'Wird neu geladen...';
+      await resetLocalRxDbBeforeStartupRetry(error);
       window.location.reload();
     };
   }

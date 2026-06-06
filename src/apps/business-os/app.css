@@ -2518,6 +2518,53 @@ body[data-auth-state="locked"] .topbar {
   margin-top: 2px;
 }
 
+.subscription-device-code {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 58%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.subscription-device-code span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.subscription-device-code strong {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 22px;
+  letter-spacing: 0;
+  line-height: 1.15;
+}
+
+.subscription-device-code em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.subscription-device-code.is-pending strong {
+  font-family: inherit;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.subscription-device-error {
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, #ff3b30 58%, var(--line));
+  border-radius: 8px;
+  color: #ffb3ad;
+  font-size: 12px;
+  line-height: 1.35;
+  background: color-mix(in srgb, #ff3b30 10%, var(--surface));
+}
+
 .runtime-auth-status.is-danger {
   border-color: color-mix(in srgb, #ff3b30 64%, var(--line));
   background: color-mix(in srgb, #ff3b30 9%, var(--surface));
