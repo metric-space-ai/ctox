@@ -7,7 +7,7 @@
 // programs the watcher. No JSON fields, no fake chat, no monitoring framing.
 import { CtoxResizer } from '../../shared/resizer.js';
 import { createContextMenu } from '../../shared/context-menu.js';
-import { showBusinessPrompt, showBusinessConfirm } from '../../shared/dialogs.js';
+import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js';
 
 const BUILD = '20260606-iot-automation';
 const COLLECTIONS = [
@@ -421,7 +421,21 @@ function openSignalMenu(assetId, attr, event) {
   state.menu?.show(event, [
     { label: 'Auftrag von diesem Signal', icon: '✦', action: () => newAuftrag(signalRef(assetId, attr)) },
     { label: 'Verlauf öffnen', icon: '∿', action: () => { state.selectedAssetId = assetId; render(); } },
+    { type: 'separator' },
+    { label: 'Als Webhook-Quelle einrichten', icon: '↘', action: () => registerWebhook(signalRef(assetId, attr)) },
   ]);
+}
+
+// Mint a token-gated inbound webhook bound to this signal and show the operator
+// the one-time URL + token (a real connector — no model needed).
+async function registerWebhook(ref) {
+  const res = await dispatch('ctox.iot.webhook.register', { realm: currentRealm(), signal_ref: ref });
+  const path = res && (res.ingest_path || (res.id ? '/ctox/iot/webhook/' + res.id : ''));
+  const token = res && res.token;
+  const msg = (path || token)
+    ? `Webhook-Quelle für „${signalLabel(ref)}" ist eingerichtet.\n\nExterne Sensoren POSTen an:\n  ${path || '(siehe ctox iot webhook)'}\nmit Header:\n  X-Webhook-Token: ${token || '(im Secret-Store)'}\n\nDer Wert wird zum Signal-Datenpunkt — gebundene Wächter feuern automatisch.`
+    : `Webhook-Quelle für „${signalLabel(ref)}" wurde angelegt.`;
+  await showBusinessAlert(msg, { title: 'Webhook-Quelle', confirmLabel: 'OK' });
 }
 
 function openWidgetMenu(widgetId, event) {
@@ -609,7 +623,7 @@ async function dispatch(command_type, payload, tolerant) {
   if (!bus?.dispatch) return;
   try {
     await state.ctx?.sync?.startCollection?.('business_commands');
-    await bus.dispatch({
+    return await bus.dispatch({
       id: `cmd_iot_${BUILD}_${Math.round(performance.now())}_${Math.floor(Math.random() * 1e4)}`,
       module: 'iot', command_type,
       record_id: payload.id || payload.widget_id || payload.dashboard_id || payload.name || payload.signal_ref || 'iot',
@@ -617,5 +631,6 @@ async function dispatch(command_type, payload, tolerant) {
     });
   } catch (err) {
     if (!tolerant) console.error('[iot] command failed', command_type, err);
+    return undefined;
   }
 }
