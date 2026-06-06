@@ -305,7 +305,7 @@ Open:
 
 ### Phase 23: Send queue drain on DataChannel open
 
-Status: Implemented locally, production deployment pending.
+Status: Deployed once, follow-up guard implemented locally.
 
 Production evidence after Phase 22 deploy:
 
@@ -334,6 +334,9 @@ Verification so far:
 
 Open:
 
+- The first deployment of this phase (`20260606-rxdb-sendqueue-drain1`) exposed a missing guard: `drainSendQueue()` threw `Cannot set properties of undefined (setting 'draining')` for peers that opened before any send queue existed.
+- Follow-up fix: `drainSendQueue(connection)` now returns immediately when `connection.sendQueue` is absent.
+- Rebuilt bundle and bumped cache keys to `20260606-rxdb-sendqueue-drain2`.
 - Must commit, push to `main`, deploy via `ctox upgrade --dev`, and rerun fresh-browser E2E.
 
 ### Step 5: Fix frontend task creation feedback

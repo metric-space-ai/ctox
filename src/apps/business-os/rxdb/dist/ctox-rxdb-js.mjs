@@ -1046,6 +1046,7 @@ var CtoxWebRtcNativePeer = class {
     });
   }
   async drainSendQueue(connection) {
+    if (!connection?.sendQueue) return;
     if (connection.sendQueue?.draining) return;
     connection.sendQueue.draining = true;
     try {
