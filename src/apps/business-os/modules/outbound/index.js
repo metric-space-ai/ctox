@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair3';
+const BUILD = '20260606-outbound-ux-repair4';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -5546,7 +5546,7 @@ async function importCompaniesFromPayload(campaign, payload) {
   const rows = await extractRowsFromPayload(payload);
   const filteredRows = filterRowsForCampaignImport(campaign, payload, rows);
   const sourceStatus = rows.length
-    ? filteredRows.length ? 'imported' : 'filtered_empty'
+    ? filteredRows.length ? 'importing' : 'filtered_empty'
     : 'queued_parser';
   await state.ctx.db.raw.outbound_sources.insert({
     id: sourceId,
@@ -5556,8 +5556,8 @@ async function importCompaniesFromPayload(campaign, payload) {
     status: sourceStatus,
     file_name: payload.source?.files?.[0]?.name || '',
     row_count: rows.length,
-    imported_count: filteredRows.length,
-    payload,
+    imported_count: 0,
+    payload: persistableImportPayload(payload, { keepFilesContent: !rows.length }),
     created_at_ms: now,
     updated_at_ms: now,
   });
@@ -5581,25 +5581,60 @@ async function importCompaniesFromPayload(campaign, payload) {
       dispatch: false,
     };
   }
-  const refs = await ensureCampaignKnowledge(campaign).catch((error) => {
-    console.warn('[outbound] knowledge campaign setup failed', error);
-    return campaignKnowledgeRefs(campaign);
-  });
   const companyDocs = buildCompanyDocsFromImportRows(campaign, sourceId, filteredRows, now);
-  for (const company of companyDocs) {
-    await upsertDoc(state.ctx.db.raw.outbound_companies, company.id, company);
-  }
-  await appendKnowledgeRows(campaign, refs.companiesKey, filteredRows.map((row) => companyKnowledgeRow(campaign, sourceId, row, now))).catch((error) => {
-    console.warn('[outbound] knowledge companies append failed', error);
+  const persistedCount = await upsertCompanyDocs(state.ctx.db.raw.outbound_companies, companyDocs);
+  await patchDoc(state.ctx.db.raw.outbound_sources, sourceId, {
+    status: persistedCount ? 'imported' : 'failed_parser',
+    imported_count: persistedCount,
+    payload: {
+      ...persistableImportPayload(payload, { keepFilesContent: false }),
+      parsed_row_count: rows.length,
+      persisted_company_count: persistedCount,
+    },
+    updated_at_ms: Date.now(),
   });
   await updateCampaignCounts(campaign.id);
   await loadAll({ skipImportRecovery: true });
   render();
+  ensureCampaignKnowledge(campaign)
+    .catch((error) => {
+      console.warn('[outbound] knowledge campaign setup failed', error);
+      return campaignKnowledgeRefs(campaign);
+    })
+    .then((refs) => appendKnowledgeRows(campaign, refs.companiesKey, filteredRows.map((row) => companyKnowledgeRow(campaign, sourceId, row, now))))
+    .catch((error) => {
+      console.warn('[outbound] knowledge companies append failed', error);
+    });
   return {
-    status: sourceStatus,
-    message: t('companiesImported', '{0} Firmen importiert.', companyDocs.length),
+    status: persistedCount ? 'imported' : 'failed_parser',
+    message: t('companiesImported', '{0} Firmen importiert.', persistedCount),
     detail: '',
     dispatch: false,
+  };
+}
+
+function persistableImportPayload(payload, options = {}) {
+  const keepFilesContent = options.keepFilesContent === true;
+  const source = payload?.source || {};
+  const files = Array.isArray(source.files) ? source.files.map((file) => ({
+    name: file.name || '',
+    type: file.type || '',
+    size: Number(file.size || 0),
+    lastModified: Number(file.lastModified || 0),
+    source: file.source || '',
+    ...(keepFilesContent ? {
+      text: file.text || '',
+      base64: file.base64 || '',
+    } : {}),
+  })) : [];
+  const text = String(source.text || '');
+  return {
+    ...payload,
+    source: {
+      ...source,
+      text: keepFilesContent ? text : text.slice(0, 2000),
+      files,
+    },
   };
 }
 
@@ -6490,6 +6525,42 @@ async function upsertDoc(collection, id, doc) {
     return;
   }
   await collection.insert(doc);
+}
+
+async function upsertCompanyDocs(collection, docs) {
+  if (!collection || !docs?.length) return 0;
+  const existingDocs = await collection.find().exec();
+  const existingById = new Map(existingDocs.map((doc) => {
+    const json = doc.toJSON ? doc.toJSON() : doc;
+    return [json.id, doc];
+  }));
+  const inserts = [];
+  const patches = [];
+  for (const doc of docs) {
+    const existing = existingById.get(doc.id);
+    if (existing) {
+      patches.push({ existing, doc });
+    } else {
+      inserts.push(doc);
+    }
+  }
+  if (inserts.length) {
+    if (typeof collection.bulkInsert === 'function') {
+      await collection.bulkInsert(inserts);
+    } else {
+      for (const doc of inserts) await collection.insert(doc);
+    }
+  }
+  for (const { existing, doc } of patches) {
+    const current = existing.toJSON ? existing.toJSON() : existing;
+    await existing.incrementalPatch({ ...doc, created_at_ms: current.created_at_ms || doc.created_at_ms });
+  }
+  const ids = new Set(docs.map((doc) => doc.id));
+  const persisted = await collection.find().exec();
+  return persisted.reduce((count, doc) => {
+    const json = doc.toJSON ? doc.toJSON() : doc;
+    return count + (ids.has(json.id) ? 1 : 0);
+  }, 0);
 }
 
 async function patchDoc(collection, id, patch) {
