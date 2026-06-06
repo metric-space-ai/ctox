@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair6';
+const BUILD = '20260606-outbound-ux-repair7';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -685,6 +685,7 @@ const state = {
   isScrolling: false,
   scrollTimeout: null,
   pendingRenderAfterScroll: false,
+  leftScrollTop: 0,
   statusFilter: '',
   tagFilter: '',
   lastTbodyHtml: '',
@@ -720,8 +721,11 @@ export async function mount(ctx) {
   wireRealtime();
 
   const scrollListener = (event) => {
-    const scrollContainer = event.target.closest('.outbound-table-scroll-unified');
+    const scrollContainer = event.target.closest('.outbound-table-scroll-unified, .outbound-left .outbound-scroll');
     if (scrollContainer) {
+      if (scrollContainer.matches('.outbound-left .outbound-scroll')) {
+        state.leftScrollTop = scrollContainer.scrollTop;
+      }
       state.isScrolling = true;
       if (state.scrollTimeout) window.clearTimeout(state.scrollTimeout);
       state.scrollTimeout = window.setTimeout(() => {
@@ -1239,10 +1243,10 @@ async function loadAll(options = {}) {
   state.pipeline = dedupePipelineItems(pipeline);
   state.runs = runs;
   refreshOperationalStateInBackground();
-  if (!state.selectedCampaignId && state.campaigns[0]) state.selectedCampaignId = state.campaigns[0].id;
+  selectBestCampaignAfterLoad();
   const visible = visibleCampaigns();
   if (visible.length && !visible.some((campaign) => campaign.id === state.selectedCampaignId)) {
-    state.selectedCampaignId = visible[0].id;
+    state.selectedCampaignId = preferredCampaign(visible)?.id || visible[0].id;
   }
   if (options.hydrateKnowledge === true) await hydrateSelectedCampaignFromKnowledge();
   if (options.skipImportRecovery !== true) {
@@ -1252,8 +1256,12 @@ async function loadAll(options = {}) {
       return;
     }
   }
-  if (!state.selectedCompanyId && currentCompanies()[0]) state.selectedCompanyId = currentCompanies()[0].id;
-  if (!state.selectedPipelineId && currentPipeline()[0]) state.selectedPipelineId = currentPipeline()[0].id;
+  if (state.selectedCompanyId && !currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId))) {
+    state.selectedCompanyId = '';
+  }
+  if (state.selectedPipelineId && !currentPipeline().some((item) => item.id === state.selectedPipelineId)) {
+    state.selectedPipelineId = '';
+  }
 }
 
 async function repairDanglingImportedSources() {
@@ -2596,6 +2604,7 @@ function render(force = false) {
 function renderLeft() {
   const root = state.ctx.host.querySelector('.outbound-left');
   if (!root) return;
+  const previousScrollTop = root.querySelector('.outbound-scroll')?.scrollTop ?? state.leftScrollTop ?? 0;
   const campaigns = visibleCampaigns();
   const outreachActive = !!state.outreachView;
   const outreachCounts = state.selectedCampaignId
@@ -2616,6 +2625,10 @@ function renderLeft() {
       </section>
     </div>
   `;
+  const scroll = root.querySelector('.outbound-scroll');
+  if (scroll) {
+    scroll.scrollTop = previousScrollTop;
+  }
 }
 
 function renderCampaignItem(campaign) {
@@ -4818,7 +4831,40 @@ function visibleCampaigns() {
     if (campaign.name !== DEFAULT_CAMPAIGN_NAME) return true;
     if (!emptyDefaultIds.has(campaign.id)) return true;
     return campaign.id === preferredDefault?.id;
-  });
+  }).sort(compareCampaignsForNavigation);
+}
+
+function selectBestCampaignAfterLoad() {
+  const visible = visibleCampaigns();
+  if (!visible.length) {
+    state.selectedCampaignId = '';
+    return;
+  }
+  if (state.selectedCampaignId && visible.some((campaign) => campaign.id === state.selectedCampaignId)) {
+    return;
+  }
+  state.selectedCampaignId = preferredCampaign(visible)?.id || visible[0].id;
+}
+
+function preferredCampaign(campaigns) {
+  return [...campaigns].sort(compareCampaignsForNavigation)[0] || null;
+}
+
+function compareCampaignsForNavigation(a, b) {
+  const dataDelta = campaignNavigationWeight(b) - campaignNavigationWeight(a);
+  if (dataDelta) return dataDelta;
+  const updatedDelta = Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0);
+  if (updatedDelta) return updatedDelta;
+  return String(a.name || '').localeCompare(String(b.name || ''), state.lang === 'en' ? 'en' : 'de');
+}
+
+function campaignNavigationWeight(campaign) {
+  if (!campaign?.id) return 0;
+  const scoped = campaignScopedRows(state, campaign.id);
+  return (scoped.companies.length * 1000)
+    + (scoped.pipeline.length * 100)
+    + (scoped.sources.length * 10)
+    + Number(campaign.company_count || 0);
 }
 
 function directCampaignHasData(campaignId) {
