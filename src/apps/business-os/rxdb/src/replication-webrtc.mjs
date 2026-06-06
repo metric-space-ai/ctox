@@ -372,7 +372,6 @@ class SharedRoomPeer {
     // Single-collection rooms omit the map (payload stays legacy-identical).
     if (this.collections.size > 1) {
       payload.collectionSchemas = await this.collectCollectionSchemas();
-      payload.collectionCheckpoints = await this.collectCollectionCheckpoints();
     }
     return payload;
   }

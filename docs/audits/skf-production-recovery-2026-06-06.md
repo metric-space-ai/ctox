@@ -258,6 +258,51 @@ ack/fail communication_routing_state
 
 This must happen for success, failure, panic, timeout, and review-terminal failure.
 
+## Phase Log
+
+### Phase 21: Production startup evidence after correct tenant login
+
+Status: Completed, not production ready.
+
+Findings:
+
+- Correct tenant login succeeds.
+- `skf.ctox.dev` receives the correct Business OS pairing room for the VPS instance.
+- The active instance reports WebRTC/native transport and `http_bridge_available=false`.
+- Browser WebRTC DataChannel receives large native master-change streams.
+- Browser-side IndexedDB stays empty for required collections and startup remains in initial-sync state.
+- Wire probe showed incoming native frames and browser ACKs, but no initial browser `ctoxProtocol` / token / pull request frames before the startup timeout.
+
+Conclusion:
+
+The immediate blocker is in the Browser/RxDB multiplex handshake path, before initial replication can mark required collections synced. This prevents correct data visibility and command processing verification on production.
+
+### Phase 22: Multiplex handshake preflight removal
+
+Status: Implemented locally, production deployment pending.
+
+Change:
+
+- Removed the browser-side wait for `collectCollectionCheckpoints()` from the first shared-room protocol payload in `src/apps/business-os/rxdb/src/replication-webrtc.mjs`.
+- Rebuilt `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs` so the served app-local RxDB bundle matches source.
+- Bumped Business OS app/RxDB cache keys to `20260606-rxdb-multiplex-handshake1`.
+
+Reason:
+
+The first browser protocol frame must not wait on local checkpoint enumeration across all multiplexed collections. On a cold or partially synced browser, that preflight can block the handshake before the native CTOX peer ever receives the browser protocol/token frames.
+
+Verification so far:
+
+- `node --check` passed for changed source and rebuilt bundle.
+- `node src/apps/business-os/scripts/assert-rxdb-only.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs` passed.
+- Active frontend search still has no command HTTP fallback implementation; remaining fallback strings are repair/guard references for historical data.
+
+Open:
+
+- `src/core/rxdb/tools/browser_rust_smoke.js` still hangs without honoring its configured timeout; this is not counted as a pass.
+- Production must be upgraded via `ctox upgrade --dev` and then verified with fresh-browser E2E before any production-ready claim.
+
 ### Step 5: Fix frontend task creation feedback
 
 For right-click, Bug Reporter, and Research continuation:
