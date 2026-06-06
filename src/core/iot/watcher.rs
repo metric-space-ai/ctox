@@ -294,7 +294,11 @@ fn state_map_to_json(map: Map) -> Value {
 ///   * `state`   — a persistent map carried across calls (hysteresis, counters)
 ///   * `now_ms`  — the injected evaluation clock (epoch-ms)
 ///   * `fire(grund)` / `fire()` — report that the condition held
-pub(crate) fn evaluate(trigger_code: &str, ctx: &SignalContext, state_in: &Value) -> WatcherOutcome {
+pub(crate) fn evaluate(
+    trigger_code: &str,
+    ctx: &SignalContext,
+    state_in: &Value,
+) -> WatcherOutcome {
     let state_fallback = if state_in.is_object() {
         state_in.clone()
     } else {
@@ -521,7 +525,11 @@ mod tests {
     // The watcher cannot reach `eval` (disabled) — a real sandbox boundary.
     #[test]
     fn eval_is_disabled() {
-        let out = evaluate(r#"eval("fire(\"x\")")"#, &ctx(series(&[(1, 1.0)]), 100), &json!({}));
+        let out = evaluate(
+            r#"eval("fire(\"x\")")"#,
+            &ctx(series(&[(1, 1.0)]), 100),
+            &json!({}),
+        );
         assert!(out.fired.is_empty());
         assert!(out.error.is_some(), "eval must be rejected");
     }

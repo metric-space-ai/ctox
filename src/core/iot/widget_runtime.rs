@@ -178,7 +178,11 @@ fn build_seed_prompt(
 /// Tick ONE widget: build its signal context, run the watcher, persist state,
 /// and route a fire to the durable queue-task chain. Pure w.r.t. the clock —
 /// `now_ms` is injected (production passes `crate::iot::now_ms()`).
-pub(crate) fn tick_widget(root: &std::path::Path, widget_id: &str, now_ms: i64) -> Result<WidgetTickOutcome> {
+pub(crate) fn tick_widget(
+    root: &std::path::Path,
+    widget_id: &str,
+    now_ms: i64,
+) -> Result<WidgetTickOutcome> {
     let conn = store::open_iot_store(root)?;
     commands::ensure_stub_schema(&conn)?;
 
@@ -225,7 +229,13 @@ pub(crate) fn tick_widget(root: &std::path::Path, widget_id: &str, now_ms: i64) 
     // Watcher failed → self-repair: persist the (unchanged) state, flip status,
     // and surface the error for CTOX to rewrite the program.
     if let Some(err) = outcome.error {
-        persist(&conn, widget_id, &outcome.state, STATUS_NEEDS_ATTENTION, &now_iso_str)?;
+        persist(
+            &conn,
+            widget_id,
+            &outcome.state,
+            STATUS_NEEDS_ATTENTION,
+            &now_iso_str,
+        )?;
         return Ok(WidgetTickOutcome {
             error: Some(err),
             ..Default::default()
@@ -410,7 +420,10 @@ mod tests {
         // A hot reading on the bound signal.
         record(&conn, "asset-1", "temperature", 35.0, 1_000);
 
-        upsert_widget(root, r#"if signal.last() > 30.0 { fire("Serverraum zu heiß"); }"#);
+        upsert_widget(
+            root,
+            r#"if signal.last() > 30.0 { fire("Serverraum zu heiß"); }"#,
+        );
 
         let out = tick_widget(root, "w1", 2_000).unwrap();
         assert_eq!(out.fired, vec!["Serverraum zu heiß".to_string()]);
@@ -542,5 +555,44 @@ mod tests {
             )
             .unwrap();
         assert_eq!(status, STATUS_NEEDS_ATTENTION);
+    }
+
+    // Soak: a naive always-fires watcher hammered with many datapoints must NOT
+    // produce unbounded durable work — the dedup key + spawn budget collapse it
+    // to one durable queue task (the bounded fire→chat-spawn the spec requires).
+    #[test]
+    fn widget_watcher_soak_stays_bounded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let conn = store::open_iot_store(root).unwrap();
+        commands::ensure_stub_schema(&conn).unwrap();
+        datapoints::init_schema(&conn).unwrap();
+        upsert_widget(root, r#"if signal.last() > 30.0 { fire("hot"); }"#);
+
+        let mut fires = 0;
+        for i in 0..80 {
+            record(&conn, "asset-1", "temperature", 35.0, 1_000 + i);
+            let out = tick_widget(root, "w1", 2_000 + i).unwrap();
+            if !out.fired.is_empty() {
+                fires += 1;
+            }
+            assert!(out.error.is_none(), "soak tick {i} errored: {:?}", out.error);
+        }
+        assert!(fires > 0, "the watcher should have fired during the soak");
+
+        // 80 fires, but the durable queue tasks are deduped/budget-bounded.
+        let core = crate::paths::core_db(root);
+        let ch = Connection::open(&core).unwrap();
+        let durable: i64 = ch
+            .query_row(
+                "SELECT COUNT(*) FROM communication_messages WHERE channel = 'iot'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        assert!(
+            durable >= 1 && durable <= 4,
+            "durable iot queue tasks must stay bounded under soak (got {durable} for 80 fires)"
+        );
     }
 }

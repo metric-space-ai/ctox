@@ -1270,7 +1270,11 @@ pub(crate) fn dashboard_upsert(
         req.realm = r.to_string();
         if let Some(id) = req.id.as_deref() {
             let er: Option<String> = conn
-                .query_row("SELECT realm FROM iot_dashboards WHERE id = ?1", params![id], |row| row.get(0))
+                .query_row(
+                    "SELECT realm FROM iot_dashboards WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
                 .optional()
                 .context("failed to realm-scope dashboard")?;
             if let Some(er) = er {
@@ -1297,20 +1301,31 @@ pub(crate) fn dashboard_upsert(
     })
 }
 
-pub(crate) fn dashboard_delete(root: &Path, id: &str, realm: Option<&str>) -> Result<EngineOutcome> {
+pub(crate) fn dashboard_delete(
+    root: &Path,
+    id: &str,
+    realm: Option<&str>,
+) -> Result<EngineOutcome> {
     let conn = store::open_iot_store(root)?;
     ensure_stub_schema(&conn)?;
     if let Some(r) = realm {
         let er: Option<String> = conn
-            .query_row("SELECT realm FROM iot_dashboards WHERE id = ?1", params![id], |row| row.get(0))
+            .query_row(
+                "SELECT realm FROM iot_dashboards WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
             .optional()
             .context("failed to realm-scope dashboard")?;
         if let Some(er) = er {
             anyhow::ensure!(er == r, "dashboard not found: {id}");
         }
     }
-    conn.execute("DELETE FROM iot_widgets WHERE dashboard_id = ?1", params![id])
-        .context("failed to delete dashboard widgets")?;
+    conn.execute(
+        "DELETE FROM iot_widgets WHERE dashboard_id = ?1",
+        params![id],
+    )
+    .context("failed to delete dashboard widgets")?;
     conn.execute("DELETE FROM iot_dashboards WHERE id = ?1", params![id])
         .context("failed to delete dashboard")?;
     project_record(&conn, "iot_dashboards", id, now_ms(), json!({}), true)?;
@@ -1354,8 +1369,21 @@ pub(crate) fn project_widget(conn: &Connection, id: &str) -> Result<(&'static st
         )
         .optional()
         .context("failed to read widget for projection")?;
-    let (dashboard_id, realm, signal_ref, cond_text, action_prompt, trigger_status, trigger_code, render_code, x, y, w, h, sort_index) =
-        row.ok_or_else(|| anyhow!("widget vanished: {id}"))?;
+    let (
+        dashboard_id,
+        realm,
+        signal_ref,
+        cond_text,
+        action_prompt,
+        trigger_status,
+        trigger_code,
+        render_code,
+        x,
+        y,
+        w,
+        h,
+        sort_index,
+    ) = row.ok_or_else(|| anyhow!("widget vanished: {id}"))?;
     let status = trigger_status.clone().unwrap_or_else(|| "idle".to_string());
     let payload = json!({
         "dashboard_id": dashboard_id, "realm": realm, "signal_ref": signal_ref,
@@ -1370,14 +1398,22 @@ pub(crate) fn project_widget(conn: &Connection, id: &str) -> Result<(&'static st
     Ok(("iot_widgets", id.to_string()))
 }
 
-pub(crate) fn widget_upsert(root: &Path, mut req: WidgetUpsertReq, realm: Option<&str>) -> Result<EngineOutcome> {
+pub(crate) fn widget_upsert(
+    root: &Path,
+    mut req: WidgetUpsertReq,
+    realm: Option<&str>,
+) -> Result<EngineOutcome> {
     let conn = store::open_iot_store(root)?;
     ensure_stub_schema(&conn)?;
     if let Some(r) = realm {
         req.realm = r.to_string();
         if let Some(id) = req.id.as_deref() {
             let er: Option<String> = conn
-                .query_row("SELECT realm FROM iot_widgets WHERE id = ?1", params![id], |row| row.get(0))
+                .query_row(
+                    "SELECT realm FROM iot_widgets WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
                 .optional()
                 .context("failed to realm-scope widget")?;
             if let Some(er) = er {
@@ -1428,7 +1464,11 @@ pub(crate) fn widget_delete(root: &Path, id: &str, realm: Option<&str>) -> Resul
     ensure_stub_schema(&conn)?;
     if let Some(r) = realm {
         let er: Option<String> = conn
-            .query_row("SELECT realm FROM iot_widgets WHERE id = ?1", params![id], |row| row.get(0))
+            .query_row(
+                "SELECT realm FROM iot_widgets WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
             .optional()
             .context("failed to realm-scope widget")?;
         if let Some(er) = er {
@@ -1457,7 +1497,11 @@ pub(crate) fn widget_arrange(
     ensure_stub_schema(&conn)?;
     if let Some(r) = realm {
         let er: Option<String> = conn
-            .query_row("SELECT realm FROM iot_widgets WHERE id = ?1", params![id], |row| row.get(0))
+            .query_row(
+                "SELECT realm FROM iot_widgets WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
             .optional()
             .context("failed to realm-scope widget")?;
         if let Some(er) = er {
@@ -1616,7 +1660,9 @@ fn enqueue_codegen(
             priority: priority.to_string(),
             suggested_skill: Some("iot-operations".to_string()),
             parent_message_key: None,
-            extra_metadata: Some(json!({ "kind": kind, "widget_id": widget_id, "signal_ref": signal_ref })),
+            extra_metadata: Some(
+                json!({ "kind": kind, "widget_id": widget_id, "signal_ref": signal_ref }),
+            ),
         },
     )?;
     Ok(EngineOutcome {
@@ -2412,7 +2458,15 @@ pub(crate) fn handle_business_command(
                     .and_then(|v| v.as_i64())
                     .ok_or_else(|| anyhow!("ctox.iot.widget.arrange requires {k}"))
             };
-            widget_arrange(root, id, coord("x")?, coord("y")?, coord("w")?, coord("h")?, realm)?
+            widget_arrange(
+                root,
+                id,
+                coord("x")?,
+                coord("y")?,
+                coord("w")?,
+                coord("h")?,
+                realm,
+            )?
         }
         "ctox.iot.widget.compile_trigger" => {
             let id = payload
@@ -2433,7 +2487,10 @@ pub(crate) fn handle_business_command(
                 .get("widget_id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("ctox.iot.widget.pause requires widget_id"))?;
-            let paused = payload.get("paused").and_then(|v| v.as_bool()).unwrap_or(true);
+            let paused = payload
+                .get("paused")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
             widget_set_pause(root, id, paused, realm)?
         }
         // Returns the token + ingest path directly (not an EngineOutcome) so the
@@ -2800,7 +2857,11 @@ mod tests {
         .unwrap();
         let conn = store::open_iot_store(root).unwrap();
         let status: String = conn
-            .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT trigger_status FROM iot_widgets WHERE id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(status, "armed");
 
@@ -2814,7 +2875,11 @@ mod tests {
         )
         .unwrap();
         let status: String = conn
-            .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT trigger_status FROM iot_widgets WHERE id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
         assert_eq!(status, "needs_attention");
     }
@@ -2843,8 +2908,12 @@ mod tests {
         .unwrap();
         let conn = store::open_iot_store(root).unwrap();
         let status = || -> String {
-            conn.query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
-                .unwrap()
+            conn.query_row(
+                "SELECT trigger_status FROM iot_widgets WHERE id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
         };
         assert_eq!(status(), "armed");
 
@@ -2880,8 +2949,14 @@ mod tests {
             &admin_session(),
         )
         .unwrap();
-        assert!(out["token"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
-        assert!(out["ingest_path"].as_str().unwrap_or("").starts_with("/ctox/iot/webhook/"));
+        assert!(out["token"]
+            .as_str()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false));
+        assert!(out["ingest_path"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("/ctox/iot/webhook/"));
         assert_eq!(out["header"], "X-Webhook-Token");
     }
 

@@ -34,7 +34,9 @@ fn parse_signal_ref(signal_ref: &str) -> Result<(&str, &str)> {
     signal_ref
         .split_once("::")
         .filter(|(a, b)| !a.is_empty() && !b.is_empty())
-        .ok_or_else(|| anyhow!("signal_ref must be '<asset_id>::<attribute_name>', got '{signal_ref}'"))
+        .ok_or_else(|| {
+            anyhow!("signal_ref must be '<asset_id>::<attribute_name>', got '{signal_ref}'")
+        })
 }
 
 /// Extract the value at a dot-path (`"data.temp.value"`) from a JSON payload.
@@ -237,7 +239,14 @@ pub(crate) fn handle_http(
         constant_eq(provided_token, &expected),
         "webhook token rejected"
     );
-    ingest(root, &signal_ref, payload, value_path.as_deref(), ts_ms, None)
+    ingest(
+        root,
+        &signal_ref,
+        payload,
+        value_path.as_deref(),
+        ts_ms,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -285,7 +294,15 @@ mod tests {
         make_asset(root);
 
         let payload = json!({ "device": "srv-1", "readings": { "temperature": 31.5 } });
-        ingest(root, "asset-1::temperature", &payload, Some("readings.temperature"), 1_000, None).unwrap();
+        ingest(
+            root,
+            "asset-1::temperature",
+            &payload,
+            Some("readings.temperature"),
+            1_000,
+            None,
+        )
+        .unwrap();
 
         let conn = store::open_iot_store(root).unwrap();
         let pts = datapoints::all(&conn, "asset-1", "temperature", 0, 10_000).unwrap();
@@ -340,20 +357,42 @@ mod tests {
         // ts=0 is normalized to now (§2A.2) so it lands inside the watcher's
         // wall-clock lookback window (the tick is anchored at now_ms()).
         let payload = json!({ "temperature": 35.0 });
-        ingest(root, "asset-1::temperature", &payload, Some("temperature"), 0, None).unwrap();
+        ingest(
+            root,
+            "asset-1::temperature",
+            &payload,
+            Some("temperature"),
+            0,
+            None,
+        )
+        .unwrap();
 
         let conn = store::open_iot_store(root).unwrap();
         let status: String = conn
-            .query_row("SELECT trigger_status FROM iot_widgets WHERE id = 'w1'", [], |r| r.get(0))
+            .query_row(
+                "SELECT trigger_status FROM iot_widgets WHERE id = 'w1'",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(status, "fired", "inbound webhook should drive the watcher to fire");
+        assert_eq!(
+            status, "fired",
+            "inbound webhook should drive the watcher to fire"
+        );
     }
 
     #[test]
     fn build_outbound_sets_json_and_rejects_bad_url() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let req = build_outbound(root, "https://erp.example/hook", &json!({ "a": 1 }), None, &[]).unwrap();
+        let req = build_outbound(
+            root,
+            "https://erp.example/hook",
+            &json!({ "a": 1 }),
+            None,
+            &[],
+        )
+        .unwrap();
         assert_eq!(req.method, "POST");
         assert_eq!(req.headers.get("Content-Type").unwrap(), "application/json");
         assert!(req.headers.get("Authorization").is_none());
@@ -391,15 +430,28 @@ mod tests {
         assert_eq!(reg["ingest_path"], "/ctox/iot/webhook/wh1");
 
         // Wrong token → rejected.
-        let err = handle_http(root, "wh1", "not-the-token", &json!({ "readings": { "temp": 99.0 } }), 0)
-            .unwrap_err();
+        let err = handle_http(
+            root,
+            "wh1",
+            "not-the-token",
+            &json!({ "readings": { "temp": 99.0 } }),
+            0,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains("rejected"), "got: {err}");
 
         // Unknown webhook id → error.
         assert!(handle_http(root, "nope", &token, &json!({}), 0).is_err());
 
         // Valid token → ingested to the bound signal.
-        handle_http(root, "wh1", &token, &json!({ "readings": { "temp": 27.0 } }), 0).unwrap();
+        handle_http(
+            root,
+            "wh1",
+            &token,
+            &json!({ "readings": { "temp": 27.0 } }),
+            0,
+        )
+        .unwrap();
         let conn = store::open_iot_store(root).unwrap();
         let pts = datapoints::all(&conn, "asset-1", "temperature", 0, i64::MAX).unwrap();
         assert!(

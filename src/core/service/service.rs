@@ -2284,7 +2284,12 @@ fn handle_iot_webhook_request(
     let token = request
         .headers()
         .iter()
-        .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case("x-webhook-token"))
+        .find(|h| {
+            h.field
+                .as_str()
+                .as_str()
+                .eq_ignore_ascii_case("x-webhook-token")
+        })
         .map(|h| h.value.as_str().to_string())
         .unwrap_or_default();
     let mut body = String::new();

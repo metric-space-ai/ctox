@@ -80,7 +80,13 @@ Der Mensch schreibt nur Prompts (Wenn/Dann). CTOX **programmiert** Trigger-Code 
 
 **Webhooks ✓ (rein & raus, end-to-end):** `webhook register` mintet eine token-gegatete Inbound-URL, an ein Signal gebunden (Token im **Secret-Store**); `webhook::handle_http` prüft das Bearer-Token konstant-zeitig und ingestet über den vollen Inbound-Pfad (Conditions + Wächter-Tick) — voll getestet ohne HTTP. Die dünne Daemon-Route `POST /ctox/iot/webhook/<id>` (`X-Webhook-Token`) auf dem bestehenden `tiny_http`-Listener delegiert daran (Fehler → 401/400, kein Leak). `webhook send` = Outbound-POST (Auth-Secret aus dem Store). E2E „Webhook → Wächter feuert" + Auth-Tests grün.
 
-**Offen (braucht deinen Browser/Netz-Test):** P2–P4-Frontend (im Working-Tree; Render-Sandbox sicher via `<iframe>`, Editor, Webhook-UI), die Inbound-HTTP-Route, P5-Politur/Zustände/CI-Soak.
+**P2–P4 ✓ (gebaut, committet & Playwright-verifiziert gegen die echten BOS-Komponenten + Mock-`ctx`):** 2-Pane + `CtoxResizer` + `ctox-pane` + Tokens; Asset/Signal-Baum + `createContextMenu`; Karten⇄Liste; **3-Teil-Automatisierungs-Kachel**; **Render-Sandbox** (`render_code` im `<iframe sandbox>`, CSP, Lint — browser-verifiziert); **3-Tab-Editor** (Auftrag/Trigger-Logik/Widget-Code, je „neu generieren"); Setup via `showBusinessPrompt`/`-Confirm`; **Webhook-Source-UI** (Token/URL); **Drag-Reorder** des Grids (persistiert via `sort_index`). Inbound-HTTP-Route im Daemon (`#[cfg(not(unix))]`-Front über `webhook::handle_http`).
+
+**P5 großteils ✓:** Self-Repair (`needs_attention` + `validate_program`) · agent-baubar (`ctox iot …` + Skill, **Live-Binary-Roundtrip** verifiziert) · **i18n DE+EN** (browser-verifiziert) · Leer-Zustände · **CI-Soak** (`widget_watcher_soak_stays_bounded` — 80 Fires → bounded durable Work) · `rustfmt` clean · `iot.test.mjs` grün (11 Collections, module.json/registry konsistent, Bundle). Laden/Sync = shell-owned.
+
+**Verifikation:** ~167 Rust-Unit-Tests grün · Schema-Parität grün · `iot.test.mjs` grün · **Playwright** (Mount→Render→Sandbox→Editor→Kontextmenü→Pause→Anlege-Flow→Webhook→Drag→i18n DE/EN; Konsole fehlerfrei) · **Live-Binary** (Wächter `fired`, Webhook-Token, Codegen-Enqueue, isoliert via `CTOX_ROOT`).
+
+**Genuin offen (harte externe Abhängigkeit):** (1) **LLM-Codegen-Generierung** der `compile_trigger`/`generate_render`-Aufträge — braucht das Chat-Modell auf `gpu1-a6000`/API (Enqueue ist verifiziert); (2) **Live-Daemon-Stack-E2E** (echtes RxDB/WebRTC) statt Mock-`ctx` + Live-CLI.
 
 ## 8. Qualitäts-Gate
 - [ ] Liest sich als **„meine CTOX-Aufträge"**, nicht als Chart-Dashboard; Politur auf `customers`/`shiftflow`-Niveau.
