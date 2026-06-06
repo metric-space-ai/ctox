@@ -17,7 +17,7 @@ import {
   activeOutreachCounts,
 } from './active-outreach.js?v=20260605-rxdb-cancel1';
 
-const BUILD = '20260606-outbound-ux-repair1';
+const BUILD = '20260606-outbound-ux-repair3';
 let loadedOutboundLang = '';
 let t = (key, fallback, ...args) => {
   let val = fallback ?? key;
@@ -762,14 +762,7 @@ export async function mount(ctx) {
   const resizeCleanup = setupOutboundColumnResizing();
   if (resizeCleanup) state.cleanup.push(resizeCleanup);
   render();
-  ensureCampaignKnowledge(selectedCampaign())
-    .then(async () => {
-      await loadAll({ hydrateKnowledge: false });
-      render();
-    })
-    .catch((error) => {
-      console.warn('[outbound] selected campaign knowledge setup failed', error);
-    });
+  scheduleCampaignKnowledgeSetup(selectedCampaign());
   return () => {
     state.centerResizeCleanup?.();
     state.centerResizeCleanup = null;
@@ -1041,6 +1034,40 @@ function nativeRxdbSyncReady() {
     || state.ctx?.sync?.config?.native_rxdb_peer_available === true;
 }
 
+function businessCommandsSyncReady() {
+  if (!state.ctx?.db?.raw?.business_commands || !nativeRxdbSyncReady()) return false;
+  const status = state.ctx?.sync?.diagnostics?.collections?.business_commands || null;
+  if (!status) return false;
+  const value = String(status.connectionStatus || status.status || '').trim();
+  return ['connected', 'running', 'reused'].includes(value);
+}
+
+function scheduleCampaignKnowledgeSetup(campaign, options = {}) {
+  if (!campaign?.id) return;
+  const delayMs = Number(options.delayMs || 2500);
+  const maxAttempts = Number(options.maxAttempts || 8);
+  let attempts = 0;
+  const run = async () => {
+    attempts += 1;
+    if (!businessCommandsSyncReady()) {
+      if (attempts < maxAttempts) window.setTimeout(run, delayMs);
+      return;
+    }
+    try {
+      await ensureCampaignKnowledge(campaign);
+      await loadAll({ hydrateKnowledge: false });
+      render();
+    } catch (error) {
+      if (attempts < maxAttempts) {
+        window.setTimeout(run, delayMs);
+        return;
+      }
+      console.warn('[outbound] campaign knowledge setup deferred; using local campaign projections', error);
+    }
+  };
+  window.setTimeout(run, delayMs);
+}
+
 async function waitForBusinessCommandProjection(commandId, startedAtMs, timeoutMs = 45000) {
   const collection = state.ctx?.db?.raw?.business_commands;
   if (!collection) return null;
@@ -1193,9 +1220,7 @@ async function ensureDefaultCampaign() {
     updated_at_ms: now,
   };
   await collection.insert(campaign);
-  ensureCampaignKnowledge(campaign).catch((error) => {
-    console.warn('[outbound] default campaign knowledge setup failed', error);
-  });
+  scheduleCampaignKnowledgeSetup(campaign, { delayMs: 5000 });
 }
 
 async function loadAll(options = {}) {
@@ -3457,7 +3482,7 @@ function renderQualificationSplit(campaign) {
 
   const rowsHtml = visibleRows.length
     ? `${visibleRows.map(row => renderCRMCompanyRows(row)).join('')}${renderTableLimitRow(rows.length, activeCols.length)}`
-    : renderTableEmptyRow(activeCols.length, emptyCompanyMessage);
+    : '';
   state.lastTbodyHtml = rowsHtml;
 
   const headersHtml = activeCols.map(col => {
@@ -3468,8 +3493,20 @@ function renderQualificationSplit(campaign) {
     return renderHeaderCell(col.id, col.label, col.className);
   }).join('');
 
+  const hasSelectedDetail = state.activeView === 'pipeline'
+    ? Boolean(state.selectedPipelineId && currentPipeline().some((item) => item.id === state.selectedPipelineId))
+    : Boolean(state.selectedCompanyId && currentCompanies().some((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)));
+  const detailPaneHtml = hasSelectedDetail
+    ? `
+      <button class="outbound-center-resizer" type="button" data-outbound-center-resizer aria-label="${escapeHtml(t('resizeDetailsPane', 'Tabellen- und Detailbereich anpassen'))}"></button>
+      <aside class="outbound-pane outbound-right" aria-label="${escapeHtml(t('researchDetails', 'Research Details'))}">
+        ${state.activeView === 'pipeline' ? renderPipelineDetail() : renderCompanyDetail()}
+      </aside>
+    `
+    : '';
+
   return `
-    <div class="outbound-split-workbench" data-outbound-center-split>
+    <div class="outbound-split-workbench${hasSelectedDetail ? '' : ' is-detail-hidden'}" data-outbound-center-split>
       <div class="outbound-unified-workbench" data-view="${state.viewMode}">
         <div class="outbound-table-scroll-unified">
           <table class="crm-table">
@@ -3482,12 +3519,10 @@ function renderQualificationSplit(campaign) {
               ${rowsHtml}
             </tbody>
           </table>
+          ${visibleRows.length ? '' : renderTableEmptyState(emptyCompanyMessage)}
         </div>
       </div>
-      <button class="outbound-center-resizer" type="button" data-outbound-center-resizer aria-label="${escapeHtml(t('resizeDetailsPane', 'Tabellen- und Detailbereich anpassen'))}"></button>
-      <aside class="outbound-pane outbound-right" aria-label="${escapeHtml(t('researchDetails', 'Research Details'))}">
-        ${state.activeView === 'pipeline' ? renderPipelineDetail() : renderCompanyDetail()}
-      </aside>
+      ${detailPaneHtml}
     </div>
   `;
 }
@@ -3603,6 +3638,16 @@ function renderTableLimitRow(total, columnCount) {
 }
 
 function renderTableEmptyRow(columnCount, message) {
+  return `
+    <tr>
+      <td colspan="${columnCount}" class="outbound-table-empty">
+        ${renderTableEmptyState(message)}
+      </td>
+    </tr>
+  `;
+}
+
+function renderTableEmptyState(message) {
   const hasSources = currentSources().length > 0;
   const title = hasSources
     ? t('emptyAfterImportTitle', 'Keine Firmen sichtbar')
@@ -3611,15 +3656,13 @@ function renderTableEmptyRow(columnCount, message) {
     ? message
     : t('emptyBeforeImportDetail', 'Lege einen Import aus Excel, PDF, URL oder Freitext an. Danach erscheinen die Firmen hier als prüfbare Arbeitsliste.');
   return `
-    <tr>
-      <td colspan="${columnCount}" class="outbound-table-empty">
+    <div class="outbound-table-empty-overlay">
         <div class="outbound-empty-state">
           <strong>${escapeHtml(title)}</strong>
           <span>${escapeHtml(detail)}</span>
           <button class="outbound-button primary" type="button" data-action="import-source">${escapeHtml(t('importJob', 'Importjob anlegen'))}</button>
         </div>
-      </td>
-    </tr>
+    </div>
   `;
 }
 
@@ -6213,11 +6256,13 @@ function currentPipeline() {
 }
 
 function selectedCompany() {
-  return currentCompanies().find((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)) || currentCompanies()[0] || null;
+  if (!state.selectedCompanyId) return null;
+  return currentCompanies().find((item) => item.id === state.selectedCompanyId || item.duplicate_company_ids?.includes(state.selectedCompanyId)) || null;
 }
 
 function selectedPipelineItem() {
-  return currentPipeline().find((item) => item.id === state.selectedPipelineId) || currentPipeline()[0] || null;
+  if (!state.selectedPipelineId) return null;
+  return currentPipeline().find((item) => item.id === state.selectedPipelineId) || null;
 }
 
 function campaignScopedRows(data, campaignId) {

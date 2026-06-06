@@ -1129,7 +1129,7 @@
 
 .outbound-split-workbench {
   display: grid;
-  grid-template-columns: minmax(360px, 1.2fr) 12px minmax(360px, 1fr);
+  grid-template-columns: minmax(0, 1fr) 10px minmax(320px, 420px);
   align-content: stretch;
   align-items: stretch;
   flex: 1;
@@ -1137,6 +1137,15 @@
   min-height: 0;
   overflow: hidden;
   overscroll-behavior: contain;
+}
+
+.outbound-split-workbench.is-detail-hidden {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.outbound-split-workbench.is-detail-hidden > .outbound-center-resizer,
+.outbound-split-workbench.is-detail-hidden > .outbound-right {
+  display: none;
 }
 
 .outbound-split-workbench > .outbound-unified-workbench,
@@ -3366,6 +3375,7 @@
 }
 
 .outbound-table-scroll-unified {
+  position: relative;
   height: 100%;
   overflow: auto;
   scrollbar-gutter: stable both-edges;
@@ -3377,13 +3387,28 @@
   color: var(--outbound-muted);
 }
 
+.outbound-table-empty-overlay {
+  position: absolute;
+  inset: 66px 0 0;
+  z-index: 1;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  padding: 34px 18px;
+  pointer-events: none;
+}
+
 .outbound-empty-state {
   display: grid;
   justify-items: center;
   gap: 8px;
   max-width: 520px;
-  margin: 56px auto;
+  margin: 0 auto;
   padding: 18px;
+}
+
+.outbound-empty-state .outbound-button {
+  pointer-events: auto;
 }
 
 .outbound-empty-state strong {
