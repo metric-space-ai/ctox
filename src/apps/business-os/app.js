@@ -31,6 +31,9 @@ const DEFAULT_TASKBAR_PIN_IDS = ['ctox', 'tickets', 'documents', 'spreadsheets',
 // the ctox-rxdb-js bundle (rxdb/src/webrtc-native.mjs). The browser_* shell
 // criticals are intentionally omitted here because they only register when the
 // Browser module is active; warming them eagerly is not this app's job.
+// desktop_file_chunks is intentionally not shell-critical: it can contain very
+// large file bodies and must be pulled lazily by file/document views instead of
+// blocking login, module navigation, or command dispatch at shell startup.
 // assertCriticalSyncCollectionsMatchBundle() runs once the bundle loads and
 // throws if this list ever drifts out of that source-of-truth set.
 const CRITICAL_SYNC_COLLECTIONS = [
@@ -39,7 +42,6 @@ const CRITICAL_SYNC_COLLECTIONS = [
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
-  'desktop_file_chunks',
 ];
 
 let criticalSyncCollectionsBundleChecked = false;
@@ -2662,7 +2664,6 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
     'business_commands',
     'ctox_queue_tasks',
     'desktop_files',
-    'desktop_file_chunks',
   ].includes(collection)) return false;
   return true;
 }

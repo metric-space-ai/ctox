@@ -290,7 +290,6 @@ function assertAdvancedStatusInterfaceExists() {
     'business_commands',
     'ctox_queue_tasks',
     'desktop_files',
-    'desktop_file_chunks',
   ]) {
     if (!appContent.includes(`'${criticalCollection}'`)) {
       offenders.push(`src/apps/business-os/app.js: advanced status default missing ${criticalCollection}`);
@@ -299,7 +298,7 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/function\s+isRequiredCollectionReady/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: advanced status missing required collection readiness helper');
   }
-  if (!/business_commands[\s\S]{0,180}ctox_queue_tasks[\s\S]{0,220}desktop_files[\s\S]{0,140}desktop_file_chunks[\s\S]{0,220}\]\.includes\(collection\)[\s\S]{0,80}return true/.test(appContent)) {
+  if (!/business_commands[\s\S]{0,180}ctox_queue_tasks[\s\S]{0,220}desktop_files[\s\S]{0,220}\]\.includes\(collection\)[\s\S]{0,80}return true/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: advanced status does not handle empty command/file collections explicitly');
   }
   if (!/collectionErrors/.test(appContent) || !/serializeAdvancedStatusCollectionError/.test(appContent)) {

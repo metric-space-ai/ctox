@@ -40,13 +40,15 @@ const SIGNALING_RECONNECT_MAX_MS = 30_000;
 // silently drift. Browser_* members only register when the Browser module is
 // active; the grant logic below gates only on criticals actually requested this
 // session (see criticalRequested / criticalRtcPeerConnectionsReady).
+// desktop_file_chunks is deliberately not shell-critical because large file
+// bodies must not block startup or command dispatch; file/document views request
+// it lazily when they need chunk bodies.
 export const SHELL_CRITICAL_COLLECTIONS = new Set([
   'ctox_runtime_settings',
   'business_module_catalog',
   'business_commands',
   'ctox_queue_tasks',
   'desktop_files',
-  'desktop_file_chunks',
   'browser_sessions',
   'browser_tabs',
   'browser_frames',
