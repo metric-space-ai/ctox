@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-web-pairing-session2'
+const APP_BUILD = '20260606-web-pairing-cache1'
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -78,6 +78,7 @@ let syncModule = null;
 let commandBusModulePromise = null;
 let coreSchemaModulesPromise = null;
 let reactSettingsModulePromise = null;
+let launchConfigForPageSession = null;
 
 const SHELL_COL_MIN = {
   left: 210,
@@ -6161,6 +6162,8 @@ async function loadSyncConfig() {
 }
 
 async function readBusinessOsLaunchConfig() {
+  if (launchConfigForPageSession) return launchConfigForPageSession;
+
   const root = globalRoot();
   const storedPairingConfig = allowsStoredPairingConfig() ? readStoredPairingConfig() : null;
   if (!allowsStoredPairingConfig()) {
@@ -6177,6 +6180,9 @@ async function readBusinessOsLaunchConfig() {
     storedPairingConfig,
   );
   const config = await normalizeBusinessOsLaunchConfig(launch);
+  if (config) {
+    launchConfigForPageSession = config;
+  }
   if (config && config.source === 'url' && allowsStoredPairingConfig()) {
     writeStoredPairingConfig(config);
     scrubPairingConfigFromUrl();
