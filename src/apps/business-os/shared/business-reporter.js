@@ -1,4 +1,5 @@
 const REPORTER_STYLE_ID = 'ctox-business-reporter-style';
+const REPORT_DISPATCH_TIMEOUT_MS = 25000;
 
 let reporterState = null;
 let fabButton = null;
@@ -444,14 +445,7 @@ async function submitReport(state, module, form) {
     },
     user_agent: navigator.userAgent,
     created_at: new Date(now).toISOString(),
-    attachment: state.attachment ? {
-      rect: state.attachment.rect,
-      strokes: state.attachment.strokes,
-      capture_mode: state.attachment.captureMode,
-      captured_at: state.attachment.capturedAt,
-      mime: state.attachment.compositeDataUrl?.match(/^data:([^;]+)/)?.[1] || 'image/png',
-      data_url: state.attachment.compositeDataUrl,
-    } : null,
+    attachment: reporterAttachmentContext(state.attachment),
   };
   submit.disabled = true;
   status.textContent = 'Sende...';
@@ -482,11 +476,11 @@ async function submitReport(state, module, form) {
     window.dispatchEvent(new CustomEvent('ctox-business-os-reports-updated', {
       detail: { reportId: result.report_id || '', moduleId: module.id || '' },
     }));
-    status.textContent = 'Als CTOX Task angelegt.';
-    setTimeout(() => closeReporterDialog(state), 700);
+    status.textContent = reporterStatusText(result);
+    setTimeout(() => closeReporterDialog(state), result.task_id ? 900 : 1400);
   } catch (error) {
     submit.disabled = false;
-    status.textContent = error.message || String(error);
+    status.textContent = reporterErrorText(error);
   }
 }
 
@@ -514,7 +508,7 @@ export async function dispatchBusinessReport({
     role: session.user.role || 'user',
     is_admin: Boolean(session.user.is_admin),
   } : null;
-  await commandBus.dispatch({
+  const dispatchResult = await withTimeout(commandBus.dispatch({
     id: commandId,
     module: 'ctox',
     type: `ctox.report.${kind || 'bug'}`,
@@ -535,16 +529,66 @@ export async function dispatchBusinessReport({
       actor,
       created_at: clientContext?.created_at || new Date(now).toISOString(),
     },
-  });
+  }), REPORT_DISPATCH_TIMEOUT_MS, 'Report konnte nicht rechtzeitig an CTOX übergeben werden.');
+  const taskId = String(dispatchResult?.task_id || '').trim();
+  const status = String(dispatchResult?.status || (taskId ? 'accepted' : 'pending_sync')).trim() || 'pending_sync';
+  const taskStatus = String(dispatchResult?.task_status || (taskId ? 'queued' : status)).trim() || status;
   return {
-    ok: true,
+    ok: dispatchResult?.ok !== false,
     report_id: reportId,
-    command_id: commandId,
-    task_id: '',
-    task_status: 'pending_sync',
-    status: 'open',
-    transport: 'rxdb-webrtc',
+    command_id: dispatchResult?.command_id || commandId,
+    task_id: taskId,
+    task_status: taskStatus,
+    status,
+    transport: dispatchResult?.transport || 'rxdb-webrtc',
   };
+}
+
+function reporterAttachmentContext(attachment) {
+  if (!attachment) return null;
+  const dataUrl = String(attachment.compositeDataUrl || '');
+  const mime = dataUrl.match(/^data:([^;]+)/)?.[1] || 'image/png';
+  const strokes = Array.isArray(attachment.strokes) ? attachment.strokes : [];
+  return {
+    rect: attachment.rect || null,
+    capture_mode: attachment.captureMode || '',
+    captured_at: attachment.capturedAt || '',
+    mime,
+    has_screenshot: Boolean(dataUrl),
+    screenshot_bytes_estimate: dataUrlByteLength(dataUrl),
+    stroke_count: strokes.length,
+    stroke_points_count: countStrokePoints(strokes),
+  };
+}
+
+function dataUrlByteLength(dataUrl) {
+  const payload = String(dataUrl || '').split(',')[1] || '';
+  if (!payload) return 0;
+  return Math.floor((payload.length * 3) / 4);
+}
+
+function countStrokePoints(strokes) {
+  return strokes.reduce((sum, stroke) => sum + (Array.isArray(stroke) ? stroke.length : 0), 0);
+}
+
+function reporterStatusText(result) {
+  if (result?.task_id) return 'Als CTOX Task angelegt.';
+  if (String(result?.status || '').toLowerCase() === 'pending_sync') {
+    return 'Report lokal gespeichert; CTOX Sync steht aus.';
+  }
+  return 'Report an CTOX übergeben.';
+}
+
+function reporterErrorText(error) {
+  const message = String(error?.message || error || '').trim();
+  return message || 'Report konnte nicht gesendet werden.';
+}
+
+async function withTimeout(promise, timeoutMs, message) {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
+  ]);
 }
 
 async function upsertLocalReport(state, report) {

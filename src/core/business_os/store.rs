@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 use sha2::Sha256;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::io;
@@ -61,6 +61,7 @@ const BUSINESS_OS_ROOM_PASSWORD_SECRET_NAME: &str = "webrtc_room_password";
 const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
+const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -328,6 +329,11 @@ pub struct BusinessOsReportMutation {
     pub expected: String,
     #[serde(default)]
     pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct QueueProjectionRepairOptions {
+    pub apply: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -5347,6 +5353,337 @@ pub fn pull_business_command_status_record(
         return Ok(None);
     }
     Ok(Some(record))
+}
+
+pub fn repair_queue_projections(
+    root: &Path,
+    options: QueueProjectionRepairOptions,
+) -> anyhow::Result<Value> {
+    let apply = options.apply;
+    let conn = open_store(root)?;
+    let now = now_ms() as i64;
+    let projection_rows = {
+        let mut statement = conn.prepare(
+            "SELECT record_id, payload_json, updated_at_ms
+             FROM business_records
+             WHERE collection = 'ctox_queue_tasks'
+               AND deleted = 0
+             ORDER BY updated_at_ms ASC, record_id ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let mut counters: BTreeMap<&'static str, usize> = BTreeMap::new();
+    let mut actions: Vec<Value> = Vec::new();
+    let mut touched_commands = HashSet::new();
+
+    for (task_id, payload_json, projection_updated_at_ms) in projection_rows {
+        let mut payload = serde_json::from_str::<Value>(&payload_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "id": task_id,
+                "status": "queued",
+                "route_status": "pending"
+            })
+        });
+        let command_id = payload
+            .get("command_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .or_else(|| queue_projection_command_id(&conn, &task_id).ok().flatten());
+        let projection_route_status = payload
+            .get("route_status")
+            .and_then(Value::as_str)
+            .or_else(|| payload.get("status").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string();
+        let projection_status = payload
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+
+        match channels::load_queue_task(root, &task_id)? {
+            Some(mut task) => {
+                let mut desired_route_status = task.route_status.clone();
+                let mut repair_kind = None;
+                if desired_route_status == "leased"
+                    && queue_status_note_is_terminal_success(task.status_note.as_deref())
+                {
+                    desired_route_status = "handled".to_string();
+                    repair_kind = Some("leased_terminal_success_note");
+                    if apply {
+                        let note = task
+                            .status_note
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("Business OS queued command completed.");
+                        let _ = channels::update_queue_task(
+                            root,
+                            channels::QueueTaskUpdateRequest {
+                                message_key: task_id.clone(),
+                                route_status: Some("handled".to_string()),
+                                status_note: Some(format!("business-os:terminal-success: {note}")),
+                                ..Default::default()
+                            },
+                        )?;
+                        if let Some(reloaded) = channels::load_queue_task(root, &task_id)? {
+                            task = reloaded;
+                        }
+                    }
+                } else if desired_route_status == "leased"
+                    && queue_status_note_is_terminal_failure(task.status_note.as_deref())
+                {
+                    desired_route_status = "failed".to_string();
+                    repair_kind = Some("leased_terminal_failure_note");
+                    if apply {
+                        let reason = task
+                            .status_note
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                            .unwrap_or("leased queue task had terminal failure note");
+                        let _ = channels::ack_leased_messages_with_failure_reason(
+                            root,
+                            std::slice::from_ref(&task_id),
+                            "failed",
+                            reason,
+                        )?;
+                        if let Some(reloaded) = channels::load_queue_task(root, &task_id)? {
+                            task = reloaded;
+                        }
+                    }
+                }
+                if apply {
+                    desired_route_status = task.route_status.clone();
+                }
+                let fallback_error_note =
+                    if desired_route_status == "failed" && task.status_note.is_none() {
+                        channels::load_queue_task_last_error(root, &task_id)?
+                    } else {
+                        None
+                    };
+                let canonical_note = task
+                    .status_note
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| fallback_error_note.as_deref());
+
+                let desired_status = normalize_queue_status(&desired_route_status).to_string();
+                let needs_projection_repair = projection_route_status != desired_route_status
+                    || projection_status != desired_status
+                    || repair_kind.is_some();
+                if needs_projection_repair {
+                    let class = match desired_route_status.as_str() {
+                        "failed" => "failed_from_canonical",
+                        "handled" => "completed_from_canonical",
+                        "cancelled" => "cancelled_from_canonical",
+                        "blocked" => "blocked_from_canonical",
+                        "leased" => "running_from_canonical",
+                        _ => "queued_from_canonical",
+                    };
+                    *counters.entry(class).or_insert(0) += 1;
+                    push_repair_action(
+                        &mut actions,
+                        class,
+                        &task_id,
+                        command_id.as_deref(),
+                        &projection_route_status,
+                        &desired_route_status,
+                        canonical_note,
+                    );
+                    if apply {
+                        payload = apply_queue_projection_status_fields(
+                            payload,
+                            &task,
+                            &desired_route_status,
+                            now,
+                        );
+                        if let Some(object) = payload.as_object_mut() {
+                            object.insert(
+                                "repair_note".to_string(),
+                                Value::String(format!(
+                                    "queue projection repaired from canonical route_status={desired_route_status}"
+                                )),
+                            );
+                            if desired_route_status == "failed" {
+                                if let Some(note) = canonical_note {
+                                    object.insert(
+                                        "status_note".to_string(),
+                                        Value::String(note.to_string()),
+                                    );
+                                    object.insert(
+                                        "error".to_string(),
+                                        Value::String(note.to_string()),
+                                    );
+                                }
+                            }
+                        }
+                        upsert_business_record(&conn, "ctox_queue_tasks", &task_id, now, payload)?;
+                    }
+                }
+
+                if let Some(command_id) = command_id.as_deref() {
+                    if command_status_for_queue_route_status(&desired_route_status).is_some() {
+                        *counters.entry("commands_updated_from_queue").or_insert(0) += 1;
+                        touched_commands.insert(command_id.to_string());
+                        if apply {
+                            upsert_command_projection_from_queue_status(
+                                &conn,
+                                command_id,
+                                Some(&task),
+                                &desired_route_status,
+                                now,
+                                if desired_route_status == "failed" {
+                                    canonical_note
+                                } else {
+                                    None
+                                },
+                            )?;
+                        }
+                    }
+                }
+            }
+            None => {
+                let command_status = command_id.as_deref().and_then(|command_id| {
+                    conn.query_row(
+                        "SELECT status FROM business_commands WHERE command_id = ?1",
+                        params![command_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+                });
+                if let Some(route_status) = command_status
+                    .as_deref()
+                    .and_then(projection_route_status_for_command_status)
+                {
+                    let desired_status = normalize_queue_status(route_status).to_string();
+                    if projection_route_status != route_status
+                        || projection_status != desired_status
+                    {
+                        *counters
+                            .entry("projection_repaired_from_command")
+                            .or_insert(0) += 1;
+                        push_repair_action(
+                            &mut actions,
+                            "projection_repaired_from_command",
+                            &task_id,
+                            command_id.as_deref(),
+                            &projection_route_status,
+                            route_status,
+                            None,
+                        );
+                        if apply {
+                            if let Some(object) = payload.as_object_mut() {
+                                object.insert("status".to_string(), Value::String(desired_status));
+                                object.insert(
+                                    "route_status".to_string(),
+                                    Value::String(route_status.to_string()),
+                                );
+                                object.insert(
+                                    "task_status".to_string(),
+                                    Value::String(normalize_queue_status(route_status).to_string()),
+                                );
+                                object.insert("updated_at_ms".to_string(), Value::from(now));
+                                object.insert(
+                                    "repair_note".to_string(),
+                                    Value::String(
+                                        "queue projection repaired from terminal command status"
+                                            .to_string(),
+                                    ),
+                                );
+                            }
+                            upsert_business_record(
+                                &conn,
+                                "ctox_queue_tasks",
+                                &task_id,
+                                now,
+                                payload,
+                            )?;
+                        }
+                    }
+                } else if projection_status_is_active(&projection_status)
+                    && now.saturating_sub(projection_updated_at_ms)
+                        > BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS
+                {
+                    let error = "Queue task is no longer present in the CTOX durable queue; marking stale Business OS projection as failed.";
+                    *counters.entry("orphaned_active_projection").or_insert(0) += 1;
+                    push_repair_action(
+                        &mut actions,
+                        "orphaned_active_projection",
+                        &task_id,
+                        command_id.as_deref(),
+                        &projection_route_status,
+                        "failed",
+                        Some(error),
+                    );
+                    if apply {
+                        if let Some(object) = payload.as_object_mut() {
+                            object
+                                .insert("status".to_string(), Value::String("failed".to_string()));
+                            object.insert(
+                                "route_status".to_string(),
+                                Value::String("failed".to_string()),
+                            );
+                            object.insert(
+                                "task_status".to_string(),
+                                Value::String("failed".to_string()),
+                            );
+                            object.insert("error".to_string(), Value::String(error.to_string()));
+                            object.insert("updated_at_ms".to_string(), Value::from(now));
+                            object.insert(
+                                "repair_note".to_string(),
+                                Value::String(
+                                    "orphaned active queue projection failed".to_string(),
+                                ),
+                            );
+                        }
+                        upsert_business_record(&conn, "ctox_queue_tasks", &task_id, now, payload)?;
+                        if let Some(command_id) = command_id.as_deref() {
+                            touched_commands.insert(command_id.to_string());
+                            upsert_command_projection_from_queue_status(
+                                &conn,
+                                command_id,
+                                None,
+                                "failed",
+                                now,
+                                Some(error),
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let redacted = repair_inline_payload_artifacts(&conn, apply, now)?;
+    if redacted > 0 {
+        counters.insert("oversized_inline_artifacts_redacted", redacted);
+    }
+    let legacy_records = count_legacy_http_fallback_records(&conn)?;
+    if legacy_records > 0 {
+        counters.insert("legacy_http_fallback_records", legacy_records);
+    }
+
+    Ok(serde_json::json!({
+        "ok": true,
+        "apply": apply,
+        "counts": counters,
+        "actions": actions,
+        "touched_commands": touched_commands.into_iter().collect::<Vec<_>>(),
+    }))
 }
 
 fn pull_rxdb_collection_table_records(
@@ -14142,6 +14479,7 @@ fn business_command_queue_task_payload(
         "workspace_root": task.workspace_root,
         "updated_at_ms": updated_at_ms
     });
+    enrich_queue_projection_payload(&mut payload, task, &task.route_status);
     if let Some(artifact) = browser_context_artifact_for_command(command) {
         if let Some(object) = payload.as_object_mut() {
             object.insert("browser_context_artifact".to_string(), artifact);
@@ -14218,7 +14556,7 @@ fn queue_task_payload(
     task: &channels::QueueTaskView,
     updated_at_ms: i64,
 ) -> Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "id": task.message_key,
         "command_id": command_id.unwrap_or_default(),
         "title": task.title,
@@ -14233,7 +14571,76 @@ fn queue_task_payload(
         "prompt": task.prompt,
         "workspace_root": task.workspace_root,
         "updated_at_ms": updated_at_ms
-    })
+    });
+    enrich_queue_projection_payload(&mut payload, task, &task.route_status);
+    payload
+}
+
+fn enrich_queue_projection_payload(
+    payload: &mut Value,
+    task: &channels::QueueTaskView,
+    route_status: &str,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "status".to_string(),
+        Value::String(normalize_queue_status(route_status).to_string()),
+    );
+    object.insert(
+        "route_status".to_string(),
+        Value::String(route_status.to_string()),
+    );
+    if let Some(note) = task
+        .status_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        object.insert("status_note".to_string(), Value::String(note.to_string()));
+        if route_status == "failed" {
+            object.insert("error".to_string(), Value::String(note.to_string()));
+        }
+    } else {
+        object.remove("status_note");
+        if route_status != "failed" {
+            object.remove("error");
+        }
+    }
+    if let Some(owner) = task
+        .lease_owner
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        object.insert("lease_owner".to_string(), Value::String(owner.to_string()));
+    } else {
+        object.remove("lease_owner");
+    }
+    if let Some(leased_at) = task
+        .leased_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        object.insert(
+            "leased_at".to_string(),
+            Value::String(leased_at.to_string()),
+        );
+    } else {
+        object.remove("leased_at");
+    }
+    if let Some(acked_at) = task
+        .acked_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+    {
+        object.insert("acked_at".to_string(), Value::String(acked_at.to_string()));
+    } else {
+        object.remove("acked_at");
+    }
 }
 
 fn queue_projection_command_id(conn: &Connection, task_id: &str) -> anyhow::Result<Option<String>> {
@@ -14254,6 +14661,342 @@ fn queue_projection_command_id(conn: &Connection, task_id: &str) -> anyhow::Resu
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         }))
+}
+
+fn command_status_for_queue_route_status(route_status: &str) -> Option<&'static str> {
+    match route_status {
+        "handled" => Some("completed"),
+        "failed" => Some("failed"),
+        "cancelled" => Some("cancelled"),
+        "blocked" => Some("blocked"),
+        _ => None,
+    }
+}
+
+fn projection_route_status_for_command_status(status: &str) -> Option<&'static str> {
+    match status {
+        "completed" | "handled" | "done" => Some("handled"),
+        "failed" | "error" => Some("failed"),
+        "cancelled" | "canceled" => Some("cancelled"),
+        "blocked" => Some("blocked"),
+        _ => None,
+    }
+}
+
+fn projection_status_is_active(status: &str) -> bool {
+    matches!(
+        status,
+        "queued" | "running" | "accepted" | "pending" | "pending_sync" | "leased"
+    )
+}
+
+fn queue_status_note_is_terminal_success(note: Option<&str>) -> bool {
+    let Some(note) = note.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let lower = note.to_ascii_lowercase();
+    lower.contains("business-os:terminal-success")
+        || lower.contains("terminal-success")
+        || (lower.contains(" completed.") && lower.contains("changed "))
+        || (lower.contains("completed.") && lower.contains("verified "))
+}
+
+fn queue_status_note_is_terminal_failure(note: Option<&str>) -> bool {
+    let Some(note) = note.map(str::trim).filter(|value| !value.is_empty()) else {
+        return false;
+    };
+    let lower = note.to_ascii_lowercase();
+    lower.contains("terminal-failure")
+        || lower.contains("input exceeds the maximum length")
+        || lower.contains("turn/start failed")
+}
+
+fn apply_queue_projection_status_fields(
+    mut payload: Value,
+    task: &channels::QueueTaskView,
+    route_status: &str,
+    updated_at_ms: i64,
+) -> Value {
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("id".to_string(), Value::String(task.message_key.clone()));
+        object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+        object
+            .entry("title".to_string())
+            .or_insert_with(|| Value::String(task.title.clone()));
+        object
+            .entry("thread_key".to_string())
+            .or_insert_with(|| Value::String(task.thread_key.clone()));
+        object
+            .entry("prompt".to_string())
+            .or_insert_with(|| Value::String(task.prompt.clone()));
+        object
+            .entry("priority".to_string())
+            .or_insert_with(|| Value::String(task.priority.clone()));
+        object.insert(
+            "task_status".to_string(),
+            Value::String(normalize_queue_status(route_status).to_string()),
+        );
+    }
+    enrich_queue_projection_payload(&mut payload, task, route_status);
+    payload
+}
+
+fn upsert_command_projection_from_queue_status(
+    conn: &Connection,
+    command_id: &str,
+    task: Option<&channels::QueueTaskView>,
+    route_status: &str,
+    updated_at_ms: i64,
+    error_note: Option<&str>,
+) -> anyhow::Result<()> {
+    if command_id.trim().is_empty() {
+        return Ok(());
+    }
+    if let Some(command_status) = command_status_for_queue_route_status(route_status) {
+        conn.execute(
+            "UPDATE business_commands
+             SET status = ?2, observed_at_ms = ?3
+             WHERE command_id = ?1",
+            params![command_id, command_status, updated_at_ms],
+        )?;
+    }
+    let mut payload = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'business_commands'
+               AND record_id = ?1
+               AND deleted = 0",
+            params![command_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .unwrap_or_else(|| {
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": "ctox",
+                "command_type": "",
+                "record_id": command_id
+            })
+        });
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(command_status) = command_status_for_queue_route_status(route_status) {
+            object.insert(
+                "status".to_string(),
+                Value::String(command_status.to_string()),
+            );
+        }
+        object.insert(
+            "route_status".to_string(),
+            Value::String(route_status.to_string()),
+        );
+        object.insert(
+            "task_status".to_string(),
+            Value::String(normalize_queue_status(route_status).to_string()),
+        );
+        if let Some(task) = task {
+            object.insert(
+                "task_id".to_string(),
+                Value::String(task.message_key.clone()),
+            );
+            if let Some(note) = task
+                .status_note
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                object.insert(
+                    "queue_status_note".to_string(),
+                    Value::String(note.to_string()),
+                );
+                if route_status == "failed" {
+                    object.insert("error".to_string(), Value::String(note.to_string()));
+                }
+            }
+        }
+        if let Some(note) = error_note.map(str::trim).filter(|value| !value.is_empty()) {
+            object.insert("error".to_string(), Value::String(note.to_string()));
+        }
+        object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+    }
+    upsert_business_record(
+        conn,
+        "business_commands",
+        command_id,
+        updated_at_ms,
+        payload,
+    )?;
+    Ok(())
+}
+
+fn push_repair_action(
+    actions: &mut Vec<Value>,
+    class: &str,
+    task_id: &str,
+    command_id: Option<&str>,
+    previous_route_status: &str,
+    next_route_status: &str,
+    note: Option<&str>,
+) {
+    if actions.len() >= 200 {
+        return;
+    }
+    actions.push(serde_json::json!({
+        "class": class,
+        "task_id": task_id,
+        "command_id": command_id.unwrap_or_default(),
+        "previous_route_status": previous_route_status,
+        "next_route_status": next_route_status,
+        "note": note.unwrap_or_default(),
+    }));
+}
+
+fn repair_inline_payload_artifacts(
+    conn: &Connection,
+    apply: bool,
+    updated_at_ms: i64,
+) -> anyhow::Result<usize> {
+    let rows = {
+        let mut statement = conn.prepare(
+            "SELECT collection, record_id, payload_json
+             FROM business_records
+             WHERE collection IN ('business_commands', 'ctox_queue_tasks', 'ctox_bug_reports')
+               AND deleted = 0
+               AND (
+                    payload_json LIKE '%data:image/%'
+                 OR payload_json LIKE '%\"strokes\"%'
+                 OR payload_json LIKE '%\"data_url\"%'
+                 OR payload_json LIKE '%\"compositeDataUrl\"%'
+               )
+             ORDER BY updated_at_ms DESC, record_id ASC
+             LIMIT 500",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut changed_count = 0usize;
+    for (collection, record_id, payload_json) in rows {
+        let mut payload = match serde_json::from_str::<Value>(&payload_json) {
+            Ok(payload) => payload,
+            Err(_) => continue,
+        };
+        if !redact_inline_report_artifacts(&mut payload) {
+            continue;
+        }
+        changed_count += 1;
+        if apply {
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                object.insert(
+                    "repair_note".to_string(),
+                    Value::String(
+                        "inline screenshot/stroke payload redacted by queue projection repair"
+                            .to_string(),
+                    ),
+                );
+            }
+            upsert_business_record(conn, &collection, &record_id, updated_at_ms, payload)?;
+        }
+    }
+    Ok(changed_count)
+}
+
+fn redact_inline_report_artifacts(value: &mut Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            let keys = map.keys().cloned().collect::<Vec<_>>();
+            for key in keys {
+                let lower = key.to_ascii_lowercase();
+                if lower == "data_url" || lower == "compositedataurl" {
+                    if let Some(Value::String(raw)) = map.get(&key) {
+                        if raw.starts_with("data:image/") || raw.len() > 10_000 {
+                            let byte_estimate = raw
+                                .split_once(',')
+                                .map(|(_, payload)| (payload.len() * 3) / 4)
+                                .unwrap_or(raw.len());
+                            map.insert(
+                                key.clone(),
+                                serde_json::json!({
+                                    "redacted": true,
+                                    "reason": "inline screenshot payload removed from Business OS command projection",
+                                    "bytes_estimate": byte_estimate
+                                }),
+                            );
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                if lower == "strokes" {
+                    if let Some(Value::Array(strokes)) = map.get(&key) {
+                        let stroke_count = strokes.len();
+                        let points_count = strokes
+                            .iter()
+                            .map(|stroke| stroke.as_array().map(Vec::len).unwrap_or(0))
+                            .sum::<usize>();
+                        map.insert(
+                            key.clone(),
+                            serde_json::json!({
+                                "redacted": true,
+                                "reason": "raw markup strokes removed from Business OS command projection",
+                                "stroke_count": stroke_count,
+                                "points_count": points_count
+                            }),
+                        );
+                        changed = true;
+                        continue;
+                    }
+                }
+                if let Some(child) = map.get_mut(&key) {
+                    changed |= redact_inline_report_artifacts(child);
+                }
+            }
+            changed
+        }
+        Value::Array(items) => items
+            .iter_mut()
+            .map(redact_inline_report_artifacts)
+            .fold(false, |acc, item| acc || item),
+        Value::String(raw) if raw.starts_with("data:image/") && raw.len() > 10_000 => {
+            let byte_estimate = raw
+                .split_once(',')
+                .map(|(_, payload)| (payload.len() * 3) / 4)
+                .unwrap_or(raw.len());
+            *value = serde_json::json!({
+                "redacted": true,
+                "reason": "inline image data URL removed from Business OS projection",
+                "bytes_estimate": byte_estimate
+            });
+            true
+        }
+        _ => false,
+    }
+}
+
+fn count_legacy_http_fallback_records(conn: &Connection) -> anyhow::Result<usize> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM business_records
+         WHERE collection IN ('business_commands', 'ctox_queue_tasks', 'business_chats')
+           AND deleted = 0
+           AND (
+                payload_json LIKE '%http-fallback%'
+             OR payload_json LIKE '%business-os-http-command-fallback%'
+             OR payload_json LIKE '%/api/business-os/commands%'
+           )",
+        [],
+        |row| row.get(0),
+    )?;
+    Ok(count.max(0) as usize)
 }
 
 fn mark_business_record_deleted(
@@ -15557,6 +16300,311 @@ mod tests {
         assert_eq!(
             queue_projection.get("route_status").and_then(Value::as_str),
             Some("failed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_updates_failed_canonical_queue_and_command() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_failed_queue",
+                "command_id": "cmd_repair_failed_queue",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe · Web Research",
+                    "instruction": "teste repair failure",
+                    "prompt": "teste repair failure"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::ack_leased_messages_with_failure_reason(
+            root,
+            std::slice::from_ref(&task_id),
+            "failed",
+            "Input exceeds the maximum length of 1048576 characters.",
+        )?;
+
+        let dry_run =
+            repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
+        assert_eq!(
+            dry_run
+                .pointer("/counts/failed_from_canonical")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/counts/commands_updated_from_queue")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let conn = open_store(root)?;
+        let stale_queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let stale_queue: Value = serde_json::from_str(&stale_queue_payload)?;
+        assert_eq!(
+            stale_queue.get("status").and_then(Value::as_str),
+            Some("queued"),
+            "dry-run must not mutate stale queue projection"
+        );
+        drop(conn);
+
+        let applied = repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        assert_eq!(
+            applied
+                .pointer("/counts/failed_from_canonical")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let conn = open_store(root)?;
+        let queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let queue_projection: Value = serde_json::from_str(&queue_payload)?;
+        assert_eq!(
+            queue_projection.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            queue_projection.get("route_status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            queue_projection.get("error").and_then(Value::as_str),
+            Some("Input exceeds the maximum length of 1048576 characters.")
+        );
+
+        let command_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = 'cmd_repair_failed_queue'",
+            [],
+            |row| row.get(0),
+        )?;
+        let command_projection: Value = serde_json::from_str(&command_payload)?;
+        assert_eq!(
+            command_projection.get("status").and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            command_projection
+                .get("task_status")
+                .and_then(Value::as_str),
+            Some("failed")
+        );
+        assert_eq!(
+            command_projection.get("error").and_then(Value::as_str),
+            Some("Input exceeds the maximum length of 1048576 characters.")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_acks_leased_terminal_success_note() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_repair_leased_success",
+                "command_id": "cmd_repair_leased_success",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe · Web Research",
+                    "instruction": "teste terminal success repair",
+                    "prompt": "teste terminal success repair"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                status_note: Some(
+                    "Business-OS documents bug report completed. Changed editor rendering. Verified in browser."
+                        .to_string(),
+                ),
+                ..Default::default()
+            },
+        )?;
+
+        let dry_run =
+            repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
+        assert_eq!(
+            dry_run
+                .pointer("/counts/completed_from_canonical")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            channels::load_queue_task(root, &task_id)?
+                .context("queue task after dry-run")?
+                .route_status,
+            "leased",
+            "dry-run must not ack leased tasks"
+        );
+
+        repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        let canonical =
+            channels::load_queue_task(root, &task_id)?.context("queue task after apply")?;
+        assert_eq!(canonical.route_status, "handled");
+
+        let conn = open_store(root)?;
+        let queue_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
+            params![task_id.as_str()],
+            |row| row.get(0),
+        )?;
+        let queue_projection: Value = serde_json::from_str(&queue_payload)?;
+        assert_eq!(
+            queue_projection.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            queue_projection.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+
+        let command_payload: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = 'cmd_repair_leased_success'",
+            [],
+            |row| row.get(0),
+        )?;
+        let command_projection: Value = serde_json::from_str(&command_payload)?;
+        assert_eq!(
+            command_projection.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            command_projection
+                .get("task_status")
+                .and_then(Value::as_str),
+            Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        let inline_image = format!("data:image/png;base64,{}", "A".repeat(12_000));
+        upsert_business_record(
+            &conn,
+            "business_commands",
+            "cmd_inline_report_payload",
+            now_ms() as i64,
+            serde_json::json!({
+                "id": "cmd_inline_report_payload",
+                "command_id": "cmd_inline_report_payload",
+                "module": "documents",
+                "command_type": "business_os.bug_report",
+                "status": "accepted",
+                "payload": {
+                    "title": "Gleichungen in word editor",
+                    "attachment": {
+                        "data_url": inline_image
+                    },
+                    "strokes": [
+                        [{"x": 1, "y": 2}],
+                        [{"x": 3, "y": 4}]
+                    ]
+                },
+                "client_context": {
+                    "transport": "business-os-http-command-fallback"
+                }
+            }),
+        )?;
+        drop(conn);
+
+        let dry_run =
+            repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
+        assert_eq!(
+            dry_run
+                .pointer("/counts/oversized_inline_artifacts_redacted")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            dry_run
+                .pointer("/counts/legacy_http_fallback_records")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        repair_queue_projections(root, QueueProjectionRepairOptions { apply: true })?;
+        let conn = open_store(root)?;
+        let payload_json: String = conn.query_row(
+            "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = 'cmd_inline_report_payload'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            !payload_json.contains("data:image/png;base64"),
+            "inline image payload must be redacted"
+        );
+        let payload: Value = serde_json::from_str(&payload_json)?;
+        assert_eq!(
+            payload
+                .pointer("/payload/attachment/data_url/redacted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/payload/strokes/redacted")
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            payload
+                .pointer("/payload/strokes/stroke_count")
+                .and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            payload
+                .pointer("/client_context/transport")
+                .and_then(Value::as_str),
+            Some("business-os-http-command-fallback"),
+            "legacy transport context is counted and quarantined, not rewritten or replayed"
         );
         Ok(())
     }

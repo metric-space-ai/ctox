@@ -16,22 +16,31 @@ const RXDB_RESET_TIMEOUT_MS = 5000;
 const INDEXEDDB_PREFLIGHT_TIMEOUT_MS = 8000;
 const RXDB_MODULE_IMPORT_TIMEOUT_MS = 8000;
 const RXDB_CREATE_DATABASE_TIMEOUT_MS = 8000;
-const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260606-command-fallback-masterwrite2';
+const RXDB_RECOVERY_OPEN_TIMEOUT_MS = 20000;
+const RXDB_BUNDLE_URL = '../rxdb/dist/ctox-rxdb-js.mjs?v=20260606-rxdb-command-plane4';
 
 export async function createBusinessDb({ name }) {
   try {
-    return await Promise.race([
+    const db = await Promise.race([
       createRxBusinessDb({ name }),
       timeoutAfter(RXDB_OPEN_TIMEOUT_MS, `RxDB database creation timed out after ${RXDB_OPEN_TIMEOUT_MS}ms (possible IndexedDB lock)`),
     ]);
+    clearRecoveryDatabaseName(name);
+    return db;
   } catch (error) {
     if (!isIndexedDbOpenStall(error)) throw error;
-    console.info('[business-os] IndexedDB open stalled; retrying local RxDB open once', error);
-    await resetBusinessDb({ name });
-    return Promise.race([
-      createRxBusinessDb({ name }),
-      timeoutAfter(RXDB_OPEN_RETRY_TIMEOUT_MS, `RxDB database retry timed out after ${RXDB_OPEN_RETRY_TIMEOUT_MS}ms (possible IndexedDB lock)`),
-    ]);
+    console.info('[business-os] IndexedDB open stalled; retrying local RxDB open once without deleting cache', error);
+    try {
+      const db = await Promise.race([
+        createRxBusinessDb({ name }),
+        timeoutAfter(RXDB_OPEN_RETRY_TIMEOUT_MS, `RxDB database retry timed out after ${RXDB_OPEN_RETRY_TIMEOUT_MS}ms (possible IndexedDB lock)`),
+      ]);
+      clearRecoveryDatabaseName(name);
+      return db;
+    } catch (retryError) {
+      if (!isIndexedDbOpenStall(retryError)) throw retryError;
+      return openRecoveryBusinessDb({ name, cause: retryError });
+    }
   }
 }
 
@@ -74,6 +83,7 @@ async function createRxBusinessDb({ name }) {
   ]);
   return {
     mode: 'rxdb',
+    name,
     rxdb,
     runtime: rxdb.__ctoxRuntime || CTOX_RXDB_RUNTIME,
     raw: db,
@@ -95,6 +105,46 @@ async function createRxBusinessDb({ name }) {
     collection: (name) => db[name],
     close: () => db.close(),
   };
+}
+
+async function openRecoveryBusinessDb({ name, cause }) {
+  const recoveryName = recoveryDatabaseName(name);
+  console.warn('[business-os] primary IndexedDB remained blocked; opening recovery database', {
+    name,
+    recoveryName,
+    error: String(cause?.message || cause || ''),
+  });
+  const db = await Promise.race([
+    createRxBusinessDb({ name: recoveryName }),
+    timeoutAfter(RXDB_RECOVERY_OPEN_TIMEOUT_MS, `RxDB recovery database open timed out after ${RXDB_RECOVERY_OPEN_TIMEOUT_MS}ms (primary IndexedDB remained blocked)`),
+  ]);
+  return {
+    ...db,
+    recovery: {
+      requestedName: name,
+      activeName: recoveryName,
+      reason: String(cause?.message || cause || ''),
+    },
+  };
+}
+
+function recoveryDatabaseName(name) {
+  const key = `ctox.businessOs.rxdbRecoveryDb.${name}`;
+  try {
+    const existing = sessionStorage.getItem(key);
+    if (existing) return existing;
+    const next = `${name}__recovery_${Date.now().toString(36)}`;
+    sessionStorage.setItem(key, next);
+    return next;
+  } catch {
+    return `${name}__recovery_${Date.now().toString(36)}`;
+  }
+}
+
+function clearRecoveryDatabaseName(name) {
+  try {
+    sessionStorage.removeItem(`ctox.businessOs.rxdbRecoveryDb.${name}`);
+  } catch {}
 }
 
 async function prepareIndexedDbForRxdb(name) {

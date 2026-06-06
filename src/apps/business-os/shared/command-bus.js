@@ -50,12 +50,7 @@ async function recordRxdbCommand({ db, sync, command }) {
       COMMAND_SYNC_READY_TIMEOUT_MS,
       'Timed out waiting for business_commands sync bridge readiness',
     );
-    const pushBridge = await withTimeout(
-      restartBusinessCommandsSync({ sync, fallbackBridge: bridge }),
-      COMMAND_SYNC_READY_TIMEOUT_MS,
-      'Timed out restarting business_commands sync bridge',
-    );
-    await flushCommandSyncBridge(pushBridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
+    await flushCommandSyncBridge(bridge, COMMAND_SYNC_PUSH_TIMEOUT_MS);
   } catch (error) {
     if (localWriteSucceeded) {
       await patchLocalCommandDispatchResult(
@@ -90,18 +85,6 @@ async function prepareBusinessCommandsSync({ db, sync }) {
   const bridge = await currentSync?.startCollection?.('business_commands');
   await waitForSyncBridgeReady(bridge, 15000);
   return bridge;
-}
-
-async function restartBusinessCommandsSync({ sync, fallbackBridge }) {
-  const currentSync = await resolveCommandSync(sync);
-  if (typeof currentSync?.restartCollection === 'function') {
-    try {
-      return await currentSync.restartCollection('business_commands');
-    } catch {
-      return fallbackBridge;
-    }
-  }
-  return fallbackBridge;
 }
 
 async function writeCommandDocument(db, commandId, doc) {

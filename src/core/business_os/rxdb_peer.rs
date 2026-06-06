@@ -3984,6 +3984,13 @@ async fn reconcile_ctox_queue_task_projections(
             continue;
         }
 
+        let canonical_task = queue_doc
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(|task_id| channels::load_queue_task(root, task_id).ok().flatten());
+
         let command_status = command_doc
             .get("status")
             .and_then(Value::as_str)
@@ -3992,10 +3999,25 @@ async fn reconcile_ctox_queue_task_projections(
             .get("updated_at_ms")
             .and_then(Value::as_i64)
             .unwrap_or_else(|| now_ms() as i64);
-        let repaired_status = if let Some(status) =
-            terminal_queue_status_for_command(command_status)
-        {
-            Some((status, command_updated_at_ms, None))
+        let repaired_status = if let Some(task) = canonical_task.as_ref() {
+            let canonical_status = queue_projection_status_for_route_status(&task.route_status);
+            let projection_route_status = queue_doc
+                .get("route_status")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if queue_status != canonical_status || projection_route_status != task.route_status {
+                Some((
+                    canonical_status,
+                    now_ms() as i64,
+                    task.status_note.as_deref(),
+                    Some(task.route_status.as_str()),
+                    canonical_task.as_ref(),
+                ))
+            } else {
+                None
+            }
+        } else if let Some(status) = terminal_queue_status_for_command(command_status) {
+            Some((status, command_updated_at_ms, None, None, None))
         } else if matches!(command_status, "accepted" | "pending" | "pending_sync")
             && projection_queue_task_is_orphaned(root, queue_doc)
             && projection_document_age_ms(queue_doc, command_updated_at_ms) > 10 * 60 * 1_000
@@ -4004,11 +4026,15 @@ async fn reconcile_ctox_queue_task_projections(
                 "failed",
                 now_ms() as i64,
                 Some("Queue task is no longer present in the CTOX harness queue; marking the orphaned Business OS projection as failed."),
+                Some("failed"),
+                None,
             ))
         } else {
             None
         };
-        let Some((repaired_status, repaired_at_ms, error_note)) = repaired_status else {
+        let Some((repaired_status, repaired_at_ms, error_note, route_status, canonical_task)) =
+            repaired_status
+        else {
             continue;
         };
         let mut next = queue_doc.clone();
@@ -4022,7 +4048,11 @@ async fn reconcile_ctox_queue_task_projections(
             );
             object.insert(
                 "route_status".to_string(),
-                Value::String(route_status_for_queue_projection(repaired_status).to_string()),
+                Value::String(
+                    route_status
+                        .unwrap_or_else(|| route_status_for_queue_projection(repaired_status))
+                        .to_string(),
+                ),
             );
             object.insert(
                 "task_status".to_string(),
@@ -4030,7 +4060,42 @@ async fn reconcile_ctox_queue_task_projections(
             );
             object.insert("updated_at_ms".to_string(), Value::from(repaired_at_ms));
             if let Some(error_note) = error_note {
-                object.insert("error".to_string(), Value::String(error_note.to_string()));
+                object.insert(
+                    "status_note".to_string(),
+                    Value::String(error_note.to_string()),
+                );
+                if repaired_status == "failed" {
+                    object.insert("error".to_string(), Value::String(error_note.to_string()));
+                }
+            }
+            if let Some(task) = canonical_task {
+                if let Some(owner) = task
+                    .lease_owner
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    object.insert("lease_owner".to_string(), Value::String(owner.to_string()));
+                }
+                if let Some(leased_at) = task
+                    .leased_at
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    object.insert(
+                        "leased_at".to_string(),
+                        Value::String(leased_at.to_string()),
+                    );
+                }
+                if let Some(acked_at) = task
+                    .acked_at
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    object.insert("acked_at".to_string(), Value::String(acked_at.to_string()));
+                }
             }
         }
         upsert_business_record_projection_document(&queue, "ctox_queue_tasks", next.clone())
@@ -4043,11 +4108,11 @@ async fn reconcile_ctox_queue_task_projections(
     }
 
     if !repaired_documents.is_empty() {
-        let root = root.to_path_buf();
+        let root_for_writeback = root.to_path_buf();
         let documents = repaired_documents.clone();
         tokio::task::spawn_blocking(move || {
             store::push_collection_records(
-                &root,
+                &root_for_writeback,
                 json!({
                     "collection": "ctox_queue_tasks",
                     "documents": documents
@@ -4056,6 +4121,15 @@ async fn reconcile_ctox_queue_task_projections(
         })
         .await
         .context("join ctox_queue_tasks reconciliation writeback")??;
+        let root_for_repair = root.to_path_buf();
+        tokio::task::spawn_blocking(move || {
+            store::repair_queue_projections(
+                &root_for_repair,
+                store::QueueProjectionRepairOptions { apply: true },
+            )
+        })
+        .await
+        .context("join queue projection command repair")??;
     }
     for (command_id, failed_at_ms) in orphaned_commands {
         let root = root.to_path_buf();
@@ -4091,6 +4165,18 @@ fn route_status_for_queue_projection(status: &str) -> &str {
         "blocked" => "blocked",
         "running" => "leased",
         _ => "pending",
+    }
+}
+
+fn queue_projection_status_for_route_status(route_status: &str) -> &'static str {
+    match route_status {
+        "pending" => "queued",
+        "leased" => "running",
+        "handled" => "completed",
+        "cancelled" => "cancelled",
+        "failed" => "failed",
+        "blocked" => "blocked",
+        _ => "queued",
     }
 }
 

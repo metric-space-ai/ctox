@@ -2800,6 +2800,8 @@ var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
+var QUERY_PEER_WAIT_TIMEOUT_MS = 8e3;
+var QUERY_PEER_WAIT_POLL_MS = 100;
 var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 var CANCELLED_QUERY_REQUEST_LIMIT = 256;
 function createDemandLoadingTransport({ getPeerId } = {}) {
@@ -2912,7 +2914,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const cancelReason = consumeQueryCancelReason(requestId);
     if (cancelReason) throw createQueryCancelError(cancelReason);
     if (!peer) throw new Error("demand transport has no peer attached");
-    const peerId = resolvePeerId();
+    const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject });
@@ -2972,7 +2974,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   }
   async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
     if (!peer) throw new Error("demand transport has no peer attached");
-    const peerId = resolvePeerId();
+    const peerId = await waitForPeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       fileCollectors.set(requestId, { chunks: [], resolve, reject });
@@ -3074,18 +3076,34 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   }
   function resolvePeerId() {
     const configured = getPeerId();
-    if (configured) return configured;
+    if (configured && isPeerOpen(configured)) return configured;
     return firstOpenPeerId();
   }
   function firstOpenPeerId() {
     const entries = peer?.connections?.entries?.();
     if (!entries) return "";
     for (const [peerId, connection] of entries) {
-      const channelState = connection?.channel?.readyState || connection?.channelReadyState || "";
-      const peerState = connection?.peer?.connectionState || connection?.peerConnectionState || connection?.connectionState || "";
-      if (channelState === "open" && !["closed", "failed", "disconnected"].includes(String(peerState))) {
-        return peerId;
-      }
+      if (isPeerConnectionOpen(connection)) return peerId;
+    }
+    return "";
+  }
+  function isPeerOpen(peerId) {
+    return Boolean(peerId && isPeerConnectionOpen(peer?.connections?.get?.(peerId)));
+  }
+  function isPeerConnectionOpen(connection) {
+    if (!connection) return false;
+    const channelState = connection?.channel?.readyState || connection?.channelReadyState || "";
+    const peerState = connection?.peer?.connectionState || connection?.peerConnectionState || connection?.connectionState || "";
+    return channelState === "open" && !["closed", "failed", "disconnected"].includes(String(peerState));
+  }
+  async function waitForPeerId(timeoutMs = QUERY_PEER_WAIT_TIMEOUT_MS) {
+    const immediate = resolvePeerId();
+    if (immediate) return immediate;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      await delay3(QUERY_PEER_WAIT_POLL_MS);
+      const peerId = resolvePeerId();
+      if (peerId) return peerId;
     }
     return "";
   }

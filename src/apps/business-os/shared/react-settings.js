@@ -1223,56 +1223,23 @@ async function waitForRuntimeSettingsProjection(db, options = {}) {
 }
 
 async function startSubscriptionAuth({ commandBus, db, session, sync } = {}) {
-  try {
-    const command = await dispatchModuleCommand({
-      commandBus,
-      db,
-      session,
-      sync,
-      commandType: 'ctox.subscription_auth.start',
-      moduleId: 'ctox',
-      recordId: 'subscription-auth',
-      payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
-      source: 'business-os-settings',
-      timeoutMs: 30000,
-    });
-    const payload = command.result || command;
-    if (payload?.user_code || payload?.auth_url || payload?.verification_url) {
-      return { ...payload, source: payload.source || 'business_commands' };
-    }
-    throw new Error(`Command ${command.command_id || command.id || ''} lieferte keinen Geräte-Code.`);
-  } catch (error) {
-    const fallback = await startSubscriptionAuthViaHttp();
-    return {
-      ...fallback,
-      source: 'http_control_plane',
-      command_error: String(error?.message || error),
-    };
-  }
-}
-
-async function startSubscriptionAuthViaHttp() {
-  const callbackUrl = new URL('/api/business-os/ctox/subscription-auth/callback', window.location.href).href;
-  const response = await fetch('/api/business-os/ctox/subscription-auth/start', {
-    method: 'POST',
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ callback_url: callbackUrl }),
+  const command = await dispatchModuleCommand({
+    commandBus,
+    db,
+    session,
+    sync,
+    commandType: 'ctox.subscription_auth.start',
+    moduleId: 'ctox',
+    recordId: 'subscription-auth',
+    payload: { provider: 'openai', auth_mode: 'chatgpt_subscription', flow: 'device_code' },
+    source: 'business-os-settings',
+    timeoutMs: 30000,
   });
-  const text = await response.text();
-  let payload = null;
-  try {
-    payload = text ? JSON.parse(text) : null;
-  } catch {
-    payload = null;
+  const payload = command.result || command;
+  if (payload?.user_code || payload?.auth_url || payload?.verification_url) {
+    return { ...payload, source: payload.source || 'business_commands' };
   }
-  if (!response.ok) {
-    throw new Error(payload?.error || payload?.message || text || `ChatGPT Login konnte nicht gestartet werden (${response.status}).`);
-  }
-  if (!payload?.auth_url && !payload?.verification_url) {
-    throw new Error('CTOX HTTP-Fallback hat keine Login-URL geliefert.');
-  }
-  return payload;
+  throw new Error(`Command ${command.command_id || command.id || ''} lieferte keinen Geräte-Code.`);
 }
 
 function runtimeSettingsReflectPayload(settings, payload, previousUpdatedAtMs = 0) {

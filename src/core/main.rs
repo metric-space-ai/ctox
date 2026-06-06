@@ -134,6 +134,8 @@ INSTALL / UPGRADE
                                  manage optional Business OS skill-app modules
   ctox business-os skills list|enable|disable
                                  manage optional packed skills for Business OS
+  ctox business-os repair queue-projections --dry-run|--apply
+                                 reconcile durable CTOX queue state into Business OS projections
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints

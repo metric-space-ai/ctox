@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-outbound-ux-repair2';
+const APP_BUILD = '20260606-skf-prod-recovery1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -21,7 +21,7 @@ const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 // still recovers on its own without a full app reload.
 const SLOW_MODULE_SYNC_RETRY_MS = 60000;
 const BUSINESS_DB_NAME = 'ctox_business_os_v10';
-const RXDB_BOOTSTRAP_VERSION = APP_BUILD;
+const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
 const SHELL_IMPORT_TIMEOUT_MS = 45000;
@@ -211,7 +211,9 @@ function installAdvancedStatusInterface() {
       const deadline = Date.now() + timeoutMs;
       let lastSnapshot = null;
       while (Date.now() < deadline) {
-        await ensureAdvancedStatusRequiredCollections(options.requiredCollections);
+        await ensureAdvancedStatusRequiredCollections(options.requiredCollections, {
+          allowRestart: options.allowRestart === true,
+        });
         lastSnapshot = await buildAdvancedStatusSnapshot({ ...options, includeCounts: false });
         if (lastSnapshot.ok) return lastSnapshot;
         await new Promise((resolve) => window.setTimeout(resolve, intervalMs));
@@ -226,12 +228,13 @@ function installAdvancedStatusInterface() {
   state.openModule = (moduleId, options = {}) => openModule(moduleId, options);
 }
 
-async function ensureAdvancedStatusRequiredCollections(requiredCollections) {
+async function ensureAdvancedStatusRequiredCollections(requiredCollections, options = {}) {
   if (!Array.isArray(requiredCollections) || !state.sync?.startCollection) return;
   const names = requiredCollections
     .filter((collection) => typeof collection === 'string' && collection.trim())
     .filter((collection) => state.db?.raw?.[collection]);
   await Promise.all(names.map((collection) => state.sync.startCollection(collection).catch(() => null)));
+  if (options.allowRestart !== true) return;
   for (const collection of names) {
     if (!shouldRestartAdvancedStatusRequiredCollection(collection)) continue;
     const lastRestartAt = Number(state.advancedStatusRequiredRestarts?.get(collection) || 0);
@@ -719,14 +722,13 @@ async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
   const versionToken = `${RXDB_BOOTSTRAP_VERSION}:${dbName}`;
   const existingToken = localStorage.getItem(RXDB_BOOTSTRAP_VERSION_KEY);
   if (existingToken === versionToken) return;
-  if (!existingToken) {
-    localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, versionToken);
-    return;
-  }
-  const { resetBusinessDb } = await loadBusinessDbModule();
-  setStatus('Lokale RxDB wird neu synchronisiert');
-  await resetBusinessDb({ name: dbName });
   localStorage.setItem(RXDB_BOOTSTRAP_VERSION_KEY, versionToken);
+  if (existingToken) {
+    console.info('[business-os] RxDB bootstrap token updated without deleting local cache', {
+      previous: existingToken,
+      current: versionToken,
+    });
+  }
 }
 
 async function openBusinessDataPlane(syncConfig) {
@@ -3708,7 +3710,10 @@ function isRxDbSchemaDriftError(error) {
 function isRxDbOpenTimeoutError(error) {
   const message = String(error?.message || error || '');
   return message.includes('RxDB database creation timed out')
-    || message.includes('IndexedDB lock');
+    || message.includes('RxDB database retry timed out')
+    || message.includes('IndexedDB lock')
+    || message.includes('IndexedDB open timed out')
+    || message.includes('IndexedDB open blocked');
 }
 
 function preloadModuleScripts() {
@@ -6566,8 +6571,8 @@ function getFriendlyErrorMessage(error) {
     advice = 'Bitte öffnen Sie Business OS über den bereitgestellten Link aus Ihrer CTOX-Schnittstelle oder koppeln Sie die Instanz erneut.';
   } else if (msg.includes('IndexedDB lock') || msg.includes('timed out')) {
     title = 'Lokaler Speicher blockiert';
-    description = 'Die Verbindung zum lokalen Datenspeicher konnte nicht rechtzeitig hergestellt werden.';
-    advice = 'CTOX setzt den lokalen Browser-Speicher beim nächsten Versuch zurück und synchronisiert ihn neu. Falls ein anderer Tab diese Anwendung offen hält, schließen Sie diesen Tab zuerst.';
+    description = 'Der lokale Browsercache hat nicht rechtzeitig geantwortet.';
+    advice = 'Die Anwendung versucht automatisch einen frischen lokalen Cache zu öffnen und neu zu synchronisieren. Falls diese Meldung erneut erscheint, bitte die Seite neu laden; die technischen Details nennen den konkreten Timeout.';
   } else if (msg.includes('Schema-Drift') || msg.includes('DB6') || msg.includes('previousSchemaHash') || msg.includes('schemaHash') || msg.includes('drift')) {
     title = 'Datenstruktur-Aktualisierung';
     description = 'Die Struktur des lokalen Datenspeichers wird an die neue Version angepasst.';
@@ -6660,7 +6665,7 @@ function showStartupError(error) {
 
   const errorMsgBlock = document.getElementById('startup-error-msg');
   if (errorMsgBlock) {
-    errorMsgBlock.textContent = error && error.stack ? error.stack : errMsg;
+    errorMsgBlock.textContent = formatStartupErrorDetails(error, errMsg);
   }
 
   const errorCard = document.getElementById('startup-error-card');
@@ -6681,6 +6686,14 @@ function showStartupError(error) {
   }
 }
 window.showStartupError = showStartupError;
+
+function formatStartupErrorDetails(error, errMsg = '') {
+  const message = String(error?.message || errMsg || error || 'Unbekannter Fehler');
+  const stack = String(error?.stack || '').trim();
+  if (!stack || stack === message) return message;
+  if (stack.startsWith(message)) return stack;
+  return `${message}\n\n${stack}`;
+}
 
 function escapeHtml(value) {
   return String(value ?? '')

@@ -2467,6 +2467,22 @@ pub fn load_queue_task(root: &Path, message_key: &str) -> Result<Option<QueueTas
     load_queue_task_from_conn(&conn, message_key)
 }
 
+pub fn load_queue_task_last_error(root: &Path, message_key: &str) -> Result<Option<String>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    conn.query_row(
+        "SELECT NULLIF(TRIM(last_error), '')
+         FROM communication_routing_state
+         WHERE message_key = ?1
+         LIMIT 1",
+        params![message_key],
+        |row| row.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(|value| value.flatten())
+    .map_err(anyhow::Error::from)
+}
+
 pub fn update_queue_task(root: &Path, request: QueueTaskUpdateRequest) -> Result<QueueTaskView> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
