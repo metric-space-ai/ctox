@@ -1561,6 +1561,13 @@ var CtoxWebRtcNativePeer = class {
       drainRtcPeerConnectionQueue("critical-peer-opened");
       this.recordConnectionEvent(connection, "datachannel-open", { readyState: channel.readyState || "open" });
       this.events.emit("peer-open", { peerId: connection.remotePeerId });
+      this.drainSendQueue(connection).catch((error) => {
+        this.events.emit("error", {
+          code: "ctox_webrtc_send_queue_failed",
+          peerId: connection.remotePeerId,
+          message: error?.message || String(error)
+        });
+      });
     };
     channel.onmessage = (event) => {
       let payload = event.data;

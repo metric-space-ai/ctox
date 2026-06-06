@@ -303,6 +303,39 @@ Open:
 - `src/core/rxdb/tools/browser_rust_smoke.js` still hangs without honoring its configured timeout; this is not counted as a pass.
 - Production must be upgraded via `ctox upgrade --dev` and then verified with fresh-browser E2E before any production-ready claim.
 
+### Phase 23: Send queue drain on DataChannel open
+
+Status: Implemented locally, production deployment pending.
+
+Production evidence after Phase 22 deploy:
+
+- `ctox upgrade --dev` successfully deployed release `branch-main-20260606T213446Z`.
+- The served shell loaded build key `20260606-rxdb-multiplex-handshake1`.
+- Login succeeded with the skf tenant user.
+- The shell reached `dataPlaneReadyStatus=ready` and created the WebRTC sync runtime.
+- Required collections still stayed in `initialReplicationState=pending`.
+- Diagnostics showed `queuedFrames > 0` and `sentScheduledFrames > 0`, but `sentFrames = 0`; the DataChannel opened and received native frames, then timed out waiting for browser requests that were never actually sent.
+
+Root cause:
+
+`send()` can enqueue protocol/request frames before the RTC data channel is open. The previous `drainSendQueue()` call exits while the channel is not yet open, and `attachChannel().onopen` did not re-drain the queued frames.
+
+Change:
+
+- `src/apps/business-os/rxdb/src/webrtc-native.mjs` now drains the existing send queue immediately after `datachannel-open`.
+- Rebuilt `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs`.
+- Bumped Business OS app/RxDB cache keys to `20260606-rxdb-sendqueue-drain1`.
+
+Verification so far:
+
+- `node --check` passed for changed source and rebuilt bundle.
+- `node src/apps/business-os/scripts/assert-rxdb-only.mjs` passed.
+- `node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs` passed.
+
+Open:
+
+- Must commit, push to `main`, deploy via `ctox upgrade --dev`, and rerun fresh-browser E2E.
+
 ### Step 5: Fix frontend task creation feedback
 
 For right-click, Bug Reporter, and Research continuation:
