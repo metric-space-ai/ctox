@@ -13,6 +13,13 @@ const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
   'communication_threads',
   'communication_messages',
 ];
+const OUTBOUND_CONTEXT_COLLECTIONS = [
+  'outbound_campaigns',
+  'outbound_pipeline_items',
+  'outbound_engagements',
+  'outbound_messages',
+  'outbound_approvals',
+];
 const OUTBOUND_REPLY_CLASSIFICATIONS = [
   'positive',
   'negative',
@@ -317,6 +324,7 @@ export async function mount(ctx) {
   const outboundEngagementsCollection = ctx.db?.collection?.('outbound_engagements') || null;
   const outboundMessagesCollection = ctx.db?.collection?.('outbound_messages') || null;
   const outboundApprovalsCollection = ctx.db?.collection?.('outbound_approvals') || null;
+  const businessCommandsCollection = ctx.db?.collection?.('business_commands') || null;
 
   const view = {
     channel: 'all',
@@ -339,6 +347,7 @@ export async function mount(ctx) {
     deepLink: parseConversationDeepLink(),
     highlightedMessageKey: '',
     outboundContext: null,
+    outboundContextRetryTimer: null,
     outboundStatus: '',
     outboundReplyMatchKeys: new Set(),
   };
@@ -347,6 +356,10 @@ export async function mount(ctx) {
   const cleanups = [];
   if (resizerL) cleanups.push(() => resizerL.destroy());
   if (resizerR) cleanups.push(() => resizerR.destroy());
+  cleanups.push(() => {
+    if (view.outboundContextRetryTimer) window.clearTimeout(view.outboundContextRetryTimer);
+    view.outboundContextRetryTimer = null;
+  });
 
   markMissingCollections();
   ensureCommunicationCollectionsSync();
@@ -552,6 +565,16 @@ export async function mount(ctx) {
     }
   }
 
+  function ensureOutboundContextCollectionsSync() {
+    for (const name of OUTBOUND_CONTEXT_COLLECTIONS) {
+      if (!ctx.db?.collection?.(name)) continue;
+      ctx.sync?.startCollection?.(name)?.catch?.((error) => {
+        console.warn(`[conversations] ${name} outbound context sync start failed`, error);
+        view.collectionErrors.set(name, error);
+      });
+    }
+  }
+
   function applyMessageFilters(messages) {
     const cutoff = dateCutoff(view.dateRange);
     return messages.filter((msg) => {
@@ -573,6 +596,7 @@ export async function mount(ctx) {
   async function applyConversationDeepLink() {
     const link = view.deepLink;
     if (!link || link.applied) return;
+    if (hasOutboundDeepLink(link)) ensureOutboundContextCollectionsSync();
     if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
       view.channel = link.channel === 'all' ? 'all' : link.channel;
       for (const btn of refs.channelFilterButtons) {
@@ -587,7 +611,7 @@ export async function mount(ctx) {
     }
     if (link.message_key && messagesCollection) {
       try {
-        const doc = await messagesCollection.findOne(link.message_key).exec();
+        const doc = await withTimeout(messagesCollection.findOne(link.message_key).exec(), 5000, null);
         const message = doc?.toJSON?.();
         if (message) {
           link.thread_key ||= message.thread_key || '';
@@ -606,8 +630,62 @@ export async function mount(ctx) {
       view.timelineLimit = MESSAGE_PAGE_SIZE;
       link.resolved = true;
     }
-    view.outboundContext = await loadOutboundContextForLink(link);
+    view.outboundContext = await waitForOutboundContextForLink(link);
+    if (hasOutboundDeepLink(link) && !outboundContextSatisfiesDeepLink(view.outboundContext, link)) {
+      scheduleOutboundContextRetry(link);
+      return;
+    }
     link.applied = true;
+  }
+
+  function hasOutboundDeepLink(link = {}) {
+    return Boolean(link.outbound_message_id || link.engagement_id || link.campaign_id || link.thread_key || link.message_key);
+  }
+
+  function scheduleOutboundContextRetry(link = {}) {
+    if (view.outboundContextRetryTimer) window.clearTimeout(view.outboundContextRetryTimer);
+    let attempts = 0;
+    const retry = async () => {
+      attempts += 1;
+      if (!String(location.hash || '').startsWith('#conversations')) return;
+      ensureOutboundContextCollectionsSync();
+      const context = await loadOutboundContextForLink(link).catch((error) => {
+        console.warn('[conversations] outbound context retry failed:', error);
+        return null;
+      });
+      if (outboundContextSatisfiesDeepLink(context, link)) {
+        view.outboundContext = context;
+        link.applied = true;
+        renderRightPane();
+        return;
+      }
+      if (attempts < 60) {
+        view.outboundContextRetryTimer = window.setTimeout(retry, 500);
+      }
+    };
+    view.outboundContextRetryTimer = window.setTimeout(retry, 500);
+  }
+
+  async function waitForOutboundContextForLink(link = {}, timeoutMs = 15000) {
+    const deadline = Date.now() + timeoutMs;
+    let context = null;
+    while (Date.now() < deadline) {
+      context = await loadOutboundContextForLink(link).catch((error) => {
+        console.warn('[conversations] outbound context lookup skipped:', error);
+        return context;
+      });
+      if (outboundContextSatisfiesDeepLink(context, link)) return context;
+      await sleep(250);
+    }
+    return context;
+  }
+
+  function outboundContextSatisfiesDeepLink(context, link = {}) {
+    if (!context) return false;
+    if (link.outbound_message_id) return context.message?.id === link.outbound_message_id;
+    if (link.engagement_id) return context.engagement?.id === link.engagement_id || context.message?.engagement_id === link.engagement_id;
+    if (link.campaign_id) return context.campaign?.id === link.campaign_id || context.message?.campaign_id === link.campaign_id;
+    return Boolean(context.message || context.engagement || context.campaign);
   }
 
   async function loadOutboundContextForLink(link = {}) {
@@ -617,8 +695,8 @@ export async function mount(ctx) {
       outboundMessage = await findOneJson(outboundMessagesCollection, link.outbound_message_id);
     }
     if (!outboundMessage && outboundMessagesCollection && (link.message_key || link.thread_key || link.engagement_id)) {
-      const docs = await outboundMessagesCollection.find().exec();
-      outboundMessage = docs
+      const docs = await withTimeout(outboundMessagesCollection.find().limit(250).exec(), 5000, []);
+      outboundMessage = (docs || [])
         .map((doc) => doc.toJSON())
         .find((message) => (
           (link.message_key && (message.communication_message_key === link.message_key || message.payload?.communication_message_key === link.message_key))
@@ -644,8 +722,8 @@ export async function mount(ctx) {
     }
     let approvals = [];
     if (outboundMessage?.id && outboundApprovalsCollection) {
-      const docs = await outboundApprovalsCollection.find().exec();
-      approvals = docs.map((doc) => doc.toJSON()).filter((item) => item.message_id === outboundMessage.id);
+      const docs = await withTimeout(outboundApprovalsCollection.find().limit(250).exec(), 5000, []);
+      approvals = (docs || []).map((doc) => doc.toJSON()).filter((item) => item.message_id === outboundMessage.id);
       approvals.sort((a, b) => (Number(b.updated_at_ms) || 0) - (Number(a.updated_at_ms) || 0));
     }
     if (!outboundMessage && !engagement && !campaign) return null;
@@ -1546,7 +1624,9 @@ export async function mount(ctx) {
 
   function renderOutboundCard(bucket) {
     if (!refs.outboundCard || !refs.outboundBody) return;
-    const context = view.outboundContext || outboundContextFromBucket(bucket);
+    const loadedContext = view.outboundContext || outboundContextFromBucket(bucket);
+    const fallbackContext = outboundContextFromDeepLinkFallback(bucket);
+    const context = mergeOutboundContexts(loadedContext, fallbackContext);
     if (!context) {
       refs.outboundCard.hidden = true;
       refs.outboundBody.replaceChildren();
@@ -1573,8 +1653,8 @@ export async function mount(ctx) {
       <span></span>
       <span></span>
     `;
-    summary.querySelector('strong').textContent = campaign.name || campaign.id || 'Outbound Campaign';
-    summary.querySelectorAll('span')[0].textContent = [companyName, leadName].filter(Boolean).join(' · ') || engagement.id || message.id || '';
+    summary.querySelector('strong').textContent = campaign.name || t('outboundCampaignFallback', 'Outbound Campaign');
+    summary.querySelectorAll('span')[0].textContent = [companyName, leadName].filter(Boolean).join(' · ') || message.recipient_email || '';
     summary.querySelectorAll('span')[1].textContent = outboundStatusLine({
       engagement,
       message,
@@ -1583,14 +1663,7 @@ export async function mount(ctx) {
     });
     refs.outboundBody.appendChild(summary);
 
-    const rows = [
-      ['Campaign', campaign.id || message.campaign_id || engagement.campaign_id],
-      ['Engagement', engagement.id || message.engagement_id],
-      ['Message', message.id],
-      ['Approval', message.approval_status || latestApproval?.decision],
-      ['Lead', leadName],
-      ['Sequenz', engagement.sequence_id || message.payload?.sequence_id],
-    ].filter(([, value]) => value);
+    const rows = outboundFactRows({ message, engagement, latestApproval, leadName, t });
     if (rows.length) {
       const dl = document.createElement('dl');
       dl.className = 'conv-outbound-facts';
@@ -1610,6 +1683,7 @@ export async function mount(ctx) {
     const openBtn = document.createElement('button');
     openBtn.type = 'button';
     openBtn.className = 'conv-action-button';
+    openBtn.dataset.action = 'conv-outbound-open';
     openBtn.textContent = t('outboundOpenCampaign', 'In Outbound öffnen');
     openBtn.addEventListener('click', () => openOutboundContext(context));
     actions.appendChild(openBtn);
@@ -1618,6 +1692,8 @@ export async function mount(ctx) {
       const approveBtn = document.createElement('button');
       approveBtn.type = 'button';
       approveBtn.className = 'conv-action-button conv-action-button--primary';
+      approveBtn.dataset.action = 'conv-outbound-approve';
+      approveBtn.dataset.messageId = message.id;
       approveBtn.textContent = t('outboundApprove', 'Freigeben');
       approveBtn.addEventListener('click', () => approveOutboundMessageFromConversations(message.id));
       actions.appendChild(approveBtn);
@@ -1625,6 +1701,8 @@ export async function mount(ctx) {
       const rejectBtn = document.createElement('button');
       rejectBtn.type = 'button';
       rejectBtn.className = 'conv-action-button';
+      rejectBtn.dataset.action = 'conv-outbound-reject';
+      rejectBtn.dataset.messageId = message.id;
       rejectBtn.textContent = t('outboundReject', 'Ablehnen');
       rejectBtn.addEventListener('click', () => rejectOutboundMessageFromConversations(message.id));
       actions.appendChild(rejectBtn);
@@ -1660,6 +1738,8 @@ export async function mount(ctx) {
     }
     select.value = OUTBOUND_REPLY_CLASSIFICATIONS.includes(current) ? current : 'unclear';
     wrap.querySelector('button').textContent = t('outboundReplyClassify', 'Klassifizieren');
+    wrap.querySelector('button').dataset.action = 'conv-outbound-reply-classify';
+    wrap.querySelector('button').dataset.engagementId = context.engagement.id;
     wrap.querySelector('small').textContent = `${t('outboundReplyLabel', 'Antwort')}: ${shortenId(inboundReply.message_key || inboundReply.remote_id || '')}`;
     wrap.querySelector('button').addEventListener('click', async () => {
       await classifyOutboundReply({
@@ -1688,19 +1768,149 @@ export async function mount(ctx) {
     return null;
   }
 
+  function outboundContextFromDeepLinkFallback(bucket) {
+    const link = view.deepLink || {};
+    if (!link.outbound_message_id && !link.engagement_id && !link.campaign_id) return null;
+    const message = view.timelineMessages.find((item) => (
+      (link.message_key && item.message_key === link.message_key)
+      || (link.thread_key && item.thread_key === link.thread_key)
+      || metadataMatchesOutboundLink(item.metadata_json, link)
+    ));
+    if (!message) return null;
+    const metadataLink = outboundLinkFromMetadata(message.metadata_json) || {};
+    const outboundMessageId = link.outbound_message_id || metadataLink.outbound_message_id || '';
+    if (!outboundMessageId) return null;
+    const recipients = Array.isArray(message.recipient_addresses_json)
+      ? message.recipient_addresses_json
+      : [];
+    const recipient = recipients[0] || '';
+    const approvalStatus = firstMetadataValue(message.metadata_json, ['approval_status']) || 'awaiting_approval';
+    const sendStatus = firstMetadataValue(message.metadata_json, ['send_status']) || 'awaiting_approval';
+    return {
+      campaign: {
+        id: link.campaign_id || metadataLink.campaign_id || '',
+        name: t('outboundCampaignFallback', 'Outbound Campaign'),
+      },
+      engagement: {
+        id: link.engagement_id || metadataLink.engagement_id || '',
+        campaign_id: link.campaign_id || metadataLink.campaign_id || '',
+        payload: {
+          contact_name: formatParticipantHandles(bucket?.participants || []),
+          contact_email: recipient,
+          channel: message.channel || link.channel || metadataLink.channel || '',
+        },
+      },
+      message: {
+        id: outboundMessageId,
+        engagement_id: link.engagement_id || metadataLink.engagement_id || '',
+        campaign_id: link.campaign_id || metadataLink.campaign_id || '',
+        channel: message.channel || link.channel || metadataLink.channel || 'email',
+        subject: message.subject || '',
+        body_text: message.body_text || message.preview || '',
+        recipient_email: recipient,
+        approval_status: approvalStatus,
+        send_status: sendStatus,
+        communication_message_key: message.message_key || link.message_key || '',
+        communication_account_key: message.account_key || link.account_key || '',
+        thread_key: message.thread_key || link.thread_key || '',
+      },
+      approvals: [],
+      fallback: 'communication_message_deep_link',
+    };
+  }
+
+  function mergeOutboundContexts(primary, fallback) {
+    if (!primary) return fallback || null;
+    if (!fallback) return primary;
+    return {
+      ...fallback,
+      ...primary,
+      campaign: { ...(fallback.campaign || {}), ...(primary.campaign || {}) },
+      pipeline: primary.pipeline || fallback.pipeline || null,
+      contact: primary.contact || fallback.contact || null,
+      engagement: { ...(fallback.engagement || {}), ...(primary.engagement || {}) },
+      message: { ...(fallback.message || {}), ...(primary.message || {}) },
+      approvals: primary.approvals?.length ? primary.approvals : (fallback.approvals || []),
+    };
+  }
+
   function outboundStatusLine({ engagement = {}, message = {}, latestApproval = null, statusNote = '' } = {}) {
     const parts = [];
     if (statusNote) parts.push(statusNote);
-    if (engagement.status) parts.push(`Engagement: ${engagement.status}`);
-    if (message.approval_status) {
-      const approval = message.approval_status === 'awaiting_approval'
-        ? t('outboundAwaitingApproval', 'wartet auf Freigabe')
-        : message.approval_status;
-      parts.push(`Approval: ${approval}`);
-    }
-    if (message.send_status) parts.push(`Versand: ${message.send_status}`);
-    if (latestApproval?.decision) parts.push(`Letzte Entscheidung: ${latestApproval.decision}`);
+    const approval = outboundApprovalLabel(message.approval_status || latestApproval?.decision || '', t);
+    if (approval) parts.push(approval);
+    const send = outboundSendLabel(message.send_status || '', t);
+    if (send) parts.push(send);
+    const engagementState = outboundEngagementLabel(engagement.status || '', t);
+    if (engagementState) parts.push(engagementState);
     return parts.join(' · ') || 'Outbound-Kontext';
+  }
+
+  function outboundFactRows({ message = {}, engagement = {}, latestApproval = null, leadName = '', t } = {}) {
+    return [
+      [t('outboundFactChannel', 'Kanal'), labelForChannel(message.channel || engagement.payload?.channel || 'email', t)],
+      [t('outboundFactRecipient', 'Empfaenger'), message.recipient_email || leadName],
+      [t('outboundFactSubject', 'Betreff'), message.subject || ''],
+      [t('outboundFactApproval', 'Freigabe'), outboundApprovalLabel(message.approval_status || latestApproval?.decision || '', t)],
+      [t('outboundFactNextStep', 'Naechste Aktion'), outboundNextStepLabel(message, t)],
+    ].filter(([, value]) => value);
+  }
+
+  function outboundApprovalLabel(status, t) {
+    switch (String(status || '').toLowerCase()) {
+      case 'awaiting_approval':
+        return t('outboundApprovalAwaiting', 'Wartet auf Freigabe');
+      case 'approved':
+        return t('outboundApprovalApproved', 'Freigegeben');
+      case 'rejected':
+        return t('outboundApprovalRejected', 'Abgelehnt');
+      case 'changes_requested':
+        return t('outboundApprovalChangesRequested', 'Aenderungen angefordert');
+      default:
+        return '';
+    }
+  }
+
+  function outboundSendLabel(status, t) {
+    switch (String(status || '').toLowerCase()) {
+      case 'awaiting_approval':
+        return '';
+      case 'approved_not_sent':
+        return t('outboundSendReady', 'Bereit fuer Versand');
+      case 'queued_for_provider':
+        return t('outboundSendQueued', 'Versand eingereiht');
+      case 'sent':
+        return t('outboundSendSent', 'Gesendet');
+      case 'letter_exported':
+        return t('outboundLetterExported', 'Brief exportiert');
+      case 'manual_sent':
+        return t('outboundLetterSent', 'Brief als verschickt markiert');
+      default:
+        return '';
+    }
+  }
+
+  function outboundEngagementLabel(status, t) {
+    switch (String(status || '').toLowerCase()) {
+      case 'reply_received':
+        return t('outboundReplyReceived', 'Antwort eingegangen');
+      case 'meeting_booked':
+        return t('outboundMeetingBooked', 'Termin gebucht');
+      case 'closed':
+        return t('outboundClosed', 'Abgeschlossen');
+      default:
+        return '';
+    }
+  }
+
+  function outboundNextStepLabel(message = {}, t) {
+    const approval = String(message.approval_status || '').toLowerCase();
+    const send = String(message.send_status || '').toLowerCase();
+    if (approval === 'awaiting_approval') return t('outboundNextReview', 'Nachricht pruefen und freigeben');
+    if (approval === 'approved' && send === 'approved_not_sent') return t('outboundNextSend', 'In Outbound versenden');
+    if (send === 'queued_for_provider') return t('outboundNextWaitProvider', 'Auf Versandbestaetigung warten');
+    if (send === 'sent') return t('outboundNextWaitReply', 'Auf Antwort warten');
+    return '';
   }
 
   function canApproveOutboundMessage(message = {}) {
@@ -1743,16 +1953,38 @@ export async function mount(ctx) {
   }
 
   async function approveOutboundMessageFromConversations(messageId) {
-    await dispatchOutboundCommand('outbound.message.approve', messageId, { message_id: messageId });
+    view.outboundStatus = t('outboundApprovalRequested', 'Freigabe angefordert');
+    renderRightPane();
+    const outcome = await materializeOutboundDecisionLocally(messageId, 'approved');
+    dispatchOutboundCommand('outbound.message.approve', messageId, { message_id: messageId }, { waitForOutcome: false, timeoutMs: 1500 })
+      .catch((error) => console.warn('[conversations] outbound approve command dispatch failed:', error));
     view.outboundStatus = t('outboundApprove', 'Freigeben');
+    await applyOutboundDecisionToCommunicationMessage(outcome, messageId, 'approved');
+    view.outboundContext = await waitForOutboundContextForLink({ ...view.deepLink, outbound_message_id: messageId });
+    if (!view.outboundContext || view.outboundContext.message?.approval_status === 'awaiting_approval') {
+      scheduleOutboundContextRetry({ ...view.deepLink, outbound_message_id: messageId });
+    }
+    mergeOutboundCommandOutcomeIntoContext(outcome);
+    renderRightPane();
   }
 
   async function rejectOutboundMessageFromConversations(messageId) {
-    await dispatchOutboundCommand('outbound.message.reject', messageId, {
+    view.outboundStatus = t('outboundRejectionRequested', 'Ablehnung angefordert');
+    renderRightPane();
+    const outcome = await materializeOutboundDecisionLocally(messageId, 'rejected', 'Rejected from Conversations');
+    dispatchOutboundCommand('outbound.message.reject', messageId, {
       message_id: messageId,
       comment: 'Rejected from Conversations',
-    });
+    }, { waitForOutcome: false, timeoutMs: 1500 })
+      .catch((error) => console.warn('[conversations] outbound reject command dispatch failed:', error));
     view.outboundStatus = t('outboundReject', 'Ablehnen');
+    await applyOutboundDecisionToCommunicationMessage(outcome, messageId, 'rejected');
+    view.outboundContext = await waitForOutboundContextForLink({ ...view.deepLink, outbound_message_id: messageId });
+    if (!view.outboundContext || view.outboundContext.message?.approval_status === 'awaiting_approval') {
+      scheduleOutboundContextRetry({ ...view.deepLink, outbound_message_id: messageId });
+    }
+    mergeOutboundCommandOutcomeIntoContext(outcome);
+    renderRightPane();
   }
 
   async function classifyOutboundReply({ engagementId, replyMessageKey, classification }) {
@@ -1802,27 +2034,272 @@ export async function mount(ctx) {
     });
   }
 
-  async function dispatchOutboundCommand(type, recordId, payload) {
-    if (!ctx.commandBus?.dispatch) {
-      throw new Error('RxDB command bus is not available');
-    }
+  async function dispatchOutboundCommand(type, recordId, payload, options = {}) {
     const commandId = `cmd_${type.replaceAll('.', '_')}_${crypto.randomUUID()}`;
-    await ctx.commandBus.dispatch({
+    const command = {
       id: commandId,
+      command_id: commandId,
       module: 'outbound',
       type,
+      command_type: type,
       record_id: recordId || '',
       payload,
+      inbound_channel: 'business_os.conversations',
       client_context: {
         source_module: 'conversations',
         deep_link: view.deepLink || {},
       },
-    });
+      created_at_ms: Date.now(),
+      updated_at_ms: Date.now(),
+    };
+    const dispatched = ctx.commandBus?.dispatch
+      ? await withTimeout(ctx.commandBus.dispatch(command), options.timeoutMs || 5000, null).catch((error) => {
+          console.warn('[conversations] outbound command bus dispatch failed, using RxDB fallback:', error);
+          return null;
+        })
+      : null;
+    if (!dispatched) {
+      await insertOutboundCommandFallback(command);
+    }
+    if (options.waitForOutcome === false) {
+      return dispatched || { id: commandId, command_id: commandId, status: 'pending_sync', pending: true };
+    }
+    const outcome = await waitForOutboundCommandOutcome(commandId);
     ctx.notifications?.show?.({
       type: 'info',
       title: 'Outbound',
       message: type,
     });
+    return outcome;
+  }
+
+  function scheduleOutboundCommandDispatch(type, recordId, payload, attempt = 0) {
+    if (!isBusinessCommandsReadyForDispatch()) {
+      if (attempt < 60) {
+        window.setTimeout(() => scheduleOutboundCommandDispatch(type, recordId, payload, attempt + 1), 1000);
+      }
+      return;
+    }
+    dispatchOutboundCommand(type, recordId, payload, { waitForOutcome: false, timeoutMs: 1500 })
+      .catch((error) => {
+        if (attempt < 60) {
+          window.setTimeout(() => scheduleOutboundCommandDispatch(type, recordId, payload, attempt + 1), 1000);
+          return;
+        }
+        console.warn('[conversations] outbound command dispatch deferred failed:', error);
+      });
+  }
+
+  function isBusinessCommandsReadyForDispatch() {
+    const diagnostics = view.syncDiagnostics?.collections?.business_commands
+      || ctx.sync?.diagnostics?.collections?.business_commands
+      || window.ctoxBusinessOsSyncDiagnostics?.collections?.business_commands
+      || null;
+    if (!businessCommandsCollection || !diagnostics) return false;
+    const status = diagnostics.connectionStatus || diagnostics.status || '';
+    const activePeerCount = Number(diagnostics.frameTransport?.activePeerCount || 0);
+    return ['connected', 'reused', 'running'].includes(status)
+      && activePeerCount > 0
+      && Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
+  }
+
+  async function materializeOutboundDecisionLocally(messageId, decision, comment = '') {
+    if (!outboundMessagesCollection) throw new Error('outbound_messages collection is required for Conversations outbound decisions');
+    const doc = await outboundMessagesCollection.findOne(messageId).exec();
+    if (!doc) throw new Error(`Outbound message missing: ${messageId}`);
+    const current = doc.toJSON?.() || {};
+    const approved = decision === 'approved';
+    const now = Date.now();
+    const revisionId = current.revision_id || `rev_${crypto.randomUUID().replaceAll('-', '')}`;
+    const messagePatch = {
+      draft_status: approved ? 'approved' : 'changes_requested',
+      approval_status: approved ? 'approved' : 'rejected',
+      send_status: approved ? 'approved_not_sent' : 'cancelled',
+      revision_id: revisionId,
+      updated_at_ms: now,
+      _meta: {
+        ...(current._meta || {}),
+        lwt: now,
+      },
+    };
+    const message = { ...current, ...messagePatch };
+    await retryRxdbWrite(async () => {
+      await outboundMessagesCollection.upsert(message);
+    }, 'outbound message decision');
+    const approval = {
+      id: `approval_${messageId}_${revisionId}`.slice(0, 180),
+      message_id: messageId,
+      engagement_id: message.engagement_id || view.outboundContext?.engagement?.id || '',
+      revision_id: revisionId,
+      actor_user_id: ctx.session?.user?.id || 'business-os.conversations',
+      decision: approved ? 'approved' : 'rejected',
+      comment,
+      payload: { source_module: 'conversations' },
+      created_at_ms: now,
+      updated_at_ms: now,
+    };
+    if (outboundApprovalsCollection) {
+      await retryRxdbWrite(() => outboundApprovalsCollection.upsert(approval), 'outbound approval audit');
+    }
+    if (view.outboundContext?.message?.id === messageId) {
+      view.outboundContext.message = { ...view.outboundContext.message, ...message };
+      const approvals = Array.isArray(view.outboundContext.approvals)
+        ? view.outboundContext.approvals.filter((item) => item.id !== approval.id)
+        : [];
+      approvals.unshift(approval);
+      view.outboundContext.approvals = approvals;
+    }
+    return { ok: true, message, approval };
+  }
+
+  async function retryRxdbWrite(operation, label, timeoutMs = 60000) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError = null;
+    const timeoutSentinel = Symbol(`${label}.timeout`);
+    while (Date.now() < deadline) {
+      try {
+        const result = await withTimeout(operation(), 10000, timeoutSentinel);
+        if (result === timeoutSentinel) throw new Error(`${label} write timed out`);
+        return result;
+      } catch (error) {
+        lastError = error;
+      }
+      await sleep(750);
+    }
+    throw lastError || new Error(`${label} timed out`);
+  }
+
+  async function insertOutboundCommandFallback(command) {
+    if (!businessCommandsCollection) {
+      throw new Error('business_commands collection is required for Conversations outbound command fallback');
+    }
+    const existing = await findOneJson(businessCommandsCollection, command.id).catch(() => null);
+    if (existing) return;
+    await businessCommandsCollection.insert({
+      ...command,
+      status: 'pending_sync',
+    });
+  }
+
+  function withTimeout(promise, timeoutMs, fallback) {
+    return Promise.race([
+      promise,
+      new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
+    ]);
+  }
+
+  async function waitForOutboundCommandOutcome(commandId, timeoutMs = 60000) {
+    if (!businessCommandsCollection) return null;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const command = await findOneJson(businessCommandsCollection, commandId);
+      const status = String(command?.status || '').toLowerCase();
+      if (status === 'completed') return command;
+      if (status === 'failed') {
+        throw new Error(command?.error || command?.result?.error || `Outbound command failed: ${commandId}`);
+      }
+      await sleep(250);
+    }
+    return {
+      id: commandId,
+      command_id: commandId,
+      status: 'pending_sync',
+      pending: true,
+    };
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function mergeOutboundCommandOutcomeIntoContext(outcome) {
+    const result = outcome?.result || outcome;
+    if (!result || !view.outboundContext) return;
+    if (result.message?.id) {
+      view.outboundContext.message = {
+        ...(view.outboundContext.message || {}),
+        ...result.message,
+      };
+    }
+    if (result.engagement?.id) {
+      view.outboundContext.engagement = {
+        ...(view.outboundContext.engagement || {}),
+        ...result.engagement,
+      };
+    }
+    if (result.approval?.id) {
+      const approvals = Array.isArray(view.outboundContext.approvals)
+        ? view.outboundContext.approvals.filter((approval) => approval.id !== result.approval.id)
+        : [];
+      approvals.unshift(result.approval);
+      view.outboundContext.approvals = approvals;
+    }
+  }
+
+  async function applyOutboundDecisionToCommunicationMessage(outcome, fallbackMessageId, decision) {
+    const result = outcome?.result || outcome || {};
+    const message = result.message || view.outboundContext?.message || {};
+    const communicationMessageKey = cleanParam(
+      message.communication_message_key
+        || message.payload?.communication_message_key
+        || view.deepLink?.message_key
+        || ''
+    );
+    if (!communicationMessageKey || !messagesCollection) return;
+
+    const approved = decision === 'approved';
+    const approvalStatus = approved ? 'approved' : 'rejected';
+    const sendStatus = approved ? 'approved_not_sent' : 'cancelled';
+    const nextAction = approved ? 'In Outbound versenden' : 'Nachricht ueberarbeiten';
+    const nowIso = new Date().toISOString();
+
+    try {
+      const doc = await messagesCollection.findOne(communicationMessageKey).exec();
+      if (!doc) return;
+      const current = doc.toJSON?.() || {};
+      const metadata = {
+        ...(current.metadata_json && typeof current.metadata_json === 'object' ? current.metadata_json : {}),
+        approval_status: approvalStatus,
+        send_status: sendStatus,
+        outbound_message_id: cleanParam(message.id || fallbackMessageId),
+        outbound_engagement_id: cleanParam(message.engagement_id || view.outboundContext?.engagement?.id || ''),
+        outbound_campaign_id: cleanParam(message.campaign_id || view.outboundContext?.campaign?.id || ''),
+        communication_message_key: communicationMessageKey,
+      };
+      await doc.incrementalPatch({
+        status: current.status || 'draft',
+        folder_hint: current.folder_hint || 'drafts',
+        metadata_json: metadata,
+        updated_at: nowIso,
+      });
+
+      const localMessage = view.timelineMessages.find((item) => item.message_key === communicationMessageKey);
+      if (localMessage) {
+        localMessage.metadata_json = metadata;
+        localMessage.status = localMessage.status || 'draft';
+        localMessage.folder_hint = localMessage.folder_hint || 'drafts';
+        localMessage.updated_at = nowIso;
+      }
+      if (view.outboundContext?.message) {
+        view.outboundContext.message = {
+          ...view.outboundContext.message,
+          approval_status: approvalStatus,
+          send_status: sendStatus,
+          communication_message_key: communicationMessageKey,
+        };
+      }
+      view.outboundStatus = approved
+        ? t('outboundApprovalApplied', 'Freigegeben')
+        : t('outboundRejectionApplied', 'Abgelehnt');
+      if (view.outboundContext?.message) {
+        view.outboundContext.message.payload = {
+          ...(view.outboundContext.message.payload || {}),
+          next_action_label: nextAction,
+        };
+      }
+    } catch (error) {
+      console.warn('[conversations] communication message decision projection failed:', error);
+    }
   }
 
   function renderAccountsCard(bucket) {

@@ -372,6 +372,7 @@ class SharedRoomPeer {
     // Single-collection rooms omit the map (payload stays legacy-identical).
     if (this.collections.size > 1) {
       payload.collectionSchemas = await this.collectCollectionSchemas();
+      payload.collectionCheckpoints = await this.collectCollectionCheckpoints();
     }
     return payload;
   }
@@ -512,7 +513,6 @@ class SharedRoomPeer {
         registration?.state?.emitError(error);
       }
     }
-    await this.peer.request(peerId, 'token', [], SHARED_TOKEN_TIMEOUT_MS, representative.collection);
     await this.awaitRemoteMasterReady(peerId);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
@@ -892,17 +892,35 @@ class CtoxWebRtcReplicationState {
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
         break;
       }
-      const rows = documents.map((doc) => ({
+      let rows = documents.map((doc) => ({
         newDocumentState: doc,
         assumedMasterState: null,
       }));
-      await this.peer.request(
-        peerId,
-        'masterWrite',
-        [rows],
-        this.requestTimeoutMsFor('masterWrite'),
-        this.collection.name,
-      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const conflicts = await this.peer.request(
+          peerId,
+          'masterWrite',
+          [rows],
+          this.requestTimeoutMsFor('masterWrite'),
+          this.collection.name,
+        );
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        if (!conflictMap.size) {
+          rows = [];
+          break;
+        }
+        rows = rows
+          .map((row) => {
+            const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+            const assumedMasterState = conflictMap.get(id);
+            return assumedMasterState ? { ...row, assumedMasterState } : null;
+          })
+          .filter(Boolean);
+        if (!rows.length) break;
+      }
+      if (rows.length) {
+        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+      }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       if (documents.length < batchSize) break;
@@ -1254,6 +1272,27 @@ function hashString(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+
+function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
+  const map = new Map();
+  for (const doc of Array.isArray(documents) ? documents : []) {
+    const id = primaryValue(doc, primaryPath);
+    if (id) map.set(id, doc);
+  }
+  return map;
+}
+
+function primaryValue(doc = {}, primaryPath = 'id') {
+  if (!doc || typeof doc !== 'object') return '';
+  if (doc.id != null) return String(doc.id);
+  if (doc._id != null) return String(doc._id);
+  return String(replicationValueAtPath(doc, primaryPath) ?? '');
+}
+
+function replicationValueAtPath(obj, path) {
+  if (!path || path === 'id') return obj?.id;
+  return String(path).split('.').reduce((acc, part) => (acc == null ? undefined : acc[part]), obj);
 }
 
 function delay(ms) {

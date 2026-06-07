@@ -61,6 +61,7 @@ export class CtoxIndexedDbCollection {
       throw new TypeError('bulkWrite rows must be an array');
     }
     const tx = this.db.transaction(DOCUMENT_STORE, 'readwrite');
+    const done = idbTransactionDone(tx);
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
@@ -72,7 +73,7 @@ export class CtoxIndexedDbCollection {
         error.push({ row, error: 'missing primary key' });
         continue;
       }
-      const lwt = Number(doc._meta?.lwt || doc.updated_at_ms || doc.updatedAtMs || now);
+      const lwt = documentLwt(doc, now);
       const stored = {
         collection: this.name,
         id,
@@ -81,11 +82,15 @@ export class CtoxIndexedDbCollection {
         indexValues: indexValuesFor(this.indexes, doc),
         doc: normalizeDocument(doc, lwt, replicationOrigin),
       };
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (!shouldAcceptDocumentWrite(previous, lwt)) {
+        continue;
+      }
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
 
-    await idbTransactionDone(tx);
+    await done;
     if (Object.keys(success).length) {
       this.events.emit('change', {
         collection: this.name,
@@ -115,6 +120,7 @@ export class CtoxIndexedDbCollection {
 
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const done = idbTransactionDone(tx);
     const store = tx.objectStore(DOCUMENT_STORE);
     const result = {};
     for (const id of ids) {
@@ -123,7 +129,7 @@ export class CtoxIndexedDbCollection {
         result[String(id)] = record.doc;
       }
     }
-    await idbTransactionDone(tx);
+    await done;
     return result;
   }
 
@@ -317,6 +323,23 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   return normalized;
 }
 
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt) {
+  if (!existingRecord) return true;
+  const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
+  const nextLwt = Number(incomingLwt || 0);
+  if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
+  return nextLwt >= existingLwt;
+}
+
+function documentLwt(doc = {}, fallback = Date.now()) {
+  const values = [
+    Number(doc._meta?.lwt || 0),
+    Number(doc.updated_at_ms || 0),
+    Number(doc.updatedAtMs || 0),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? Math.max(...values) : Number(fallback || Date.now());
+}
+
 function sanitizeReplicationOrigin(origin) {
   return {
     role: String(origin.role || '').slice(0, 64),
@@ -466,4 +489,5 @@ export const ctoxIndexedDbStorageTestInternals = {
   normalizeSchemaIndexes,
   replicationScanLimit,
   selectBestIndex,
+  shouldAcceptDocumentWrite,
 };

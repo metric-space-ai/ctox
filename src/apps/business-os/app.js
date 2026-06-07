@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-rxdb-public-catalog2';
+const APP_BUILD = '20260607-outbound-rxdb-main1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -41,7 +41,6 @@ const CRITICAL_SYNC_COLLECTIONS = [
   'ctox_runtime_settings',
   'business_commands',
   'ctox_queue_tasks',
-  'desktop_files',
 ];
 
 let criticalSyncCollectionsBundleChecked = false;
@@ -2046,7 +2045,6 @@ async function buildAdvancedStatusSnapshot(options = {}) {
         'ctox_runtime_settings',
         'business_commands',
         'ctox_queue_tasks',
-        'desktop_files',
       ];
   const failedCollections = collectionValues
     .filter((item) => ['failed', 'error', 'stopped'].includes(item?.connectionStatus || item?.status))
@@ -2663,7 +2661,6 @@ function isRequiredCollectionReady({ collection, diagnostics, evidence }) {
   if (![
     'business_commands',
     'ctox_queue_tasks',
-    'desktop_files',
   ].includes(collection)) return false;
   return true;
 }
@@ -2703,8 +2700,6 @@ async function collectAdvancedStatusCounts() {
   const names = [
     'business_module_catalog',
     'ctox_runtime_settings',
-    'desktop_files',
-    'desktop_file_chunks',
     'business_commands',
     'ctox_queue_tasks',
   ];

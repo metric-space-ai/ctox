@@ -57,6 +57,8 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   business_module_releases: "8d9ff79eec5eccc04353a885002a8982deb169dbbf3a348998b88fafb7e219f7",
   business_module_reports: "440b04e33e1040e556c62741d7c4289422b6d0d01203c74e5aee391d5f050ed1",
   business_module_source_files: "fa9cdeda3530f04bd84b926cb8ffae650c8f5886efac079daee0d01315737551",
+  business_onboarding_state: "264584aef35bc5efc4bbc8b4084155afe07ced859293be18cdd15cc65e8fad91",
+  business_profile: "5ff538b175f7432f9d7e798c09777f4c974c2270ca320119131606adac0223bb",
   business_users: "da6d1a192bc21ad59baf2680d8b80faa471a4883457a8d0ad5a533a1afefba42",
   channel_pairing_state: "d93ceef99b772bc57939143bc6ef0044bf816801700d2dbc8f88def356aa246a",
   communication_accounts: "d40ca549e2f112071b6eb39bf0999a743643073279af4471a477cef259275653",
@@ -100,6 +102,15 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   document_runbooks: "50b126b168c2fbf148da6b8693bbf455f6124c1b798a19e48aaaf5174acc9b7b",
   document_versions: "fca6df9bfa1d0d27f93d41cb7685fd08dacbf9f4843b7c1d95142b4cbe157738",
   documents: "600e0a73160dfaa480dd0ff8b833c85cec8aa60d41a9982a1ecd971e8a291ec1",
+  iot_agent_status: "c719592fcc4274060d12567b09013cff8dc11b605b790b349e8efac88cfb6ccd",
+  iot_agents: "0bf0fed6ea33be5d475e88b7b913fb1675bb1bf5d4361cc3c5eb6befec6480f8",
+  iot_alarms: "978c527550ceb781393bba6e9e886714f7c66f60bc2f7b98be55896bb2ccb149",
+  iot_asset_types: "5aebcc5fb39fe783d5364ce21c6f50dc929935ad1cef4964ad1ae996221064d3",
+  iot_assets: "b56ee809bbf974a07d1a6423753bedc195e49f7ea4a9f0f4077afa54486ff93e",
+  iot_attributes: "35a1c2494238fffedd2b6006ff5269bc7183a5ac60e2cd4a4c12ed17a9acabcb",
+  iot_datapoints: "6313f3c8671e3406d789877aca842f8bf5b6a7fa2b63a8458dece314a2f55a80",
+  iot_realms: "42ff4cfc74268c51602dd3873df95127f9070068aa5d7c1994e80f5275f78ada",
+  iot_rulesets: "0232a7ef9501f87ff583848bf29489aff7105d79ea7a1740dbfc357476f799f1",
   knowledge_items: "33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300",
   knowledge_runbooks: "33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300",
   knowledge_tables: "33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300",
@@ -180,7 +191,12 @@ function buildProtocolPayload({
   // hash/version of the OTHER collections sharing the DataChannel. The remote
   // validates each entry individually (see `assertCollectionSchemasCompatible`)
   // instead of skipping schema validation wholesale under multiplex.
-  collectionSchemas = null
+  collectionSchemas = null,
+  // Multiplexed rooms also need per-collection checkpoint evidence. The
+  // representative collection's checkpoint is not valid for sibling
+  // collections when the room reconnects, especially for file chunk stores
+  // where stale checkpoint epochs are a data-corruption signal.
+  collectionCheckpoints = null
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   return {
@@ -197,6 +213,7 @@ function buildProtocolPayload({
     // Omitted (null) for single-collection rooms so the legacy single-
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
+    collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
     peerSession: {
       role,
       sessionId: peerSessionId || null,
@@ -217,6 +234,18 @@ function normalizeCollectionSchemas(map) {
       schemaVersion: Number.isFinite(entry.schemaVersion) ? entry.schemaVersion : null,
       schemaHash: entry.schemaHash || null,
       schemaHashSource: entry.schemaHashSource || schemaHashSource(name)
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+function normalizeCollectionCheckpoints(map) {
+  if (!map || typeof map !== "object") return null;
+  const out = {};
+  for (const [name, entry] of Object.entries(map)) {
+    if (!name || !entry || typeof entry !== "object") continue;
+    out[name] = {
+      ...entry,
+      collection: typeof entry.collection === "string" && entry.collection ? entry.collection : name
     };
   }
   return Object.keys(out).length > 0 ? out : null;
@@ -410,9 +439,6 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
 var DB_VERSION = 1;
 var DOCUMENT_STORE = "documents";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
-var REPLICATION_SCAN_MULTIPLIER = 50;
-var REPLICATION_MIN_SCAN_LIMIT = 500;
-var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -459,6 +485,7 @@ var CtoxIndexedDbCollection = class {
       throw new TypeError("bulkWrite rows must be an array");
     }
     const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
+    const done = idbTransactionDone(tx);
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
@@ -469,7 +496,7 @@ var CtoxIndexedDbCollection = class {
         error.push({ row, error: "missing primary key" });
         continue;
       }
-      const lwt = Number(doc._meta?.lwt || doc.updated_at_ms || doc.updatedAtMs || now);
+      const lwt = documentLwt(doc, now);
       const stored = {
         collection: this.name,
         id,
@@ -478,10 +505,14 @@ var CtoxIndexedDbCollection = class {
         indexValues: indexValuesFor(this.indexes, doc),
         doc: normalizeDocument(doc, lwt, replicationOrigin)
       };
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (!shouldAcceptDocumentWrite(previous, lwt)) {
+        continue;
+      }
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
-    await idbTransactionDone(tx);
+    await done;
     if (Object.keys(success).length) {
       this.events.emit("change", {
         collection: this.name,
@@ -509,6 +540,7 @@ var CtoxIndexedDbCollection = class {
   }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const done = idbTransactionDone(tx);
     const store = tx.objectStore(DOCUMENT_STORE);
     const result = {};
     for (const id of ids) {
@@ -517,7 +549,7 @@ var CtoxIndexedDbCollection = class {
         result[String(id)] = record.doc;
       }
     }
-    await idbTransactionDone(tx);
+    await done;
     return result;
   }
   async findOne(id, { withDeleted = false } = {}) {
@@ -580,18 +612,15 @@ var CtoxIndexedDbCollection = class {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || "");
     const excludedOriginRole = String(options?.excludeReplicationOriginRole || "").trim();
-    const scanLimit = replicationScanLimit(limit);
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false);
     const documents = [];
     let nextCheckpoint = checkpoint || null;
-    let scanned = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
-      if (!cursor || documents.length >= limit || scanned >= scanLimit) {
+      if (!cursor || documents.length >= limit) {
         return false;
       }
-      scanned += 1;
       const record = cursor.value;
       nextCheckpoint = { lwt: record.lwt, id: record.id };
       if (!documentMatchesReplicationOrigin(record.doc, excludedOriginRole)) {
@@ -701,6 +730,21 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
 }
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt) {
+  if (!existingRecord) return true;
+  const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
+  const nextLwt = Number(incomingLwt || 0);
+  if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
+  return nextLwt >= existingLwt;
+}
+function documentLwt(doc = {}, fallback = Date.now()) {
+  const values = [
+    Number(doc._meta?.lwt || 0),
+    Number(doc.updated_at_ms || 0),
+    Number(doc.updatedAtMs || 0)
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? Math.max(...values) : Number(fallback || Date.now());
+}
 function sanitizeReplicationOrigin(origin) {
   return {
     role: String(origin.role || "").slice(0, 64),
@@ -713,13 +757,6 @@ function documentMatchesReplicationOrigin(doc, excludedOriginRole) {
   if (!excludedOriginRole) return false;
   const origin = doc?._meta?.ctoxReplicationOrigin;
   return origin?.role === excludedOriginRole;
-}
-function replicationScanLimit(limit) {
-  const batchLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
-  return Math.max(
-    REPLICATION_MIN_SCAN_LIMIT,
-    Math.min(REPLICATION_MAX_SCAN_LIMIT, Math.ceil(batchLimit * REPLICATION_SCAN_MULTIPLIER))
-  );
 }
 function normalizeSchemaIndexes(schema = {}) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
@@ -828,8 +865,8 @@ var ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
-  replicationScanLimit,
-  selectBestIndex
+  selectBestIndex,
+  shouldAcceptDocumentWrite
 };
 
 // src/apps/business-os/rxdb/src/frame-contract.generated.mjs
@@ -859,7 +896,6 @@ var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
   "business_module_catalog",
   "business_commands",
   "ctox_queue_tasks",
-  "desktop_files",
   "browser_sessions",
   "browser_tabs",
   "browser_frames",
@@ -934,6 +970,7 @@ var CtoxWebRtcNativePeer = class {
       incomingTransfers: 0,
       completedAckCacheSize: 0,
       sentFrames: 0,
+      sentInlineFrames: 0,
       sentBytes: 0,
       receivedFrames: 0,
       receivedBytes: 0,
@@ -954,6 +991,7 @@ var CtoxWebRtcNativePeer = class {
     };
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
+    this.recentMessages = [];
     this.connectionRequests = /* @__PURE__ */ new Map();
     this.forceInitiatorPeers = /* @__PURE__ */ new Set();
     this.closed = false;
@@ -983,14 +1021,14 @@ var CtoxWebRtcNativePeer = class {
   }
   scheduleSignalingReconnect() {
     if (this.closed || this.signalingReconnectTimer) return;
-    const delay3 = this.signalingReconnectDelayMs;
-    this.signalingReconnectDelayMs = Math.min(delay3 * 2, SIGNALING_RECONNECT_MAX_MS);
+    const delay = this.signalingReconnectDelayMs;
+    this.signalingReconnectDelayMs = Math.min(delay * 2, SIGNALING_RECONNECT_MAX_MS);
     this.signalingReconnectTimer = setTimeout(() => {
       this.signalingReconnectTimer = null;
       if (this.closed) return;
-      this.events.emit("signaling-reconnect", { delayMs: delay3 });
+      this.events.emit("signaling-reconnect", { delayMs: delay });
       this.connect();
-    }, delay3);
+    }, delay);
   }
   close() {
     this.closed = true;
@@ -1046,12 +1084,11 @@ var CtoxWebRtcNativePeer = class {
     });
   }
   async drainSendQueue(connection) {
-    if (!connection?.sendQueue) return;
     if (connection.sendQueue?.draining) return;
     connection.sendQueue.draining = true;
     try {
       await Promise.resolve();
-      while (!this.closed && connection.channel?.readyState === "open") {
+      while (!this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
         const item = nextQueuedSend(connection.sendQueue);
         if (!item) break;
         this.refreshSendQueueStatus(connection);
@@ -1061,16 +1098,32 @@ var CtoxWebRtcNativePeer = class {
         });
         if (item.inline) {
           await this.waitForSendBuffer(connection.channel);
-          connection.channel.send(item.text);
+          if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== "open") {
+            this.removeConnection(connection.remotePeerId, "send-queue-channel-closed");
+            break;
+          }
+          try {
+            connection.channel.send(item.text);
+            this.recordSentInlineFrame(item.payload, connection.channel);
+          } catch (error) {
+            this.removeConnection(connection.remotePeerId, "send-queue-send-failed");
+            throw error;
+          }
           continue;
         }
         try {
           await this.sendFramed(connection, item.text);
         } catch (error) {
+          const peerClosed = isPeerClosedError(error);
+          if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== "open") {
+            this.removeConnection(connection.remotePeerId, "frame-send-channel-closed");
+          }
           this.events.emit("error", {
-            code: "ctox_webrtc_frame_send_failed",
+            code: peerClosed ? "ctox_webrtc_peer_closed" : "ctox_webrtc_frame_send_failed",
             peerId: connection.remotePeerId,
             priority: item.priority,
+            reason: error?.reason || null,
+            lifecycle: peerClosed,
             message: error?.message || String(error)
           });
         }
@@ -1091,24 +1144,30 @@ var CtoxWebRtcNativePeer = class {
     this.recordTransportStatus({ activeTransfers: this.transportStats.activeTransfers + 1 });
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_FRAME_RETRIES; attempt += 1) {
-      const startFrame = {
-        ctoxFrame: CTOX_FRAME_PROTOCOL,
-        kind: "start",
-        transferId,
-        windowSize: FRAME_ACK_WINDOW,
-        attempt,
-        totalFrames,
-        totalBytes
-      };
-      channel.send(JSON.stringify(startFrame));
-      this.recordSentTransportFrame(startFrame, channel);
       try {
+        if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== "open") {
+          throw createPeerClosedError(connection.remotePeerId, "frame-send-channel-closed");
+        }
+        const startFrame = {
+          ctoxFrame: CTOX_FRAME_PROTOCOL,
+          kind: "start",
+          transferId,
+          windowSize: FRAME_ACK_WINDOW,
+          attempt,
+          totalFrames,
+          totalBytes
+        };
+        channel.send(JSON.stringify(startFrame));
+        this.recordSentTransportFrame(startFrame, channel);
         for (let windowStart = 0; windowStart < totalFrames; windowStart += FRAME_ACK_WINDOW) {
           await this.drainHighPriorityInlineFrames(connection);
           const windowEnd = Math.min(windowStart + FRAME_ACK_WINDOW, totalFrames) - 1;
           const ack = this.awaitFrameAck(transferId, connection.remotePeerId, windowEnd);
           for (let seq = windowStart; seq <= windowEnd; seq += 1) {
             await this.waitForSendBuffer(channel);
+            if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== "open") {
+              throw createPeerClosedError(connection.remotePeerId, "frame-send-channel-closed");
+            }
             const chunkFrame = {
               ctoxFrame: CTOX_FRAME_PROTOCOL,
               kind: "chunk",
@@ -1121,7 +1180,7 @@ var CtoxWebRtcNativePeer = class {
             this.recordSentTransportFrame(chunkFrame, channel);
           }
           try {
-            await ack;
+            await this.awaitFrameAckWithControlDrain(connection, ack);
           } catch (error) {
             const resumed = await this.requestFrameResume(connection, transferId, attempt, windowEnd);
             if (!resumed) throw error;
@@ -1131,6 +1190,7 @@ var CtoxWebRtcNativePeer = class {
         return;
       } catch (error) {
         lastError = error;
+        if (isPeerClosedError(error)) break;
         if (attempt >= MAX_FRAME_RETRIES) break;
         this.recordTransportStatus({ retryCount: this.transportStats.retryCount + 1 });
         this.events.emit("transport-retry", {
@@ -1144,14 +1204,43 @@ var CtoxWebRtcNativePeer = class {
     this.recordTransportStatus({ activeTransfers: Math.max(0, this.transportStats.activeTransfers - 1) });
     throw lastError || new Error(`WebRTC frame transfer failed ${transferId}`);
   }
+  async awaitFrameAckWithControlDrain(connection, ackPromise) {
+    let settled = false;
+    const wrapped = Promise.resolve(ackPromise).then(
+      (value) => {
+        settled = true;
+        return { ok: true, value };
+      },
+      (error) => {
+        settled = true;
+        return { ok: false, error };
+      }
+    );
+    while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
+      const result = await Promise.race([
+        wrapped,
+        delay(50).then(() => null)
+      ]);
+      if (result) {
+        if (result.ok) return result.value;
+        throw result.error;
+      }
+      await this.drainHighPriorityInlineFrames(connection);
+    }
+    const result = await wrapped;
+    if (result.ok) return result.value;
+    throw result.error;
+  }
   async drainHighPriorityInlineFrames(connection) {
     const queue = connection.sendQueue;
     if (!queue) return;
-    while (queue.high.length && queue.high[0]?.inline && connection.channel?.readyState === "open") {
-      const item = queue.high.shift();
+    while (connection.channel?.readyState === "open") {
+      const item = nextHighPriorityInlineSend(queue);
+      if (!item) break;
       this.refreshSendQueueStatus(connection);
       await this.waitForSendBuffer(connection.channel);
       connection.channel.send(item.text);
+      this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
         sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
         lastSendPriority: item.priority
@@ -1171,6 +1260,10 @@ var CtoxWebRtcNativePeer = class {
   requestFrameResume(connection, transferId, attempt, ackSeq) {
     const channel = connection.channel;
     return new Promise((resolve, reject) => {
+      if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== "open") {
+        resolve(false);
+        return;
+      }
       const key = frameAckKey(transferId, ackSeq);
       const timer = setTimeout(() => {
         this.pendingFrameAcks.delete(key);
@@ -1231,17 +1324,10 @@ var CtoxWebRtcNativePeer = class {
         const connection = this.connections.get(peerId);
         if (connection) {
           this.recordConnectionEvent(connection, "request-timeout", { method });
-          this.forceInitiatorPeers.add(peerId);
-          this.removeConnection(peerId, `request-timeout-${method}`);
-          setTimeout(() => {
-            if (!this.closed && this.shouldConnectToRemotePeer(peerId)) {
-              try {
-                this.ensureConnection(peerId);
-              } catch (reconnectError) {
-                this.events.emit("error", normalizePeerSignalError(reconnectError, peerId));
-              }
-            }
-          }, 250 + Math.floor(Math.random() * 500));
+          if (shouldRecycleConnectionAfterRequestTimeout(method)) {
+            this.forceInitiatorPeers.add(peerId);
+            this.removeConnection(peerId, `request-timeout-${method}`);
+          }
         }
         reject(error);
       }, timeoutMs);
@@ -1252,9 +1338,23 @@ var CtoxWebRtcNativePeer = class {
       if (!sent) {
         this.pending.delete(id);
         clearTimeout(timer);
+        this.scheduleReconnect(remotePeerId, `send-not-open-${method}`);
         reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
       }
     });
+  }
+  scheduleReconnect(remotePeerId, reason = "peer-reconnect") {
+    const peerId = String(remotePeerId || "");
+    if (!peerId || this.closed || !this.shouldConnectToRemotePeer(peerId)) return;
+    setTimeout(() => {
+      if (this.closed || this.connections.has(peerId) || !this.shouldConnectToRemotePeer(peerId)) return;
+      try {
+        this.ensureConnection(peerId);
+      } catch (reconnectError) {
+        this.events.emit("error", normalizePeerSignalError(reconnectError, peerId));
+      }
+    }, 250 + Math.floor(Math.random() * 500));
+    this.events.emit("peer-state", { peerId, state: "reconnect-scheduled", reason });
   }
   handleSignalingMessage(raw) {
     let message;
@@ -1274,6 +1374,7 @@ var CtoxWebRtcNativePeer = class {
       for (const descriptor of descriptors) {
         if (descriptor.peerId) this.rememberPeerMetadata(descriptor.peerId, descriptor);
       }
+      this.pruneStaleNativeCandidateConnections(descriptors);
       const expectedNativePeerId = String(this.options.expectedNativePeerId || "").trim();
       const hasExpectedDescriptor = Boolean(expectedNativePeerId) && descriptors.some((descriptor) => this.peerMatchesExpectedNativePeerId(descriptor.peerId, descriptor));
       for (const descriptor of descriptors) {
@@ -1404,15 +1505,6 @@ var CtoxWebRtcNativePeer = class {
       this.events.emit("peer-state", { peerId: remotePeerId, state: "handshake-timeout" });
       this.forceInitiatorPeers.add(remotePeerId);
       this.removeConnection(remotePeerId, "rtc-handshake-timeout");
-      setTimeout(() => {
-        if (!this.closed && this.shouldConnectToRemotePeer(remotePeerId)) {
-          try {
-            this.ensureConnection(remotePeerId);
-          } catch (reconnectError) {
-            this.events.emit("error", normalizePeerSignalError(reconnectError, remotePeerId));
-          }
-        }
-      }, 250 + Math.floor(Math.random() * 500));
     }, RTC_HANDSHAKE_TIMEOUT_MS);
     this.recordConnectionEvent(connection, "created", { state: peer.connectionState || "new" });
     peer.onicecandidate = (event) => {
@@ -1457,6 +1549,9 @@ var CtoxWebRtcNativePeer = class {
   }
   shouldInitiate(remotePeerId, connection = null) {
     if (connection?.forceInitiator) return true;
+    const remoteRole = this.peerMetadata.get(String(remotePeerId || ""))?.role || "";
+    if (this.options.role === "browser" && remoteRole === "ctox_instance") return true;
+    if (this.options.role === "ctox_instance" && remoteRole === "browser") return false;
     return String(this.options.clientId) < String(remotePeerId);
   }
   async createOffer(remotePeerId, peer) {
@@ -1489,10 +1584,13 @@ var CtoxWebRtcNativePeer = class {
       connection.signalStats.offerReceived += 1;
       connection.signalStats.lastSignalAtMs = Date.now();
       this.recordConnectionEvent(connection, "offer-received", { signalingState: peer.signalingState });
+      if (this.shouldInitiate(remotePeerId, connection)) {
+        this.recordConnectionEvent(connection, "offer-ignored-local-initiator", {
+          signalingState: peer.signalingState
+        });
+        return;
+      }
       if (peer.signalingState !== "stable") {
-        if (this.shouldInitiate(remotePeerId)) {
-          return;
-        }
         await rollbackLocalDescription(peer);
       }
       await peer.setRemoteDescription(data);
@@ -1562,13 +1660,6 @@ var CtoxWebRtcNativePeer = class {
       drainRtcPeerConnectionQueue("critical-peer-opened");
       this.recordConnectionEvent(connection, "datachannel-open", { readyState: channel.readyState || "open" });
       this.events.emit("peer-open", { peerId: connection.remotePeerId });
-      this.drainSendQueue(connection).catch((error) => {
-        this.events.emit("error", {
-          code: "ctox_webrtc_send_queue_failed",
-          peerId: connection.remotePeerId,
-          message: error?.message || String(error)
-        });
-      });
     };
     channel.onmessage = (event) => {
       let payload = event.data;
@@ -1594,6 +1685,7 @@ var CtoxWebRtcNativePeer = class {
       await this.handleTransportFrame(peerId, payload);
       return;
     }
+    this.recordMessageMeta(peerId, payload);
     this.events.emit("message", { peerId, payload });
     const masterChangeCollection = masterChangeStreamCollection(payload);
     if (masterChangeCollection !== null) {
@@ -1907,6 +1999,9 @@ var CtoxWebRtcNativePeer = class {
     releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
     this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
     this.events.emit("peer-close", { peerId, reason });
+    if (reason !== "peer-close") {
+      this.scheduleReconnect(peerId, reason);
+    }
   }
   rememberPeerMetadata(peerId, metadata = {}) {
     const normalized = normalizePeerMetadata({ ...metadata, peerId });
@@ -1922,11 +2017,20 @@ var CtoxWebRtcNativePeer = class {
     const metadata = this.peerMetadata.get(peerId);
     if (this.peerMatchesExpectedNativePeerId(peerId, metadata)) return true;
     if (this.nativeCandidateConnectionCount(peerId) > 0) return false;
-    if (peerId.startsWith("ctox-business-os-native") || peerId.startsWith("ctox-core-")) {
-      return true;
+    return this.isNativePeerCandidate(peerId, metadata);
+  }
+  isNativePeerCandidate(peerId, metadata = {}) {
+    return this.peerMatchesExpectedNativePeerId(peerId, metadata) || peerId.startsWith("ctox-business-os-native") || peerId.startsWith("ctox-core-") || metadata?.role === "ctox_instance";
+  }
+  pruneStaleNativeCandidateConnections(descriptors = []) {
+    const liveNativePeerIds = new Set(descriptors.filter((descriptor) => descriptor?.peerId && this.isNativePeerCandidate(descriptor.peerId, descriptor)).map((descriptor) => descriptor.peerId));
+    if (!liveNativePeerIds.size) return;
+    for (const peerId of [...this.connections.keys()]) {
+      if (liveNativePeerIds.has(peerId)) continue;
+      const metadata = this.peerMetadata.get(peerId);
+      if (!this.isNativePeerCandidate(peerId, metadata)) continue;
+      this.removeConnection(peerId, "peer-close");
     }
-    if (!metadata?.role) return false;
-    return metadata.role === "ctox_instance";
   }
   peerMatchesExpectedNativePeerId(peerId, metadata = {}) {
     const expectedNativePeerId = String(this.options.expectedNativePeerId || "").trim();
@@ -1949,7 +2053,7 @@ var CtoxWebRtcNativePeer = class {
     for (const peerId of this.connections.keys()) {
       if (peerId === excludePeerId) continue;
       const metadata = this.peerMetadata.get(peerId);
-      if (peerId.startsWith("ctox-business-os-native") || peerId.startsWith("ctox-core-") || metadata?.role === "ctox_instance") {
+      if (this.isNativePeerCandidate(peerId, metadata)) {
         count += 1;
       }
     }
@@ -2013,6 +2117,9 @@ var CtoxWebRtcNativePeer = class {
     return {
       ...this.transportStats,
       pendingAcks: this.pendingFrameAcks.size,
+      pendingRequests: this.pending.size,
+      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || "").filter(Boolean).slice(-20),
+      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split("|").slice(1).join("|")).slice(-20),
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
       rtcConnectionPool: rtcPeerConnectionPoolSnapshot(),
@@ -2028,7 +2135,8 @@ var CtoxWebRtcNativePeer = class {
         channelState: connection.channel?.readyState || "",
         channelLabel: connection.channel?.label || "",
         pendingCandidates: Array.isArray(connection.pendingCandidates) ? connection.pendingCandidates.length : 0
-      }))
+      })),
+      recentMessages: this.recentMessages.slice(-30)
     };
   }
   recordConnectionEvent(connection, event, detail = {}) {
@@ -2054,11 +2162,34 @@ var CtoxWebRtcNativePeer = class {
       lastBufferedAmount: Number(channel?.bufferedAmount || 0)
     });
   }
+  recordSentInlineFrame(payload, channel) {
+    this.recordTransportStatus({
+      sentInlineFrames: this.transportStats.sentInlineFrames + 1,
+      sentBytes: this.transportStats.sentBytes + encodedSize(JSON.stringify(payload)),
+      lastBufferedAmount: Number(channel?.bufferedAmount || 0)
+    });
+  }
   recordReceivedTransportFrame(payload) {
     this.recordTransportStatus({
       receivedFrames: this.transportStats.receivedFrames + 1,
       receivedBytes: this.transportStats.receivedBytes + encodedSize(JSON.stringify(payload))
     });
+  }
+  recordMessageMeta(peerId, payload) {
+    if (!payload || typeof payload !== "object") return;
+    this.recentMessages.push({
+      atMs: Date.now(),
+      peerId: String(peerId || ""),
+      id: typeof payload.id === "string" ? payload.id.slice(0, 120) : "",
+      method: typeof payload.method === "string" ? payload.method.slice(0, 80) : "",
+      collection: typeof payload.collection === "string" ? payload.collection.slice(0, 120) : "",
+      hasResult: Object.prototype.hasOwnProperty.call(payload, "result"),
+      hasError: Object.prototype.hasOwnProperty.call(payload, "error")
+    });
+    if (this.recentMessages.length > 60) {
+      this.recentMessages.splice(0, this.recentMessages.length - 60);
+    }
+    this.events.emit("transport-status", this.getTransportStatus());
   }
   recordTransportStatus(patch = {}) {
     Object.assign(this.transportStats, patch, { updatedAtMs: Date.now() });
@@ -2127,6 +2258,13 @@ function createPeerClosedError(peerId, reason) {
   error.reason = reason;
   error.lifecycle = true;
   return error;
+}
+function isPeerClosedError(error) {
+  if (!error) return false;
+  if (error.lifecycle === true && error.code === "ERR_CONNECTION_FAILURE") return true;
+  const reason = String(error.reason || "");
+  const message = String(error.message || error || "");
+  return error.code === "ERR_CONNECTION_FAILURE" || reason.includes("peer-close") || reason.includes("channel-close") || reason.includes("channel-closed") || message.includes(" closed: ") || message.includes("channel-close") || message.includes("channel-closed");
 }
 async function rollbackLocalDescription(peer) {
   if (!peer || peer.signalingState === "stable" || peer.signalingState === "closed") return;
@@ -2583,25 +2721,32 @@ function nextQueuedSend(queue) {
   }
   return null;
 }
-function isInteractiveMasterWriteCollection(collection = "") {
-  return [
-    "business_commands",
-    "ctox_queue_tasks",
-    "business_chats",
-    "research_runs",
-    "research_notes",
-    "knowledge_items"
-  ].includes(String(collection || ""));
+function nextHighPriorityInlineSend(queue) {
+  if (!queue?.high?.length) return null;
+  const index = queue.high.findIndex((item) => item?.inline);
+  if (index < 0) return null;
+  return queue.high.splice(index, 1)[0] || null;
+}
+function shouldRecycleConnectionAfterRequestTimeout(method = "") {
+  return ["ctoxProtocol", "token"].includes(String(method || ""));
 }
 function classifySendPriority(payload = {}, text = "") {
   if (payload?.ctoxFrame === CTOX_FRAME_PROTOCOL) {
     return ["ack", "resume", "start"].includes(payload.kind) ? "high" : "normal";
   }
   const method = String(payload?.method || "");
-  if (["ctoxProtocol", "token", "rxdb.activeCollections"].includes(method)) return "high";
-  if (method === "masterWrite" && isInteractiveMasterWriteCollection(payload?.collection)) return "high";
+  if ([
+    "ctoxProtocol",
+    "token",
+    "rxdb.activeCollections",
+    "masterChangesSince",
+    "rxdb.query.fetch",
+    "rxdb.query.cancel",
+    "rxdb.file.fetch",
+    "rxdb.file.cancel"
+  ].includes(method)) return "high";
   if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return "low";
-  if (method === "masterChangesSince") return "normal";
+  if (method === "masterWrite") return "high";
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, "result") || Object.prototype.hasOwnProperty.call(payload, "error"))) {
     return "high";
   }
@@ -2685,8 +2830,6 @@ var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
-var QUERY_PEER_WAIT_TIMEOUT_MS = 8e3;
-var QUERY_PEER_WAIT_POLL_MS = 100;
 var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 var CANCELLED_QUERY_REQUEST_LIMIT = 256;
 function createDemandLoadingTransport({ getPeerId } = {}) {
@@ -2799,7 +2942,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
     const cancelReason = consumeQueryCancelReason(requestId);
     if (cancelReason) throw createQueryCancelError(cancelReason);
     if (!peer) throw new Error("demand transport has no peer attached");
-    const peerId = await waitForPeerId();
+    const peerId = resolvePeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       queryCollectors.set(requestId, { chunks: [], resolve, reject });
@@ -2859,7 +3002,7 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   }
   async function requestFileFetch({ requestId, fileId, range, knownSequences, collectionName }) {
     if (!peer) throw new Error("demand transport has no peer attached");
-    const peerId = await waitForPeerId();
+    const peerId = resolvePeerId();
     if (!peerId) throw new Error("PEER_UNAVAILABLE");
     const promise = new Promise((resolve, reject) => {
       fileCollectors.set(requestId, { chunks: [], resolve, reject });
@@ -2961,34 +3104,18 @@ function createDemandLoadingTransport({ getPeerId } = {}) {
   }
   function resolvePeerId() {
     const configured = getPeerId();
-    if (configured && isPeerOpen(configured)) return configured;
+    if (configured) return configured;
     return firstOpenPeerId();
   }
   function firstOpenPeerId() {
     const entries = peer?.connections?.entries?.();
     if (!entries) return "";
     for (const [peerId, connection] of entries) {
-      if (isPeerConnectionOpen(connection)) return peerId;
-    }
-    return "";
-  }
-  function isPeerOpen(peerId) {
-    return Boolean(peerId && isPeerConnectionOpen(peer?.connections?.get?.(peerId)));
-  }
-  function isPeerConnectionOpen(connection) {
-    if (!connection) return false;
-    const channelState = connection?.channel?.readyState || connection?.channelReadyState || "";
-    const peerState = connection?.peer?.connectionState || connection?.peerConnectionState || connection?.connectionState || "";
-    return channelState === "open" && !["closed", "failed", "disconnected"].includes(String(peerState));
-  }
-  async function waitForPeerId(timeoutMs = QUERY_PEER_WAIT_TIMEOUT_MS) {
-    const immediate = resolvePeerId();
-    if (immediate) return immediate;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      await delay3(QUERY_PEER_WAIT_POLL_MS);
-      const peerId = resolvePeerId();
-      if (peerId) return peerId;
+      const channelState = connection?.channel?.readyState || connection?.channelReadyState || "";
+      const peerState = connection?.peer?.connectionState || connection?.peerConnectionState || connection?.connectionState || "";
+      if (channelState === "open" && !["closed", "failed", "disconnected"].includes(String(peerState))) {
+        return peerId;
+      }
     }
     return "";
   }
@@ -3173,6 +3300,8 @@ function createQueryDemandLoader({
       const job = (async () => {
         const startedAt = clock();
         try {
+          const effectiveSkip = Number.isFinite(Number(query?.skip)) ? Math.max(0, Math.floor(Number(query.skip))) : normalizedWindow.offset;
+          const effectiveLimit = Number.isFinite(Number(query?.limit)) ? Math.max(1, Math.floor(Number(query.limit))) : normalizedWindow.limit;
           const result = await requestQueryFetch({
             requestId: `${dedupKey}|${startedAt}`,
             databaseName: storageCollection?.databaseName ?? null,
@@ -3182,8 +3311,8 @@ function createQueryDemandLoader({
             query: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
-              limit: query?.limit,
-              skip: query?.skip
+              limit: effectiveLimit,
+              skip: effectiveSkip
             },
             window: normalizedWindow
           });
@@ -3206,13 +3335,10 @@ function createQueryDemandLoader({
           v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
           return readLocalDocuments(storageCollection, query, normalizedWindow);
         } catch (error) {
-          if (isQueryCancelledError(error)) {
-            bumpStatus(status, "queryFetchCancelCount");
-            v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
-            return readLocalDocuments(storageCollection, query, normalizedWindow);
-          }
           bumpStatus(status, "queryFetchErrorCount");
-          v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+          if (!isIndexedDbConnectionClosingError(error)) {
+            v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+          }
           throw error;
         } finally {
           bumpStatus(status, "queryFetchInFlight", -1);
@@ -3248,6 +3374,21 @@ function createQueryDemandLoader({
       }
       return invalidated;
     },
+    async invalidateCollectionChange() {
+      const all = await sidecar.backend.scanQueryWindows();
+      let invalidated = 0;
+      for (const window2 of all) {
+        if (window2.collection !== collectionName) continue;
+        await sidecar.invalidateQueryWindow([
+          window2.collection,
+          window2.queryFingerprint,
+          window2.offset,
+          window2.limit
+        ]);
+        invalidated += 1;
+      }
+      return invalidated;
+    },
     // Wave 7 + production hardening: reconnect-cancel. Aborts all in-flight
     // fetches and removes any partially-materialized documents from the
     // primary store so the next fetch starts from a clean slate (no orphans).
@@ -3256,16 +3397,16 @@ function createQueryDemandLoader({
       for (const [dedupKey, job] of inflightByFingerprint.entries()) {
         const [, fingerprint] = dedupKey.split("|");
         cancelled.push({ dedupKey, fingerprint });
-        try {
-          job.catch?.(() => {
-          });
-        } catch {
-        }
         if (typeof requestCancel === "function") {
           try {
             await requestCancel({ requestId: dedupKey, fingerprint, reason });
           } catch {
           }
+        }
+        try {
+          job.catch?.(() => {
+          });
+        } catch {
         }
       }
       inflightByFingerprint.clear();
@@ -3367,9 +3508,6 @@ function bumpStatus(status, field, delta = 1) {
   if (!status) return;
   if (typeof status[field] !== "number") status[field] = 0;
   status[field] += delta;
-}
-function isQueryCancelledError(error) {
-  return error?.code === "QUERY_CANCELLED" || String(error?.message || "").includes("QUERY_CANCELLED");
 }
 var v15LogSink = null;
 function setV15LogSink(fn) {
@@ -4399,6 +4537,7 @@ var SharedRoomPeer = class {
     const payload = await registration.state.buildProtocolPayload();
     if (this.collections.size > 1) {
       payload.collectionSchemas = await this.collectCollectionSchemas();
+      payload.collectionCheckpoints = await this.collectCollectionCheckpoints();
     }
     return payload;
   }
@@ -4463,7 +4602,7 @@ var SharedRoomPeer = class {
       collection: {
         ...baseCollection,
         name: collection,
-        ...schema || {},
+        ...(schema || {}),
         checkpoint: checkpoint || baseCollection.checkpoint || remoteProtocol.checkpoint || null
       }
     };
@@ -4525,7 +4664,6 @@ var SharedRoomPeer = class {
         registration?.state?.emitError(error);
       }
     }
-    await this.peer.request(peerId, "token", [], SHARED_TOKEN_TIMEOUT_MS, representative.collection);
     await this.awaitRemoteMasterReady(peerId);
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
@@ -4873,17 +5011,33 @@ var CtoxWebRtcReplicationState = class {
         this.pushCheckpointsByPeer.set(peerId, checkpoint);
         break;
       }
-      const rows = documents.map((doc) => ({
+      let rows = documents.map((doc) => ({
         newDocumentState: doc,
         assumedMasterState: null
       }));
-      await this.peer.request(
-        peerId,
-        "masterWrite",
-        [rows],
-        this.requestTimeoutMsFor("masterWrite"),
-        this.collection.name
-      );
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const conflicts = await this.peer.request(
+          peerId,
+          "masterWrite",
+          [rows],
+          this.requestTimeoutMsFor("masterWrite"),
+          this.collection.name
+        );
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        if (!conflictMap.size) {
+          rows = [];
+          break;
+        }
+        rows = rows.map((row) => {
+          const id = primaryValue(row.newDocumentState, this.collection.schema.primaryPath);
+          const assumedMasterState = conflictMap.get(id);
+          return assumedMasterState ? { ...row, assumedMasterState } : null;
+        }).filter(Boolean);
+        if (!rows.length) break;
+      }
+      if (rows.length) {
+        throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
+      }
       checkpoint = result?.checkpoint || checkpoint;
       this.pushCheckpointsByPeer.set(peerId, checkpoint);
       if (documents.length < batchSize) break;
@@ -5056,19 +5210,6 @@ var CtoxWebRtcReplicationState = class {
     if (this.collection.name === "desktop_file_chunks") {
       return method === "masterChangesSince" ? 45e3 : 3e4;
     }
-    if (method === "masterWrite") {
-      if ([
-        "business_commands",
-        "ctox_queue_tasks",
-        "business_chats",
-        "research_runs",
-        "research_notes",
-        "knowledge_items"
-      ].includes(this.collection.name)) {
-        return 6e4;
-      }
-      return 45e3;
-    }
     return 15e3;
   }
   periodicPullIntervalMs() {
@@ -5195,6 +5336,24 @@ function hashString(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+function documentsByPrimaryPath(documents = [], primaryPath = "id") {
+  const map = /* @__PURE__ */ new Map();
+  for (const doc of Array.isArray(documents) ? documents : []) {
+    const id = primaryValue(doc, primaryPath);
+    if (id) map.set(id, doc);
+  }
+  return map;
+}
+function primaryValue(doc = {}, primaryPath = "id") {
+  if (!doc || typeof doc !== "object") return "";
+  if (doc.id != null) return String(doc.id);
+  if (doc._id != null) return String(doc._id);
+  return String(replicationValueAtPath(doc, primaryPath) ?? "");
+}
+function replicationValueAtPath(obj, path) {
+  if (!path || path === "id") return obj?.id;
+  return String(path).split(".").reduce((acc, part) => acc == null ? void 0 : acc[part], obj);
 }
 function delay2(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -5411,7 +5570,13 @@ var CtoxRxCollection = class {
         const flushEmit = async () => {
           pendingTimer = null;
           if (!active) return;
-          const documents = await this.find().exec();
+          let documents;
+          try {
+            documents = await this.find().exec();
+          } catch (error) {
+            if (isIndexedDbConnectionClosingError(error)) return;
+            throw error;
+          }
           if (active) listener({ collectionName: this.name, documents });
         };
         const emit = () => {
@@ -5436,6 +5601,10 @@ var CtoxRxCollection = class {
   }
 };
 var OBSERVABLE_DEBOUNCE_MS = 50;
+function isIndexedDbConnectionClosingError(error) {
+  const message = String(error?.message || error || "");
+  return error?.name === "InvalidStateError" && message.includes("database connection is closing");
+}
 var CtoxRxQuery = class _CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
@@ -5513,7 +5682,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     if (this.collection.demandLoader) {
-      docs = await this.collection.demandLoader.resolveQuery(this.query);
+      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : void 0;
+      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
@@ -5580,10 +5750,16 @@ var CtoxRxDocument = class {
     return this.incrementalModify(modifier);
   }
   async incrementalPatch(fields) {
+    const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
       ...fields,
-      updated_at_ms: fields?.updated_at_ms || this._data.updated_at_ms || Date.now()
+      updated_at_ms: updatedAtMs,
+      _meta: {
+        ...this._data._meta || {},
+        ...fields?._meta || {},
+        lwt: updatedAtMs
+      }
     };
     await this.collection.storageCollection.upsert(next);
     this._data = next;
@@ -5735,7 +5911,7 @@ function normalizeDoc(doc, primaryPath) {
   normalized._deleted = Boolean(normalized._deleted);
   normalized._meta = {
     ...normalized._meta || {},
-    lwt: Number(normalized._meta?.lwt || normalized.updated_at_ms || normalized.updatedAtMs || Date.now())
+    lwt: documentLwt(normalized)
   };
   return normalized;
 }
@@ -6047,6 +6223,7 @@ export {
   remoteSupportsQueryFetch,
   removeRxDatabase,
   replicateWebRTC,
+  replicationWebRtcTestInternals,
   rxdbCore,
   schemaHash,
   schemaHashSource,

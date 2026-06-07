@@ -204,9 +204,10 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         return Ok(());
     }
     // RxDB/WebRTC-only data plane: Business OS HTTP data APIs stay hard-disabled
-    // except for ChatGPT subscription auth, which cannot depend on a healthy
-    // browser-to-native peer before the account is connected.
-    if path.starts_with("/api/business-os") && !is_business_os_http_exception_path(path) {
+    // except for explicit control-plane endpoints such as ChatGPT subscription
+    // auth, which cannot depend on a healthy browser-to-native peer before the
+    // account is connected.
+    if path.starts_with("/api/business-os") && !is_business_os_control_plane_path(path) {
         respond_status(
             request,
             410,
@@ -670,7 +671,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
     Ok(())
 }
 
-fn is_business_os_http_exception_path(path: &str) -> bool {
+fn is_business_os_control_plane_path(path: &str) -> bool {
     matches!(
         path,
         "/api/business-os/ctox/subscription-auth/start"

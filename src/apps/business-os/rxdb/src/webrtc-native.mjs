@@ -40,15 +40,11 @@ const SIGNALING_RECONNECT_MAX_MS = 30_000;
 // silently drift. Browser_* members only register when the Browser module is
 // active; the grant logic below gates only on criticals actually requested this
 // session (see criticalRequested / criticalRtcPeerConnectionsReady).
-// desktop_file_chunks is deliberately not shell-critical because large file
-// bodies must not block startup or command dispatch; file/document views request
-// it lazily when they need chunk bodies.
 export const SHELL_CRITICAL_COLLECTIONS = new Set([
   'ctox_runtime_settings',
   'business_module_catalog',
   'business_commands',
   'ctox_queue_tasks',
-  'desktop_files',
   'browser_sessions',
   'browser_tabs',
   'browser_frames',
@@ -125,6 +121,7 @@ export class CtoxWebRtcNativePeer {
       incomingTransfers: 0,
       completedAckCacheSize: 0,
       sentFrames: 0,
+      sentInlineFrames: 0,
       sentBytes: 0,
       receivedFrames: 0,
       receivedBytes: 0,
@@ -145,6 +142,7 @@ export class CtoxWebRtcNativePeer {
     };
     this.lastControlPlaneError = null;
     this.recentConnectionEvents = [];
+    this.recentMessages = [];
     this.connectionRequests = new Map();
     this.forceInitiatorPeers = new Set();
     this.closed = false;
@@ -247,12 +245,11 @@ export class CtoxWebRtcNativePeer {
   }
 
   async drainSendQueue(connection) {
-    if (!connection?.sendQueue) return;
     if (connection.sendQueue?.draining) return;
     connection.sendQueue.draining = true;
     try {
       await Promise.resolve();
-      while (!this.closed && connection.channel?.readyState === 'open') {
+      while (!this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === 'open') {
         const item = nextQueuedSend(connection.sendQueue);
         if (!item) break;
         this.refreshSendQueueStatus(connection);
@@ -262,16 +259,32 @@ export class CtoxWebRtcNativePeer {
         });
         if (item.inline) {
           await this.waitForSendBuffer(connection.channel);
-          connection.channel.send(item.text);
+          if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== 'open') {
+            this.removeConnection(connection.remotePeerId, 'send-queue-channel-closed');
+            break;
+          }
+          try {
+            connection.channel.send(item.text);
+            this.recordSentInlineFrame(item.payload, connection.channel);
+          } catch (error) {
+            this.removeConnection(connection.remotePeerId, 'send-queue-send-failed');
+            throw error;
+          }
           continue;
         }
         try {
           await this.sendFramed(connection, item.text);
         } catch (error) {
+          const peerClosed = isPeerClosedError(error);
+          if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== 'open') {
+            this.removeConnection(connection.remotePeerId, 'frame-send-channel-closed');
+          }
           this.events.emit('error', {
-            code: 'ctox_webrtc_frame_send_failed',
+            code: peerClosed ? 'ctox_webrtc_peer_closed' : 'ctox_webrtc_frame_send_failed',
             peerId: connection.remotePeerId,
             priority: item.priority,
+            reason: error?.reason || null,
+            lifecycle: peerClosed,
             message: error?.message || String(error),
           });
         }
@@ -293,24 +306,30 @@ export class CtoxWebRtcNativePeer {
     this.recordTransportStatus({ activeTransfers: this.transportStats.activeTransfers + 1 });
     let lastError = null;
     for (let attempt = 0; attempt <= MAX_FRAME_RETRIES; attempt += 1) {
-      const startFrame = {
-        ctoxFrame: CTOX_FRAME_PROTOCOL,
-        kind: 'start',
-        transferId,
-        windowSize: FRAME_ACK_WINDOW,
-        attempt,
-        totalFrames,
-        totalBytes,
-      };
-      channel.send(JSON.stringify(startFrame));
-      this.recordSentTransportFrame(startFrame, channel);
       try {
+        if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== 'open') {
+          throw createPeerClosedError(connection.remotePeerId, 'frame-send-channel-closed');
+        }
+        const startFrame = {
+          ctoxFrame: CTOX_FRAME_PROTOCOL,
+          kind: 'start',
+          transferId,
+          windowSize: FRAME_ACK_WINDOW,
+          attempt,
+          totalFrames,
+          totalBytes,
+        };
+        channel.send(JSON.stringify(startFrame));
+        this.recordSentTransportFrame(startFrame, channel);
         for (let windowStart = 0; windowStart < totalFrames; windowStart += FRAME_ACK_WINDOW) {
           await this.drainHighPriorityInlineFrames(connection);
           const windowEnd = Math.min(windowStart + FRAME_ACK_WINDOW, totalFrames) - 1;
           const ack = this.awaitFrameAck(transferId, connection.remotePeerId, windowEnd);
           for (let seq = windowStart; seq <= windowEnd; seq += 1) {
             await this.waitForSendBuffer(channel);
+            if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== 'open') {
+              throw createPeerClosedError(connection.remotePeerId, 'frame-send-channel-closed');
+            }
             const chunkFrame = {
               ctoxFrame: CTOX_FRAME_PROTOCOL,
               kind: 'chunk',
@@ -323,7 +342,7 @@ export class CtoxWebRtcNativePeer {
             this.recordSentTransportFrame(chunkFrame, channel);
           }
           try {
-            await ack;
+            await this.awaitFrameAckWithControlDrain(connection, ack);
           } catch (error) {
             const resumed = await this.requestFrameResume(connection, transferId, attempt, windowEnd);
             if (!resumed) throw error;
@@ -333,6 +352,7 @@ export class CtoxWebRtcNativePeer {
         return;
       } catch (error) {
         lastError = error;
+        if (isPeerClosedError(error)) break;
         if (attempt >= MAX_FRAME_RETRIES) break;
         this.recordTransportStatus({ retryCount: this.transportStats.retryCount + 1 });
         this.events.emit('transport-retry', {
@@ -347,14 +367,44 @@ export class CtoxWebRtcNativePeer {
     throw lastError || new Error(`WebRTC frame transfer failed ${transferId}`);
   }
 
+  async awaitFrameAckWithControlDrain(connection, ackPromise) {
+    let settled = false;
+    const wrapped = Promise.resolve(ackPromise).then(
+      (value) => {
+        settled = true;
+        return { ok: true, value };
+      },
+      (error) => {
+        settled = true;
+        return { ok: false, error };
+      },
+    );
+    while (!settled && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === 'open') {
+      const result = await Promise.race([
+        wrapped,
+        delay(50).then(() => null),
+      ]);
+      if (result) {
+        if (result.ok) return result.value;
+        throw result.error;
+      }
+      await this.drainHighPriorityInlineFrames(connection);
+    }
+    const result = await wrapped;
+    if (result.ok) return result.value;
+    throw result.error;
+  }
+
   async drainHighPriorityInlineFrames(connection) {
     const queue = connection.sendQueue;
     if (!queue) return;
-    while (queue.high.length && queue.high[0]?.inline && connection.channel?.readyState === 'open') {
-      const item = queue.high.shift();
+    while (connection.channel?.readyState === 'open') {
+      const item = nextHighPriorityInlineSend(queue);
+      if (!item) break;
       this.refreshSendQueueStatus(connection);
       await this.waitForSendBuffer(connection.channel);
       connection.channel.send(item.text);
+      this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
         sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
         lastSendPriority: item.priority,
@@ -376,6 +426,10 @@ export class CtoxWebRtcNativePeer {
   requestFrameResume(connection, transferId, attempt, ackSeq) {
     const channel = connection.channel;
     return new Promise((resolve, reject) => {
+      if (this.connections.get(connection.remotePeerId) !== connection || channel?.readyState !== 'open') {
+        resolve(false);
+        return;
+      }
       const key = frameAckKey(transferId, ackSeq);
       const timer = setTimeout(() => {
         this.pendingFrameAcks.delete(key);
@@ -438,17 +492,10 @@ export class CtoxWebRtcNativePeer {
         const connection = this.connections.get(peerId);
         if (connection) {
           this.recordConnectionEvent(connection, 'request-timeout', { method });
-          this.forceInitiatorPeers.add(peerId);
-          this.removeConnection(peerId, `request-timeout-${method}`);
-          setTimeout(() => {
-            if (!this.closed && this.shouldConnectToRemotePeer(peerId)) {
-              try {
-                this.ensureConnection(peerId);
-              } catch (reconnectError) {
-                this.events.emit('error', normalizePeerSignalError(reconnectError, peerId));
-              }
-            }
-          }, 250 + Math.floor(Math.random() * 500));
+          if (shouldRecycleConnectionAfterRequestTimeout(method)) {
+            this.forceInitiatorPeers.add(peerId);
+            this.removeConnection(peerId, `request-timeout-${method}`);
+          }
         }
         reject(error);
       }, timeoutMs);
@@ -459,9 +506,24 @@ export class CtoxWebRtcNativePeer {
       if (!sent) {
         this.pending.delete(id);
         clearTimeout(timer);
+        this.scheduleReconnect(remotePeerId, `send-not-open-${method}`);
         reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
       }
     });
+  }
+
+  scheduleReconnect(remotePeerId, reason = 'peer-reconnect') {
+    const peerId = String(remotePeerId || '');
+    if (!peerId || this.closed || !this.shouldConnectToRemotePeer(peerId)) return;
+    setTimeout(() => {
+      if (this.closed || this.connections.has(peerId) || !this.shouldConnectToRemotePeer(peerId)) return;
+      try {
+        this.ensureConnection(peerId);
+      } catch (reconnectError) {
+        this.events.emit('error', normalizePeerSignalError(reconnectError, peerId));
+      }
+    }, 250 + Math.floor(Math.random() * 500));
+    this.events.emit('peer-state', { peerId, state: 'reconnect-scheduled', reason });
   }
 
   handleSignalingMessage(raw) {
@@ -482,6 +544,7 @@ export class CtoxWebRtcNativePeer {
       for (const descriptor of descriptors) {
         if (descriptor.peerId) this.rememberPeerMetadata(descriptor.peerId, descriptor);
       }
+      this.pruneStaleNativeCandidateConnections(descriptors);
       const expectedNativePeerId = String(this.options.expectedNativePeerId || '').trim();
       const hasExpectedDescriptor = Boolean(expectedNativePeerId) && descriptors.some((descriptor) => (
         this.peerMatchesExpectedNativePeerId(descriptor.peerId, descriptor)
@@ -622,15 +685,6 @@ export class CtoxWebRtcNativePeer {
       this.events.emit('peer-state', { peerId: remotePeerId, state: 'handshake-timeout' });
       this.forceInitiatorPeers.add(remotePeerId);
       this.removeConnection(remotePeerId, 'rtc-handshake-timeout');
-      setTimeout(() => {
-        if (!this.closed && this.shouldConnectToRemotePeer(remotePeerId)) {
-          try {
-            this.ensureConnection(remotePeerId);
-          } catch (reconnectError) {
-            this.events.emit('error', normalizePeerSignalError(reconnectError, remotePeerId));
-          }
-        }
-      }, 250 + Math.floor(Math.random() * 500));
     }, RTC_HANDSHAKE_TIMEOUT_MS);
     this.recordConnectionEvent(connection, 'created', { state: peer.connectionState || 'new' });
 
@@ -678,6 +732,9 @@ export class CtoxWebRtcNativePeer {
 
   shouldInitiate(remotePeerId, connection = null) {
     if (connection?.forceInitiator) return true;
+    const remoteRole = this.peerMetadata.get(String(remotePeerId || ''))?.role || '';
+    if (this.options.role === 'browser' && remoteRole === 'ctox_instance') return true;
+    if (this.options.role === 'ctox_instance' && remoteRole === 'browser') return false;
     return String(this.options.clientId) < String(remotePeerId);
   }
 
@@ -712,10 +769,13 @@ export class CtoxWebRtcNativePeer {
       connection.signalStats.offerReceived += 1;
       connection.signalStats.lastSignalAtMs = Date.now();
       this.recordConnectionEvent(connection, 'offer-received', { signalingState: peer.signalingState });
+      if (this.shouldInitiate(remotePeerId, connection)) {
+        this.recordConnectionEvent(connection, 'offer-ignored-local-initiator', {
+          signalingState: peer.signalingState,
+        });
+        return;
+      }
       if (peer.signalingState !== 'stable') {
-        if (this.shouldInitiate(remotePeerId)) {
-          return;
-        }
         await rollbackLocalDescription(peer);
       }
       await peer.setRemoteDescription(data);
@@ -788,13 +848,6 @@ export class CtoxWebRtcNativePeer {
       drainRtcPeerConnectionQueue('critical-peer-opened');
       this.recordConnectionEvent(connection, 'datachannel-open', { readyState: channel.readyState || 'open' });
       this.events.emit('peer-open', { peerId: connection.remotePeerId });
-      this.drainSendQueue(connection).catch((error) => {
-        this.events.emit('error', {
-          code: 'ctox_webrtc_send_queue_failed',
-          peerId: connection.remotePeerId,
-          message: error?.message || String(error),
-        });
-      });
     };
     channel.onmessage = (event) => {
       let payload = event.data;
@@ -822,6 +875,7 @@ export class CtoxWebRtcNativePeer {
       await this.handleTransportFrame(peerId, payload);
       return;
     }
+    this.recordMessageMeta(peerId, payload);
     this.events.emit('message', { peerId, payload });
     // Phase 3 multiplex: master-change pushes carry a collection-qualified id
     // (`masterChangeStream$:{collection}`) and/or a `collection` field so the
@@ -1150,6 +1204,9 @@ export class CtoxWebRtcNativePeer {
     releaseRtcPeerConnectionSlot(connection.rtcPoolSlot, reason);
     this.rejectPendingForPeer(peerId, createPeerClosedError(peerId, reason));
     this.events.emit('peer-close', { peerId, reason });
+    if (reason !== 'peer-close') {
+      this.scheduleReconnect(peerId, reason);
+    }
   }
 
   rememberPeerMetadata(peerId, metadata = {}) {
@@ -1167,11 +1224,29 @@ export class CtoxWebRtcNativePeer {
     const metadata = this.peerMetadata.get(peerId);
     if (this.peerMatchesExpectedNativePeerId(peerId, metadata)) return true;
     if (this.nativeCandidateConnectionCount(peerId) > 0) return false;
-    if (peerId.startsWith('ctox-business-os-native') || peerId.startsWith('ctox-core-')) {
-      return true;
+    return this.isNativePeerCandidate(peerId, metadata);
+  }
+
+  isNativePeerCandidate(peerId, metadata = {}) {
+    return this.peerMatchesExpectedNativePeerId(peerId, metadata)
+      || peerId.startsWith('ctox-business-os-native')
+      || peerId.startsWith('ctox-core-')
+      || metadata?.role === 'ctox_instance';
+  }
+
+  pruneStaleNativeCandidateConnections(descriptors = []) {
+    const liveNativePeerIds = new Set(
+      descriptors
+        .filter((descriptor) => descriptor?.peerId && this.isNativePeerCandidate(descriptor.peerId, descriptor))
+        .map((descriptor) => descriptor.peerId),
+    );
+    if (!liveNativePeerIds.size) return;
+    for (const peerId of [...this.connections.keys()]) {
+      if (liveNativePeerIds.has(peerId)) continue;
+      const metadata = this.peerMetadata.get(peerId);
+      if (!this.isNativePeerCandidate(peerId, metadata)) continue;
+      this.removeConnection(peerId, 'peer-close');
     }
-    if (!metadata?.role) return false;
-    return metadata.role === 'ctox_instance';
   }
 
   peerMatchesExpectedNativePeerId(peerId, metadata = {}) {
@@ -1196,11 +1271,7 @@ export class CtoxWebRtcNativePeer {
     for (const peerId of this.connections.keys()) {
       if (peerId === excludePeerId) continue;
       const metadata = this.peerMetadata.get(peerId);
-      if (
-        peerId.startsWith('ctox-business-os-native')
-        || peerId.startsWith('ctox-core-')
-        || metadata?.role === 'ctox_instance'
-      ) {
+      if (this.isNativePeerCandidate(peerId, metadata)) {
         count += 1;
       }
     }
@@ -1267,6 +1338,9 @@ export class CtoxWebRtcNativePeer {
     return {
       ...this.transportStats,
       pendingAcks: this.pendingFrameAcks.size,
+      pendingRequests: this.pending.size,
+      pendingRequestMethods: [...this.pending.values()].map((pending) => pending.method || '').filter(Boolean).slice(-20),
+      observedRequestMethods: [...this.observedRequests.keys()].map((key) => String(key).split('|').slice(1).join('|')).slice(-20),
       incomingTransfers: this.incomingFrames.size,
       completedAckCacheSize: this.completedFrameAcks.size,
       rtcConnectionPool: rtcPeerConnectionPoolSnapshot(),
@@ -1285,6 +1359,7 @@ export class CtoxWebRtcNativePeer {
           ? connection.pendingCandidates.length
           : 0,
       })),
+      recentMessages: this.recentMessages.slice(-30),
     };
   }
 
@@ -1313,11 +1388,36 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
+  recordSentInlineFrame(payload, channel) {
+    this.recordTransportStatus({
+      sentInlineFrames: this.transportStats.sentInlineFrames + 1,
+      sentBytes: this.transportStats.sentBytes + encodedSize(JSON.stringify(payload)),
+      lastBufferedAmount: Number(channel?.bufferedAmount || 0),
+    });
+  }
+
   recordReceivedTransportFrame(payload) {
     this.recordTransportStatus({
       receivedFrames: this.transportStats.receivedFrames + 1,
       receivedBytes: this.transportStats.receivedBytes + encodedSize(JSON.stringify(payload)),
     });
+  }
+
+  recordMessageMeta(peerId, payload) {
+    if (!payload || typeof payload !== 'object') return;
+    this.recentMessages.push({
+      atMs: Date.now(),
+      peerId: String(peerId || ''),
+      id: typeof payload.id === 'string' ? payload.id.slice(0, 120) : '',
+      method: typeof payload.method === 'string' ? payload.method.slice(0, 80) : '',
+      collection: typeof payload.collection === 'string' ? payload.collection.slice(0, 120) : '',
+      hasResult: Object.prototype.hasOwnProperty.call(payload, 'result'),
+      hasError: Object.prototype.hasOwnProperty.call(payload, 'error'),
+    });
+    if (this.recentMessages.length > 60) {
+      this.recentMessages.splice(0, this.recentMessages.length - 60);
+    }
+    this.events.emit('transport-status', this.getTransportStatus());
   }
 
   recordTransportStatus(patch = {}) {
@@ -1397,6 +1497,20 @@ function createPeerClosedError(peerId, reason) {
   error.reason = reason;
   error.lifecycle = true;
   return error;
+}
+
+function isPeerClosedError(error) {
+  if (!error) return false;
+  if (error.lifecycle === true && error.code === 'ERR_CONNECTION_FAILURE') return true;
+  const reason = String(error.reason || '');
+  const message = String(error.message || error || '');
+  return error.code === 'ERR_CONNECTION_FAILURE'
+    || reason.includes('peer-close')
+    || reason.includes('channel-close')
+    || reason.includes('channel-closed')
+    || message.includes(' closed: ')
+    || message.includes('channel-close')
+    || message.includes('channel-closed');
 }
 
 async function rollbackLocalDescription(peer) {
@@ -1927,15 +2041,15 @@ function nextQueuedSend(queue) {
   return null;
 }
 
-function isInteractiveMasterWriteCollection(collection = '') {
-  return [
-    'business_commands',
-    'ctox_queue_tasks',
-    'business_chats',
-    'research_runs',
-    'research_notes',
-    'knowledge_items',
-  ].includes(String(collection || ''));
+function nextHighPriorityInlineSend(queue) {
+  if (!queue?.high?.length) return null;
+  const index = queue.high.findIndex((item) => item?.inline);
+  if (index < 0) return null;
+  return queue.high.splice(index, 1)[0] || null;
+}
+
+function shouldRecycleConnectionAfterRequestTimeout(method = '') {
+  return ['ctoxProtocol', 'token'].includes(String(method || ''));
 }
 
 function classifySendPriority(payload = {}, text = '') {
@@ -1946,10 +2060,18 @@ function classifySendPriority(payload = {}, text = '') {
   // Phase 2: the `rxdb.activeCollections` priority hint must reach the native
   // peer ahead of any bulk backlog so foreground prioritization takes effect
   // promptly. Treat it as a control frame (high).
-  if (['ctoxProtocol', 'token', 'rxdb.activeCollections'].includes(method)) return 'high';
-  if (method === 'masterWrite' && isInteractiveMasterWriteCollection(payload?.collection)) return 'high';
+  if ([
+    'ctoxProtocol',
+    'token',
+    'rxdb.activeCollections',
+    'masterChangesSince',
+    'rxdb.query.fetch',
+    'rxdb.query.cancel',
+    'rxdb.file.fetch',
+    'rxdb.file.cancel',
+  ].includes(method)) return 'high';
   if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
-  if (method === 'masterChangesSince') return 'normal';
+  if (method === 'masterWrite') return 'high';
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
     return 'high';
   }

@@ -1,4 +1,4 @@
-import { readStoredFileFromChunks } from './file-integrity.js?v=20260605-rxdb-cancel1';
+import { readStoredFileFromChunks } from './file-integrity.js?v=20260603-active-chunk-query2';
 
 const STATUS_KEY = 'ctox.businessOs.importer.status.v1';
 

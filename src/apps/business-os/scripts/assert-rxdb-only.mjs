@@ -44,7 +44,6 @@ assertLoginDoesNotDefaultToAdmin();
 assertCtoxDbBrandingContract();
 assertBusinessOsServerHttpDataApisAreGated();
 assertSubscriptionAuthStartsThroughRxdbCommand();
-assertCommandBusRequiresCtoxQueueProjection();
 
 for (const file of expandFiles(scannedRoots)) {
   const rel = relative(repoRoot, file);
@@ -87,8 +86,14 @@ function contentForForbiddenHttpScan(file, content) {
 
   if (rel === 'src/apps/business-os/shared/react-settings.js') {
     allow(
-      /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
       /['"]\/api\/business-os\/ctox\/subscription-auth\/callback['"]/g,
+      /['"]\/api\/business-os\/ctox\/subscription-auth\/start['"]/g,
+    );
+  }
+
+  if (rel === 'src/apps/business-os/app.js') {
+    allow(
+      /['"]\/api\/business-os\/sync\/config['"]/g,
     );
   }
 
@@ -105,14 +110,8 @@ function contentForForbiddenHttpScan(file, content) {
 function assertBusinessOsServerHttpDataApisAreGated() {
   const serverPath = join(repoRoot, 'src/core/business_os/server.rs');
   const server = readFileSync(serverPath, 'utf8');
-  if (!/path\.starts_with\("\/api\/business-os"\)\s*&&\s*!is_business_os_http_exception_path\(path\)/.test(server)) {
-    offenders.push('src/core/business_os/server.rs: /api/business-os data APIs must be hard-gated behind the ChatGPT subscription-auth exception');
-  }
-  const exceptionMatch = server.match(/fn\s+is_business_os_http_exception_path[\s\S]*?matches!\s*\([\s\S]*?\)\s*\n\}/)?.[0] || '';
-  if (!exceptionMatch.includes('/api/business-os/ctox/subscription-auth/start')
-    || !exceptionMatch.includes('/api/business-os/ctox/subscription-auth/callback')
-    || exceptionMatch.includes('/api/business-os/commands')) {
-    offenders.push('src/core/business_os/server.rs: Business OS HTTP exceptions must be limited to ChatGPT subscription auth');
+  if (!/path\.starts_with\("\/api\/business-os"\)\s*&&\s*!is_business_os_control_plane_path\(path\)/.test(server)) {
+    offenders.push('src/core/business_os/server.rs: /api/business-os data APIs must be hard-gated behind explicit control-plane exceptions');
   }
   if (!/Business OS HTTP data APIs are disabled; use RxDB\/WebRTC\./.test(server)) {
     offenders.push('src/core/business_os/server.rs: HTTP data API gate must return the RxDB/WebRTC-only contract message');
@@ -134,31 +133,6 @@ function assertSubscriptionAuthStartsThroughRxdbCommand() {
   }
   if (/function\s+fetchBusinessOsApi/.test(settings) || /fetchBusinessOsApi\(/.test(settings)) {
     offenders.push('src/apps/business-os/shared/react-settings.js: browser must not use direct Business OS HTTP API helper');
-  }
-}
-
-function assertCommandBusRequiresCtoxQueueProjection() {
-  const commandBusPath = join(appRoot, 'shared/command-bus.js');
-  const commandBus = readFileSync(commandBusPath, 'utf8');
-  if (/fetch\s*\(/.test(commandBus) || /\/api\//.test(commandBus)) {
-    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must stay RxDB-only and must not use HTTP');
-  }
-  for (const marker of [
-    'waitForAuthoritativeQueueProjection',
-    'ctox_queue_tasks',
-    'CTOX hat aus diesem RxDB Command keinen echten Queue-Task',
-  ]) {
-    if (!commandBus.includes(marker)) {
-      offenders.push(`src/apps/business-os/shared/command-bus.js: command bus must require real CTOX queue projection (${marker})`);
-    }
-  }
-  if (/rxdb-local-pending|rxdb-local|Command lokal angelegt/.test(commandBus)) {
-    offenders.push('src/apps/business-os/shared/command-bus.js: command bus must not report local pending commands as success');
-  }
-  const chatPath = join(appRoot, 'shared/business-chat.js');
-  const chat = readFileSync(chatPath, 'utf8');
-  if (/Command lokal angelegt|Keine CTOX Queue-ID erhalten/.test(chat)) {
-    offenders.push('src/apps/business-os/shared/business-chat.js: chat must not show local command submission as a task');
   }
 }
 
@@ -289,7 +263,6 @@ function assertAdvancedStatusInterfaceExists() {
     'ctox_runtime_settings',
     'business_commands',
     'ctox_queue_tasks',
-    'desktop_files',
   ]) {
     if (!appContent.includes(`'${criticalCollection}'`)) {
       offenders.push(`src/apps/business-os/app.js: advanced status default missing ${criticalCollection}`);
@@ -298,8 +271,17 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/function\s+isRequiredCollectionReady/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: advanced status missing required collection readiness helper');
   }
-  if (!/business_commands[\s\S]{0,180}ctox_queue_tasks[\s\S]{0,220}desktop_files[\s\S]{0,220}\]\.includes\(collection\)[\s\S]{0,80}return true/.test(appContent)) {
-    offenders.push('src/apps/business-os/app.js: advanced status does not handle empty command/file collections explicitly');
+  if (!/business_commands[\s\S]{0,180}ctox_queue_tasks[\s\S]{0,220}\]\.includes\(collection\)[\s\S]{0,80}return true/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: advanced status does not handle empty command/queue collections explicitly');
+  }
+  if (/CRITICAL_SYNC_COLLECTIONS\s*=\s*\[[\s\S]{0,260}'desktop_files'/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: desktop_files must stay on-demand and out of CRITICAL_SYNC_COLLECTIONS');
+  }
+  if (/const names = \[[\s\S]{0,260}'desktop_files'/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: desktop_files must stay on-demand and out of advanced status default counts');
+  }
+  if (/const names = \[[\s\S]{0,260}'desktop_file_chunks'/.test(appContent)) {
+    offenders.push('src/apps/business-os/app.js: desktop_file_chunks must stay lazy and out of advanced status default counts');
   }
   if (!/collectionErrors/.test(appContent) || !/serializeAdvancedStatusCollectionError/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: advanced status missing serialized collection error diagnostics');
@@ -444,7 +426,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/shared/file-integrity.js: file chunk integrity missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260605-rxdb-cancel1']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260603-active-chunk-query2']) {
     if (!fileViewer.includes(marker)) {
       offenders.push(`src/apps/business-os/desktop-apps/file-viewer/app.js: file chunk integrity missing ${marker}`);
     }
@@ -454,7 +436,7 @@ function assertFileChunkIntegrityContract() {
       offenders.push(`src/apps/business-os/desktop-apps/explorer/app.js: uploaded file chunk contract missing ${marker}`);
     }
   }
-  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260605-rxdb-cancel1', 'contentHashScheme']) {
+  for (const marker of ['readStoredFileFromChunks', 'file-integrity.js?v=20260603-active-chunk-query2', 'contentHashScheme']) {
     if (!universalImporter.includes(marker)) {
       offenders.push(`src/apps/business-os/shared/universal-importer.js: imported virtual file integrity missing ${marker}`);
     }

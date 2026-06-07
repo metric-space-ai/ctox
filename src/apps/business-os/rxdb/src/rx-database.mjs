@@ -222,7 +222,13 @@ class CtoxRxCollection {
         const flushEmit = async () => {
           pendingTimer = null;
           if (!active) return;
-          const documents = await this.find().exec();
+          let documents;
+          try {
+            documents = await this.find().exec();
+          } catch (error) {
+            if (isIndexedDbConnectionClosingError(error)) return;
+            throw error;
+          }
           if (active) listener({ collectionName: this.name, documents });
         };
         const emit = () => {
@@ -248,6 +254,12 @@ class CtoxRxCollection {
 }
 
 export const OBSERVABLE_DEBOUNCE_MS = 50;
+
+function isIndexedDbConnectionClosingError(error) {
+  const message = String(error?.message || error || '');
+  return error?.name === 'InvalidStateError'
+    && message.includes('database connection is closing');
+}
 
 class CtoxRxQuery {
   constructor(collection, query, single) {
@@ -336,7 +348,10 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     if (this.collection.demandLoader) {
-      docs = await this.collection.demandLoader.resolveQuery(this.query);
+      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
+        ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
+        : undefined;
+      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
@@ -413,10 +428,16 @@ class CtoxRxDocument {
   }
 
   async incrementalPatch(fields) {
+    const updatedAtMs = Number(fields?.updated_at_ms || Date.now());
     const next = {
       ...this._data,
       ...fields,
-      updated_at_ms: fields?.updated_at_ms || this._data.updated_at_ms || Date.now(),
+      updated_at_ms: updatedAtMs,
+      _meta: {
+        ...(this._data._meta || {}),
+        ...(fields?._meta || {}),
+        lwt: updatedAtMs,
+      },
     };
     await this.collection.storageCollection.upsert(next);
     this._data = next;
@@ -587,9 +608,18 @@ function normalizeDoc(doc, primaryPath) {
   normalized._deleted = Boolean(normalized._deleted);
   normalized._meta = {
     ...(normalized._meta || {}),
-    lwt: Number(normalized._meta?.lwt || normalized.updated_at_ms || normalized.updatedAtMs || Date.now()),
+    lwt: documentLwt(normalized),
   };
   return normalized;
+}
+
+function documentLwt(doc = {}, fallback = Date.now()) {
+  const values = [
+    Number(doc._meta?.lwt || 0),
+    Number(doc.updated_at_ms || 0),
+    Number(doc.updatedAtMs || 0),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  return values.length ? Math.max(...values) : Number(fallback || Date.now());
 }
 
 export const ctoxRxdbTestInternals = {
