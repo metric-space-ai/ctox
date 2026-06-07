@@ -20,7 +20,7 @@ use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema
 use serde_json::json;
 use serde_json::Value;
 use sha2::Digest;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::path::Path;
@@ -1155,9 +1155,14 @@ async fn run_native_peer(
                 .get("repaired_tables")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            if repaired_tables > 0 {
+            let repaired_triggers = result
+                .get("repaired_triggers")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if repaired_tables > 0 || repaired_triggers > 0 {
                 eprintln!(
-                    "[business-os] repaired {repaired_tables} stale RxDB collection schema table(s) before native peer startup"
+                    "[business-os] repaired {repaired_tables} stale RxDB collection schema table(s) \
+                     and {repaired_triggers} trigger(s) before native peer startup"
                 );
             }
         }
@@ -6261,10 +6266,15 @@ pub fn repair_optional_rxdb_collection_schema_drift(
 fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
+    let mut repaired_triggers = 0usize;
     for (collection, _) in business_os_collections() {
         let result = repair_rxdb_collection_schema_version_drift(root, &collection, false, true)?;
         repaired_tables += result
             .get("repaired_tables")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        repaired_triggers += result
+            .get("repaired_triggers")
             .and_then(Value::as_u64)
             .unwrap_or(0) as usize;
         if result
@@ -6279,8 +6289,9 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
         "ok": true,
         "code": "ctox_rxdb_stale_schema_versions",
         "action": "repair-stale-schema-versions",
-        "repaired": repaired_tables > 0,
+        "repaired": repaired_tables > 0 || repaired_triggers > 0,
         "repaired_tables": repaired_tables,
+        "repaired_triggers": repaired_triggers,
         "collections": results
     }))
 }
@@ -6328,7 +6339,24 @@ fn repair_rxdb_collection_schema_version_drift(
         active_version,
         expected_table_exists,
     )?;
+    let stale_triggers = stale_rxdb_collection_version_triggers(
+        &conn,
+        collection,
+        expected_version,
+        active_version,
+        expected_table_exists,
+    )?;
     if !dry_run {
+        for trigger in &stale_triggers {
+            conn.execute(
+                &format!(
+                    "DROP TRIGGER IF EXISTS {}",
+                    quote_sqlite_identifier(&trigger.name)
+                ),
+                [],
+            )
+            .with_context(|| format!("drop stale RxDB schema trigger {}", trigger.name))?;
+        }
         for table in &stale_tables {
             conn.execute(
                 &format!(
@@ -6351,13 +6379,23 @@ fn repair_rxdb_collection_schema_version_drift(
             })
         })
         .collect::<Vec<_>>();
-    let repaired = !dry_run && !stale_tables.is_empty();
-    let message = if stale_tables.is_empty() {
-        "No stale versioned RxDB table was present for this collection."
+    let stale_trigger_values = stale_triggers
+        .iter()
+        .map(|trigger| {
+            json!({
+                "name": trigger.name,
+                "table": trigger.table,
+                "stale_versions": trigger.stale_versions
+            })
+        })
+        .collect::<Vec<_>>();
+    let repaired = !dry_run && (!stale_tables.is_empty() || !stale_triggers.is_empty());
+    let message = if stale_tables.is_empty() && stale_triggers.is_empty() {
+        "No stale versioned RxDB table or trigger was present for this collection."
     } else if dry_run {
-        "Dry-run only; stale versioned RxDB tables were detected but not dropped."
+        "Dry-run only; stale versioned RxDB tables/triggers were detected but not dropped."
     } else {
-        "Dropped stale versioned RxDB tables for this collection."
+        "Dropped stale versioned RxDB tables/triggers for this collection."
     };
     Ok(json!({
         "ok": true,
@@ -6372,8 +6410,10 @@ fn repair_rxdb_collection_schema_version_drift(
         "expected_table": expected_table,
         "expected_table_exists": expected_table_exists,
         "stale_tables": stale_table_values,
+        "stale_triggers": stale_trigger_values,
         "repaired": repaired,
         "repaired_tables": if dry_run { 0 } else { stale_tables.len() },
+        "repaired_triggers": if dry_run { 0 } else { stale_triggers.len() },
         "message": message
     }))
 }
@@ -6384,6 +6424,13 @@ struct StaleRxdbCollectionTable {
     version: i64,
     row_count: i64,
     latest_updated_at_ms: Option<i64>,
+}
+
+#[derive(Debug)]
+struct StaleRxdbCollectionTrigger {
+    name: String,
+    table: String,
+    stale_versions: Vec<i64>,
 }
 
 fn expected_rxdb_collection_version(collection: &str) -> i64 {
@@ -6459,6 +6506,75 @@ fn stale_rxdb_collection_version_tables(
     Ok(stale)
 }
 
+fn stale_rxdb_collection_version_triggers(
+    conn: &Connection,
+    collection: &str,
+    expected_version: i64,
+    active_version: Option<i64>,
+    expected_table_exists: bool,
+) -> anyhow::Result<Vec<StaleRxdbCollectionTrigger>> {
+    if active_version != Some(expected_version) || !expected_table_exists {
+        return Ok(Vec::new());
+    }
+    let prefix = rxdb_collection_version_table_prefix(collection);
+    let pattern = format!("%{prefix}%");
+    let mut statement = conn.prepare(
+        "SELECT name, tbl_name, COALESCE(sql, '')
+         FROM sqlite_master
+         WHERE type = 'trigger'
+           AND (tbl_name LIKE ?1 OR sql LIKE ?1)
+         ORDER BY name ASC",
+    )?;
+    let rows = statement.query_map(params![pattern], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut stale = Vec::new();
+    for row in rows {
+        let (name, table, sql) = row?;
+        let mut versions = rxdb_collection_versions_referenced_by_text(&table, &prefix);
+        versions.extend(rxdb_collection_versions_referenced_by_text(&sql, &prefix));
+        let stale_versions = versions
+            .into_iter()
+            .filter(|version| *version != expected_version)
+            .collect::<Vec<_>>();
+        if stale_versions.is_empty() {
+            continue;
+        }
+        stale.push(StaleRxdbCollectionTrigger {
+            name,
+            table,
+            stale_versions,
+        });
+    }
+    Ok(stale)
+}
+
+fn rxdb_collection_versions_referenced_by_text(text: &str, prefix: &str) -> BTreeSet<i64> {
+    let mut versions = BTreeSet::new();
+    let mut cursor = text;
+    while let Some(index) = cursor.find(prefix) {
+        let after_prefix = &cursor[index + prefix.len()..];
+        let digit_len = after_prefix
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .map(char::len_utf8)
+            .sum::<usize>();
+        if digit_len > 0 {
+            if let Ok(version) = after_prefix[..digit_len].parse::<i64>() {
+                versions.insert(version);
+            }
+            cursor = &after_prefix[digit_len..];
+        } else {
+            cursor = after_prefix;
+        }
+    }
+    versions
+}
+
 fn rxdb_collection_version_table_prefix(collection: &str) -> String {
     format!("{RXDB_SQLITE_DATABASE_NAME}__{collection}__v")
 }
@@ -6483,6 +6599,17 @@ fn sqlite_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
         .query_row(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
             params![table],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn sqlite_trigger_exists(conn: &Connection, trigger: &str) -> anyhow::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = ?1",
+            params![trigger],
             |row| row.get::<_, String>(0),
         )
         .optional()?
@@ -6600,6 +6727,16 @@ mod tests {
             [],
         )
         .expect("create active v1 table");
+        conn.execute_batch(
+            "CREATE TRIGGER sync_commands_v1_to_v0_insert
+             AFTER INSERT ON ctox_business_os__business_commands__v1
+             FOR EACH ROW
+             BEGIN
+                 INSERT OR REPLACE INTO ctox_business_os__business_commands__v0 (id, data)
+                 VALUES (NEW.id, NEW.data);
+             END;",
+        )
+        .expect("create stale v1-to-v0 trigger");
         conn.execute(
             "INSERT INTO ctox_business_os___rxdb_internal__v0 (id, data, deleted)
              VALUES ('collection|business_commands-1', ?1, 0)",
@@ -6640,8 +6777,10 @@ mod tests {
         .expect("dry-run repair");
         assert_eq!(dry_run["repaired"], false);
         assert_eq!(dry_run["stale_tables"].as_array().unwrap().len(), 1);
+        assert_eq!(dry_run["stale_triggers"].as_array().unwrap().len(), 1);
         let conn = Connection::open(&path).expect("reopen rxdb sqlite after dry-run");
         assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
+        assert!(sqlite_trigger_exists(&conn, "sync_commands_v1_to_v0_insert").unwrap());
         drop(conn);
 
         let refused = repair_optional_rxdb_collection_schema_drift(
@@ -6665,10 +6804,21 @@ mod tests {
         .expect("apply repair");
         assert_eq!(applied["repaired"], true);
         assert_eq!(applied["repaired_tables"], 1);
+        assert_eq!(applied["repaired_triggers"], 1);
 
         let conn = Connection::open(&path).expect("reopen rxdb sqlite after apply");
         assert!(!sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
         assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v1").unwrap());
+        assert!(!sqlite_trigger_exists(&conn, "sync_commands_v1_to_v0_insert").unwrap());
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data)
+             VALUES ('cmd_after_repair', ?1)",
+            [
+                json!({"id": "cmd_after_repair", "updated_at_ms": 300, "status": "failed"})
+                    .to_string(),
+            ],
+        )
+        .expect("active v1 write must not reference removed stale v0 table");
     }
 
     #[test]
