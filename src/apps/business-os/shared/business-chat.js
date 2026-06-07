@@ -8,6 +8,7 @@ const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
 const MANY_CHAT_THRESHOLD = 12;
 const MAX_RENDERED_CHAT_TABS = 12;
 const MAX_BUSY_LIST_ITEMS = 80;
+const MAX_BUSY_GROUPS = 24;
 
 export function initBusinessChat({
   session,
@@ -1367,8 +1368,15 @@ function chatBusyPanel({ chats, selectedDate, state }) {
   const moduleOptions = ['all', ...Array.from(stats.byModule.keys()).sort()];
   const sourceOptions = ['all', ...Array.from(stats.bySource.keys()).sort()];
   const hourOptions = ['all', ...Array.from(stats.byHour.keys()).sort((a, b) => Number(a) - Number(b))];
-  const rows = filtered.slice(0, MAX_BUSY_LIST_ITEMS);
-  const remaining = Math.max(0, filtered.length - rows.length);
+  const groupOptions = [
+    ['auto', 'Gruppen: Auto'],
+    ['thread', 'Nach Serie'],
+    ['source', 'Nach Quelle'],
+    ['hour', 'Nach Stunde'],
+    ['status', 'Nach Status'],
+    ['none', 'Keine Gruppen'],
+  ];
+  const list = busyListMarkup({ filtered, filters, activeId: state.activeChatId });
   return `
     <section class="ctox-chat-busy-panel" data-chat-busy-panel aria-label="Chatliste fuer ${escapeAttr(formatGermanDateLabel(selectedDate))}">
       <header>
@@ -1385,6 +1393,9 @@ function chatBusyPanel({ chats, selectedDate, state }) {
         ${Array.from(stats.byStatus.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([status, count]) => busyStatMarkup(status, count)).join('')}
       </div>
       <div class="ctox-chat-busy-filters">
+        <select data-chat-list-filter="group" aria-label="Gruppierung wählen">
+          ${groupOptions.map(([value, label]) => `<option value="${escapeAttr(value)}" ${filters.group === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
+        </select>
         <select data-chat-list-filter="status" aria-label="Status filtern">
           ${statusOptions.map((value) => `<option value="${escapeAttr(value)}" ${filters.status === value ? 'selected' : ''}>${escapeHtml(value === 'all' ? 'Alle Status' : value)}</option>`).join('')}
         </select>
@@ -1400,8 +1411,9 @@ function chatBusyPanel({ chats, selectedDate, state }) {
         <input type="search" data-chat-list-filter="text" value="${escapeAttr(filters.text)}" placeholder="Suchen" aria-label="Chats suchen" />
       </div>
       <div class="ctox-chat-busy-list" data-chat-busy-list>
-        ${rows.map((chat) => busyChatRow(chat, state.activeChatId)).join('')}
-        ${remaining > 0 ? `<div class="ctox-chat-busy-more">${formatCompactCount(remaining)} weitere Treffer durch Filter eingrenzen</div>` : ''}
+        ${list.html}
+        ${list.remaining > 0 ? `<div class="ctox-chat-busy-more">${formatCompactCount(list.remaining)} weitere Treffer durch Filter eingrenzen</div>` : ''}
+        ${list.groupRemaining > 0 ? `<div class="ctox-chat-busy-more">${formatCompactCount(list.groupRemaining)} weitere Gruppen durch Filter eingrenzen</div>` : ''}
       </div>
     </section>
   `;
@@ -1460,6 +1472,7 @@ function dateHeatmapDay(day, max, selectedDate) {
 
 function normalizeChatListFilter(filter = {}) {
   return {
+    group: filter.group || 'auto',
     status: filter.status || 'all',
     module: filter.module || 'all',
     source: filter.source || 'all',
@@ -1473,8 +1486,10 @@ function filterBusyChats(chats, filters) {
     const status = getTaskState(chat);
     const moduleName = chat.contextMeta?.module || 'ctox';
     const source = chatSource(chat);
+    const sourceTitle = chat.contextMeta?.source_title || '';
+    const threadKey = chatSeriesKey(chat) || '';
     const hour = String(new Date(chat.createdAt || Date.now()).getHours()).padStart(2, '0');
-    const haystack = `${chat.title || ''} ${moduleName} ${source} ${status} ${(chat.messages || []).map((message) => message.text || '').join(' ')}`.toLowerCase();
+    const haystack = `${chat.title || ''} ${moduleName} ${source} ${sourceTitle} ${threadKey} ${status} ${(chat.messages || []).map((message) => message.text || '').join(' ')}`.toLowerCase();
     return (filters.status === 'all' || status === filters.status)
       && (filters.module === 'all' || moduleName === filters.module)
       && (filters.source === 'all' || source === filters.source)
@@ -1487,8 +1502,182 @@ function chatSource(chat) {
   return chat.contextMeta?.source_module || chat.contextMeta?.source_title || chat.contextMeta?.module || 'ctox';
 }
 
+function busyListMarkup({ filtered, filters, activeId }) {
+  if (filters.group === 'none' || filtered.length <= MAX_RENDERED_CHAT_TABS) {
+    const rows = filtered.slice(0, MAX_BUSY_LIST_ITEMS);
+    return {
+      html: rows.map((chat) => busyChatRow(chat, activeId)).join(''),
+      remaining: Math.max(0, filtered.length - rows.length),
+      groupRemaining: 0,
+    };
+  }
+
+  const groups = groupBusyChats(filtered, filters.group);
+  const visibleGroups = visibleBusyGroups(groups, activeId);
+  const rowMap = allocateBusyGroupRows(visibleGroups);
+  const renderedRows = Array.from(rowMap.values()).reduce((sum, rows) => sum + rows.length, 0);
+  const html = visibleGroups.map((group) => busyChatGroup(group, rowMap.get(group.key) || [], activeId)).join('');
+
+  return {
+    html,
+    remaining: Math.max(0, filtered.length - renderedRows),
+    groupRemaining: Math.max(0, groups.length - visibleGroups.length),
+  };
+}
+
+function groupBusyChats(chats, mode = 'auto') {
+  const groups = new Map();
+  for (const chat of chats) {
+    const descriptor = chatGroupDescriptor(chat, mode);
+    const key = descriptor.key;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        key,
+        label: descriptor.label,
+        detail: descriptor.detail,
+        chats: [],
+        statusCounts: new Map(),
+        earliestCreated: chat.createdAt || Date.now(),
+        latestUpdated: chat.updated_at_ms || chat.createdAt || Date.now(),
+      });
+    }
+    const group = groups.get(key);
+    group.chats.push(chat);
+    const status = getTaskState(chat);
+    group.statusCounts.set(status, (group.statusCounts.get(status) || 0) + 1);
+    group.earliestCreated = Math.min(group.earliestCreated, chat.createdAt || Date.now());
+    group.latestUpdated = Math.max(group.latestUpdated, chat.updated_at_ms || chat.createdAt || Date.now());
+  }
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      chats: group.chats.slice().sort((a, b) => (b.updated_at_ms || b.createdAt || 0) - (a.updated_at_ms || a.createdAt || 0)),
+    }))
+    .sort((a, b) => b.chats.length - a.chats.length || b.latestUpdated - a.latestUpdated || a.label.localeCompare(b.label));
+}
+
+function visibleBusyGroups(groups, activeId) {
+  const visible = groups.slice(0, MAX_BUSY_GROUPS);
+  const activeGroup = groups.find((group) => group.chats.some((chat) => chat.id === activeId));
+  if (activeGroup && !visible.some((group) => group.key === activeGroup.key)) {
+    visible[Math.max(0, visible.length - 1)] = activeGroup;
+  }
+  return visible;
+}
+
+function allocateBusyGroupRows(groups) {
+  const rowsByGroup = new Map(groups.map((group) => [group.key, []]));
+  let renderedRows = 0;
+  let added = true;
+  while (renderedRows < MAX_BUSY_LIST_ITEMS && added) {
+    added = false;
+    for (const group of groups) {
+      if (renderedRows >= MAX_BUSY_LIST_ITEMS) break;
+      const rows = rowsByGroup.get(group.key);
+      if (!rows || rows.length >= group.chats.length) continue;
+      rows.push(group.chats[rows.length]);
+      renderedRows += 1;
+      added = true;
+    }
+  }
+  return rowsByGroup;
+}
+
+function chatGroupDescriptor(chat, mode) {
+  const status = getTaskState(chat);
+  const source = chatSource(chat);
+  const moduleName = chat.contextMeta?.module || 'ctox';
+  const hour = String(new Date(chat.createdAt || Date.now()).getHours()).padStart(2, '0');
+  const seriesKey = chatSeriesKey(chat);
+  const titleSignature = normalizedTaskSignature(chat.contextMeta?.source_title || chat.contextMeta?.title || chat.title || '');
+  const titleLabel = chat.contextMeta?.source_title || chat.contextMeta?.title || chat.title || source || 'Tasks';
+
+  if (mode === 'thread' && seriesKey) {
+    return { key: `series:${seriesKey}`, label: titleLabel, detail: 'Serie' };
+  }
+  if (mode === 'source') {
+    return { key: `source:${source}`, label: source, detail: moduleName };
+  }
+  if (mode === 'hour') {
+    return { key: `hour:${hour}`, label: `${hour}:00`, detail: 'Stunde' };
+  }
+  if (mode === 'status') {
+    return { key: `status:${status}`, label: status, detail: 'Status' };
+  }
+  if (seriesKey) {
+    return { key: `series:${seriesKey}`, label: titleLabel, detail: `${source} · Serie` };
+  }
+  if (source && source !== 'ctox') {
+    return { key: `source-title:${source}:${titleSignature || 'tasks'}`, label: titleLabel || source, detail: source };
+  }
+  if (titleSignature && titleSignature !== 'ctox') {
+    return { key: `title:${titleSignature}`, label: titleLabel, detail: moduleName };
+  }
+  return { key: `hour:${hour}`, label: `${hour}:00`, detail: `${moduleName} · Stunde` };
+}
+
+function chatSeriesKey(chat) {
+  const meta = chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {};
+  const payload = meta.payload && typeof meta.payload === 'object' ? meta.payload : {};
+  const clientContext = meta.client_context && typeof meta.client_context === 'object' ? meta.client_context : {};
+  const candidates = [
+    meta.thread_key,
+    meta.threadKey,
+    meta.group_key,
+    meta.groupKey,
+    payload.thread_key,
+    payload.threadKey,
+    payload.group_key,
+    payload.groupKey,
+    clientContext.thread_key,
+    clientContext.threadKey,
+    clientContext.group_key,
+    clientContext.groupKey,
+    meta.record_id,
+    meta.recordId,
+  ].map((value) => String(value || '').trim()).filter(Boolean);
+  return candidates.find((value) => value !== chat.id && !value.endsWith(`/${chat.id}`)) || '';
+}
+
+function normalizedTaskSignature(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\b(cmd|task|chat|run)_[a-z0-9-]+\b/g, ' ')
+    .replace(/[a-f0-9]{8,}(?:-[a-f0-9]{4,})+/g, ' ')
+    .replace(/\d{2,}/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
 function busyStatMarkup(label, count) {
   return `<span><b>${formatCompactCount(count)}</b><small>${escapeHtml(label)}</small></span>`;
+}
+
+function busyChatGroup(group, rows, activeId) {
+  const first = group.chats[0];
+  const statusSummary = Array.from(group.statusCounts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([status, count]) => `${formatCompactCount(count)} ${status}`)
+    .join(' · ');
+  const remaining = Math.max(0, group.chats.length - rows.length);
+  return `
+    <section class="ctox-chat-busy-group" data-chat-busy-group="${escapeAttr(group.key)}">
+      <button class="ctox-chat-busy-group-head ${group.chats.some((chat) => chat.id === activeId) ? 'is-active' : ''}" type="button" data-chat-list-focus="${escapeAttr(first?.id || '')}">
+        <span class="ctox-chat-busy-group-copy">
+          <strong>${escapeHtml(group.label || 'Tasks')}</strong>
+          <small>${escapeHtml([formatCompactCount(group.chats.length) + ' Tasks', group.detail, statusSummary].filter(Boolean).join(' · '))}</small>
+        </span>
+      </button>
+      <div class="ctox-chat-busy-group-rows">
+        ${rows.map((chat) => busyChatRow(chat, activeId)).join('')}
+        ${remaining > 0 ? `<div class="ctox-chat-busy-group-more">+${formatCompactCount(remaining)} in dieser Gruppe</div>` : ''}
+      </div>
+    </section>
+  `;
 }
 
 function busyChatRow(chat, activeId) {
@@ -1648,14 +1837,24 @@ function messageMarkup(message) {
 
 async function submitChatMessage({ state, chat, text, commandBus, getActiveModule, meta = {}, onPending = null }) {
   const activeModule = getActiveModule?.() || { id: 'ctox', title: 'CTOX' };
-  const sourceModule = meta.module || meta.source_module || activeModule.id || 'ctox';
-  const sourceTitle = meta.source_title || activeModule.title || sourceModule || 'CTOX';
+  const sourceModule = meta.module || meta.source_module || meta.sourceModule || activeModule.id || 'ctox';
+  const sourceTitle = meta.source_title || meta.sourceTitle || activeModule.title || activeModule.name || sourceModule || 'CTOX';
   const commandType = meta.command_type || meta.commandType || 'business_os.chat.task';
   const extraPayload = meta.payload && typeof meta.payload === 'object' ? meta.payload : {};
   const extraClientContext = meta.client_context && typeof meta.client_context === 'object' ? meta.client_context : {};
   const now = Date.now();
   const commandId = meta.command_id || meta.commandId || `cmd_${crypto.randomUUID()}`;
   const messageId = `chatmsg_${crypto.randomUUID()}`;
+  const threadKey = meta.thread_key || meta.threadKey || extraPayload.thread_key || extraPayload.threadKey || chat.contextMeta?.thread_key || `business-os/chat/${chat.id}`;
+  chat.contextMeta = {
+    ...(chat.contextMeta && typeof chat.contextMeta === 'object' ? chat.contextMeta : {}),
+    module: sourceModule,
+    source_module: sourceModule,
+    source_title: sourceTitle,
+    command_type: commandType,
+    record_id: meta.record_id || meta.recordId || chat.contextMeta?.record_id || chat.id,
+    thread_key: threadKey,
+  };
   chat.messages.push({
     id: messageId,
     role: 'user',
@@ -1697,7 +1896,7 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
       outbound_channel: 'business_os_chat',
       response_channel: 'business_os_chat',
       reply_to: chat.id,
-      thread_key: meta.thread_key || extraPayload.thread_key || `business-os/chat/${chat.id}`,
+      thread_key: threadKey,
       priority: meta.priority || extraPayload.priority || 'normal',
       source_module: sourceModule,
     },
@@ -1969,12 +2168,16 @@ function chatContextMetaFromDetail(detail = {}) {
   const payload = detail.payload && typeof detail.payload === 'object' ? detail.payload : {};
   const clientContext = detail.client_context && typeof detail.client_context === 'object'
     ? detail.client_context
+    : detail.clientContext && typeof detail.clientContext === 'object'
+      ? detail.clientContext
     : {};
   const meta = {
     module: detail.module || detail.source_module || '',
     source_module: detail.source_module || detail.module || '',
     source_title: detail.source_title || detail.sourceTitle || '',
     record_id: detail.record_id || detail.recordId || '',
+    thread_key: detail.thread_key || detail.threadKey || payload.thread_key || payload.threadKey || clientContext.thread_key || clientContext.threadKey || '',
+    group_key: detail.group_key || detail.groupKey || payload.group_key || payload.groupKey || clientContext.group_key || clientContext.groupKey || '',
     title: detail.command_title || detail.commandTitle || detail.title || '',
     instruction: detail.instruction || '',
     inbound_channel: detail.inbound_channel || detail.inboundChannel || '',
@@ -2688,7 +2891,7 @@ function installChatStyles() {
     }
     .ctox-chat-busy-filters {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 6px;
     }
     .ctox-chat-busy-filters input {
@@ -2715,6 +2918,58 @@ function installChatStyles() {
       align-content: start;
       gap: 4px;
       padding-right: 2px;
+    }
+    .ctox-chat-busy-group {
+      display: grid;
+      gap: 3px;
+      padding: 4px;
+      border: 1px solid color-mix(in srgb, var(--line) 24%, transparent);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--surface-2) 18%, transparent);
+    }
+    .ctox-chat-busy-group-head {
+      display: grid;
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 34%, transparent);
+      color: var(--text);
+      text-align: left;
+      padding: 6px 8px;
+      cursor: pointer;
+    }
+    .ctox-chat-busy-group-head:hover,
+    .ctox-chat-busy-group-head.is-active {
+      border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .ctox-chat-busy-group-copy {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+    }
+    .ctox-chat-busy-group-copy strong,
+    .ctox-chat-busy-group-copy small {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-chat-busy-group-copy strong {
+      font-size: 11px;
+      font-weight: 840;
+    }
+    .ctox-chat-busy-group-copy small,
+    .ctox-chat-busy-group-more {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 700;
+    }
+    .ctox-chat-busy-group-rows {
+      display: grid;
+      gap: 2px;
+    }
+    .ctox-chat-busy-group-more {
+      padding: 4px 8px 5px 52px;
     }
     .ctox-chat-busy-row {
       display: grid;
@@ -3767,6 +4022,9 @@ function installChatStyles() {
       }
       .ctox-chat-busy-panel {
         width: calc(100vw - 36px) !important;
+      }
+      .ctox-chat-busy-filters {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
       }
       .ctox-date-workload-panel {
         left: 0 !important;

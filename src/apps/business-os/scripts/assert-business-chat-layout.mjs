@@ -45,6 +45,11 @@ expectIncludes(source, 'function selectVisibleChats(openChats, activeChat)', 'Bu
 expectIncludes(source, 'chatOverflowItem(hiddenChatCount', 'Busy days need an overflow affordance');
 expectIncludes(source, 'chatBusyPanel({ chats: openChats, selectedDate, state })', 'Busy days need a filterable list panel');
 expectIncludes(source, 'data-chat-list-filter="source"', 'Busy-day list must include source filtering');
+expectIncludes(source, 'data-chat-list-filter="group"', 'Busy-day list must include grouping control');
+expectIncludes(source, 'function groupBusyChats(chats, mode = \'auto\')', 'Busy-day list must group related task series');
+expectIncludes(source, 'function chatSeriesKey(chat)', 'Busy-day grouping must use stable thread/group metadata');
+expectIncludes(source, 'function allocateBusyGroupRows(groups)', 'Busy-day grouping must allocate row budget across groups');
+expectIncludes(source, 'const MAX_BUSY_GROUPS = 24;', 'Busy-day grouped lists must cap rendered groups');
 expectIncludes(source, 'dateWorkloadPanel({ chats: state.chats, selectedDate })', 'Date selection must expose workload heatmap panel');
 expectIncludes(source, 'function workloadDaysAround(chats, selectedDate, count)', 'Date workload panel must aggregate nearby days');
 expectIncludes(

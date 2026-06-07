@@ -42,6 +42,7 @@ The chatbar is a task and conversation dock, not a flat list of every task as a 
 | US-09 | done | User scrolls messages. | Active message pane scrolls; dock wheel-scroll does not steal message scroll. |
 | US-10 | done | User opens calendar/date picker. | Date workload heatmap shows task volume and selected-day intensity. |
 | US-11 | done | User filters a busy day. | Filter by status, module, source, hour, text. |
+| US-12 | done | User opens a day where one system created many related tasks, e.g. Web Research. | Related tasks collapse into deterministic groups while individual tasks remain selectable. |
 
 ## Implementation Plan
 
@@ -55,9 +56,10 @@ The chatbar is a task and conversation dock, not a flat list of every task as a 
 | 6 | done | Add workload summary model for days. | Counts derive from chats without creating records; queue/command-only task counts remain for a later data sync pass. |
 | 7 | done | Add date workload heatmap/popover. | Calendar shows daily task count and selected-day intensity. |
 | 8 | done | Add busy-day drawer with virtualized list. | 1000 tasks render without chip/window explosion. |
-| 9 | done | Add filters/grouping. | Filter by hour, status, module, source, text. |
+| 9 | done | Add filters. | Filter by hour, status, module, source, text. |
 | 10 | done | Expand regression guards. | Static guard is in CI; browser guard covers `0/1/4/6/8/12/100/1000`, future dates, latency, keyboard, typing, scroll. |
 | 11 | done | Final headed browser QA on clean main worktree. | Full story matrix passes before commit/push. |
+| 12 | done | Add deterministic grouping for related high-volume task series. | `thread_key`, `group_key`, `record_id`, source and normalized title signatures create capped groups; Web Research series is browser-tested. |
 
 ## Regression Matrix
 
@@ -70,6 +72,7 @@ The chatbar is a task and conversation dock, not a flat list of every task as a 
 | Latency | done | DB delay `180` ms for max/min/chip interactions; immediate UI target <150 ms |
 | Accessibility | done | focus order, aria labels, hidden inactive controls, touch target size |
 | Data scale | done | Browser guard verifies 100/1000 source chats render max 12 chips/windows and max 80 busy-list rows |
+| Grouping | done | Browser guard verifies 120 related Web Research tasks collapse into one group with max 80 rendered rows |
 
 ## Known Bugs From Audit
 
@@ -101,3 +104,5 @@ The chatbar is a task and conversation dock, not a flat list of every task as a 
 | 2026-06-07 | done | Date workload heatmap guard | 100-task day opens 28-day heatmap, selected day intensity `4`, summary `100 Tasks` |
 | 2026-06-07 | done | Final headed browser matrix after rebase | Browser matrix OK: 48 scenario entries including viewports 2048/1440/1024/760/390 |
 | 2026-06-07 | done | Viewport measurements | 1440: dock 1107px; 1024: 951px; 760: 724px; 390 one-chat: 354px |
+| 2026-06-07 | done | Headed browser matrix after grouping implementation | Browser matrix OK: 51 scenario entries including 120 grouped Web Research tasks |
+| 2026-06-07 | done | Grouped Web Research visual check | 120 related tasks render as one group, 80 visible rows, +40 group overflow, readable filter controls |

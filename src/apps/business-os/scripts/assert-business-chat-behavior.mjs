@@ -12,6 +12,7 @@ const outputDir = process.env.BUSINESS_CHAT_BEHAVIOR_OUTPUT_DIR
   || path.join(repoRoot, 'output/playwright', `business-chat-behavior-${timestampForPath()}`);
 const reportPath = path.join(outputDir, 'business-chat-behavior.json');
 const screenshotPath = path.join(outputDir, 'business-chat-behavior.png');
+const groupedScreenshotPath = path.join(outputDir, 'business-chat-grouped.png');
 const headless = process.env.BUSINESS_CHAT_BEHAVIOR_HEADLESS !== '0';
 
 fs.mkdirSync(outputDir, { recursive: true });
@@ -157,6 +158,23 @@ try {
     results.push({ scenario: 'hundred-chats-overflow-panel-open', metrics: open });
     expect(open.busyRowCount <= 80, `hundred-chat panel must cap rendered rows, got ${open.busyRowCount}`);
     expect(open.busyMoreText.includes('20 weitere'), `hundred-chat panel must show the remaining 20 rows, got ${open.busyMoreText}`);
+  });
+
+  await scenario(page, 'web-research-tasks-grouped', { count: 120, activeIndex: 60, groupedResearch: true }, async () => {
+    const open = await page.evaluate(async () => {
+      document.querySelector('[data-chat-overflow-open]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('[data-chat-busy-panel]'));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'web-research-tasks-grouped-open', metrics: open });
+    expect(open.busyPanelCount === 1, 'grouped research setup must open busy-day panel');
+    expect(open.groupFilterValue === 'auto', `busy panel should default to auto grouping, got ${open.groupFilterValue}`);
+    expect(open.busyGroupCount === 1, `related research tasks must collapse into one group, got ${open.busyGroupCount}`);
+    expect(open.busyGroupFirstLabel.includes('Web Research'), `group label should name the research series, got ${open.busyGroupFirstLabel}`);
+    expect(open.busyRowCount <= 80, `grouped research panel must cap rendered task rows, got ${open.busyRowCount}`);
+    expect(open.busyGroupMoreText.includes('40'), `research group should summarize the 40 hidden tasks, got ${open.busyGroupMoreText}`);
+    expect(open.busyMoreText.includes('40 weitere'), `busy panel should expose remaining filtered matches, got ${open.busyMoreText}`);
+    await page.screenshot({ path: groupedScreenshotPath, fullPage: true });
   });
 
   await scenario(page, 'inactive-window-click-selects', { count: 4, activeIndex: 2 }, async (m) => {
@@ -313,6 +331,7 @@ function writeReport() {
     results,
     consoleEvents,
     screenshotPath,
+    groupedScreenshotPath,
   }, null, 2));
 }
 
@@ -476,6 +495,8 @@ function harnessHtml() {
       const createdAt = dateTimestamp(selectedDate, index);
       const modules = ['ctox', 'documents', 'knowledge', 'research', 'matching', 'reports', 'conversations', 'outbound'];
       const messages = [];
+      const groupedResearch = Boolean(options.groupedResearch);
+      const moduleName = groupedResearch ? 'research' : modules[index % modules.length];
       for (let i = 0; i < (options.messagesPerChat || 0); i += 1) {
         messages.push({
           id: 'msg_' + index + '_' + i,
@@ -484,17 +505,40 @@ function harnessHtml() {
           createdAt: createdAt + i * 1000,
         });
       }
+      const trackingId = groupedResearch ? 'task_research_' + index : '';
+      if (groupedResearch) {
+        const statuses = ['running', 'queued', 'success', 'success', 'success', 'failed'];
+        messages.push({
+          id: 'status_research_' + index,
+          role: 'ctox',
+          text: 'Web Research Schritt ' + (index + 1) + ' verarbeitet.',
+          taskId: trackingId,
+          commandId: trackingId,
+          status: statuses[index % statuses.length],
+          createdAt: createdAt + 500,
+        });
+      }
       return {
         id: 'chat_' + index,
-        title: index % 3 === 0 ? 'Documents be...' : 'CTOX',
+        title: groupedResearch ? 'Web Research ' + (index + 1) : index % 3 === 0 ? 'Documents be...' : 'CTOX',
         open: true,
         minimized: false,
         maximized: false,
         owner_user_id: owner,
-        lastTrackingId: '',
+        lastTrackingId: trackingId,
         messages,
         draft: '',
-        contextMeta: { module: modules[index % modules.length] },
+        contextMeta: groupedResearch
+          ? {
+              module: moduleName,
+              source_module: 'web_research',
+              source_title: 'Web Research Wettbewerberanalyse',
+              command_type: 'research.web',
+              record_id: 'research_case_42',
+              thread_key: 'research/web/wettbewerberanalyse',
+              group_key: 'research:wettbewerberanalyse',
+            }
+          : { module: moduleName },
         createdAt,
         updated_at_ms: createdAt,
         showFollowUp: false,
@@ -550,7 +594,12 @@ function harnessHtml() {
         headerNewCount: document.querySelectorAll('.ctox-chat-window [data-chat-new]').length,
         overflowCount: document.querySelectorAll('[data-chat-overflow-open]').length,
         busyPanelCount: document.querySelectorAll('[data-chat-busy-panel]').length,
-        busyRowCount: document.querySelectorAll('[data-chat-list-focus]').length,
+        busyRowCount: document.querySelectorAll('.ctox-chat-busy-row[data-chat-list-focus]').length,
+        busyFocusTargetCount: document.querySelectorAll('[data-chat-list-focus]').length,
+        busyGroupCount: document.querySelectorAll('[data-chat-busy-group]').length,
+        groupFilterValue: document.querySelector('[data-chat-list-filter="group"]')?.value || '',
+        busyGroupFirstLabel: document.querySelector('.ctox-chat-busy-group-head strong')?.textContent || '',
+        busyGroupMoreText: document.querySelector('.ctox-chat-busy-group-more')?.textContent || '',
         busyMoreText: document.querySelector('.ctox-chat-busy-more')?.textContent || '',
         workloadBadgeText: document.querySelector('.ctox-date-workload-badge')?.textContent || '',
         datePanelCount: document.querySelectorAll('[data-chat-date-workload-panel]').length,
