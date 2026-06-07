@@ -541,7 +541,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     topic: room,
     connectionHandlerCreator,
     pull: { batchSize },
-    push: isReadOnlyProjectionCollection(collection) ? undefined : { batchSize },
+    push: isReadOnlyProjectionCollection(collection) ? null : { batchSize },
     retryTime: 5000,
     ctox: {
       onPeerProtocol(info) {
