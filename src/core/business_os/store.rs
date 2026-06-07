@@ -3658,6 +3658,9 @@ fn is_starter_module(id: &str) -> bool {
 
 fn module_install_scope(manifest: &ModuleManifest) -> String {
     let explicit = manifest.install_scope.trim().to_ascii_lowercase();
+    if is_starter_module(&manifest.id) && explicit == "store" {
+        return "starter".to_owned();
+    }
     if matches!(
         explicit.as_str(),
         "core" | "starter" | "store" | "internal" | "installed"
@@ -22236,7 +22239,7 @@ mod tests {
         )?;
         fs::write(
             app_root.join("modules/research/module.json"),
-            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"local"}"#,
+            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"store"}"#,
         )?;
 
         write_module_catalog_projection_to_rxdb(root)?;
@@ -22291,7 +22294,7 @@ mod tests {
         )?;
         fs::write(
             release_app_root.join("modules/research/module.json"),
-            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"local"}"#,
+            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"store"}"#,
         )?;
 
         let catalog = module_catalog_for_rxdb(&runtime_root)?;
