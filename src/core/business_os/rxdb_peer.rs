@@ -3831,7 +3831,15 @@ async fn sync_knowledge_tables_with_database(
         .collection("knowledge_tables")
         .context("knowledge_tables collection is not registered")?;
     let mut count = 0usize;
+    let mut current_ids = HashSet::new();
     for mut document in documents {
+        if let Some(id) = document
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+        {
+            current_ids.insert(id);
+        }
         if let Some(object) = document.as_object_mut() {
             object.remove("_rev");
             object.remove("_meta");
@@ -3842,6 +3850,31 @@ async fn sync_knowledge_tables_with_database(
             .incremental_upsert(document)
             .await
             .map_err(|err| anyhow::anyhow!("upsert knowledge_tables projection: {err}"))?;
+        count += 1;
+    }
+    let existing = collection
+        .find(Some(MangoQuery {
+            limit: Some(10_000),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec stale knowledge_tables projection query: {err}"))?;
+    for mut stale in existing.as_array().cloned().unwrap_or_default() {
+        let Some(id) = stale.get("id").and_then(Value::as_str).map(str::to_string) else {
+            continue;
+        };
+        if current_ids.contains(&id) {
+            continue;
+        }
+        if let Some(object) = stale.as_object_mut() {
+            object.remove("_rev");
+            object.remove("_meta");
+        }
+        upsert_business_record_projection_tombstone(&collection, stale)
+            .await
+            .map_err(|err| anyhow::anyhow!("tombstone stale knowledge_tables projection: {err}"))?;
         count += 1;
     }
     Ok(count)

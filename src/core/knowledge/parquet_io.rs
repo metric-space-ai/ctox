@@ -216,21 +216,26 @@ pub(super) fn rows_to_df(rows: &[Value]) -> Result<DataFrame> {
 
 /// Read up to `cap` rows from the parquet file at `path` and return them as
 /// NDJSON-shaped `Vec<serde_json::Value>` objects together with the number of
-/// rows actually read.
+/// total rows in the parquet file.
 ///
 /// Used by the `knowledge_tables` RxDB projection to embed record-shape rows
 /// directly into the synced doc (no HTTP). Keeps all Polars usage contained in
 /// this helper module so callers do not have to depend on Polars types.
 pub(super) fn read_rows_capped(path: &Path, cap: usize) -> Result<(Vec<Value>, i64)> {
-    let df = scan_table(path)
+    let full_df = scan_table(path)
         .map_err(cerr)
         .with_context(|| format!("scan parquet for projection {}", path.display()))?
-        .limit(cap as IdxSize)
         .collect()
         .map_err(cerr)
-        .with_context(|| format!("collect parquet rows for projection {}", path.display()))?;
-    let count = df.height() as i64;
-    let rows = df_to_rows(&df)?;
+        .with_context(|| {
+            format!(
+                "collect parquet row count for projection {}",
+                path.display()
+            )
+        })?;
+    let count = full_df.height() as i64;
+    let capped_df = full_df.head(Some(cap));
+    let rows = df_to_rows(&capped_df)?;
     Ok((rows, count))
 }
 
@@ -288,4 +293,30 @@ pub(super) fn refresh_catalog_after_write(
         );
     }
     Ok((row_count, bytes, hash))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn read_rows_capped_reports_full_row_count() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("table.parquet");
+        let rows = vec![
+            json!({"id": "a", "score": 1}),
+            json!({"id": "b", "score": 2}),
+            json!({"id": "c", "score": 3}),
+            json!({"id": "d", "score": 4}),
+        ];
+        let df = rows_to_df(&rows)?;
+        commit_parquet(&path, df)?;
+
+        let (embedded, count) = read_rows_capped(&path, 2)?;
+
+        assert_eq!(embedded.len(), 2);
+        assert_eq!(count, 4);
+        Ok(())
+    }
 }
