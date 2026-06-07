@@ -48,7 +48,7 @@ const CORE_MODULE_IDS: &[&str] = &[
     "reports",
     "tickets",
 ];
-const STARTER_MODULE_IDS: &[&str] = &["documents", "spreadsheets", "calendar", "notes"];
+const STARTER_MODULE_IDS: &[&str] = &["documents", "spreadsheets", "calendar", "notes", "research"];
 const CHATGPT_AUTH_ISSUER: &str = "https://auth.openai.com";
 const CHATGPT_AUTH_CALLBACK_PORT: u16 = 1455;
 const CHATGPT_AUTH_CALLBACK_FALLBACK_PORT: u16 = 1457;
@@ -22207,6 +22207,52 @@ mod tests {
         assert!(
             ids.contains(&"research".to_owned()),
             "missing installed research: {ids:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_projection_includes_packaged_research() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::create_dir_all(app_root.join("modules/research"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            app_root.join("modules/research/module.json"),
+            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"local"}"#,
+        )?;
+
+        write_module_catalog_projection_to_rxdb(root)?;
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let catalog_json: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+            [],
+            |row| row.get(0),
+        )?;
+        let catalog: Value = serde_json::from_str(&catalog_json)?;
+        let research = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .and_then(|modules| {
+                modules
+                    .iter()
+                    .find(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+            })
+            .expect("packaged research module missing from projected catalog");
+        assert_eq!(
+            research.get("install_scope").and_then(Value::as_str),
+            Some("starter")
+        );
+        assert_eq!(
+            research.get("entry").and_then(Value::as_str),
+            Some("modules/research/index.html")
         );
         Ok(())
     }
