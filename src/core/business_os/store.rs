@@ -1060,6 +1060,54 @@ fn configured_auth_users() -> Vec<ConfiguredAuthUser> {
         .collect()
 }
 
+fn default_configured_business_user() -> Option<ConfiguredAuthUser> {
+    let password = env::var("CTOX_BUSINESS_PASSWORD").unwrap_or_default();
+    let user = env::var("CTOX_BUSINESS_USER").unwrap_or_else(|_| "admin".to_owned());
+    let id = user.trim();
+    if id.is_empty() || password.trim().is_empty() {
+        return None;
+    }
+    Some(ConfiguredAuthUser {
+        id: id.to_owned(),
+        password,
+        role: default_session_role(),
+    })
+}
+
+fn configured_business_users() -> Vec<ConfiguredAuthUser> {
+    let mut users = Vec::new();
+    if let Some(default_user) = default_configured_business_user() {
+        users.push(default_user);
+    }
+    for configured in configured_auth_users() {
+        if users
+            .iter()
+            .any(|existing| existing.id.eq_ignore_ascii_case(&configured.id))
+        {
+            continue;
+        }
+        users.push(configured);
+    }
+    users
+}
+
+fn seed_configured_business_users(conn: &Connection) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    for user in configured_business_users() {
+        conn.execute(
+            "INSERT INTO business_users
+                (user_id, display_name, role, active, created_at_ms, updated_at_ms)
+             VALUES (?1, ?1, ?2, 1, ?3, ?3)
+             ON CONFLICT(user_id) DO UPDATE SET
+                role = excluded.role,
+                active = 1,
+                updated_at_ms = excluded.updated_at_ms",
+            params![user.id.trim(), normalize_business_role(&user.role), now],
+        )?;
+    }
+    Ok(())
+}
+
 fn normalize_business_role(role: &str) -> String {
     match role.trim().to_ascii_lowercase().as_str() {
         "owner" | "chef" => "chef".to_owned(),
@@ -1210,6 +1258,7 @@ pub fn list_users(root: &Path, session: &BusinessOsSession) -> anyhow::Result<Va
 
 pub fn pull_business_users_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
     let users = query_users(&conn)?;
     let documents = users
         .into_iter()
@@ -11554,6 +11603,7 @@ fn trusted_rxdb_command_user(
 ) -> anyhow::Result<BusinessOsUser> {
     let actor_id = actor_id.trim();
     let conn = open_store(root)?;
+    seed_configured_business_users(&conn)?;
     let user = conn
         .query_row(
             "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms
@@ -15971,6 +16021,41 @@ mod tests {
             }),
             login_url: None,
             reason: None,
+        }
+    }
+
+    struct EnvRestore {
+        values: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvRestore {
+        fn set(values: &[(&'static str, &'static str)]) -> Self {
+            let restore = Self {
+                values: values
+                    .iter()
+                    .map(|(key, _)| (*key, env::var(key).ok()))
+                    .collect(),
+            };
+            for (key, value) in values {
+                unsafe {
+                    env::set_var(key, value);
+                }
+            }
+            restore
+        }
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                unsafe {
+                    if let Some(value) = value {
+                        env::set_var(key, value);
+                    } else {
+                        env::remove_var(key);
+                    }
+                }
+            }
         }
     }
 
@@ -21974,6 +22059,59 @@ mod tests {
             iot_pull_record(root, "iot_assets", "asset-denied-1").is_none(),
             "denied iot mutation must not project"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_auth_user_is_trusted_for_rxdb_admin_commands() -> anyhow::Result<()> {
+        let _env = EnvRestore::set(&[
+            (
+                "CTOX_AUTH_USERS",
+                "michael.welsch@metric-space.ai|secret|admin",
+            ),
+            ("CTOX_BUSINESS_OS_REQUIRE_LOGIN", "1"),
+        ]);
+        let temp = tempdir()?;
+        let root = temp.path();
+
+        let outcome = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_configured_admin_user_upsert",
+                "command_id": "cmd_configured_admin_user_upsert",
+                "module": "ctox",
+                "command_type": "ctox.business_os.user.upsert",
+                "record_id": "new-admin",
+                "status": "pending_sync",
+                "payload": {
+                    "id": "new-admin",
+                    "display_name": "New Admin",
+                    "role": "admin",
+                    "active": true
+                },
+                "client_context": {
+                    "actor": {
+                        "id": "michael.welsch@metric-space.ai",
+                        "display_name": "Michael Welsch"
+                    }
+                }
+            }),
+        )?;
+
+        assert_eq!(outcome["status"], "completed");
+        let conn = open_store(root)?;
+        let configured_role: String = conn.query_row(
+            "SELECT role FROM business_users WHERE user_id = ?1",
+            params!["michael.welsch@metric-space.ai"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(configured_role, "admin");
+        let new_role: String = conn.query_row(
+            "SELECT role FROM business_users WHERE user_id = ?1",
+            params!["new-admin"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(new_role, "admin");
         Ok(())
     }
 

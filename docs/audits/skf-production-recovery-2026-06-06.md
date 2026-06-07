@@ -206,6 +206,46 @@ No writes performed.
 
 ## Implementation Steps
 
+## Phase 34 - Post-Upgrade Server Truth Check
+
+Status: Complete
+
+Result: The `ctox upgrade --dev` deployment of `906ab4d7` is active on the VPS, but `skf.ctox.dev` is still not production ready.
+
+Evidence from `/home/ubuntu/.local/lib/ctox/current`:
+
+- Active release: `branch-main-20260607T022749Z`.
+- Served Business OS asset marker: `app.js?v=20260606-rxdb-public-catalog2`.
+- `business_users` is still empty immediately after deploy.
+- RxDB `business_module_catalog` has 12 modules and `allowed_module_ids=[]`.
+- Catalog module ids are `app-store`, `browser`, `calendar`, `creator`, `ctox`, `desktop`, `documents`, `knowledge`, `notes`, `reports`, `spreadsheets`, `tickets`.
+- `research` is not in the projected module catalog, so Web Research cannot be considered restored for skf.
+
+Next action: run a fresh browser login against `skf.ctox.dev` with the real account and then re-check whether the authenticated shell/login path seeds `business_users`. If it does not, the public skf login path is bypassing the core login seed path and needs either a CTOX core fix or an explicit skf instance data repair before canonical `ctox.app_store.install` can install `research`.
+
+## Phase 35 - Configured Auth Users Back RxDB Admin Commands
+
+Status: Complete locally, push/deploy pending
+
+Result: Root cause confirmed and fixed in CTOX core. The `ctox-dev` public WebDeploy login injects an authenticated browser session, but it does not hit the Rust `/login` route; therefore `business_users` stayed empty and RxDB commands from the browser were downgraded to `user` by `trusted_rxdb_command_user`. That is why admin-class commands such as `ctox.app_store.install` were rejected even though the browser showed an admin user.
+
+Implemented fix:
+
+- `store.rs` now treats server-configured auth identities (`CTOX_AUTH_USERS` plus the default `CTOX_BUSINESS_USER`/`CTOX_BUSINESS_PASSWORD`) as authoritative Business OS users.
+- `pull_business_users_for_rxdb` seeds those configured users before projecting `business_users`.
+- `trusted_rxdb_command_user` seeds those configured users before resolving an RxDB command actor, so existing RxDB command authorization remains server-side and does not trust a browser-supplied role.
+- No HTTP command fallback was added.
+
+Local verification:
+
+- `cargo test configured_auth_user_is_trusted_for_rxdb_admin_commands --bin ctox -- --nocapture` passed.
+- `node src/apps/business-os/scripts/assert-rxdb-only.mjs` passed.
+- `cargo fmt --check` passed.
+- `git diff --check` passed.
+- `cargo check -q` passed with existing warnings.
+
+Next action: push this fix to `main`, deploy via `ctox upgrade --dev`, configure the skf authenticated user in the VPS environment, verify `business_users` projects the admin, then install/restore `research` through the canonical RxDB/CTOX command path.
+
 ### Step 1: Finish rebase-safe local baseline
 
 - Resolve current rebase conflict in `src/apps/business-os/app.js`.
