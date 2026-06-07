@@ -1633,6 +1633,57 @@ pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     }))
 }
 
+pub fn write_module_catalog_projection_to_rxdb(root: &Path) -> anyhow::Result<()> {
+    let mut document = module_catalog_for_rxdb(root)?;
+    if let Some(object) = document.as_object_mut() {
+        object.remove("_rev");
+        object.remove("_meta");
+        object.insert("_deleted".to_string(), Value::Bool(false));
+        object.insert("is_deleted".to_string(), Value::Bool(false));
+    }
+    let now = now_ms();
+    let revision = format!("{now}-ctox-module-catalog");
+    let path = rxdb_store_path(root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create RxDB runtime dir {}", parent.display()))?;
+    }
+    let conn =
+        Connection::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch(
+        r#"
+        PRAGMA journal_mode = WAL;
+        PRAGMA busy_timeout = 10000;
+        CREATE TABLE IF NOT EXISTS "ctox_business_os__business_module_catalog__v0"(
+            id TEXT NOT NULL PRIMARY KEY UNIQUE,
+            revision TEXT,
+            deleted INTEGER NOT NULL CHECK (deleted IN (0, 1)),
+            lastWriteTime REAL NOT NULL,
+            data TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS "ctox_business_os__business_module_catalog__v0_lwt_id_idx"
+            ON "ctox_business_os__business_module_catalog__v0"(lastWriteTime, id);
+        CREATE INDEX IF NOT EXISTS "ctox_business_os__business_module_catalog__v0_deleted_lwt_id_idx"
+            ON "ctox_business_os__business_module_catalog__v0"(deleted, lastWriteTime, id);
+        "#,
+    )?;
+    conn.execute(
+        r#"
+        INSERT INTO "ctox_business_os__business_module_catalog__v0"
+            (id, revision, deleted, lastWriteTime, data)
+        VALUES ('module-catalog', ?1, 0, ?2, ?3)
+        ON CONFLICT(id) DO UPDATE SET
+            revision = excluded.revision,
+            deleted = 0,
+            lastWriteTime = excluded.lastWriteTime,
+            data = excluded.data
+        "#,
+        params![revision, now as f64, serde_json::to_string(&document)?],
+    )?;
+    Ok(())
+}
+
 pub fn upsert_user(
     root: &Path,
     session: &BusinessOsSession,
@@ -4313,6 +4364,7 @@ pub fn rollback_module_to_version(
         &format!("Rolled back to {version_id}"),
         &created_by,
     )?;
+    write_module_catalog_projection_to_rxdb(root)?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -4519,6 +4571,7 @@ pub fn install_app_module(
         "Installed from store",
         &created_by,
     )?;
+    write_module_catalog_projection_to_rxdb(root)?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -4557,6 +4610,7 @@ pub fn uninstall_app_module(
     let mut layout = load_module_layout(root)?;
     remove_module_from_layout_value(&mut layout, &module_id);
     save_module_layout(root, &layout)?;
+    write_module_catalog_projection_to_rxdb(root)?;
 
     Ok(serde_json::json!({
         "ok": true,
@@ -22112,6 +22166,48 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(new_role, "admin");
+        Ok(())
+    }
+
+    #[test]
+    fn direct_module_catalog_projection_includes_installed_modules() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let app_root = root.join("src/apps/business-os");
+        fs::create_dir_all(app_root.join("modules/ctox"))?;
+        fs::create_dir_all(app_root.join("installed-modules/research"))?;
+        fs::write(app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            app_root.join("installed-modules/research/module.json"),
+            r#"{"id":"research","title":"Web Research","entry":"installed-modules/research/index.html","install_scope":"installed"}"#,
+        )?;
+
+        write_module_catalog_projection_to_rxdb(root)?;
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let catalog_json: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__business_module_catalog__v0 WHERE id = 'module-catalog'",
+            [],
+            |row| row.get(0),
+        )?;
+        let catalog: Value = serde_json::from_str(&catalog_json)?;
+        let ids = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|module| module.get("id").and_then(Value::as_str).map(str::to_owned))
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"ctox".to_owned()), "missing ctox: {ids:?}");
+        assert!(
+            ids.contains(&"research".to_owned()),
+            "missing installed research: {ids:?}"
+        );
         Ok(())
     }
 
