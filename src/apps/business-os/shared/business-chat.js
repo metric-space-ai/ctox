@@ -5,6 +5,9 @@ const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
+const MANY_CHAT_THRESHOLD = 12;
+const MAX_RENDERED_CHAT_TABS = 12;
+const MAX_BUSY_LIST_ITEMS = 80;
 
 export function initBusinessChat({
   session,
@@ -24,16 +27,11 @@ export function initBusinessChat({
     const datePickerTrigger = event.target.closest?.('.ctox-date-picker-trigger');
     if (datePickerTrigger && root.contains(datePickerTrigger)) {
       if (event.target.tagName !== 'INPUT') {
-        const picker = datePickerTrigger.querySelector('[data-chat-date-picker]');
-        if (picker) {
-          event.preventDefault();
-          event.stopPropagation();
-          try {
-            picker.showPicker();
-          } catch (error) {
-            picker.click();
-          }
-        }
+        event.preventDefault();
+        event.stopPropagation();
+        state.dateWorkloadOpen = !state.dateWorkloadOpen;
+        state.chatListOpen = false;
+        renderChatRoot({ root, state, commandBus, db, getActiveModule });
       }
       return;
     }
@@ -401,6 +399,31 @@ function alignChatWindows(root) {
   }
 }
 
+function renderAndPersistChatState({ root, state, commandBus, db, getActiveModule }) {
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  persistChatState({ state, db }).catch((error) => {
+    console.warn('[business-chat] chat persistence failed', error);
+  });
+}
+
+function setWindowInteractiveState(win, isActive) {
+  win.querySelectorAll('button, input, textarea, select, a').forEach((node) => {
+    if (isActive) {
+      if (node.dataset.chatInactiveTabManaged === 'true') {
+        node.removeAttribute('tabindex');
+        delete node.dataset.chatInactiveTabManaged;
+      }
+      node.removeAttribute('aria-hidden');
+      return;
+    }
+    if (!node.hasAttribute('tabindex')) {
+      node.dataset.chatInactiveTabManaged = 'true';
+    }
+    node.setAttribute('tabindex', '-1');
+    node.setAttribute('aria-hidden', 'true');
+  });
+}
+
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   initSchedulerLoop({ root, state, commandBus, db, getActiveModule });
 
@@ -409,6 +432,22 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const openChats = chatsOfSelectedDate.filter((chat) => chat.open !== false);
   const hasMaximized = openChats.some(chat => chat.maximized && !chat.minimized);
   const activeChat = activeChatFor(state, openChats);
+  if (!activeChat && state.activeChatId) state.activeChatId = '';
+  const visibleChats = selectVisibleChats(openChats, activeChat);
+  const hiddenChatCount = Math.max(0, openChats.length - visibleChats.length);
+  const hasVisibleChats = openChats.length > 0;
+  const showChatStrip = !Boolean(state.dockCollapsed) && hasVisibleChats;
+  const showChatNav = showChatStrip && openChats.length > 1;
+  const workload = chatWorkloadForDate(openChats);
+  const dockStateClass = [
+    Boolean(state.dockCollapsed) ? 'is-collapsed' : '',
+    hasVisibleChats ? 'has-visible-chats' : 'has-no-chats',
+    openChats.length === 1 ? 'has-one-chat' : '',
+    openChats.length > 1 && openChats.length < MANY_CHAT_THRESHOLD ? 'has-few-chats' : '',
+    openChats.length >= MANY_CHAT_THRESHOLD ? 'has-many-chats' : '',
+    hiddenChatCount > 0 ? 'has-overflow-chats' : '',
+    showChatNav ? 'has-nav' : 'has-no-nav',
+  ].filter(Boolean).join(' ');
   const dockCollapsed = Boolean(state.dockCollapsed);
   const wasCollapsed = root.classList.contains('is-collapsed');
   root.classList.toggle('is-collapsed', dockCollapsed);
@@ -417,19 +456,25 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const datePickerEl = root.querySelector('[data-chat-date-picker]');
   const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
+  const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
+  const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
-  const openChatIds = openChats.map(c => c.id);
-  const canUpdateInPlace = existingWindows.length === openChats.length &&
-                           currentWindowIds.every((id, idx) => id === openChatIds[idx]) &&
+  const visibleChatIds = visibleChats.map(c => c.id);
+  const canUpdateInPlace = existingWindows.length === visibleChats.length &&
+                           currentWindowIds.every((id, idx) => id === visibleChatIds[idx]) &&
                            root.querySelector('[data-chat-dock]') &&
                            wasCollapsed === dockCollapsed &&
-                           matchesCurrentDate;
+                           matchesCurrentDate &&
+                           !state.chatListOpen &&
+                           !hasBusyPanel &&
+                           !state.dateWorkloadOpen &&
+                           !hasDatePanel;
 
   if (canUpdateInPlace) {
     // 1. Update dock state / collapse class
     const dockEl = root.querySelector('[data-chat-dock]');
     if (dockEl) {
-      dockEl.className = `ctox-chat-dock ${dockCollapsed ? 'is-collapsed' : ''}`;
+      dockEl.className = `ctox-chat-dock ${dockStateClass}`;
     }
     
     // Update Chat count badge in FAB
@@ -459,14 +504,16 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     });
 
     // 3. Update active states, 3D relation tags, maximized and minimized classes on windows
-    const activeIndex = openChats.findIndex((c) => c.id === activeChat?.id);
+    const activeIndex = visibleChats.findIndex((c) => c.id === activeChat?.id);
     existingWindows.forEach((win, idx) => {
-      const chat = openChats[idx];
+      const chat = visibleChats[idx];
       const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
       const taskState = getTaskState(chat);
 
-      win.className = `ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeChat?.id ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} is-task-${taskState}`;
+      const isActiveWindow = chat.id === activeChat?.id && !chat.minimized;
+      win.className = `ctox-chat-window ${chat.maximized ? 'is-maximized' : ''} ${isActiveWindow ? 'is-active' : ''} ${chat.minimized ? 'is-minimized' : ''} is-task-${taskState}`;
       win.dataset.chatRel = relation;
+      setWindowInteractiveState(win, isActiveWindow);
 
       // Update title text in header
       const titleStrong = win.querySelector('.ctox-chat-title strong');
@@ -507,7 +554,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const maxDateVal = getLocalDateString(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
 
   root.innerHTML = `
-    <section class="ctox-chat-dock ${dockCollapsed ? 'is-collapsed' : ''}" data-chat-dock>
+    <section class="ctox-chat-dock ${dockStateClass}" data-chat-dock>
       <button class="ctox-chat-fab" type="button" data-chat-open aria-label="Chat öffnen">
         <span>Chat</span><b>${openChats.length || ''}</b>
       </button>
@@ -516,36 +563,40 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <button class="ctox-date-nav-btn" type="button" data-chat-date-prev aria-label="Vorheriger Tag">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
         </button>
-        <div class="ctox-date-picker-trigger">
+        <div class="ctox-date-picker-trigger" role="button" tabindex="0" aria-label="Datum wählen">
           <span class="ctox-date-label">${formatGermanDateLabel(selectedDate)}</span>
+          ${workload.total > 0 ? `<span class="ctox-date-workload-badge" title="${escapeAttr(workload.total)} Tasks">${formatCompactCount(workload.total)}</span>` : ''}
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
-          <input type="date" class="ctox-date-native-picker" data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" />
+          <input type="date" class="ctox-date-native-picker" data-chat-date-picker value="${selectedDate}" max="${maxDateVal}" tabindex="-1" aria-hidden="true" />
         </div>
         <button class="ctox-date-nav-btn" type="button" data-chat-date-next aria-label="Nächster Tag">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
         </button>
       </div>
 
-      ${dockCollapsed ? '' : `
-        <button class="ctox-chat-nav" type="button" data-chat-prev aria-label="Vorheriger Chat">
+      ${!dockCollapsed ? `
+        ${showChatNav ? `<button class="ctox-chat-nav" type="button" data-chat-prev aria-label="Vorheriger Chat">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
-        </button>
-        <div class="ctox-chat-strip" data-chat-strip aria-label="Offene Chats">
-          ${openChats.map((chat) => chatDockItem(chat, activeChat?.id)).join('')}
-        </div>
-        <button class="ctox-chat-nav" type="button" data-chat-next aria-label="Nächster Chat">
+        </button>` : ''}
+        ${showChatStrip ? `<div class="ctox-chat-strip" data-chat-strip aria-label="Offene Chats">
+          ${visibleChats.map((chat) => chatDockItem(chat, activeChat?.id)).join('')}
+          ${hiddenChatCount > 0 ? chatOverflowItem(hiddenChatCount, Boolean(state.chatListOpen)) : ''}
+        </div>` : ''}
+        ${showChatNav ? `<button class="ctox-chat-nav" type="button" data-chat-next aria-label="Nächster Chat">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
-        </button>
+        </button>` : ''}
         <button class="ctox-chat-new" type="button" data-chat-new aria-label="Neuer Chat">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         </button>
-      `}
+      ` : ''}
     </section>
+    ${state.dateWorkloadOpen ? dateWorkloadPanel({ chats: state.chats, selectedDate }) : ''}
+    ${state.chatListOpen && openChats.length > MAX_RENDERED_CHAT_TABS ? chatBusyPanel({ chats: openChats, selectedDate, state }) : ''}
     <div class="ctox-chat-stage" data-chat-stage>
       <div class="ctox-chat-stage-inner ${hasMaximized ? 'has-maximized' : ''}">
         ${dockCollapsed ? '' : (() => {
-          const activeIndex = openChats.findIndex((c) => c.id === activeChat?.id);
-          return openChats.map((chat, idx) => {
+          const activeIndex = visibleChats.findIndex((c) => c.id === activeChat?.id);
+          return visibleChats.map((chat, idx) => {
             const relation = idx < activeIndex ? 'left' : idx > activeIndex ? 'right' : 'center';
             return chatWindow(chat, activeChat?.id, relation);
           }).join('');
@@ -557,29 +608,88 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 
   root.querySelector('[data-chat-date-prev]')?.addEventListener('click', async () => {
     shiftSelectedDate(state, -1);
-    const chat = ensureChat(state);
-    chat.minimized = false;
-    await persistChatState({ state, db });
-    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
   });
 
   root.querySelector('[data-chat-date-next]')?.addEventListener('click', async () => {
     shiftSelectedDate(state, 1);
-    const chat = ensureChat(state);
-    chat.minimized = false;
-    await persistChatState({ state, db });
-    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
   });
 
   root.querySelector('[data-chat-date-picker]')?.addEventListener('change', async (event) => {
     const val = event.currentTarget.value;
     if (val) {
       state.selectedDate = val;
-      const chat = ensureChat(state);
-      chat.minimized = false;
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      state.dateWorkloadOpen = false;
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     }
+  });
+
+  root.querySelector('[data-chat-date-picker-panel]')?.addEventListener('change', async (event) => {
+    const val = event.currentTarget.value;
+    if (!val) return;
+    state.selectedDate = val;
+    state.dateWorkloadOpen = false;
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelectorAll('[data-chat-date-select]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const val = button.dataset.chatDateSelect;
+      if (!val) return;
+      state.selectedDate = val;
+      state.dateWorkloadOpen = false;
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+    });
+  });
+
+  root.querySelector('[data-chat-date-workload-close]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    state.dateWorkloadOpen = false;
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelector('.ctox-date-picker-trigger')?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    state.dateWorkloadOpen = !state.dateWorkloadOpen;
+    state.chatListOpen = false;
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelector('[data-chat-overflow-open]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    state.chatListOpen = !state.chatListOpen;
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelector('[data-chat-overflow-close]')?.addEventListener('click', (event) => {
+    event.preventDefault();
+    state.chatListOpen = false;
+    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+  });
+
+  root.querySelectorAll('[data-chat-list-filter]').forEach((control) => {
+    const updateFilter = () => {
+      const key = control.dataset.chatListFilter;
+      state.chatListFilter = normalizeChatListFilter(state.chatListFilter);
+      state.chatListFilter[key] = control.value;
+      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    };
+    control.addEventListener(control.tagName === 'INPUT' ? 'input' : 'change', updateFilter);
+  });
+
+  root.querySelectorAll('[data-chat-list-focus]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const chat = state.chats.find((item) => item.id === button.dataset.chatListFocus);
+      if (!chat) return;
+      toggleChatFromDock(state, chat);
+      state.chatListOpen = false;
+      state.dockCollapsed = false;
+      touchChats(state, [chat]);
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+    });
   });
 
   root.querySelector('[data-chat-new]')?.addEventListener('click', async () => {
@@ -588,8 +698,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     expandChatOnly(state, next);
     state.dockCollapsed = false;
     touchChats(state, [next]);
-    await persistChatState({ state, db });
-    renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
   });
 
   root.querySelector('[data-chat-prev]')?.addEventListener('click', (e) => {
@@ -617,14 +726,14 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       toggleChatFromDock(state, chat);
       state.dockCollapsed = false;
       touchChats(state, [chat]);
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     });
   });
 
   root.querySelectorAll('[data-chat-id]').forEach((node) => {
     const chat = state.chats.find((item) => item.id === node.dataset.chatId);
     if (!chat) return;
+    setWindowInteractiveState(node, chat.id === activeChat?.id && !chat.minimized);
 
     node.addEventListener('click', async (e) => {
       if (node.classList.contains('is-active')) return;
@@ -632,15 +741,13 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       state.activeChatId = chat.id;
       chat.minimized = false;
       touchChats(state, [chat]);
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     });
 
     node.querySelectorAll('[data-chat-minimize]').forEach((button) => button.addEventListener('click', async () => {
       chat.minimized = true;
       touchChats(state, [chat]);
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     }));
 
     node.querySelectorAll('[data-chat-title]').forEach((titleBtn) => {
@@ -649,8 +756,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         chat.minimized = false;
         state.activeChatId = chat.id;
         touchChats(state, [chat]);
-        await persistChatState({ state, db });
-        renderChatRoot({ root, state, commandBus, db, getActiveModule });
+        renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
       });
     });
 
@@ -660,8 +766,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       state.dockCollapsed = false;
       state.activeChatId = chat.id;
       touchChats(state, [chat]);
-      await persistChatState({ state, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
     }));
 
     node.querySelector('[data-chat-delete]')?.addEventListener('click', async () => {
@@ -671,16 +776,6 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       });
       if (!confirmed) return;
       await deleteChat({ state, chat, db });
-      renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    });
-
-    node.querySelector('[data-chat-new]')?.addEventListener('click', async () => {
-      const next = createChat(state.ownerUserId, state.selectedDate);
-      state.chats.push(next);
-      expandChatOnly(state, next);
-      state.dockCollapsed = false;
-      touchChats(state, [next]);
-      await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     });
 
@@ -956,13 +1051,13 @@ async function toggleChatDock({ root, state, commandBus, db, getActiveModule }) 
 }
 
 function toggleChatFromDock(state, chat) {
-  if (!chat.minimized) {
+  if (chat.id === state.activeChatId && !chat.minimized) {
     chat.minimized = true;
-  } else {
-    chat.open = true;
-    chat.minimized = false;
-    state.activeChatId = chat.id;
+    return;
   }
+  chat.open = true;
+  chat.minimized = false;
+  state.activeChatId = chat.id;
 }
 
 async function collapseChatWindow({ root, state, commandBus, db, getActiveModule, target }) {
@@ -1187,9 +1282,6 @@ function chatWindow(chat, activeId, relation = 'center') {
           ${chat.lastTrackingId ? `<span>${escapeHtml(chat.lastTrackingId)}</span>` : '<span>Business OS</span>'}
         </button>
         <div class="ctox-chat-header-actions">
-          <button type="button" data-chat-new aria-label="Neuer Chat">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-          </button>
           <button type="button" data-chat-maximize aria-label="Chat maximieren">
             ${chat.maximized 
               ? `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"></polyline><polyline points="20 10 14 10 14 4"></polyline><line x1="14" y1="10" x2="21" y2="3"></line><line x1="10" y1="14" x2="3" y2="21"></line></svg>` 
@@ -1217,6 +1309,200 @@ function chatWindow(chat, activeId, relation = 'center') {
       </div>
       ${bottomHtml}
     </section>
+  `;
+}
+
+function selectVisibleChats(openChats, activeChat) {
+  if (openChats.length <= MAX_RENDERED_CHAT_TABS) return openChats;
+  const activeIndex = Math.max(0, openChats.findIndex((chat) => chat.id === activeChat?.id));
+  const half = Math.floor(MAX_RENDERED_CHAT_TABS / 2);
+  const start = Math.max(0, Math.min(activeIndex - half, openChats.length - MAX_RENDERED_CHAT_TABS));
+  return openChats.slice(start, start + MAX_RENDERED_CHAT_TABS);
+}
+
+function chatWorkloadForDate(chats) {
+  const byStatus = new Map();
+  const byModule = new Map();
+  const bySource = new Map();
+  const byHour = new Map();
+  for (const chat of chats) {
+    const status = getTaskState(chat);
+    const moduleName = chat.contextMeta?.module || 'ctox';
+    const source = chatSource(chat);
+    const hour = String(new Date(chat.createdAt || Date.now()).getHours()).padStart(2, '0');
+    byStatus.set(status, (byStatus.get(status) || 0) + 1);
+    byModule.set(moduleName, (byModule.get(moduleName) || 0) + 1);
+    bySource.set(source, (bySource.get(source) || 0) + 1);
+    byHour.set(hour, (byHour.get(hour) || 0) + 1);
+  }
+  return {
+    total: chats.length,
+    byStatus,
+    byModule,
+    bySource,
+    byHour,
+  };
+}
+
+function formatCompactCount(count) {
+  const value = Number(count) || 0;
+  if (value >= 1000) return `${Math.floor(value / 100) / 10}k`;
+  return String(value);
+}
+
+function chatOverflowItem(hiddenCount, active) {
+  return `
+    <button class="ctox-chat-overflow-chip ${active ? 'is-active' : ''}" type="button" data-chat-overflow-open aria-label="${escapeAttr(hiddenCount)} weitere Chats anzeigen">
+      <span>+${formatCompactCount(hiddenCount)}</span>
+      <small>mehr</small>
+    </button>
+  `;
+}
+
+function chatBusyPanel({ chats, selectedDate, state }) {
+  const filters = normalizeChatListFilter(state.chatListFilter);
+  const stats = chatWorkloadForDate(chats);
+  const filtered = filterBusyChats(chats, filters);
+  const statusOptions = ['all', ...Array.from(stats.byStatus.keys()).sort()];
+  const moduleOptions = ['all', ...Array.from(stats.byModule.keys()).sort()];
+  const sourceOptions = ['all', ...Array.from(stats.bySource.keys()).sort()];
+  const hourOptions = ['all', ...Array.from(stats.byHour.keys()).sort((a, b) => Number(a) - Number(b))];
+  const rows = filtered.slice(0, MAX_BUSY_LIST_ITEMS);
+  const remaining = Math.max(0, filtered.length - rows.length);
+  return `
+    <section class="ctox-chat-busy-panel" data-chat-busy-panel aria-label="Chatliste fuer ${escapeAttr(formatGermanDateLabel(selectedDate))}">
+      <header>
+        <div>
+          <strong>${escapeHtml(formatGermanDateLabel(selectedDate))}</strong>
+          <span>${formatCompactCount(stats.total)} Tasks, ${formatCompactCount(filtered.length)} sichtbar</span>
+        </div>
+        <button type="button" data-chat-overflow-close aria-label="Chatliste schliessen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </header>
+      <div class="ctox-chat-busy-stats">
+        ${busyStatMarkup('total', stats.total)}
+        ${Array.from(stats.byStatus.entries()).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([status, count]) => busyStatMarkup(status, count)).join('')}
+      </div>
+      <div class="ctox-chat-busy-filters">
+        <select data-chat-list-filter="status" aria-label="Status filtern">
+          ${statusOptions.map((value) => `<option value="${escapeAttr(value)}" ${filters.status === value ? 'selected' : ''}>${escapeHtml(value === 'all' ? 'Alle Status' : value)}</option>`).join('')}
+        </select>
+        <select data-chat-list-filter="module" aria-label="Modul filtern">
+          ${moduleOptions.map((value) => `<option value="${escapeAttr(value)}" ${filters.module === value ? 'selected' : ''}>${escapeHtml(value === 'all' ? 'Alle Module' : value)}</option>`).join('')}
+        </select>
+        <select data-chat-list-filter="source" aria-label="Quelle filtern">
+          ${sourceOptions.map((value) => `<option value="${escapeAttr(value)}" ${filters.source === value ? 'selected' : ''}>${escapeHtml(value === 'all' ? 'Alle Quellen' : value)}</option>`).join('')}
+        </select>
+        <select data-chat-list-filter="hour" aria-label="Stunde filtern">
+          ${hourOptions.map((value) => `<option value="${escapeAttr(value)}" ${filters.hour === value ? 'selected' : ''}>${escapeHtml(value === 'all' ? 'Alle Stunden' : `${value}:00`)}</option>`).join('')}
+        </select>
+        <input type="search" data-chat-list-filter="text" value="${escapeAttr(filters.text)}" placeholder="Suchen" aria-label="Chats suchen" />
+      </div>
+      <div class="ctox-chat-busy-list" data-chat-busy-list>
+        ${rows.map((chat) => busyChatRow(chat, state.activeChatId)).join('')}
+        ${remaining > 0 ? `<div class="ctox-chat-busy-more">${formatCompactCount(remaining)} weitere Treffer durch Filter eingrenzen</div>` : ''}
+      </div>
+    </section>
+  `;
+}
+
+function dateWorkloadPanel({ chats, selectedDate }) {
+  const days = workloadDaysAround(chats, selectedDate, 28);
+  const max = Math.max(1, ...days.map((day) => day.count));
+  const selected = days.find((day) => day.date === selectedDate);
+  return `
+    <section class="ctox-date-workload-panel" data-chat-date-workload-panel aria-label="Task-Aufkommen nach Datum">
+      <header>
+        <div>
+          <strong>${escapeHtml(formatGermanDateLabel(selectedDate))}</strong>
+          <span>${formatCompactCount(selected?.count || 0)} Tasks am ausgewaehlten Tag</span>
+        </div>
+        <button type="button" data-chat-date-workload-close aria-label="Datumsauswahl schliessen">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </header>
+      <input type="date" data-chat-date-picker-panel value="${escapeAttr(selectedDate)}" aria-label="Datum wählen" />
+      <div class="ctox-date-heatmap" role="list" aria-label="Task-Aufkommen der umliegenden Tage">
+        ${days.map((day) => dateHeatmapDay(day, max, selectedDate)).join('')}
+      </div>
+    </section>
+  `;
+}
+
+function workloadDaysAround(chats, selectedDate, count) {
+  const byDate = new Map();
+  for (const chat of chats) {
+    const date = getLocalDateString(chat.createdAt || Date.now());
+    byDate.set(date, (byDate.get(date) || 0) + 1);
+  }
+  const selected = dateFromLocalDateString(selectedDate);
+  const before = Math.floor(count / 2);
+  return Array.from({ length: count }, (_, index) => {
+    const date = new Date(selected);
+    date.setDate(selected.getDate() + index - before);
+    const dateStr = getLocalDateString(date);
+    return { date: dateStr, count: byDate.get(dateStr) || 0 };
+  });
+}
+
+function dateHeatmapDay(day, max, selectedDate) {
+  const intensity = day.count <= 0 ? 0 : Math.max(1, Math.ceil((day.count / max) * 4));
+  const date = dateFromLocalDateString(day.date);
+  const label = `${formatGermanDateLabel(day.date)}: ${day.count} Tasks`;
+  return `
+    <button class="ctox-date-heatmap-day ${day.date === selectedDate ? 'is-selected' : ''}" type="button" data-chat-date-select="${escapeAttr(day.date)}" data-intensity="${intensity}" aria-label="${escapeAttr(label)}">
+      <span>${date.getDate()}</span>
+      <b>${day.count ? formatCompactCount(day.count) : ''}</b>
+    </button>
+  `;
+}
+
+function normalizeChatListFilter(filter = {}) {
+  return {
+    status: filter.status || 'all',
+    module: filter.module || 'all',
+    source: filter.source || 'all',
+    hour: filter.hour || 'all',
+    text: String(filter.text || '').trim().toLowerCase(),
+  };
+}
+
+function filterBusyChats(chats, filters) {
+  return chats.filter((chat) => {
+    const status = getTaskState(chat);
+    const moduleName = chat.contextMeta?.module || 'ctox';
+    const source = chatSource(chat);
+    const hour = String(new Date(chat.createdAt || Date.now()).getHours()).padStart(2, '0');
+    const haystack = `${chat.title || ''} ${moduleName} ${source} ${status} ${(chat.messages || []).map((message) => message.text || '').join(' ')}`.toLowerCase();
+    return (filters.status === 'all' || status === filters.status)
+      && (filters.module === 'all' || moduleName === filters.module)
+      && (filters.source === 'all' || source === filters.source)
+      && (filters.hour === 'all' || hour === filters.hour)
+      && (!filters.text || haystack.includes(filters.text));
+  });
+}
+
+function chatSource(chat) {
+  return chat.contextMeta?.source_module || chat.contextMeta?.source_title || chat.contextMeta?.module || 'ctox';
+}
+
+function busyStatMarkup(label, count) {
+  return `<span><b>${formatCompactCount(count)}</b><small>${escapeHtml(label)}</small></span>`;
+}
+
+function busyChatRow(chat, activeId) {
+  const status = getTaskState(chat);
+  const moduleName = chat.contextMeta?.module || 'ctox';
+  const time = getFormattedTime(chat.createdAt || Date.now());
+  return `
+    <button class="ctox-chat-busy-row ${chat.id === activeId ? 'is-active' : ''}" type="button" data-chat-list-focus="${escapeAttr(chat.id)}">
+      <span class="ctox-chat-busy-time">${escapeHtml(time)}</span>
+      <span class="ctox-chat-busy-main">
+        <strong>${escapeHtml(chat.title || 'CTOX')}</strong>
+        <small>${escapeHtml(moduleName)} · ${escapeHtml(status)}</small>
+      </span>
+    </button>
   `;
 }
 
@@ -1599,6 +1885,11 @@ function getLocalDateString(timestampOrDate = Date.now()) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function dateFromLocalDateString(dateStr) {
+  const [y, m, d] = String(dateStr || getLocalDateString(Date.now())).split('-').map(Number);
+  return new Date(y || new Date().getFullYear(), (m || 1) - 1, d || 1);
+}
+
 function formatGermanDateLabel(dateStr) {
   const todayStr = getLocalDateString(Date.now());
   
@@ -1957,11 +2248,12 @@ function installChatStyles() {
       pointer-events: auto;
       grid-row: 2;
       display: grid;
-      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      grid-template-columns: 88px 115px 34px;
       align-items: center;
       gap: 8px;
       min-width: 0;
-      width: 100%;
+      width: max-content;
+      max-width: 100%;
       padding: 6px;
       border: 1px solid color-mix(in srgb, var(--line) 35%, transparent);
       border-radius: 14px;
@@ -1973,6 +2265,26 @@ function installChatStyles() {
     }
     .ctox-chat-dock:hover {
       border-color: color-mix(in srgb, var(--line) 55%, transparent);
+    }
+    .ctox-chat-dock.has-visible-chats {
+      grid-template-columns: 88px 115px minmax(136px, auto) 34px;
+    }
+    .ctox-chat-dock.has-nav {
+      grid-template-columns: 88px 115px 28px minmax(0, auto) 28px 34px;
+    }
+    .ctox-chat-dock.has-many-chats {
+      grid-template-columns: 88px 115px 28px minmax(0, 1fr) 28px 34px;
+      width: 100%;
+    }
+    .ctox-chat-dock.has-one-chat .ctox-chat-strip {
+      width: 148px;
+    }
+    .ctox-chat-dock.has-few-chats .ctox-chat-strip {
+      width: auto;
+      max-width: min(760px, calc(100vw - 420px));
+    }
+    .ctox-chat-dock.has-many-chats .ctox-chat-strip {
+      width: auto;
     }
     .ctox-chat-date-pill {
       display: inline-flex;
@@ -2040,6 +2352,19 @@ function installChatStyles() {
       overflow: hidden;
       text-overflow: ellipsis;
       color: var(--text);
+    }
+    .ctox-date-workload-badge {
+      display: inline-grid;
+      place-items: center;
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--accent) 18%, transparent);
+      color: var(--accent);
+      font-size: 9px;
+      font-weight: 800;
+      line-height: 1;
     }
     .ctox-date-picker-trigger svg {
       flex-shrink: 0;
@@ -2162,6 +2487,283 @@ function installChatStyles() {
     }
     .ctox-chat-strip::-webkit-scrollbar {
       display: none;
+    }
+    .ctox-chat-overflow-chip {
+      flex: 0 0 78px;
+      display: grid;
+      grid-template-columns: 1fr;
+      align-items: center;
+      justify-items: center;
+      gap: 0;
+      height: 34px;
+      border: 1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+      border-radius: 10px;
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      color: var(--accent);
+      cursor: pointer;
+      transition: transform 0.25s var(--spring-bounce), background-color 0.2s ease, border-color 0.2s ease;
+    }
+    .ctox-chat-overflow-chip span {
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .ctox-chat-overflow-chip small {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 740;
+      line-height: 1;
+    }
+    .ctox-chat-overflow-chip:hover,
+    .ctox-chat-overflow-chip.is-active {
+      transform: translateY(-1px);
+      background: color-mix(in srgb, var(--accent) 18%, var(--surface-2));
+      border-color: var(--accent);
+    }
+    .ctox-chat-busy-panel {
+      position: absolute;
+      left: 0;
+      bottom: 52px;
+      width: min(520px, calc(100vw - 132px));
+      max-height: min(520px, calc(100vh - 180px));
+      pointer-events: auto;
+      display: grid;
+      grid-template-rows: auto auto auto minmax(0, 1fr);
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      box-shadow: 0 20px 52px rgba(0, 0, 0, 0.22);
+      color: var(--text);
+      z-index: 70;
+    }
+    .ctox-date-workload-panel {
+      position: absolute;
+      left: 104px;
+      bottom: 52px;
+      width: min(360px, calc(100vw - 132px));
+      pointer-events: auto;
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+      border-radius: 14px;
+      background: color-mix(in srgb, var(--surface) 90%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+      box-shadow: 0 20px 52px rgba(0, 0, 0, 0.22);
+      color: var(--text);
+      z-index: 71;
+    }
+    .ctox-date-workload-panel header,
+    .ctox-chat-busy-panel header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .ctox-date-workload-panel header div,
+    .ctox-chat-busy-panel header div {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+    .ctox-date-workload-panel header strong,
+    .ctox-chat-busy-panel header strong {
+      font-size: 13px;
+      font-weight: 820;
+    }
+    .ctox-date-workload-panel header span,
+    .ctox-chat-busy-panel header span {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 680;
+    }
+    .ctox-date-workload-panel header button,
+    .ctox-chat-busy-panel header button {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid color-mix(in srgb, var(--line) 36%, transparent);
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--surface-2) 40%, transparent);
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .ctox-date-workload-panel input {
+      height: 32px;
+      border: 1px solid color-mix(in srgb, var(--line) 34%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 65%, transparent);
+      color: var(--text);
+      padding: 0 8px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 680;
+      color-scheme: dark;
+    }
+    .ctox-date-heatmap {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 5px;
+    }
+    .ctox-date-heatmap-day {
+      aspect-ratio: 1;
+      min-width: 0;
+      display: grid;
+      place-items: center;
+      gap: 1px;
+      border: 1px solid color-mix(in srgb, var(--line) 26%, transparent);
+      border-radius: 7px;
+      background: color-mix(in srgb, var(--surface-2) 28%, transparent);
+      color: var(--muted);
+      cursor: pointer;
+      padding: 2px;
+    }
+    .ctox-date-heatmap-day[data-intensity="1"] {
+      background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+    }
+    .ctox-date-heatmap-day[data-intensity="2"] {
+      background: color-mix(in srgb, var(--accent) 26%, var(--surface-2));
+    }
+    .ctox-date-heatmap-day[data-intensity="3"] {
+      background: color-mix(in srgb, var(--accent) 38%, var(--surface-2));
+      color: var(--text);
+    }
+    .ctox-date-heatmap-day[data-intensity="4"] {
+      background: color-mix(in srgb, var(--accent) 54%, var(--surface-2));
+      color: var(--text);
+      border-color: color-mix(in srgb, var(--accent) 72%, transparent);
+    }
+    .ctox-date-heatmap-day.is-selected {
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
+      color: var(--text);
+    }
+    .ctox-date-heatmap-day span {
+      font-size: 10px;
+      font-weight: 780;
+      line-height: 1;
+    }
+    .ctox-date-heatmap-day b {
+      min-height: 9px;
+      color: currentColor;
+      font-size: 8px;
+      font-weight: 800;
+      line-height: 1;
+    }
+    .ctox-chat-busy-stats {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .ctox-chat-busy-stats::-webkit-scrollbar {
+      display: none;
+    }
+    .ctox-chat-busy-stats span {
+      flex: 0 0 auto;
+      display: grid;
+      min-width: 58px;
+      gap: 1px;
+      padding: 6px 8px;
+      border: 1px solid color-mix(in srgb, var(--line) 28%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface-2) 34%, transparent);
+    }
+    .ctox-chat-busy-stats b {
+      font-size: 13px;
+      line-height: 1;
+    }
+    .ctox-chat-busy-stats small {
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 740;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .ctox-chat-busy-filters {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .ctox-chat-busy-filters input {
+      grid-column: 1 / -1;
+    }
+    .ctox-chat-busy-filters select,
+    .ctox-chat-busy-filters input {
+      min-width: 0;
+      height: 30px;
+      border: 1px solid color-mix(in srgb, var(--line) 34%, transparent);
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--surface) 65%, transparent);
+      color: var(--text);
+      padding: 0 8px;
+      font: inherit;
+      font-size: 11px;
+      font-weight: 680;
+      outline: none;
+    }
+    .ctox-chat-busy-list {
+      min-height: 0;
+      overflow-y: auto;
+      display: grid;
+      align-content: start;
+      gap: 4px;
+      padding-right: 2px;
+    }
+    .ctox-chat-busy-row {
+      display: grid;
+      grid-template-columns: 44px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-height: 38px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      padding: 5px 7px;
+      cursor: pointer;
+    }
+    .ctox-chat-busy-row:hover,
+    .ctox-chat-busy-row.is-active {
+      border-color: color-mix(in srgb, var(--accent) 48%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+    }
+    .ctox-chat-busy-time {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 760;
+    }
+    .ctox-chat-busy-main {
+      display: grid;
+      gap: 1px;
+      min-width: 0;
+    }
+    .ctox-chat-busy-main strong,
+    .ctox-chat-busy-main small {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .ctox-chat-busy-main strong {
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .ctox-chat-busy-main small,
+    .ctox-chat-busy-more {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 680;
+    }
+    .ctox-chat-busy-more {
+      padding: 8px;
+      text-align: center;
     }
     .ctox-chat-chip {
       flex: 0 0 136px;
@@ -2471,6 +3073,15 @@ function installChatStyles() {
     }
     .ctox-chat-window:not(.is-active) * {
       pointer-events: none !important;
+    }
+    .ctox-chat-window:not(.is-active) .ctox-chat-header-actions,
+    .ctox-chat-window:not(.is-active) .ctox-chat-form,
+    .ctox-chat-window:not(.is-active) .ctox-followup-container,
+    .ctox-chat-window:not(.is-active) .ctox-chat-scheduler-card,
+    .ctox-chat-window:not(.is-active) .ctox-chat-delegation-card,
+    .ctox-chat-window:not(.is-active) .ctox-chat-attachments-preview {
+      opacity: 0;
+      visibility: hidden;
     }
     .ctox-chat-window:not(.is-active):hover {
       opacity: 0.85;
@@ -3136,15 +3747,29 @@ function installChatStyles() {
         justify-content: flex-start !important;
         gap: 6px !important;
         overflow-x: auto !important;
-        width: 100% !important;
+        width: max-content !important;
+        max-width: 100% !important;
         scrollbar-width: none !important;
+      }
+      .ctox-chat-dock.has-many-chats {
+        width: 100% !important;
       }
       .ctox-chat-dock::-webkit-scrollbar {
         display: none !important;
       }
       .ctox-chat-strip {
-        flex: 1 1 auto !important;
+        flex: 0 1 auto !important;
         min-width: 0 !important;
+      }
+      .ctox-chat-dock.has-many-chats .ctox-chat-strip {
+        flex: 1 1 auto !important;
+      }
+      .ctox-chat-busy-panel {
+        width: calc(100vw - 36px) !important;
+      }
+      .ctox-date-workload-panel {
+        left: 0 !important;
+        width: calc(100vw - 36px) !important;
       }
       .ctox-chat-stage {
         display: block !important;

@@ -106,6 +106,7 @@ jobs:
           node --check src/apps/business-os/scripts/assert-sync-error-classification.mjs
           node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
+          node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
           node src/apps/business-os/scripts/assert-sync-error-classification.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
