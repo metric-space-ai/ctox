@@ -4,7 +4,6 @@
   "description": "Knowledge-backed research dashboards with source scoring, portfolio maps, and CTOX systematic-research handoff.",
   "entry": "modules/research/index.html",
   "collections": [
-    "business_commands",
     "ctox_queue_tasks",
     "research_tasks",
     "research_runs",
