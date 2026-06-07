@@ -245,6 +245,26 @@ try {
     expect(scroll.top > 0, 'active message pane must scroll vertically');
   });
 
+  await viewportScenario(page, 'viewport-1440-eight-chats', { width: 1440, height: 820 }, { count: 8, activeIndex: 4 }, (m) => {
+    expect(m.dockWidth <= m.viewportWidth - 90, `1440px dock must leave shell space for eight chats, got ${m.dockWidth}`);
+    expect(m.chipCount === 8, `1440px eight-chat state should render eight chips, got ${m.chipCount}`);
+  });
+
+  await viewportScenario(page, 'viewport-1024-eight-chats', { width: 1024, height: 760 }, { count: 8, activeIndex: 4 }, (m) => {
+    expect(m.dockWidth <= m.viewportWidth - 30, `1024px dock must fit shell, got ${m.dockWidth}`);
+    expect(m.chipCount === 8, `1024px eight-chat state should render eight chips, got ${m.chipCount}`);
+  });
+
+  await viewportScenario(page, 'viewport-760-eight-chats', { width: 760, height: 760 }, { count: 8, activeIndex: 4 }, (m) => {
+    expect(m.dockWidth <= m.viewportWidth - 30, `760px dock must fit mobile shell, got ${m.dockWidth}`);
+    expect(m.windowCount <= 8, `760px state should not duplicate windows, got ${m.windowCount}`);
+  });
+
+  await viewportScenario(page, 'viewport-390-one-chat', { width: 390, height: 760 }, { count: 1 }, (m) => {
+    expect(m.dockWidth <= m.viewportWidth - 30, `390px one-chat dock must fit mobile shell, got ${m.dockWidth}`);
+    expect(m.navCount === 0, `390px one-chat state must not show chat nav, got ${m.navCount}`);
+  });
+
   const blockingConsole = consoleEvents.filter((event) => {
     if (event.type === 'warning') return false;
     if (/favicon/i.test(event.text || '')) return false;
@@ -274,6 +294,12 @@ async function scenario(page, name, seedOptions, assertions) {
   const failuresBefore = failures.length;
   await assertions(metrics);
   if (failures.length === failuresBefore) results.push({ scenario: `${name}:pass` });
+}
+
+async function viewportScenario(page, name, viewport, seedOptions, assertions) {
+  await page.setViewportSize(viewport);
+  await scenario(page, name, seedOptions, assertions);
+  await page.setViewportSize({ width: 2048, height: 900 });
 }
 
 function expect(condition, message) {

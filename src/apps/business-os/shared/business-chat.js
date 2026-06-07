@@ -3747,8 +3747,9 @@ function installChatStyles() {
         justify-content: flex-start !important;
         gap: 6px !important;
         overflow-x: auto !important;
-        width: max-content !important;
+        width: 100% !important;
         max-width: 100% !important;
+        box-sizing: border-box !important;
         scrollbar-width: none !important;
       }
       .ctox-chat-dock.has-many-chats {
