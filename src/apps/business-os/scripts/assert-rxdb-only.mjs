@@ -361,6 +361,9 @@ function assertAdvancedStatusInterfaceExists() {
   if (!/protocol/.test(syncContent) || !/ctox-rxdb-browser-v1/.test(syncContent) || !/ctox-file-chunks-v1/.test(syncContent)) {
     offenders.push('src/apps/business-os/shared/sync.js: missing protocol capability diagnostics');
   }
+  if (!/isReadOnlyProjectionCollection[\s\S]{0,500}knowledge_tables/.test(syncContent)) {
+    offenders.push('src/apps/business-os/shared/sync.js: knowledge_tables must remain pull-only because the native knowledge projection is the single writer');
+  }
   for (const marker of [
     'bootTimings',
     'shellVisibleMs',

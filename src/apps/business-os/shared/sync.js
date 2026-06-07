@@ -1597,5 +1597,6 @@ function isReadOnlyProjectionCollection(collection) {
     || collection === 'business_users'
     || collection === 'channel_pairing_state'
     || collection === 'communication_accounts'
+    || collection === 'knowledge_tables'
     || collection === 'ctox_runtime_settings';
 }
