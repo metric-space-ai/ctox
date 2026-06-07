@@ -3134,15 +3134,26 @@ fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Valu
 }
 
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
-    [
+    let mut candidates = Vec::new();
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "runtime")
+    {
+        if let Some(release_root) = root.parent() {
+            candidates.push(release_root.join("src").join("apps").join("business-os"));
+        }
+    }
+    candidates.extend([
         root.join("src").join("apps").join("business-os"),
         root.join("apps").join("business-os"),
         root.join("business-os"),
         root.to_path_buf(),
-    ]
-    .into_iter()
-    .find(|candidate| candidate.join("index.html").is_file())
-    .context("Business OS app root not found")
+    ]);
+    candidates
+        .into_iter()
+        .find(|candidate| candidate.join("index.html").is_file())
+        .context("Business OS app root not found")
 }
 
 fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
@@ -22254,6 +22265,43 @@ mod tests {
             research.get("entry").and_then(Value::as_str),
             Some("modules/research/index.html")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn module_catalog_prefers_release_source_over_stale_runtime_app_root() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let release_root = temp.path().join("release");
+        let runtime_root = release_root.join("runtime");
+        let stale_app_root = runtime_root.join("business-os");
+        let release_app_root = release_root.join("src/apps/business-os");
+
+        fs::create_dir_all(stale_app_root.join("modules/ctox"))?;
+        fs::create_dir_all(release_app_root.join("modules/ctox"))?;
+        fs::create_dir_all(release_app_root.join("modules/research"))?;
+        fs::write(stale_app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(release_app_root.join("index.html"), "<!doctype html>")?;
+        fs::write(
+            stale_app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            release_app_root.join("modules/ctox/module.json"),
+            r#"{"id":"ctox","title":"CTOX","entry":"modules/ctox/index.html","install_scope":"core"}"#,
+        )?;
+        fs::write(
+            release_app_root.join("modules/research/module.json"),
+            r#"{"id":"research","title":"Web Research","entry":"modules/research/index.html","install_scope":"local"}"#,
+        )?;
+
+        let catalog = module_catalog_for_rxdb(&runtime_root)?;
+        let modules = catalog
+            .get("modules")
+            .and_then(Value::as_array)
+            .context("catalog modules")?;
+        assert!(modules
+            .iter()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
         Ok(())
     }
 
