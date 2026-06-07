@@ -4601,6 +4601,17 @@ fn seed_session_user(conn: &Connection, session: &BusinessOsSession) -> anyhow::
     Ok(())
 }
 
+pub fn remember_authenticated_session_user(
+    root: &Path,
+    session: &BusinessOsSession,
+) -> anyhow::Result<()> {
+    if !session.authenticated {
+        return Ok(());
+    }
+    let conn = open_store(root)?;
+    seed_session_user(&conn, session)
+}
+
 fn query_users(conn: &Connection) -> anyhow::Result<Vec<BusinessOsUser>> {
     let mut stmt = conn.prepare(
         "SELECT user_id, display_name, role, active, created_at_ms, updated_at_ms

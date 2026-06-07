@@ -270,7 +270,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             )?;
         }
         (Method::Post, "/login") => {
-            handle_login_request(request)?;
+            handle_login_request(root, request)?;
         }
         (Method::Get, "/logout") => {
             respond_redirect_with_cookie(request, "/", "", 0)?;
@@ -1284,7 +1284,7 @@ fn header_value(request: &Request, name: &str) -> Option<String> {
         .map(|header| header.value.as_str().to_owned())
 }
 
-fn handle_login_request(mut request: Request) -> anyhow::Result<()> {
+fn handle_login_request(root: &Path, mut request: Request) -> anyhow::Result<()> {
     // Fetch-based logins ask for JSON so the login gate can show an inline error
     // without a full-page reload that flashes the workspace startup loader.
     let wants_json = header_value(&request, "Accept")
@@ -1305,6 +1305,7 @@ fn handle_login_request(mut request: Request) -> anyhow::Result<()> {
     );
     let session = store::session(Some(&auth_header), None);
     if session.authenticated {
+        store::remember_authenticated_session_user(root, &session)?;
         let cookie =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credentials.as_bytes());
         if wants_json {
@@ -2750,6 +2751,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     let mime = mime_for(&target);
     if target == app_root.join("index.html") {
         let session = request_session(&request);
+        store::remember_authenticated_session_user(root, &session)?;
         let sync_config = if session.authenticated {
             Some(store::sync_config(root)?)
         } else {

@@ -260,6 +260,47 @@ This must happen for success, failure, panic, timeout, and review-terminal failu
 
 ## Phase Log
 
+### Phase 32 - Public catalog cleanup E2E and SKF module-scope diagnosis
+
+Status: partial pass, not production ready.
+
+Evidence:
+
+- Browser E2E against `skf.ctox.dev` after `app.js?v=20260606-rxdb-public-catalog2` logged in and rendered CTOX data without new `/api/business-os/commands` requests.
+- No console warnings/errors remained from `ctox.source.list_snapshots`; server command count for that command stayed unchanged during the run.
+- The active server RxDB `business_module_catalog` contains 12 modules and does not contain `research`.
+- The release files contain `src/apps/business-os/modules/research/module.json`, but it is `install_scope: "store"` and not present under `installed-modules`.
+- `installed-modules` on SKF currently contains `matching` only.
+- `business_users` on SKF is empty even though the browser displays `Michael Welsch@SKF` as Admin.
+- Direct canonical Business OS command dispatch for `ctox.app_store.install` is correctly rejected with `chef or admin role required` because the server has no trusted Business OS admin user.
+
+Conclusion:
+
+- `research` is invisible because the server-projected RxDB module catalog is missing the installed Store module, not because the browser should seed packaged modules.
+- App-Store installation through the RxDB command bus is blocked by missing trusted server-side user projection.
+- Production readiness remains blocked until the login/launch user is persisted server-side, `research` is installed for SKF through the canonical App-Store path, and browser E2E proves Documents, Web Research, task processing, bug reporter, and logout.
+
+### Phase 33 - General login user projection fix
+
+Status: implemented locally, not yet deployed.
+
+Change:
+
+- `src/core/business_os/store.rs` now exposes `remember_authenticated_session_user`, a narrow wrapper around the existing `business_users` seeding path.
+- `src/core/business_os/server.rs` calls it after successful `/login` and when serving the authenticated shell index.
+- This keeps the existing trust model: RxDB commands still trust only server-known `business_users`; the browser-provided `is_admin` flag remains insufficient by itself.
+
+Verification:
+
+- `cargo check -q` passed with existing warnings only.
+- `node src/apps/business-os/scripts/assert-rxdb-only.mjs` passed.
+- `node --check src/apps/business-os/app.js` passed.
+- `git diff --check` passed.
+
+Remaining:
+
+- Push to `main`, deploy through `ctox upgrade --dev`, then repair/seed the SKF admin user and install `research` through the canonical App-Store command path.
+
 ### Phase 21: Production startup evidence after correct tenant login
 
 Status: Completed, not production ready.
@@ -503,3 +544,4 @@ Required scenarios:
 | 2026-06-07 02:30 CEST | Phase 28 local tenant-scope fix implemented. Production server verification shows active `business_module_catalog` has `module_count=12`, while the fresh browser still rendered `21` modules because the public WebDeploy shell inserted/merged the packaged `modules/registry.json` catalog into local RxDB before the real server projection governed startup. `app.js` now disables packaged module catalog seeding on public/non-local WebDeploy surfaces and only allows the server-projected RxDB catalog to define visible modules; the browser DB name was bumped to `ctox_business_os_v11` and the `app.js` cache key was bumped to prevent stale local widened catalogs from surviving. Local gates passed: `node src/apps/business-os/scripts/assert-rxdb-only.mjs`, `node --check src/apps/business-os/app.js`, and `git diff --check`. Production remains not ready until this is pushed, deployed through `ctox upgrade --dev`, and fresh browser E2E proves tenant scope, data visibility, command queue processing, result navigation, bug reporter send, research continue, logout, and console/network health. |
 | 2026-06-07 02:59 CEST | Phase 29 deployed the tenant-scope fix through the required `ctox upgrade --dev` path. Commit `b0c3c621` is active as release `branch-main-20260607T003215Z`; previous release was `branch-main-20260606T234919Z`; upgrade backup is `/home/ubuntu/.local/state/ctox/backups/update-20260607T003219Z`; active `current` resolves to `/home/ubuntu/.local/lib/ctox/releases/branch-main-20260607T003215Z`. Runtime verification reports `ctox.service` active, Business OS `ok=true`, `runtime=native-rust`, `sync.transport=webrtc`, `http_bridge_available=false`, fresh native RxDB peer heartbeat, data-plane ready, server-side `business_module_catalog.module_count=12`, served `app.js?v=20260606-rxdb-public-catalog1`, and browser DB marker `ctox_business_os_v11`. Production remains not ready until fresh browser E2E passes. |
 | 2026-06-07 03:18 CEST | Phase 30 browser E2E after Phase 29 is improved but still not production ready. A fresh Playwright login reaches the authenticated CTOX UI, shows replicated CTOX task data, emits no `/api/business-os/commands` requests, and no page errors. Tenant scope is visibly narrower than the previous 21-module topbar, but the E2E found a remaining command-contract violation: opening CTOX triggers `ctox.source.list_snapshots` for the module version dropdown; the server completes that `business_commands` row without `task_id`, so the frontend correctly warns that no authoritative `ctox_queue_tasks` projection exists. Local fix implemented: `loadModuleVersionsDropdown` no longer dispatches the read-only snapshot listing through the task-backed RxDB command bus; it only reads `business_module_catalog.version_states`, which is already replicated over RxDB. Local gates passed: `node src/apps/business-os/scripts/assert-rxdb-only.mjs`, `node --check src/apps/business-os/app.js`, and `git diff --check`. Production remains not ready until this is pushed, deployed with `ctox upgrade --dev`, and fresh browser E2E passes command processing, data apps, logout, and console/network checks. |
+| 2026-06-07 03:51 CEST | Phase 31 deployed the CommandBus cleanup through the required `ctox upgrade --dev` path. Commit `e1a2f4ad` is active as release `branch-main-20260607T012242Z`; previous release was `branch-main-20260607T003215Z`; upgrade backup is `/home/ubuntu/.local/state/ctox/backups/update-20260607T012246Z`; active `current` resolves to `/home/ubuntu/.local/lib/ctox/releases/branch-main-20260607T012242Z`. Runtime verification reports `ctox.service` active, Business OS `ok=true`, `runtime=native-rust`, `sync.transport=webrtc`, `http_bridge_available=false`, native RxDB peer running with fresh heartbeat, server-side `business_module_catalog.module_count=12`, and served `app.js?v=20260606-rxdb-public-catalog2`. Production remains not ready until fresh browser E2E passes. |
