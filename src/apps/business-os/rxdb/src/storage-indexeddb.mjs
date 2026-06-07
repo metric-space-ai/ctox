@@ -65,6 +65,10 @@ export class CtoxIndexedDbCollection {
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
+    let localWriteLwtFloor = null;
+    if (!replicationOrigin?.role) {
+      localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
+    }
 
     for (const row of rows) {
       const doc = row?.document || row;
@@ -73,7 +77,11 @@ export class CtoxIndexedDbCollection {
         error.push({ row, error: 'missing primary key' });
         continue;
       }
-      const lwt = documentLwt(doc, now);
+      let lwt = documentLwt(doc, now);
+      if (localWriteLwtFloor !== null) {
+        lwt = Math.max(lwt, localWriteLwtFloor);
+        localWriteLwtFloor = lwt + 1;
+      }
       const stored = {
         collection: this.name,
         id,
@@ -338,6 +346,19 @@ function documentLwt(doc = {}, fallback = Date.now()) {
     Number(doc.updatedAtMs || 0),
   ].filter((value) => Number.isFinite(value) && value > 0);
   return values.length ? Math.max(...values) : Number(fallback || Date.now());
+}
+
+async function latestCollectionLwtInTransaction(store, collection) {
+  const index = store.index('collectionLwtId');
+  const range = IDBKeyRange.bound(
+    [collection, 0, ''],
+    [collection, Number.MAX_SAFE_INTEGER, '\uffff'],
+    false,
+    false,
+  );
+  const record = await firstCursorValue(index.openCursor(range, 'prev'));
+  const latest = Number(record?.lwt || 0);
+  return Number.isFinite(latest) && latest > 0 ? latest : 0;
 }
 
 function sanitizeReplicationOrigin(origin) {

@@ -439,6 +439,9 @@ function waitForEvent(emitter, type, timeoutMs = 1e4) {
 var DB_VERSION = 1;
 var DOCUMENT_STORE = "documents";
 var OPEN_DATABASE_TIMEOUT_MS = 4e3;
+var REPLICATION_SCAN_MULTIPLIER = 50;
+var REPLICATION_MIN_SCAN_LIMIT = 500;
+var REPLICATION_MAX_SCAN_LIMIT = 5e3;
 async function openCtoxIndexedDbStorage({ databaseName = "ctox_business_os_js_v1" } = {}) {
   if (!globalThis.indexedDB) {
     throw new Error("indexedDB is required for ctox-rxdb-js storage");
@@ -489,6 +492,10 @@ var CtoxIndexedDbCollection = class {
     const store = tx.objectStore(DOCUMENT_STORE);
     const success = {};
     const error = [];
+    let localWriteLwtFloor = null;
+    if (!replicationOrigin?.role) {
+      localWriteLwtFloor = await latestCollectionLwtInTransaction(store, this.name) + 1;
+    }
     for (const row of rows) {
       const doc = row?.document || row;
       const id = documentId(doc);
@@ -496,7 +503,11 @@ var CtoxIndexedDbCollection = class {
         error.push({ row, error: "missing primary key" });
         continue;
       }
-      const lwt = documentLwt(doc, now);
+      let lwt = documentLwt(doc, now);
+      if (localWriteLwtFloor !== null) {
+        lwt = Math.max(lwt, localWriteLwtFloor);
+        localWriteLwtFloor = lwt + 1;
+      }
       const stored = {
         collection: this.name,
         id,
@@ -612,15 +623,18 @@ var CtoxIndexedDbCollection = class {
     const fromLwt = Number(checkpoint?.lwt || 0);
     const fromId = String(checkpoint?.id || "");
     const excludedOriginRole = String(options?.excludeReplicationOriginRole || "").trim();
+    const scanLimit = replicationScanLimit(limit);
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, fromLwt, fromId], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], true, false);
     const documents = [];
     let nextCheckpoint = checkpoint || null;
+    let scanned = 0;
     await iterateCursor(index.openCursor(range), (cursor) => {
-      if (!cursor || documents.length >= limit) {
+      if (!cursor || documents.length >= limit || scanned >= scanLimit) {
         return false;
       }
+      scanned += 1;
       const record = cursor.value;
       nextCheckpoint = { lwt: record.lwt, id: record.id };
       if (!documentMatchesReplicationOrigin(record.doc, excludedOriginRole)) {
@@ -745,6 +759,18 @@ function documentLwt(doc = {}, fallback = Date.now()) {
   ].filter((value) => Number.isFinite(value) && value > 0);
   return values.length ? Math.max(...values) : Number(fallback || Date.now());
 }
+async function latestCollectionLwtInTransaction(store, collection) {
+  const index = store.index("collectionLwtId");
+  const range = IDBKeyRange.bound(
+    [collection, 0, ""],
+    [collection, Number.MAX_SAFE_INTEGER, "\uFFFF"],
+    false,
+    false
+  );
+  const record = await firstCursorValue(index.openCursor(range, "prev"));
+  const latest = Number(record?.lwt || 0);
+  return Number.isFinite(latest) && latest > 0 ? latest : 0;
+}
 function sanitizeReplicationOrigin(origin) {
   return {
     role: String(origin.role || "").slice(0, 64),
@@ -757,6 +783,13 @@ function documentMatchesReplicationOrigin(doc, excludedOriginRole) {
   if (!excludedOriginRole) return false;
   const origin = doc?._meta?.ctoxReplicationOrigin;
   return origin?.role === excludedOriginRole;
+}
+function replicationScanLimit(limit) {
+  const batchLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
+  return Math.max(
+    REPLICATION_MIN_SCAN_LIMIT,
+    Math.min(REPLICATION_MAX_SCAN_LIMIT, Math.ceil(batchLimit * REPLICATION_SCAN_MULTIPLIER))
+  );
 }
 function normalizeSchemaIndexes(schema = {}) {
   const indexes = Array.isArray(schema?.indexes) ? schema.indexes : [];
@@ -865,6 +898,7 @@ var ctoxIndexedDbStorageTestInternals = {
   indexValuesFor,
   normalizeDocument,
   normalizeSchemaIndexes,
+  replicationScanLimit,
   selectBestIndex,
   shouldAcceptDocumentWrite
 };
