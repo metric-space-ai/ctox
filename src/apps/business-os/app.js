@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-rxdb-sendqueue-drain2';
+const APP_BUILD = '20260606-rxdb-public-catalog1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -20,7 +20,7 @@ const MAX_TRANSIENT_MODULE_SYNC_RETRIES = 3;
 // retry instead of being permanently disabled, so a longer transient failure
 // still recovers on its own without a full app reload.
 const SLOW_MODULE_SYNC_RETRY_MS = 60000;
-const BUSINESS_DB_NAME = 'ctox_business_os_v10';
+const BUSINESS_DB_NAME = 'ctox_business_os_v11';
 const RXDB_BOOTSTRAP_VERSION = `${BUSINESS_DB_NAME}:storage-v1`;
 const CTOX_HEALTH_POLL_MS = 10000;
 const SYNC_RECOVERY_REPAIR_DELAY_MS = 15000;
@@ -5385,12 +5385,13 @@ function isLocalBusinessOsSurface() {
 
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
+  const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
-    allowShellSeed: normalized.allowShellSeed !== false,
+    allowShellSeed,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed: normalized.allowShellSeed !== false }
+    { allowShellSeed }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -5430,6 +5431,16 @@ function applyModuleAllowlist(modules, catalogAllowlist) {
   if (allow.size === 0) return modules; // no restriction configured
   return normalizeModuleList(modules)
     .filter((mod) => allow.has(String(mod?.id || '').trim()));
+}
+
+function allowsPackagedModuleCatalogSeed() {
+  const config = (typeof window !== 'undefined' && window.CTOX_BUSINESS_OS_CONFIG) || null;
+  const hosting = String(config?.app_hosting || config?.appHosting || '').trim();
+  // Public web deployments must render the server-projected RxDB catalog. The
+  // packaged registry is code metadata only there; inserting it locally widens
+  // tenant-scoped shells before the real projection arrives.
+  if (hosting === 'web_deploy' || !isLocalBusinessOsSurface()) return false;
+  return true;
 }
 
 function moduleCatalogFingerprint(catalog) {
