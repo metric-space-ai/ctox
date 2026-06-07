@@ -8,6 +8,7 @@ use crate::mission::tickets;
 use anyhow::Context;
 use base64::Engine;
 use chrono::{DateTime, FixedOffset};
+use rusqlite::{params, Connection, OptionalExtension};
 use rxdb::plugins::replication_webrtc::{
     RTCIceServer, RxWebRTCReplicationPool, WebRTCRsConnectionHandler,
 };
@@ -68,6 +69,7 @@ const DESKTOP_FILE_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 const CTOX_DESKTOP_FOLDER_ID: &str = "fs_ctox";
 const CTOX_DESKTOP_FOLDER_PATH: &str = "/CTOX";
 const CHANNEL_STATE_SYNC_INTERVAL_SECS: u64 = 3;
+const RXDB_SQLITE_DATABASE_NAME: &str = "ctox_business_os";
 const BUSINESS_USERS_SYNC_INTERVAL_SECS: u64 = 3;
 const RUNTIME_SETTINGS_SYNC_INTERVAL_SECS: u64 = 3;
 const MODULE_CATALOG_SYNC_INTERVAL_SECS: u64 = 3;
@@ -1147,6 +1149,24 @@ async fn run_native_peer(
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     let database_path = store::rxdb_store_path(&root);
+    match repair_stale_rxdb_collection_schema_versions(&root) {
+        Ok(result) => {
+            let repaired_tables = result
+                .get("repaired_tables")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            if repaired_tables > 0 {
+                eprintln!(
+                    "[business-os] repaired {repaired_tables} stale RxDB collection schema table(s) before native peer startup"
+                );
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "[business-os] stale RxDB schema table repair failed before peer startup: {err:#}"
+            );
+        }
+    }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
 
@@ -4935,9 +4955,12 @@ fn is_doc_cache_revision_error(error: &rxdb::rx_error::RxError) -> bool {
 // repair fallback, which rebases the write onto the existing tombstone instead of
 // failing the projection sync.
 fn is_recoverable_projection_write_error(error: &rxdb::rx_error::RxError) -> bool {
+    let message = error.to_string();
     is_doc_cache_revision_error(error)
         || error.code() == "CONFLICT"
-        || error.to_string().contains("CONFLICT")
+        || message.contains("CONFLICT")
+        || message.contains("UNIQUE constraint failed")
+        || message.contains("PRIMARY KEY constraint failed")
 }
 
 async fn repair_projection_document_envelope_and_upsert(
@@ -6223,12 +6246,119 @@ pub fn repair_optional_rxdb_collection_schema_drift(
     if collection.is_empty() {
         anyhow::bail!("collection is required");
     }
+    if !business_os_schema_contract().contains_key(collection) {
+        anyhow::bail!("unknown Business OS RxDB collection `{collection}`");
+    }
     let required = is_required_native_collection(collection);
     if required && !force {
         anyhow::bail!(
             "refusing to repair required Business OS RxDB collection `{collection}` without --force"
         );
     }
+    repair_rxdb_collection_schema_version_drift(root, collection, dry_run, force)
+}
+
+fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+    let mut results = Vec::new();
+    let mut repaired_tables = 0usize;
+    for (collection, _) in business_os_collections() {
+        let result = repair_rxdb_collection_schema_version_drift(root, &collection, false, true)?;
+        repaired_tables += result
+            .get("repaired_tables")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        if result
+            .get("repaired")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            results.push(result);
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "code": "ctox_rxdb_stale_schema_versions",
+        "action": "repair-stale-schema-versions",
+        "repaired": repaired_tables > 0,
+        "repaired_tables": repaired_tables,
+        "collections": results
+    }))
+}
+
+fn repair_rxdb_collection_schema_version_drift(
+    root: &Path,
+    collection: &str,
+    dry_run: bool,
+    force: bool,
+) -> anyhow::Result<Value> {
+    let database_path = store::rxdb_store_path(root);
+    if !database_path.is_file() {
+        return Ok(json!({
+            "ok": true,
+            "code": "ctox_optional_schema_drift",
+            "action": "repair-optional-drift",
+            "dry_run": dry_run,
+            "force": force,
+            "collection": collection,
+            "database_path": database_path.display().to_string(),
+            "expected_version": expected_rxdb_collection_version(collection),
+            "active_version": null,
+            "expected_table_exists": false,
+            "stale_tables": [],
+            "repaired": false,
+            "repaired_tables": 0,
+            "message": "Native Business OS RxDB store is missing; no schema drift repair was needed."
+        }));
+    }
+    let conn = Connection::open(&database_path).with_context(|| {
+        format!(
+            "open native Business OS RxDB store {}",
+            database_path.display()
+        )
+    })?;
+    let _ = conn.busy_timeout(Duration::from_secs(10));
+    let expected_version = expected_rxdb_collection_version(collection);
+    let active_version = active_rxdb_collection_version(&conn, collection)?;
+    let expected_table = rxdb_collection_version_table_name(collection, expected_version);
+    let expected_table_exists = sqlite_table_exists(&conn, &expected_table)?;
+    let stale_tables = stale_rxdb_collection_version_tables(
+        &conn,
+        collection,
+        expected_version,
+        active_version,
+        expected_table_exists,
+    )?;
+    if !dry_run {
+        for table in &stale_tables {
+            conn.execute(
+                &format!(
+                    "DROP TABLE IF EXISTS {}",
+                    quote_sqlite_identifier(&table.name)
+                ),
+                [],
+            )
+            .with_context(|| format!("drop stale RxDB schema table {}", table.name))?;
+        }
+    }
+    let stale_table_values = stale_tables
+        .iter()
+        .map(|table| {
+            json!({
+                "name": table.name,
+                "version": table.version,
+                "row_count": table.row_count,
+                "latest_updated_at_ms": table.latest_updated_at_ms
+            })
+        })
+        .collect::<Vec<_>>();
+    let repaired = !dry_run && !stale_tables.is_empty();
+    let message = if stale_tables.is_empty() {
+        "No stale versioned RxDB table was present for this collection."
+    } else if dry_run {
+        "Dry-run only; stale versioned RxDB tables were detected but not dropped."
+    } else {
+        "Dropped stale versioned RxDB tables for this collection."
+    };
     Ok(json!({
         "ok": true,
         "code": "ctox_optional_schema_drift",
@@ -6236,10 +6366,155 @@ pub fn repair_optional_rxdb_collection_schema_drift(
         "dry_run": dry_run,
         "force": force,
         "collection": collection,
-        "database_path": store::rxdb_store_path(root).display().to_string(),
-        "repaired": false,
-        "message": "No optional schema drift repair was needed for the current isolated Business OS RxDB store."
+        "database_path": database_path.display().to_string(),
+        "expected_version": expected_version,
+        "active_version": active_version,
+        "expected_table": expected_table,
+        "expected_table_exists": expected_table_exists,
+        "stale_tables": stale_table_values,
+        "repaired": repaired,
+        "repaired_tables": if dry_run { 0 } else { stale_tables.len() },
+        "message": message
     }))
+}
+
+#[derive(Debug)]
+struct StaleRxdbCollectionTable {
+    name: String,
+    version: i64,
+    row_count: i64,
+    latest_updated_at_ms: Option<i64>,
+}
+
+fn expected_rxdb_collection_version(collection: &str) -> i64 {
+    business_os_schema_contract()
+        .get(collection)
+        .and_then(|schema| schema.get("version"))
+        .and_then(Value::as_i64)
+        .unwrap_or(0)
+}
+
+fn active_rxdb_collection_version(
+    conn: &Connection,
+    collection: &str,
+) -> anyhow::Result<Option<i64>> {
+    let internal_table = format!("{RXDB_SQLITE_DATABASE_NAME}___rxdb_internal__v0");
+    if !sqlite_table_exists(conn, &internal_table)? {
+        return Ok(None);
+    }
+    conn.query_row(
+        &format!(
+            "SELECT CAST(json_extract(data, '$.data.version') AS INTEGER)
+             FROM {}
+             WHERE json_extract(data, '$.data.name') = ?1
+               AND COALESCE(deleted, 0) = 0
+               AND COALESCE(json_extract(data, '$._deleted'), 0) = 0
+             ORDER BY CAST(json_extract(data, '$.data.version') AS INTEGER) DESC
+             LIMIT 1",
+            quote_sqlite_identifier(&internal_table)
+        ),
+        params![collection],
+        |row| row.get::<_, i64>(0),
+    )
+    .optional()
+    .with_context(|| format!("read active RxDB schema version for {collection}"))
+}
+
+fn stale_rxdb_collection_version_tables(
+    conn: &Connection,
+    collection: &str,
+    expected_version: i64,
+    active_version: Option<i64>,
+    expected_table_exists: bool,
+) -> anyhow::Result<Vec<StaleRxdbCollectionTable>> {
+    if active_version != Some(expected_version) || !expected_table_exists {
+        return Ok(Vec::new());
+    }
+    let prefix = rxdb_collection_version_table_prefix(collection);
+    let pattern = format!("{prefix}%");
+    let mut statement = conn.prepare(
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name LIKE ?1
+         ORDER BY name ASC",
+    )?;
+    let rows = statement.query_map(params![pattern], |row| row.get::<_, String>(0))?;
+    let mut stale = Vec::new();
+    for row in rows {
+        let table = row?;
+        let Some(version) = rxdb_collection_version_from_table_name(&table, &prefix) else {
+            continue;
+        };
+        if version == expected_version {
+            continue;
+        }
+        let row_count = sqlite_table_row_count(conn, &table)?;
+        let latest_updated_at_ms = sqlite_table_latest_updated_at_ms(conn, &table)?;
+        stale.push(StaleRxdbCollectionTable {
+            name: table,
+            version,
+            row_count,
+            latest_updated_at_ms,
+        });
+    }
+    Ok(stale)
+}
+
+fn rxdb_collection_version_table_prefix(collection: &str) -> String {
+    format!("{RXDB_SQLITE_DATABASE_NAME}__{collection}__v")
+}
+
+fn rxdb_collection_version_table_name(collection: &str, version: i64) -> String {
+    format!(
+        "{}{version}",
+        rxdb_collection_version_table_prefix(collection)
+    )
+}
+
+fn rxdb_collection_version_from_table_name(table: &str, prefix: &str) -> Option<i64> {
+    let suffix = table.strip_prefix(prefix)?;
+    if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    suffix.parse().ok()
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> anyhow::Result<bool> {
+    Ok(conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![table],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn sqlite_table_row_count(conn: &Connection, table: &str) -> anyhow::Result<i64> {
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM {}", quote_sqlite_identifier(table)),
+        [],
+        |row| row.get::<_, i64>(0),
+    )
+    .with_context(|| format!("count rows in {table}"))
+}
+
+fn sqlite_table_latest_updated_at_ms(
+    conn: &Connection,
+    table: &str,
+) -> anyhow::Result<Option<i64>> {
+    conn.query_row(
+        &format!(
+            "SELECT MAX(CAST(json_extract(data, '$.updated_at_ms') AS INTEGER)) FROM {}",
+            quote_sqlite_identifier(table)
+        ),
+        [],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .with_context(|| format!("read latest updated_at_ms in {table}"))
+}
+
+fn quote_sqlite_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
 }
 
 #[cfg(test)]
@@ -6280,11 +6555,120 @@ mod tests {
     fn projection_upsert_recovers_from_tombstone_conflict() {
         let conflict_error = rxdb::rx_error::new_rx_error("CONFLICT", Some(json!({})));
         let revision_error = rxdb::rx_error::new_rx_error("DOC_CACHE_REV", Some(json!({})));
+        let sqlite_unique_error = rxdb::rx_error::new_rx_error(
+            "SQLITE",
+            Some(json!({
+                "message": "UNIQUE constraint failed: ctox_business_os__business_commands__v0.id"
+            })),
+        );
         let other_error = rxdb::rx_error::new_rx_error("COL4", Some(json!({})));
 
         assert!(is_recoverable_projection_write_error(&conflict_error));
         assert!(is_recoverable_projection_write_error(&revision_error));
+        assert!(is_recoverable_projection_write_error(&sqlite_unique_error));
         assert!(!is_recoverable_projection_write_error(&other_error));
+    }
+
+    #[test]
+    fn rxdb_schema_drift_repair_drops_stale_version_table_after_active_meta_upgrade() {
+        let root = tempfile::tempdir().expect("temp root");
+        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
+        let path = store::rxdb_store_path(root.path());
+        let conn = Connection::open(&path).expect("open rxdb sqlite");
+        conn.execute(
+            "CREATE TABLE ctox_business_os___rxdb_internal__v0 (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )
+        .expect("create internal store");
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v0 (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .expect("create stale v0 table");
+        conn.execute(
+            "CREATE TABLE ctox_business_os__business_commands__v1 (
+                id TEXT PRIMARY KEY,
+                data TEXT NOT NULL
+            )",
+            [],
+        )
+        .expect("create active v1 table");
+        conn.execute(
+            "INSERT INTO ctox_business_os___rxdb_internal__v0 (id, data, deleted)
+             VALUES ('collection|business_commands-1', ?1, 0)",
+            [json!({
+                "id": "collection|business_commands-1",
+                "key": "business_commands-1",
+                "context": "collection",
+                "data": {
+                    "name": "business_commands",
+                    "version": 1,
+                    "schemaHash": "test"
+                },
+                "_deleted": false
+            })
+            .to_string()],
+        )
+        .expect("insert active v1 collection meta");
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v0 (id, data)
+             VALUES ('cmd_stale', ?1)",
+            [json!({"id": "cmd_stale", "updated_at_ms": 100, "status": "accepted"}).to_string()],
+        )
+        .expect("insert stale row");
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_commands__v1 (id, data)
+             VALUES ('cmd_active', ?1)",
+            [json!({"id": "cmd_active", "updated_at_ms": 200, "status": "failed"}).to_string()],
+        )
+        .expect("insert active row");
+        drop(conn);
+
+        let dry_run = repair_optional_rxdb_collection_schema_drift(
+            root.path(),
+            "business_commands",
+            true,
+            true,
+        )
+        .expect("dry-run repair");
+        assert_eq!(dry_run["repaired"], false);
+        assert_eq!(dry_run["stale_tables"].as_array().unwrap().len(), 1);
+        let conn = Connection::open(&path).expect("reopen rxdb sqlite after dry-run");
+        assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
+        drop(conn);
+
+        let refused = repair_optional_rxdb_collection_schema_drift(
+            root.path(),
+            "business_commands",
+            false,
+            false,
+        )
+        .expect_err("required collection repair must require force");
+        assert!(
+            refused.to_string().contains("without --force"),
+            "unexpected refusal: {refused:#}"
+        );
+
+        let applied = repair_optional_rxdb_collection_schema_drift(
+            root.path(),
+            "business_commands",
+            false,
+            true,
+        )
+        .expect("apply repair");
+        assert_eq!(applied["repaired"], true);
+        assert_eq!(applied["repaired_tables"], 1);
+
+        let conn = Connection::open(&path).expect("reopen rxdb sqlite after apply");
+        assert!(!sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
+        assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v1").unwrap());
     }
 
     #[test]
