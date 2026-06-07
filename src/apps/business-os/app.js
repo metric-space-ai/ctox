@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260606-rxdb-public-catalog1';
+const APP_BUILD = '20260606-rxdb-public-catalog2';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -3879,14 +3879,6 @@ async function loadModuleVersionsDropdown(moduleId) {
   if (!select) return;
   const generation = state.dataPlaneGeneration;
   try {
-    const response = await dispatchShellModuleCommand({
-      commandType: 'ctox.source.list_snapshots',
-      moduleId,
-      recordId: `${moduleId}:snapshots`,
-      payload: { module_id: moduleId },
-      source: 'business-os-shell',
-    });
-    const snapshots = response?.result || [];
     const bundleVersions = await moduleBundleVersionsFor(moduleId);
     if (isStaleDataPlaneGeneration(generation)) return;
 
@@ -3916,19 +3908,7 @@ async function loadModuleVersionsDropdown(moduleId) {
       select.appendChild(group);
     }
 
-    if (snapshots.length > 0) {
-      const group = document.createElement('optgroup');
-      group.label = shellLang() === 'de' ? 'Datei-Snapshots' : 'File snapshots';
-      snapshots.forEach((snap) => {
-        const option = document.createElement('option');
-        option.value = snap.snapshot_id;
-        option.textContent = `${snap.path} (${fmtDate(snap.created_at_ms)})`;
-        group.appendChild(option);
-      });
-      select.appendChild(group);
-    }
-
-    select.style.display = (bundleVersions.length > 0 || snapshots.length > 0) ? 'inline-block' : 'none';
+    select.style.display = bundleVersions.length > 0 ? 'inline-block' : 'none';
   } catch (error) {
     if (isRecoverableDataPlaneAbort(error) || isStaleDataPlaneGeneration(generation)) return;
     console.warn('[business-os] failed to load module versions:', error);
