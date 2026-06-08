@@ -1,9 +1,11 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const BUILD = '20260608-skf-dashboard-counts1';
+const BUILD = '20260608-skf-dashboard-sync-refresh1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
+const COLLECTION_READ_TIMEOUT_MS = 10000;
+const POST_SYNC_REFRESH_LIMIT = 3;
 const RESEARCH_COLLECTIONS = Object.freeze([
   'business_commands',
   'ctox_queue_tasks',
@@ -276,6 +278,7 @@ const state = {
     reloadStartedAt: 0,
     reloadFinishedAt: 0,
     reloadCount: 0,
+    postSyncRefreshes: 0,
   },
   refreshTimer: null,
   cleanup: [],
@@ -315,8 +318,10 @@ export async function mount(ctx) {
   
   await startResearchCollections();
   wireRealtime();
+  wireSyncDiagnosticsRefresh();
   state.cleanup.push(initResearchContextMenu());
   await refreshAll({ seed: true });
+  schedulePostSyncRefresh(1200);
   return () => {
     // Cleanup globals
     delete window.selectReport;
@@ -499,6 +504,28 @@ function wireRealtime() {
   }
   const knowledgeSubscription = raw.knowledge_tables?.$?.subscribe?.(() => scheduleKnowledgeRefresh(120));
   if (knowledgeSubscription?.unsubscribe) state.cleanup.push(() => knowledgeSubscription.unsubscribe());
+}
+
+function wireSyncDiagnosticsRefresh() {
+  const listener = (event) => {
+    const collections = event?.detail?.collections
+      || event?.detail?.snapshot?.collections
+      || window.ctoxBusinessOsSyncDiagnostics?.collections
+      || {};
+    const hasResearchCollection = RESEARCH_COLLECTIONS.some((name) => {
+      const info = collections[name];
+      return info?.initialReplicationState === 'complete' || info?.status === 'connected' || info?.status === 'reused';
+    });
+    if (hasResearchCollection) schedulePostSyncRefresh(250);
+  };
+  window.addEventListener('ctox-business-os-sync-diagnostics', listener);
+  state.cleanup.push(() => window.removeEventListener('ctox-business-os-sync-diagnostics', listener));
+}
+
+function schedulePostSyncRefresh(delay = 250) {
+  if (state.diagnostics.postSyncRefreshes >= POST_SYNC_REFRESH_LIMIT) return;
+  state.diagnostics.postSyncRefreshes += 1;
+  scheduleKnowledgeRefresh(delay);
 }
 
 function scheduleLocalRefresh(delay = 80) {
@@ -2569,7 +2596,7 @@ async function findAll(collection, collectionName = '') {
     return [];
   }
   try {
-    const docs = await withTimeout(collection.find().exec(), 1600, 'collection read timed out');
+    const docs = await withTimeout(collection.find().exec(), COLLECTION_READ_TIMEOUT_MS, 'collection read timed out');
     if (collectionName) markCollectionDiagnostic(collectionName, 'read', 'ok', `${docs.length} rows`);
     return docs.map(toJson);
   } catch (error) {
