@@ -1103,6 +1103,13 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
     {
         return Some(60);
     }
+    if lower.contains("database is locked")
+        || lower.contains("database is busy")
+        || lower.contains("sqlite_busy")
+        || lower.contains("sqlite locked")
+    {
+        return Some(30);
+    }
     if lower.contains("too many requests")
         || lower.contains("rate limit")
         || lower.contains("rate_limit")

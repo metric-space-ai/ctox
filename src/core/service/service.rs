@@ -10798,6 +10798,10 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("refresh token was already used")
         || normalized.contains("refresh token has expired")
         || normalized.contains("refresh token was revoked")
+        || normalized.contains("database is locked")
+        || normalized.contains("database is busy")
+        || normalized.contains("sqlite_busy")
+        || normalized.contains("sqlite locked")
 }
 
 fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -19911,6 +19915,35 @@ Use shell tools to create or update these files."
             &job,
             "database is locked"
         ));
+    }
+
+    #[test]
+    fn queue_sqlite_lock_is_retryable_runtime_failure() {
+        let job = QueuedPrompt {
+            prompt: "Bitte antworte exakt mit SKF_CHAT_E2E.".to_string(),
+            goal: "Business OS chat task".to_string(),
+            preview: "Business OS chat task".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::business-chat".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/chat/chat-test".to_string()),
+            workspace_root: Some("/home/ubuntu/.local/lib/ctox/current".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(!founder_email_worker_error_is_retryable(
+            &job,
+            "database is locked"
+        ));
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs("database is locked"),
+            Some(30)
+        );
+        assert!(runtime_error_is_transient_api_failure("database is locked"));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
     }
 
     #[test]
