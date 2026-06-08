@@ -53,13 +53,13 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
     // puts in the request body. ctox-core's Models-Manager may remap unknown
     // model names to its internal defaults (e.g. "gpt-5.3-codex"), which the
     // MiniMax API rejects. The gateway already routed to this adapter based on
-    // CTOX's active_model, so the correct model is always MiniMax-M2.7.
+    // CTOX's active_model, so the default direct MiniMax model is MiniMax-M3.
     let incoming_model = payload.get("model").and_then(Value::as_str).unwrap_or("");
     let model = if incoming_model.to_ascii_lowercase().contains("minimax") {
         incoming_model.to_string()
     } else {
         // Not a recognized MiniMax model name — use the canonical one.
-        "MiniMax-M2.7".to_string()
+        "MiniMax-M3".to_string()
     };
     let instructions = payload
         .get("instructions")
@@ -114,7 +114,7 @@ pub fn rewrite_request(raw: &[u8]) -> anyhow::Result<Vec<u8>> {
             request.insert(mapped_key.to_string(), value.clone());
         }
     }
-    // M2.7's chain-of-thought needs significant headroom (model card says
+    // MiniMax reasoning needs significant headroom (M2.7's model card says
     // up to 128k CoT tokens). Default agent-runtime request usually has no
     // max_tokens set or sets a small cap, which cuts the model off mid-
     // <think> and produces empty agent replies. Floor at the CTOX standard
@@ -144,8 +144,7 @@ pub fn rewrite_success_response(
 ) -> anyhow::Result<Vec<u8>> {
     let payload: Value =
         serde_json::from_slice(raw).context("failed to parse chat completion response")?;
-    let mut builder =
-        engine::responses_turn_builder(&payload, fallback_model, "minimax/minimax-m2.7");
+    let mut builder = engine::responses_turn_builder(&payload, fallback_model, "MiniMax-M3");
     if let Some(choices) = payload.get("choices").and_then(Value::as_array) {
         for choice in choices {
             let message = choice.get("message").and_then(Value::as_object);

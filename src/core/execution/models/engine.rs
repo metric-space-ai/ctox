@@ -1926,6 +1926,18 @@ mod tests {
     }
 
     #[test]
+    fn recognizes_minimax_m3_api_chat_model() {
+        assert!(is_minimax_api_chat_model("MiniMax-M3"));
+        assert!(is_api_chat_model("MiniMax-M3"));
+        assert_eq!(default_api_provider_for_model("MiniMax-M3"), "minimax");
+        assert!(api_provider_supports_model("minimax", "MiniMax-M3"));
+        assert_eq!(
+            chat_model_family_for_model("MiniMax-M3"),
+            Some(ChatModelFamily::MiniMax)
+        );
+    }
+
+    #[test]
     fn recognizes_new_openrouter_api_chat_models() {
         assert!(is_openrouter_api_chat_model("moonshotai/kimi-k2.6"));
         assert!(is_openrouter_api_chat_model("tencent/hy3-preview:free"));

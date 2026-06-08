@@ -15,7 +15,8 @@ pub const SUPPORTED_ANTHROPIC_API_CHAT_MODELS: &[&str] = &[
 // MiniMax Direct-API (platform.minimax.io). These are the cloud-hosted
 // variants; the `minimax/minimax-m2.7` entry lower down is the OpenRouter-
 // routed variant with the same weights.
-pub const SUPPORTED_MINIMAX_API_CHAT_MODELS: &[&str] = &["MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
+pub const SUPPORTED_MINIMAX_API_CHAT_MODELS: &[&str] =
+    &["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
 pub const SUPPORTED_OPENROUTER_API_CHAT_MODELS: &[&str] = &[
     "openai/gpt-oss-120b",
     "anthropic/claude-opus-4.7",
@@ -52,6 +53,7 @@ pub const SUPPORTED_CHAT_MODELS: &[&str] = &[
     "claude-opus-4-6",
     "claude-sonnet-4-7",
     "claude-sonnet-4-6",
+    "MiniMax-M3",
     "MiniMax-M2.7",
     "MiniMax-M2.7-highspeed",
     "openai/gpt-oss-120b",
@@ -1403,6 +1405,10 @@ const REMOTE_CHAT_FAMILY_REGISTRY: &[RemoteChatFamilyEntry] = &[
         // OpenRouter-routed alias (minimax/* prefix is OpenRouter's
         // namespace). Goes via openrouter.ai/api/v1.
         model: "minimax/minimax-m2.7",
+        chat_family: engine::ChatModelFamily::MiniMax,
+    },
+    RemoteChatFamilyEntry {
+        model: "MiniMax-M3",
         chat_family: engine::ChatModelFamily::MiniMax,
     },
     RemoteChatFamilyEntry {

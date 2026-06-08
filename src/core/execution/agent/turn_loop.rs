@@ -1324,6 +1324,24 @@ mod tests {
     }
 
     #[test]
+    fn minimax_m3_proxy_settings_resolve_core_api_provider() {
+        let mut settings = BTreeMap::new();
+        settings.insert("CTOX_API_PROVIDER".to_string(), "minimax".to_string());
+        settings.insert(
+            "CTOX_UPSTREAM_BASE_URL".to_string(),
+            "https://llm.ctox.dev".to_string(),
+        );
+
+        let spec =
+            resolve_api_model_provider_spec("MiniMax-M3", &settings, None).expect("provider spec");
+
+        assert_eq!(spec.provider_id, "ctox_core_api");
+        assert_eq!(spec.base_url, "https://llm.ctox.dev/v1");
+        assert_eq!(spec.env_key, runtime_state::CTOX_LLM_PROXY_API_KEY_ENV);
+        assert_eq!(spec.wire_api, "responses");
+    }
+
+    #[test]
     fn current_prompt_fallback_preserves_authoritative_prompt() {
         let rendered = "CURRENT REQUEST\n- User asked:\n\nRECENT CONVERSATION EVIDENCE\n- none\n";
         let prompt = "Do the queued work in /tmp/worktree.";
