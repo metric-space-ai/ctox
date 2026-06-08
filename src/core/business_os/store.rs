@@ -1318,7 +1318,9 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 })
             },
         ));
-    let key_name = crate::inference::runtime_state::api_key_env_var_for_provider(&provider);
+    let key_name = crate::inference::runtime_state::api_key_env_var_for_provider_with_env_map(
+        &provider, &env_map,
+    );
     let key_configured = crate::secrets::get_credential(root, key_name).is_some();
     let configured_auth_mode = env_map
         .get("CTOX_OPENAI_AUTH_MODE")

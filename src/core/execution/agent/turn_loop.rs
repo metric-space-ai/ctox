@@ -1027,7 +1027,11 @@ pub(crate) fn resolve_api_model_provider_spec(
     let (env_key, default_provider, wire_api) = match normalized.as_str() {
         "anthropic" => ("ANTHROPIC_API_KEY", "anthropic", "anthropic_messages"),
         "openrouter" => ("OPENROUTER_API_KEY", "openrouter", "responses"),
-        "minimax" => ("MINIMAX_API_KEY", "minimax", "responses"),
+        "minimax" => (
+            runtime_state::api_key_env_var_for_provider_with_env_map("minimax", settings),
+            "minimax",
+            "responses",
+        ),
         "azure_foundry" => ("AZURE_FOUNDRY_API_KEY", "azure_foundry", "responses"),
         _ => return None,
     };

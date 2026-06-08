@@ -627,9 +627,9 @@ impl PersistentSession {
         let use_chatgpt_subscription_auth =
             use_openai_chatgpt_subscription_auth(settings, selected_api_provider.as_deref());
 
-        let selected_api_key_name = selected_api_provider
-            .as_deref()
-            .map(runtime_state::api_key_env_var_for_provider);
+        let selected_api_key_name = selected_api_provider.as_deref().map(|provider| {
+            runtime_state::api_key_env_var_for_provider_with_env_map(provider, settings)
+        });
         let api_key = match selected_api_key_name {
             Some(key)
                 if use_chatgpt_subscription_auth && key.eq_ignore_ascii_case("OPENAI_API_KEY") =>
