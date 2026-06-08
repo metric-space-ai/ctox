@@ -11,9 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260608-module-catalog-stall-restart1';
-const MODULE_CATALOG_SYNC_RESTART_AFTER_MS = 30000;
-const MODULE_CATALOG_SYNC_RESTART_COOLDOWN_MS = 15000;
+const APP_BUILD = '20260609-module-catalog-no-restart1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -5508,7 +5506,6 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
   await syncStart;
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
-  let lastRestartAt = 0;
   while (Date.now() < deadline) {
     try {
       const data = await readModuleCatalogProjection(coll);
@@ -5516,43 +5513,9 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     } catch (error) {
       lastError = error;
     }
-    lastRestartAt = maybeRestartStalledModuleCatalogSync(lastRestartAt);
     await delay(300);
   }
   throw lastError || new Error('Modulkatalog wurde noch nicht synchronisiert.');
-}
-
-function maybeRestartStalledModuleCatalogSync(lastRestartAt = 0) {
-  const diagnostics = state.syncDiagnostics?.collections?.business_module_catalog || null;
-  if (!diagnostics || diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete') {
-    return lastRestartAt;
-  }
-  const now = Date.now();
-  if (now - lastRestartAt < MODULE_CATALOG_SYNC_RESTART_COOLDOWN_MS) return lastRestartAt;
-  const startedAt = Date.parse(diagnostics.initialReplicationStartedAt || diagnostics.updatedAt || '');
-  if (Number.isFinite(startedAt) && now - startedAt < MODULE_CATALOG_SYNC_RESTART_AFTER_MS) {
-    return lastRestartAt;
-  }
-  const status = diagnostics.connectionStatus || diagnostics.status || '';
-  if (!['connecting', 'reconnecting', 'failed', 'error', 'stopped'].includes(status)) return lastRestartAt;
-  const frameTransport = diagnostics.frameTransport || {};
-  const activePeerCount = Number(frameTransport.activePeerCount || 0);
-  const hasTransfer = frameTransport.pullInProgress === true
-    || frameTransport.pushInProgress === true
-    || Number(frameTransport.activeTransfers || 0) > 0;
-  if (status === 'connecting' && activePeerCount > 0 && hasTransfer) return lastRestartAt;
-  console.warn('[business-os] module catalog WebRTC sync appears stalled; restarting collection sync', {
-    status,
-    initialReplicationState: diagnostics.initialReplicationState || null,
-    initialReplicationStartedAt: diagnostics.initialReplicationStartedAt || null,
-    activePeerCount,
-    receivedFrames: Number(frameTransport.receivedFrames || 0),
-    sentFrames: Number(frameTransport.sentFrames || 0),
-  });
-  state.sync?.restartCollection?.('business_module_catalog').catch((error) => {
-    console.warn('[business-os] module catalog restart failed while waiting for shell catalog', error);
-  });
-  return now;
 }
 
 function normalizeModuleCatalog(catalog) {
