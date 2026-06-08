@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260608-module-catalog-sync-wait1';
+const APP_BUILD = '20260608-session-before-config1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -5287,9 +5287,10 @@ async function loadSession() {
     };
   }
 
-  const pairedConfig = await readBusinessOsLaunchConfig();
   const injected = readInjectedDesktopSession();
-  if (injected && injected.authenticated !== false) return injected;
+  if (injected) return injected;
+
+  const pairedConfig = await readBusinessOsLaunchConfig();
 
   if (pairedConfig && allowsPairingConfigSession(pairedConfig)) {
     const user = pairedConfig.session?.user || pairedConfig.user || {};
