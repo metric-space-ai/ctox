@@ -1014,7 +1014,11 @@ function captureDrafts(root, state) {
 
 async function toggleChatDock({ root, state, commandBus, db, getActiveModule }) {
   captureDrafts(root, state);
-  const openChats = state.chats.filter((chat) => chat.open !== false);
+  const selectedDate = state.selectedDate || getLocalDateString(Date.now());
+  state.selectedDate = selectedDate;
+  const openChats = state.chats.filter((chat) => (
+    chat.open !== false && getLocalDateString(chat.createdAt) === selectedDate
+  ));
   if (!state.dockCollapsed) {
     state.preCollapseExpandedChatIds = openChats
       .filter((chat) => !chat.minimized)
@@ -1026,8 +1030,9 @@ async function toggleChatDock({ root, state, commandBus, db, getActiveModule }) 
       ? state.preCollapseExpandedChatIds
       : [];
     const changedChats = [];
-    if (restoreIds.length) {
-      const restoreSet = new Set(restoreIds);
+    const restoreSet = new Set(restoreIds);
+    const hasRestorableChatForDate = openChats.some((chat) => restoreSet.has(chat.id));
+    if (hasRestorableChatForDate) {
       for (const chat of openChats) {
         const nextMinimized = !restoreSet.has(chat.id);
         if (chat.minimized !== nextMinimized) {

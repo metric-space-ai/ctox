@@ -84,6 +84,25 @@ try {
     expect(after.stripCount === 0, 'date next from empty state must not render a phantom strip');
   });
 
+  await scenario(page, 'collapsed-dock-ignores-old-open-chat', {
+    count: 0,
+    dockCollapsed: true,
+    oldOpenOtherDate: true,
+    preCollapseExpandedChatIds: ['chat_old_other_date'],
+  }, async (m) => {
+    expect(m.storedChats === 1, `old-date setup must start with one stored chat, got ${m.storedChats}`);
+    expect(m.windowCount === 0, `old-date collapsed setup must not render today's window, got ${m.windowCount}`);
+    const after = await page.evaluate(async () => {
+      document.querySelector('[data-chat-open]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea'));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'collapsed-dock-after-open-current-date', metrics: after });
+    expect(after.windowCount === 1, `opening current date must render one chat window, got ${after.windowCount}`);
+    expect(after.activeTextareaCount === 1, `opening current date must render one active composer, got ${after.activeTextareaCount}`);
+    expect(after.activeId !== 'chat_old_other_date', 'opening current date must not activate stale chat from another day');
+  });
+
   await scenario(page, 'one-chat-compact', { count: 1 }, (m) => {
     expect(m.windowCount === 1, 'one chat renders one window');
     expect(m.chipCount === 1, 'one chat renders one chip');
@@ -471,13 +490,21 @@ function harnessHtml() {
 
       const selectedDate = localDateString(addDays(new Date(), options.selectedOffset || 0));
       const chats = Array.from({ length: options.count || 0 }, (_, index) => makeChat({ index, selectedDate, options }));
+      if (options.oldOpenOtherDate) {
+        const oldDate = localDateString(addDays(new Date(), (options.selectedOffset || 0) - 1));
+        const oldChat = makeChat({ index: 1000, selectedDate: oldDate, options });
+        oldChat.id = 'chat_old_other_date';
+        oldChat.title = 'Old CTOX';
+        oldChat.minimized = false;
+        chats.push(oldChat);
+      }
       const activeIndex = Math.min(Math.max(options.activeIndex || 0, 0), Math.max(chats.length - 1, 0));
       if (chats.length) chats[activeIndex].minimized = false;
       localStorage.setItem(CHAT_STATE_KEY, JSON.stringify({
         selectedDate,
-        activeChatId: chats[activeIndex]?.id || '',
-        dockCollapsed: false,
-        preCollapseExpandedChatIds: [],
+        activeChatId: options.activeChatId || chats[activeIndex]?.id || '',
+        dockCollapsed: Boolean(options.dockCollapsed),
+        preCollapseExpandedChatIds: Array.isArray(options.preCollapseExpandedChatIds) ? options.preCollapseExpandedChatIds : [],
         chats,
       }));
       initBusinessChat({
@@ -616,6 +643,7 @@ function harnessHtml() {
         inactiveVisibleActions: inactiveActions.filter(isVisible).length,
         messagesClientHeight: activeMessages?.clientHeight || 0,
         messagesScrollHeight: activeMessages?.scrollHeight || 0,
+        activeTextareaCount: document.querySelectorAll('.ctox-chat-window.is-active textarea').length,
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
       };
     }
