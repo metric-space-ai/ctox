@@ -1200,6 +1200,7 @@ const SECRET_KEYS: &[&str] = &[
     "MISTRAL_API_KEY",
     "CTOX_MISTRAL_API_KEY",
     "MINIMAX_API_KEY",
+    "CTOX_LLM_PROXY_API_KEY",
     "AZURE_FOUNDRY_API_KEY",
     "DATABASE_URL",
     "CTO_EMAIL_PASSWORD",
@@ -1372,6 +1373,11 @@ mod tests {
 
         let _ = fs::remove_dir_all(&root);
         Ok(())
+    }
+
+    #[test]
+    fn llm_proxy_api_key_is_treated_as_encrypted_credential() {
+        assert!(is_secret_key("CTOX_LLM_PROXY_API_KEY"));
     }
 
     #[test]
