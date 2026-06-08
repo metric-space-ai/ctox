@@ -1,9 +1,9 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 
-const BUILD = '20260605-rxdb-cancel1';
+const BUILD = '20260608-skf-dashboard-counts1';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
-const ROW_LIMIT = 320;
+const ROW_LIMIT = 5000;
 const RESEARCH_COLLECTIONS = Object.freeze([
   'business_commands',
   'ctox_queue_tasks',
@@ -960,7 +960,7 @@ function renderCenter() {
           <div class="research-tabs" role="tablist" aria-label="Research views">
             ${tabButton('sources', `${state.t('sources', 'Sources')} (${state.sourceModels.length})`)}
             ${tabButton('measurements', `${state.t('measurements', 'Measurements')} (${state.measurementRows.length})`)}
-            ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${knowledgeBaseForTask(task)?.tables?.length || 0})`)}
+            ${tabButton('knowledge', `${state.t('knowledge', 'Knowledge')} (${state.curatedRows.length})`)}
             ${tabButton('reports', `Fachberichte (12)`)}
           </div>
           ${state.activeTab === 'sources' ? `
