@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260607-outbound-rxdb-main1';
+const APP_BUILD = '20260608-module-catalog-sync-wait1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -613,10 +613,17 @@ async function bootstrap() {
     modules = await loadModules();
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
-    console.warn('[business-os] module catalog sync stalled; resetting local RxDB cache and retrying WebRTC sync', error);
-    setStartupProgress(80, 'Lokaler Datenspeicher wird optimiert...');
-    await repairBusinessDataPlane(syncConfig);
-    modules = await loadModules(20000);
+    console.warn('[business-os] module catalog sync stalled; extending WebRTC wait before local cache repair', error);
+    setStartupProgress(82, 'Modulkatalog wird synchronisiert...');
+    try {
+      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+    } catch (retryError) {
+      if (!isModuleCatalogSyncError(retryError)) throw retryError;
+      console.warn('[business-os] module catalog still unavailable; resetting local RxDB cache and retrying WebRTC sync', retryError);
+      setStartupProgress(80, 'Lokaler Datenspeicher wird optimiert...');
+      await repairBusinessDataPlane(syncConfig);
+      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+    }
   }
   state.modules = modules.modules || [];
   state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
