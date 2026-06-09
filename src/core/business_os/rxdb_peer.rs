@@ -9284,7 +9284,7 @@ mod tests {
                 .await
                 .expect("insert pending command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume pending command");
 
@@ -9442,7 +9442,7 @@ mod tests {
                 .await
                 .expect("insert pending ticket command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume pending ticket command");
 
@@ -9540,7 +9540,7 @@ mod tests {
                     .expect("insert invalid ticket command");
             }
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume invalid ticket commands");
 
@@ -9625,7 +9625,7 @@ mod tests {
                 .await
                 .expect("insert seed command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume seed command");
 
@@ -9672,7 +9672,7 @@ mod tests {
                 .await
                 .expect("insert task update command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume task update command");
 
@@ -9752,7 +9752,7 @@ mod tests {
                 .await
                 .expect("insert knowledge command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume knowledge command");
 
@@ -9825,7 +9825,7 @@ mod tests {
                 .await
                 .expect("insert report command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume report command");
 
@@ -9940,7 +9940,7 @@ mod tests {
                 .await
                 .expect("insert source load command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume source load command");
 
@@ -9989,7 +9989,7 @@ mod tests {
                 .await
                 .expect("insert source save command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume source save command");
 
@@ -10106,7 +10106,7 @@ mod tests {
                 .await
                 .expect("insert user command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume user command");
 
@@ -10166,7 +10166,7 @@ mod tests {
                 .await
                 .expect("insert module owner command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume module owner command");
 
@@ -10227,7 +10227,7 @@ mod tests {
                 .await
                 .expect("insert runtime settings command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume runtime settings command");
 
@@ -10270,7 +10270,7 @@ mod tests {
                 .await
                 .expect("insert channel command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume channel command");
 
@@ -10321,7 +10321,7 @@ mod tests {
                 .await
                 .expect("insert founder command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume founder command");
 
@@ -10369,7 +10369,7 @@ mod tests {
                 }))
                 .await
                 .expect("insert module save command");
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume module save command");
             assert!(
@@ -10405,7 +10405,7 @@ mod tests {
                 }))
                 .await
                 .expect("insert template install command");
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume template install command");
             let installed_template_manifest = std::fs::read_to_string(
@@ -10438,7 +10438,7 @@ mod tests {
                 }))
                 .await
                 .expect("insert module delete command");
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume module delete command");
             assert!(
@@ -10483,7 +10483,7 @@ mod tests {
                     .await
                     .expect("insert release command");
 
-                consume_pending_business_commands(root.path(), &database)
+                consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                     .await
                     .expect("consume release command");
             }
@@ -10543,7 +10543,7 @@ mod tests {
                 .await
                 .expect("insert rollback command");
 
-            consume_pending_business_commands(root.path(), &database)
+            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
                 .await
                 .expect("consume rollback command");
 
