@@ -55,7 +55,7 @@ for (const file of readdirSync(jsSrcDir).filter((name) => name.endsWith('.mjs'))
   for (const match of readFileSync(path, 'utf8').matchAll(/^\s*(?:import|export)[^'"\n]*from\s+['"]([^'"]+)['"]/gm)) {
     const specifier = match[1];
     if (!specifier.startsWith('./') && !specifier.startsWith('../')) {
-      offenders.push(`${rel}: non-relative import '${specifier}' (npm/node builtins are forbidden in the browser runtime)`);
+      offenders.push(`${rel}: non-relative specifier '${specifier}' (npm/node builtins are forbidden in the browser runtime)`);
     }
   }
 }

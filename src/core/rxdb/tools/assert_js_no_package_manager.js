@@ -98,6 +98,10 @@ function assertRequiredMarkers() {
     ['query plan index selection', /queryPlanFor\(query = \{\}\)/],
   ]);
   assertText('src/webrtc-native.mjs', [
+    // Phase 3 moved native-peer pruning/selection here (was
+    // pruneReplacedNativePeers/retainOnlyNativePeer in replication-webrtc).
+    ['stale native candidate pruning', /pruneStaleNativeCandidateConnections/],
+    ['expected native peer selection', /peerMatchesExpectedNativePeerId/],
     ['native RTCPeerConnection usage', /new RTCPeerConnection/],
     ['native data channel usage', /createDataChannel/],
     ['native WebSocket usage', /new WebSocket/],
@@ -121,8 +125,6 @@ function assertRequiredMarkers() {
     ['per-peer push checkpoint tracking', /pushCheckpointsByPeer/],
     ['per-peer pull checkpoint tracking', /pullCheckpointsByPeer/],
     ['closed peer state cleanup', /removePeer\(peerId/],
-    ['replaced native peer pruning', /pruneReplacedNativePeers/],
-    ['native peer singleton retention', /retainOnlyNativePeer/],
     ['serialized peer-open handshakes', /peerOpenQueue/],
   ]);
   assertText('src/protocol-contract.generated.mjs', [
