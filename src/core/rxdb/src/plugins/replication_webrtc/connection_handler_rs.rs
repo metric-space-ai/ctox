@@ -101,6 +101,7 @@ impl WebRTCRsConfig {
 struct PeerEntry {
     peer_connection: Arc<dyn PeerConnection>,
     data_channel: Option<Arc<dyn DataChannel>>,
+    data_channel_open: bool,
     tasks: Vec<tokio::task::JoinHandle<()>>,
 }
 
@@ -646,6 +647,7 @@ impl WebRTCRsConnectionHandler {
             PeerEntry {
                 peer_connection: Arc::clone(&pc),
                 data_channel: None,
+                data_channel_open: false,
                 tasks: Vec::new(),
             },
         );
@@ -677,6 +679,10 @@ impl WebRTCRsConnectionHandler {
     }
 
     async fn handle_signal(self: &Arc<Self>, remote_peer_id: PeerId, data: Value) -> RxResult<()> {
+        let is_offer = data.get("type").and_then(Value::as_str) == Some("offer");
+        if is_offer {
+            self.remove_unopened_peer_before_offer(&remote_peer_id);
+        }
         let pc = self
             .ensure_peer_connection(remote_peer_id.clone(), false)
             .await?;
@@ -691,7 +697,6 @@ impl WebRTCRsConnectionHandler {
                         })),
                     )
                 })?;
-            let is_offer = data.get("type").and_then(Value::as_str) == Some("offer");
             pc.set_remote_description(description)
                 .await
                 .map_err(|e| webrtc_error("set remote description", e))?;
@@ -730,6 +735,28 @@ impl WebRTCRsConnectionHandler {
         }
         Ok(())
     }
+
+    fn remove_unopened_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
+        let should_rebuild = {
+            let peers = self.peers.lock();
+            let Some(entry) = peers.get(remote_peer_id) else {
+                return;
+            };
+            should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open)
+        };
+        if should_rebuild {
+            tracing::warn!(
+                target: "ctox_rxdb::webrtc_rs",
+                peer = %remote_peer_id,
+                "dropping unopened WebRTC responder before answering renewed browser offer"
+            );
+            remove_peer(self, remote_peer_id);
+        }
+    }
+}
+
+fn should_rebuild_peer_for_inbound_offer(peer_exists: bool, data_channel_open: bool) -> bool {
+    peer_exists && !data_channel_open
 }
 
 #[async_trait]
@@ -1716,7 +1743,12 @@ fn install_data_channel(
             .await;
         while let Some(event) = data_channel.poll().await {
             match event {
-                DataChannelEvent::OnOpen => connect_subject.next(peer_for_task.clone()),
+                DataChannelEvent::OnOpen => {
+                    if let Some(entry) = handler_for_task.peers.lock().get_mut(&peer_for_task) {
+                        entry.data_channel_open = true;
+                    }
+                    connect_subject.next(peer_for_task.clone());
+                }
                 DataChannelEvent::OnMessage(msg) => {
                     let text = String::from_utf8_lossy(&msg.data).to_string();
                     let value = match serde_json::from_str::<Value>(&text) {
@@ -2495,6 +2527,13 @@ mod tests {
     fn default_handler_binds_udp_on_all_ipv4_interfaces() {
         let handler = WebRTCRsConnectionHandler::new();
         assert_eq!(handler.udp_bind_addr, DEFAULT_UDP_BIND_ADDR);
+    }
+
+    #[test]
+    fn inbound_offer_rebuilds_only_unopened_responder_peer() {
+        assert!(!should_rebuild_peer_for_inbound_offer(false, false));
+        assert!(should_rebuild_peer_for_inbound_offer(true, false));
+        assert!(!should_rebuild_peer_for_inbound_offer(true, true));
     }
 
     #[test]
