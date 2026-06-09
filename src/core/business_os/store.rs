@@ -4899,31 +4899,39 @@ pub fn process_source_parse_command(
             } else {
                 None
             };
+            let command_payload = serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": command.module.clone(),
+                "command_type": command.command_type.clone(),
+                "record_id": command.record_id.clone().unwrap_or_default(),
+                "status": "completed",
+                "inbound_channel": command_inbound_channel(&command),
+                "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
+                "task_status": "completed",
+                "payload": command.payload.clone(),
+                "client_context": command.client_context.clone(),
+                "result": {
+                    "record_ids": outcome.record_ids,
+                    "records_count": outcome.records_count,
+                    "collection": outcome.collection,
+                    "definition_id": outcome.definition_id
+                },
+                "updated_at_ms": completed_at_ms
+            });
             upsert_business_record(
                 &conn,
                 "business_commands",
                 command_id,
                 completed_at_ms,
-                serde_json::json!({
-                    "id": command_id,
-                    "command_id": command_id,
-                    "module": command.module.clone(),
-                    "command_type": command.command_type.clone(),
-                    "record_id": command.record_id.clone().unwrap_or_default(),
-                    "status": "completed",
-                    "inbound_channel": command_inbound_channel(&command),
-                    "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
-                    "task_status": "completed",
-                    "payload": command.payload.clone(),
-                    "client_context": command.client_context.clone(),
-                    "result": {
-                        "record_ids": outcome.record_ids,
-                        "records_count": outcome.records_count,
-                        "collection": outcome.collection,
-                        "definition_id": outcome.definition_id
-                    },
-                    "updated_at_ms": completed_at_ms
-                }),
+                command_payload.clone(),
+            )?;
+            upsert_rxdb_collection_record(
+                root,
+                "business_commands",
+                command_id,
+                completed_at_ms,
+                command_payload,
             )?;
             refresh_queue_task_projection(
                 root,
@@ -4960,26 +4968,34 @@ pub fn process_source_parse_command(
             } else {
                 None
             };
+            let command_payload = serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "module": command.module.clone(),
+                "command_type": command.command_type.clone(),
+                "record_id": command.record_id.clone().unwrap_or_default(),
+                "status": "failed",
+                "inbound_channel": command_inbound_channel(&command),
+                "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
+                "task_status": "failed",
+                "error": err.to_string(),
+                "payload": command.payload.clone(),
+                "client_context": command.client_context.clone(),
+                "updated_at_ms": failed_at_ms
+            });
             upsert_business_record(
                 &conn,
                 "business_commands",
                 command_id,
                 failed_at_ms,
-                serde_json::json!({
-                    "id": command_id,
-                    "command_id": command_id,
-                    "module": command.module.clone(),
-                    "command_type": command.command_type.clone(),
-                    "record_id": command.record_id.clone().unwrap_or_default(),
-                    "status": "failed",
-                    "inbound_channel": command_inbound_channel(&command),
-                    "task_id": queue_task.as_ref().map(|task| task.message_key.clone()),
-                    "task_status": "failed",
-                    "error": err.to_string(),
-                    "payload": command.payload.clone(),
-                    "client_context": command.client_context.clone(),
-                    "updated_at_ms": failed_at_ms
-                }),
+                command_payload.clone(),
+            )?;
+            upsert_rxdb_collection_record(
+                root,
+                "business_commands",
+                command_id,
+                failed_at_ms,
+                command_payload,
             )?;
             refresh_queue_task_projection(
                 root,
@@ -5154,38 +5170,53 @@ fn process_business_chat_reply(
         "business_chats",
         &chat_id,
         completed_at_ms,
+        chat_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_chats",
+        &chat_id,
+        completed_at_ms,
         chat_payload,
     )?;
 
+    let command_payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "completed",
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": task_id,
+        "task_status": "completed",
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": {
+            "chat_id": chat_id,
+            "outbound_text": reply_text,
+            "response": reply_text,
+            "answer": reply_text,
+            "summary": reply_text
+        },
+        "outbound_text": reply_text,
+        "response": reply_text,
+        "answer": reply_text,
+        "updated_at_ms": completed_at_ms
+    });
     upsert_business_record(
         conn,
         "business_commands",
         command_id,
         completed_at_ms,
-        serde_json::json!({
-            "id": command_id,
-            "command_id": command_id,
-            "module": command.module.clone(),
-            "command_type": command.command_type.clone(),
-            "record_id": command.record_id.clone().unwrap_or_default(),
-            "status": "completed",
-            "inbound_channel": command_inbound_channel(command),
-            "task_id": task_id,
-            "task_status": "completed",
-            "payload": command.payload.clone(),
-            "client_context": command.client_context.clone(),
-            "result": {
-                "chat_id": chat_id,
-                "outbound_text": reply_text,
-                "response": reply_text,
-                "answer": reply_text,
-                "summary": reply_text
-            },
-            "outbound_text": reply_text,
-            "response": reply_text,
-            "answer": reply_text,
-            "updated_at_ms": completed_at_ms
-        }),
+        command_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_commands",
+        command_id,
+        completed_at_ms,
+        command_payload,
     )?;
     refresh_queue_task_projection(root, conn, command_id, command, queue_task, completed_at_ms)?;
 
@@ -14607,18 +14638,26 @@ fn refresh_queue_task_projection(
         return Ok(());
     };
     let inbound_channel = command_inbound_channel(command);
+    let payload = business_command_queue_task_payload(
+        command_id,
+        command,
+        &task,
+        &inbound_channel,
+        updated_at_ms,
+    );
     upsert_business_record(
         conn,
         "ctox_queue_tasks",
         &task.message_key,
         updated_at_ms,
-        business_command_queue_task_payload(
-            command_id,
-            command,
-            &task,
-            &inbound_channel,
-            updated_at_ms,
-        ),
+        payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "ctox_queue_tasks",
+        &task.message_key,
+        updated_at_ms,
+        payload,
     )
 }
 
@@ -16517,6 +16556,114 @@ mod tests {
         assert_eq!(
             queue_projection.get("route_status").and_then(Value::as_str),
             Some("failed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn queue_worker_success_marks_active_rxdb_business_command_completed() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_completed_queue_chat",
+                "command_id": "cmd_completed_queue_chat",
+                "module": "ctox",
+                "command_type": "business_os.chat.task",
+                "record_id": "ctox",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "CTOX Aufgabe",
+                    "instruction": "teste Erfolgspfad",
+                    "prompt": "teste Erfolgspfad",
+                    "message_id": "chatmsg_success"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "ctox",
+                    "owner_user_id": "tester"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_completed_queue_chat",
+                "status": "running",
+                "route_status": "leased",
+                "task_status": "running",
+                "updated_at_ms": 1
+            }),
+        )?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__business_commands__v1",
+            "cmd_completed_queue_chat",
+            serde_json::json!({
+                "id": "cmd_completed_queue_chat",
+                "command_id": "cmd_completed_queue_chat",
+                "status": "accepted",
+                "task_id": task_id,
+                "task_status": "queued",
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
+
+        let projected = complete_business_command_from_queue_reply(
+            root,
+            &task_id,
+            "Chat-Antwort wurde gespeichert.",
+        )?
+        .context("expected business chat command writeback")?;
+        assert_eq!(
+            projected.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+
+        let rxdb_command =
+            load_rxdb_collection_record(root, "business_commands", "cmd_completed_queue_chat")?
+                .context("expected active rxdb command row")?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_command.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_command.get("response").and_then(Value::as_str),
+            Some("Chat-Antwort wurde gespeichert.")
+        );
+        assert_eq!(
+            rxdb_command
+                .pointer("/result/answer")
+                .and_then(Value::as_str),
+            Some("Chat-Antwort wurde gespeichert.")
+        );
+
+        let rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected active rxdb queue row")?;
+        assert_eq!(
+            rxdb_queue.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
         );
         Ok(())
     }
