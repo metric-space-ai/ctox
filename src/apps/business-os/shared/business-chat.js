@@ -1943,6 +1943,14 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
     pendingMessage.detail = 'nicht übergeben';
     pendingMessage.createdAt = Date.now();
     if (failedCommandId) chat.lastTrackingId = failedCommandId;
+    if (isTransientCommandTrackingError(error)) {
+      pendingMessage.text = 'Task an CTOX übergeben. Warte auf die CTOX Queue-Projektion.';
+      pendingMessage.commandId = failedCommandId;
+      pendingMessage.taskId = '';
+      pendingMessage.status = 'queued';
+      pendingMessage.trackable = true;
+      pendingMessage.detail = 'wartet auf queue';
+    }
   }
   touchChats(state, [chat]);
 }
@@ -2079,6 +2087,11 @@ function isActiveTrackingStatus(status) {
 function trackingMessageAgeMs(message) {
   const createdAt = Number(message?.createdAt || 0);
   return Number.isFinite(createdAt) && createdAt > 0 ? Math.max(0, Date.now() - createdAt) : 0;
+}
+
+function isTransientCommandTrackingError(error) {
+  const text = String(error?.message || error || '');
+  return /Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|keinen echten Queue-Task/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
@@ -2321,7 +2334,7 @@ async function persistChatState({ state, db }) {
 
 function isVolatileChatPersistenceError(error) {
   const text = String(error?.message || error || '');
-  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
+  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(text);
 }
 
 async function hydrateChatsFromRxDb({ state, db, session }) {

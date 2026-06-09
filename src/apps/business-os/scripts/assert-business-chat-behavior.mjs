@@ -103,6 +103,21 @@ try {
     expect(after.activeId !== 'chat_old_other_date', 'opening current date must not activate stale chat from another day');
   });
 
+  await scenario(page, 'dock-opens-despite-transient-persist-timeout', {
+    count: 0,
+    dockCollapsed: true,
+    dbTransientError: true,
+  }, async () => {
+    const after = await page.evaluate(async () => {
+      document.querySelector('[data-chat-open]').click();
+      await window.chatHarness.waitFor(() => document.querySelector('.ctox-chat-window.is-active textarea'));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'dock-opens-after-transient-persist-timeout', metrics: after });
+    expect(after.windowCount === 1, `transient chat persistence timeout must not block dock open, got ${after.windowCount}`);
+    expect(after.activeTextareaCount === 1, `transient chat persistence timeout must still render composer, got ${after.activeTextareaCount}`);
+  });
+
   await scenario(page, 'one-chat-compact', { count: 1 }, (m) => {
     expect(m.windowCount === 1, 'one chat renders one window');
     expect(m.chipCount === 1, 'one chat renders one chip');
@@ -266,6 +281,25 @@ try {
     const draftValue = await page.evaluate(() => document.querySelector('.ctox-chat-window.is-active textarea')?.value || '');
     results.push({ scenario: 'active-input-draft-value', draftValue });
     expect(draftValue === 'Browser Test Aufgabe', `active chat textarea must accept typing, got ${JSON.stringify(draftValue)}`);
+  });
+
+  await scenario(page, 'transient-command-timeout-keeps-chat-trackable', {
+    count: 1,
+    commandError: 'transient',
+  }, async () => {
+    const after = await page.evaluate(async () => {
+      const input = document.querySelector('.ctox-chat-window.is-active textarea');
+      input.value = 'Bitte als CTOX Task verarbeiten';
+      input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+      document.querySelector('.ctox-chat-window.is-active [data-chat-send]').click();
+      await window.chatHarness.waitFor(() => /Warte auf die CTOX Queue-Projektion/.test(document.body.innerText || ''));
+      return window.chatHarness.collect();
+    });
+    results.push({ scenario: 'transient-command-timeout-after-send', metrics: after });
+    expect(after.activeTaskClass.includes('is-task-queued'), `transient command timeout must keep chat queued, got ${after.activeTaskClass}`);
+    expect(!after.activeTaskClass.includes('is-task-failed'), `transient command timeout must not mark failed, got ${after.activeTaskClass}`);
+    expect(after.activeMessageText.includes('Warte auf die CTOX Queue-Projektion'), 'transient command timeout must explain that tracking continues');
+    expect(after.activeMessageText.includes('queued'), `transient command timeout should keep queued status text, got ${after.activeMessageText}`);
   });
 
   await scenario(page, 'active-message-pane-scrolls', { count: 1, messagesPerChat: 28, longMessages: true }, async (m) => {
@@ -509,8 +543,8 @@ function harnessHtml() {
       }));
       initBusinessChat({
         session: { authenticated: true, user: { id: owner, name: 'Harness User' } },
-        commandBus: { dispatch: async () => ({ task_id: 'task_harness', command_id: 'cmd_harness', status: 'queued' }) },
-        db: makeDb(chats, options.dbDelay || 0),
+        commandBus: makeCommandBus(options),
+        db: makeDb(chats, options.dbDelay || 0, Boolean(options.dbTransientError)),
         getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
       });
       await waitFor(() => document.querySelector('[data-chat-dock]'));
@@ -573,25 +607,40 @@ function harnessHtml() {
       };
     }
 
-    function makeDb(chats, delayMs) {
+    function makeCommandBus(options) {
+      return {
+        dispatch: async () => {
+          if (options.commandError === 'transient') {
+            throw new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
+          }
+          return { task_id: 'task_harness', command_id: 'cmd_harness', status: 'queued' };
+        },
+      };
+    }
+
+    function makeDb(chats, delayMs, transientError) {
       const store = new Map(chats.map((chat) => [chat.id, structuredClone(chat)]));
       const delay = () => new Promise((resolve) => setTimeout(resolve, delayMs));
+      const maybeThrow = async () => {
+        await delay();
+        if (transientError) throw new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
+      };
       const docFor = (id) => {
         const value = store.get(id);
         if (!value) return null;
         return {
           toJSON: () => structuredClone(value),
-          incrementalPatch: async (doc) => { await delay(); store.set(id, structuredClone({ ...value, ...doc })); },
-          remove: async () => { await delay(); store.delete(id); },
+          incrementalPatch: async (doc) => { await maybeThrow(); store.set(id, structuredClone({ ...value, ...doc })); },
+          remove: async () => { await maybeThrow(); store.delete(id); },
         };
       };
       return {
         raw: {
           business_chats: {
             $: { subscribe: () => ({ unsubscribe() {} }) },
-            find: () => ({ exec: async () => { await delay(); return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
-            findOne: (id) => ({ exec: async () => { await delay(); return docFor(id); } }),
-            insert: async (doc) => { await delay(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
+            find: () => ({ exec: async () => { await maybeThrow(); return Array.from(store.keys()).map(docFor).filter(Boolean); } }),
+            findOne: (id) => ({ exec: async () => { await maybeThrow(); return docFor(id); } }),
+            insert: async (doc) => { await maybeThrow(); store.set(doc.id, structuredClone(doc)); return docFor(doc.id); },
           },
           business_commands: { $: { subscribe: () => ({ unsubscribe() {} }) } },
           ctox_queue_tasks: { $: { subscribe: () => ({ unsubscribe() {} }) } },
@@ -644,6 +693,9 @@ function harnessHtml() {
         messagesClientHeight: activeMessages?.clientHeight || 0,
         messagesScrollHeight: activeMessages?.scrollHeight || 0,
         activeTextareaCount: document.querySelectorAll('.ctox-chat-window.is-active textarea').length,
+        activeTaskClass: activeWindow?.className || '',
+        activeStatusText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-status-badge')?.textContent?.trim() || '',
+        activeMessageText: document.querySelector('.ctox-chat-window.is-active .ctox-chat-messages')?.textContent?.trim() || '',
         storedChats: Array.isArray(stored.chats) ? stored.chats.length : 0,
       };
     }
