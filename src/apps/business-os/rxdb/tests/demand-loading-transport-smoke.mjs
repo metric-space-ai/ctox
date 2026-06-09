@@ -18,6 +18,11 @@ const transport = createDemandLoadingTransport({ getPeerId: () => 'peer-1' });
 
 const sent = [];
 const fakePeer = {
+  // The transport only dispatches to peers whose DataChannel is OPEN
+  // (resolvePeerId -> isPeerOpen); mock an open connection for peer-1.
+  connections: new Map([
+    ['peer-1', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
   async request(peerId, method, params) {
     sent.push({ peerId, method, params });
     return { ack: true };
@@ -86,14 +91,17 @@ let caught = null;
 try { await errPromise; } catch (e) { caught = e; }
 assert(caught && caught.code === 'PEER_UNAVAILABLE', 'PEER_UNAVAILABLE propagated');
 
-// Cancel path: must not throw, removes the in-flight collector.
+// Cancel path: removes the in-flight collector AND rejects the outstanding
+// fetch with QUERY_CANCELLED so callers stop waiting (hardened cancel
+// semantics — previously the promise just hung forever).
 const pendingPromise = transport.requestQueryFetch({ ...envelope, requestId: 'q-cancel' });
+const pendingOutcome = pendingPromise.catch((error) => error);
 await new Promise((r) => setImmediate(r));
 assert(transport.pendingQueryCount() === 1, 'one pending before cancel');
 await transport.requestQueryCancel({ requestId: 'q-cancel' });
 assert(transport.pendingQueryCount() === 0, 'cancel clears pending');
-// the pendingPromise stays pending forever in this mock — drop the reference
-void pendingPromise;
+const cancelError = await pendingOutcome;
+assert(cancelError && cancelError.code === 'QUERY_CANCELLED', 'cancelled fetch rejects with QUERY_CANCELLED');
 
 console.log('ctox-rxdb-js demand-loading transport smoke OK', {
   docs: result.documents.length,

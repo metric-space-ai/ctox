@@ -308,6 +308,7 @@ async fn main() {
     let message = WebRTCMessage {
         id: "scale-msg".into(),
         method: "rxdb.query.fetch".into(),
+        collection: None,
         params: vec![json!({
             "requestId": "scale-r1",
             "collectionName": "synthetic",

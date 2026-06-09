@@ -71,6 +71,17 @@ export const CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   document_runbooks: '50b126b168c2fbf148da6b8693bbf455f6124c1b798a19e48aaaf5174acc9b7b',
   document_versions: 'fca6df9bfa1d0d27f93d41cb7685fd08dacbf9f4843b7c1d95142b4cbe157738',
   documents: '600e0a73160dfaa480dd0ff8b833c85cec8aa60d41a9982a1ecd971e8a291ec1',
+  iot_agent_status: 'c719592fcc4274060d12567b09013cff8dc11b605b790b349e8efac88cfb6ccd',
+  iot_agents: '0bf0fed6ea33be5d475e88b7b913fb1675bb1bf5d4361cc3c5eb6befec6480f8',
+  iot_alarms: '978c527550ceb781393bba6e9e886714f7c66f60bc2f7b98be55896bb2ccb149',
+  iot_asset_types: '5aebcc5fb39fe783d5364ce21c6f50dc929935ad1cef4964ad1ae996221064d3',
+  iot_assets: 'b56ee809bbf974a07d1a6423753bedc195e49f7ea4a9f0f4077afa54486ff93e',
+  iot_attributes: '35a1c2494238fffedd2b6006ff5269bc7183a5ac60e2cd4a4c12ed17a9acabcb',
+  iot_dashboards: '29a0875c3214b50bce0198608dd4a44e969b51900ea0b76128a53a4fffd25d49',
+  iot_datapoints: '6313f3c8671e3406d789877aca842f8bf5b6a7fa2b63a8458dece314a2f55a80',
+  iot_realms: '42ff4cfc74268c51602dd3873df95127f9070068aa5d7c1994e80f5275f78ada',
+  iot_rulesets: '0232a7ef9501f87ff583848bf29489aff7105d79ea7a1740dbfc357476f799f1',
+  iot_widgets: 'acd9a9b1bdaabe7118403bd998190ac785cbf3133c2352386f14f1a4579eb66e',
   knowledge_items: '33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300',
   knowledge_runbooks: '33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300',
   knowledge_tables: '33db05bd0efe97e32343da493cd3cb552099383a4bfde182012e334034467300',
@@ -160,6 +171,11 @@ export function buildProtocolPayload({
   // validates each entry individually (see `assertCollectionSchemasCompatible`)
   // instead of skipping schema validation wholesale under multiplex.
   collectionSchemas = null,
+  // Multiplexed rooms also need per-collection checkpoint evidence. The
+  // representative collection's checkpoint is not valid for sibling
+  // collections when the room reconnects, especially for file chunk stores
+  // where stale checkpoint epochs are a data-corruption signal.
+  collectionCheckpoints = null,
 } = {}) {
   const checkpointEvidence = checkpoint || null;
   return {
@@ -176,6 +192,7 @@ export function buildProtocolPayload({
     // Omitted (null) for single-collection rooms so the legacy single-
     // collection handshake stays byte-identical.
     collectionSchemas: normalizeCollectionSchemas(collectionSchemas),
+    collectionCheckpoints: normalizeCollectionCheckpoints(collectionCheckpoints),
     peerSession: {
       role,
       sessionId: peerSessionId || null,
@@ -197,6 +214,19 @@ function normalizeCollectionSchemas(map) {
       schemaVersion: Number.isFinite(entry.schemaVersion) ? entry.schemaVersion : null,
       schemaHash: entry.schemaHash || null,
       schemaHashSource: entry.schemaHashSource || schemaHashSource(name),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function normalizeCollectionCheckpoints(map) {
+  if (!map || typeof map !== 'object') return null;
+  const out = {};
+  for (const [name, entry] of Object.entries(map)) {
+    if (!name || !entry || typeof entry !== 'object') continue;
+    out[name] = {
+      ...entry,
+      collection: typeof entry.collection === 'string' && entry.collection ? entry.collection : name,
     };
   }
   return Object.keys(out).length > 0 ? out : null;

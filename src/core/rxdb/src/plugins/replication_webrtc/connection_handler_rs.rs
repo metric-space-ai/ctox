@@ -53,9 +53,9 @@ const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
 // DataChannel when a large transfer (e.g. documents + blob chunks) is sent.
 const DATA_CHANNEL_BUFFERED_HIGH_WATER: u32 = 1024 * 1024; // 1 MiB
 const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
-// Upper bound on how long a sender waits for the buffer to drain below the low
-// watermark before giving up (matches the ack timeout so a wedged peer fails
-// rather than hanging forever).
+                                                         // Upper bound on how long a sender waits for the buffer to drain below the low
+                                                         // watermark before giving up (matches the ack timeout so a wedged peer fails
+                                                         // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 // Phase 1 hard size invariant: the SCTP message ceiling for an RTCDataChannel is
 // 16 KiB. A single `send_text` larger than this is dropped by / kills the channel
@@ -250,15 +250,34 @@ impl PeerSendQueue {
     /// the original High→Normal→Low drain order. Control frames (intrinsic
     /// High) and oversized background writes (Low) are unaffected.
     fn reprioritize(&mut self, active: &HashSet<String>) {
-        let mut items: Vec<QueuedSend> = Vec::with_capacity(
-            self.high.len() + self.normal.len() + self.low.len(),
-        );
+        let mut items: Vec<QueuedSend> =
+            Vec::with_capacity(self.high.len() + self.normal.len() + self.low.len());
         items.extend(self.high.drain(..));
         items.extend(self.normal.drain(..));
         items.extend(self.low.drain(..));
         for mut item in items.into_iter() {
             item.priority = item.classify_against(active);
             self.push(item);
+        }
+    }
+}
+
+/// Cancellation guard for `drain_send_queue`: if the draining task is aborted
+/// mid-send, `Drop` re-opens the drain slot so the next sender resumes the
+/// queue instead of parking forever behind a `draining` flag nobody owns.
+struct DrainResetGuard {
+    queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>>,
+    peer: WebRTCRsPeer,
+    armed: bool,
+}
+
+impl Drop for DrainResetGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        if let Some(queue) = self.queues.lock().get_mut(&self.peer) {
+            queue.draining = false;
         }
     }
 }
@@ -861,6 +880,14 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
             .map(|active| active.contains(collection))
             .unwrap_or(false)
     }
+
+    /// Tear down ONE peer's transport. Emits the disconnect event, so the
+    /// replication pool cleans up the peer state and the remote sees its
+    /// channel close and reconnects — used by the pool to convert a failed
+    /// handshake into a clean reconnect cycle instead of a half-dead peer.
+    async fn close_peer(&self, peer: &Self::Peer) {
+        remove_peer(self, peer);
+    }
 }
 
 impl WebRTCRsConnectionHandler {
@@ -951,16 +978,32 @@ impl WebRTCRsConnectionHandler {
     }
 
     async fn drain_send_queue(&self, peer: &WebRTCRsPeer, data_channel: Arc<dyn DataChannel>) {
+        // The drainer runs inside whatever task called `send_queued_text`
+        // first. That task can be aborted mid-send (peer relays are aborted on
+        // disconnect), which used to leave `draining == true` forever: later
+        // senders for the same peer id queued behind a drainer that no longer
+        // existed and parked on their result channel until process restart.
+        // The guard re-opens the drain slot on cancellation; the clean-exit
+        // path disarms it while holding the lock so no item can slip between
+        // "queue observed empty" and "flag cleared".
+        let mut reset_guard = DrainResetGuard {
+            queues: Arc::clone(&self.send_queues),
+            peer: peer.clone(),
+            armed: true,
+        };
         loop {
             let item = {
                 let mut queues = self.send_queues.lock();
                 let Some(queue) = queues.get_mut(peer) else {
+                    // Queue removed (peer torn down) — nothing left to drain.
+                    reset_guard.armed = false;
                     return;
                 };
                 match queue.pop_next() {
                     Some(item) => item,
                     None => {
                         queue.draining = false;
+                        reset_guard.armed = false;
                         break;
                     }
                 }
@@ -1832,6 +1875,14 @@ fn install_data_channel(
                 }
                 DataChannelEvent::OnClose => {
                     backpressure_for_task.clear_high();
+                    // Mark the entry's channel as no longer open so a renewed
+                    // browser offer rebuilds the responder
+                    // (`remove_unopened_peer_before_offer` keys on this) —
+                    // otherwise a re-offer after a channel close hit the
+                    // stale pc and could never converge.
+                    if let Some(entry) = handler_for_task.peers.lock().get_mut(&peer_for_task) {
+                        entry.data_channel_open = false;
+                    }
                     disconnect_subject.next(peer_for_task.clone());
                     break;
                 }
@@ -1850,10 +1901,7 @@ fn install_data_channel(
         // Channel ended: release any sender parked on backpressure and drop the
         // per-peer signal so it cannot leak across reconnects.
         backpressure_for_task.clear_high();
-        handler_for_task
-            .backpressure
-            .lock()
-            .remove(&peer_for_task);
+        handler_for_task.backpressure.lock().remove(&peer_for_task);
     });
 
     if let Some(entry) = handler.peers.lock().get_mut(&remote_peer_id) {
@@ -1861,7 +1909,7 @@ fn install_data_channel(
     }
 }
 
-fn remove_peer(handler: &Arc<WebRTCRsConnectionHandler>, peer: &str) {
+fn remove_peer(handler: &WebRTCRsConnectionHandler, peer: &str) {
     if let Some(mut entry) = handler.peers.lock().remove(peer) {
         for task in entry.tasks.drain(..) {
             task.abort();
@@ -1869,6 +1917,20 @@ fn remove_peer(handler: &Arc<WebRTCRsConnectionHandler>, peer: &str) {
         // Phase 2: drop the per-peer active-collection set so it cannot leak
         // across reconnects (a new connection re-reports its active set).
         handler.active_collections.lock().remove(peer);
+        // Release anyone parked on backpressure and drop the per-peer signal.
+        // The poll task normally does this, but when WE abort the poll task
+        // (the abort above) its cleanup tail never runs.
+        if let Some(bp) = handler.backpressure.lock().remove(peer) {
+            bp.clear_high();
+        }
+        // Drop the peer's send queue. Every queued `QueuedSend` is dropped
+        // with it, which closes its oneshot result channel — callers parked
+        // in `send_queued_text` fail fast instead of waiting forever on a
+        // drainer that no longer exists. Without this, a queue whose drainer
+        // was aborted mid-send wedged the peer id permanently and (because
+        // responses are routed through it) could stall every other peer too.
+        handler.send_queues.lock().remove(peer);
+        handler.refresh_send_queue_status();
         let peer_id = peer.to_string();
         tokio::spawn(async move {
             if let Some(data_channel) = entry.data_channel {
@@ -2218,11 +2280,11 @@ mod tests {
         // or a quote/backslash (2x). A raw-byte chunker would have produced frames
         // far over the 16 KiB SCTP ceiling for this content.
         let payloads = [
-            "\u{1}".repeat(200_000),                 // all C0 controls -> 6x expansion
-            "\"\\".repeat(150_000),                  // all quotes+backslashes -> 2x
-            "aäb🙂c\u{7}\"".repeat(40_000),          // mixed multibyte + escapes
-            "x".repeat(500_000),                     // plain ASCII (no expansion)
-            String::new(),                            // empty
+            "\u{1}".repeat(200_000),        // all C0 controls -> 6x expansion
+            "\"\\".repeat(150_000),         // all quotes+backslashes -> 2x
+            "aäb🙂c\u{7}\"".repeat(40_000), // mixed multibyte + escapes
+            "x".repeat(500_000),            // plain ASCII (no expansion)
+            String::new(),                  // empty
         ];
         for payload in payloads {
             let chunks = split_chunks_for_frame(&payload, transfer_id);
@@ -2244,7 +2306,9 @@ mod tests {
 
     #[test]
     fn json_escaped_char_len_matches_serde() {
-        for ch in ['a', '"', '\\', '\n', '\t', '\u{08}', '\u{0c}', '\u{1}', 'ä', '🙂'] {
+        for ch in [
+            'a', '"', '\\', '\n', '\t', '\u{08}', '\u{0c}', '\u{1}', 'ä', '🙂',
+        ] {
             let s = ch.to_string();
             let serialized = serde_json::to_string(&s).unwrap();
             // serde wraps the value in quotes; strip them to compare inner length.

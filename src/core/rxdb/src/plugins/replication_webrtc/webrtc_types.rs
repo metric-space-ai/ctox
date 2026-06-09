@@ -116,6 +116,15 @@ pub trait WebRTCConnectionHandler: Send + Sync {
 
     async fn close(&self) -> Result<(), RxError>;
 
+    /// Force-close ONE peer's transport (peer connection + data channel) so
+    /// both sides observe a disconnect and rebuild cleanly. Used when the
+    /// replication layer must abandon a peer whose transport is up but whose
+    /// handshake failed — leaving the transport open used to park the peer in
+    /// a half-dead state (channel open, no replication) until an unrelated
+    /// network event tore it down. Default is a no-op for handlers that do
+    /// not model per-peer transport.
+    async fn close_peer(&self, _peer: &Self::Peer) {}
+
     /// V1.5 server-push backpressure hook. Returns the number of bytes
     /// currently buffered for the given peer (analogous to WebRTC's
     /// `RTCDataChannel.bufferedAmount`). Implementations that do not yet

@@ -35,6 +35,7 @@ export {
   getConnectionHandlerSimplePeer,
   remoteSupportsQueryFetch,
   replicateWebRTC,
+  replicationWebRtcTestInternals,
 } from './replication-webrtc.mjs';
 
 export {

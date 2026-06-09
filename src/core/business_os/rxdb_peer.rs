@@ -44,6 +44,31 @@ static TEMPORARY_RXDB_DATABASE_LOCK: Mutex<()> = Mutex::new(());
 static NATIVE_RXDB_WRITE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static BROWSER_RUNTIME_COMMAND_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SIGNALING_TOKEN_TTL_SECONDS: u64 = 24 * 60 * 60;
+
+/// True while the multiplexed WebRTC replication session is up. Written by
+/// `run_native_peer`, read by the status heartbeat — a peer whose process is
+/// alive but whose replication bring-up failed used to be indistinguishable
+/// from a healthy one ("running" status, zero sync).
+static NATIVE_PEER_REPLICATION_UP: AtomicBool = AtomicBool::new(false);
+
+/// Supervision backoff bounds for respawning the native peer after a
+/// non-intentional exit (bring-up failure, watchdog-stale heartbeat,
+/// transient SQLite/fs error).
+const NATIVE_PEER_RESPAWN_BASE_DELAY_SECS: u64 = 5;
+const NATIVE_PEER_RESPAWN_MAX_DELAY_SECS: u64 = 300;
+/// A run that stayed up at least this long resets the respawn backoff.
+const NATIVE_PEER_RESPAWN_HEALTHY_RUN_SECS: u64 = 600;
+
+/// How `run_native_peer` ended — drives the supervision loop's respawn
+/// decision in `spawn_native_peer`.
+enum NativePeerExit {
+    /// Intentional stop (`restart_native_peer` / service shutdown): no respawn.
+    Shutdown,
+    /// The watchdog saw a stale heartbeat and tore the peer down: respawn.
+    WatchdogStale,
+    /// Another process holds the peer lock: retry later (standby takeover).
+    LockHeldElsewhere,
+}
 /// Phase 3: single-session signaling/replication bring-up timeout. One room is
 /// joined once for the whole sync room; if it cannot come up in this window we
 /// log and continue (collections stay locally queryable).
@@ -461,6 +486,19 @@ pub fn native_peer_status(root: &Path) -> Value {
         .map(|age_ms| age_ms <= NATIVE_PEER_HEARTBEAT_TTL_MS)
         .unwrap_or(false);
     let running = in_process_running || in_process_started || heartbeat_fresh;
+    // Replication liveness: in-process reads the static directly; an
+    // out-of-process reader falls back to the heartbeat field. `false` when
+    // unknown — a missing signal must read as "not proven up".
+    let replication_up = if in_process_running {
+        NATIVE_PEER_REPLICATION_UP.load(Ordering::SeqCst)
+    } else {
+        heartbeat
+            .as_ref()
+            .and_then(|value| value.get("replicationUp"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && heartbeat_fresh
+    };
     let health_errors = if running {
         Vec::<Value>::new()
     } else if process_lock_held {
@@ -485,6 +523,7 @@ pub fn native_peer_status(root: &Path) -> Value {
     json!({
         "version": NATIVE_PEER_STATUS_VERSION,
         "running": running,
+        "replicationUp": replication_up,
         "in_process_started": in_process_started,
         "in_process_running": in_process_running,
         "process_lock_held": process_lock_held,
@@ -574,12 +613,14 @@ pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
         .thread_name("business-os-rxdb-peer")
         .build()
         .context("failed to create Business OS native RxDB peer runtime")?;
-    runtime.block_on(run_native_peer(
-        root,
-        config.sync_room.clone(),
-        config.signaling_urls.clone(),
-        config.signaling_room_password.clone(),
-    ))
+    runtime
+        .block_on(run_native_peer(
+            root,
+            config.sync_room.clone(),
+            config.signaling_urls.clone(),
+            config.signaling_room_password.clone(),
+        ))
+        .map(|_| ())
 }
 
 pub fn spawn_native_peer(
@@ -595,28 +636,82 @@ pub fn spawn_native_peer(
     if let Err(err) = std::thread::Builder::new()
         .name("business-os-rxdb-peer".to_string())
         .spawn(move || {
-            let runtime = match tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .worker_threads(native_peer_worker_threads())
-                .thread_name("business-os-rxdb-peer")
-                .build()
-            {
-                Ok(runtime) => runtime,
-                Err(err) => {
-                    NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
-                    eprintln!("[business-os] native rxdb peer runtime failed: {err:#}");
-                    return;
-                }
-            };
-            if let Err(err) = runtime.block_on(run_native_peer(
-                root,
-                sync_room,
-                signaling_urls,
-                signaling_room_password,
-            )) {
+            // Supervision loop. The peer used to die PERMANENTLY on any exit
+            // (bring-up failure, watchdog-stale heartbeat, transient SQLite
+            // error): nothing respawned it and `ensure_native_peer` only runs
+            // at daemon boot, so a boot race against the signaling server
+            // cost the entire daemon lifetime of sync. Every non-intentional
+            // exit now respawns with capped backoff. The sync config is
+            // re-read per attempt so room-password rotation and signaling
+            // changes reach the respawned peer without a daemon restart.
+            let mut delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
+            loop {
+                let runtime = match tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .worker_threads(native_peer_worker_threads())
+                    .thread_name("business-os-rxdb-peer")
+                    .build()
+                {
+                    Ok(runtime) => runtime,
+                    Err(err) => {
+                        eprintln!("[business-os] native rxdb peer runtime failed: {err:#}");
+                        break;
+                    }
+                };
+                let (room, urls, password) = match store::sync_config(&root) {
+                    Ok(config) => (
+                        config.sync_room.clone(),
+                        config.signaling_urls.clone(),
+                        config.signaling_room_password.clone(),
+                    ),
+                    Err(err) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer: sync config re-read failed \
+                             ({err:#}); using boot-time values"
+                        );
+                        (
+                            sync_room.clone(),
+                            signaling_urls.clone(),
+                            signaling_room_password.clone(),
+                        )
+                    }
+                };
+                let started_at = std::time::Instant::now();
+                let result = runtime.block_on(run_native_peer(root.clone(), room, urls, password));
                 NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
-                NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
-                eprintln!("[business-os] native rxdb peer failed: {err:#}");
+                // Drop the runtime before sleeping so tasks leaked by a
+                // wedged run cannot hold sockets/filehandles across the
+                // backoff window.
+                drop(runtime);
+                match result {
+                    Ok(NativePeerExit::Shutdown) => break,
+                    Ok(NativePeerExit::WatchdogStale) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer exited after stale heartbeat; \
+                             respawning in {}s",
+                            delay.as_secs()
+                        );
+                    }
+                    Ok(NativePeerExit::LockHeldElsewhere) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer lock held by another process; \
+                             retrying in {}s",
+                            delay.as_secs()
+                        );
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer failed: {err:#}; respawning in {}s",
+                            delay.as_secs()
+                        );
+                    }
+                }
+                if started_at.elapsed() >= Duration::from_secs(NATIVE_PEER_RESPAWN_HEALTHY_RUN_SECS)
+                {
+                    delay = Duration::from_secs(NATIVE_PEER_RESPAWN_BASE_DELAY_SECS);
+                }
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(Duration::from_secs(NATIVE_PEER_RESPAWN_MAX_DELAY_SECS));
             }
             NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
             NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
@@ -1135,17 +1230,28 @@ async fn run_native_peer(
     sync_room: String,
     signaling_urls: Vec<String>,
     signaling_room_password: String,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<NativePeerExit> {
+    NATIVE_PEER_REPLICATION_UP.store(false, Ordering::SeqCst);
     let Some(process_lock) = acquire_native_peer_process_lock(&root)? else {
         eprintln!("[business-os] native rxdb peer already runs in another process");
-        return Ok(());
+        return Ok(NativePeerExit::LockHeldElsewhere);
     };
-    let signaling_url = signaling_urls
+    let signaling_base_url = signaling_urls
         .into_iter()
         .find(|url| !url.trim().is_empty())
         .context("Business OS native RxDB peer requires a signaling URL")?;
-    let signaling_url =
-        signaling_url_with_native_metadata(&signaling_url, &sync_room, &signaling_room_password);
+    // The provider re-derives the URL — including fresh `token_iat`/
+    // `token_exp` — on EVERY signaling (re)connect attempt. Baking the token
+    // window in once meant that after >24h uptime any socket drop became a
+    // permanent join-rejection loop (server: "control plane token expired").
+    let signaling_url_provider: std::sync::Arc<dyn Fn() -> String + Send + Sync> = {
+        let base_url = signaling_base_url.clone();
+        let sync_room = sync_room.clone();
+        let password = signaling_room_password.clone();
+        std::sync::Arc::new(move || {
+            signaling_url_with_native_metadata(&base_url, &sync_room, &password)
+        })
+    };
     let ice_servers = ice_servers_from_sync_config(&store::sync_config(&root)?.ice_servers);
     let peer_session_id = format!("rxdb-rs-{}", Uuid::new_v4().simple());
     let database_path = store::rxdb_store_path(&root);
@@ -1233,13 +1339,13 @@ async fn run_native_peer(
         );
     } else {
         let topic = sync_room.clone();
-        let multi_signaling_url = signaling_url.clone();
+        let multi_signaling_url_provider = std::sync::Arc::clone(&signaling_url_provider);
         let multi_peer_session_id = peer_session_id.clone();
         let multi_ice_servers = ice_servers.clone();
-        let bringup = tokio::spawn(async move {
-            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi(
+        let mut bringup = tokio::spawn(async move {
+            rxdb::plugins::replication_webrtc::replicate_web_rtc_rs_multi_with_url_provider(
                 collection_list,
-                multi_signaling_url,
+                multi_signaling_url_provider,
                 topic,
                 multi_peer_session_id,
                 multi_ice_servers,
@@ -1250,9 +1356,14 @@ async fn run_native_peer(
             )
             .await
         });
+        // Bring-up failure is FATAL for this run: returning the error hands
+        // control to the supervision loop, which respawns with backoff. The
+        // previous behavior — log and keep running with an empty pool list —
+        // produced the canonical zombie: heartbeat "running", zero
+        // replication, no retry, until a manual daemon restart.
         match tokio::time::timeout(
             Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-            bringup,
+            &mut bringup,
         )
         .await
         {
@@ -1268,19 +1379,23 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(&pool, &database);
+                NATIVE_PEER_REPLICATION_UP.store(true, Ordering::SeqCst);
                 pools.push(pool);
             }
             Ok(Ok(Err(err))) => {
-                eprintln!("[business-os] multiplexed WebRTC replication bring-up failed: {err}");
+                anyhow::bail!("multiplexed WebRTC replication bring-up failed: {err}");
             }
             Ok(Err(join_err)) => {
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication bring-up task panicked: {join_err}"
-                );
+                anyhow::bail!("multiplexed WebRTC replication bring-up task panicked: {join_err}");
             }
             Err(_) => {
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication bring-up timed out after {}s",
+                // Abort the in-flight attempt: letting it run detached used
+                // to leak a LIVE orphan replication session (joined to the
+                // room under this peer's session id, answering handshakes,
+                // no demand-file sources, uncancelable).
+                bringup.abort();
+                anyhow::bail!(
+                    "multiplexed WebRTC replication bring-up timed out after {}s",
                     NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS
                 );
             }
@@ -1394,6 +1509,7 @@ async fn run_native_peer(
     let mut watchdog =
         tokio::time::interval(Duration::from_secs(NATIVE_PEER_WATCHDOG_INTERVAL_SECS));
     watchdog.tick().await; // first tick fires immediately; consume it.
+    let mut exit = NativePeerExit::Shutdown;
     loop {
         tokio::select! {
             _ = &mut shutdown_rx => {
@@ -1410,15 +1526,17 @@ async fn run_native_peer(
                 if wedged {
                     eprintln!(
                         "[business-os] native rxdb peer watchdog: heartbeat stale ({:?} ms); \
-                         shutting down to release the process lock for a clean restart",
+                         shutting down for a supervised respawn",
                         heartbeat_age_ms
                     );
+                    exit = NativePeerExit::WatchdogStale;
                     break;
                 }
             }
         }
     }
 
+    NATIVE_PEER_REPLICATION_UP.store(false, Ordering::SeqCst);
     peer.shutdown().await;
     if let Ok(mut current) = NATIVE_PEER.lock() {
         if current
@@ -1429,9 +1547,12 @@ async fn run_native_peer(
             *current = None;
         }
     }
+    // NATIVE_PEER_STARTED stays true here: the supervision loop in
+    // `spawn_native_peer` owns that flag and only clears it when it decides
+    // not to respawn. Clearing it from inside a run opened a window where a
+    // concurrent `ensure_native_peer` spawned a SECOND peer thread.
     NATIVE_PEER_RUNNING.store(false, Ordering::SeqCst);
-    NATIVE_PEER_STARTED.store(false, Ordering::SeqCst);
-    Ok(())
+    Ok(exit)
 }
 
 fn ice_servers_from_sync_config(values: &[Value]) -> Vec<RTCIceServer> {
@@ -1612,6 +1733,10 @@ fn write_native_peer_heartbeat(
         "peer_session_id": peer_session_id,
         "updated_at_ms": now_ms() as u64,
         "database_path": database_path.display().to_string(),
+        // Replication liveness rides on every heartbeat: "process alive" and
+        // "replication session up" are different facts, and conflating them
+        // hid bring-up failures behind a healthy-looking status.
+        "replicationUp": NATIVE_PEER_REPLICATION_UP.load(Ordering::SeqCst),
     });
     let temporary_path = path.with_extension("status.json.tmp");
     fs::write(&temporary_path, serde_json::to_vec_pretty(&payload)?).with_context(|| {

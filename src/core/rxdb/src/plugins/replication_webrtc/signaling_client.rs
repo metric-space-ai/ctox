@@ -14,6 +14,7 @@
 //! (`connection_handler_rs`) consumes peer-list changes and signal frames to
 //! drive ICE/SDP exchange with webrtc-rs.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::Once;
@@ -57,11 +58,23 @@ type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
 
 pub struct SignalingClient {
+    /// URL of the initial connect (identification/logging only — reconnects
+    /// ask `url_provider` for a fresh URL).
     pub url: String,
+    /// Produces the URL for every (re)connect attempt. Time-windowed query
+    /// params (`token_iat`/`token_exp`, TTL 24h) used to be frozen into the
+    /// connect-time URL; after >24h uptime any socket drop then turned into a
+    /// permanent join-rejection loop. The provider recomputes them per attempt.
+    url_provider: Arc<dyn Fn() -> String + Send + Sync>,
     /// Stream of every server frame we received.
     server_messages: RxSubject<ServerToClient>,
     /// Holds the latest list of peer ids we're co-resident with.
     peer_list: RxBehaviorSubject<Vec<PeerId>>,
+    /// Role metadata per room member (from the `joined` peer descriptors).
+    /// Drives the initiator decision in the connection handler: the browser
+    /// bundle always initiates toward `ctox_instance`, so we must never
+    /// initiate toward a `browser` peer.
+    peer_roles: PlMutex<HashMap<PeerId, String>>,
     /// Our server-issued peer id, once the `init` frame arrives.
     own_peer_id: RxBehaviorSubject<Option<PeerId>>,
     joined_room: PlMutex<Option<RoomId>>,
@@ -77,12 +90,26 @@ pub struct SignalingClient {
 impl SignalingClient {
     /// Connect to a signaling server (e.g. `ws://localhost:8080`).
     pub async fn connect(url: impl Into<String>) -> Result<Arc<Self>, RxError> {
-        let url_string = url.into();
+        let url_string: String = url.into();
+        Self::connect_with_url_provider(move || url_string.clone()).await
+    }
+
+    /// Connect with a URL provider that is re-evaluated on every reconnect
+    /// attempt, so freshness-windowed query params stay valid across long
+    /// uptimes.
+    pub async fn connect_with_url_provider<F>(url_provider: F) -> Result<Arc<Self>, RxError>
+    where
+        F: Fn() -> String + Send + Sync + 'static,
+    {
+        let url_provider: Arc<dyn Fn() -> String + Send + Sync> = Arc::new(url_provider);
+        let url_string = url_provider();
         let (write_half, read_half) = establish_ws(&url_string).await?;
         let client = Arc::new(Self {
             url: url_string,
+            url_provider,
             server_messages: RxSubject::new(),
             peer_list: RxBehaviorSubject::new(Vec::new()),
+            peer_roles: PlMutex::new(HashMap::new()),
             own_peer_id: RxBehaviorSubject::new(None),
             joined_room: PlMutex::new(None),
             writer: TokioMutex::new(Some(write_half)),
@@ -111,7 +138,8 @@ impl SignalingClient {
                         return;
                     }
                     tokio::time::sleep(delay).await;
-                    match establish_ws(&supervisor_client.url).await {
+                    let fresh_url = (supervisor_client.url_provider)();
+                    match establish_ws(&fresh_url).await {
                         Ok((write_half, new_read)) => {
                             *supervisor_client.writer.lock().await = Some(write_half);
                             read_half = new_read;
@@ -217,6 +245,13 @@ impl SignalingClient {
 
     pub fn peer_list_stream(&self) -> RxStream<Vec<PeerId>> {
         self.peer_list.subscribe()
+    }
+
+    /// Role a room member declared in its signaling-URL query
+    /// (`browser`, `ctox_instance`, `desktop_shell`, …), if the server's
+    /// `joined` broadcast carried peer descriptors.
+    pub fn peer_role(&self, peer_id: &str) -> Option<String> {
+        self.peer_roles.lock().get(peer_id).cloned()
     }
 
     pub fn own_peer_id(&self) -> Option<PeerId> {
@@ -326,8 +361,44 @@ async fn run_reader(client: &Arc<SignalingClient>, read_half: &mut WsRead) {
                         ServerToClient::Init { your_peer_id } => {
                             client.own_peer_id.next(Some(your_peer_id.clone()));
                         }
-                        ServerToClient::Joined { other_peer_ids } => {
+                        ServerToClient::Joined {
+                            other_peer_ids,
+                            peers,
+                        } => {
+                            // Update the role map BEFORE emitting the peer
+                            // list, so the connection handler's initiator
+                            // decision sees fresh roles.
+                            {
+                                let mut roles = client.peer_roles.lock();
+                                roles.clear();
+                                for descriptor in peers.iter() {
+                                    if !descriptor.peer_id.is_empty() {
+                                        roles.insert(
+                                            descriptor.peer_id.clone(),
+                                            descriptor.role.clone(),
+                                        );
+                                    }
+                                }
+                            }
                             client.peer_list.next(other_peer_ids.clone());
+                        }
+                        ServerToClient::CtoxError {
+                            scope,
+                            code,
+                            reason,
+                        } => {
+                            // The server closes the socket right after this
+                            // frame. Without surfacing it, a rejected join
+                            // (expired token, protocol/instance mismatch) is
+                            // indistinguishable from a network blip and the
+                            // supervisor reconnect-hammers silently.
+                            tracing::warn!(
+                                target: "ctox_rxdb::signaling_client",
+                                scope = %scope,
+                                code = %code,
+                                reason = %reason,
+                                "signaling server rejected this peer (control plane)",
+                            );
                         }
                         _ => {}
                     }

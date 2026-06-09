@@ -643,6 +643,13 @@ class CtoxWebRtcReplicationState {
     this.pullAgainAfterCurrent = false;
     this.pushInProgress = false;
     this.pushInProgressPromise = null;
+    this.pushAgainAfterCurrent = false;
+    this.pullRetryTimer = null;
+    this.pushRetryTimer = null;
+    // Checkpoints retained across a peer drop, keyed by the remote storage
+    // epoch + native peer session. Reused on reconnect when both still match,
+    // so a transport blip does not force a from-scratch resync.
+    this.retainedCheckpoints = null;
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
     this.schemaHashValue = null;
@@ -710,7 +717,10 @@ class CtoxWebRtcReplicationState {
 
   onMasterChange() {
     if (this.cancelled) return;
-    this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+    this.pullFromRemotePeers().catch((error) => {
+      this.error$.next(error);
+      this.schedulePullRetry();
+    });
   }
 
   emitError(error) {
@@ -746,6 +756,26 @@ class CtoxWebRtcReplicationState {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
+    // Seed retained checkpoints when the native storage generation matches —
+    // the catch-up pull/push below then resumes incrementally instead of
+    // re-reading everything from a null checkpoint after each reconnect.
+    const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
+    const retained = this.retainedCheckpoints;
+    if (retained && validityKey) {
+      if (retained.validityKey === validityKey) {
+        if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
+          this.pullCheckpointsByPeer.set(peerId, retained.pull);
+        }
+        if (retained.push && !this.pushCheckpointsByPeer.has(peerId)) {
+          this.pushCheckpointsByPeer.set(peerId, retained.push);
+        }
+      } else {
+        // Different daemon run / storage generation: the retained
+        // checkpoints are meaningless there — drop them so this and every
+        // later reconnect does the (correct) full resync.
+        this.retainedCheckpoints = null;
+      }
+    }
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     peerStates.set(peerId, {
       peerId,
@@ -795,6 +825,9 @@ class CtoxWebRtcReplicationState {
         const peerIds = this.openPeerIds();
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
         this.reportPeerResults(results, peerIds);
+        if (results.some((result) => result.status === 'rejected')) {
+          this.schedulePullRetry();
+        }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
     })().finally(() => {
       this.pullInProgress = false;
@@ -802,6 +835,35 @@ class CtoxWebRtcReplicationState {
       this.pullAgainAfterCurrent = false;
     });
     return this.pullInProgressPromise;
+  }
+
+  // Pulls are otherwise purely event-driven (`masterChangeStream$`): a pull
+  // that failed past its in-band attempts was simply LOST until the next
+  // remote write produced a new master-change event — a quiet collection
+  // stayed stale until reload. Re-arm a single retry timer with the
+  // configured `retryTime` (which was previously stored and never read).
+  schedulePullRetry() {
+    if (this.cancelled || this.pullRetryTimer) return;
+    this.pullRetryTimer = setTimeout(() => {
+      this.pullRetryTimer = null;
+      if (this.cancelled) return;
+      this.pullFromRemotePeers().catch((error) => {
+        this.error$.next(error);
+        this.schedulePullRetry();
+      });
+    }, Math.max(1000, Number(this.retryTime) || 5000));
+  }
+
+  schedulePushRetry() {
+    if (this.cancelled || this.pushRetryTimer) return;
+    this.pushRetryTimer = setTimeout(() => {
+      this.pushRetryTimer = null;
+      if (this.cancelled) return;
+      this.pushToRemotePeers().catch((error) => {
+        this.error$.next(error);
+        this.schedulePushRetry();
+      });
+    }, Math.max(1000, Number(this.retryTime) || 5000));
   }
 
   async pullFromPeer(peerId) {
@@ -861,16 +923,31 @@ class CtoxWebRtcReplicationState {
 
   async pushToRemotePeers() {
     if (!this.push) return;
-    if (this.pushInProgressPromise) return this.pushInProgressPromise;
+    if (this.pushInProgressPromise) {
+      // Re-run after the in-flight push: a local write that lands during the
+      // masterWrite round-trip used to be coalesced into the running push and
+      // never re-read — the trailing writes of any burst sat unsynced until
+      // the NEXT local write. Mirrors the pull loop's re-run flag.
+      this.pushAgainAfterCurrent = true;
+      return this.pushInProgressPromise;
+    }
     this.pushInProgress = true;
+    this.pushAgainAfterCurrent = false;
     this.pushInProgressPromise = (async () => {
-      const peerIds = this.openPeerIds();
       try {
-        const results = await Promise.allSettled(peerIds.map((peerId) => this.pushToPeer(peerId)));
-        this.reportPeerResults(results, peerIds);
+        do {
+          this.pushAgainAfterCurrent = false;
+          const peerIds = this.openPeerIds();
+          const results = await Promise.allSettled(peerIds.map((peerId) => this.pushToPeer(peerId)));
+          this.reportPeerResults(results, peerIds);
+          if (results.some((result) => result.status === 'rejected')) {
+            this.schedulePushRetry();
+          }
+        } while (this.pushAgainAfterCurrent && !this.cancelled);
       } finally {
         this.pushInProgress = false;
         this.pushInProgressPromise = null;
+        this.pushAgainAfterCurrent = false;
       }
     })();
     return this.pushInProgressPromise;
@@ -981,6 +1058,14 @@ class CtoxWebRtcReplicationState {
       clearInterval(this.periodicPushTimer);
       this.periodicPushTimer = null;
     }
+    if (this.pullRetryTimer) {
+      clearTimeout(this.pullRetryTimer);
+      this.pullRetryTimer = null;
+    }
+    if (this.pushRetryTimer) {
+      clearTimeout(this.pushRetryTimer);
+      this.pushRetryTimer = null;
+    }
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
@@ -1069,12 +1154,32 @@ class CtoxWebRtcReplicationState {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     if (!peerStates.has(peerId)) return;
+    // Retain the checkpoints (validity-keyed) BEFORE dropping the peer.
+    // Discarding them outright meant EVERY reconnect re-synced the whole
+    // collection from a null checkpoint — across ~80 collections that
+    // saturated the fresh DataChannel and manufactured the next timeouts.
+    const validityKey = this.checkpointValidityKeyForPeer(peerId);
+    const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
+    const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
+    if (validityKey && (retainedPull || retainedPush)) {
+      this.retainedCheckpoints = { validityKey, pull: retainedPull, push: retainedPush };
+    }
     peerStates.delete(peerId);
     this.pullCheckpointsByPeer.delete(peerId);
     this.pushCheckpointsByPeer.delete(peerId);
     this.peerStates$.next(peerStates);
     if (!peerStates.size) this.active$.next(false);
     this.ctox?.onPeerClose?.({ peerId, reason });
+  }
+
+  // Checkpoints are only reusable against the SAME native storage generation:
+  // the storage epoch (bumped on a wire-format/storage reset) plus the native
+  // peer session id (new on every daemon run). A daemon restart therefore
+  // still forces a conservative full resync; a transport-level reconnect
+  // within one daemon run resumes from the last acknowledged checkpoint.
+  checkpointValidityKeyForPeer(peerId) {
+    const remoteProtocol = this.remoteProtocolForPeer(peerId);
+    return checkpointValidityKeyFromProtocol(remoteProtocol);
   }
 
   remoteProtocolForPeer(peerId) {
@@ -1239,6 +1344,22 @@ class CtoxWebRtcReplicationState {
 }
 
 const BROWSER_PEER_SESSION_ID = createBrowserPeerSessionId();
+
+// Native storage generation a checkpoint is valid against: storage epoch +
+// the native peer's per-run session id. Both must match for retained
+// checkpoints to be reused after a reconnect; empty when either is missing
+// (then no reuse happens and the conservative full resync runs).
+function checkpointValidityKeyFromProtocol(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return '';
+  const epoch = typeof remoteProtocol.checkpoint?.epoch === 'string'
+    ? remoteProtocol.checkpoint.epoch.trim()
+    : '';
+  const sessionId = typeof remoteProtocol.peerSession?.sessionId === 'string'
+    ? remoteProtocol.peerSession.sessionId.trim()
+    : '';
+  if (!epoch || !sessionId) return '';
+  return `${epoch}|${sessionId}`;
+}
 
 function browserInitiatorPeerId(topic) {
   const origin = browserPeerOriginId();

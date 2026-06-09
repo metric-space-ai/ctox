@@ -23,6 +23,27 @@ pub type PeerId = String;
 /// (`validateIdString`).
 pub type RoomId = String;
 
+/// Per-peer descriptor the CTOX signaling server includes on `joined`
+/// broadcasts. Carries the role metadata the peers declared in their
+/// signaling-URL query (`role=browser|ctox_instance|…`). Optional on the
+/// wire — an upstream-shaped server sends only `otherPeerIds`.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SignalingPeerDescriptor {
+    #[serde(default)]
+    pub peer_id: PeerId,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub protocol: String,
+    #[serde(default)]
+    pub instance_id: String,
+    #[serde(default)]
+    pub client: String,
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+}
+
 // ref: rxdb/src/plugins/replication-webrtc/signaling-server.ts:91 + 178-181
 /// Frame received from the signaling server.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -37,6 +58,9 @@ pub enum ServerToClient {
     Joined {
         #[serde(rename = "otherPeerIds")]
         other_peer_ids: Vec<PeerId>,
+        /// CTOX extension: role/protocol descriptors for every room member.
+        #[serde(default)]
+        peers: Vec<SignalingPeerDescriptor>,
     },
     /// Relayed from another peer; opaque `data` is the simple-peer SDP/ICE payload.
     Signal {
@@ -46,6 +70,19 @@ pub enum ServerToClient {
         #[serde(rename = "receiverPeerId")]
         receiver_peer_id: PeerId,
         data: Value,
+    },
+    /// Control-plane rejection (expired/invalid token, protocol mismatch,
+    /// instance mismatch). The CTOX signaling server sends this right before
+    /// closing the socket; surfacing it is the only way a peer can tell a
+    /// rejected join apart from a network blip.
+    #[serde(rename_all = "camelCase")]
+    CtoxError {
+        #[serde(default)]
+        scope: String,
+        #[serde(default)]
+        code: String,
+        #[serde(default)]
+        reason: String,
     },
     /// Catch-all so unknown frames don't tear down the connection.
     #[serde(other)]

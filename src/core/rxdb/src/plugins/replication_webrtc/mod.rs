@@ -19,12 +19,14 @@ pub mod webrtc_types;
 pub use connection_handler_rs::{WebRTCRsConfig, WebRTCRsConnectionHandler, WebRTCRsPeer};
 pub use index_mod::{
     master_change_stream_id, replicate_web_rtc, replicate_web_rtc_multi, replicate_web_rtc_rs,
-    replicate_web_rtc_rs_multi, replicate_web_rtc_with_options, RxWebRTCReplicationPool,
-    RxWebRTCReplicationState, SyncOptionsWebRTC, SyncOptionsWebRTCRs,
+    replicate_web_rtc_rs_multi, replicate_web_rtc_rs_multi_with_url_provider,
+    replicate_web_rtc_with_options, RxWebRTCReplicationPool, RxWebRTCReplicationState,
+    SyncOptionsWebRTC, SyncOptionsWebRTCRs,
 };
 pub use signaling_client::SignalingClient;
 pub use signaling_protocol::{
-    ClientToServer, PeerId, RoomId, ServerToClient, PEER_ID_LENGTH, SIMPLE_PEER_PING_INTERVAL_MS,
+    ClientToServer, PeerId, RoomId, ServerToClient, SignalingPeerDescriptor, PEER_ID_LENGTH,
+    SIMPLE_PEER_PING_INTERVAL_MS,
 };
 pub use webrtc::peer_connection::RTCIceServer;
 pub use webrtc_helper::{is_master_in_webrtc_replication, send_message_and_await_answer};

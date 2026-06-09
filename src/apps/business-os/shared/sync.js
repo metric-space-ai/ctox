@@ -217,6 +217,12 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           collection,
           recordCollection,
           onFatalPeerError: (error) => scheduleGlobalRestart(collection, error),
+          // Passed down explicitly: startWebRtcReplication is a module-level
+          // function, so it cannot see this closure. The previous direct call
+          // threw a ReferenceError that the metric-subscription wrapper
+          // swallowed — the primary "peer dropped → schedule repair" trigger
+          // never ran.
+          scheduleRestart: scheduleRestartOfUnhealthyCollections,
         });
       });
       collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(500));
@@ -479,13 +485,13 @@ function signalingUrlMatchKey(value) {
   }
 }
 
-async function startWebRtcReplication({ db, config, collection, recordCollection, onFatalPeerError }) {
+async function startWebRtcReplication({ db, config, collection, recordCollection, onFatalPeerError, scheduleRestart }) {
   const rxCollection = db?.raw?.[collection] || db?.collection?.(collection);
   if (!rxCollection) {
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260607-outbound-rxdb-main1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260609-webrtc-stability1');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -684,6 +690,24 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       onFatalPeerError?.(lifecycleEvent);
       return;
     }
+    if (isTransientSignalingSocketError(error)) {
+      // The shared native peer auto-reconnects its signaling socket with
+      // backoff; a socket-level blip is not a per-collection failure. The
+      // generic fallthrough below used to mark every collection `error` and
+      // arm a mass hard-restart that raced the in-progress reconnect — every
+      // Wi-Fi blip turned into stop/start churn across ~80 collections.
+      // Record a reconnecting hint; the unhealthy-collection sweep repairs
+      // it only if it stays down.
+      recordCollection?.(collection, {
+        status: 'reconnecting',
+        connectionStatus: 'reconnecting',
+        lastError: null,
+        lastLifecycleEvent: serializeError(error),
+        reconnectingSince: new Date().toISOString(),
+      });
+      scheduleRestart?.(collection, 15000);
+      return;
+    }
     if (now - lastErrorLogAt > 5000) {
       lastErrorLogAt = now;
       console.error(`[business-os] WebRTC replication failed for ${collection}`, error);
@@ -720,7 +744,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
       connectionStatus: observedActive ? 'reconnecting' : 'connecting',
       reconnectingSince,
     });
-    if (observedActive) scheduleRestartOfUnhealthyCollections(collection, 750);
+    if (observedActive) scheduleRestart?.(collection, 750);
   });
   subscribeReplicationMetric(replicationState.canceled$, subscriptions, (canceled) => {
     if (stopped) return;
@@ -1489,7 +1513,13 @@ function isLifecycleEvent(value) {
 
 function subscribeReplicationMetric(observable, subscriptions, onValue) {
   const subscription = observable?.subscribe?.((value) => {
-    try { onValue(value); } catch {}
+    try {
+      onValue(value);
+    } catch (error) {
+      // Never swallow silently: this wrapper hid a ReferenceError in the
+      // active$ handler for months, which disabled the peer-drop repair path.
+      console.error('[business-os] replication metric handler failed', error);
+    }
   });
   if (subscription) subscriptions.push(subscription);
 }

@@ -308,6 +308,7 @@ async fn main() {
                             id: String::new(),
                             method: String::new(),
                             params: vec![],
+                            collection: None,
                         });
 
                 let peer = DaemonPeer(peer_identity.clone());

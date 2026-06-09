@@ -27,11 +27,23 @@ pub async fn is_master_in_webrtc_replication(
     ha > hb
 }
 
+/// Upper bound for one request/answer round-trip. Generous on purpose: large
+/// answers travel through the chunked frame transport whose own ack timeouts
+/// (30s per window) bound a genuinely wedged peer well below this. The
+/// browser side uses 15s/60s request timeouts, so 60s never fails first.
+const REQUEST_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 // ref: rxdb/src/plugins/replication-webrtc/webrtc-helper.ts:37-54
 /// Send a message to the peer and await the answer. The answer is identified by
 /// `message.id` on the response stream and is scoped to `peer`. Returns an
-/// `RxError` with code `RC_WEBRTC_PEER` if the connection drops before an
-/// answer arrives.
+/// `RxError` with code `RC_WEBRTC_PEER` if the peer disconnects, the handler
+/// shuts down, or no answer arrives within [`REQUEST_ANSWER_TIMEOUT`].
+///
+/// The disconnect race matters: the per-subscriber response stream ends only
+/// when the whole HANDLER is dropped, not when one peer dies. Without racing
+/// the peer's disconnect event, a request in flight when the peer dropped
+/// hung its caller forever (stuck handshakes, stuck fork pull/push that
+/// `cancel()` could not interrupt).
 pub async fn send_message_and_await_answer<H>(
     handler: Arc<H>,
     peer: H::Peer,
@@ -42,22 +54,72 @@ where
 {
     let request_id = message.id.clone();
     let peer_for_filter = peer.clone();
-    // Subscribe to the response stream BEFORE sending to avoid races where
-    // the answer arrives between send() and subscribe().
+    // Subscribe to the response + disconnect streams BEFORE sending to avoid
+    // races where the answer (or the disconnect) lands between send() and
+    // subscribe().
     let mut response_stream = handler.response_stream();
+    let mut disconnect_stream = handler.disconnect_stream();
     handler
         .send(&peer, WebRTCWireFrame::Message(message))
         .await?;
-    while let Some(item) = response_stream.next().await {
-        if item.peer == peer_for_filter && item.response.id == request_id {
-            return Ok(item.response);
+    let deadline = tokio::time::sleep(REQUEST_ANSWER_TIMEOUT);
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            item = response_stream.next() => {
+                match item {
+                    Some(item) => {
+                        if item.peer == peer_for_filter && item.response.id == request_id {
+                            return Ok(item.response);
+                        }
+                    }
+                    None => {
+                        return Err(new_rx_error(
+                            "RC_WEBRTC_PEER",
+                            Some(serde_json::json!({
+                                "message": "WebRTC response stream ended before an answer was received",
+                                "requestId": request_id,
+                            })),
+                        ));
+                    }
+                }
+            }
+            gone = disconnect_stream.next() => {
+                match gone {
+                    Some(p) => {
+                        if p == peer_for_filter {
+                            return Err(new_rx_error(
+                                "RC_WEBRTC_PEER",
+                                Some(serde_json::json!({
+                                    "message": "peer disconnected before an answer was received",
+                                    "requestId": request_id,
+                                })),
+                            ));
+                        }
+                    }
+                    None => {
+                        return Err(new_rx_error(
+                            "RC_WEBRTC_PEER",
+                            Some(serde_json::json!({
+                                "message": "WebRTC disconnect stream ended before an answer was received",
+                                "requestId": request_id,
+                            })),
+                        ));
+                    }
+                }
+            }
+            _ = &mut deadline => {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": format!(
+                            "no answer within {}s",
+                            REQUEST_ANSWER_TIMEOUT.as_secs()
+                        ),
+                        "requestId": request_id,
+                    })),
+                ));
+            }
         }
     }
-    Err(new_rx_error(
-        "RC_WEBRTC_PEER",
-        Some(serde_json::json!({
-            "message": "WebRTC response stream ended before an answer was received",
-            "requestId": request_id,
-        })),
-    ))
 }

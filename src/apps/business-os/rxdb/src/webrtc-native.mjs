@@ -161,8 +161,8 @@ export class CtoxWebRtcNativePeer {
     this.socket = socket;
     socket.onopen = () => {
       socket.send(JSON.stringify({ type: 'join', room: this.options.room }));
-      // Reconnect succeeded (or first connect) — reset the backoff.
-      this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
+      // Backoff is reset on the `joined` broadcast (proof the server accepted
+      // us), not here: an open-then-rejected socket must keep backing off.
       this.events.emit('signaling-open', { url: redactUrl(url) });
     };
     socket.onmessage = (event) => this.handleSignalingMessage(event.data);
@@ -535,9 +535,19 @@ export class CtoxWebRtcNativePeer {
       return;
     }
     if (message.type === 'init' || message.type === 'joined' || message.type === 'ctoxPresence') {
-      const ownPeerId = message.yourPeerId || message.peerId || this.options.clientId;
-      if (ownPeerId && ownPeerId !== this.options.clientId) {
-        this.options.clientId = String(ownPeerId);
+      // Only `yourPeerId` may rename us. `message.peerId` on joined/presence
+      // frames plausibly names the REMOTE peer that triggered the broadcast —
+      // adopting it corrupted senderPeerId on all subsequent signals and made
+      // the initiator/target checks reject the native peer.
+      if (message.yourPeerId && message.yourPeerId !== this.options.clientId) {
+        this.options.clientId = String(message.yourPeerId);
+      }
+      if (message.type === 'joined') {
+        // A joined broadcast proves the server ACCEPTED our join — only now
+        // reset the reconnect backoff. Resetting on socket-open degenerated
+        // into a 1s-interval storm when the server accepted the socket and
+        // then rejected the join (e.g. control-plane errors).
+        this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
       }
       const descriptors = signalingPeerDescriptors(message);
       const previousMetadata = new Map(this.peerMetadata);
@@ -1984,6 +1994,18 @@ function buildSignalingUrl(options) {
   if (options.tokenExpiresAt) url.searchParams.set('token_exp', String(options.tokenExpiresAt));
   for (const capability of options.capabilities || []) {
     url.searchParams.append('cap', capability);
+  }
+  // Re-stamp the token freshness window on EVERY connect attempt, keeping the
+  // original TTL length. The window used to be baked into the URL once at
+  // page load; a tab older than the TTL (24h) then reconnect-looped forever
+  // against "control plane token expired" rejections.
+  const issuedAt = Number(url.searchParams.get('token_iat') || 0);
+  const expiresAt = Number(url.searchParams.get('token_exp') || 0);
+  if (issuedAt > 0 && expiresAt > issuedAt) {
+    const ttlSeconds = expiresAt - issuedAt;
+    const now = Math.floor(Date.now() / 1000);
+    url.searchParams.set('token_iat', String(now));
+    url.searchParams.set('token_exp', String(now + ttlSeconds));
   }
   return url.toString();
 }
