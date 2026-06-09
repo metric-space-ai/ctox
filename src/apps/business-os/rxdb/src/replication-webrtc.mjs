@@ -729,7 +729,13 @@ class CtoxWebRtcReplicationState {
     }
     if (eventName === 'peer-state') {
       const stateName = detail?.state || '';
-      if (['closed', 'failed', 'disconnected'].includes(stateName)) {
+      // 'disconnected' is transient (the transport layer keeps the
+      // connection through a grace window and the Rust peer does the same).
+      // Dropping the replication peer state here while the DataChannel
+      // survived meant nobody re-added it after ICE recovered — the
+      // collection silently stopped replicating. Only terminal states drop
+      // the peer; a real teardown also emits 'peer-close'.
+      if (['closed', 'failed'].includes(stateName)) {
         this.removePeer(detail?.peerId, `peer-${stateName}`);
       }
     }

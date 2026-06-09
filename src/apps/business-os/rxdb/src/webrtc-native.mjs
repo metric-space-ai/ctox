@@ -53,6 +53,9 @@ const RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45_000;
 const RTC_HANDSHAKE_TIMEOUT_MS = 15_000;
 const GLOBAL_RTC_CONNECTION_POOL_KEY = Symbol.for('ctox.rxdb.webrtc-rtc-pool.v1');
 const RECENT_RTC_EVENT_LIMIT = 40;
+// Grace window for transient ICE 'disconnected' before tearing the
+// connection down (mirrors the Rust peer's keep-through-Disconnected rule).
+const ICE_DISCONNECTED_GRACE_MS = 8_000;
 // Signaling reconnection backoff. Post-multiplex the whole room shares ONE
 // signaling socket; a clean close used to only emit `signaling-close` (which had
 // no listener), so the peer could never re-discover the native side until an
@@ -173,6 +176,9 @@ export class CtoxWebRtcNativePeer {
     this.forceInitiatorPeers = new Set();
     this.closed = false;
     this.signalingReconnectTimer = null;
+    // Per-peer grace timers for transient ICE 'disconnected' (see
+    // onconnectionstatechange below).
+    this.disconnectedGraceTimers = new Map();
     this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
   }
 
@@ -220,6 +226,8 @@ export class CtoxWebRtcNativePeer {
       clearTimeout(this.signalingReconnectTimer);
       this.signalingReconnectTimer = null;
     }
+    for (const timer of this.disconnectedGraceTimers.values()) clearTimeout(timer);
+    this.disconnectedGraceTimers.clear();
     cancelRtcPeerConnectionRequestsForOwner(this, 'peer-close');
     this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {
@@ -755,7 +763,31 @@ export class CtoxWebRtcNativePeer {
       const state = peer.connectionState;
       this.recordConnectionEvent(connection, 'connection-state', { state });
       this.events.emit('peer-state', { peerId: remotePeerId, state });
-      if (['closed', 'failed', 'disconnected'].includes(state)) {
+      if (state === 'disconnected') {
+        // ICE 'disconnected' is usually transient (NAT rebind, brief Wi-Fi
+        // blip) and recovers on its own — the Rust peer deliberately keeps
+        // the connection through it for the same reason. Tearing down
+        // immediately turned every blip into a full reconnect cycle (15-45s
+        // of handshake timeouts). Give ICE a grace window; tear down only if
+        // it has not recovered by then. 'failed'/'closed' stay immediate.
+        const existing = this.disconnectedGraceTimers.get(remotePeerId);
+        if (existing) clearTimeout(existing);
+        this.disconnectedGraceTimers.set(remotePeerId, setTimeout(() => {
+          this.disconnectedGraceTimers.delete(remotePeerId);
+          const live = this.connections.get(remotePeerId);
+          const liveState = live?.peer?.connectionState || '';
+          if (live === connection && ['disconnected', 'failed'].includes(liveState)) {
+            this.removeConnection(remotePeerId, 'peer-disconnected-grace-expired');
+          }
+        }, ICE_DISCONNECTED_GRACE_MS));
+        return;
+      }
+      const graceTimer = this.disconnectedGraceTimers.get(remotePeerId);
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        this.disconnectedGraceTimers.delete(remotePeerId);
+      }
+      if (['closed', 'failed'].includes(state)) {
         this.removeConnection(remotePeerId, `peer-${state}`);
       }
     };

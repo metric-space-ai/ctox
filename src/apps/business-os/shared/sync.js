@@ -200,6 +200,13 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
         const currentBridge = await withTimeout(currentBridgePromise, 1000);
         const currentStatus = current.connectionStatus || current.status || '';
         const restartNeeded = ['reconnecting', 'failed', 'error', 'stopped'].includes(currentStatus);
+        if (currentBridge?.mode === 'pending') {
+          // A 'pending' stub means the collection was not registered when
+          // the bridge was created (schema/startup race). Reusing the cached
+          // stub disabled that collection's sync until a page reload — drop
+          // it and fall through to a fresh start instead.
+          bridges.delete(collection);
+        } else {
         const healthyReuse = Boolean(
           currentBridge
           && current.initialReplicationAt
@@ -226,6 +233,7 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           return currentBridgePromise;
         }
         await this.stopCollection(collection);
+        }
       }
       recordCollection(collection, { status: 'starting' });
       const bridgePromise = collectionStartQueue.then(() => {
@@ -510,7 +518,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260610-rxdb-hardening1');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260610-rxdb-hardening2');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }
@@ -774,14 +782,16 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     if (stopped) return;
     if (canceled) recordCollection?.(collection, { status: 'stopped', connectionStatus: 'stopped' });
   });
-  watchInitialReplication({
+  const stopInitialReplicationWatch = watchInitialReplication({
     replicationState,
     collection,
     recordCollection,
     isStopped: () => stopped,
     startedAt: initialReplicationStartedAt,
     canCompleteInitialReplication: () => nativePeerProtocolReady && hasOpenNativePeerState(replicationState),
+    scheduleRestart,
   });
+  subscriptions.push({ unsubscribe: stopInitialReplicationWatch });
 
   return {
     mode: 'webrtc',
@@ -813,6 +823,13 @@ function formatLifecycleError(error) {
   }
 }
 
+// How long the initial catch-up may run without completing before the
+// collection is declared stalled and handed to the restart sweep. The
+// awaiter promise can hang FOREVER (handshake done, pull stuck) — without
+// this watchdog the collection showed 'connected'/'connecting' with no data
+// until a page reload, invisible to every repair path.
+const INITIAL_REPLICATION_STALL_MS = 45_000;
+
 function watchInitialReplication({
   replicationState,
   collection,
@@ -820,6 +837,7 @@ function watchInitialReplication({
   isStopped,
   startedAt,
   canCompleteInitialReplication,
+  scheduleRestart,
 }) {
   const awaitInitialReplication = initialReplicationAwaiter(replicationState);
   if (!awaitInitialReplication) {
@@ -827,8 +845,18 @@ function watchInitialReplication({
       initialReplicationState: 'unsupported',
       initialReplicationStartedAt: startedAt || new Date().toISOString(),
     });
-    return;
+    return () => {};
   }
+  const stallTimer = setTimeout(() => {
+    if (isStopped?.()) return;
+    recordCollection?.(collection, {
+      status: 'reconnecting',
+      connectionStatus: 'reconnecting',
+      initialReplicationState: 'stalled',
+      reconnectingSince: new Date().toISOString(),
+    });
+    scheduleRestart?.(collection, 1000);
+  }, INITIAL_REPLICATION_STALL_MS);
   recordCollection?.(collection, {
     initialReplicationState: 'pending',
     initialReplicationSource: awaitInitialReplication.source,
@@ -848,8 +876,27 @@ function watchInitialReplication({
           lastError: null,
         });
         const ready = await waitForCondition(canCompleteInitialReplication, 30000, 250, isStopped);
-        if (!ready || isStopped?.()) return;
+        if (isStopped?.()) {
+          clearTimeout(stallTimer);
+          return;
+        }
+        if (!ready) {
+          // Peer never became ready: do NOT give up silently (the old
+          // behavior left the collection in 'waiting-for-peer' forever).
+          // Mark it restartable and arm the sweep; the stall timer is no
+          // longer needed.
+          clearTimeout(stallTimer);
+          recordCollection?.(collection, {
+            status: 'reconnecting',
+            connectionStatus: 'reconnecting',
+            initialReplicationState: 'stalled-waiting-for-peer',
+            reconnectingSince: new Date().toISOString(),
+          });
+          scheduleRestart?.(collection, 1000);
+          return;
+        }
       }
+      clearTimeout(stallTimer);
       recordCollection?.(collection, {
         status: 'connected',
         connectionStatus: 'connected',
@@ -862,6 +909,7 @@ function watchInitialReplication({
       });
     })
     .catch((error) => {
+      clearTimeout(stallTimer);
       if (isStopped?.()) return;
       recordCollection?.(collection, {
         status: 'error',
@@ -871,6 +919,7 @@ function watchInitialReplication({
         lastError: serializeError(error),
       });
     });
+  return () => clearTimeout(stallTimer);
 }
 
 function waitForCondition(predicate, timeoutMs, intervalMs, isStopped) {

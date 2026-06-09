@@ -924,6 +924,7 @@ var RTC_CONNECTION_QUEUE_TIMEOUT_MS = 45e3;
 var RTC_HANDSHAKE_TIMEOUT_MS = 15e3;
 var GLOBAL_RTC_CONNECTION_POOL_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.webrtc-rtc-pool.v1");
 var RECENT_RTC_EVENT_LIMIT = 40;
+var ICE_DISCONNECTED_GRACE_MS = 8e3;
 var SIGNALING_RECONNECT_BASE_MS = 1e3;
 var SIGNALING_RECONNECT_MAX_MS = 3e4;
 var SHELL_CRITICAL_COLLECTIONS = /* @__PURE__ */ new Set([
@@ -1031,6 +1032,7 @@ var CtoxWebRtcNativePeer = class {
     this.forceInitiatorPeers = /* @__PURE__ */ new Set();
     this.closed = false;
     this.signalingReconnectTimer = null;
+    this.disconnectedGraceTimers = /* @__PURE__ */ new Map();
     this.signalingReconnectDelayMs = SIGNALING_RECONNECT_BASE_MS;
   }
   on(type, listener) {
@@ -1070,6 +1072,8 @@ var CtoxWebRtcNativePeer = class {
       clearTimeout(this.signalingReconnectTimer);
       this.signalingReconnectTimer = null;
     }
+    for (const timer of this.disconnectedGraceTimers.values()) clearTimeout(timer);
+    this.disconnectedGraceTimers.clear();
     cancelRtcPeerConnectionRequestsForOwner(this, "peer-close");
     this.connectionRequests.clear();
     for (const peerId of [...this.connections.keys()]) {
@@ -1571,7 +1575,25 @@ var CtoxWebRtcNativePeer = class {
       const state = peer.connectionState;
       this.recordConnectionEvent(connection, "connection-state", { state });
       this.events.emit("peer-state", { peerId: remotePeerId, state });
-      if (["closed", "failed", "disconnected"].includes(state)) {
+      if (state === "disconnected") {
+        const existing = this.disconnectedGraceTimers.get(remotePeerId);
+        if (existing) clearTimeout(existing);
+        this.disconnectedGraceTimers.set(remotePeerId, setTimeout(() => {
+          this.disconnectedGraceTimers.delete(remotePeerId);
+          const live = this.connections.get(remotePeerId);
+          const liveState = live?.peer?.connectionState || "";
+          if (live === connection && ["disconnected", "failed"].includes(liveState)) {
+            this.removeConnection(remotePeerId, "peer-disconnected-grace-expired");
+          }
+        }, ICE_DISCONNECTED_GRACE_MS));
+        return;
+      }
+      const graceTimer = this.disconnectedGraceTimers.get(remotePeerId);
+      if (graceTimer) {
+        clearTimeout(graceTimer);
+        this.disconnectedGraceTimers.delete(remotePeerId);
+      }
+      if (["closed", "failed"].includes(state)) {
         this.removeConnection(remotePeerId, `peer-${state}`);
       }
     };
@@ -4939,7 +4961,7 @@ var CtoxWebRtcReplicationState = class {
     }
     if (eventName === "peer-state") {
       const stateName = detail?.state || "";
-      if (["closed", "failed", "disconnected"].includes(stateName)) {
+      if (["closed", "failed"].includes(stateName)) {
         this.removePeer(detail?.peerId, `peer-${stateName}`);
       }
     }

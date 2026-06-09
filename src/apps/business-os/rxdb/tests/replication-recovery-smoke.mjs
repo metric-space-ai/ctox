@@ -137,6 +137,18 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
+// --- 4. transient 'disconnected' keeps the replication peer state ----------
+{
+  const state = await makeState('disconnected-grace');
+  const removed = [];
+  state.removePeer = (peerId, reason) => removed.push({ peerId, reason });
+  state.onSharedEvent('peer-state', { peerId: 'p1', state: 'disconnected' });
+  assert(removed.length === 0, "transient 'disconnected' must NOT drop the replication peer state");
+  state.onSharedEvent('peer-state', { peerId: 'p1', state: 'failed' });
+  assert(removed.length === 1 && removed[0].reason === 'peer-failed', "terminal 'failed' drops the peer");
+  await state.cancel();
+}
+
 console.log('ctox-rxdb replication recovery smoke OK');
 
 function assert(condition, message) {
