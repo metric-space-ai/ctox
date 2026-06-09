@@ -16,6 +16,7 @@ const MODULES = [
   'notes',
   'research',
   'app-store',
+  'iot',
   'matching',
   'reports',
   'tickets',

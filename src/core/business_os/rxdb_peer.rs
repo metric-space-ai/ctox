@@ -2077,10 +2077,15 @@ async fn consume_business_commands_loop(
     database: Arc<RxDatabase>,
     database_write_lock: Arc<AsyncMutex<()>>,
 ) {
+    // Per-command failure budget. A command that keeps failing to accept
+    // (e.g. a corrupt document) used to abort the WHOLE round via `?`, get
+    // re-sorted to the head on the next 1s tick, and starve every command
+    // behind it — browser-issued commands then appeared to hang forever.
+    let mut accept_failures: HashMap<String, u32> = HashMap::new();
     loop {
         let result = {
             let _guard = database_write_lock.lock().await;
-            consume_pending_business_commands(&root, &database).await
+            consume_pending_business_commands(&root, &database, &mut accept_failures).await
         };
         if let Err(err) = result {
             eprintln!("[business-os] native rxdb command consumer failed: {err:#}");
@@ -2088,6 +2093,10 @@ async fn consume_business_commands_loop(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
+
+/// How often a single command may fail `accept_pending_business_command`
+/// before it is marked `failed` and dropped from the pending queue.
+const BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET: u32 = 5;
 
 async fn enqueue_business_command_document_with_database(
     database: &Arc<RxDatabase>,
@@ -2243,6 +2252,7 @@ fn redact_browser_frame_data(frame: &Value) -> Value {
 async fn consume_pending_business_commands(
     root: &Path,
     database: &Arc<RxDatabase>,
+    accept_failures: &mut HashMap<String, u32>,
 ) -> anyhow::Result<()> {
     let commands = database
         .collection("business_commands")
@@ -2262,7 +2272,51 @@ async fn consume_pending_business_commands(
         return Ok(());
     };
     for document in rows {
-        accept_pending_business_command(root, database, document.clone()).await?;
+        // Isolate failures per command: one broken document must not stall
+        // the entire queue (it would be re-sorted to the head every tick).
+        let command_id = document
+            .get("command_id")
+            .or_else(|| document.get("id"))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        match accept_pending_business_command(root, database, document.clone()).await {
+            Ok(()) => {
+                if !command_id.is_empty() {
+                    accept_failures.remove(&command_id);
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "[business-os] accepting business command `{command_id}` failed: {err:#}"
+                );
+                if command_id.is_empty() {
+                    continue;
+                }
+                let failures = accept_failures.entry(command_id.clone()).or_insert(0);
+                *failures += 1;
+                if *failures >= BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                    accept_failures.remove(&command_id);
+                    // Budget exhausted: surface the failure on the command
+                    // itself so the browser sees a terminal state instead of
+                    // an eternally pending command. Best-effort write.
+                    let failed_patch = json!({
+                        "id": command_id,
+                        "command_id": command_id,
+                        "status": "failed",
+                        "error": format!("native accept failed after {BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET} attempts: {err:#}"),
+                        "updated_at_ms": now_ms() as u64,
+                    });
+                    if let Some(commands) = database.collection("business_commands") {
+                        if let Err(write_err) = commands.incremental_upsert(failed_patch).await {
+                            eprintln!(
+                                "[business-os] marking command `{command_id}` failed did not stick: {write_err}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
