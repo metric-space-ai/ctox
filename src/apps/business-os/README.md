@@ -31,6 +31,42 @@ The shell loads module manifests through the native Rust API and mounts modules
 as plain browser modules. React may be embedded for menus, settings, and dense
 forms, but the working views should remain direct, inspectable ESM.
 
+### Writing A Module
+
+The shell imports `index.js` and calls `mount(ctx)`; the context carries
+everything a module is allowed to touch: `host`, `db`, `sync`, `commandBus`,
+`eventBus`, `contextMenu`, `notifications`, `windowManager`, drawer openers,
+`locale`, and `preferences`. `mount` returns an unmount/cleanup function.
+
+Styling comes from two shell-owned layers that are loaded once for every app:
+
+- `app.css` defines the primitive design tokens (`--bg`, `--surface`,
+  `--surface-2`, `--line`, `--text`, `--muted`, `--accent`, `--danger`,
+  `--panel-radius`, `--control-radius`, `--font-sans`, `--font-mono`, ...).
+- `shared/base.css` is the module base kit: `.ctox-workspace` (the standard
+  3-pane grid wired to the shell column resizers), `.ctox-pane`,
+  `.ctox-pane-body`, `.ctox-pane-band`, `.ctox-toolbar`, `.ctox-button`,
+  `.ctox-input`, `.ctox-chip`, `.ctox-card`, `.ctox-list`, `.ctox-empty`,
+  `.ctox-badge`, plus derived semantic tokens (`--line-strong`, `--success`,
+  `--warning`). Modules use these classes directly — no import needed — and
+  keep `index.css` for what is genuinely module-specific. Module-local color
+  names should alias shell tokens (see `modules/customers/index.css`), which
+  makes light/dark theming automatic. `modules/conversations/` is the layout
+  reference.
+
+Known pitfalls the conformance guard
+(`scripts/assert-module-conformance.mjs`, run in CI) catches early:
+
+- every collection in `module.json` must be declared in `schema.js` — a
+  missing declaration does not error, it silently never replicates
+- schema version bumps need `migrationStrategies` exported from `schema.js`
+- `mount(ctx)` is the only supported signature; do not unwrap `ctx.db.raw`
+  (raw handles go stale when the data plane recovers from schema drift)
+- module CSS must not write tokens on `:root`, redefine shell/base tokens, or
+  `@import` remote stylesheets/fonts
+- ship `locales/de.json` + `locales/en.json` and load them through
+  `shared/i18n.js`
+
 ## Data Runtime Contract
 
 Business OS modules use **CTOX DB**, the CTOX-owned browser data runtime backed

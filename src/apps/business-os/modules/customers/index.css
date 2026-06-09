@@ -1,23 +1,23 @@
-:root {
-  color-scheme: light dark;
-}
-
+/* Reference migration to the shared design system (shared/base.css):
+   the module keeps its internal --customers-* names, but every value derives
+   from the shell tokens. Light/dark/prefers-color-scheme variants come from
+   the shell automatically — no per-module theme blocks, no :root writes. */
 .customers-module {
   --customers-left-width: 292px;
   --customers-right-width: 340px;
-  --customers-bg: #f7f8fb;
-  --customers-pane: #ffffff;
-  --customers-pane-subtle: #f1f5f9;
-  --customers-line: #d9e1ea;
-  --customers-line-strong: #c4ceda;
-  --customers-text: #111827;
-  --customers-muted: #64748b;
-  --customers-soft: #e7edf4;
-  --customers-accent: #0f766e;
-  --customers-accent-strong: #2563eb;
-  --customers-danger: #b91c1c;
-  --customers-warning: #a16207;
-  --customers-success: #047857;
+  --customers-bg: var(--bg);
+  --customers-pane: var(--surface);
+  --customers-pane-subtle: var(--surface-2);
+  --customers-line: var(--line);
+  --customers-line-strong: var(--line-strong);
+  --customers-text: var(--text);
+  --customers-muted: var(--muted);
+  --customers-soft: var(--surface-2);
+  --customers-accent: var(--accent);
+  --customers-accent-strong: var(--accent);
+  --customers-danger: var(--danger);
+  --customers-warning: var(--warning);
+  --customers-success: var(--success);
   display: grid;
   grid-template-columns: minmax(236px, var(--customers-left-width)) 8px minmax(460px, 1fr) 8px minmax(286px, var(--customers-right-width));
   height: 100%;
@@ -25,65 +25,6 @@
   background: var(--customers-bg);
   color: var(--customers-text);
   overflow: hidden;
-}
-
-:root[data-theme="dark"] .customers-module,
-html[data-theme="dark"] .customers-module,
-body[data-theme="dark"] .customers-module,
-.customers-module[data-theme="dark"],
-[data-theme="dark"] .customers-module {
-  --customers-bg: #0d1117;
-  --customers-pane: #111827;
-  --customers-pane-subtle: #182231;
-  --customers-line: #263445;
-  --customers-line-strong: #334155;
-  --customers-text: #e5edf6;
-  --customers-muted: #94a3b8;
-  --customers-soft: #1f2a3a;
-  --customers-accent: #2dd4bf;
-  --customers-accent-strong: #60a5fa;
-  --customers-danger: #fb7185;
-  --customers-warning: #fbbf24;
-  --customers-success: #34d399;
-}
-
-:root[data-theme="light"] .customers-module,
-html[data-theme="light"] .customers-module,
-body[data-theme="light"] .customers-module,
-.customers-module[data-theme="light"],
-[data-theme="light"] .customers-module {
-  --customers-bg: #f7f8fb;
-  --customers-pane: #ffffff;
-  --customers-pane-subtle: #f1f5f9;
-  --customers-line: #d9e1ea;
-  --customers-line-strong: #c4ceda;
-  --customers-text: #111827;
-  --customers-muted: #64748b;
-  --customers-soft: #e7edf4;
-  --customers-accent: #0f766e;
-  --customers-accent-strong: #2563eb;
-  --customers-danger: #b91c1c;
-  --customers-warning: #a16207;
-  --customers-success: #047857;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme]) .customers-module,
-  html:not([data-theme]) .customers-module {
-    --customers-bg: #0d1117;
-    --customers-pane: #111827;
-    --customers-pane-subtle: #182231;
-    --customers-line: #263445;
-    --customers-line-strong: #334155;
-    --customers-text: #e5edf6;
-    --customers-muted: #94a3b8;
-    --customers-soft: #1f2a3a;
-    --customers-accent: #2dd4bf;
-    --customers-accent-strong: #60a5fa;
-    --customers-danger: #fb7185;
-    --customers-warning: #fbbf24;
-    --customers-success: #34d399;
-  }
 }
 
 .customers-pane {
@@ -209,7 +150,7 @@ body[data-theme="light"] .customers-module,
 .customers-button.primary {
   border-color: transparent;
   background: var(--customers-accent);
-  color: #ffffff;
+  color: var(--surface);
 }
 
 .customers-icon-button.small {

@@ -1,0 +1,447 @@
+/* ============================================================================
+   CTOX Business OS — shared module base (the design-system artifact).
+
+   Loaded once by the shell (index.html). Modules run in the same document,
+   so every class and token below is available to module markup with zero
+   imports. New apps should build their frame from these classes and only add
+   module-specific CSS for what is genuinely unique to them.
+
+   Rules:
+   - Everything here resolves through the shell tokens defined in app.css
+     (--bg, --surface, --surface-2, --line, --text, --muted, --accent,
+     --accent-soft, --danger, --panel-radius, --control-radius,
+     --panel-shadow, --font-sans, --font-mono, ...).
+   - This file owns the DERIVED semantic tokens (--line-strong, --success,
+     --warning, ...). Primitive palette tokens stay in app.css.
+   - Module CSS must not redefine any of these tokens or write tokens on
+     :root (the business-os conformance guard enforces this).
+
+   Canonical module frame (see modules/conversations for the reference):
+
+     <main class="ctox-workspace my-module" data-resize-frame>
+       <aside class="ctox-pane ctox-pane--glass">…</aside>
+       <button class="ctox-column-resizer" data-resizer="left"
+               data-resizer-var="--ctox-left-width" …></button>
+       <section class="ctox-pane">…</section>
+       <button class="ctox-column-resizer" data-resizer="right"
+               data-resizer-var="--ctox-right-width" …></button>
+       <aside class="ctox-pane">…</aside>
+     </main>
+   ========================================================================== */
+
+/* ----------------------------------------------------------------------------
+   1. Derived semantic tokens (light defaults, dark overrides below)
+   -------------------------------------------------------------------------- */
+:root {
+  --line-strong: color-mix(in srgb, var(--text) 22%, var(--line));
+  --success: #047857;
+  --success-soft: color-mix(in srgb, #047857 14%, var(--surface));
+  --warning: #a16207;
+  --warning-soft: color-mix(in srgb, #a16207 14%, var(--surface));
+  --danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  --focus-ring: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+:root[data-theme="dark"] {
+  --success: #34d399;
+  --success-soft: color-mix(in srgb, #34d399 16%, var(--surface));
+  --warning: #fbbf24;
+  --warning-soft: color-mix(in srgb, #fbbf24 14%, var(--surface));
+}
+
+/* ----------------------------------------------------------------------------
+   2. Workspace frame — the standard 3-pane module grid.
+   Column widths are driven by custom properties so the shell-owned
+   declarative resizers ([data-resizer-var]) work without module JS.
+   -------------------------------------------------------------------------- */
+.ctox-workspace {
+  display: grid;
+  grid-template-columns:
+    var(--ctox-left-width, 320px)
+    12px
+    minmax(0, 1fr)
+    12px
+    var(--ctox-right-width, 320px);
+  gap: 0;
+  padding: 12px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  box-sizing: border-box;
+}
+
+.ctox-workspace--two-pane {
+  grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
+}
+
+.ctox-workspace--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* The [hidden] attribute has user-agent specificity that loses to module
+   `display: …` rules. Re-assert it for everything inside a workspace so
+   toggling [hidden] in module JS reliably hides elements. */
+.ctox-workspace [hidden] {
+  display: none !important;
+}
+
+/* ----------------------------------------------------------------------------
+   3. Pane — one rounded column of the workspace.
+   -------------------------------------------------------------------------- */
+.ctox-pane {
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--panel-radius);
+  box-shadow: var(--panel-shadow);
+  box-sizing: border-box;
+}
+
+.ctox-pane--glass {
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+/* Stacked pane body: content view and empty state share the same grid cell,
+   so toggling [hidden] swaps them instead of stacking them. */
+.ctox-pane-body {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.ctox-pane-body > * {
+  grid-row: 1;
+  grid-column: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.ctox-pane-scroll {
+  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Padded header band at the top of a pane. Combine with the existing
+   .ctox-pane-header / .ctox-pane-kicker / .ctox-pane-title typography
+   from app.css. */
+.ctox-pane-band {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+/* Tool strip inside a pane header (search, quick actions). The class names
+   were already in module markup across the tree; the baseline styles live
+   here so modules stop re-styling them locally. */
+.ctox-pane-tools {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.ctox-pane-search {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  text-overflow: ellipsis;
+  box-sizing: border-box;
+}
+
+.ctox-pane-search:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+/* ----------------------------------------------------------------------------
+   4. Toolbar and form controls
+   -------------------------------------------------------------------------- */
+.ctox-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline, var(--line));
+}
+
+.ctox-input,
+.ctox-select,
+.ctox-textarea {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+.ctox-textarea {
+  padding: 8px 10px;
+  resize: vertical;
+}
+
+.ctox-input:focus,
+.ctox-select:focus,
+.ctox-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.ctox-field-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ----------------------------------------------------------------------------
+   5. Buttons
+   -------------------------------------------------------------------------- */
+.ctox-button,
+.ctox-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ctox-icon-button {
+  width: 32px;
+  padding: 0;
+}
+
+.ctox-button:hover,
+.ctox-icon-button:hover {
+  background: var(--surface-2);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
+}
+
+.ctox-button:focus-visible,
+.ctox-icon-button:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.ctox-button.is-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface);
+}
+
+.ctox-button.is-primary:hover {
+  background: color-mix(in srgb, var(--accent) 86%, var(--text));
+}
+
+.ctox-button.is-danger {
+  border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
+  color: var(--danger);
+}
+
+.ctox-button.is-danger:hover {
+  background: var(--danger-soft);
+}
+
+.ctox-button:disabled,
+.ctox-icon-button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ----------------------------------------------------------------------------
+   6. Chips (filter pills with optional count)
+   -------------------------------------------------------------------------- */
+.ctox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.ctox-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.ctox-chip.is-active,
+.ctox-chip[aria-pressed="true"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: var(--text);
+}
+
+.ctox-chip-count {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* ----------------------------------------------------------------------------
+   7. Cards (right-pane inspector sections)
+   -------------------------------------------------------------------------- */
+.ctox-card {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ctox-card > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.ctox-card-body {
+  padding: 0 12px 12px;
+  min-width: 0;
+}
+
+/* ----------------------------------------------------------------------------
+   8. Lists (selectable rows, e.g. record lists in the left pane)
+   -------------------------------------------------------------------------- */
+.ctox-list {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.ctox-list-item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline, var(--line));
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctox-list-item:hover {
+  background: color-mix(in srgb, var(--surface-2) 70%, transparent);
+}
+
+.ctox-list-item.is-selected,
+.ctox-list-item[aria-selected="true"] {
+  background: var(--accent-soft);
+}
+
+/* ----------------------------------------------------------------------------
+   9. Empty state (pane-level). The shell also ships a generic .empty-state;
+   this variant is for stacked pane bodies.
+   -------------------------------------------------------------------------- */
+.ctox-empty {
+  display: grid;
+  gap: 6px;
+  place-content: center;
+  align-items: center;
+  min-height: 100%;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.ctox-empty strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+/* ----------------------------------------------------------------------------
+   10. Status badges
+   -------------------------------------------------------------------------- */
+.ctox-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ctox-badge.is-success {
+  background: var(--success-soft);
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+  color: var(--success);
+}
+
+.ctox-badge.is-warning {
+  background: var(--warning-soft);
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--line));
+  color: var(--warning);
+}
+
+.ctox-badge.is-danger {
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  color: var(--danger);
+}

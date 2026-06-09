@@ -2,13 +2,13 @@
    CODING AGENTS MODULE MAIN CSS
    ============================================================================== */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800&family=Fira+Code:wght@400;500;600&display=swap');
-
-/* Main Theme Variables & Colors */
-:root {
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
-  --font-brand: 'Outfit', 'Inter', system-ui, sans-serif;
-  --font-mono: 'Fira Code', monospace;
+/* Main Theme Variables & Colors.
+   Scoped to the module root: module CSS must not write tokens on :root — they
+   would leak into the shell and every other app once this stylesheet loads.
+   Fonts resolve through the shell tokens --font-sans / --font-mono; the
+   no-build runtime does not load CDN web fonts. */
+.coding-agents-module {
+  --font-brand: var(--font-sans);
 
   --radius-panel: 8px;
   --radius-control: 8px;

@@ -200,6 +200,31 @@ same catalog for startup, background module refresh, and the template drawer.
 The Rust peer refreshes that catalog from the local Business OS app tree and
 canonical governance store periodically and after module commands.
 
+## Collection Ownership And Write Model
+
+Every replicated collection has exactly one of two write models. Which model a
+collection uses is part of the module contract; mixing them up is how approval
+and projection bugs happen.
+
+| Write model | Who writes | Examples |
+| --- | --- | --- |
+| **CTOX-owned projection** — read-only in the browser; the only browser write is a command document in `business_commands`. The Rust peer validates the command, mutates canonical CTOX state, and republishes the projection. | Rust peer only | `ctox_ticket_*`, `ctox_queue_tasks`, `ctox_runtime_settings`, `business_module_catalog`, `business_module_reports`, `business_users`, `communication_accounts`, `channel_pairing_state`, `knowledge_tables` (pull-only) |
+| **Module-owned records** — local-first browser data the module reads and writes directly through the shell DB handles (`ctx.db.<collection>`); replication carries the records to CTOX. | The owning module (and CTOX, as a peer) | `notes`, `documents`/`document_versions`, `spreadsheets`, `calendar_*`, `customer_*`, `accounting_*`, `planning_*`, `outbound_*`, `research_*` |
+
+Rules that follow from this:
+
+- A module may `insert`/`patch` only collections it owns. Anything CTOX must
+  validate, execute, or audit goes through a `business_commands` command
+  document, never through a direct write to a `ctox_*` projection.
+- Modules access collections only through the shell context (`ctx.db`). The
+  facade forwards collection names (`ctx.db.notes.find()` works); unwrapping
+  `ctx.db.raw` is forbidden because raw handles go stale when the data plane
+  recovers from schema drift.
+- A module that lists another module's collections in `module.json` (for
+  cross-links) does not own them and must treat them as read-only — and must
+  accept that they only replicate once the owning module's schema has been
+  registered on that client.
+
 ## CTOX Files
 
 Files created or managed by the CTOX core agent loop must be written into the
@@ -255,6 +280,15 @@ The main CI workflow runs the guard in the Linux CTOX check lane with Node 22.
 Server endpoint definitions remain allowed as compatibility/admin surfaces; the
 guard is scoped to browser-facing app code and the explicit native bridge
 markers that must not return.
+
+`src/apps/business-os/scripts/assert-module-conformance.mjs` is the companion
+guard for the module contract itself: schema.js must declare every collection
+the module lists in `module.json` (silent-sync-fail otherwise), index.js must
+export `mount(ctx)` and must not unwrap `ctx.db.raw` or touch IndexedDB, and
+module CSS must not write tokens on `:root`, redefine shell/base design tokens,
+or `@import` remote stylesheets. Pre-existing violations are frozen in an
+allowlist inside the script; do not add entries — remove them as modules are
+migrated.
 
 ## No Fallback Data
 

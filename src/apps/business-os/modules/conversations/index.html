@@ -1,5 +1,5 @@
-<main class="conv-module" data-conv-root data-resize-frame>
-  <aside class="conv-pane conv-left" aria-label="Conversations">
+<main class="ctox-workspace conv-module" data-conv-root data-resize-frame>
+  <aside class="ctox-pane ctox-pane--glass conv-pane conv-left" aria-label="Conversations">
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
@@ -60,9 +60,9 @@
       </select>
       <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
     </div>
-    <div class="conv-left-body">
+    <div class="ctox-pane-body conv-left-body">
       <div class="conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
-      <div class="conv-empty conv-empty--list" data-conv-empty-list hidden>
+      <div class="ctox-empty conv-empty conv-empty--list" data-conv-empty-list hidden>
         <strong data-empty-list-title>Keine Konversationen</strong>
         <span data-empty-list-body>Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami oder MS Teams führt.</span>
       </div>
@@ -71,7 +71,7 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--conversations-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
 
-  <section class="conv-pane conv-center" aria-label="Conversation Detail">
+  <section class="ctox-pane conv-pane conv-center" aria-label="Conversation Detail">
     <header class="conv-center-header" data-conv-detail-header hidden>
       <div class="conv-detail-identity">
         <span class="conv-avatar" data-conv-detail-avatar></span>
@@ -82,9 +82,9 @@
       </div>
     </header>
     <nav class="conv-channel-tabs" data-conv-channel-tabs role="tablist" hidden></nav>
-    <div class="conv-center-body">
+    <div class="ctox-pane-body conv-center-body">
       <div class="conv-timeline" data-conv-timeline role="log" aria-live="polite"></div>
-      <div class="conv-empty conv-empty--detail" data-conv-empty-detail>
+      <div class="ctox-empty conv-empty conv-empty--detail" data-conv-empty-detail>
         <strong data-empty-detail-title>Keine Konversation ausgewählt</strong>
         <span data-empty-detail-body>Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.</span>
       </div>
@@ -93,8 +93,8 @@
 
   <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--conversations-right-width" data-resizer-min="260" data-resizer-max="550" aria-label="Rechte Spaltenbreite anpassen"></button>
 
-  <aside class="conv-pane conv-right" aria-label="Conversation Context">
-    <div class="conv-right-body">
+  <aside class="ctox-pane conv-pane conv-right" aria-label="Conversation Context">
+    <div class="ctox-pane-body conv-right-body">
       <div class="conv-right-empty" data-conv-right-empty>
         <strong data-right-empty-title></strong>
         <span data-right-empty-body>Kontaktdaten und verknüpfte Datensätze erscheinen hier.</span>

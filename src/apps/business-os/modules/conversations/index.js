@@ -1024,7 +1024,7 @@ export async function mount(ctx) {
     refs.timeline.replaceChildren();
     if (!view.timelineMessages.length) {
       const empty = document.createElement('div');
-      empty.className = 'conv-empty';
+      empty.className = 'ctox-empty conv-empty';
       empty.innerHTML = `<span></span>`;
       empty.querySelector('span').textContent = t('emptyDetailBody', 'Wähle links eine Konversation.');
       refs.timeline.appendChild(empty);

@@ -1,76 +1,26 @@
+/* Reference migration to the shared design system: the frame, panes, stacked
+   pane bodies, empty states and the header search come from shared/base.css
+   (.ctox-workspace / .ctox-pane / .ctox-pane-body / .ctox-empty /
+   .ctox-pane-search). This file only keeps what is conversations-specific.
+   The width aliases keep the persisted resizer layout working — the shell
+   resizer writes --conversations-*-width onto the frame element. */
 .conv-module {
-  display: grid;
-  grid-template-columns: var(--conversations-left-width, 320px) 12px minmax(0, 1fr) 12px var(--conversations-right-width, 320px);
-  gap: 0;
-  padding: 12px;
-  height: 100%;
-  min-height: 0;
-  overflow: hidden;
-  color: var(--text);
-  background: var(--bg);
-  box-sizing: border-box;
+  --ctox-left-width: var(--conversations-left-width, 320px);
+  --ctox-right-width: var(--conversations-right-width, 320px);
 }
 
 /* Column resizer styling handled by global [data-resizer] in app.css */
 
-/* The hidden attribute has user-agent specificity that loses to .conv-* { display: ... }
-   rules. Re-assert it module-wide so toggling [hidden] in JS actually hides elements. */
-.conv-module [hidden] {
-  display: none !important;
-}
-
-.conv-pane {
-  min-width: 0;
-  min-height: 0;
-  height: 100%;
-  overflow: hidden;
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
-  box-sizing: border-box;
-}
-
 .conv-pane.conv-left {
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border: 1px solid var(--line);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
 }
 
 .conv-pane.conv-center {
   grid-template-rows: auto auto minmax(0, 1fr);
-  background: var(--surface);
 }
 
 .conv-pane.conv-right {
   grid-template-rows: minmax(0, 1fr);
-  background: var(--surface);
-}
-
-/* Stacked panes — timeline ↔ empty, thread-list ↔ empty, right-detail ↔ right-empty
-   share the same area so toggling [hidden] swaps them instead of stacking. */
-.conv-left-body,
-.conv-right-body,
-.conv-center-body {
-  position: relative;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
-}
-
-.conv-left-body > *,
-.conv-right-body > *,
-.conv-center-body > * {
-  grid-row: 1;
-  grid-column: 1;
-  min-width: 0;
-  min-height: 0;
 }
 
 /* Left pane — list of threads */
@@ -90,37 +40,6 @@
   margin: 0;
   color: var(--muted);
   font-size: 12px;
-}
-
-.conv-search {
-  padding: 10px 14px;
-}
-
-.conv-search input {
-  width: 100%;
-  height: 32px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-  color: var(--text);
-  padding: 0 10px;
-  font: inherit;
-}
-
-.conv-search input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
-}
-
-.conv-left .ctox-pane-tools {
-  min-width: 0;
-}
-
-.conv-left .ctox-pane-search {
-  width: 100%;
-  min-width: 0;
-  text-overflow: ellipsis;
 }
 
 .conv-channel-filters {
@@ -1243,21 +1162,7 @@ details[open] > .conv-message-details-summary::before {
   font-size: 11px;
 }
 
-.conv-empty {
-  display: grid;
-  align-content: center;
-  justify-items: center;
-  gap: 6px;
-  padding: 32px;
-  text-align: center;
-  color: var(--muted);
-}
-
-.conv-empty strong {
-  color: var(--text);
-  font-size: 14px;
-}
-
+/* Base empty-state styling comes from .ctox-empty in shared/base.css. */
 .conv-empty--list {
   padding: 24px 16px;
 }
