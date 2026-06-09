@@ -5120,6 +5120,7 @@ fn process_business_chat_reply(
         params![command_id, completed_at_ms],
     )?;
 
+    let mut terminal_queue_task = queue_task.cloned();
     if let Some(task) = queue_task {
         let _ = channels::update_queue_task(
             root,
@@ -5130,13 +5131,18 @@ fn process_business_chat_reply(
                 ..Default::default()
             },
         );
+        terminal_queue_task = channels::load_queue_task(root, &task.message_key)
+            .ok()
+            .flatten()
+            .or_else(|| Some(task.clone()));
     }
 
     let chat_id = business_chat_id(command, command_id);
     let chat_title = business_chat_title(command);
     let owner_user_id = first_string_field(&command.client_context, &["owner_user_id", "user_id"])
         .unwrap_or_else(|| "local-dev".to_string());
-    let task_id = queue_task
+    let task_id = terminal_queue_task
+        .as_ref()
         .map(|task| task.message_key.clone())
         .unwrap_or_default();
     let user_message_id = first_string_field(&command.payload, &["message_id"])
@@ -5218,13 +5224,20 @@ fn process_business_chat_reply(
         completed_at_ms,
         command_payload,
     )?;
-    refresh_queue_task_projection(root, conn, command_id, command, queue_task, completed_at_ms)?;
+    refresh_queue_task_projection(
+        root,
+        conn,
+        command_id,
+        command,
+        terminal_queue_task.as_ref(),
+        completed_at_ms,
+    )?;
 
     Ok(CommandAccepted {
         ok: true,
         command_id: command_id.to_string(),
         status: "completed",
-        task_id: queue_task.map(|task| task.message_key.clone()),
+        task_id: terminal_queue_task.map(|task| task.message_key.clone()),
         task_status: Some("completed".to_string()),
     })
 }
@@ -14668,12 +14681,13 @@ fn business_command_queue_task_payload(
     inbound_channel: &str,
     updated_at_ms: i64,
 ) -> Value {
+    let route_status = effective_queue_projection_route_status(task);
     let mut payload = serde_json::json!({
         "id": task.message_key,
         "command_id": command_id,
         "title": task.title,
-        "status": normalize_queue_status(&task.route_status),
-        "route_status": task.route_status,
+        "status": normalize_queue_status(&route_status),
+        "route_status": route_status,
         "module": "ctox",
         "source_module": command.module.clone(),
         "inbound_channel": inbound_channel,
@@ -14684,7 +14698,7 @@ fn business_command_queue_task_payload(
         "workspace_root": task.workspace_root,
         "updated_at_ms": updated_at_ms
     });
-    enrich_queue_projection_payload(&mut payload, task, &task.route_status);
+    enrich_queue_projection_payload(&mut payload, task, &route_status);
     if let Some(artifact) = browser_context_artifact_for_command(command) {
         if let Some(object) = payload.as_object_mut() {
             object.insert("browser_context_artifact".to_string(), artifact);
@@ -14761,12 +14775,13 @@ fn queue_task_payload(
     task: &channels::QueueTaskView,
     updated_at_ms: i64,
 ) -> Value {
+    let route_status = effective_queue_projection_route_status(task);
     let mut payload = serde_json::json!({
         "id": task.message_key,
         "command_id": command_id.unwrap_or_default(),
         "title": task.title,
-        "status": normalize_queue_status(&task.route_status),
-        "route_status": task.route_status,
+        "status": normalize_queue_status(&route_status),
+        "route_status": route_status,
         "module": "ctox",
         "source_module": "ctox",
         "inbound_channel": "business_os.llm.chat",
@@ -14777,8 +14792,22 @@ fn queue_task_payload(
         "workspace_root": task.workspace_root,
         "updated_at_ms": updated_at_ms
     });
-    enrich_queue_projection_payload(&mut payload, task, &task.route_status);
+    enrich_queue_projection_payload(&mut payload, task, &route_status);
     payload
+}
+
+fn effective_queue_projection_route_status(task: &channels::QueueTaskView) -> String {
+    if task.route_status == "leased"
+        && queue_status_note_is_terminal_success(task.status_note.as_deref())
+    {
+        return "handled".to_string();
+    }
+    if task.route_status == "leased"
+        && queue_status_note_is_terminal_failure(task.status_note.as_deref())
+    {
+        return "failed".to_string();
+    }
+    task.route_status.clone()
 }
 
 fn enrich_queue_projection_payload(
@@ -14796,6 +14825,10 @@ fn enrich_queue_projection_payload(
     object.insert(
         "route_status".to_string(),
         Value::String(route_status.to_string()),
+    );
+    object.insert(
+        "task_status".to_string(),
+        Value::String(normalize_queue_status(route_status).to_string()),
     );
     if let Some(note) = task
         .status_note
@@ -16664,6 +16697,10 @@ mod tests {
         assert_eq!(
             rxdb_queue.get("route_status").and_then(Value::as_str),
             Some("handled")
+        );
+        assert_eq!(
+            rxdb_queue.get("task_status").and_then(Value::as_str),
+            Some("completed")
         );
         Ok(())
     }

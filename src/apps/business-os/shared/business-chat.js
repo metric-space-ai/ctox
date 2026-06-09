@@ -1091,7 +1091,7 @@ function getTaskState(chat) {
   const status = String(trackingMsg.status || '').toLowerCase();
   if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
-  if (status === 'success' || status === 'completed' || status === 'done' || status === 'erledigt') return 'success';
+  if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
   if (['failed', 'blocked', 'stale_missing_native', 'error'].includes(status)) return 'failed';
   if (['queued', 'pending', 'pending_sync', 'waiting'].includes(status)) return 'queued';
   if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
@@ -1959,7 +1959,7 @@ async function syncTrackedMessages({ state, db }) {
       const taskDoc = (message.taskId || commandDoc?.task_id) && queue ? await findDoc(queue, message.taskId || commandDoc.task_id) : null;
       const nextTaskId = message.taskId || commandDoc?.task_id || taskDoc?.id || '';
       const orphanedTracking = !commandDoc && !taskDoc && isActiveTrackingStatus(message.status) && trackingMessageAgeMs(message) > 10 * 60 * 1000;
-      const nextStatus = orphanedTracking ? 'failed' : (taskDoc?.status || commandDoc?.task_status || commandDoc?.status || message.status || '');
+      const nextStatus = orphanedTracking ? 'failed' : preferredTrackingStatus(commandDoc, taskDoc, message.status);
       if (orphanedTracking && message.trackable !== false) {
         message.trackable = false;
         changed = true;
@@ -2016,6 +2016,36 @@ async function findDoc(collection, id) {
   } catch {
     return null;
   }
+}
+
+function preferredTrackingStatus(commandDoc, taskDoc, currentStatus = '') {
+  const commandStatus = firstStatusValue(commandDoc, ['task_status', 'status', 'route_status']);
+  const taskStatus = firstStatusValue(taskDoc, ['task_status', 'status', 'route_status']);
+  const terminalStatus = [commandStatus, taskStatus].find(isTerminalTrackingStatus);
+  if (terminalStatus) return canonicalTrackingStatus(terminalStatus);
+  return canonicalTrackingStatus(taskStatus || commandStatus || currentStatus || '');
+}
+
+function firstStatusValue(doc, fields) {
+  if (!doc || typeof doc !== 'object') return '';
+  for (const field of fields) {
+    const value = String(doc[field] || '').trim();
+    if (value) return value;
+  }
+  return '';
+}
+
+function canonicalTrackingStatus(status) {
+  const value = String(status || '').trim().toLowerCase();
+  if (value === 'handled' || value === 'success' || value === 'done' || value === 'passed') return 'completed';
+  if (value === 'leased' || value === 'processing' || value === 'executing' || value === 'active') return 'running';
+  if (value === 'waiting' || value === 'pending_sync' || value === 'pending') return 'queued';
+  return value;
+}
+
+function isTerminalTrackingStatus(status) {
+  const value = canonicalTrackingStatus(status);
+  return ['completed', 'failed', 'blocked', 'cancelled', 'canceled', 'stale_missing_native', 'error'].includes(value);
 }
 
 function extractOutboundText(doc) {
@@ -2336,17 +2366,89 @@ async function deleteChat({ state, chat, db }) {
 }
 
 function mergeChats(localChats, remoteChats, owner) {
-  const byId = new Map();
-  for (const chat of [...remoteChats, ...localChats]) {
+  const remoteById = new Map();
+  const localById = new Map();
+  for (const chat of remoteChats) {
     const normalized = normalizeChat({ ...chat, owner_user_id: chat.owner_user_id || owner });
-    if (!isOwnedChat(normalized, owner)) continue;
-    const previous = byId.get(normalized.id);
-    if (!previous || (normalized.updated_at_ms || 0) >= (previous.updated_at_ms || 0)) {
-      byId.set(normalized.id, normalized);
-    }
+    if (isOwnedChat(normalized, owner)) remoteById.set(normalized.id, normalized);
   }
-  return Array.from(byId.values())
-    .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+  for (const chat of localChats) {
+    const normalized = normalizeChat({ ...chat, owner_user_id: chat.owner_user_id || owner });
+    if (isOwnedChat(normalized, owner)) localById.set(normalized.id, normalized);
+  }
+  const ids = new Set([...remoteById.keys(), ...localById.keys()]);
+  const merged = [];
+  for (const id of ids) {
+    merged.push(mergeChatPair(localById.get(id), remoteById.get(id), owner));
+  }
+  return merged.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+}
+
+function mergeChatPair(localChat, remoteChat, owner) {
+  if (!localChat) return normalizeChat({ ...remoteChat, owner_user_id: remoteChat.owner_user_id || owner });
+  if (!remoteChat) return normalizeChat({ ...localChat, owner_user_id: localChat.owner_user_id || owner });
+  const local = normalizeChat(localChat);
+  const remote = normalizeChat(remoteChat);
+  const localIsNewer = (local.updated_at_ms || 0) >= (remote.updated_at_ms || 0);
+  const base = localIsNewer ? local : remote;
+  const messages = mergeChatMessages(local.messages, remote.messages);
+  return {
+    ...base,
+    title: local.title || remote.title || base.title,
+    open: local.open !== false || remote.open !== false,
+    minimized: Boolean(local.minimized),
+    maximized: Boolean(local.maximized),
+    owner_user_id: local.owner_user_id || remote.owner_user_id || owner,
+    lastTrackingId: preferredChatTrackingId(local, remote, messages),
+    messages,
+    draft: local.draft || '',
+    contextMeta: { ...(remote.contextMeta || {}), ...(local.contextMeta || {}) },
+    attachments: Array.isArray(local.attachments) ? local.attachments : [],
+    showFollowUp: Boolean(local.showFollowUp),
+    updated_at_ms: Math.max(local.updated_at_ms || 0, remote.updated_at_ms || 0),
+  };
+}
+
+function mergeChatMessages(localMessages = [], remoteMessages = []) {
+  const byKey = new Map();
+  for (const message of [...localMessages, ...remoteMessages]) {
+    const key = messageIdentity(message);
+    const previous = byKey.get(key);
+    byKey.set(key, preferredMessage(previous, message));
+  }
+  return Array.from(byKey.values())
+    .sort((a, b) => (Number(a.createdAt) || 0) - (Number(b.createdAt) || 0))
+    .slice(-40);
+}
+
+function messageIdentity(message = {}) {
+  return String(message.id || message.replyFor || `${message.role || 'ctox'}:${message.commandId || ''}:${message.taskId || ''}:${message.createdAt || ''}`);
+}
+
+function preferredMessage(previous, next) {
+  if (!previous) return next;
+  const previousRank = messageStatusRank(previous);
+  const nextRank = messageStatusRank(next);
+  if (nextRank !== previousRank) return nextRank > previousRank ? next : previous;
+  return (Number(next.createdAt) || 0) >= (Number(previous.createdAt) || 0) ? next : previous;
+}
+
+function messageStatusRank(message = {}) {
+  const status = canonicalTrackingStatus(message.status);
+  if (isTerminalTrackingStatus(status)) return 3;
+  if (isActiveTrackingStatus(status)) return 2;
+  return 1;
+}
+
+function preferredChatTrackingId(local, remote, messages) {
+  const remoteTrackingId = remote.lastTrackingId || '';
+  if (remoteTrackingId && messages.some((message) => (
+    (message.commandId === remoteTrackingId || message.taskId === remoteTrackingId || message.replyFor === remoteTrackingId)
+      && isTerminalTrackingStatus(message.status)
+  ))) {
+    return remoteTrackingId;
+  }
+  return local.lastTrackingId || remoteTrackingId || '';
 }
 
 function normalizeChat(chat) {
@@ -3255,9 +3357,10 @@ function installChatStyles() {
       pointer-events: auto;
       display: grid;
       grid-template-rows: 38px minmax(0, 1fr) auto;
-      width: 320px;
+      width: min(320px, calc(100vw - 24px));
       height: min(320px, calc(100vh - 132px));
-      min-width: min(320px, calc(100vw - 24px));
+      min-width: 0;
+      min-inline-size: 0;
       overflow: hidden;
       box-sizing: border-box;
       max-width: min(440px, calc(100vw - 24px));
