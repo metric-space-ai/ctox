@@ -471,11 +471,11 @@ async function refreshAll({ seed = false } = {}) {
 
 async function loadLocalState() {
   const [tasks, runs, notes, commands, queueTasks] = await Promise.all([
-    findAll(state.ctx.db.raw.research_tasks, 'research_tasks'),
-    findAll(state.ctx.db.raw.research_runs, 'research_runs'),
-    findAll(state.ctx.db.raw.research_notes, 'research_notes'),
-    findAll(state.ctx.db.raw.business_commands, 'business_commands'),
-    findAll(state.ctx.db.raw.ctox_queue_tasks, 'ctox_queue_tasks'),
+    findAll(state.ctx.db.research_tasks, 'research_tasks'),
+    findAll(state.ctx.db.research_runs, 'research_runs'),
+    findAll(state.ctx.db.research_notes, 'research_notes'),
+    findAll(state.ctx.db.business_commands, 'business_commands'),
+    findAll(state.ctx.db.ctox_queue_tasks, 'ctox_queue_tasks'),
   ]);
   if (tasks.length || !state.tasks.length) {
     state.tasks = tasks
@@ -489,7 +489,7 @@ async function loadLocalState() {
 }
 
 function wireRealtime() {
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   const collections = [
     raw.research_tasks,
     raw.research_runs,
@@ -586,7 +586,7 @@ async function ensureTasksFromKnowledgeBases() {
       created_at_ms: now,
       updated_at_ms: now,
     };
-    await upsertDoc(state.ctx.db.raw.research_tasks, task).catch((error) => {
+    await upsertDoc(state.ctx.db.research_tasks, task).catch((error) => {
       console.warn('[research] could not persist seeded task', error);
     });
     state.tasks.push(task);
@@ -630,7 +630,7 @@ function knowledgeBasesFromTables(tables = []) {
 }
 
 async function loadKnowledgeTables() {
-  return findAll(state.ctx?.db?.raw?.knowledge_tables, 'knowledge_tables');
+  return findAll(state.ctx?.db?.knowledge_tables, 'knowledge_tables');
 }
 
 function isResearchKnowledgeBase(base) {
@@ -1938,7 +1938,7 @@ async function createTaskFromForm(form) {
     created_at_ms: current?.created_at_ms || now,
     updated_at_ms: now,
   };
-  await upsertDoc(state.ctx.db.raw.research_tasks, task);
+  await upsertDoc(state.ctx.db.research_tasks, task);
   await loadLocalState();
   state.selectedTaskId = task.id;
   await loadDashboardData();
@@ -2067,10 +2067,10 @@ async function runSelectedResearch() {
     updated_at_ms: now,
   };
   state.runs = [run, ...state.runs.filter((item) => item.id !== run.id)];
-  await upsertDoc(state.ctx.db.raw.research_runs, run).catch((error) => {
+  await upsertDoc(state.ctx.db.research_runs, run).catch((error) => {
     console.warn('[research] could not persist run', error);
   });
-  await patchDoc(state.ctx.db.raw.research_tasks, task.id, { status: 'collecting', updated_at_ms: now }).catch((error) => {
+  await patchDoc(state.ctx.db.research_tasks, task.id, { status: 'collecting', updated_at_ms: now }).catch((error) => {
     console.warn('[research] could not patch task status', error);
   });
   setStatus(state.t('researchChatQueued', 'Research-Aufgabe im Chat gestartet.'));
@@ -2087,7 +2087,7 @@ async function updateTaskAxis(axis, value) {
   const task = selectedTask();
   if (!task) return;
   const patch = axis === 'x' ? { x_axis: safeAxis(value, task) } : { y_axis: safeAxis(value, task) };
-  await patchDoc(state.ctx.db.raw.research_tasks, task.id, { ...patch, updated_at_ms: Date.now() });
+  await patchDoc(state.ctx.db.research_tasks, task.id, { ...patch, updated_at_ms: Date.now() });
   Object.assign(task, patch);
   renderCenter();
 }
@@ -3088,7 +3088,7 @@ function parseMarkdown(md) {
 // documents that replicate into the `documents` collection over RxDB/WebRTC;
 // `index_text` holds the document text, with a blob-chunk fallback — all RxDB.
 async function loadReportContentFromRxdb(filename) {
-  const raw = state.ctx && state.ctx.db && state.ctx.db.raw;
+  const raw = state.ctx && state.ctx.db;
   if (!raw || !raw.documents) {
     throw new Error('RxDB-Dokumente nicht verfügbar');
   }

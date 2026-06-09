@@ -1,0 +1,186 @@
+// Business OS module conformance guard.
+//
+// Static checks over modules/<id>/ that enforce the module contract from
+// README.md / ARCHITECTURE.md / shared/base.css:
+//
+//   schema-covers-collections  every collection listed in module.json is
+//                              declared in the module's schema.js (the shell
+//                              only pre-registers the critical collections);
+//                              a missing declaration fails sync silently.
+//   mount-export               index.js exports mount().
+//   mount-signature            mount takes the shell context as its single
+//                              parameter: mount(ctx).
+//   no-db-raw                  modules must not unwrap the shell DB facade
+//                              (ctx.db.raw): raw handles go stale when the
+//                              data plane recovers from schema drift.
+//   no-indexeddb               IndexedDB is owned by shared/db.js.
+//   css-no-root-tokens         module CSS must not define custom properties
+//                              on :root — they leak into the shell and every
+//                              other app once the stylesheet loads.
+//   css-no-shell-token-redefinition
+//                              module CSS must not redefine shell/base design
+//                              tokens (--bg, --surface, --accent, ...); derive
+//                              module-local names from them instead (see
+//                              modules/customers/index.css).
+//   css-no-cdn-import          no @import of remote stylesheets/fonts in the
+//                              no-build runtime.
+//   locales                    module ships locales/de.json + locales/en.json.
+//
+// The HTTP-path and upstream-rxdb-import rules live in assert-rxdb-only.mjs;
+// this guard does not duplicate them.
+//
+// ALLOWLIST POLICY: entries below freeze violations that existed when the
+// guard was introduced. Do not add new entries — remove them as modules are
+// migrated to the contract.
+
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const appRoot = resolve(scriptDir, '..');
+const repoRoot = resolve(appRoot, '../../..');
+const modulesRoot = join(appRoot, 'modules');
+
+// Registered by the shell before any module mounts (app.js
+// CRITICAL_SYNC_COLLECTIONS); modules may list them without re-declaring.
+const SHELL_REGISTERED_COLLECTIONS = new Set([
+  'business_module_catalog',
+  'ctox_runtime_settings',
+  'business_commands',
+  'ctox_queue_tasks',
+]);
+
+const SHELL_TOKEN_NAMES = [
+  'bg', 'surface', 'surface-2', 'line', 'text', 'text-strong', 'muted',
+  'accent', 'accent-soft', 'danger', 'hairline', 'panel-radius',
+  'control-radius', 'panel-shadow', 'glass-bg', 'glass-blur',
+  'font-sans', 'font-mono',
+  // shared/base.css derived semantic tokens
+  'line-strong', 'success', 'success-soft', 'warning', 'warning-soft',
+  'danger-soft', 'focus-ring',
+];
+const shellTokenPattern = new RegExp(
+  `--(?:${SHELL_TOKEN_NAMES.join('|')})(?![\\w-])\\s*:`,
+);
+
+// Frozen pre-existing violations. Remove entries as modules are fixed.
+const ALLOWLIST = new Map(Object.entries({
+  // Cross-module reads: these modules list collections whose schemas only the
+  // owning module declares (conversations -> outbound_*, reports -> ctox/
+  // release projections). On a fresh client that opens this module before the
+  // owning one, those collections silently do not replicate. Fix is a contract
+  // decision: declare the schemas locally or drop them from module.json.
+  conversations: ['schema-covers-collections'],
+  reports: ['schema-covers-collections'],
+  // Pending i18n migration (no locales/ yet).
+  'app-store': ['locales'],
+  browser: ['locales'],
+  creator: ['locales'],
+  // .theme-* blocks alias --accent onto itself with a fallback — a latent
+  // self-reference (invalid at computed-value time). Needs a real fix, not a
+  // rename; frozen until the coding-agents theme pass.
+  'coding-agents': ['css-no-shell-token-redefinition'],
+  // Known token-system rebuild backlog: matching still shadows shell tokens
+  // with its --bo-*/--km-* palette inside its module scope.
+  matching: ['css-no-shell-token-redefinition'],
+}));
+
+const offenders = [];
+const moduleDirs = readdirSync(modulesRoot).filter((name) => {
+  const dir = join(modulesRoot, name);
+  return statSync(dir).isDirectory() && existsSync(join(dir, 'module.json'));
+});
+
+if (moduleDirs.length === 0) {
+  console.error('module conformance guard found no modules — wrong root?');
+  process.exit(1);
+}
+
+for (const id of moduleDirs) {
+  const dir = join(modulesRoot, id);
+  const allow = new Set(ALLOWLIST.get(id) || []);
+  const offend = (rule, detail) => {
+    if (allow.has(rule)) return;
+    offenders.push(`${relative(repoRoot, dir)}: ${rule}${detail ? ` — ${detail}` : ''}`);
+  };
+
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(join(dir, 'module.json'), 'utf8'));
+  } catch (error) {
+    offend('manifest-parse', String(error?.message || error));
+    continue;
+  }
+
+  // schema-covers-collections
+  const schemaPath = join(dir, 'schema.js');
+  const schemaText = existsSync(schemaPath) ? readFileSync(schemaPath, 'utf8') : '';
+  const declared = Array.isArray(manifest.collections) ? manifest.collections : [];
+  for (const collection of declared) {
+    if (SHELL_REGISTERED_COLLECTIONS.has(collection)) continue;
+    const keyPattern = new RegExp(`(?:^|[^\\w'"])(?:'${collection}'|"${collection}"|${collection})\\s*:`, 'm');
+    if (!keyPattern.test(schemaText)) {
+      offend('schema-covers-collections', `${collection} listed in module.json but not declared in schema.js`);
+    }
+  }
+
+  // mount-export / mount-signature
+  const indexJsPath = join(dir, 'index.js');
+  const indexJs = existsSync(indexJsPath) ? readFileSync(indexJsPath, 'utf8') : '';
+  if (!indexJs) {
+    offend('mount-export', 'missing index.js');
+  } else {
+    const mountMatch = indexJs.match(/export\s+(?:async\s+)?function\s+mount\s*\(([^)]*)\)/)
+      || indexJs.match(/export\s+const\s+mount\s*=\s*(?:async\s*)?\(([^)]*)\)/);
+    if (!mountMatch) {
+      offend('mount-export', 'index.js does not export mount()');
+    } else {
+      const params = mountMatch[1].split(',').map((p) => p.trim()).filter(Boolean);
+      if (params.length > 1) {
+        offend('mount-signature', `mount(${mountMatch[1].trim()}) — contract is mount(ctx)`);
+      }
+    }
+    if (/\b(?:ctx\.)?db\.raw\b/.test(indexJs)) {
+      offend('no-db-raw', 'unwraps the shell DB facade');
+    }
+    if (/\bindexedDB\s*[.[]/.test(indexJs)) {
+      offend('no-indexeddb', 'modules must not touch IndexedDB directly');
+    }
+  }
+
+  // CSS rules
+  const cssPath = join(dir, 'index.css');
+  const cssText = existsSync(cssPath) ? readFileSync(cssPath, 'utf8') : '';
+  if (cssText) {
+    const cssNoComments = cssText.replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const match of cssNoComments.matchAll(/(?:^|[};])\s*([^{};]+)\{([^{}]*)\}/g)) {
+      const selector = match[1].trim();
+      const body = match[2];
+      const isPureRoot = /^:root(?:\[[^\]]*\])?(?:\s*,\s*(?:html|body|:root)(?:\[[^\]]*\])?)*$/.test(selector);
+      if (isPureRoot && /--[\w-]+\s*:/.test(body)) {
+        offend('css-no-root-tokens', `"${selector}" defines custom properties globally`);
+      }
+      if (shellTokenPattern.test(body)) {
+        const token = body.match(shellTokenPattern)?.[0]?.replace(/\s*:$/, '');
+        offend('css-no-shell-token-redefinition', `"${selector}" redefines ${token}`);
+      }
+    }
+    if (/@import\s+url\(\s*['"]?https?:/.test(cssNoComments)) {
+      offend('css-no-cdn-import', 'remote @import in module CSS');
+    }
+  }
+
+  // locales
+  const localesDir = join(dir, 'locales');
+  if (!existsSync(join(localesDir, 'de.json')) || !existsSync(join(localesDir, 'en.json'))) {
+    offend('locales', 'missing locales/de.json + locales/en.json');
+  }
+}
+
+if (offenders.length) {
+  console.error(`Business OS module conformance failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
+  process.exit(1);
+}
+
+console.log(`Business OS module conformance OK (${moduleDirs.length} modules)`);

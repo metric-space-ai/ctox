@@ -970,7 +970,7 @@ async function ensureCampaignKnowledge(campaign) {
       runs_table_key: refs.runsKey,
     },
   };
-  await patchDoc(state.ctx.db.raw.outbound_campaigns, campaign.id, {
+  await patchDoc(state.ctx.db.outbound_campaigns, campaign.id, {
     payload,
     updated_at_ms: Date.now(),
   });
@@ -1040,7 +1040,7 @@ function nativeRxdbSyncReady() {
 }
 
 function businessCommandsSyncReady() {
-  if (!state.ctx?.db?.raw?.business_commands || !nativeRxdbSyncReady()) return false;
+  if (!state.ctx?.db?.business_commands || !nativeRxdbSyncReady()) return false;
   const status = state.ctx?.sync?.diagnostics?.collections?.business_commands || null;
   if (!status) return false;
   const value = String(status.connectionStatus || status.status || '').trim();
@@ -1074,7 +1074,7 @@ function scheduleCampaignKnowledgeSetup(campaign, options = {}) {
 }
 
 async function waitForBusinessCommandProjection(commandId, startedAtMs, timeoutMs = 45000) {
-  const collection = state.ctx?.db?.raw?.business_commands;
+  const collection = state.ctx?.db?.business_commands;
   if (!collection) return null;
   const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
   const deadline = Date.now() + timeoutMs;
@@ -1099,7 +1099,7 @@ async function waitForBusinessCommandProjection(commandId, startedAtMs, timeoutM
 }
 
 async function waitForCampaignProjection(campaignId, minUpdatedAtMs, timeoutMs = 15000) {
-  const collection = state.ctx?.db?.raw?.outbound_campaigns;
+  const collection = state.ctx?.db?.outbound_campaigns;
   if (!collection) return null;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -1162,7 +1162,7 @@ function openCampaignRunbook(campaignId) {
 }
 
 async function ensureDefaultCampaign() {
-  const collection = state.ctx?.db?.raw?.outbound_campaigns;
+  const collection = state.ctx?.db?.outbound_campaigns;
   if (!collection) return;
   const existing = await collection.find().exec();
   if (existing.some((doc) => doc.id === DEFAULT_CAMPAIGN_ID)) return;
@@ -1196,7 +1196,7 @@ async function ensureDefaultCampaign() {
 }
 
 async function loadAll(options = {}) {
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   const [campaigns, sources, companies, pipeline, runs] = await Promise.all([
     findAll(raw.outbound_campaigns),
     findAll(raw.outbound_sources),
@@ -1233,7 +1233,7 @@ async function loadAll(options = {}) {
 
 async function repairDanglingImportedSources() {
   if (state.importRecoveryPending) return false;
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   if (!raw.outbound_sources || !raw.outbound_companies) return false;
   const companiesBySource = new Map();
   for (const company of state.companies || []) {
@@ -1284,7 +1284,7 @@ async function repairDanglingImportedSources() {
 }
 
 function refreshOperationalStateInBackground() {
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   if (!raw.business_commands || !raw.ctox_queue_tasks) return;
   const now = Date.now();
   if (state.operationalRefreshPending || now - state.lastOperationalRefreshMs < 10000) return;
@@ -1681,7 +1681,7 @@ function stringValue(value) {
 }
 
 function wireRealtime() {
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   const collections = [
     raw.outbound_campaigns,
     raw.outbound_sources,
@@ -4021,14 +4021,14 @@ function persistAutomationQueueMarkers(stage, records, now) {
   (async () => {
     for (const record of records) {
       if (stage === 'company_research') {
-        await upsertDoc(state.ctx.db.raw.outbound_companies, record.id, {
+        await upsertDoc(state.ctx.db.outbound_companies, record.id, {
           ...record,
           research_status: 'queued',
           updated_at_ms: now,
         });
       }
       if (stage === 'pipeline') {
-        await upsertDoc(state.ctx.db.raw.outbound_companies, record.id, {
+        await upsertDoc(state.ctx.db.outbound_companies, record.id, {
           ...record,
           pipeline_status: 'queued',
           qualification_status: 'qualified',
@@ -4036,14 +4036,14 @@ function persistAutomationQueueMarkers(stage, records, now) {
         });
       }
       if (stage === 'contact_research') {
-        await upsertDoc(state.ctx.db.raw.outbound_pipeline_items, record.id, {
+        await upsertDoc(state.ctx.db.outbound_pipeline_items, record.id, {
           ...record,
           contact_research_status: 'queued',
           updated_at_ms: now,
         });
       }
       if (stage === 'lead_qualification') {
-        await upsertDoc(state.ctx.db.raw.outbound_pipeline_items, record.id, {
+        await upsertDoc(state.ctx.db.outbound_pipeline_items, record.id, {
           ...record,
           outreach_status: 'queued',
           updated_at_ms: now,
@@ -4550,7 +4550,7 @@ async function saveResearchSettings() {
     research_settings: researchSettings,
   };
 
-  await patchDoc(state.ctx.db.raw.outbound_campaigns, campaign.id, {
+  await patchDoc(state.ctx.db.outbound_campaigns, campaign.id, {
     payload: nextPayload,
     updated_at_ms: Date.now(),
   });
@@ -5266,7 +5266,7 @@ async function createCampaign() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  await state.ctx.db.raw.outbound_campaigns.insert(campaign);
+  await state.ctx.db.outbound_campaigns.insert(campaign);
   state.selectedCampaignId = id;
   state.editingCampaignId = id;
   await loadAll();
@@ -5502,11 +5502,11 @@ async function deleteCampaign(campaignId) {
     confirmLabel: t('delete', 'Löschen'),
   });
   if (!ok) return;
-  await removeWhere(state.ctx.db.raw.outbound_sources, (item) => item.campaign_id === campaign.id);
-  await removeWhere(state.ctx.db.raw.outbound_companies, (item) => item.campaign_id === campaign.id);
-  await removeWhere(state.ctx.db.raw.outbound_pipeline_items, (item) => item.campaign_id === campaign.id);
-  await removeWhere(state.ctx.db.raw.outbound_research_runs, (item) => item.campaign_id === campaign.id);
-  await removeDoc(state.ctx.db.raw.outbound_campaigns, campaign.id);
+  await removeWhere(state.ctx.db.outbound_sources, (item) => item.campaign_id === campaign.id);
+  await removeWhere(state.ctx.db.outbound_companies, (item) => item.campaign_id === campaign.id);
+  await removeWhere(state.ctx.db.outbound_pipeline_items, (item) => item.campaign_id === campaign.id);
+  await removeWhere(state.ctx.db.outbound_research_runs, (item) => item.campaign_id === campaign.id);
+  await removeDoc(state.ctx.db.outbound_campaigns, campaign.id);
   state.selectedCampaignId = '';
   await ensureDefaultCampaign();
   await loadAll();
@@ -5690,7 +5690,7 @@ async function importCompaniesFromPayload(campaign, payload) {
   const sourceStatus = rows.length
     ? filteredRows.length ? 'importing' : 'filtered_empty'
     : 'queued_parser';
-  await state.ctx.db.raw.outbound_sources.insert({
+  await state.ctx.db.outbound_sources.insert({
     id: sourceId,
     campaign_id: campaign.id,
     title: payload.title,
@@ -5726,8 +5726,8 @@ async function importCompaniesFromPayload(campaign, payload) {
     };
   }
   const companyDocs = buildCompanyDocsFromImportRows(campaign, sourceId, filteredRows, now);
-  const persistedCount = await upsertCompanyDocs(state.ctx.db.raw.outbound_companies, companyDocs);
-  await patchDoc(state.ctx.db.raw.outbound_sources, sourceId, {
+  const persistedCount = await upsertCompanyDocs(state.ctx.db.outbound_companies, companyDocs);
+  await patchDoc(state.ctx.db.outbound_sources, sourceId, {
     status: persistedCount ? 'imported' : 'failed_parser',
     imported_count: persistedCount,
     payload: {
@@ -5815,7 +5815,7 @@ function runOutboundImportInBackground(campaign, payload, sourceId) {
     .then(async (result) => {
       const refs = campaignKnowledgeRefs(campaign);
       const importedCount = await countKnowledgeRowsForSource(refs, sourceId).catch(() => 0);
-      await patchDoc(state.ctx.db.raw.outbound_sources, sourceId, {
+      await patchDoc(state.ctx.db.outbound_sources, sourceId, {
         status: result?.status === 'completed' ? 'imported' : result?.status || 'queued_parser',
         row_count: importedCount,
         imported_count: importedCount,
@@ -5833,7 +5833,7 @@ function runOutboundImportInBackground(campaign, payload, sourceId) {
     })
     .catch(async (error) => {
       console.warn('[outbound] CTOX source import failed', error);
-      await patchDoc(state.ctx.db.raw.outbound_sources, sourceId, {
+      await patchDoc(state.ctx.db.outbound_sources, sourceId, {
         status: 'failed_parser',
         payload: {
           ...payload,
@@ -6150,7 +6150,7 @@ async function queueCompanyResearch(companyId, options = {}) {
   };
   const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
   const now = Date.now();
-  await state.ctx.db.raw.outbound_research_runs.insert({
+  await state.ctx.db.outbound_research_runs.insert({
     id: runId,
     campaign_id: campaign.id,
     company_id: company.id,
@@ -6175,7 +6175,7 @@ async function queueCompanyResearch(companyId, options = {}) {
     created_at_ms: now,
     request_json: JSON.stringify(command.payload.research_request),
   }]).catch((error) => console.warn('[outbound] knowledge runs append failed', error));
-  await patchDoc(state.ctx.db.raw.outbound_companies, company.id, {
+  await patchDoc(state.ctx.db.outbound_companies, company.id, {
     research_status: result.status || 'pending_sync',
     updated_at_ms: now,
   });
@@ -6225,7 +6225,7 @@ async function queueContactResearch(pipelineId) {
   };
   const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
   const now = Date.now();
-  await state.ctx.db.raw.outbound_research_runs.insert({
+  await state.ctx.db.outbound_research_runs.insert({
     id: runId,
     campaign_id: item.campaign_id,
     company_id: item.company_id,
@@ -6251,7 +6251,7 @@ async function queueContactResearch(pipelineId) {
     created_at_ms: now,
     request_json: JSON.stringify(command.payload),
   }]).catch((error) => console.warn('[outbound] knowledge runs append failed', error));
-  await patchDoc(state.ctx.db.raw.outbound_pipeline_items, item.id, {
+  await patchDoc(state.ctx.db.outbound_pipeline_items, item.id, {
     contact_research_status: result.status || 'pending_sync',
     updated_at_ms: now,
   });
@@ -6302,7 +6302,7 @@ async function queueLeadQualification(pipelineId) {
   };
   const result = await state.ctx.commandBus.dispatch(command).catch((error) => ({ ok: false, status: 'pending_sync_failed', error: error?.message || String(error) }));
   const now = Date.now();
-  await state.ctx.db.raw.outbound_research_runs.insert({
+  await state.ctx.db.outbound_research_runs.insert({
     id: runId,
     campaign_id: item.campaign_id,
     company_id: item.company_id,
@@ -6328,7 +6328,7 @@ async function queueLeadQualification(pipelineId) {
     created_at_ms: now,
     request_json: JSON.stringify(command.payload),
   }]).catch((error) => console.warn('[outbound] knowledge runs append failed', error));
-  await patchDoc(state.ctx.db.raw.outbound_pipeline_items, item.id, {
+  await patchDoc(state.ctx.db.outbound_pipeline_items, item.id, {
     outreach_status: result.status || 'pending_sync',
     stage: 'lead_qualification',
     updated_at_ms: now,
@@ -6339,7 +6339,7 @@ async function setCompanyQualification(companyId, status) {
   const company = state.companies.find((item) => item.id === companyId);
   const campaign = state.campaigns.find((item) => item.id === company?.campaign_id) || selectedCampaign();
   const now = Date.now();
-  await patchDoc(state.ctx.db.raw.outbound_companies, companyId, {
+  await patchDoc(state.ctx.db.outbound_companies, companyId, {
     qualification_status: status,
     fit_status: status === 'qualified' ? 'fit' : status === 'rejected' ? 'not_fit' : 'unqualified',
     fit_score: status === 'qualified' ? 75 : status === 'rejected' ? 10 : 0,
@@ -6386,9 +6386,9 @@ async function sendCompanyToPipeline(companyId, options = {}) {
       created_at_ms: now,
       updated_at_ms: now,
     };
-    await state.ctx.db.raw.outbound_pipeline_items.insert(pipelineItem);
+    await state.ctx.db.outbound_pipeline_items.insert(pipelineItem);
   }
-  await patchDoc(state.ctx.db.raw.outbound_companies, company.id, {
+  await patchDoc(state.ctx.db.outbound_companies, company.id, {
     pipeline_status: 'pipeline',
     qualification_status: 'qualified',
     updated_at_ms: now,
@@ -6406,11 +6406,11 @@ async function sendCompanyToPipeline(companyId, options = {}) {
 }
 
 async function updateCampaignCounts(campaignId) {
-  const raw = state.ctx?.db?.raw || {};
+  const raw = state.ctx?.db || {};
   const companies = dedupeCompanies((await findAll(raw.outbound_companies)).filter((item) => item.campaign_id === campaignId));
   const sources = (await findAll(raw.outbound_sources)).filter((item) => item.campaign_id === campaignId);
   const pipeline = (await findAll(raw.outbound_pipeline_items)).filter((item) => item.campaign_id === campaignId);
-  await patchDoc(state.ctx.db.raw.outbound_campaigns, campaignId, {
+  await patchDoc(state.ctx.db.outbound_campaigns, campaignId, {
     source_count: sources.length,
     company_count: companies.length,
     qualified_count: companies.filter((item) => item.qualification_status === 'qualified').length,
@@ -6991,7 +6991,7 @@ function escapeHtml(value) {
 }
 
 async function updateContactInPipelineItem(pipelineItemId, contactIndex, mutator) {
-  const collection = state.ctx?.db?.raw?.outbound_pipeline_items;
+  const collection = state.ctx?.db?.outbound_pipeline_items;
   if (!collection) return;
   const existing = await collection.findOne(pipelineItemId).exec();
   if (!existing) return;
@@ -7025,7 +7025,7 @@ function setSelectedContactIndexForCompany(companyId, index) {
 }
 
 async function deleteContactFromPipelineItem(pipelineItemId, contactIndex) {
-  const collection = state.ctx?.db?.raw?.outbound_pipeline_items;
+  const collection = state.ctx?.db?.outbound_pipeline_items;
   if (!collection) return;
   const existing = await collection.findOne(pipelineItemId).exec();
   if (!existing) return;

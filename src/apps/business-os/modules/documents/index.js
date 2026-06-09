@@ -399,7 +399,7 @@ function wireLocalRealtime(state) {
     }, DOCUMENT_RENDER_DEBOUNCE_MS);
   };
   const subscriptions = collections
-    .map((collectionName) => state.ctx.db?.raw?.[collectionName]?.$?.subscribe?.(schedule) || null)
+    .map((collectionName) => state.ctx.db?.[collectionName]?.$?.subscribe?.(schedule) || null)
     .filter(Boolean);
   return () => {
     if (timer) window.clearTimeout(timer);
@@ -424,7 +424,7 @@ async function refreshDocumentsFromLocal(state) {
 }
 
 async function refreshDocuments(state) {
-  const collection = state.ctx.db?.raw?.documents;
+  const collection = state.ctx.db?.documents;
   const rawDocuments = collection
     ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
     : [];
@@ -440,7 +440,7 @@ async function refreshDocuments(state) {
 }
 
 async function refreshRunbooks(state) {
-  const collection = state.ctx.db?.raw?.document_runbooks;
+  const collection = state.ctx.db?.document_runbooks;
   const storedRunbooks = collection
     ? (await collection.find({ sort: [{ title: 'asc' }] }).exec()).map((doc) => doc.toJSON())
     : [];
@@ -493,7 +493,7 @@ async function importDocumentFile(state, file, workflow = {}) {
     bytes,
   });
 
-  await state.ctx.db.raw.document_versions.insert({
+  await state.ctx.db.document_versions.insert({
     id: versionId,
     document_id: documentId,
     version: 1,
@@ -505,7 +505,7 @@ async function importDocumentFile(state, file, workflow = {}) {
     updated_at_ms: now,
   });
 
-  await state.ctx.db.raw.documents.insert({
+  await state.ctx.db.documents.insert({
     id: documentId,
     title: titleFromFilename(file.name),
     filename: file.name,
@@ -574,14 +574,14 @@ async function loadSelectedVersion(state) {
   }
   let doc = record.current_version_id
     ? await withTimeout(
-      state.ctx.db.raw.document_versions.findOne(record.current_version_id).exec(),
+      state.ctx.db.document_versions.findOne(record.current_version_id).exec(),
       4500,
       `Version ${record.current_version_id} konnte nicht geladen werden.`,
     )
     : null;
   if (!doc) {
     const fallback = await withTimeout(
-      state.ctx.db.raw.document_versions.find({
+      state.ctx.db.document_versions.find({
         selector: { document_id: record.id },
         sort: [{ updated_at_ms: 'desc' }],
         limit: 1,
@@ -592,7 +592,7 @@ async function loadSelectedVersion(state) {
     doc = fallback[0] || null;
     if (doc) {
       const versionJson = doc.toJSON();
-      const recordDoc = await state.ctx.db.raw.documents.findOne(record.id).exec();
+      const recordDoc = await state.ctx.db.documents.findOne(record.id).exec();
       await recordDoc?.incrementalPatch({ current_version_id: versionJson.id });
       record.current_version_id = versionJson.id;
     }
@@ -860,7 +860,7 @@ async function deleteDocument(state, documentId) {
     });
   }
 
-  const doc = await state.ctx.db.raw.documents.findOne(documentId).exec();
+  const doc = await state.ctx.db.documents.findOne(documentId).exec();
   if (doc) {
     await doc.incrementalPatch({
       is_deleted: true,
@@ -897,7 +897,7 @@ async function updateDocumentMetadata(state, documentId, input) {
     tags: normalizeTags(input.tags),
     updated_at_ms: Date.now(),
   };
-  const doc = await state.ctx.db.raw.documents.findOne(documentId).exec();
+  const doc = await state.ctx.db.documents.findOne(documentId).exec();
   if (doc) await doc.incrementalPatch(patch);
   Object.assign(sourceRecord, patch);
   state.selectedId = documentId;
@@ -1610,7 +1610,7 @@ async function dispatchDocumentCommandWithBackendFallback(state, command, comman
 }
 
 async function waitForBusinessCommandProjection(state, commandId, startedAtMs) {
-  const collection = state.ctx.db?.raw?.business_commands;
+  const collection = state.ctx.db?.business_commands;
   if (!collection) return null;
   const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
   for (let attempt = 0; attempt < 12; attempt += 1) {
@@ -2035,13 +2035,13 @@ async function flushActiveSuperDocDraft(state, record = selectedRecord(state), o
       mimeType: DOCX_MIME,
       bytes,
     });
-    const versionDoc = await state.ctx.db.raw.document_versions.findOne(versionId).exec();
+    const versionDoc = await state.ctx.db.document_versions.findOne(versionId).exec();
     await versionDoc?.incrementalPatch({
       source_kind: 'edited_docx',
       blob_id: blobId,
       updated_at_ms: now,
     });
-    const recordDoc = await state.ctx.db.raw.documents.findOne(recordId).exec();
+    const recordDoc = await state.ctx.db.documents.findOne(recordId).exec();
     await recordDoc?.incrementalPatch({
       status: 'Draft',
       updated_at_ms: now,
@@ -2074,7 +2074,7 @@ async function flushActiveSuperDocDraft(state, record = selectedRecord(state), o
 
 async function markRecordDraft(state, record) {
   const now = Date.now();
-  const recordDoc = await state.ctx.db.raw.documents.findOne(record.id).exec();
+  const recordDoc = await state.ctx.db.documents.findOne(record.id).exec();
   await recordDoc?.incrementalPatch({
     status: 'Draft',
     updated_at_ms: now,
@@ -2089,12 +2089,12 @@ async function saveDraftVersion(state, document) {
   const formatModule = await ensureDocumentFormatModule(state);
   const now = Date.now();
   const indexText = formatModule.getDocumentText(document).slice(0, 20000);
-  const versionDoc = await state.ctx.db.raw.document_versions.findOne(state.selectedVersion.id).exec();
+  const versionDoc = await state.ctx.db.document_versions.findOne(state.selectedVersion.id).exec();
   await versionDoc?.incrementalPatch({
     model_json: document,
     updated_at_ms: now,
   });
-  const recordDoc = await state.ctx.db.raw.documents.findOne(record.id).exec();
+  const recordDoc = await state.ctx.db.documents.findOne(record.id).exec();
   await recordDoc?.incrementalPatch({
     status: 'Draft',
     index_text: indexText,
@@ -2138,7 +2138,7 @@ async function saveBlobChunks(ctx, input) {
   const base64 = uint8ToBase64(input.bytes);
   const total = Math.ceil(base64.length / CHUNK_SIZE) || 1;
   for (let idx = 0; idx < total; idx += 1) {
-    await ctx.db.raw.document_blob_chunks.insert({
+    await ctx.db.document_blob_chunks.insert({
       id: `${input.blobId}_${idx}`,
       blob_id: input.blobId,
       document_id: input.documentId,
@@ -2156,7 +2156,7 @@ async function saveBlobChunks(ctx, input) {
 async function loadBlobBytes(ctx, blobId) {
   requireDocumentPersistence(ctx);
   if (!blobId) return null;
-  const chunks = await ctx.db.raw.document_blob_chunks.find({
+  const chunks = await ctx.db.document_blob_chunks.find({
     selector: { blob_id: blobId },
     sort: [{ idx: 'asc' }],
   }).exec();
@@ -2166,14 +2166,14 @@ async function loadBlobBytes(ctx, blobId) {
 }
 
 function requireDocumentPersistence(ctx) {
-  const raw = ctx?.db?.raw;
+  const raw = ctx?.db;
   if (!raw?.documents || !raw?.document_versions || !raw?.document_blob_chunks) {
     throw new Error('CTOX document persistence is unavailable. Document bytes must be stored through CTOX collections, not local files.');
   }
 }
 
 async function ensureSeedRunbooks(ctx) {
-  const collection = ctx.db?.raw?.document_runbooks;
+  const collection = ctx.db?.document_runbooks;
   if (!collection) return;
   const existing = await collection.find().exec();
   const now = Date.now();

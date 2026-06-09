@@ -1089,7 +1089,7 @@ async function readCollection(name) {
 }
 
 function resolveCollection(name) {
-  return state.ctx?.db?.raw?.[name]
+  return state.ctx?.db?.[name]
     || state.ctx?.db?.collections?.[name]
     || state.ctx?.db?.collection?.(name);
 }
@@ -2392,7 +2392,7 @@ async function importCustomerRowsFromPayload(payload = {}) {
     const accountId = `customer_import_${slugId(domain || row.name)}_${row.row_index || imported}_${now}`;
     if (existing) {
       dedupe += 1;
-      await upsertLocalDoc(state.ctx.db.raw.customer_dedupe_candidates, `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`, {
+      await upsertLocalDoc(state.ctx.db.customer_dedupe_candidates, `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`, {
         id: `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`,
         object_type: 'account',
         match_key: domain || row.name,
@@ -2430,11 +2430,11 @@ async function importCustomerRowsFromPayload(payload = {}) {
       updated_at_ms: now,
       last_activity_at_ms: now,
     };
-    await upsertLocalDoc(state.ctx.db.raw.customer_accounts, account.id, account);
+    await upsertLocalDoc(state.ctx.db.customer_accounts, account.id, account);
     if (domain) existingByDomain.set(domain, account);
     imported += 1;
   }
-  await upsertLocalDoc(state.ctx.db.raw.customer_import_batches, batchId, {
+  await upsertLocalDoc(state.ctx.db.customer_import_batches, batchId, {
     id: batchId,
     source: payload.source_type || 'importer',
     source_record_id: payload.record_id || '',

@@ -3797,8 +3797,16 @@ function createModuleContext(mod) {
   };
 }
 
+// Live DB facade handed to modules as ctx.db. A Proxy forwards unknown
+// property names to the live RxDB collections, so modules get the ergonomic
+// `ctx.db.notes.find()` style WITHOUT unwrapping ctx.db.raw. The indirection
+// through state.db is the point: the data plane can be torn down and rebuilt
+// (schema-drift recovery bumps state.dataPlaneGeneration) and the facade keeps
+// pointing at the live database, while an unwrapped raw handle goes stale.
+// The module conformance guard (scripts/assert-module-conformance.mjs)
+// forbids ctx.db.raw in modules.
 function createLiveDbFacade() {
-  return {
+  const base = {
     get mode() { return state.db?.mode; },
     get rxdb() { return state.db?.rxdb; },
     get raw() { return state.db?.raw; },
@@ -3807,6 +3815,17 @@ function createLiveDbFacade() {
     collection: (...args) => state.db?.collection?.(...args),
     close: (...args) => state.db?.close?.(...args),
   };
+  return new Proxy(base, {
+    get(target, prop, receiver) {
+      if (prop in target) return Reflect.get(target, prop, receiver);
+      if (typeof prop !== 'string') return undefined;
+      return state.db?.collection?.(prop);
+    },
+    has(target, prop) {
+      if (prop in target) return true;
+      return typeof prop === 'string' && Boolean(state.db?.collection?.(prop));
+    },
+  });
 }
 
 function createLiveSyncFacade() {

@@ -16,10 +16,6 @@ let contextMenu = null;
 let contextMenuCleanup = null;
 
 export async function mount(ctx) {
-  if (ctx.db && ctx.db.raw) {
-    ctx.db = ctx.db.raw;
-  }
-
   lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, {});
   t = (key, fallback, ...args) => {

@@ -400,7 +400,7 @@ async function startCreatorDataStreams(ctx, host) {
 }
 
 function getCollection(ctx, name) {
-  return ctx.db?.collection?.(name) || ctx.db?.raw?.[name] || null;
+  return ctx.db?.collection?.(name) || ctx.db?.[name] || null;
 }
 
 function cleanupSubscription(subscription) {
@@ -1137,9 +1137,9 @@ async function autoMigrate(ctx) {
   console.log(\`[Migration] [\${APP_METADATA.version}] Auto-Migration wird initialisiert...\\n\`);
   for (const baseColl of APP_METADATA.collections) {
     const currentColl = \`\${baseColl}_\${version}\\n\`.trim();
-    if (!ctx.db?.raw || !ctx.db.raw[currentColl]) continue;
+    if (!ctx.db || !ctx.db[currentColl]) continue;
 
-    const currentCount = await ctx.db.raw[currentColl].find().exec().then(docs => docs.length).catch(() => 0);
+    const currentCount = await ctx.db[currentColl].find().exec().then(docs => docs.length).catch(() => 0);
     if (currentCount > 0) {
       console.log(\`[Migration] [\${currentColl}] Hat bereits Daten, keine Migration erforderlich.\\n\`);
       continue;
@@ -1149,14 +1149,14 @@ async function autoMigrate(ctx) {
       const prevColl = \`\${baseColl}_v\${i}\\n\`.trim();
       console.log(\`[Migration] Überprüfe historische Tabelle \${prevColl}...\\n\`);
 
-      if (!ctx.db.raw[prevColl]) {
+      if (!ctx.db[prevColl]) {
         try {
-          const currentSchema = ctx.db.raw[currentColl].schema.jsonSchema;
+          const currentSchema = ctx.db[currentColl].schema.jsonSchema;
           const prevSchema = {
             ...currentSchema,
             title: \`\${prevColl} schema\`
           };
-          await ctx.db.raw.addCollections({
+          await ctx.db.addCollections({
             [prevColl]: { schema: prevSchema }
           });
         } catch (e) {
@@ -1165,10 +1165,10 @@ async function autoMigrate(ctx) {
         }
       }
 
-      const prevCount = await ctx.db.raw[prevColl].find().exec().then(docs => docs.length).catch(() => 0);
+      const prevCount = await ctx.db[prevColl].find().exec().then(docs => docs.length).catch(() => 0);
       if (prevCount > 0) {
         console.log(\`[Migration] Daten in \${prevColl} gefunden (\${prevCount} Einträge). Starte Migration...\\n\`);
-        const oldItems = await ctx.db.raw[prevColl].find().exec();
+        const oldItems = await ctx.db[prevColl].find().exec();
         const docs = oldItems.map(item => {
           const json = item.toJSON();
           delete json._meta;
@@ -1176,7 +1176,7 @@ async function autoMigrate(ctx) {
           return json;
         });
 
-        await ctx.db.raw[currentColl].bulkInsert(docs);
+        await ctx.db[currentColl].bulkInsert(docs);
         console.log(\`[Migration] Migration von \${prevColl} nach \${currentColl} erfolgreich beendet!\\n\`);
         break;
       }
@@ -1226,15 +1226,15 @@ function setupResizers(host) {
 }
 
 async function loadInitialData() {
-  if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return;
-  const items = await state.ctx.db.raw[PRIMARY_COLL].find().exec();
+  if (!state.ctx.db?.[PRIMARY_COLL]) return;
+  const items = await state.ctx.db[PRIMARY_COLL].find().exec();
   state.records = items.map(item => item.toJSON());
   renderList();
 }
 
 function wireReactiveSync() {
-  if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return () => {};
-  const sub = state.ctx.db.raw[PRIMARY_COLL].find().$.subscribe(items => {
+  if (!state.ctx.db?.[PRIMARY_COLL]) return () => {};
+  const sub = state.ctx.db[PRIMARY_COLL].find().$.subscribe(items => {
     state.records = items.map(item => item.toJSON());
     renderList();
     if (state.selectedId) {
@@ -1308,9 +1308,9 @@ function wireUi(host) {
 
   if (btnCreate) {
     btnCreate.addEventListener('click', async () => {
-      if (!state.ctx.db?.raw?.[PRIMARY_COLL]) return;
+      if (!state.ctx.db?.[PRIMARY_COLL]) return;
       const newId = \`rec-\${Date.now()}\`;
-      await state.ctx.db.raw[PRIMARY_COLL].insert({
+      await state.ctx.db[PRIMARY_COLL].insert({
         id: newId,
         title: 'Neuer Eintrag',
         status: 'Entwurf',
@@ -1328,11 +1328,11 @@ function wireUi(host) {
 
   if (btnSave) {
     btnSave.addEventListener('click', async () => {
-      if (!state.selectedId || !state.ctx.db?.raw?.[PRIMARY_COLL]) return;
+      if (!state.selectedId || !state.ctx.db?.[PRIMARY_COLL]) return;
       const inputTitle = host.querySelector('#record-detail-title');
       const selectStatus = host.querySelector('#record-detail-status');
 
-      const doc = await state.ctx.db.raw[PRIMARY_COLL].findOne(state.selectedId).exec();
+      const doc = await state.ctx.db[PRIMARY_COLL].findOne(state.selectedId).exec();
       if (doc) {
         await doc.patch({
           title: inputTitle.value || 'Unbenannt',
