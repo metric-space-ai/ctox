@@ -1,3 +1,6 @@
+// Heritage marker, NOT a dependency: CTOX DB is a hard fork derived from
+// RxDB 16.20.0 concepts (see docs/ctox-rxdb.md). The runtime imports no
+// upstream rxdb code — do not "update" this version or add npm rxdb.
 export const RXDB_VERSION = '16.20.0';
 export const SYNC_TRANSPORT = 'webrtc';
 export const SYNC_TOPIC_PREFIX = 'ctox-business-os';
