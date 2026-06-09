@@ -5584,6 +5584,11 @@ pub fn repair_queue_projections(
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let projection_task_status = payload
+            .get("task_status")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
 
         match channels::load_queue_task(root, &task_id)? {
             Some(mut task) => {
@@ -5656,6 +5661,7 @@ pub fn repair_queue_projections(
                 let desired_status = normalize_queue_status(&desired_route_status).to_string();
                 let needs_projection_repair = projection_route_status != desired_route_status
                     || projection_status != desired_status
+                    || projection_task_status != desired_status
                     || repair_kind.is_some();
                 if needs_projection_repair {
                     let class = match desired_route_status.as_str() {
@@ -16965,6 +16971,36 @@ mod tests {
                 ..Default::default()
             },
         )?;
+        let conn = open_store(root)?;
+        upsert_business_record(
+            &conn,
+            "ctox_queue_tasks",
+            &task_id,
+            now_ms() as i64,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_repair_leased_success",
+                "status": "completed",
+                "route_status": "handled",
+                "task_status": "running"
+            }),
+        )?;
+        drop(conn);
+        let rxdb_conn = create_repair_rxdb_tables(root)?;
+        insert_rxdb_test_record(
+            &rxdb_conn,
+            "ctox_business_os__ctox_queue_tasks__v0",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": "cmd_repair_leased_success",
+                "status": "completed",
+                "route_status": "handled",
+                "task_status": "running",
+                "updated_at_ms": 1
+            }),
+        )?;
+        drop(rxdb_conn);
 
         let dry_run =
             repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
@@ -17002,6 +17038,10 @@ mod tests {
             queue_projection.get("route_status").and_then(Value::as_str),
             Some("handled")
         );
+        assert_eq!(
+            queue_projection.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
 
         let command_payload: String = conn.query_row(
             "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = 'cmd_repair_leased_success'",
@@ -17017,6 +17057,20 @@ mod tests {
             command_projection
                 .get("task_status")
                 .and_then(Value::as_str),
+            Some("completed")
+        );
+        let rxdb_queue = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected repaired rxdb queue row")?;
+        assert_eq!(
+            rxdb_queue.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            rxdb_queue.get("route_status").and_then(Value::as_str),
+            Some("handled")
+        );
+        assert_eq!(
+            rxdb_queue.get("task_status").and_then(Value::as_str),
             Some("completed")
         );
         Ok(())
