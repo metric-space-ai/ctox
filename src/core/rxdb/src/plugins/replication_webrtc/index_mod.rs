@@ -2285,6 +2285,7 @@ mod tests {
         response: crate::rxjs_compat::RxSubject<PeerWithResponse<MockPeer>>,
         error: crate::rxjs_compat::RxSubject<RxError>,
         sent: StdArc<PlMutex<Vec<WebRTCWireFrame>>>,
+        closed_peers: StdArc<PlMutex<Vec<String>>>,
     }
 
     impl MockHandler {
@@ -2296,6 +2297,7 @@ mod tests {
                 response: crate::rxjs_compat::RxSubject::new(),
                 error: crate::rxjs_compat::RxSubject::new(),
                 sent: StdArc::new(PlMutex::new(Vec::new())),
+                closed_peers: StdArc::new(PlMutex::new(Vec::new())),
             })
         }
 
@@ -2345,6 +2347,9 @@ mod tests {
         }
         async fn close(&self) -> Result<(), RxError> {
             Ok(())
+        }
+        async fn close_peer(&self, peer: &MockPeer) {
+            self.closed_peers.lock().push(peer.0.clone());
         }
     }
 
@@ -2487,6 +2492,157 @@ mod tests {
             serde_json::json!("does_not_exist")
         );
 
+        pool.cancel().await;
+    }
+    /// REGRESSION (52a1bf45): a request in flight when its peer disconnects
+    /// must FAIL, not hang. The per-subscriber response stream only ends when
+    /// the whole handler is dropped, so without racing the disconnect event a
+    /// stuck handshake/fork pull was uncancelable until process restart.
+    #[tokio::test]
+    async fn request_in_flight_fails_when_peer_disconnects() {
+        let handler = MockHandler::new();
+        let peer = MockPeer("p1".to_string());
+        let request = tokio::spawn(send_message_and_await_answer(
+            StdArc::clone(&handler) as StdArc<dyn WebRTCConnectionHandler<Peer = MockPeer>>,
+            peer.clone(),
+            WebRTCMessage {
+                id: "req-1".to_string(),
+                method: "token".to_string(),
+                params: vec![],
+                collection: None,
+            },
+        ));
+        // Let the request subscribe + send, then drop the peer.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        handler.disconnect.next(peer);
+        let result = tokio::time::timeout(Duration::from_secs(2), request)
+            .await
+            .expect("request must settle promptly after peer disconnect")
+            .expect("task must not panic");
+        let err = result.expect_err("disconnect must surface as an error, not an answer");
+        assert!(
+            err.to_string().contains("disconnected"),
+            "error should name the disconnect: {err}"
+        );
+    }
+
+    /// REGRESSION (52a1bf45): a request whose answer never arrives (channel
+    /// alive, remote silent) must fail at the request deadline instead of
+    /// parking its caller forever. Paused time fast-forwards the 60s deadline.
+    #[tokio::test(start_paused = true)]
+    async fn request_without_answer_times_out() {
+        let handler = MockHandler::new();
+        let result = tokio::time::timeout(
+            Duration::from_secs(120),
+            send_message_and_await_answer(
+                StdArc::clone(&handler) as StdArc<dyn WebRTCConnectionHandler<Peer = MockPeer>>,
+                MockPeer("p1".to_string()),
+                WebRTCMessage {
+                    id: "req-timeout".to_string(),
+                    method: "token".to_string(),
+                    params: vec![],
+                    collection: None,
+                },
+            ),
+        )
+        .await
+        .expect("request must settle at its own deadline");
+        let err = result.expect_err("a never-answered request must error");
+        assert!(
+            err.to_string().contains("no answer within"),
+            "error should name the deadline: {err}"
+        );
+    }
+
+    /// REGRESSION (52a1bf45): an empty/non-string `token` answer corrupts the
+    /// master election and collapses the replication identifier, so the
+    /// handshake must fail AND tear the transport down (close_peer) instead of
+    /// leaving a half-dead peer that answers requests but never replicates.
+    #[tokio::test]
+    async fn empty_token_answer_fails_handshake_and_closes_peer() {
+        let collection = crate::rx_collection::test_support::test_collection_named("etok").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi(
+            vec![StdArc::clone(&collection)],
+            StdArc::clone(&handler),
+            None,
+            Some("test-room".to_string()),
+            Some(StdArc::<str>::from("rxdb-rs-test")),
+        )
+        .await
+        .expect("bring up pool");
+        let mut errors = pool.error_subject.subscribe();
+
+        let peer = MockPeer("p1".to_string());
+        handler.connect.next(peer.clone());
+
+        // Answer the handshake requests the pool sends us: a valid protocol
+        // payload first, then an EMPTY token.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut answered_protocol = false;
+        let mut answered_token = false;
+        while tokio::time::Instant::now() < deadline && !(answered_protocol && answered_token) {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let requests: Vec<WebRTCMessage> = handler
+                .sent
+                .lock()
+                .iter()
+                .filter_map(|frame| match frame {
+                    WebRTCWireFrame::Message(m) => Some(m.clone()),
+                    _ => None,
+                })
+                .collect();
+            for request in requests {
+                if request.method == "ctoxProtocol" && !answered_protocol {
+                    answered_protocol = true;
+                    let local_protocol = request.params.first().cloned().unwrap_or(Value::Null);
+                    handler.response.next(PeerWithResponse {
+                        peer: peer.clone(),
+                        response: WebRTCResponse {
+                            id: request.id.clone(),
+                            // Echo our own payload back: protocol-compatible.
+                            result: local_protocol,
+                            error: None,
+                            collection: None,
+                        },
+                    });
+                } else if request.method == "token" && !answered_token {
+                    answered_token = true;
+                    handler.response.next(PeerWithResponse {
+                        peer: peer.clone(),
+                        response: WebRTCResponse {
+                            id: request.id.clone(),
+                            result: Value::String(String::new()),
+                            error: None,
+                            collection: None,
+                        },
+                    });
+                }
+            }
+        }
+        assert!(
+            answered_protocol && answered_token,
+            "handshake requests observed"
+        );
+
+        // The pool must surface the handshake error AND close the transport.
+        let err = tokio::time::timeout(Duration::from_secs(2), errors.next())
+            .await
+            .expect("handshake error surfaces")
+            .expect("error stream alive");
+        assert!(
+            err.to_string().contains("empty"),
+            "error names the empty token: {err}"
+        );
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline && handler.closed_peers.lock().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            handler.closed_peers.lock().as_slice(),
+            &["p1".to_string()],
+            "handshake failure must close the peer transport"
+        );
         pool.cancel().await;
     }
 }

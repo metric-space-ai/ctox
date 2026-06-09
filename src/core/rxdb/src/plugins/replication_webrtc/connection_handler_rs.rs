@@ -2195,6 +2195,34 @@ mod tests {
     // through this glob.
     use super::*;
 
+    /// REGRESSION (52a1bf45): when the task draining a peer's send queue is
+    /// aborted mid-send, the guard's Drop must re-open the drain slot.
+    #[test]
+    fn drain_reset_guard_reopens_slot_on_drop() {
+        let queues: Arc<Mutex<HashMap<WebRTCRsPeer, PeerSendQueue>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        queues.lock().entry("p1".to_string()).or_default().draining = true;
+        drop(DrainResetGuard {
+            queues: Arc::clone(&queues),
+            peer: "p1".to_string(),
+            armed: true,
+        });
+        assert!(
+            !queues.lock().get("p1").unwrap().draining,
+            "armed guard must clear `draining` on drop"
+        );
+        queues.lock().get_mut("p1").unwrap().draining = true;
+        drop(DrainResetGuard {
+            queues: Arc::clone(&queues),
+            peer: "p1".to_string(),
+            armed: false,
+        });
+        assert!(
+            queues.lock().get("p1").unwrap().draining,
+            "disarmed guard must leave the flag alone"
+        );
+    }
+
     #[test]
     fn classifies_wire_frames_by_result_or_error_field() {
         let response = serde_json::to_value(WebRTCWireFrame::Response(WebRTCResponse {
