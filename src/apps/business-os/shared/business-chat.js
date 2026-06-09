@@ -77,6 +77,7 @@ export function initBusinessChat({
   };
 
   const syncChats = () => {
+    if (shouldDeferRemoteChatHydration(root, state)) return;
     captureDrafts(root, state);
     hydrateChatsFromRxDb({ state, db, session }).then((changed) => {
       if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
@@ -1772,6 +1773,15 @@ function touchChats(state, chats) {
     chat.owner_user_id = chat.owner_user_id || state.ownerUserId || '';
     chat.updated_at_ms = now;
   });
+}
+
+function shouldDeferRemoteChatHydration(root, state) {
+  const active = document.activeElement;
+  const hasFocusedChatControl = Boolean(active?.closest?.('[data-chat-id]'))
+    && /^(TEXTAREA|INPUT|SELECT|BUTTON)$/.test(active?.tagName || '');
+  if (hasFocusedChatControl) return true;
+  const lastMutation = Number(state?.lastUiMutationMs || 0);
+  return lastMutation > 0 && Date.now() - lastMutation < 2500;
 }
 
 function scrollActiveChatIntoView(root, state) {
