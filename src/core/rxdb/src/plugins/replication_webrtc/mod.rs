@@ -1,3 +1,25 @@
+//! ============================================================================
+//! AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
+//! ============================================================================
+//! This module is the CTOX side of CTOX DB, the WebRTC-ONLY data plane to
+//! Business OS. Hard rules (each one has caused real regressions):
+//!   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only
+//!      (root README.md "Data Boundary").
+//!   2. The native peer is a PASSIVE RESPONDER: it never initiates
+//!      RTCPeerConnections from the signaling peer list. Browsers initiate;
+//!      the responder is built when their offer arrives (glare protection).
+//!   3. Native is ALWAYS master toward role=browser peers; the hash election
+//!      only applies between non-browser peers. Do not "simplify" this.
+//!   4. Wire-contract constants are GENERATED from the fixtures under
+//!      tests/fixtures/ — never hand-edit *_contract_generated.rs or the JS
+//!      twins; run the build_webrtc_*_contract.mjs tools instead.
+//!   5. NO new process-env toggles — runtime config flows through the SQLite
+//!      runtime store (CLAUDE.md operator rule).
+//!   6. Keep `cargo test --manifest-path src/core/rxdb/Cargo.toml` AND
+//!      `node src/apps/business-os/rxdb/tests/run-all.mjs` green. Never
+//!      delete or weaken a failing test to make a change pass.
+//! ============================================================================
+
 //! Port of `src/plugins/replication-webrtc/` — phase-4 WebRTC transport.
 //!
 //! The user-facing `replicateWebRTC()` entry point is available through the

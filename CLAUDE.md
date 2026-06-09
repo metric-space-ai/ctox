@@ -9,6 +9,12 @@ Before answering **any** question about CTOX's architecture, scope, what code do
 - `CLAUDE.md` — this file
 - `docs/architecture.md` — architecture orientation
 
+For anything touching the Business OS data plane (sync, replication, RxDB,
+WebRTC, `src/core/rxdb/`, `src/apps/business-os/rxdb/`,
+`src/core/business_os/rxdb_peer.rs`, `shared/sync.js`), additionally read
+`docs/ctox-rxdb.md` — the canonical, code-verified description of CTOX DB and
+its guardrails.
+
 Do **not** rely on grep/memory/assumptions about what a given subsystem is supposed to be — the architecture docs in root are the source of truth. Specifically:
 
 - `src/core/harness/` is the integrated in-process agent harness built around the hard-forked OpenAI Codex runtime (`ctox-core`). Executed **in-process** via `InProcessAppServerClient`, not as an external `codex-exec` subprocess.
@@ -42,6 +48,31 @@ These rules apply to new or actively refactored inference-capable model integrat
 7. **Transport is Unix domain socket with line-delimited JSON, OpenAI Responses envelope.** No HTTP, no TCP (not even loopback), no TLS, no extra RPC frameworks. Peer UID check via `SO_PEERCRED` on Linux. Socket mode `0600`, parent dir `0700`. Wire-compatible with CTOX's existing client in `src/core/harness/core/src/client.rs::LocalIpcRequest`.
 
 If a shortcut is tempting (for example "just add a shared helper crate" or "just read one env var"), treat it as an architecture decision, not a drive-by implementation detail. Existing compatibility bridges should be made explicit and contained.
+
+## ctox-rxdb Data Plane (hard rules)
+
+CTOX DB (`rxdb-rs` in the daemon, `ctox-rxdb-js` in the browser) is the
+WebRTC-ONLY data plane for Business OS. These rules are enforced by guard
+tests; every one of them encodes a real past regression caused by a
+well-meaning agent. Full context: `docs/ctox-rxdb.md`.
+
+1. **No HTTP fallback or bridge for Business OS records — ever.** Collections,
+   `business_commands`, `ctox_queue_tasks`, desktop files/chunks, manifests and
+   runtime status replicate only over RxDB/WebRTC. If sync is broken, fix it
+   inside the WebRTC stack.
+2. **Never patch `src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs` directly,
+   and never edit its `src/` without rebuilding dist** (pinned esbuild command
+   in `docs/ctox-rxdb.md`) **and bumping the `?v=` cache-busters**. src↔dist
+   drift has shipped breakage in both directions.
+3. **Never change wire-contract constants on one side.** The four
+   `*generated*` contract files (two per side) are generated from
+   `src/core/rxdb/tests/fixtures/*.json`; change the fixture and regenerate.
+4. **No npm/bare imports in the browser runtime; no new process-env toggles
+   anywhere in the data plane.**
+5. **Keep the suites green and never delete/weaken a failing test:**
+   `node src/apps/business-os/rxdb/tests/run-all.mjs` and
+   `cargo test --manifest-path src/core/rxdb/Cargo.toml` (the crate is NOT a
+   workspace member — root `cargo test` does not cover it).
 
 ## What CTOX Is (one-paragraph orientation)
 

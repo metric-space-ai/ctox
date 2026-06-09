@@ -120,6 +120,18 @@ jobs:
           node src/apps/business-os/rxdb/tests/query-api-smoke.mjs
           node src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
           node src/core/rxdb/tools/build_business_os_schema_contract.mjs
+          # Full ctox-rxdb smoke + guard suite (auto-discovers every
+          # *-smoke.mjs, incl. contract-drift, bundle-reproducibility and the
+          # data-plane ratchet guards). The three explicit smoke invocations
+          # above stay for the release-evidence contract.
+          node src/apps/business-os/rxdb/tests/run-all.mjs
+
+      - name: rxdb-rs crate tests
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        # The ctox-rxdb crate is NOT a cargo workspace member: the root
+        # cargo test/check never compiles or runs its 230+ unit tests. This
+        # is the only CI coverage the WebRTC data plane's Rust side has.
+        run: cargo test --manifest-path src/core/rxdb/Cargo.toml --quiet
 
       - name: ctox-rxdb-js bundle provenance
         if: matrix.target == 'x86_64-unknown-linux-gnu'

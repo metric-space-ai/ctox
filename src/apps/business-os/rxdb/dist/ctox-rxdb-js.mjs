@@ -914,6 +914,7 @@ var MAX_FRAME_RETRIES = 2;
 // src/apps/business-os/rxdb/src/webrtc-native.mjs
 var SEND_BUFFER_HIGH_WATER = 512 * 1024;
 var SEND_BUFFER_LOW_WATER = 128 * 1024;
+var MAX_SERIALIZED_FRAME_BYTES = 16384;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
 var FRAME_RESUME_TIMEOUT_MS = 1e3;
 var COMPLETED_FRAME_ACK_TTL_MS = 6e4;
@@ -1169,7 +1170,8 @@ var CtoxWebRtcNativePeer = class {
   async sendFramed(connection, text) {
     const channel = connection.channel;
     const transferId = `${this.options.clientId}|frame|${Date.now()}|${this.frameCounter++}`;
-    const totalFrames = Math.ceil(text.length / MAX_CHUNK_CHARS);
+    const chunks = splitFrameChunks(text, transferId);
+    const totalFrames = chunks.length;
     const totalBytes = encodedSize(text);
     if (totalBytes > MAX_TRANSFER_BYTES) {
       throw new Error(`WebRTC frame transfer exceeds ${MAX_TRANSFER_BYTES} bytes`);
@@ -1207,7 +1209,7 @@ var CtoxWebRtcNativePeer = class {
               transferId,
               attempt,
               seq,
-              data: text.slice(seq * MAX_CHUNK_CHARS, (seq + 1) * MAX_CHUNK_CHARS)
+              data: chunks[seq]
             };
             channel.send(JSON.stringify(chunkFrame));
             this.recordSentTransportFrame(chunkFrame, channel);
@@ -2740,6 +2742,51 @@ function requestObservationKey(peerId, method) {
 }
 function encodedSize(value) {
   return new TextEncoder().encode(String(value || "")).byteLength;
+}
+function splitFrameChunks(text, transferId) {
+  const envelope = JSON.stringify({
+    ctoxFrame: CTOX_FRAME_PROTOCOL,
+    kind: "chunk",
+    transferId,
+    attempt: Number.MAX_SAFE_INTEGER,
+    seq: Number.MAX_SAFE_INTEGER,
+    data: ""
+  });
+  const overhead = encodedSize(envelope);
+  const budget = Math.max(1, Math.min(MAX_CHUNK_CHARS, MAX_SERIALIZED_FRAME_BYTES - overhead - 64));
+  const value = String(text || "");
+  if (!value) return [""];
+  const chunks = [];
+  let cur = "";
+  let curEscaped = 0;
+  for (const ch of value) {
+    const chEscaped = jsonEscapedCharLen(ch);
+    if (curEscaped + chEscaped > budget && cur) {
+      chunks.push(cur);
+      cur = "";
+      curEscaped = 0;
+    }
+    cur += ch;
+    curEscaped += chEscaped;
+  }
+  if (cur || chunks.length === 0) chunks.push(cur);
+  return chunks;
+}
+var webrtcNativeTestInternals = Object.freeze({
+  splitFrameChunks,
+  jsonEscapedCharLen,
+  MAX_SERIALIZED_FRAME_BYTES
+});
+function jsonEscapedCharLen(ch) {
+  const code = ch.codePointAt(0);
+  if (ch === '"' || ch === "\\") return 2;
+  if (code === 8 || code === 9 || code === 10 || code === 12 || code === 13) return 2;
+  if (code < 32) return 6;
+  if (code <= 127) return 1;
+  if (code <= 2047) return 2;
+  if (code >= 55296 && code <= 57343) return 6;
+  if (code <= 65535) return 3;
+  return 4;
 }
 function highestContiguousSeq(received, totalFrames) {
   let seq = -1;

@@ -1,3 +1,19 @@
+//! ============================================================================
+//! AGENT GUARDRAILS — Business OS native RxDB peer (read docs/ctox-rxdb.md)
+//! ============================================================================
+//! Lifecycle rules that took real outages to learn — do not regress them:
+//!   * spawn_native_peer SUPERVISES run_native_peer: every non-intentional
+//!     exit respawns with capped backoff and re-reads the sync config.
+//!     NATIVE_PEER_STARTED is owned by the supervision loop alone.
+//!   * WebRTC bring-up failure/timeout is FATAL for the run. "Log and keep
+//!     running" creates a zombie: heartbeat healthy, zero replication.
+//!   * Heartbeats carry replicationUp — "process alive" and "replication up"
+//!     are different facts; never collapse them.
+//!   * The signaling URL is produced by a PROVIDER per (re)connect attempt so
+//!     token_iat/token_exp stay fresh; never bake the token window in once.
+//!   * NO HTTP data path for Business OS records; NO new process-env toggles.
+//! ============================================================================
+
 // Origin: CTOX
 // License: Apache-2.0
 

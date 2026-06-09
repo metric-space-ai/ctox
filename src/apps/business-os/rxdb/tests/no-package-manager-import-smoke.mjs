@@ -352,6 +352,10 @@ if (core.CTOX_RXDB_PROTOCOL !== CTOX_RXDB_PROTOCOL || typeof core.replicateWebRT
       },
     },
   };
+  // sendFramed refuses to keep transferring on a connection that is no longer
+  // the registered one (stale-connection guard) — register the mock like the
+  // real connection lifecycle does.
+  peer.connections.set(connection.remotePeerId, connection);
   await peer.sendFramed(connection, JSON.stringify({
     id: 'fixture-large-write',
     method: 'masterWrite',
@@ -394,6 +398,8 @@ if (core.CTOX_RXDB_PROTOCOL !== CTOX_RXDB_PROTOCOL || typeof core.replicateWebRT
       send: (text) => sent.push(JSON.parse(text)),
     },
   };
+  // drainSendQueue has the same stale-connection identity check as sendFramed.
+  peer.connections.set(connection.remotePeerId, connection);
   peer.enqueueSendFrame(connection, {
     payload: { id: 'large-write', method: 'masterWrite' },
     text: JSON.stringify({ id: 'large-write', method: 'masterWrite' }),

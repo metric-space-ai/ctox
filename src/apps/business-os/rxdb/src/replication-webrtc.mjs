@@ -1,3 +1,23 @@
+// =============================================================================
+// AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
+// =============================================================================
+// This file is part of CTOX DB, the WebRTC-ONLY data plane between Business OS
+// and the CTOX daemon. Hard rules (each one has caused real regressions):
+//   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only.
+//   2. NO npm/bare/node: imports — this runtime is package-manager-free.
+//   3. After ANY src edit: rebuild dist with the pinned esbuild command and
+//      bump the ?v= cache-buster (see docs/ctox-rxdb.md "Build & release").
+//      Never patch dist/ctox-rxdb-js.mjs directly.
+//   4. Wire-contract constants are GENERATED from fixtures — never hand-edit
+//      *-contract.generated.mjs or the Rust twins.
+//   5. Run `node src/apps/business-os/rxdb/tests/run-all.mjs` and keep it
+//      green. Never delete or weaken a failing test to make it pass.
+// =============================================================================
+
+// Phase-3 multiplex: ONE SharedRoomPeer carries EVERY collection of a sync
+// room. Recovery semantics here (push re-run flag, pull/push retry timers,
+// checkpoint retention keyed by storage epoch + native session) are pinned
+// by tests/replication-recovery-smoke.mjs.
 import { CtoxSubject } from './observable.mjs';
 import { createCtoxWebRtcNativePeer } from './webrtc-native.mjs';
 import {

@@ -1,6 +1,12 @@
 # Implementation Plan — Constant Real-Time RxDB/WebRTC Stream + App-Transparent Transport
 
-Status: PROPOSAL (no code touched yet). Author: engine review.
+Status: SUPERSEDED / LARGELY IMPLEMENTED — kept as history. The phases below
+landed across the Phase 1-4 transport commits and the 2026-06 stability work;
+the "current state" claims and line numbers in this document are STALE. The
+canonical, code-verified description of the data plane is `docs/ctox-rxdb.md`.
+Do not implement against this plan.
+
+Original status line: PROPOSAL (no code touched yet). Author: engine review.
 Scope: the hard-forked RxDB-WebRTC layer — browser (`src/apps/business-os/rxdb/src/`) and native (`src/core/rxdb/src/plugins/replication_webrtc/`, `src/core/business_os/rxdb_peer.rs`).
 
 ## 0. Why (the two themes, in the operator's words)

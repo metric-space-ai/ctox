@@ -1,3 +1,24 @@
+// =============================================================================
+// AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
+// =============================================================================
+// This file is part of CTOX DB, the WebRTC-ONLY data plane between Business OS
+// and the CTOX daemon. Hard rules (each one has caused real regressions):
+//   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only.
+//   2. NO npm/bare/node: imports — this runtime is package-manager-free.
+//   3. After ANY src edit: rebuild dist with the pinned esbuild command and
+//      bump the ?v= cache-buster (see docs/ctox-rxdb.md "Build & release").
+//      Never patch dist/ctox-rxdb-js.mjs directly.
+//   4. Wire-contract constants are GENERATED from fixtures — never hand-edit
+//      *-contract.generated.mjs or the Rust twins.
+//   5. Run `node src/apps/business-os/rxdb/tests/run-all.mjs` and keep it
+//      green. Never delete or weaken a failing test to make it pass.
+// =============================================================================
+
+// Connection lifecycle invariants pinned by tests: token freshness re-stamp
+// per connect, yourPeerId-only identity adoption, joined-based backoff reset
+// (signaling-freshness-smoke), byte-budgeted frame chunking mirroring the
+// Rust splitter (frame-chunking-smoke), multiplex admission + the
+// SHELL_CRITICAL_COLLECTIONS pin (rtc-critical-pool-smoke).
 import { CtoxEventEmitter } from './event-target.mjs';
 import { buildProtocolPayload, CTOX_RXDB_PROTOCOL } from './schema.mjs';
 import {
@@ -11,6 +32,11 @@ import {
 
 const SEND_BUFFER_HIGH_WATER = 512 * 1024;
 const SEND_BUFFER_LOW_WATER = 128 * 1024;
+// Hard wire invariant shared with the Rust peer (MAX_SERIALIZED_FRAME_BYTES in
+// connection_handler_rs.rs): a single serialized DataChannel message must stay
+// <= 16 KiB or browsers kill the channel. Chunks are budgeted by their
+// JSON-ESCAPED byte length against this ceiling — NOT by UTF-16 char count.
+const MAX_SERIALIZED_FRAME_BYTES = 16384;
 const FRAME_ACK_TIMEOUT_MS = 30_000;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
@@ -298,7 +324,11 @@ export class CtoxWebRtcNativePeer {
   async sendFramed(connection, text) {
     const channel = connection.channel;
     const transferId = `${this.options.clientId}|frame|${Date.now()}|${this.frameCounter++}`;
-    const totalFrames = Math.ceil(text.length / MAX_CHUNK_CHARS);
+    // Byte-correct chunking (mirrors Rust `split_chunks_for_frame`): slicing
+    // by UTF-16 chars let umlaut/emoji-heavy documents blow past the 16 KiB
+    // SCTP-safe envelope and silently kill the DataChannel.
+    const chunks = splitFrameChunks(text, transferId);
+    const totalFrames = chunks.length;
     const totalBytes = encodedSize(text);
     if (totalBytes > MAX_TRANSFER_BYTES) {
       throw new Error(`WebRTC frame transfer exceeds ${MAX_TRANSFER_BYTES} bytes`);
@@ -336,7 +366,7 @@ export class CtoxWebRtcNativePeer {
               transferId,
               attempt,
               seq,
-              data: text.slice(seq * MAX_CHUNK_CHARS, (seq + 1) * MAX_CHUNK_CHARS),
+              data: chunks[seq],
             };
             channel.send(JSON.stringify(chunkFrame));
             this.recordSentTransportFrame(chunkFrame, channel);
@@ -2033,6 +2063,69 @@ function requestObservationKey(peerId, method) {
 
 function encodedSize(value) {
   return new TextEncoder().encode(String(value || '')).byteLength;
+}
+
+// Mirrors Rust `split_chunks_for_frame` (connection_handler_rs.rs): budget
+// every chunk by its JSON-ESCAPED byte length. Code-point iteration never
+// splits surrogate pairs. AGENT GUARDRAIL: do not "simplify" this back to
+// `text.slice(n * CHARS, ...)` — char-based slicing overflows the SCTP frame
+// limit for non-ASCII content and the browser kills the DataChannel.
+function splitFrameChunks(text, transferId) {
+  const envelope = JSON.stringify({
+    ctoxFrame: CTOX_FRAME_PROTOCOL,
+    kind: 'chunk',
+    transferId,
+    attempt: Number.MAX_SAFE_INTEGER,
+    seq: Number.MAX_SAFE_INTEGER,
+    data: '',
+  });
+  const overhead = encodedSize(envelope);
+  // Two ceilings apply: the wire contract's per-chunk payload budget
+  // (MAX_CHUNK_CHARS — historical name; the fixture value is a BYTE budget)
+  // and the 16 KiB serialized-frame ceiling minus the envelope. Take the
+  // stricter one so chunks honor the documented contract AND can never kill
+  // the channel.
+  const budget = Math.max(1, Math.min(MAX_CHUNK_CHARS, MAX_SERIALIZED_FRAME_BYTES - overhead - 64));
+  const value = String(text || '');
+  if (!value) return [''];
+  const chunks = [];
+  let cur = '';
+  let curEscaped = 0;
+  for (const ch of value) {
+    const chEscaped = jsonEscapedCharLen(ch);
+    if (curEscaped + chEscaped > budget && cur) {
+      chunks.push(cur);
+      cur = '';
+      curEscaped = 0;
+    }
+    cur += ch;
+    curEscaped += chEscaped;
+  }
+  if (cur || chunks.length === 0) chunks.push(cur);
+  return chunks;
+}
+
+// Test-only surface (mirrors replicationWebRtcTestInternals): lets the smoke
+// suite assert the frame-chunking invariants without reaching into private
+// scope. Not part of the public CTOX DB API.
+export const webrtcNativeTestInternals = Object.freeze({
+  splitFrameChunks,
+  jsonEscapedCharLen,
+  MAX_SERIALIZED_FRAME_BYTES,
+});
+
+// JSON-escaped UTF-8 byte length of one code point, matching Rust
+// `json_escaped_char_len`.
+function jsonEscapedCharLen(ch) {
+  const code = ch.codePointAt(0);
+  if (ch === '"' || ch === '\\') return 2;
+  if (code === 0x08 || code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d) return 2;
+  if (code < 0x20) return 6;
+  if (code <= 0x7f) return 1;
+  if (code <= 0x7ff) return 2;
+  if (code >= 0xd800 && code <= 0xdfff) return 6; // lone surrogate -> \uXXXX
+  if (code <= 0xffff) return 3;
+  return 4;
 }
 
 function highestContiguousSeq(received, totalFrames) {

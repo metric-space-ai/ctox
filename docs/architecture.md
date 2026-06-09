@@ -132,6 +132,19 @@ current architecture. Remaining references to that retired external engine
 layout should be treated as cleanup work unless code inspection proves an
 active migration path still needs them.
 
+## Business OS Data Plane (CTOX DB / ctox-rxdb)
+
+Business OS in the browser and the CTOX daemon exchange ALL business data over
+a WebRTC-only replication plane called CTOX DB: the hard-fork Rust crate
+`src/core/rxdb/` (rxdb-rs) on the daemon side, the package-manager-free
+browser runtime `src/apps/business-os/rxdb/` (ctox-rxdb-js) on the other, and
+`src/core/business_os/rxdb_peer.rs` as the supervised native peer. HTTP only
+delivers the static shell and bootstrap config — never collection data.
+
+The canonical, code-verified documentation (architecture, wire protocol,
+lifecycle, failure semantics, build/test story, agent guardrails) is
+`docs/ctox-rxdb.md`. Read it before changing anything in the data plane.
+
 ## Runtime State
 
 Runtime state is centralized in `runtime/ctox.sqlite3`, reached through

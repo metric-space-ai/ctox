@@ -1,0 +1,145 @@
+// REGRESSION: replication recovery semantics that past regressions deleted.
+//
+// 1. Push re-run flag: a local write landing while a push is in flight must
+//    trigger another push pass (trailing writes of a burst used to sit
+//    unsynced until the NEXT local write).
+// 2. Pull retry: a failed pull must re-arm via `retryTime` (pulls are
+//    otherwise purely event-driven; a quiet collection stayed stale forever).
+// 3. Checkpoint retention: pull/push checkpoints survive a peer drop and are
+//    re-seeded on reconnect ONLY when the native storage generation
+//    (epoch + peer session id) matches — otherwise a full resync is forced.
+//
+// The test drives the real CtoxWebRtcReplicationState through replicateWebRTC
+// with a mock collection; network-level methods are stubbed per instance so
+// the class logic under test runs unmodified.
+
+import { replicateWebRTC } from '../src/replication-webrtc.mjs';
+
+function mockCollection(name) {
+  return {
+    name,
+    schema: { version: 0, hash: async () => `hash-${name}` },
+    observe() { return { unsubscribe() {} }; },
+    storageCollection: {
+      replicationCheckpointStatus: async () => ({ epoch: 'checkpoint-epoch-1', state: 'ready' }),
+      getChangedDocumentsSince: async () => ({ documents: [], checkpoint: null }),
+      bulkWrite: async () => ({}),
+    },
+  };
+}
+
+async function makeState(name) {
+  const state = await replicateWebRTC({
+    collection: mockCollection(name),
+    topic: `room-${name}-123456`,
+    connectionHandlerCreator: {
+      kind: 'ctox-native-webrtc',
+      signalingServerUrl: 'wss://signaling.invalid/?token=t&token_iat=1&token_exp=2',
+      config: {},
+    },
+    pull: { batchSize: 5 },
+    push: { batchSize: 5 },
+    retryTime: 60,
+  });
+  // cancel() rejects the initial-replication deferred; without a consumer the
+  // rejection would crash node. (sync.js awaits it in production.)
+  state.initialReplication?.catch?.(() => {});
+  return state;
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// --- 1. push re-run flag ----------------------------------------------------
+{
+  const state = await makeState('push-rerun');
+  let pushPasses = 0;
+  let releaseFirstPush;
+  const firstPushGate = new Promise((resolve) => { releaseFirstPush = resolve; });
+  state.openPeerIds = () => ['p1'];
+  state.pushToPeer = async () => {
+    pushPasses += 1;
+    if (pushPasses === 1) await firstPushGate;
+  };
+  const inFlight = state.pushToRemotePeers();
+  await delay(10);
+  // Local write lands while the first push is still in flight:
+  state.pushToRemotePeers();
+  releaseFirstPush();
+  await inFlight;
+  assert(pushPasses === 2, `push re-run: expected 2 push passes, got ${pushPasses}`);
+  await state.cancel();
+}
+
+// --- 2. pull retry via retryTime ---------------------------------------------
+{
+  const state = await makeState('pull-retry');
+  let pullAttempts = 0;
+  state.openPeerIds = () => ['p1'];
+  state.reportPeerResults = () => {};
+  state.pullFromPeer = async () => {
+    pullAttempts += 1;
+    if (pullAttempts === 1) throw new Error('transient pull failure');
+  };
+  await state.pullFromRemotePeers();
+  assert(pullAttempts === 1, 'pull retry: first attempt ran');
+  assert(state.pullRetryTimer, 'pull retry: retry timer armed after a failed pull');
+  await delay(1200); // retry delay is clamped to >= 1000ms (anti-hammering floor)
+  assert(pullAttempts >= 2, `pull retry: retry fired (attempts=${pullAttempts})`);
+  await state.cancel();
+  assert(!state.pullRetryTimer, 'pull retry: cancel clears the retry timer');
+}
+
+// --- 3. checkpoint retention across reconnects -------------------------------
+{
+  const state = await makeState('checkpoints');
+  const protoSameGeneration = {
+    checkpoint: { epoch: 'checkpoint-epoch-1' },
+    peerSession: { sessionId: 'rxdb-rs-run-A', role: 'ctox_instance' },
+    capabilities: [],
+  };
+  state.remoteProtocolForPeer = () => protoSameGeneration;
+  state.pullFromRemotePeers = async () => {};
+  state.pushToRemotePeers = async () => {};
+
+  state.peerStates$.next(new Map([['peer-1', { peerId: 'peer-1' }]]));
+  state.pullCheckpointsByPeer.set('peer-1', { lwt: 111 });
+  state.pushCheckpointsByPeer.set('peer-1', { lwt: 222 });
+
+  state.removePeer('peer-1', 'test-drop');
+  assert(state.retainedCheckpoints, 'retention: checkpoints retained on peer drop');
+  assert(!state.pullCheckpointsByPeer.has('peer-1'), 'retention: live map cleared');
+
+  // Reconnect with the SAME storage generation: checkpoints are re-seeded.
+  await state.runPeerReady('peer-2', protoSameGeneration, false);
+  assert(
+    state.pullCheckpointsByPeer.get('peer-2')?.lwt === 111,
+    'retention: pull checkpoint re-seeded for the new peer id',
+  );
+  assert(
+    state.pushCheckpointsByPeer.get('peer-2')?.lwt === 222,
+    'retention: push checkpoint re-seeded for the new peer id',
+  );
+
+  // Drop again, then reconnect with a DIFFERENT daemon run: full resync.
+  state.peerStates$.next(new Map([['peer-2', { peerId: 'peer-2' }]]));
+  state.removePeer('peer-2', 'test-drop');
+  const protoNewGeneration = {
+    checkpoint: { epoch: 'checkpoint-epoch-1' },
+    peerSession: { sessionId: 'rxdb-rs-run-B', role: 'ctox_instance' },
+    capabilities: [],
+  };
+  await state.runPeerReady('peer-3', protoNewGeneration, false);
+  assert(
+    !state.pullCheckpointsByPeer.has('peer-3'),
+    'retention: NO seeding across daemon runs (full resync is the safe path)',
+  );
+  assert(state.retainedCheckpoints === null, 'retention: stale checkpoints dropped');
+  await state.cancel();
+}
+
+console.log('ctox-rxdb replication recovery smoke OK');
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+process.exit(0);

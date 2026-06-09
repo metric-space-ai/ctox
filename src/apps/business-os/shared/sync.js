@@ -1,3 +1,22 @@
+// =============================================================================
+// AGENT GUARDRAILS — ctox-rxdb data plane (read docs/ctox-rxdb.md first)
+// =============================================================================
+// This file orchestrates CTOX DB, the WebRTC-ONLY data plane between Business OS
+// and the CTOX daemon. Hard rules (each one has caused real regressions):
+//   1. NO HTTP fallback/bridge for collection data — ever. WebRTC only.
+//   2. NO npm/bare/node: imports — this runtime is package-manager-free.
+//   3. After ANY src edit: rebuild dist with the pinned esbuild command and
+//      bump the ?v= cache-buster (see docs/ctox-rxdb.md "Build & release").
+//      Never patch dist/ctox-rxdb-js.mjs directly.
+//   4. Wire-contract constants are GENERATED from fixtures — never hand-edit
+//      *-contract.generated.mjs or the Rust twins.
+//   5. Run `node src/apps/business-os/rxdb/tests/run-all.mjs` and keep it
+//      green. Never delete or weaken a failing test to make it pass.
+// =============================================================================
+
+// Per-collection sync runtime on top of CTOX DB. Repair philosophy: the
+// shared native peer self-heals its transport; this layer only classifies
+// errors and schedules bounded restarts.
 import { batchSizeFor, collectionTopic, nativeRxdbPeerReady } from './sync-contract.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -615,6 +634,11 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     },
   });
   let lastErrorLogAt = 0;
+  // AGENT GUARDRAIL: the classification ORDER below is load-bearing —
+  // control-plane (fatal) -> schema (fatal) -> replication IO (record only)
+  // -> transient shutdown -> peer lifecycle -> signaling blip (reconnecting)
+  // -> generic. Reordering it, or escalating IO/blip errors to fatal, brings
+  // back the mass-restart churn. Extend at the END, with a test.
   const errorSubscription = replicationState.error$?.subscribe?.((error) => {
     if (stopped) return;
     const now = Date.now();
