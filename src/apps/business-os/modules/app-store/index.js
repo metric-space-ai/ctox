@@ -1,4 +1,5 @@
 import { CtoxResizer } from '../../shared/resizer.js';
+import { loadModuleMessages } from '../../shared/i18n.js';
 
 const CTOX_REPO = 'metric-space-ai/ctox';
 const CTOX_BRANCH = 'main';
@@ -10,6 +11,7 @@ const CTOX_DOWNLOAD_URL = `https://github.com/${CTOX_REPO}/archive/refs/heads/${
 
 const state = {
   ctx: null,
+  t: (key, fallback) => fallback ?? key,
   catalog: null,
   marketplace: [],
   marketplaceStatus: 'idle',
@@ -30,7 +32,10 @@ const els = {};
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
+  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
   ctx.host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  applyTranslations(ctx.host, state.t);
   ensureStylesheet();
   bindElements(ctx.host);
   wireEvents();
@@ -606,34 +611,34 @@ function renderCard(item) {
   let actionsHtml = `<div class="app-card-actions">`;
 
   if (item.id === 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">Erstellen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'marketplace') {
     if (item.status === 'installed') {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
+      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     } else if (item.installable) {
-      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">Installieren</button>`;
+      actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`;
     }
     if (item.homepage) {
       actionsHtml += `<button type="button" class="card-btn secondary external" data-card-action="repository" data-external-action="github" title="GitHub repository in new tab" aria-label="GitHub repository in new tab">GitHub ${externalLinkIcon()}</button>`;
     }
   } else if (item.kind === 'template') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">Erstellen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'system') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     actionsHtml += versionsButtonHtml(item);
   } else if (item.kind === 'starter') {
-    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>`;
+    actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     actionsHtml += actionButtonsForManagedItem(item);
   } else {
     // Local / Installed non-system apps
     actionsHtml += `
-      <button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">Öffnen</button>
+      <button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>
       ${actionButtonsForManagedItem(item)}
     `;
   }
 
   if (item.id !== 'create-scratch') {
-    actionsHtml += `<button type="button" class="card-btn link" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">Details</button>`;
+    actionsHtml += `<button type="button" class="card-btn link" data-card-action="details" aria-label="Details zu ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionDetails', 'Details'))}</button>`;
   }
 
   actionsHtml += `</div>`;
@@ -687,17 +692,17 @@ function renderDetails() {
 
 function renderEmptyDetails() {
   if (els.detailIcon) els.detailIcon.textContent = '?';
-  if (els.detailTitle) els.detailTitle.textContent = 'Keine App ausgewählt';
+  if (els.detailTitle) els.detailTitle.textContent = state.t('drawerNoSelection', 'Keine App ausgewählt');
   if (els.detailVersion) els.detailVersion.textContent = '-';
   if (els.detailCategory) els.detailCategory.textContent = 'Empty';
   if (els.detailDeveloper) els.detailDeveloper.textContent = '-';
   if (els.detailLicense) els.detailLicense.textContent = '-';
   if (els.detailSource) els.detailSource.textContent = 'App Store';
-  if (els.detailStatus) els.detailStatus.textContent = 'No selection';
+  if (els.detailStatus) els.detailStatus.textContent = state.t('statusNoSelection', 'No selection');
   if (els.readme) {
     const empty = document.createElement('p');
     empty.className = 'store-detail-empty';
-    empty.textContent = 'Wähle eine App oder ändere den Filter, um Details zu sehen.';
+    empty.textContent = state.t('emptyDetails', 'Wähle eine App oder ändere den Filter, um Details zu sehen.');
     els.readme.replaceChildren(empty);
   }
 }
@@ -1076,14 +1081,14 @@ function modificationStateFor(item, release, kind, resolvedId) {
 function actionButtonsForManagedItem(item) {
   let html = '';
   if (item.update_available && item.download_url) {
-    html += `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">Aktualisieren</button>`;
+    html += `<button type="button" class="card-btn warn" data-card-action="update" aria-label="${escapeHtml(item.title)} aktualisieren">${escapeHtml(state.t('actionUpdate', 'Aktualisieren'))}</button>`;
   }
   if (item.editable) {
-    html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">Bearbeiten</button>`;
+    html += `<button type="button" class="card-btn secondary" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
   }
   html += versionsButtonHtml(item);
   if (item.deletable) {
-    html += `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">Deinstallieren</button>`;
+    html += `<button type="button" class="card-btn danger" data-card-action="uninstall" aria-label="${escapeHtml(item.title)} deinstallieren">${escapeHtml(state.t('actionUninstall', 'Deinstallieren'))}</button>`;
   }
   return html;
 }
@@ -1091,7 +1096,7 @@ function actionButtonsForManagedItem(item) {
 function versionsButtonHtml(item) {
   const count = item.version_state?.version_count || 0;
   if (count < 1) return '';
-  return `<button type="button" class="card-btn secondary" data-card-action="versions" aria-label="Versionen von ${escapeHtml(item.title)} anzeigen">Versionen (${count})</button>`;
+  return `<button type="button" class="card-btn secondary" data-card-action="versions" aria-label="Versionen von ${escapeHtml(item.title)} anzeigen">${escapeHtml(state.t('actionVersions', 'Versionen ({count})').replace('{count}', String(count)))}</button>`;
 }
 
 function compareVersions(left, right) {
@@ -1127,15 +1132,33 @@ function sortItems(left, right) {
 }
 
 function scopeTitle(scope) {
+  const t = state.t;
   return {
-    all: 'Alle Anwendungen',
-    marketplace: 'GitHub Marketplace',
-    template: 'Templates',
-    installed: 'Installierte Apps',
-    starter: 'Starter Apps',
-    system: 'System Apps',
-    local: 'Local Modules',
-  }[scope] || 'Applications';
+    all: t('scopeTitleAll', 'Alle Anwendungen'),
+    marketplace: t('scopeTitleMarketplace', 'GitHub Marketplace'),
+    template: t('scopeTitleTemplate', 'Templates'),
+    installed: t('scopeTitleInstalled', 'Installierte Apps'),
+    starter: t('scopeTitleStarter', 'Starter Apps'),
+    system: t('scopeTitleSystem', 'System Apps'),
+    local: t('scopeTitleLocal', 'Local Modules'),
+  }[scope] || t('scopeTitleFallback', 'Applications');
+}
+
+// Translate static markup: data-t (textContent), data-t-placeholder,
+// data-t-title, data-t-aria (aria-label). German markup text is the fallback.
+function applyTranslations(root, t) {
+  root.querySelectorAll('[data-t]').forEach((el) => {
+    el.textContent = t(el.dataset.t, el.textContent.trim());
+  });
+  root.querySelectorAll('[data-t-placeholder]').forEach((el) => {
+    el.setAttribute('placeholder', t(el.dataset.tPlaceholder, el.getAttribute('placeholder') || ''));
+  });
+  root.querySelectorAll('[data-t-title]').forEach((el) => {
+    el.setAttribute('title', t(el.dataset.tTitle, el.getAttribute('title') || ''));
+  });
+  root.querySelectorAll('[data-t-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.tAria, el.getAttribute('aria-label') || ''));
+  });
 }
 
 function iconGlyphForItem(item) {
@@ -1193,11 +1216,11 @@ function statusLabel(status) {
 }
 
 function appCountLabel(count, scope, marketplaceStatus) {
-  const suffix = count === 1 ? 'App' : 'Apps';
+  const label = state.t('appsCount', '{count} Apps').replace('{count}', String(count));
   if (scope === 'marketplace' && marketplaceStatus === 'loading') {
-    return `${count} ${suffix} · Sync`;
+    return `${label} · Sync`;
   }
-  return `${count} ${suffix}`;
+  return label;
 }
 
 function marketplaceStateLabel({

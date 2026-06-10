@@ -1,3 +1,5 @@
+import { collections as knowledgeCollections } from '../knowledge/schema.js';
+
 const commandSchema = {
   version: 1,
   primaryKey: 'id',
@@ -129,24 +131,11 @@ const researchNoteSchema = {
   additionalProperties: true,
 };
 
-const knowledgeRecordSchema = {
-  version: 0,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 180 },
-    kind: { type: 'string' },
-    title: { type: 'string' },
-    subtitle: { type: 'string' },
-    summary: { type: 'string' },
-    source_path: { type: 'string' },
-    updated_at: { type: 'string' },
-    payload: { type: 'object', additionalProperties: true },
-    updated_at_ms: { type: 'number' },
-  },
-  required: ['id', 'updated_at_ms'],
-  additionalProperties: true,
-};
+// knowledge_tables is owned by the knowledge module (read-only native
+// projection; sync.js keeps it pull-only). Import its definition so research
+// registers the identical schema — the conformance guard asserts parity for
+// collections declared by more than one module.
+const knowledgeRecordSchema = knowledgeCollections.knowledge_tables;
 
 export const collections = {
   business_commands: commandSchema,

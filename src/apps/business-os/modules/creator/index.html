@@ -5,8 +5,8 @@
       <header class="ctox-pane-header">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">AI Engine</span>
-            <h2 class="ctox-pane-title">Generator</h2>
+            <span class="ctox-pane-kicker" data-t="kicker">AI Engine</span>
+            <h2 class="ctox-pane-title" data-t="title">Generator</h2>
           </div>
         </div>
       </header>
@@ -14,9 +14,9 @@
       <div class="creator-sidebar-body">
         <!-- 1. Quickstart presets dropdown -->
         <div class="form-group">
-          <label class="form-label" for="select-preset-prompt">Schnellstart-Vorlage laden</label>
+          <label class="form-label" for="select-preset-prompt" data-t="presetLabel">Schnellstart-Vorlage laden</label>
           <select id="select-preset-prompt" class="os-select">
-            <option value="" selected disabled>Vorlage auswählen</option>
+            <option value="" selected disabled data-t="presetPlaceholder">Vorlage auswählen</option>
             <option value="standard-mgmt">Lagerverwaltung</option>
             <option value="notes-style">Notizbuch</option>
             <option value="kanban-style">Taskboard</option>
@@ -28,13 +28,13 @@
 
         <!-- 2. AI Prompt Textarea -->
         <div class="form-group">
-          <label class="form-label" for="ai-prompt-input">Wunsch-App Prompt</label>
-          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'"></textarea>
+          <label class="form-label" for="ai-prompt-input" data-t="promptLabel">Wunsch-App Prompt</label>
+          <textarea id="ai-prompt-input" class="os-textarea" placeholder="Beschreibe deine Anwendung. Zum Beispiel: 'Eine App zum Verwalten von IT-Geräten im Büro mit Zustand, Seriennummer...'" data-t-placeholder="promptPlaceholder"></textarea>
           <button type="button" id="btn-apply-prompt" class="os-btn is-accent creator-wide-action" disabled>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            Spezifikation optimieren & anwenden
+            <span data-t="applyPrompt">Spezifikation optimieren &amp; anwenden</span>
           </button>
-          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite">Prompt fehlt. Beschreibe zuerst die App.</p>
+          <p class="creator-spec-diagnostics" id="creator-spec-diagnostics" data-state="blocked" aria-live="polite" data-t="promptMissing">Prompt fehlt. Beschreibe zuerst die App.</p>
         </div>
 
         <!-- 3. Advanced Settings Accordion -->
@@ -42,7 +42,7 @@
           <button type="button" class="accordion-trigger" id="expert-accordion-btn" aria-expanded="false" aria-controls="expert-accordion-content">
             <span class="accordion-label">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.04.04a2 2 0 1 1-2.83 2.83l-.04-.04A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.07A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.88.34l-.04.04a2 2 0 1 1-2.83-2.83l.04-.04A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-.6-1A1.7 1.7 0 0 0 2.9 13H3a2 2 0 1 1 0-4h-.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.88l-.04-.04a2 2 0 1 1 2.83-2.83l.04.04A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V3a2 2 0 1 1 4 0v-.1A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.88-.34l.04-.04a2 2 0 1 1 2.83 2.83l-.04.04A1.7 1.7 0 0 0 19.4 9c.18.36.4.7.6 1 .3.3.7.5 1.1.5H21a2 2 0 1 1 0 4h.1c-.4 0-.8.2-1.1.5-.2.3-.42.64-.6 1Z"/></svg>
-              Erweiterte Einstellungen
+              <span data-t="advancedSettings">Erweiterte Einstellungen</span>
             </span>
             <svg class="accordion-chevron" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
           </button>
@@ -50,24 +50,24 @@
           <div class="accordion-content is-collapsed" id="expert-accordion-content">
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label" for="input-app-id">Modul ID (Slug)</label>
+                <label class="form-label" for="input-app-id" data-t="fieldModuleId">Modul ID (Slug)</label>
                 <input type="text" id="input-app-id" class="os-input" placeholder="z.B. lagerverwaltung" value="lagerverwaltung" required pattern="[a-z0-9\-]+">
               </div>
 
               <div class="form-group">
-                <label class="form-label" for="input-app-title">Titel der App</label>
+                <label class="form-label" for="input-app-title" data-t="fieldTitle">Titel der App</label>
                 <input type="text" id="input-app-title" class="os-input" placeholder="z.B. Lagerverwaltung" value="Lagerverwaltung" required>
               </div>
             </div>
 
             <div class="form-group">
-              <label class="form-label" for="input-app-desc">Beschreibung</label>
+              <label class="form-label" for="input-app-desc" data-t="fieldDescription">Beschreibung</label>
               <input type="text" id="input-app-desc" class="os-input" placeholder="Kurze Beschreibung..." value="Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen." required>
             </div>
 
             <div class="form-grid">
               <div class="form-group">
-                <label class="form-label" for="select-app-category">Kategorie</label>
+                <label class="form-label" for="select-app-category" data-t="fieldCategory">Kategorie</label>
                 <select id="select-app-category" class="os-select">
                   <option value="Productivity">Productivity</option>
                   <option value="Management" selected>Management</option>
@@ -78,23 +78,23 @@
               </div>
 
               <div class="form-group">
-                <label class="form-label" for="select-app-layout">Workspace Layout</label>
+                <label class="form-label" for="select-app-layout" data-t="fieldLayout">Workspace Layout</label>
                 <select id="select-app-layout" class="os-select">
-                  <option value="pane">Standard-Spalten (links/center/rechts)</option>
-                  <option value="full-workspace" selected>Volle Breite (Custom Columns)</option>
+                  <option value="pane" data-t="layoutPane">Standard-Spalten (links/center/rechts)</option>
+                  <option value="full-workspace" selected data-t="layoutFull">Volle Breite (Custom Columns)</option>
                 </select>
               </div>
             </div>
 
             <div class="form-group">
-              <label class="form-label">Datentabellen</label>
+              <label class="form-label" data-t="fieldCollections">Datentabellen</label>
               <div class="collections-editor">
                 <div id="collections-list">
                   <!-- Dynamically populated collection rows -->
                 </div>
                 <div class="collection-row" style="margin-top: 8px;">
-                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Datentabelle..." style="flex: 1; padding: 6px 10px; font-size: 11px;">
-                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Datentabelle hinzufügen" aria-label="Datentabelle hinzufügen">
+                  <input type="text" id="input-new-collection" class="os-input" placeholder="Neue Datentabelle..." data-t-placeholder="newCollectionPlaceholder" style="flex: 1; padding: 6px 10px; font-size: 11px;">
+                  <button type="button" id="btn-add-collection" class="os-icon-btn" title="Datentabelle hinzufügen" data-t-title="addCollection" aria-label="Datentabelle hinzufügen" data-t-aria="addCollection">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
                   </button>
                 </div>
@@ -106,15 +106,15 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--creator-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--creator-left-width" data-resizer-min="260" data-resizer-max="550" aria-label="Linke Spaltenbreite anpassen" data-t-aria="resizeLeft"></button>
 
   <!-- Mittlere Spalte: Workbench / Editor & Live Terminal -->
   <section class="creator-pane creator-center" aria-label="Build & Deployment Workbench">
     <div class="creator-card">
       <header class="creator-card-header">
-        <span class="os-kicker">KI App Generator</span>
-        <h2 class="os-title">Neue App beschreiben & installieren</h2>
-        <p class="os-subtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert Datenmodell, Benutzeroberfläche und App-Struktur vollautomatisch.</p>
+        <span class="os-kicker" data-t="centerKicker">KI App Generator</span>
+        <h2 class="os-title" data-t="centerTitle">Neue App beschreiben &amp; installieren</h2>
+        <p class="os-subtitle" data-t="centerSubtitle">Beschreibe deine Wunsch-App in natürlicher Sprache. Das Business OS generiert Datenmodell, Benutzeroberfläche und App-Struktur vollautomatisch.</p>
       </header>
 
       <div class="creator-card-body">
@@ -122,12 +122,12 @@
         <div class="deploy-action-section">
           <button type="button" id="btn-deploy-app" class="os-btn is-primary" disabled>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="margin-right: 6px;"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
-            App jetzt generieren & installieren
+            <span data-t="deployButton">App jetzt generieren &amp; installieren</span>
           </button>
 
           <div class="sync-status">
             <div class="sync-dot" id="deploy-sync-dot"></div>
-            <span id="deploy-sync-text">System bereit</span>
+            <span id="deploy-sync-text" data-t="deployReady">System bereit</span>
           </div>
         </div>
       </div>
@@ -140,7 +140,7 @@
             <span class="t-dot"></span>
             <span class="t-dot"></span>
           </div>
-          <span class="terminal-title">Build & Deployment Logs</span>
+          <span class="terminal-title" data-t="terminalTitle">Build &amp; Deployment Logs</span>
         </div>
         <div id="console-logs-container" class="console-logs os-scrollbar">
           <div class="console-log-entry info">[SYSTEM] App Creator initialisiert. Bereit zur Prompt-Eingabe...</div>
@@ -149,30 +149,30 @@
     </div>
   </section>
 
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen"></button>
+  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--creator-right-width" data-resizer-min="240" data-resizer-max="520" aria-label="Rechte Spaltenbreite anpassen" data-t-aria="resizeRight"></button>
 
   <!-- Rechte Spalte: Bestehende Custom-Apps & CTOX-Generator-Prompts -->
   <section class="creator-pane creator-right" aria-label="Installierte Custom-Apps und CTOX-Prompts">
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Installiert</span>
-          <h2 class="ctox-pane-title">Custom-Apps</h2>
+          <span class="ctox-pane-kicker" data-t="rightKicker">Installiert</span>
+          <h2 class="ctox-pane-title" data-t="rightTitle">Custom-Apps</h2>
         </div>
       </div>
     </header>
     <div class="creator-right-body" data-creator-right-body>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker" data-creator-installed-heading>Bestehende Apps</span>
+        <span class="ctox-pane-kicker" data-creator-installed-heading data-t="installedHeading">Bestehende Apps</span>
         <div class="creator-right-list" data-creator-installed-list></div>
-        <div class="creator-right-empty" data-creator-installed-empty>
+        <div class="creator-right-empty" data-creator-installed-empty data-t="installedEmpty">
           Noch keine eigenen Apps installiert. Sobald über den Generator eine App erstellt wurde, erscheint sie hier zum erneuten Öffnen oder Upgrade.
         </div>
       </section>
       <section class="creator-right-block">
-        <span class="ctox-pane-kicker" data-creator-prompts-heading>CTOX-Generator-Prompts</span>
+        <span class="ctox-pane-kicker" data-creator-prompts-heading data-t="promptsHeading">CTOX-Generator-Prompts</span>
         <div class="creator-right-list" data-creator-prompts-list></div>
-        <div class="creator-right-empty" data-creator-prompts-empty>
+        <div class="creator-right-empty" data-creator-prompts-empty data-t="promptsEmpty">
           Lass CTOX über die Chatleiste eine neue App-Spezifikation entwerfen — Prompts und Vorschläge erscheinen hier als Vorlage für den Generator links.
         </div>
       </section>

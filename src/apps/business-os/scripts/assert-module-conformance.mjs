@@ -7,6 +7,17 @@
 //                              declared in the module's schema.js (the shell
 //                              only pre-registers the critical collections);
 //                              a missing declaration fails sync silently.
+//                              Checked against the REAL schema export
+//                              (dynamic import), so re-export patterns like
+//                              modules/reports -> ../ctox/schema.js count.
+//   schema-import              schema.js must be importable in Node (the
+//                              module tests and this guard rely on it).
+//   schema-parity              when two modules declare the same collection
+//                              (cross-module reads via import/re-export),
+//                              their schema definitions must be identical —
+//                              whichever module registers first wins at
+//                              runtime, so divergence would be a silent
+//                              version/shape conflict.
 //   mount-export               index.js exports mount().
 //   mount-signature            mount takes the shell context as its single
 //                              parameter: mount(ctx).
@@ -35,7 +46,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(scriptDir, '..');
@@ -66,17 +77,6 @@ const shellTokenPattern = new RegExp(
 
 // Frozen pre-existing violations. Remove entries as modules are fixed.
 const ALLOWLIST = new Map(Object.entries({
-  // Cross-module reads: these modules list collections whose schemas only the
-  // owning module declares (conversations -> outbound_*, reports -> ctox/
-  // release projections). On a fresh client that opens this module before the
-  // owning one, those collections silently do not replicate. Fix is a contract
-  // decision: declare the schemas locally or drop them from module.json.
-  conversations: ['schema-covers-collections'],
-  reports: ['schema-covers-collections'],
-  // Pending i18n migration (no locales/ yet).
-  'app-store': ['locales'],
-  browser: ['locales'],
-  creator: ['locales'],
   // .theme-* blocks alias --accent onto itself with a fallback — a latent
   // self-reference (invalid at computed-value time). Needs a real fix, not a
   // rename; frozen until the coding-agents theme pass.
@@ -87,6 +87,8 @@ const ALLOWLIST = new Map(Object.entries({
 }));
 
 const offenders = [];
+// collection name -> [{ module, fingerprint }] across all modules' schema.js
+const collectionDeclarations = new Map();
 const moduleDirs = readdirSync(modulesRoot).filter((name) => {
   const dir = join(modulesRoot, name);
   return statSync(dir).isDirectory() && existsSync(join(dir, 'module.json'));
@@ -113,16 +115,31 @@ for (const id of moduleDirs) {
     continue;
   }
 
-  // schema-covers-collections
+  // schema-covers-collections — against the real export, not text matching.
   const schemaPath = join(dir, 'schema.js');
-  const schemaText = existsSync(schemaPath) ? readFileSync(schemaPath, 'utf8') : '';
+  let schemaCollections = {};
+  if (existsSync(schemaPath)) {
+    try {
+      const schemaModule = await import(pathToFileURL(schemaPath).href);
+      schemaCollections = schemaModule.collections || {};
+    } catch (error) {
+      offend('schema-import', `schema.js failed to import in Node: ${String(error?.message || error).slice(0, 160)}`);
+    }
+  }
   const declared = Array.isArray(manifest.collections) ? manifest.collections : [];
   for (const collection of declared) {
     if (SHELL_REGISTERED_COLLECTIONS.has(collection)) continue;
-    const keyPattern = new RegExp(`(?:^|[^\\w'"])(?:'${collection}'|"${collection}"|${collection})\\s*:`, 'm');
-    if (!keyPattern.test(schemaText)) {
+    if (!Object.hasOwn(schemaCollections, collection)) {
       offend('schema-covers-collections', `${collection} listed in module.json but not declared in schema.js`);
     }
+  }
+  for (const [collection, definition] of Object.entries(schemaCollections)) {
+    if (SHELL_REGISTERED_COLLECTIONS.has(collection)) continue;
+    if (!collectionDeclarations.has(collection)) collectionDeclarations.set(collection, []);
+    collectionDeclarations.get(collection).push({
+      module: id,
+      fingerprint: stableStringify(definition?.schema || definition),
+    });
   }
 
   // mount-export / mount-signature
@@ -178,9 +195,36 @@ for (const id of moduleDirs) {
   }
 }
 
+// schema-parity: collections declared by more than one module must carry the
+// exact same definition — at runtime, whichever module registers first wins,
+// so any divergence is a silent version/shape conflict on some clients.
+for (const [collection, declarations] of collectionDeclarations) {
+  if (declarations.length < 2) continue;
+  const reference = declarations[0];
+  for (const other of declarations.slice(1)) {
+    if (other.fingerprint !== reference.fingerprint) {
+      offenders.push(
+        `src/apps/business-os/modules: schema-parity — ${collection} declared with diverging schemas by `
+        + `${reference.module} and ${other.module}; share one definition via import/re-export`,
+      );
+    }
+  }
+}
+
 if (offenders.length) {
   console.error(`Business OS module conformance failed:\n${offenders.map((line) => `- ${line}`).join('\n')}`);
   process.exit(1);
 }
 
 console.log(`Business OS module conformance OK (${moduleDirs.length} modules)`);
+
+// Key-order-independent serialization so independently-typed but identical
+// schemas compare equal, while any real divergence (version, fields) differs.
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  if (typeof value === 'function') return JSON.stringify(String(value));
+  return JSON.stringify(value) ?? 'undefined';
+}

@@ -1,4 +1,9 @@
+import { loadModuleMessages } from '../../shared/i18n.js';
+
 const STYLE_BUILD = '20260605-rxdb-cancel1';
+
+// Module-level translator; set from locales/<lang>.json during mount.
+let t = (key, fallback) => fallback ?? key;
 const DEFAULT_SESSION_ID = 'browser_session_default';
 const DEFAULT_TAB_ID = 'browser_tab_default';
 const SYNTHETIC_SESSION_ID = 'browser_session_synthetic';
@@ -15,11 +20,14 @@ const BROWSER_SYNC_COLLECTIONS = [
 
 export async function mount(ctx) {
   await ensureStyles();
+  const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
+  t = (key, fallback) => messages[key] ?? fallback ?? key;
   const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   ctx.host.innerHTML = html;
 
   const root = ctx.host.querySelector('[data-browser-root]');
   if (!root) throw new Error('browser: root element missing after fragment mount');
+  applyTranslations(root);
 
   const refs = {
     root,
@@ -988,12 +996,12 @@ function authAssistStatusLabel(status, fallback) {
 function renderStatus(refs, session, tab, frame, command) {
   const state = browserUiState(session);
   if (refs.statusChip) {
-    refs.statusChip.textContent = session ? browserStatusLabel(session) : 'Nicht verbunden';
+    refs.statusChip.textContent = session ? browserStatusLabel(session) : t('statusDisconnected', 'Nicht verbunden');
     refs.statusChip.dataset.state = state;
   }
   const url = tab?.url || session?.current_url || '';
   if (refs.statusTitle) {
-    refs.statusTitle.textContent = browserDisplayTitle(tab, session, url) || 'Kein Browser-Fenster geoeffnet';
+    refs.statusTitle.textContent = browserDisplayTitle(tab, session, url) || t('noWindowOpen', 'Kein Browser-Fenster geoeffnet');
   }
   const bits = [];
   if (url) bits.push(url);
@@ -1042,7 +1050,7 @@ async function renderFrame(refs, frame, state) {
   } catch (error) {
     console.error('[browser] frame render failed', error);
     refs.empty.hidden = false;
-    refs.empty.textContent = 'Die Seite konnte nicht angezeigt werden.';
+    refs.empty.textContent = t('frameRenderFailed', 'Die Seite konnte nicht angezeigt werden.');
   } finally {
     state.drawing = false;
   }
@@ -1052,12 +1060,12 @@ function frameEmptyText(state) {
   const session = state.latestSession;
   const commandError = commandErrorMessage(state.latestCommand);
   if (commandError) return commandError;
-  if (!session) return 'Oeffne ein neues Browser-Fenster';
+  if (!session) return t('frameOpenNew', 'Oeffne ein neues Browser-Fenster');
   const status = String(session.runtime_status || session.status || '').toLowerCase();
-  if (status === 'failed' || status === 'error') return session.error || 'Der Browser konnte nicht gestartet werden';
-  if (status === 'stopped' || status === 'closed') return 'Browser-Fenster geschlossen';
-  if (status === 'requested' || status === 'starting' || status === 'pending_command') return 'Browser wird gestartet';
-  return 'Browser-Inhalt wird geladen';
+  if (status === 'failed' || status === 'error') return session.error || t('frameStartFailed', 'Der Browser konnte nicht gestartet werden');
+  if (status === 'stopped' || status === 'closed') return t('frameClosed', 'Browser-Fenster geschlossen');
+  if (status === 'requested' || status === 'starting' || status === 'pending_command') return t('frameStarting', 'Browser wird gestartet');
+  return t('frameLoading', 'Browser-Inhalt wird geladen');
 }
 
 function browserUiState(session) {
@@ -1072,11 +1080,11 @@ function browserUiState(session) {
 
 function browserStatusLabel(session) {
   const state = browserUiState(session);
-  if (state === 'ready') return 'Bereit';
-  if (state === 'starting') return 'Startet';
-  if (state === 'waiting') return 'Verbindet';
-  if (state === 'error') return 'Fehler';
-  return 'Nicht verbunden';
+  if (state === 'ready') return t('statusReady', 'Bereit');
+  if (state === 'starting') return t('statusStarting', 'Startet');
+  if (state === 'waiting') return t('statusConnecting', 'Verbindet');
+  if (state === 'error') return t('statusError', 'Fehler');
+  return t('statusDisconnected', 'Nicht verbunden');
 }
 
 function browserDisplayTitle(tab, session, url = '') {
@@ -1358,4 +1366,15 @@ async function ensureStyles() {
   link.rel = 'stylesheet';
   link.href = href;
   document.head.appendChild(link);
+}
+
+// Translate static markup: data-t (textContent) and data-t-aria (aria-label).
+// German markup text is the fallback when a key is missing.
+function applyTranslations(root) {
+  root.querySelectorAll('[data-t]').forEach((el) => {
+    el.textContent = t(el.dataset.t, el.textContent.trim());
+  });
+  root.querySelectorAll('[data-t-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.tAria, el.getAttribute('aria-label') || ''));
+  });
 }

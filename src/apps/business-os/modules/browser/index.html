@@ -4,32 +4,32 @@
     <div class="browser-auth-assist" data-browser-auth-assist hidden></div>
       <div class="browser-session-list" data-browser-session-list aria-label="Browser Fenster"></div>
     <div class="browser-actions">
-      <button type="button" data-browser-start>Neues Fenster</button>
-      <button type="button" data-browser-send-to-ctox>An CTOX senden</button>
-      <button type="button" data-browser-stop>Schliessen</button>
+      <button type="button" data-browser-start data-t="newWindow">Neues Fenster</button>
+      <button type="button" data-browser-send-to-ctox data-t="sendToCtox">An CTOX senden</button>
+      <button type="button" data-browser-stop data-t="close">Schliessen</button>
     </div>
-      <button type="button" class="browser-icon-button" data-browser-refresh aria-label="Aktualisieren">↻</button>
+      <button type="button" class="browser-icon-button" data-browser-refresh aria-label="Aktualisieren" data-t-aria="refresh">↻</button>
     </div>
     <div class="browser-dev-actions" hidden>
-      <button type="button" data-browser-reset>Reset</button>
-      <button type="button" data-browser-seed>Testbild</button>
-      <button type="button" data-browser-clear>Bilder loeschen</button>
+      <button type="button" data-browser-reset data-t="reset">Reset</button>
+      <button type="button" data-browser-seed data-t="seed">Testbild</button>
+      <button type="button" data-browser-clear data-t="clearImages">Bilder loeschen</button>
     </div>
     <div class="browser-notice" data-browser-notice hidden></div>
     <header class="browser-toolbar">
       <div class="browser-nav-actions" aria-label="Navigation">
-        <button type="button" data-browser-back aria-label="Zurueck">‹</button>
-        <button type="button" data-browser-forward aria-label="Vor">›</button>
-        <button type="button" data-browser-reload aria-label="Neu laden">↻</button>
+        <button type="button" data-browser-back aria-label="Zurueck" data-t-aria="navBack">‹</button>
+        <button type="button" data-browser-forward aria-label="Vor" data-t-aria="navForward">›</button>
+        <button type="button" data-browser-reload aria-label="Neu laden" data-t-aria="navReload">↻</button>
       </div>
       <form class="browser-address-form" data-browser-address-form>
         <input data-browser-address type="url" placeholder="https://example.com" autocomplete="off">
-        <button type="submit">Los</button>
+        <button type="submit" data-t="go">Los</button>
       </form>
     </header>
     <div class="browser-status-strip" aria-label="Browser Status">
-      <span class="browser-status-chip" data-browser-status-chip>Nicht verbunden</span>
-      <span data-browser-status-title>Kein Browser-Fenster geoeffnet</span>
+      <span class="browser-status-chip" data-browser-status-chip data-t="statusDisconnected">Nicht verbunden</span>
+      <span data-browser-status-title data-t="noWindowOpen">Kein Browser-Fenster geoeffnet</span>
     </div>
     <span data-browser-status-meta hidden></span>
   </section>
@@ -37,7 +37,7 @@
   <section class="browser-workbench" aria-label="Browser Inhalt">
     <div class="browser-frame-shell" data-browser-frame-shell>
       <canvas data-browser-canvas width="1280" height="720" tabindex="0" aria-label="Remote browser frame"></canvas>
-      <div class="browser-empty" data-browser-empty>Browser-Fenster wird vorbereitet</div>
+      <div class="browser-empty" data-browser-empty data-t="framePreparing">Browser-Fenster wird vorbereitet</div>
     </div>
   </section>
 

@@ -60,6 +60,7 @@ const PRESETS = {
 
 const state = {
   ctx: null,
+  t: (key, fallback) => fallback ?? key,
   appId: 'lagerverwaltung',
   appTitle: 'Lagerverwaltung',
   appDesc: 'Echtzeit-Lagerverwaltung und Bestandsüberwachung mit synchronisierten Artikeltabellen.',
@@ -264,9 +265,14 @@ export async function mount(ctx) {
   // 1. Inject module scoped stylesheet dynamically
   await ensureStyles();
 
+  // 1b. Load locale messages (German markup text is the fallback)
+  const messages = await loadCreatorMessages(ctx.locale);
+  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
+
   // 2. Fetch and render raw index.html structure
   const html = await fetch(new URL('./index.html', import.meta.url)).then(res => res.text());
   ctx.host.innerHTML = html;
+  applyCreatorTranslations(ctx.host, state.t);
 
   // 3. Wire UI events & presets loading
   wireUi(ctx.host);
@@ -948,125 +954,154 @@ function generateAllFiles() {
 
   state.generatedFiles['schema.js'] = `export const collections = {\n${colSchemaProps.trim().substring(0, colSchemaProps.trim().length - 1)}\n};\n`;
 
-  // 3. index.html
+  // 3. index.html — built on the shared design system (shared/base.css).
+  // The shell loads base.css once; generated apps use its classes directly and
+  // get the declarative shell column resizer ([data-resize-frame] +
+  // .ctox-column-resizer[data-resizer-var]) without any module JS.
+  const detailCardHtml = `      <div id="detail-card" class="ctox-card" hidden>
+        <div class="ctox-card-body" style="padding-top: 12px; display: grid; gap: 14px;">
+          <div>
+            <label class="ctox-field-label" data-t="fieldTitle">Titel des Eintrags</label>
+            <input type="text" id="record-detail-title" class="ctox-input">
+          </div>
+          <div>
+            <label class="ctox-field-label" data-t="fieldStatus">Status</label>
+            <select id="record-detail-status" class="ctox-select">
+              <option value="Aktiv">Aktiv</option>
+              <option value="Entwurf">Entwurf</option>
+              <option value="Archiviert">Archiviert</option>
+            </select>
+          </div>
+          <div>
+            <button type="button" class="ctox-button is-primary" id="btn-save-record" data-t="saveRecord">Speichern</button>
+          </div>
+        </div>
+      </div>`;
   if (appLayout === 'full-workspace') {
-    state.generatedFiles['index.html'] = `<div class="module-root" data-module-root="${appId}">\n  <div class="${appId}-layout">\n    <!-- Links: Listpane -->\n    <div class="${appId}-left">\n      <header class="pane-header">\n        <span class="os-kicker" data-t="backlog">Kategorie</span>\n        <h2 class="os-title" data-t="itemsTitle">${appTitle}</h2>\n      </header>\n      <div class="${appId}-scrollable os-scrollbar" data-list-container>\n        <!-- Listeneinträge werden dynamisch eingefügt -->\n      </div>\n    </div>\n    \n    <!-- Spalten-Resizer Handle -->\n    <div class="os-col-resizer" role="separator" aria-label="Breite anpassen" data-resizer="left"></div>\n\n    <!-- Mitte: Detailworkbench -->\n    <div class="${appId}-center">\n      <header class="pane-header" style="border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between;">\n        <div>\n          <span class="os-kicker">Arbeitsfläche</span>\n          <h2 class="os-title" id="selected-item-title">Kein Eintrag gewählt</h2>\n        </div>\n        <button type="button" class="os-btn is-primary" id="btn-create-record">Eintrag erstellen</button>\n      </header>\n      \n      <main class="${appId}-workbench os-scrollbar" style="flex: 1; padding: 20px; overflow-y: auto;">\n        <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted);">\n          <p>Wähle einen Datensatz links aus oder erstelle einen neuen.</p>\n        </div>\n        \n        <div id="detail-card" class="is-hidden" style="background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--panel-radius); padding: 20px;">\n          <div class="form-group">\n            <label class="form-label">Titel des Eintrags</label>\n            <input type="text" id="record-detail-title" class="os-input">\n          </div>\n          <div class="form-group">\n            <label class="form-label">Status</label>\n            <select id="record-detail-status" class="os-select">\n              <option value="Aktiv">Aktiv</option>\n              <option value="Entwurf">Entwurf</option>\n              <option value="Archiviert">Archiviert</option>\n            </select>\n          </div>\n          <button type="button" class="os-btn is-accent" id="btn-save-record" style="margin-top: 12px;">Speichern</button>\n        </div>\n      </main>\n    </div>\n  </div>\n</div>\n`;
+    state.generatedFiles['index.html'] = `<main class="ctox-workspace ctox-workspace--two-pane ${appId}-module" data-module-root="${appId}" data-resize-frame>
+  <aside class="ctox-pane" aria-label="${appTitle} Navigation">
+    <header class="ctox-pane-band ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="backlog">Kategorie</span>
+          <h2 class="ctox-pane-title" data-t="itemsTitle">${appTitle}</h2>
+        </div>
+      </div>
+    </header>
+    <div class="ctox-list" data-list-container></div>
+  </aside>
+
+  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="550" aria-label="Spaltenbreite anpassen"></button>
+
+  <section class="ctox-pane" aria-label="${appTitle} Workbench">
+    <header class="ctox-pane-band ctox-pane-header">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <span class="ctox-pane-kicker" data-t="workbench">Arbeitsfläche</span>
+          <h2 class="ctox-pane-title" id="selected-item-title" data-t="noSelection">Kein Eintrag gewählt</h2>
+        </div>
+        <button type="button" class="ctox-button is-primary" id="btn-create-record" data-t="createRecord">Eintrag erstellen</button>
+      </div>
+    </header>
+    <main class="ctox-pane-scroll" style="padding: 16px;">
+      <div class="ctox-empty" id="empty-state">
+        <span data-t="selectPrompt">Wähle einen Datensatz links aus oder erstelle einen neuen.</span>
+      </div>
+${detailCardHtml}
+    </main>
+  </section>
+</main>
+`;
   } else {
-    state.generatedFiles['index.html'] = `<div class="module-root" data-module-root="${appId}">\n  <!-- In pane layout, outer panels are shell-rendered, center is active active workbench -->\n  <div class="${appId}-center" style="display: flex; flex-direction: column; width: 100%; height: 100%;">\n    <header class="pane-header" style="border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between;">\n      <div>\n        <span class="os-kicker">Arbeitsbereich</span>\n        <h2 class="os-title">${appTitle} Workbench</h2>\n      </div>\n      <button type="button" class="os-btn is-primary" id="btn-create-record">Eintrag erstellen</button>\n    </header>\n    \n    <main class="${appId}-workbench os-scrollbar" style="flex: 1; padding: 20px; overflow-y: auto;">\n      <div id="empty-state" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--muted);">\n        <p>Nutze die linke Navigationsspalte zur Auswahl und Bearbeitung.</p>\n      </div>\n      \n      <div id="detail-card" class="is-hidden" style="background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--panel-radius); padding: 20px;">\n        <div class="form-group">\n          <label class="form-label">Titel des Eintrags</label>\n          <input type="text" id="record-detail-title" class="os-input">\n        </div>\n        <div class="form-group">\n          <label class="form-label">Status</label>\n          <select id="record-detail-status" class="os-select">\n            <option value="Aktiv">Aktiv</option>\n            <option value="Entwurf">Entwurf</option>\n            <option value="Archiviert">Archiviert</option>\n          </select>\n        </div>\n        <button type="button" class="os-btn is-accent" id="btn-save-record" style="margin-top: 12px;">Eintrag speichern</button>\n      </div>\n    </main>\n  </div>\n</div>\n`;
+    state.generatedFiles['index.html'] = `<div class="${appId}-module" data-module-root="${appId}">
+  <!-- Pane layout: the shell renders the outer left/right panes; the module owns only the center workbench. -->
+  <div style="display: flex; flex-direction: column; width: 100%; height: 100%;">
+    <header class="ctox-toolbar">
+      <div class="ctox-pane-titles" style="flex: 1 1 auto;">
+        <span class="ctox-pane-kicker" data-t="workbench">Arbeitsbereich</span>
+        <h2 class="ctox-pane-title" id="selected-item-title">${appTitle} Workbench</h2>
+      </div>
+      <button type="button" class="ctox-button is-primary" id="btn-create-record" data-t="createRecord">Eintrag erstellen</button>
+    </header>
+
+    <main class="ctox-pane-scroll" style="flex: 1; padding: 16px;">
+      <div class="ctox-empty" id="empty-state">
+        <span data-t="selectPromptPane">Nutze die linke Navigationsspalte zur Auswahl und Bearbeitung.</span>
+      </div>
+${detailCardHtml}
+    </main>
+  </div>
+</div>
+`;
   }
 
-  // 4. index.css
-  state.generatedFiles['index.css'] = `/* Stylesheet dynamic generator for module: ${appId} */
-.module-root {
+  // 4. index.css — module-specific styles only. Frame, panes, lists, buttons,
+  // inputs, cards, empty states all come from the shell design system
+  // (app.css tokens + shared/base.css classes), so the module stylesheet
+  // stays nearly empty and dark/light theming follows the shell automatically.
+  state.generatedFiles['index.css'] = `/* ${appId} — module-specific styles.
+   The layout frame and controls come from shared/base.css (.ctox-workspace,
+   .ctox-pane, .ctox-list, .ctox-button, .ctox-input, .ctox-card, .ctox-empty).
+   Resolve every color through the shell tokens (--bg, --surface, --text,
+   --muted, --accent, ...). Do not define tokens on :root and do not redefine
+   shell tokens — the module conformance guard enforces this. */
+
+.${appId}-record-meta {
   display: flex;
-  width: 100%;
-  height: 100%;
-  background: var(--bg-1);
-  color: var(--text-main);
-  font-family: var(--font-sans);
-}
-
-.${appId}-layout {
-  --${appId}-left-width: 300px;
-  display: grid;
-  grid-template-columns: var(--${appId}-left-width) 12px minmax(0, 1fr);
-  width: 100%;
-  height: 100%;
-}
-
-.${appId}-left {
-  min-width: 0;
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-2);
-}
-
-.${appId}-center {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg-1);
-}
-
-.${appId}-scrollable {
-  flex: 1;
-  overflow-y: auto;
-  padding: 12px;
-}
-
-.record-item-card {
-  padding: 12px 14px;
-  border-radius: var(--panel-radius);
-  background: var(--surface-1);
-  border: 1px solid var(--line);
-  margin-bottom: 8px;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.record-item-card:hover {
-  background: var(--surface-2);
-  border-color: var(--line-active);
-}
-
-.record-item-card.is-active {
-  background: var(--surface-active);
-  border-color: var(--accent);
-}
-
-.form-group {
-  margin-bottom: 16px;
-}
-
-.form-label {
-  display: block;
-  font-size: 12px;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 11px;
   color: var(--muted);
-  margin-bottom: 6px;
-  font-weight: 500;
 }
-
-.is-hidden {
-  display: none !important;
-}
-
-/* Column resizer styling handled by global [data-resizer] in app.css */
 
 @media (max-width: 768px) {
-  .${appId}-layout {
+  .${appId}-module.ctox-workspace {
     grid-template-columns: minmax(0, 1fr);
   }
-  .${appId}-left {
+  .${appId}-module .ctox-column-resizer,
+  .${appId}-module aside.ctox-pane {
     display: none !important;
-  }
-  .os-col-resizer,
-  [data-resizer] {
-    display: none !important;
-  }
-  .${appId}-center .pane-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 12px;
   }
 }
 `;
 
-  // 5. index.js
+  // 5. locales — same keys as the inline fallback labels in index.js.
+  const localeDe = {
+    backlog: 'Datenkatalog',
+    itemsTitle: appTitle,
+    workbench: 'Arbeitsfläche',
+    noSelection: 'Kein Eintrag gewählt',
+    createRecord: 'Eintrag erstellen',
+    saveRecord: 'Speichern',
+    fieldTitle: 'Titel des Eintrags',
+    fieldStatus: 'Status',
+    selectPrompt: 'Wähle einen Datensatz links aus oder erstelle einen neuen.',
+    selectPromptPane: 'Nutze die linke Navigationsspalte zur Auswahl und Bearbeitung.',
+    emptyList: 'Keine Einträge vorhanden',
+  };
+  const localeEn = {
+    backlog: 'Data catalog',
+    itemsTitle: appTitle,
+    workbench: 'Workbench',
+    noSelection: 'No record selected',
+    createRecord: 'Create record',
+    saveRecord: 'Save',
+    fieldTitle: 'Record title',
+    fieldStatus: 'Status',
+    selectPrompt: 'Select a record on the left or create a new one.',
+    selectPromptPane: 'Use the left navigation pane to select and edit records.',
+    emptyList: 'No records yet',
+  };
+  state.generatedFiles['locales/de.json'] = JSON.stringify(localeDe, null, 2);
+  state.generatedFiles['locales/en.json'] = JSON.stringify(localeEn, null, 2);
+
+  // 6. index.js
   state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js';
 
 const labels = {
-  de: {
-    backlog: 'Datenkatalog',
-    itemsTitle: 'Einträge',
-    selectPrompt: 'Wähle ein Element aus, um Details anzuzeigen.'
-  },
-  en: {
-    backlog: 'Data Catalog',
-    itemsTitle: 'Items',
-    selectPrompt: 'Select an item to view details.'
-  }
+  de: ${JSON.stringify(localeDe, null, 2).replace(/\n/g, '\n  ')},
+  en: ${JSON.stringify(localeEn, null, 2).replace(/\n/g, '\n  ')}
 };
 
 const APP_METADATA = {
@@ -1101,8 +1136,9 @@ export async function mount(ctx) {
   // 4. Translate static tags
   applyTranslations(ctx.host, state.t);
 
-  // 5. Wire Resizers if in full-workspace
-  const cleanupResizers = setupResizers(ctx.host);
+  // 5. Column resizing is shell-owned: the declarative
+  //    .ctox-column-resizer[data-resizer-var] handle in index.html is wired
+  //    (incl. width persistence) by the shell after mount — no module code.
 
   // 6. Run client-side auto-migration
   try {
@@ -1124,7 +1160,6 @@ export async function mount(ctx) {
     } else if (state.dbSubscription && typeof state.dbSubscription.unsubscribe === 'function') {
       state.dbSubscription.unsubscribe();
     }
-    cleanupResizers();
     console.log('[${appId}] Unmounted successfully.');
   };
 }
@@ -1197,34 +1232,6 @@ function applyTranslations(root, t) {
   root.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
 }
 
-function setupResizers(host) {
-  const containerEl = host.querySelector('.${appId}-layout') || host;
-  const resizerEl = host.querySelector('[data-resizer="left"]');
-  if (!resizerEl) return () => {};
-
-  const storageKey = 'ctox.${appId}.leftWidth';
-  const cssVar = '--${appId}-left-width';
-
-  const saved = parseInt(localStorage.getItem(storageKey) || '300', 10);
-  containerEl.style.setProperty(cssVar, \`\${saved}px\`);
-
-  const resizer = new CtoxResizer({
-    resizerEl,
-    containerEl,
-    cssVar,
-    side: 'left',
-    minWidth: 220,
-    maxWidth: 550,
-    onResize: (width) => {
-      localStorage.setItem(storageKey, String(Math.round(width)));
-    },
-  });
-
-  return () => {
-    resizer.destroy();
-  };
-}
-
 async function loadInitialData() {
   if (!state.ctx.db?.[PRIMARY_COLL]) return;
   const items = await state.ctx.db[PRIMARY_COLL].find().exec();
@@ -1251,13 +1258,18 @@ function renderList() {
   container.innerHTML = '';
 
   if (state.records.length === 0) {
-    container.innerHTML = '<div style="color: var(--muted); font-size: 12px; text-align: center; margin-top: 20px;">Keine Einträge vorhanden</div>';
+    const empty = document.createElement('div');
+    empty.className = 'ctox-empty';
+    empty.textContent = state.t('emptyList', 'Keine Einträge vorhanden');
+    container.appendChild(empty);
     return;
   }
 
   state.records.forEach(record => {
-    const card = document.createElement('div');
-    card.className = \`record-item-card \${state.selectedId === record.id ? 'is-active' : ''}\`;
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'ctox-list-item';
+    card.setAttribute('aria-selected', state.selectedId === record.id ? 'true' : 'false');
     card.dataset.id = record.id;
 
     card.setAttribute('data-context-module', '${appId}');
@@ -1267,7 +1279,7 @@ function renderList() {
 
     card.innerHTML = \`
       <div style="font-weight: 600; font-size: 13px;">\${record.title}</div>
-      <div style="font-size: 11px; color: var(--muted); margin-top: 4px; display: flex; justify-content: space-between;">
+      <div class="${appId}-record-meta">
         <span>Status: \${record.status}</span>
         <span>\${new Date(record.updated_at_ms).toLocaleTimeString()}</span>
       </div>
@@ -1291,8 +1303,8 @@ function showDetail(record) {
   const detailCard = state.ctx.host.querySelector('#detail-card');
   const titleHeader = state.ctx.host.querySelector('#selected-item-title');
 
-  if (emptyState) emptyState.classList.add('is-hidden');
-  if (detailCard) detailCard.classList.remove('is-hidden');
+  if (emptyState) emptyState.hidden = true;
+  if (detailCard) detailCard.hidden = false;
   if (titleHeader) titleHeader.textContent = record.title;
 
   const inputTitle = state.ctx.host.querySelector('#record-detail-title');
@@ -1378,7 +1390,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   state.isDeploying = true;
   btnDeploy.disabled = true;
   syncDot.className = 'sync-dot is-saving';
-  syncText.textContent = 'Speichere Modul...';
+  syncText.textContent = state.t('deploySaving', 'Speichere Modul...');
   updateCreatorActionState();
 
   // Visual delay logs to mimic compiler
@@ -1437,7 +1449,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     await new Promise(r => setTimeout(r, 600));
 
     // 2. Loop through generated templates and dispatch ctox.source.save
-    const filesToSave = ['module.json', 'schema.js', 'index.html', 'index.css', 'index.js', 'icon.svg'];
+    const filesToSave = ['module.json', 'schema.js', 'index.html', 'index.css', 'index.js', 'icon.svg', 'locales/de.json', 'locales/en.json'];
     for (const file of filesToSave) {
       addConsoleLog(`[WRITE] Schreibe Datei: installed-modules/${appId}/${file}...`, 'info');
       await state.ctx.commandBus.dispatch({
@@ -1467,7 +1479,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     });
 
     syncDot.className = 'sync-dot';
-    syncText.textContent = 'Erfolgreich installiert';
+    syncText.textContent = state.t('deployInstalled', 'Erfolgreich installiert');
 
     // Reload the app catalog in the background so it shows up in desktop
     setTimeout(() => {
@@ -1486,7 +1498,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
 
     syncDot.className = 'sync-dot';
     syncDot.style.background = 'var(--danger)';
-    syncText.textContent = 'Fehler beim Speichern';
+    syncText.textContent = state.t('deployFailed', 'Fehler beim Speichern');
     state.isDeploying = false;
     updateCreatorActionState();
   }
@@ -1779,4 +1791,34 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+
+// --- Creator module i18n -----------------------------------------------------
+// Loads locales/<lang>.json for the creator UI itself (the generator templates
+// carry their own labels). German markup text is the fallback.
+async function loadCreatorMessages(locale) {
+  const lang = locale === 'en' ? 'en' : 'de';
+  try {
+    const response = await fetch(new URL(`./locales/${lang}.json`, import.meta.url));
+    if (!response.ok) throw new Error(String(response.status));
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+function applyCreatorTranslations(root, t) {
+  root.querySelectorAll('[data-t]').forEach((el) => {
+    el.textContent = t(el.dataset.t, el.textContent.trim());
+  });
+  root.querySelectorAll('[data-t-placeholder]').forEach((el) => {
+    el.setAttribute('placeholder', t(el.dataset.tPlaceholder, el.getAttribute('placeholder') || ''));
+  });
+  root.querySelectorAll('[data-t-title]').forEach((el) => {
+    el.setAttribute('title', t(el.dataset.tTitle, el.getAttribute('title') || ''));
+  });
+  root.querySelectorAll('[data-t-aria]').forEach((el) => {
+    el.setAttribute('aria-label', t(el.dataset.tAria, el.getAttribute('aria-label') || ''));
+  });
 }

@@ -4,65 +4,65 @@
       <header class="ctox-pane-header">
         <div class="ctox-pane-title-row">
           <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Katalog</span>
-            <h2 class="ctox-pane-title">App Store</h2>
+            <span class="ctox-pane-kicker" data-t="kicker">Katalog</span>
+            <h2 class="ctox-pane-title" data-t="title">App Store</h2>
           </div>
         </div>
         <div class="ctox-pane-tools">
-          <input class="ctox-pane-search store-search" data-search type="search" placeholder="Module, Templates, Apps suchen..." aria-label="App Store durchsuchen" />
+          <input class="ctox-pane-search store-search" data-search type="search" placeholder="Module, Templates, Apps suchen..." data-t-placeholder="searchPlaceholder" aria-label="App Store durchsuchen" data-t-aria="searchAria" />
         </div>
       </header>
 
       <div class="store-create-scratch-wrapper">
-        <button type="button" class="store-action-btn primary" id="btn-create-scratch" title="Zum App Creator wechseln, Rueckweg: App Store">
+        <button type="button" class="store-action-btn primary" id="btn-create-scratch" title="Zum App Creator wechseln, Rueckweg: App Store" data-t-title="createScratchTitle">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 5v14M5 12h14"/></svg>
-          App von Scratch erstellen
+          <span data-t="createScratch">App von Scratch erstellen</span>
         </button>
       </div>
 
       <nav class="store-category-list" data-scope-list>
         <button class="category-btn active" data-scope="marketplace">
           <span class="cat-icon">GH</span>
-          <span class="cat-label">Marketplace</span>
+          <span class="cat-label" data-t="scopeMarketplace">Marketplace</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="template">
           <span class="cat-icon">+</span>
-          <span class="cat-label">Templates</span>
+          <span class="cat-label" data-t="scopeTemplates">Templates</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="installed">
           <span class="cat-icon">✓</span>
-          <span class="cat-label">Installed</span>
+          <span class="cat-label" data-t="scopeInstalled">Installed</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="starter">
           <span class="cat-icon">★</span>
-          <span class="cat-label">Starter</span>
+          <span class="cat-label" data-t="scopeStarter">Starter</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="local">
           <span class="cat-icon">*</span>
-          <span class="cat-label">Local Modules</span>
+          <span class="cat-label" data-t="scopeLocal">Local Modules</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="system">
           <span class="cat-icon">◆</span>
-          <span class="cat-label">System</span>
+          <span class="cat-label" data-t="scopeSystem">System</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
         <button class="category-btn" data-scope="all">
           <span class="cat-icon">All</span>
-          <span class="cat-label">Everything</span>
+          <span class="cat-label" data-t="scopeAll">Everything</span>
           <span class="cat-count" data-scope-count>0</span>
         </button>
       </nav>
 
       <div class="store-info-box">
-        <h4>GitHub Discovery</h4>
-        <p>Marketplace apps are loaded from <code>metric-space-ai/ctox</code>. Each app uses its own <code>modules/*/module.json</code> contract.</p>
-        <button class="store-refresh-btn" data-refresh-marketplace aria-label="GitHub Discovery aktualisieren">GitHub aktualisieren</button>
-        <p class="store-sync-state" data-marketplace-state>GitHub modules are loaded from the CTOX repository.</p>
+        <h4 data-t="infoTitle">GitHub Discovery</h4>
+        <p data-t="infoBody">Marketplace apps are loaded from <code>metric-space-ai/ctox</code>. Each app uses its own <code>modules/*/module.json</code> contract.</p>
+        <button class="store-refresh-btn" data-refresh-marketplace aria-label="GitHub Discovery aktualisieren" data-t="refreshMarketplace" data-t-aria="refreshMarketplace">GitHub aktualisieren</button>
+        <p class="store-sync-state" data-marketplace-state data-t="marketplaceState">GitHub modules are loaded from the CTOX repository.</p>
       </div>
     </div>
   </section>
@@ -73,15 +73,15 @@
     <header class="ctox-pane-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Entdecken</span>
+          <span class="ctox-pane-kicker" data-t="discoverKicker">Entdecken</span>
           <h2 class="ctox-pane-title" data-visible-category-title>GitHub Marketplace</h2>
         </div>
         <div class="ctox-pane-actions store-pane-actions">
-          <div class="view-toggle-buttons" data-view-toggle role="group" aria-label="App-Store Ansicht">
-            <button type="button" class="view-toggle-btn active" data-view="grid" title="Rasteransicht" aria-label="Rasteransicht" aria-pressed="true">
+          <div class="view-toggle-buttons" data-view-toggle role="group" aria-label="App-Store Ansicht" data-t-aria="viewToggleAria">
+            <button type="button" class="view-toggle-btn active" data-view="grid" title="Rasteransicht" data-t-title="viewGrid" aria-label="Rasteransicht" data-t-aria="viewGrid" aria-pressed="true">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
             </button>
-            <button type="button" class="view-toggle-btn" data-view="list" title="Listenansicht" aria-label="Listenansicht" aria-pressed="false">
+            <button type="button" class="view-toggle-btn" data-view="list" title="Listenansicht" data-t-title="viewList" aria-label="Listenansicht" data-t-aria="viewList" aria-pressed="false">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
             </button>
           </div>
@@ -96,7 +96,7 @@
       <div class="store-card-grid" data-apps-grid></div>
       <div class="store-loading-overlay" data-loading-spinner hidden>
         <span class="store-loading-dot"></span>
-        <span data-loading-text>GitHub Discovery wird synchronisiert.</span>
+        <span data-loading-text data-t="loadingText">GitHub Discovery wird synchronisiert.</span>
       </div>
 
       <!-- Sliding Bottom Details Drawer -->
@@ -106,36 +106,36 @@
           <div class="store-detail-title-row">
             <div class="app-logo-large" data-detail-icon>?</div>
             <div class="store-detail-heading">
-              <span class="ctox-drawer-kicker">Catalog</span>
-              <h3 class="ctox-drawer-title" data-detail-title>Keine App ausgewählt</h3>
+              <span class="ctox-drawer-kicker" data-t="drawerKicker">Catalog</span>
+              <h3 class="ctox-drawer-title" data-detail-title data-t="drawerNoSelection">Keine App ausgewählt</h3>
               <div class="store-detail-badges">
                 <span class="app-version-badge" data-detail-version>-</span>
                 <span class="app-category-badge" data-detail-category>Empty</span>
-                <span class="app-status-badge" data-detail-status>No selection</span>
+                <span class="app-status-badge" data-detail-status data-t="statusNoSelection">No selection</span>
               </div>
             </div>
           </div>
-          <button type="button" class="ctox-drawer-close" data-close-drawer title="Details schließen" aria-label="Details schließen">&times;</button>
+          <button type="button" class="ctox-drawer-close" data-close-drawer title="Details schließen" data-t-title="drawerCloseTitle" aria-label="Details schließen" data-t-aria="drawerCloseTitle">&times;</button>
         </header>
 
         <div class="ctox-drawer-body">
           <div class="app-info-grid">
             <div class="info-item">
-              <span class="info-label">Developer</span>
+              <span class="info-label" data-t="labelDeveloper">Developer</span>
               <span class="info-value" data-detail-developer>CTOX</span>
             </div>
             <div class="info-item">
-              <span class="info-label">License</span>
+              <span class="info-label" data-t="labelLicense">License</span>
               <span class="info-value" data-detail-license>AGPL-3.0-only</span>
             </div>
             <div class="info-item">
-              <span class="info-label">Source</span>
+              <span class="info-label" data-t="labelSource">Source</span>
               <span class="info-value" data-detail-source>GitHub</span>
             </div>
           </div>
 
           <div class="store-readme-section">
-            <h4>Module Contract</h4>
+            <h4 data-t="readmeTitle">Module Contract</h4>
             <article class="markdown-document" data-readme-content></article>
           </div>
         </div>

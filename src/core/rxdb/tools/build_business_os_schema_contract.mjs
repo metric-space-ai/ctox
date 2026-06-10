@@ -42,21 +42,16 @@ async function buildContract() {
 }
 
 async function importSchemaModule(url) {
-  const source = await readFile(url, 'utf8');
-  const reexport = source.match(/^\s*export\s+\{\s*collections\s*,\s*migrationStrategies\s*\}\s+from\s+['"]([^'"]+)['"];\s*$/m);
-  if (reexport) {
-    return importSchemaModule(new URL(reexport[1], url));
-  }
-  const transformed = source
-    .replace(/\bexport\s+const\s+collections\s*=/, 'const collections =')
-    .replace(/\bexport\s+const\s+migrationStrategies\s*=/, 'const migrationStrategies =');
-  return Function(`
-    ${transformed}
-    return {
-      collections: typeof collections === 'undefined' ? {} : collections,
-      migrationStrategies: typeof migrationStrategies === 'undefined' ? {} : migrationStrategies,
-    };
-  `)();
+  // Real ESM import instead of the old strip-exports/Function() transform:
+  // module schema files may use any import/re-export pattern (full re-exports
+  // like modules/reports, partial cross-module imports like
+  // modules/conversations pulling the outbound-owned collections). The
+  // emitted contract content is unchanged — same exported objects either way.
+  const mod = await import(url.href);
+  return {
+    collections: mod.collections || {},
+    migrationStrategies: mod.migrationStrategies || {},
+  };
 }
 
 const next = await buildContract();

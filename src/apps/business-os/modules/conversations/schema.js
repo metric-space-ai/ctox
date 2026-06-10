@@ -4,8 +4,33 @@
 // native RxDB objects/arrays — the projector parses them once on write.
 //
 // Source of truth: src/core/mission/channels.rs (CREATE TABLE communication_*).
+//
+// Conversations also cross-links outbound records (campaign cards in the right
+// pane). Those collections are owned by the outbound module; we import its
+// schema definitions so this module can register them on clients where
+// outbound has never been opened — without the definitions drifting apart
+// (same pattern as modules/reports re-exporting the ctox schemas). The
+// conformance guard asserts parity for collections declared by more than one
+// module.
+
+import {
+  collections as outboundCollections,
+  migrationStrategies as outboundMigrationStrategies,
+} from '../outbound/schema.js';
+
+const OUTBOUND_LINKED_COLLECTIONS = [
+  'outbound_campaigns',
+  'outbound_pipeline_items',
+  'outbound_engagements',
+  'outbound_messages',
+  'outbound_approvals',
+];
 
 export const collections = {
+  ...Object.fromEntries(OUTBOUND_LINKED_COLLECTIONS.map((name) => [name, outboundCollections[name]])),
+  // Canonical definition for communication_accounts — modules/desktop imports
+  // it from here. Includes the tombstone/projection bookkeeping fields the
+  // Rust channel projector writes (updated_at_ms, is_deleted, deleted_at_ms).
   communication_accounts: {
     version: 0,
     primaryKey: 'account_key',
@@ -20,6 +45,9 @@ export const collections = {
       updated_at: { type: 'string' },
       last_inbound_ok_at: { type: 'string' },
       last_outbound_ok_at: { type: 'string' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' },
+      deleted_at_ms: { type: 'number' },
     },
     required: ['account_key', 'channel', 'address', 'provider', 'created_at', 'updated_at'],
     additionalProperties: true,
@@ -82,4 +110,8 @@ export const collections = {
   },
 };
 
-export const migrationStrategies = {};
+export const migrationStrategies = Object.fromEntries(
+  OUTBOUND_LINKED_COLLECTIONS
+    .filter((name) => outboundMigrationStrategies[name])
+    .map((name) => [name, outboundMigrationStrategies[name]]),
+);

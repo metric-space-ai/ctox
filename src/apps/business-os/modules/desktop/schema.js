@@ -1,3 +1,10 @@
+// communication_accounts is owned by the conversations module (the RxDB
+// projection of the canonical CTOX channel tables). Import its definition so
+// the desktop pairing/notification surface registers the identical schema —
+// the conformance guard asserts parity for collections declared by more than
+// one module.
+import { collections as conversationsCollections } from '../conversations/schema.js';
+
 export const collections = {
   desktop_icons: {
     version: 0,
@@ -117,27 +124,7 @@ export const collections = {
     required: ['id', 'file_id', 'idx', 'total', 'encoding', 'data', 'created_at_ms'],
     additionalProperties: true,
   },
-  communication_accounts: {
-    version: 0,
-    primaryKey: 'account_key',
-    type: 'object',
-    properties: {
-      account_key: { type: 'string', maxLength: 256 },
-      channel: { type: 'string' },
-      address: { type: 'string' },
-      provider: { type: 'string' },
-      profile_json: { type: 'object', additionalProperties: true },
-      created_at: { type: 'string' },
-      updated_at: { type: 'string' },
-      last_inbound_ok_at: { type: 'string' },
-      last_outbound_ok_at: { type: 'string' },
-      updated_at_ms: { type: 'number' },
-      is_deleted: { type: 'boolean' },
-      deleted_at_ms: { type: 'number' },
-    },
-    required: ['account_key', 'channel', 'address', 'provider', 'created_at', 'updated_at'],
-    additionalProperties: true,
-  },
+  communication_accounts: conversationsCollections.communication_accounts,
   channel_pairing_state: {
     version: 0,
     primaryKey: 'channel',
