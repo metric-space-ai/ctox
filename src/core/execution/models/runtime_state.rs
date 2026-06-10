@@ -1269,7 +1269,7 @@ mod tests {
         let state = sync_runtime_state_from_env_map(&root, &env_map).unwrap();
 
         assert_eq!(state.source, InferenceSource::Api);
-        assert_eq!(state.configured_context_tokens, Some(131_072));
+        assert_eq!(state.configured_context_tokens, Some(262_144));
         std::fs::remove_dir_all(root).unwrap();
     }
 

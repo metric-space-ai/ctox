@@ -122,9 +122,10 @@ There are two context-protection mechanisms in the current code:
   defaults to a 15 percent visible-output/read-input drift threshold, with a
   minimum of 4096 visible output tokens.
 
-The default context window is 131072 tokens when no runtime/model value
-overrides it. The installer seeds model-specific `max_seq` values, commonly
-131072 and sometimes 65536 for smaller local models.
+The default context window is 262144 tokens (256k) when no runtime/model value
+overrides it. 256k is the only supported chat-context choice; the retired 128k
+option is gone, and legacy persisted 128k values fall back to the 256k default.
+The installer seeds `max_seq = 262144` for every local model.
 
 ## Continuity Refresh
 

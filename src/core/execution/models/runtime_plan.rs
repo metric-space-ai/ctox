@@ -28,9 +28,18 @@ use crate::persistence;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+/// Model-capability policy floor: the smallest context a plan may realize and
+/// still count as a valid local chat runtime. This is NOT a user choice — the
+/// user-facing context setting only offers 256k. Models whose architecture
+/// caps below 256k (e.g. native-128k models) keep planning at their
+/// manifest-declared maximum instead of being banned outright.
 const MIN_SUPPORTED_CHAT_CONTEXT: u32 = 131_072;
-const DEFAULT_CHAT_CONTEXT: u32 = 131_072;
+const DEFAULT_CHAT_CONTEXT: u32 = 262_144;
 const MAX_SUPPORTED_CHAT_CONTEXT: u32 = 262_144;
+/// Compaction baselines (`QUALITY_MIN_COMPACTION_TOKENS` etc.) were tuned
+/// against a 128k window. Keep that reference fixed so raising the default
+/// chat context does not silently shrink scaled compaction budgets.
+const COMPACTION_BASELINE_REFERENCE_CONTEXT: u32 = 131_072;
 #[cfg(test)]
 const MIN_POLICY_CONTEXT: u32 = DEFAULT_CHAT_CONTEXT;
 const QUALITY_MIN_COMPACTION_TOKENS: u32 = 12_288;
@@ -55,7 +64,7 @@ pub enum ChatPreset {
     Performance,
 }
 
-const SUPPORTED_CHAT_CONTEXT_CHOICES: &[(&str, u32)] = &[("128k", 131_072), ("256k", 262_144)];
+const SUPPORTED_CHAT_CONTEXT_CHOICES: &[(&str, u32)] = &[("256k", 262_144)];
 
 pub fn supported_chat_context_choices() -> Vec<&'static str> {
     SUPPORTED_CHAT_CONTEXT_CHOICES
@@ -110,8 +119,9 @@ pub fn format_chat_context_choice(tokens: u32) -> String {
 }
 
 pub fn scale_compaction_tokens(baseline_tokens: u32, context_tokens: u32) -> u32 {
-    (((baseline_tokens as u128) * (context_tokens as u128)) / (DEFAULT_CHAT_CONTEXT as u128)).max(1)
-        as u32
+    (((baseline_tokens as u128) * (context_tokens as u128))
+        / (COMPACTION_BASELINE_REFERENCE_CONTEXT as u128))
+        .max(1) as u32
 }
 
 impl ChatPreset {
@@ -1172,6 +1182,36 @@ fn manifest_profile_satisfies_context_policy(
         .any(manifest_candidate_satisfies_context_policy)
 }
 
+/// Largest context the model's manifest can actually target across both
+/// presets. Candidates without an explicit cap count as "supports the full
+/// 256k ceiling".
+fn manifest_max_context_target(manifest: &model_manifest::RuntimeModelManifest) -> u32 {
+    let profile_max = |profile: &model_manifest::ManifestPresetProfile| {
+        profile
+            .candidates
+            .iter()
+            .map(|candidate| {
+                candidate
+                    .context_target_cap
+                    .unwrap_or(MAX_SUPPORTED_CHAT_CONTEXT)
+            })
+            .max()
+            .unwrap_or(MAX_SUPPORTED_CHAT_CONTEXT)
+    };
+    profile_max(&manifest.quality).max(profile_max(&manifest.performance))
+}
+
+/// Effective requested context for one model: the configured chat context
+/// (256k default — the only user-facing choice) clamped down to the largest
+/// context the model's manifest can target. Native-128k models keep planning
+/// at their architectural cap instead of being rejected by the 256k default.
+fn requested_context_for_manifest(
+    manifest: &model_manifest::RuntimeModelManifest,
+    env_map: &BTreeMap<String, String>,
+) -> u32 {
+    configured_chat_context_tokens(env_map).min(manifest_max_context_target(manifest))
+}
+
 fn manifest_satisfies_context_policy(manifest: &model_manifest::RuntimeModelManifest) -> bool {
     let required_context = required_context_floor_for_manifest(manifest);
     manifest_profile_satisfies_context_policy_with_requirement(&manifest.quality, required_context)
@@ -1585,8 +1625,8 @@ fn local_model_satisfies_context_policy_with_hardware(
         Some(profile) if !profile.gpus.is_empty() => profile,
         _ => return true,
     };
-    let required_context =
-        configured_chat_context_tokens(env_map).max(required_context_floor_for_manifest(&manifest));
+    let required_context = requested_context_for_manifest(&manifest, env_map)
+        .max(required_context_floor_for_manifest(&manifest));
     if qualification_profile_for_model(Some(root), model)
         .as_ref()
         .and_then(|profile| qualification_host_profile_for_hardware(profile, hardware))
@@ -1876,11 +1916,16 @@ pub fn apply_chat_runtime_plan(
         runtime_contract::clear_chat_capacity_contract(root)?;
         return Ok(None);
     };
-    let required_context_floor = runtime_manifest(Some(root), &bundle.model)
+    let bundle_manifest = runtime_manifest(Some(root), &bundle.model);
+    let required_context_floor = bundle_manifest
         .as_ref()
         .map(required_context_floor_for_manifest)
         .unwrap_or(MIN_SUPPORTED_CHAT_CONTEXT);
-    let policy_context = requested_context.max(required_context_floor);
+    let policy_context = bundle_manifest
+        .as_ref()
+        .map(|manifest| requested_context.min(manifest_max_context_target(manifest)))
+        .unwrap_or(requested_context)
+        .max(required_context_floor);
     let explicit_model_requested = explicit_local_chat_model(env_map).is_some();
     let explicit_family_requested = explicit_local_chat_family(env_map).is_some();
     let enforce_global_context_policy = !explicit_family_requested && !explicit_model_requested;
@@ -2398,7 +2443,7 @@ fn plan_from_specs(
     specs: &[PlanSpec],
     env_map: &BTreeMap<String, String>,
 ) -> ChatRuntimePlan {
-    let requested_context = configured_chat_context_tokens(env_map);
+    let requested_context = requested_context_for_manifest(manifest, env_map);
     let adjusted_specs = adjust_plan_specs_for_requested_context(specs, requested_context);
     let candidates = build_feasible_candidates(
         root,
@@ -7196,10 +7241,16 @@ mod tests {
         assert_eq!(parse_chat_context_tokens("32k"), None);
         assert_eq!(parse_chat_context_tokens("64k"), None);
         assert_eq!(parse_chat_context_tokens("32768"), None);
-        assert_eq!(parse_chat_context_tokens("128k"), Some(131_072));
-        assert_eq!(parse_chat_context_tokens("131072"), Some(131_072));
-        assert_eq!(supported_chat_context_choices(), vec!["128k", "256k"]);
-        assert_eq!(format_chat_context_choice(131_072), "128k");
+        // 128k is retired: legacy persisted values fall back to the 256k default.
+        assert_eq!(parse_chat_context_tokens("128k"), None);
+        assert_eq!(parse_chat_context_tokens("131072"), None);
+        assert_eq!(parse_chat_context_tokens("256k"), Some(262_144));
+        assert_eq!(parse_chat_context_tokens("262144"), Some(262_144));
+        assert_eq!(supported_chat_context_choices(), vec!["256k"]);
+        assert_eq!(format_chat_context_choice(262_144), "256k");
+        assert_eq!(default_chat_context_tokens(), 262_144);
+        // Model-capability policy floor, not a user choice: native-128k
+        // models stay plannable at their architectural cap.
         assert_eq!(minimum_supported_chat_context(), 131_072);
     }
 
@@ -7334,7 +7385,9 @@ mod tests {
         let env_map = BTreeMap::new();
         let plan = build_qwen35_4b_bundle(ChatPreset::Quality, &hardware(1, 24_576), &env_map)
             .selected_plan;
-        assert!(plan.max_seq_len >= MIN_POLICY_CONTEXT);
+        // Qwen3.5-4B's manifest caps at 131072; the 256k default clamps down
+        // to the model cap, which is exactly the supported policy floor.
+        assert!(plan.max_seq_len >= MIN_SUPPORTED_CHAT_CONTEXT);
     }
 
     #[test]
@@ -7635,11 +7688,13 @@ mod tests {
     fn qwen35_35b_a3b_targets_requested_context_variants_on_large_hosts() {
         let root = temp_root("qwen35-context-variants");
         write_platform_contract(&root, 4, 81_920, false);
-        for requested_context in [131_072, 262_144] {
+        // 128k is retired as a user choice: a persisted legacy "131072"
+        // value no longer parses and falls back to the 256k default.
+        for (persisted_value, expected_context) in [("131072", 262_144), ("262144", 262_144)] {
             let mut env_map = BTreeMap::new();
             env_map.insert(
                 "CTOX_CHAT_MODEL_MAX_CONTEXT".to_string(),
-                requested_context.to_string(),
+                persisted_value.to_string(),
             );
             let bundle = build_manifest_bundle_with_root(
                 Some(&root),
@@ -7651,8 +7706,8 @@ mod tests {
             .expect("qwen3.5-35b-a3b manifest bundle should resolve")
             .expect("qwen3.5-35b-a3b manifest bundle should exist");
             assert_eq!(
-                bundle.selected_plan.max_seq_len, requested_context,
-                "requested_context={requested_context} bundle={bundle:#?}"
+                bundle.selected_plan.max_seq_len, expected_context,
+                "persisted_value={persisted_value} bundle={bundle:#?}"
             );
         }
         let _ = std::fs::remove_dir_all(root);
@@ -8018,8 +8073,10 @@ mod tests {
             "Q4K" => 1,
             _ => 0,
         };
-        assert_eq!(quality.max_seq_len, MIN_POLICY_CONTEXT);
-        assert_eq!(performance.max_seq_len, MIN_POLICY_CONTEXT);
+        // Qwen3.5-4B plans at its 131072 manifest cap (the 256k default
+        // clamps down to the model's architectural maximum).
+        assert_eq!(quality.max_seq_len, MIN_SUPPORTED_CHAT_CONTEXT);
+        assert_eq!(performance.max_seq_len, MIN_SUPPORTED_CHAT_CONTEXT);
         assert_eq!(quality.max_seqs, 1);
         assert_eq!(performance.max_seqs, 1);
         assert!(quant_rank(&quality.quantization) >= quant_rank(&performance.quantization));
@@ -8585,7 +8642,9 @@ mod tests {
             .iter()
             .find(|plan| plan.preset == ChatPreset::Performance)
             .unwrap();
-        assert!(quality.max_seq_len >= MIN_POLICY_CONTEXT);
+        // Nemotron's manifest caps below the 256k default; the request clamps
+        // to the model cap, so the supported floor is the right bound here.
+        assert!(quality.max_seq_len >= MIN_SUPPORTED_CHAT_CONTEXT);
         assert!(performance.max_seqs >= 2);
         assert_eq!(performance.quantization, "Q4K");
     }
@@ -8617,9 +8676,11 @@ mod tests {
             compaction_policy_for_preset(ChatPreset::Performance, DEFAULT_CHAT_CONTEXT);
 
         assert_eq!(quality.threshold_percent, 75);
-        assert_eq!(quality.min_tokens, 12_288);
+        // Baselines are tuned against the 128k reference window and scale
+        // linearly: at the 256k default they double.
+        assert_eq!(quality.min_tokens, 24_576);
         assert_eq!(performance.threshold_percent, 70);
-        assert_eq!(performance.min_tokens, 8_192);
+        assert_eq!(performance.min_tokens, 16_384);
     }
 
     #[test]

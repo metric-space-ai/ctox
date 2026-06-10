@@ -1749,7 +1749,10 @@ write_runtime_sqlite_config() {
   local chat_model="${CTOX_CHAT_MODEL:-$model}"
   local active_model="${CTOX_ACTIVE_MODEL:-$chat_model}"
 
-  # Model-specific defaults
+  # Model-specific defaults. The CTOX chat context default is 256k; max_seq
+  # is seeded to each model's manifest context cap (contracts/models/
+  # runtime_manifests). Models whose manifest caps at 131072 keep that cap —
+  # raising it requires model qualification, not an installer edit.
   local port="1235" arch="" max_seq="131072" paged_attn="auto"
   local tp_backend="disabled" isq="Q4K" pa_cache_type="turboquant3" pa_mem_frac="0.80"
   local disable_nccl="1" world_size=""
@@ -1762,9 +1765,9 @@ write_runtime_sqlite_config() {
     google/gemma-4-E4B-it)
       port="1234"; arch=""; max_seq="131072"; isq="" ;;
     Qwen/Qwen3.5-35B-A3B)
-      port="1235"; arch=""; max_seq="131072"; isq="Q4K"; pa_cache_type="turboquant3"; pa_mem_frac="0.80" ;;
+      port="1235"; arch=""; max_seq="262144"; isq="Q4K"; pa_cache_type="turboquant3"; pa_mem_frac="0.80" ;;
     Qwen/Qwen3.5-9B|Qwen/Qwen3.5-4B)
-      port="1235"; arch=""; max_seq="65536"; isq="Q4K" ;;
+      port="1235"; arch=""; max_seq="131072"; isq="Q4K" ;;
   esac
 
   local proxy_port="12434"
@@ -1830,7 +1833,7 @@ INSERT INTO runtime_env_kv(env_key, env_value) VALUES
 ('CTOX_AZURE_FOUNDRY_ENDPOINT', '$(sql_escape "$azure_endpoint")'),
 ('CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID', '$(sql_escape "$azure_deployment_id")'),
 ('CTOX_CHAT_MODEL', '$(sql_escape "$chat_model")'),
-('CTOX_CHAT_MODEL_MAX_CONTEXT', '$(sql_escape "${CTOX_CHAT_MODEL_MAX_CONTEXT:-131072}")'),
+('CTOX_CHAT_MODEL_MAX_CONTEXT', '$(sql_escape "${CTOX_CHAT_MODEL_MAX_CONTEXT:-262144}")'),
 ('CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT', '$(sql_escape "${CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT:-75}")'),
 ('CTOX_ACTIVE_MODEL', '$(sql_escape "$active_model")'),
 ('CTOX_PROXY_HOST', '$(sql_escape "${CTOX_PROXY_HOST:-127.0.0.1}")'),

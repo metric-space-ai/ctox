@@ -42,6 +42,7 @@ use ctox_utils_absolute_path::AbsolutePathBuf;
 
 use crate::api_costs::{self, ApiCallTelemetry, ApiTokenUsage};
 use crate::context::compact::{CompactDecision, CompactMode, CompactPolicy, CompactTrigger};
+use crate::context::live_context;
 use crate::inference::engine;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
@@ -171,11 +172,34 @@ fn escape_json_fragment(value: &str) -> String {
         .to_string()
 }
 
-fn compose_base_instructions(extra: Option<&str>) -> String {
-    match extra.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(extra) => format!("{CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS}\n\n{extra}"),
-        None => CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS.to_string(),
+/// Compose the system prompt for a direct session.
+///
+/// Worker sessions (no override) receive the full CTOX system prompt rendered
+/// from the runtime identity and settings, followed by the direct-session
+/// execution contract. The long system prompt is the stability layer for
+/// long-running worker behavior; it must reach the model, not just the
+/// TUI/live-prompt diagnostics.
+///
+/// Sessions that pass an override (completion review, queue repair) own their
+/// entire system prompt. They intentionally do not inherit the worker prompt:
+/// a reviewer must not be instructed to perform worker actions.
+fn compose_base_instructions(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    override_prompt: Option<&str>,
+) -> Result<String> {
+    if let Some(prompt) = override_prompt
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(prompt.to_string());
     }
+    let system_prompt = live_context::render_system_prompt(root, settings)
+        .context("failed to render CTOX worker system prompt")?;
+    Ok(format!(
+        "{}\n\n{CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS}",
+        system_prompt.trim_end()
+    ))
 }
 
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
@@ -337,7 +361,8 @@ impl PersistentSession {
     }
 
     /// Start a persistent session with explicit base instructions and optional
-    /// compaction disablement. Review runs use this to create an isolated
+    /// compaction disablement. The instructions REPLACE the worker system
+    /// prompt entirely. Review runs use this to create an isolated
     /// external-review thread with its own system prompt, without normal
     /// long-run compaction behavior, and without active execution tools.
     pub fn start_with_instructions(
@@ -403,7 +428,8 @@ impl PersistentSession {
             .build()
             .context("failed to start tokio runtime")?;
 
-        let composed_base_instructions = compose_base_instructions(base_instructions);
+        let composed_base_instructions =
+            compose_base_instructions(root, settings, base_instructions)?;
         let (client, thread_id, cwd, seq, model, model_provider, api_provider, reasoning_effort) =
             rt.block_on(async {
                 Self::start_client_and_thread(
@@ -1297,9 +1323,27 @@ mod tests {
         }
     }
 
+    fn compose_test_root(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-direct-session-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        root
+    }
+
     #[test]
-    fn base_instructions_include_durable_outcome_contract() {
-        let instructions = compose_base_instructions(None);
+    fn worker_base_instructions_include_system_prompt_and_durable_outcome_contract() {
+        let root = compose_test_root("worker-base");
+        let instructions =
+            compose_base_instructions(&root, &BTreeMap::new(), None).expect("worker instructions");
+        // The long CTOX system prompt is the stability layer and must be present.
+        assert!(instructions.contains("You are CTOX, the personal CTO agent"));
+        assert!(instructions.contains("Secret handling policy:"));
+        // The direct-session execution contract stays appended.
         assert!(instructions.contains("required durable outcome exists"));
         assert!(instructions.contains("do not run reviewed-send before review feedback"));
         assert!(instructions.contains("Do not create review rows or approval digests manually"));
@@ -1308,10 +1352,19 @@ mod tests {
     }
 
     #[test]
-    fn base_instructions_preserve_extra_review_prompt() {
-        let instructions = compose_base_instructions(Some("Act as the external reviewer."));
-        assert!(instructions.contains("required durable outcome exists"));
+    fn override_base_instructions_stand_alone_without_worker_prompt() {
+        let root = compose_test_root("override-base");
+        let instructions = compose_base_instructions(
+            &root,
+            &BTreeMap::new(),
+            Some("Act as the external reviewer."),
+        )
+        .expect("override instructions");
         assert!(instructions.contains("Act as the external reviewer."));
+        // Review/repair sessions own their full system prompt; the worker
+        // contract must not leak in and instruct worker actions.
+        assert!(!instructions.contains("required durable outcome exists"));
+        assert!(!instructions.contains("You are CTOX, the personal CTO agent"));
     }
 
     #[test]

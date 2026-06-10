@@ -112,7 +112,7 @@ impl CompactPolicy {
             trigger,
             mode,
             emergency_fill_ratio: DEFAULT_EMERGENCY_FILL_RATIO,
-            context_window: 131_072, // CTOX default; overridden by from_settings
+            context_window: 262_144, // CTOX default; overridden by from_settings
             turns_since_last_compact: 0,
             last_call_input_tokens: 0,
             cum_output_tokens: 0,
@@ -178,7 +178,7 @@ impl CompactPolicy {
             .unwrap_or(DEFAULT_EMERGENCY_FILL_RATIO);
         let context_window = context_window_raw
             .and_then(|v| v.trim().parse::<i64>().ok())
-            .unwrap_or(131_072); // CTOX_CHAT_MODEL_MAX_CONTEXT default
+            .unwrap_or(262_144); // CTOX_CHAT_MODEL_MAX_CONTEXT default
         let mut policy = Self::new(trigger, mode);
         policy.emergency_fill_ratio = emergency_ratio;
         policy.context_window = context_window;

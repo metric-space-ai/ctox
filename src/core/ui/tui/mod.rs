@@ -420,7 +420,7 @@ fn supported_stt_model_choices() -> Vec<&'static str> {
 fn supported_tts_model_choices() -> Vec<&'static str> {
     engine::SUPPORTED_TTS_MODELS.to_vec()
 }
-const DEFAULT_MAX_CONTEXT: usize = 131_072;
+const DEFAULT_MAX_CONTEXT: usize = 262_144;
 const MAX_CONTEXT_WINDOW: usize = 262_144;
 const DEFAULT_COMPACTION_THRESHOLD_PERCENT: usize = 75;
 const DEFAULT_COMPACTION_MIN_TOKENS: usize = 12_288;

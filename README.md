@@ -299,7 +299,7 @@ Then verify and switch:
 
 ```sh
 ctox doctor
-ctox runtime switch Qwen/Qwen3.5-27B quality --context 128k
+ctox runtime switch Qwen/Qwen3.5-27B quality --context 256k
 ```
 
 If the CUDA backend, model weights, or runtime artifacts are missing,

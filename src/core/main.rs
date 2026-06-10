@@ -141,7 +141,7 @@ ENGINE / GPU
   ctox doctor                    health check — update available? hints
 
 RUN / EXEC
-  ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]
+  ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>]
   ctox runtime embedding-doctor
   ctox runtime embedding-smoke [--token-id <id>]
   ctox runtime stt-doctor
@@ -453,12 +453,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let model = args
                     .get(2)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>]",
                     )?;
                 let preset = args
                     .get(3)
                     .context(
-                        "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>]",
+                        "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>]",
                     )?;
                 let context = find_flag_value(&args[4..], "--context");
                 let timeout = find_flag_value(&args[4..], "--timeout");
@@ -488,7 +488,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
             _ => anyhow::bail!(
-                "usage: ctox runtime switch <model> <quality|performance> [--context 128k|256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
+                "usage: ctox runtime switch <model> <quality|performance> [--context 256k] [--timeout <secs>] | ctox runtime embedding-doctor | ctox runtime embedding-smoke [--token-id <id>] | ctox runtime stt-doctor | ctox runtime stt-smoke <wav-path> | ctox runtime stt-realtime-smoke <wav-path> | ctox runtime tts-doctor | ctox runtime tts-smoke [--text <text>] | ctox runtime openrouter-tool-smoke [--model <id>] [--tool-choice auto|required|named|all]"
             ),
         },
         Some("boost") => match args.get(1).map(String::as_str) {
@@ -973,10 +973,10 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                         token_budget,
                     )
                 } else {
-                    (Some(tail.join(" ")), 131_072_i64)
+                    (Some(tail.join(" ")), 262_144_i64)
                 }
             } else {
-                (None, 131_072_i64)
+                (None, 262_144_i64)
             };
             let result = context_health::assess_for_conversation(
                 PathBuf::from(db_path).as_path(),
