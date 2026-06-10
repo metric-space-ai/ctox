@@ -1598,10 +1598,36 @@ fn default_research_workspace(
         .get("search_query")
         .and_then(Value::as_str)
         .unwrap_or(&request.query);
-    root.join("runtime")
+    let base = root
+        .join("runtime")
         .join("research")
         .join("deep-research")
-        .join(format!("{now}-{}", slugify(query)))
+        .join(format!("{now}-{}", slugify(query)));
+    unique_workspace_dir(base)
+}
+
+/// Return `base` if free, else `base-2`, `base-3`, ... so two same-second runs
+/// with the same slug (or a broken clock pinned to `0`) don't clobber each
+/// other's workspace.
+fn unique_workspace_dir(base: PathBuf) -> PathBuf {
+    if !base.exists() {
+        return base;
+    }
+    let Some(parent) = base.parent().map(Path::to_path_buf) else {
+        return base;
+    };
+    let name = base
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("research")
+        .to_string();
+    for suffix in 2..10_000 {
+        let candidate = parent.join(format!("{name}-{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    base
 }
 
 fn write_json_pretty(path: &Path, value: &Value) -> Result<()> {

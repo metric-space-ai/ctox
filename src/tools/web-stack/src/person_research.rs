@@ -1078,8 +1078,34 @@ fn default_person_workspace(root: &Path, company: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_else(|_| Duration::from_secs(0))
         .as_secs();
-    root.join("runtime/research/person")
-        .join(format!("{ts}-{slug}", slug = slugify(company)))
+    let base = root
+        .join("runtime/research/person")
+        .join(format!("{ts}-{slug}", slug = slugify(company)));
+    unique_workspace_dir(base)
+}
+
+/// Return `base` if free, else `base-2`, `base-3`, ... so two same-second runs
+/// for the same company (or a broken clock pinned to `0`) don't clobber each
+/// other's workspace.
+fn unique_workspace_dir(base: PathBuf) -> PathBuf {
+    if !base.exists() {
+        return base;
+    }
+    let Some(parent) = base.parent().map(Path::to_path_buf) else {
+        return base;
+    };
+    let name = base
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("person")
+        .to_string();
+    for suffix in 2..10_000 {
+        let candidate = parent.join(format!("{name}-{suffix}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    base
 }
 
 fn persist_person_workspace(
