@@ -5443,6 +5443,47 @@ async fn upsert_desktop_file_with_policy(
     .await
 }
 
+/// Expected number of chunk documents for an eagerly-synced desktop file of
+/// `size_bytes`: base64 with padding (4 chars per 3 input bytes), split into
+/// DESKTOP_FILE_CHUNK_SIZE-character chunks; empty files still get one empty
+/// chunk. Mirrors the write path's `total` computation exactly.
+fn expected_desktop_file_chunk_total(size_bytes: u64) -> u64 {
+    let encoded_len = size_bytes.div_ceil(3) * 4;
+    encoded_len.div_ceil(DESKTOP_FILE_CHUNK_SIZE as u64).max(1)
+}
+
+/// True when the chunk store holds the complete LIVE chunk set for the given
+/// generation. The scan's change-detection fast path must not skip a file
+/// whose chunks went missing (crash window, manual cleanup,
+/// `ctox.file.materialize` repair) just because the file-doc fingerprint
+/// still matches — the index has to stay self-healing.
+async fn desktop_file_chunk_generation_is_complete(
+    database: &Arc<RxDatabase>,
+    file_id: &str,
+    generation_id: &str,
+    size_bytes: u64,
+) -> bool {
+    if generation_id.is_empty() {
+        return false;
+    }
+    let Some(chunks) = database.collection("desktop_file_chunks") else {
+        return false;
+    };
+    let Ok(query) = chunks.count(Some(MangoQuery {
+        selector: Some(json!({
+            "file_id": { "$eq": file_id },
+            "generation_id": { "$eq": generation_id },
+        })),
+        ..Default::default()
+    })) else {
+        return false;
+    };
+    let Ok(counted) = query.exec(false).await else {
+        return false;
+    };
+    counted.as_u64() == Some(expected_desktop_file_chunk_total(size_bytes))
+}
+
 async fn upsert_desktop_file_with_parent(
     database: &Arc<RxDatabase>,
     path: PathBuf,
@@ -5474,54 +5515,162 @@ async fn upsert_desktop_file_with_parent(
     let path_string = path.to_string_lossy().into_owned();
     let display_path = virtual_path.unwrap_or_else(|| path_string.clone());
     let modified_at_ms = metadata_modified_at_ms(&metadata);
+
+    // Change detection: the desktop-file index rescans every workspace root
+    // every DESKTOP_FILE_SCAN_INTERVAL_SECS. Without this check every scan
+    // minted a fresh (timestamped) generation id for EVERY file, re-wrote all
+    // its chunks and tombstoned the previous generation — a permanent
+    // insert/tombstone churn that browser-side replication (batchSize 2 for
+    // desktop_file_chunks) could never catch up with. Skip files whose
+    // on-disk fingerprint still matches the indexed document; below, reuse
+    // the stored generation when only metadata changed but content did not.
+    let files = database
+        .collection("desktop_files")
+        .context("desktop_files collection is not registered")?;
+    let existing_file_doc = files
+        .find_one(Some(MangoQuery {
+            selector: Some(json!({ "id": { "$eq": file_id } })),
+            ..Default::default()
+        }))
+        .map_err(|err| anyhow::anyhow!("query desktop file doc: {err}"))?
+        .exec(false)
+        .await
+        .map_err(|err| anyhow::anyhow!("exec desktop file doc query: {err}"))?;
+    let existing_file_doc = existing_file_doc.is_object().then_some(existing_file_doc);
+    if let Some(doc) = existing_file_doc.as_ref() {
+        let same_location = doc.get("parent_id").and_then(Value::as_str)
+            == Some(parent_id.as_str())
+            && doc.get("virtual_path").and_then(Value::as_str) == Some(display_path.as_str())
+            && doc.get("path").and_then(Value::as_str) == Some(path_string.as_str());
+        let same_stat = doc.get("mtime_ms").and_then(Value::as_u64)
+            == u64::try_from(modified_at_ms).ok()
+            && doc.get("size_bytes").and_then(Value::as_u64) == Some(metadata.len());
+        let not_deleted = !doc
+            .get("is_deleted")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let content_ready = match policy {
+            DesktopFileContentPolicy::Eager => {
+                doc.get("content_state").and_then(Value::as_str) == Some("available")
+                    && doc
+                        .get("content_generation_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|generation| !generation.is_empty())
+            }
+            DesktopFileContentPolicy::Lazy => {
+                doc.get("content_state").and_then(Value::as_str) == Some("lazy")
+            }
+        };
+        if same_location && same_stat && not_deleted && content_ready {
+            // Self-healing: only skip when the indexed generation's chunks
+            // are actually (still) complete in the chunk store.
+            let chunks_complete = match policy {
+                DesktopFileContentPolicy::Eager => {
+                    let generation = doc
+                        .get("content_generation_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    desktop_file_chunk_generation_is_complete(
+                        database,
+                        &file_id,
+                        generation,
+                        metadata.len(),
+                    )
+                    .await
+                }
+                DesktopFileContentPolicy::Lazy => true,
+            };
+            if chunks_complete {
+                return Ok(());
+            }
+        }
+    }
+
     let (content_hash, content_generation_id, active_generation_id) =
         if policy == DesktopFileContentPolicy::Eager {
             let bytes = fs::read(&path)
                 .with_context(|| format!("failed to read desktop file {}", path.display()))?;
             let content_hash = hex_sha256(&bytes);
-            let generation_suffix = content_hash.get(..12).unwrap_or(content_hash.as_str());
-            let generation_id = format!("gen_{now}_{generation_suffix}");
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
-            let total = encoded.len().div_ceil(DESKTOP_FILE_CHUNK_SIZE).max(1);
-            let chunks = database
-                .collection("desktop_file_chunks")
-                .context("desktop_file_chunks collection is not registered")?;
-
-            let chunk_payloads: Vec<&str> = if encoded.is_empty() {
-                vec![""]
-            } else {
-                encoded
-                    .as_bytes()
-                    .chunks(DESKTOP_FILE_CHUNK_SIZE)
-                    .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
-                    .collect()
-            };
-            for (idx, data) in chunk_payloads.into_iter().enumerate() {
-                let chunk_hash = hex_sha256(data.as_bytes());
-                chunks
-                    .incremental_upsert(json!({
-                        "id": format!("{file_id}_{generation_id}_{idx}"),
-                        "file_id": file_id,
-                        "generation_id": generation_id.clone(),
-                        "content_hash": content_hash.clone(),
-                        "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
-                        "idx": idx as u64,
-                        "total": total as u64,
-                        "encoding": "base64",
-                        "data": data,
-                        "chunk_hash": chunk_hash,
-                        "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
-                        "size_bytes": data.len() as u64,
-                        "created_at_ms": now,
-                    }))
-                    .await
-                    .map_err(|err| anyhow::anyhow!("upsert desktop file chunk {idx}: {err}"))?;
+            // Same content as the indexed generation (e.g. touch / metadata
+            // change): keep the replicated generation and its chunks instead
+            // of rotating a byte-identical copy through the data plane.
+            let reused_generation_id = existing_file_doc.as_ref().and_then(|doc| {
+                if doc.get("content_hash").and_then(Value::as_str) != Some(content_hash.as_str())
+                    || doc.get("content_state").and_then(Value::as_str) != Some("available")
+                {
+                    return None;
+                }
+                doc.get("content_generation_id")
+                    .and_then(Value::as_str)
+                    .filter(|generation| !generation.is_empty())
+                    .map(str::to_string)
+            });
+            // Reuse only a generation whose chunks are complete; otherwise
+            // fall through to a full rewrite (self-healing repair).
+            let mut reused_generation_id = reused_generation_id;
+            if let Some(generation) = reused_generation_id.as_deref() {
+                if !desktop_file_chunk_generation_is_complete(
+                    database,
+                    &file_id,
+                    generation,
+                    metadata.len(),
+                )
+                .await
+                {
+                    reused_generation_id = None;
+                }
             }
-            (
-                content_hash,
-                Value::String(generation_id.clone()),
-                Some(generation_id),
-            )
+            if let Some(generation_id) = reused_generation_id {
+                (
+                    content_hash,
+                    Value::String(generation_id.clone()),
+                    Some(generation_id),
+                )
+            } else {
+                let generation_suffix = content_hash.get(..12).unwrap_or(content_hash.as_str());
+                let generation_id = format!("gen_{now}_{generation_suffix}");
+                let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                let total = encoded.len().div_ceil(DESKTOP_FILE_CHUNK_SIZE).max(1);
+                let chunks = database
+                    .collection("desktop_file_chunks")
+                    .context("desktop_file_chunks collection is not registered")?;
+
+                let chunk_payloads: Vec<&str> = if encoded.is_empty() {
+                    vec![""]
+                } else {
+                    encoded
+                        .as_bytes()
+                        .chunks(DESKTOP_FILE_CHUNK_SIZE)
+                        .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+                        .collect()
+                };
+                for (idx, data) in chunk_payloads.into_iter().enumerate() {
+                    let chunk_hash = hex_sha256(data.as_bytes());
+                    chunks
+                        .incremental_upsert(json!({
+                            "id": format!("{file_id}_{generation_id}_{idx}"),
+                            "file_id": file_id,
+                            "generation_id": generation_id.clone(),
+                            "content_hash": content_hash.clone(),
+                            "content_hash_scheme": DESKTOP_FILE_CONTENT_HASH_SCHEME,
+                            "idx": idx as u64,
+                            "total": total as u64,
+                            "encoding": "base64",
+                            "data": data,
+                            "chunk_hash": chunk_hash,
+                            "chunk_hash_scheme": DESKTOP_FILE_CHUNK_HASH_SCHEME,
+                            "size_bytes": data.len() as u64,
+                            "created_at_ms": now,
+                        }))
+                        .await
+                        .map_err(|err| anyhow::anyhow!("upsert desktop file chunk {idx}: {err}"))?;
+                }
+                (
+                    content_hash,
+                    Value::String(generation_id.clone()),
+                    Some(generation_id),
+                )
+            }
         } else {
             (
                 format!("mtime:{modified_at_ms}:size:{}", metadata.len()),
@@ -5531,9 +5680,6 @@ async fn upsert_desktop_file_with_parent(
         };
 
     ensure_ctox_desktop_folder(database, now).await?;
-    let files = database
-        .collection("desktop_files")
-        .context("desktop_files collection is not registered")?;
     let now_u64 = u64::try_from(now).unwrap_or(u64::MAX);
     let content_synced_at_ms = if policy == DesktopFileContentPolicy::Eager {
         Value::from(now_u64)
@@ -5568,7 +5714,13 @@ async fn upsert_desktop_file_with_parent(
             "content_synced_at_ms": content_synced_at_ms,
             "sort_index": now,
             "is_deleted": false,
-            "created_at_ms": now,
+            // Keep the original creation time stable across index updates.
+            "created_at_ms": existing_file_doc
+                .as_ref()
+                .and_then(|doc| doc.get("created_at_ms"))
+                .and_then(Value::as_u64)
+                .map(Value::from)
+                .unwrap_or_else(|| json!(now)),
             "updated_at_ms": now,
         }))
         .await
@@ -8930,6 +9082,100 @@ mod tests {
             )
             .expect("chunks count");
         assert_eq!(chunks, 1);
+    }
+
+    /// REGRESSION (data-plane churn): rescanning an UNCHANGED workspace must
+    /// be a complete no-op. The 15s desktop-file index scan used to mint a
+    /// fresh timestamped generation id for every file on every pass, rewrite
+    /// all its chunks and tombstone the previous generation — an endless
+    /// insert/tombstone churn that browser-side replication (batchSize 2 for
+    /// desktop_file_chunks) could never catch up with (rxdb-soak churn mode
+    /// failure). A content change must still rotate the generation.
+    #[test]
+    fn rescan_of_unchanged_workspace_is_a_no_op() {
+        let root = tempfile::tempdir().expect("temp root");
+        let workspace = root.path().join("agent-workspace");
+        let nested = workspace.join("reports");
+        fs::create_dir_all(&nested).expect("create workspace dirs");
+        let file_path = nested.join("brief.md");
+        fs::write(&file_path, b"# Brief\n\nstable content\n").expect("write file");
+
+        sync_desktop_files_from_workspace_root(root.path(), &workspace).expect("first scan");
+
+        let file_id = desktop_file_id(&file_path.canonicalize().expect("canonical file"));
+        let first_file;
+        let first_chunks;
+        {
+            let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+            first_file = read_desktop_file_row(&conn, &file_id);
+            first_chunks = read_desktop_file_chunks(&conn, &file_id, true);
+        }
+        assert!(!first_chunks.is_empty(), "first scan produced chunks");
+
+        sync_desktop_files_from_workspace_root(root.path(), &workspace).expect("rescan");
+
+        let second_file;
+        let second_chunks;
+        {
+            let conn =
+                Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+            second_file = read_desktop_file_row(&conn, &file_id);
+            second_chunks = read_desktop_file_chunks(&conn, &file_id, true);
+        }
+        // Byte-identical documents (including _rev/_meta) prove the rescan
+        // wrote NOTHING — no new generation, no chunk rotation, no
+        // tombstones, no replication traffic.
+        assert_eq!(
+            first_file, second_file,
+            "rescan of an unchanged file must not rewrite the file doc"
+        );
+        assert_eq!(
+            first_chunks, second_chunks,
+            "rescan of an unchanged file must not rotate its chunks"
+        );
+
+        // A real content change (different size) must still mint a new
+        // generation whose chunks fully replace the old ones.
+        fs::write(
+            &file_path,
+            b"# Brief\n\nupdated content, longer than before\n",
+        )
+        .expect("update file");
+        sync_desktop_files_from_workspace_root(root.path(), &workspace).expect("third scan");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let third_file = read_desktop_file_row(&conn, &file_id);
+        assert_ne!(
+            second_file.get("content_generation_id"),
+            third_file.get("content_generation_id"),
+            "content change must mint a new generation"
+        );
+        let third_generation = third_file
+            .get("content_generation_id")
+            .and_then(Value::as_str)
+            .expect("third generation id");
+        let live_chunks = read_desktop_file_chunks(&conn, &file_id, false);
+        let new_generation_chunks = live_chunks
+            .iter()
+            .filter(|chunk| {
+                chunk.get("generation_id").and_then(Value::as_str) == Some(third_generation)
+            })
+            .count();
+        assert!(
+            new_generation_chunks > 0,
+            "updated content produced chunks of the new generation"
+        );
+        // prune intentionally retains up to DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS
+        // generations; what must never happen is unbounded rotation.
+        let live_generations: HashSet<&str> = live_chunks
+            .iter()
+            .filter_map(|chunk| chunk.get("generation_id").and_then(Value::as_str))
+            .collect();
+        assert!(
+            live_generations.len() <= DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS,
+            "live generations stay bounded (got {})",
+            live_generations.len()
+        );
     }
 
     fn read_desktop_file_row(conn: &Connection, file_id: &str) -> Value {
