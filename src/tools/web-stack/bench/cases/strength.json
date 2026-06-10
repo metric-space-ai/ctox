@@ -214,6 +214,76 @@
         { "path": "materialization.deleted_count", "equals": 1 },
         { "path": "materialization.unchanged_count", "equals": 1 }
       ]
+    },
+    {
+      "id": "strength.web_unlock.fixture.clean_baseline_passes",
+      "tier": "strength",
+      "tool": "ctox_web_unlock",
+      "families": ["web-unlock"],
+      "setup": [
+        { "command": ["web", "unlock", "list-probes"] },
+        { "write_text": { "path": "${TMP_ROOT}/unlock-fixtures/clean.json", "content": "{\"failed\": []}" } },
+        {
+          "seed_sqlite_rows": {
+            "path": "${TMP_ROOT}/runtime/ctox.sqlite3",
+            "table": "web_unlock_probes",
+            "rows": [
+              {
+                "probe_id": "bench-fixture-clean",
+                "site_name": "bench-fixture",
+                "probe_url": "about:blank",
+                "script_path": "unlock-fixtures/clean.json",
+                "parser_kind": "sannysoft_fixture",
+                "expected_baseline_json": "{\"failed_max\": 0}",
+                "timeout_ms": 1000,
+                "enabled": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+              }
+            ]
+          }
+        }
+      ],
+      "command": ["web", "unlock", "baseline", "bench-fixture-clean", "--record"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "probes", "len_eq": 1 },
+        { "path": "probes.0.probe_id", "equals": "bench-fixture-clean" },
+        { "path": "probes.0.passed_baseline", "equals": true },
+        { "path": "probes.0.failed_count", "equals": 0 }
+      ]
+    },
+    {
+      "id": "strength.web_unlock.fixture.regression_detected",
+      "tier": "strength",
+      "tool": "ctox_web_unlock",
+      "families": ["web-unlock"],
+      "setup": [
+        { "command": ["web", "unlock", "list-probes"] },
+        { "write_text": { "path": "${TMP_ROOT}/unlock-fixtures/dirty.json", "content": "{\"failed\": [{\"name\": \"WebDriver (New)\"}, {\"name\": \"Chrome (New)\"}]}" } },
+        {
+          "seed_sqlite_rows": {
+            "path": "${TMP_ROOT}/runtime/ctox.sqlite3",
+            "table": "web_unlock_probes",
+            "rows": [
+              {
+                "probe_id": "bench-fixture-dirty",
+                "site_name": "bench-fixture",
+                "probe_url": "about:blank",
+                "script_path": "unlock-fixtures/dirty.json",
+                "parser_kind": "sannysoft_fixture",
+                "expected_baseline_json": "{\"failed_max\": 0}",
+                "timeout_ms": 1000,
+                "enabled": 1,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:00Z"
+              }
+            ]
+          }
+        }
+      ],
+      "command": ["web", "unlock", "baseline", "bench-fixture-dirty", "--record"],
+      "expect_failure": { "contains": "\"failed_count\": 2" }
     }
   ]
 }

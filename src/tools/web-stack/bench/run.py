@@ -187,11 +187,17 @@ def validate_case(case: dict[str, Any]) -> None:
 
 
 def validate_step(step: dict[str, Any], case_id: str, label: str) -> None:
-    step_kinds = ("write_json", "write_text", "seed_runtime_config", "command")
+    step_kinds = (
+        "write_json",
+        "write_text",
+        "seed_runtime_config",
+        "seed_sqlite_rows",
+        "command",
+    )
     if not any(kind in step for kind in step_kinds):
         raise BenchError(
             f"{label} step in {case_id} must contain write_json, write_text, "
-            f"seed_runtime_config, or command"
+            f"seed_runtime_config, seed_sqlite_rows, or command"
         )
 
 
@@ -391,6 +397,30 @@ def execute_setup_step(
                 "VALUES (?, ?)",
                 list(spec["values"].items()),
             )
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
+    if "seed_sqlite_rows" in step:
+        spec = substitute_placeholders(step["seed_sqlite_rows"], variables)
+        path = Path(spec["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Insert rows into a table ctox already created (e.g. via a prior
+        # `ctox web unlock list-probes` setup command). Lets a case seed
+        # subsystem rows that have no CLI to create them (web_unlock probes,
+        # business_commands docs) so strength cases stay hermetic.
+        table = spec["table"]
+        conn = sqlite3.connect(str(path))
+        try:
+            for row in spec.get("rows", []):
+                cols = list(row.keys())
+                col_list = ", ".join(f'"{c}"' for c in cols)
+                placeholders = ", ".join("?" for _ in cols)
+                conn.execute(
+                    f'INSERT OR REPLACE INTO "{table}" ({col_list}) VALUES ({placeholders})',
+                    [row[c] for c in cols],
+                )
             conn.commit()
         finally:
             conn.close()
