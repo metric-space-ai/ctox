@@ -5537,6 +5537,25 @@ async fn upsert_desktop_file_with_parent(
         .await
         .map_err(|err| anyhow::anyhow!("exec desktop file doc query: {err}"))?;
     let existing_file_doc = existing_file_doc.is_object().then_some(existing_file_doc);
+    // Materialization is sticky: once a file was explicitly materialized
+    // (ctox.file.materialize set content_state 'available'), the periodic
+    // scan must NOT demote it back to its size/extension policy 'lazy'.
+    // Demoting rewrote the file doc with an empty content_generation_id,
+    // stranded the already-replicated chunks and reverted the browser file
+    // viewer to an unreadable lazy state ~15s after every materialize
+    // (rxdb-soak workspace-large-file-viewer-restart). Keep maintaining such
+    // files eagerly; a content change re-chunks them below.
+    let policy = if policy == DesktopFileContentPolicy::Lazy
+        && existing_file_doc
+            .as_ref()
+            .and_then(|doc| doc.get("content_state"))
+            .and_then(Value::as_str)
+            == Some("available")
+    {
+        DesktopFileContentPolicy::Eager
+    } else {
+        policy
+    };
     if let Some(doc) = existing_file_doc.as_ref() {
         let same_location = doc.get("parent_id").and_then(Value::as_str)
             == Some(parent_id.as_str())
@@ -9175,6 +9194,71 @@ mod tests {
             live_generations.len() <= DESKTOP_FILE_CHUNK_RETAIN_GENERATIONS,
             "live generations stay bounded (got {})",
             live_generations.len()
+        );
+    }
+
+    /// REGRESSION (sticky materialization): a large file is indexed lazily by
+    /// size policy; after an explicit ctox.file.materialize the periodic scan
+    /// used to DEMOTE the doc back to lazy (empty content_generation_id),
+    /// stranding the replicated chunks and reverting the browser file viewer
+    /// to an unreadable state ~15s after every materialize (rxdb-soak
+    /// workspace-large-file-viewer-restart). A rescan must keep the
+    /// materialized doc byte-identical.
+    #[test]
+    fn materialized_large_file_survives_lazy_rescan() {
+        let root = tempfile::tempdir().expect("temp root");
+        let file_path = root.path().join("large.txt");
+        fs::write(
+            &file_path,
+            vec![b'x'; DESKTOP_FILE_EAGER_LIMIT_BYTES as usize + 1],
+        )
+        .expect("write large artifact");
+        let canonical = file_path.canonicalize().expect("canonical file");
+        let file_id = desktop_file_id(&canonical);
+
+        sync_desktop_file_from_path(root.path(), &file_path).expect("lazy index");
+        materialize_desktop_file_from_path(root.path(), &file_path).expect("materialize");
+
+        let file_before;
+        let chunks_before;
+        {
+            let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open sqlite");
+            file_before = read_desktop_file_row(&conn, &file_id);
+            chunks_before = read_desktop_file_chunks(&conn, &file_id, true);
+        }
+        assert_eq!(
+            file_before.get("content_state").and_then(Value::as_str),
+            Some("available"),
+            "materialize produced an available doc"
+        );
+        assert!(
+            file_before
+                .get("content_generation_id")
+                .and_then(Value::as_str)
+                .is_some_and(|generation| !generation.is_empty()),
+            "materialize stamped a generation"
+        );
+        assert!(!chunks_before.is_empty(), "materialize produced chunks");
+
+        // The periodic index scan revisits the file with its size policy
+        // (lazy). It must keep the materialized state, not demote it.
+        sync_desktop_file_from_path(root.path(), &file_path).expect("rescan");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("reopen sqlite");
+        let file_after = read_desktop_file_row(&conn, &file_id);
+        let chunks_after = read_desktop_file_chunks(&conn, &file_id, true);
+        assert_eq!(
+            file_after.get("content_state").and_then(Value::as_str),
+            Some("available"),
+            "rescan must not demote a materialized file back to lazy"
+        );
+        assert_eq!(
+            file_before, file_after,
+            "rescan of an unchanged materialized file must be a no-op"
+        );
+        assert_eq!(
+            chunks_before, chunks_after,
+            "rescan must not rotate or strand materialized chunks"
         );
     }
 
