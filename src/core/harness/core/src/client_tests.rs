@@ -3,9 +3,9 @@ use super::LastResponse;
 use super::ModelClient;
 use super::PendingUnauthorizedRetry;
 use super::UnauthorizedRecoveryExecution;
+use ctox_api::ResponseCreateWsRequest;
 use ctox_api::ResponsesApiRequest;
 use ctox_otel::SessionTelemetry;
-use ctox_protocol::ThreadId;
 use ctox_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::models::ContentItem;
@@ -14,8 +14,9 @@ use ctox_protocol::openai_models::ModelInfo;
 use ctox_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use ctox_protocol::protocol::SessionSource;
 use ctox_protocol::protocol::SubAgentSource;
+use ctox_protocol::ThreadId;
 use pretty_assertions::assert_eq;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde_json::json;
 use tokio::sync::oneshot;
 
@@ -62,6 +63,39 @@ fn test_openrouter_model_client(session_source: SessionSource) -> ModelClient {
     let provider = crate::model_provider_info::ModelProviderInfo {
         name: "ctox-core-api".to_string(),
         base_url: Some("https://openrouter.ai/api/v1".to_string()),
+        transport_endpoint: None,
+        socket_transport_required: false,
+        env_key: None,
+        env_key_instructions: None,
+        experimental_bearer_token: None,
+        wire_api: crate::model_provider_info::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: None,
+        stream_max_retries: None,
+        stream_idle_timeout_ms: None,
+        websocket_connect_timeout_ms: None,
+        requires_openai_auth: false,
+        supports_websockets: false,
+    };
+    ModelClient::new(
+        None,
+        ThreadId::new(),
+        provider,
+        session_source,
+        None,
+        false,
+        false,
+        false,
+        None,
+    )
+}
+
+fn test_minimax_model_client(session_source: SessionSource) -> ModelClient {
+    let provider = crate::model_provider_info::ModelProviderInfo {
+        name: "ctox-core-api".to_string(),
+        base_url: Some("https://api.minimax.io/v1".to_string()),
         transport_endpoint: None,
         socket_transport_required: false,
         env_key: None,
@@ -242,6 +276,42 @@ fn http_request_uses_previous_response_id_for_incremental_delta() {
 }
 
 #[test]
+fn http_request_keeps_full_history_for_minimax_responses() {
+    let client = test_minimax_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = ResponseItem::FunctionCall {
+        id: Some("fc_call_weather".to_string()),
+        name: "get_weather".to_string(),
+        namespace: None,
+        arguments: "{\"city\":\"Berlin\"}".to_string(),
+        call_id: "call_function_weather_1".to_string(),
+    };
+    let tool_output = ResponseItem::FunctionCallOutput {
+        call_id: "call_function_weather_1".to_string(),
+        output: ctox_protocol::models::FunctionCallOutputPayload::from_text(
+            "12 C, clear".to_string(),
+        ),
+    };
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), tool_output.clone()]);
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let wire_request = session.prepare_http_request(&next_request);
+
+    assert_eq!(wire_request.previous_response_id, None);
+    assert_eq!(wire_request.input, next_request.input);
+}
+
+#[test]
 fn http_request_can_reuse_previous_response_id_after_preparation() {
     let client = test_model_client(SessionSource::Cli);
     let mut session = client.new_session();
@@ -272,6 +342,33 @@ fn http_request_can_reuse_previous_response_id_after_preparation() {
         Some("resp_previous")
     );
     assert_eq!(second_wire_request.input, vec![next_user]);
+}
+
+#[test]
+fn websocket_request_keeps_full_history_for_minimax_responses() {
+    let client = test_minimax_model_client(SessionSource::Cli);
+    let mut session = client.new_session();
+    let initial_user = test_user_message("initial");
+    let assistant = test_assistant_message("done");
+    let next_user = test_user_message("next");
+    let previous_request = test_responses_request(vec![initial_user.clone()]);
+    let next_request =
+        test_responses_request(vec![initial_user, assistant.clone(), next_user.clone()]);
+    let payload = ResponseCreateWsRequest::from(&next_request);
+    let (tx, rx) = oneshot::channel();
+    tx.send(LastResponse {
+        response_id: "resp_previous".to_string(),
+        items_added: vec![assistant],
+    })
+    .expect("last response receiver should be open");
+    session.websocket_session.last_request = Some(previous_request);
+    session.websocket_session.last_response_rx = Some(rx);
+
+    let wire_request = session.prepare_websocket_request(payload, &next_request);
+
+    let super::ResponsesWsRequest::ResponseCreate(payload) = wire_request;
+    assert_eq!(payload.previous_response_id, None);
+    assert_eq!(payload.input, next_request.input);
 }
 
 #[test]

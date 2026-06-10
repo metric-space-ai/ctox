@@ -886,6 +886,9 @@ impl ModelClientSession {
     }
 
     fn prepare_http_request(&mut self, request: &ResponsesApiRequest) -> ResponsesApiRequest {
+        if provider_requires_full_responses_history(&self.client.state.provider) {
+            return request.clone();
+        }
         let Some(last_response) = self.get_last_response() else {
             return request.clone();
         };
@@ -933,6 +936,9 @@ impl ModelClientSession {
         payload: ResponseCreateWsRequest,
         request: &ResponsesApiRequest,
     ) -> ResponsesWsRequest {
+        if provider_requires_full_responses_history(&self.client.state.provider) {
+            return ResponsesWsRequest::ResponseCreate(payload);
+        }
         let Some(last_response) = self.get_last_response() else {
             return ResponsesWsRequest::ResponseCreate(payload);
         };
@@ -2725,6 +2731,22 @@ where
     });
 
     (ResponseStream { rx_event }, rx_last_response)
+}
+
+fn provider_requires_full_responses_history(provider: &ModelProviderInfo) -> bool {
+    if provider.wire_api != WireApi::Responses {
+        return false;
+    }
+    provider
+        .base_url
+        .as_deref()
+        .map(is_minimax_responses_base_url)
+        .unwrap_or(false)
+}
+
+fn is_minimax_responses_base_url(base_url: &str) -> bool {
+    let normalized = base_url.trim().to_ascii_lowercase();
+    normalized.contains("api.minimax.io") || normalized.contains("api.minimaxi.com")
 }
 
 /// Handles a 401 response by optionally refreshing ChatGPT tokens once.
