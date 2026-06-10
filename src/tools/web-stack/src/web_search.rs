@@ -4361,11 +4361,21 @@ fn extract_pdf_opened_page(
     })
 }
 
+/// pdfium is a single-threaded C library. The parallel evidence fetch in
+/// `WebSearchSession::fetch_evidence` can reach PDF parsing from several
+/// threads at once, so all pdfium access goes through this process-global
+/// lock. The network fetch already completed before this point, so only the
+/// (fast) parse serializes — the page fetches themselves still run in parallel.
+static PDFIUM_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn extract_pdf_sections_guided(
     config: &SearchConfig,
     query: &str,
     body: &[u8],
 ) -> Result<PdfExtraction> {
+    let _pdfium_guard = PDFIUM_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let total_pages =
         page_count_for_pdf_bytes(body, None).context("failed to inspect PDF bytes")?;
     let page_numbers = (1..=total_pages)
