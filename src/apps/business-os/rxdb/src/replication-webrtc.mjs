@@ -1159,6 +1159,13 @@ class CtoxWebRtcReplicationState {
     // for a peer-driven cache that grows from real-time replication.
     try { this.demandSidecar.startEvictionScheduler({ intervalMs: 30_000 }); } catch {}
 
+    // Demand-fetched documents are MASTER state: stamp them with the active
+    // peer's replication origin so the push pipeline never echoes them back
+    // and the LWW gate treats them as replicated (not unsynced-local) rows.
+    const demandReplicationOrigin = () => (
+      this.replicationOriginForPeer(this.activeRemotePeerId)
+        || { role: 'ctox_instance', peerId: this.activeRemotePeerId || '', sessionId: '', collection: this.collection.name }
+    );
     this.demandLoader = createQueryDemandLoader({
       storageCollection: this.collection.storageCollection,
       sidecar: this.demandSidecar,
@@ -1167,6 +1174,7 @@ class CtoxWebRtcReplicationState {
       requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: null,
+      replicationOrigin: demandReplicationOrigin,
     });
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);
@@ -1176,6 +1184,7 @@ class CtoxWebRtcReplicationState {
       collectionName: this.collection.name,
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
+      replicationOrigin: demandReplicationOrigin,
       requestFileFetch: ({ requestId, fileId, range, knownSequences }) =>
         demandTransport.requestFileFetch({
           requestId,

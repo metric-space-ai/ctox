@@ -14,6 +14,10 @@ export function createFileDemandLoader({
   requestFileFetch,
   status = null,
   clock = Date.now,
+  // Origin stamp (object or provider fn): fetched chunk rows are master
+  // state, not local writes — see query-demand-loader.mjs for the failure
+  // modes an unstamped write causes (push echo, LWW veto of later pulls).
+  replicationOrigin = null,
 }) {
   if (!collectionName) throw new TypeError('file loader requires collectionName');
   if (!storageCollection) throw new TypeError('file loader requires storageCollection');
@@ -23,6 +27,9 @@ export function createFileDemandLoader({
   }
 
   const inflight = new Map();
+  const resolveReplicationOrigin = () => (
+    (typeof replicationOrigin === 'function' ? replicationOrigin() : replicationOrigin) || null
+  );
 
   return {
     async fetchFile(fileId, { range = null } = {}) {
@@ -55,7 +62,7 @@ export function createFileDemandLoader({
                 bytes_base64: chunk.bytesBase64,
                 hash: chunk.hash || null,
               },
-            ]);
+            ], { replicationOrigin: resolveReplicationOrigin() });
             bump(status, 'fileBytesReceived', (chunk.bytesBase64?.length || 0));
           }
           const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);

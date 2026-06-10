@@ -6358,6 +6358,14 @@ function ensureCtoxSmokeBinary() {
       }
       if (smokeMode === 'file-chunk-stale-generation-error-browser-status') {
         const hostCorruption = await globalThis.__ctoxStaleRustSeedChunkGeneration?.();
+        // The corruption is a raw SQLite write on the native side: no
+        // change-stream event ever fires for it (browser pulls are
+        // event-driven), and the native index scan SELF-HEALS the
+        // inconsistent row within one scan interval. Pull explicitly so the
+        // browser observes the stale-generation state deterministically
+        // before the repair lands.
+        await appFileReplicationState?.pullFromRemotePeers?.();
+        await appChunkReplicationState?.pullFromRemotePeers?.();
         await bounded(appFileReplicationState?.awaitInSync?.(), 30000);
         await bounded(appChunkReplicationState?.awaitInSync?.(), 30000);
         const stale = await waitForStaleGenerationState(rustSeed.id, hostCorruption?.requestedGenerationId || '', 60000);

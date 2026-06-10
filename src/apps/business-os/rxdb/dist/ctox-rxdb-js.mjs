@@ -508,6 +508,13 @@ var CtoxIndexedDbCollection = class {
         lwt = Math.max(lwt, localWriteLwtFloor);
         localWriteLwtFloor = lwt + 1;
       }
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+        continue;
+      }
+      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
+        lwt = Number(previous.lwt) + 1;
+      }
       const stored = {
         collection: this.name,
         id,
@@ -516,10 +523,6 @@ var CtoxIndexedDbCollection = class {
         indexValues: indexValuesFor(this.indexes, doc),
         doc: normalizeDocument(doc, lwt, replicationOrigin)
       };
-      const previous = await idbRequest(store.get([this.name, id]));
-      if (!shouldAcceptDocumentWrite(previous, lwt)) {
-        continue;
-      }
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
@@ -744,11 +747,15 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   normalized._deleted = Boolean(normalized._deleted);
   return normalized;
 }
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt) {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
   if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
+  if (replicationOrigin?.role) {
+    const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
+    if (!existingIsLocalWrite) return true;
+  }
   return nextLwt >= existingLwt;
 }
 function documentLwt(doc = {}, fallback = Date.now()) {
@@ -3391,7 +3398,13 @@ function createQueryDemandLoader({
   requestCancel = null,
   multiTabBroker = null,
   status = null,
-  clock = Date.now
+  clock = Date.now,
+  // Origin stamp (object or provider fn) for every document this loader
+  // writes into the primary store. Demand-fetched documents ARE master
+  // state: without the stamp they counted as unsynced LOCAL writes, so the
+  // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
+  // back to the master, and the LWW gate let them veto later master pulls.
+  replicationOrigin = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
   if (!sidecar) throw new TypeError("demand loader requires sidecar");
@@ -3399,6 +3412,7 @@ function createQueryDemandLoader({
   if (typeof requestQueryFetch !== "function") {
     throw new TypeError("demand loader requires requestQueryFetch");
   }
+  const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   const inflightByFingerprint = /* @__PURE__ */ new Map();
   return {
     async resolveQuery(query, { window: window2 } = {}) {
@@ -3446,7 +3460,7 @@ function createQueryDemandLoader({
             },
             window: normalizedWindow
           });
-          await materializeChunks(storageCollection, result.documents || []);
+          await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
           const documentIds = (result.documents || []).map(extractId).filter(Boolean);
           await sidecar.upsertQueryWindow({
             collection: collectionName,
@@ -3539,7 +3553,7 @@ function createQueryDemandLoader({
             if (ids.length && typeof storageCollection.bulkWrite === "function") {
               const tombstones = ids.map((id) => ({ id, _deleted: true }));
               try {
-                await storageCollection.bulkWrite(tombstones);
+                await storageCollection.bulkWrite(tombstones, { replicationOrigin: resolveReplicationOrigin() });
               } catch {
               }
             }
@@ -3603,9 +3617,9 @@ async function readLocalDocuments(storageCollection, query, window2) {
   const docs = await storageCollection.allDocuments();
   return applyQueryToDocs(docs, query, window2);
 }
-async function materializeChunks(storageCollection, documents) {
+async function materializeChunks(storageCollection, documents, replicationOrigin = null) {
   if (!documents.length) return;
-  await storageCollection.bulkWrite(documents);
+  await storageCollection.bulkWrite(documents, { replicationOrigin });
 }
 async function touchSidecarAccess(sidecar, collectionName, documentIds) {
   if (!documentIds?.length) return;
@@ -3692,7 +3706,11 @@ function createFileDemandLoader({
   sidecarBackend,
   requestFileFetch,
   status = null,
-  clock = Date.now
+  clock = Date.now,
+  // Origin stamp (object or provider fn): fetched chunk rows are master
+  // state, not local writes — see query-demand-loader.mjs for the failure
+  // modes an unstamped write causes (push echo, LWW veto of later pulls).
+  replicationOrigin = null
 }) {
   if (!collectionName) throw new TypeError("file loader requires collectionName");
   if (!storageCollection) throw new TypeError("file loader requires storageCollection");
@@ -3701,6 +3719,7 @@ function createFileDemandLoader({
     throw new TypeError("file loader requires requestFileFetch");
   }
   const inflight = /* @__PURE__ */ new Map();
+  const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
   return {
     async fetchFile(fileId, { range = null } = {}) {
       if (inflight.has(fileId)) {
@@ -3732,7 +3751,7 @@ function createFileDemandLoader({
                 bytes_base64: chunk.bytesBase64,
                 hash: chunk.hash || null
               }
-            ]);
+            ], { replicationOrigin: resolveReplicationOrigin() });
             bump(status, "fileBytesReceived", chunk.bytesBase64?.length || 0);
           }
           const sequences = chunks.map((c) => c.sequence).sort((a, b) => a - b);
@@ -5339,6 +5358,7 @@ var CtoxWebRtcReplicationState = class {
       this.demandSidecar.startEvictionScheduler({ intervalMs: 3e4 });
     } catch {
     }
+    const demandReplicationOrigin = () => this.replicationOriginForPeer(this.activeRemotePeerId) || { role: "ctox_instance", peerId: this.activeRemotePeerId || "", sessionId: "", collection: this.collection.name };
     this.demandLoader = createQueryDemandLoader({
       storageCollection: this.collection.storageCollection,
       sidecar: this.demandSidecar,
@@ -5346,7 +5366,8 @@ var CtoxWebRtcReplicationState = class {
       schemaVersion: this.collection.schema?.version || 0,
       requestQueryFetch: (envelope) => demandTransport.requestQueryFetch(envelope),
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
-      status: null
+      status: null,
+      replicationOrigin: demandReplicationOrigin
     });
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
@@ -5355,6 +5376,7 @@ var CtoxWebRtcReplicationState = class {
       collectionName: this.collection.name,
       storageCollection: this.collection.storageCollection,
       sidecarBackend: backend,
+      replicationOrigin: demandReplicationOrigin,
       requestFileFetch: ({ requestId, fileId, range, knownSequences }) => demandTransport.requestFileFetch({
         requestId,
         fileId,

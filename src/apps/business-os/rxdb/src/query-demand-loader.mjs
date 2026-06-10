@@ -25,6 +25,12 @@ export function createQueryDemandLoader({
   multiTabBroker = null,
   status = null,
   clock = Date.now,
+  // Origin stamp (object or provider fn) for every document this loader
+  // writes into the primary store. Demand-fetched documents ARE master
+  // state: without the stamp they counted as unsynced LOCAL writes, so the
+  // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
+  // back to the master, and the LWW gate let them veto later master pulls.
+  replicationOrigin = null,
 }) {
   if (!storageCollection) throw new TypeError('demand loader requires storageCollection');
   if (!sidecar) throw new TypeError('demand loader requires sidecar');
@@ -32,6 +38,9 @@ export function createQueryDemandLoader({
   if (typeof requestQueryFetch !== 'function') {
     throw new TypeError('demand loader requires requestQueryFetch');
   }
+  const resolveReplicationOrigin = () => (
+    (typeof replicationOrigin === 'function' ? replicationOrigin() : replicationOrigin) || null
+  );
 
   const inflightByFingerprint = new Map();
 
@@ -92,7 +101,7 @@ export function createQueryDemandLoader({
             },
             window: normalizedWindow,
           });
-          await materializeChunks(storageCollection, result.documents || []);
+          await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
           const documentIds = (result.documents || []).map(extractId).filter(Boolean);
           await sidecar.upsertQueryWindow({
             collection: collectionName,
@@ -195,7 +204,10 @@ export function createQueryDemandLoader({
               // into the underlying SQLite DELETE from here, but soft-delete
               // via _deleted=true is enough for the cache layer.
               const tombstones = ids.map((id) => ({ id, _deleted: true }));
-              try { await storageCollection.bulkWrite(tombstones); } catch {}
+              // Cache bookkeeping, NOT a user delete: stamp the replication
+              // origin so the push pipeline never replays these tombstones
+              // to the master as real deletions.
+              try { await storageCollection.bulkWrite(tombstones, { replicationOrigin: resolveReplicationOrigin() }); } catch {}
             }
             await sidecar.backend.deleteQueryWindow([
               window.collection,
@@ -263,9 +275,9 @@ async function readLocalDocuments(storageCollection, query, window) {
   return applyQueryToDocs(docs, query, window);
 }
 
-async function materializeChunks(storageCollection, documents) {
+async function materializeChunks(storageCollection, documents, replicationOrigin = null) {
   if (!documents.length) return;
-  await storageCollection.bulkWrite(documents);
+  await storageCollection.bulkWrite(documents, { replicationOrigin });
 }
 
 async function touchSidecarAccess(sidecar, collectionName, documentIds) {

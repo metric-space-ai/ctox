@@ -82,6 +82,16 @@ export class CtoxIndexedDbCollection {
         lwt = Math.max(lwt, localWriteLwtFloor);
         localWriteLwtFloor = lwt + 1;
       }
+      const previous = await idbRequest(store.get([this.name, id]));
+      if (!shouldAcceptDocumentWrite(previous, lwt, replicationOrigin)) {
+        continue;
+      }
+      if (replicationOrigin?.role && previous && Number(previous.lwt || 0) >= lwt) {
+        // Accepted master state whose payload timestamp did not advance:
+        // keep the stored lwt monotonic so local checkpoint consumers
+        // (change feed, LWW comparisons) never see this row move backwards.
+        lwt = Number(previous.lwt) + 1;
+      }
       const stored = {
         collection: this.name,
         id,
@@ -90,10 +100,6 @@ export class CtoxIndexedDbCollection {
         indexValues: indexValuesFor(this.indexes, doc),
         doc: normalizeDocument(doc, lwt, replicationOrigin),
       };
-      const previous = await idbRequest(store.get([this.name, id]));
-      if (!shouldAcceptDocumentWrite(previous, lwt)) {
-        continue;
-      }
       await idbRequest(store.put(stored));
       success[id] = stored.doc;
     }
@@ -331,11 +337,24 @@ function normalizeDocument(doc, lwt, replicationOrigin = null) {
   return normalized;
 }
 
-function shouldAcceptDocumentWrite(existingRecord, incomingLwt) {
+function shouldAcceptDocumentWrite(existingRecord, incomingLwt, replicationOrigin = null) {
   if (!existingRecord) return true;
   const existingLwt = Number(existingRecord.lwt || existingRecord.doc?._meta?.lwt || 0);
   const nextLwt = Number(incomingLwt || 0);
   if (!Number.isFinite(existingLwt) || !Number.isFinite(nextLwt)) return true;
+  if (replicationOrigin?.role) {
+    // Replication writes carry the MASTER's authoritative state for this id
+    // (master checkpoint iteration only moves forward). The app-level
+    // `updated_at_ms` lwt heuristic must not veto them: master rows arrive
+    // WITHOUT `_meta.lwt` (keep_meta=false on the wire), so a master change
+    // whose payload timestamp did not advance was silently dropped here
+    // while the pull checkpoint advanced past it — a permanent divergence
+    // (rxdb-soak file-chunk-stale-generation mode). Only an unsynced LOCAL
+    // write (no ctoxReplicationOrigin marker) with a newer lwt may win,
+    // until its own push round-trips through the master.
+    const existingIsLocalWrite = !existingRecord.doc?._meta?.ctoxReplicationOrigin;
+    if (!existingIsLocalWrite) return true;
+  }
   return nextLwt >= existingLwt;
 }
 
