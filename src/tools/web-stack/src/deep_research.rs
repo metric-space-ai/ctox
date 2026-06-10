@@ -27,6 +27,36 @@ use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
 use crate::web_search::SearchUserLocation;
 
+use crate::runtime_config;
+
+/// Research vertical profile. The deep-research skeleton is generic, but a few
+/// pieces (extra LSP/NDT search plans, the aerospace term-compression mapping,
+/// and the report scaffold) were tuned for one aerospace lightning-strike
+/// inspection project. Those live behind `AerospaceLsp` so a generic install
+/// gets a neutral skeleton. Selected via the `CTOX_RESEARCH_PROFILE` runtime
+/// config key (`generic` default, `aerospace_lsp` to opt in).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResearchProfile {
+    Generic,
+    AerospaceLsp,
+}
+
+impl ResearchProfile {
+    fn resolve(root: &Path) -> Self {
+        match runtime_config::get(root, "CTOX_RESEARCH_PROFILE")
+            .map(|raw| raw.trim().to_ascii_lowercase())
+            .as_deref()
+        {
+            Some("aerospace_lsp") | Some("aerospace-lsp") | Some("lsp") => Self::AerospaceLsp,
+            _ => Self::Generic,
+        }
+    }
+
+    fn is_aerospace_lsp(self) -> bool {
+        matches!(self, Self::AerospaceLsp)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeepResearchRequest {
     pub query: String,
@@ -122,9 +152,10 @@ struct ResearchSearchPlan {
 
 pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -> Result<Value> {
     let query_text = normalize_required_query(&request.query)?;
-    let search_query = derive_research_search_query(&query_text, request.focus.as_deref());
+    let profile = ResearchProfile::resolve(root);
+    let search_query = derive_research_search_query(&query_text, request.focus.as_deref(), profile);
     let max_sources = request.max_sources.clamp(3, 300);
-    let plans = build_research_search_plan(&search_query, request)
+    let plans = build_research_search_plan(&search_query, request, profile)
         .into_iter()
         .take(request.depth.query_budget())
         .collect::<Vec<_>>();
@@ -292,7 +323,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         "data_links": data_links,
         "figure_candidates": figure_candidates,
         "sources": enriched,
-        "report_scaffold": report_scaffold(&query_text),
+        "report_scaffold": report_scaffold(&query_text, profile),
     });
 
     if request.persist_workspace {
@@ -391,13 +422,24 @@ fn normalize_required_query(raw: &str) -> Result<String> {
     Ok(trimmed)
 }
 
-fn derive_research_search_query(raw: &str, focus: Option<&str>) -> String {
+fn derive_research_search_query(
+    raw: &str,
+    focus: Option<&str>,
+    profile: ResearchProfile,
+) -> String {
     let compact = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     if is_measurement_or_source_review_query(&compact) {
         return append_focus(derive_measurement_data_query(&compact), focus);
     }
     if compact.chars().count() <= 220 {
         return append_focus(compact, focus);
+    }
+
+    // Long free-form query compression. The term mapping below is the
+    // aerospace/LSP vertical; a generic profile just truncates, which is
+    // byte-identical to the existing no-term-match fallback.
+    if !profile.is_aerospace_lsp() {
+        return compact.chars().take(220).collect();
     }
 
     let lowered = compact.to_ascii_lowercase();
@@ -505,6 +547,7 @@ fn derive_measurement_data_query(raw: &str) -> String {
 fn build_research_search_plan(
     query: &str,
     request: &DeepResearchRequest,
+    profile: ResearchProfile,
 ) -> Vec<ResearchSearchPlan> {
     let mut plans = vec![
         ResearchSearchPlan {
@@ -610,7 +653,7 @@ fn build_research_search_plan(
         });
     }
 
-    if request.include_papers && is_lsp_composite_topic(query) {
+    if request.include_papers && profile.is_aerospace_lsp() && is_lsp_composite_topic(query) {
         plans.extend([
             ResearchSearchPlan {
                 label: "eddy_current_lsp",
@@ -1981,7 +2024,33 @@ impl IfEmpty for String {
     }
 }
 
-fn report_scaffold(query: &str) -> Value {
+fn report_scaffold(query: &str, profile: ResearchProfile) -> Value {
+    match profile {
+        ResearchProfile::AerospaceLsp => aerospace_lsp_report_scaffold(query),
+        ResearchProfile::Generic => generic_report_scaffold(query),
+    }
+}
+
+fn generic_report_scaffold(query: &str) -> Value {
+    json!({
+        "recommended_sections": [
+            "Management Summary",
+            "Problem Statement and Scope",
+            "Search Strategy and Evidence Base",
+            "Findings and Synthesis",
+            "Assessment and Trade-offs",
+            "Risks, Unknowns, and Open Questions",
+            "Recommendation",
+            "References"
+        ],
+        "evaluation_axes": [],
+        "synthesis_instruction": format!(
+            "Write a decision-grade research report for: {query}. Cite every factual claim that depends on external evidence, separate evidence from inference, and flag uncertainty explicitly."
+        )
+    })
+}
+
+fn aerospace_lsp_report_scaffold(query: &str) -> Value {
     json!({
         "recommended_sections": [
             "Management Summary",
@@ -2040,7 +2109,7 @@ mod tests {
             workspace: None,
             persist_workspace: false,
         };
-        let plans = build_research_search_plan(&request.query, &request);
+        let plans = build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
         let annas = plans
             .iter()
             .find(|plan| plan.label == "annas_archive_metadata")
@@ -2061,7 +2130,7 @@ mod tests {
             workspace: None,
             persist_workspace: false,
         };
-        let plans = build_research_search_plan(&request.query, &request);
+        let plans = build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
         let labels = plans.iter().map(|plan| plan.label).collect::<Vec<_>>();
         assert!(labels.contains(&"topic_literature"));
         assert!(!labels.contains(&"eddy_current_lsp"));
@@ -2080,12 +2149,41 @@ mod tests {
             workspace: None,
             persist_workspace: false,
         };
-        let plans = build_research_search_plan(&request.query, &request);
+        let plans = build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
         let labels = plans.iter().map(|plan| plan.label).collect::<Vec<_>>();
         assert!(labels.contains(&"measured_data_sources"));
         assert!(labels.contains(&"load_and_operating_fields"));
         assert!(labels.contains(&"data_repositories"));
         assert!(labels.contains(&"technical_reports_data"));
+    }
+
+    #[test]
+    fn research_profile_gates_aerospace_lsp_plans() {
+        let request = DeepResearchRequest {
+            query: "lightning strike protection CFRP copper mesh inspection".to_string(),
+            focus: None,
+            depth: DeepResearchDepth::Exhaustive,
+            max_sources: 20,
+            include_annas_archive: false,
+            include_papers: true,
+            workspace: None,
+            persist_workspace: false,
+        };
+        // Aerospace profile: an LSP composite query gets the specialized
+        // project verticals.
+        let aero =
+            build_research_search_plan(&request.query, &request, ResearchProfile::AerospaceLsp);
+        let aero_labels = aero.iter().map(|plan| plan.label).collect::<Vec<_>>();
+        assert!(aero_labels.contains(&"eddy_current_lsp"));
+        assert!(aero_labels.contains(&"terahertz_lsp"));
+        // Generic profile: the same query gets neutral topic plans, never the
+        // project-specific aerospace verticals.
+        let generic =
+            build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
+        let generic_labels = generic.iter().map(|plan| plan.label).collect::<Vec<_>>();
+        assert!(!generic_labels.contains(&"eddy_current_lsp"));
+        assert!(!generic_labels.contains(&"aircraft_composites_ndt"));
+        assert!(generic_labels.contains(&"topic_literature"));
     }
 
     #[test]
@@ -2190,7 +2288,7 @@ mod tests {
     #[test]
     fn derives_concise_search_query_from_long_german_research_prompt() {
         let prompt = "Da es um Metallstrukturen in Kunststoff geht und unter dem Gitter scheinbar noch eine konstante metallische Folie liegt: waere es denkbar, mit elektrischen und magnetischen Feldern zu arbeiten? Der Blitzschutz wird durch ein Kupfergitter in kohlenstofffaserverstaerktem Kunststoff CFK bewerkstelligt. Zu bewerten sind Hyperspektralkamera, Terahertz Imaging, Eddy Current, Induktion, Thermografie, Mikrowelle/mmWave, Roentgen/CT und Shearografie.";
-        let query = derive_research_search_query(prompt, None);
+        let query = derive_research_search_query(prompt, None, ResearchProfile::AerospaceLsp);
         assert!(query.contains("lightning strike protection"));
         assert!(query.contains("copper mesh"));
         assert!(query.contains("CFRP"));
@@ -2201,7 +2299,7 @@ mod tests {
     #[test]
     fn derives_measurement_data_query_from_operator_research_prompt() {
         let prompt = "Research into sources of load data for bearing design in small electromechanical systems";
-        let query = derive_research_search_query(prompt, None);
+        let query = derive_research_search_query(prompt, None, ResearchProfile::Generic);
         assert!(!query.to_ascii_lowercase().contains("research into"));
         assert!(query.contains("bearing"));
         assert!(query.contains("force"));
