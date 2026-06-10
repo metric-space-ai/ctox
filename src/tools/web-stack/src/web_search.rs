@@ -1297,30 +1297,118 @@ impl<'a> WebSearchSession<'a> {
         hits: &[SearchHit],
         context_size: ContextSize,
     ) -> Vec<EvidenceDoc> {
-        hits.iter()
-            .take(context_size.evidence_docs())
-            .filter_map(|hit| self.fetch_evidence_doc(query, hit).ok())
-            .collect()
-    }
+        let selected: Vec<&SearchHit> = hits.iter().take(context_size.evidence_docs()).collect();
+        let mut resolved: Vec<Option<EvidenceDoc>> = vec![None; selected.len()];
 
-    fn fetch_evidence_doc(&mut self, query: &str, hit: &SearchHit) -> Result<EvidenceDoc> {
-        let original_key = normalize_url_cache_key(&hit.url);
-        if let Some(doc) = self.request_docs.get(&original_key).cloned() {
-            return Ok(doc);
-        }
-        if let Some(cached_doc) = self.load_cached_page_doc(&hit.url) {
-            let doc = rebuild_cached_evidence_doc(self.config, query, hit, &cached_doc);
-            if !cached_pdf_doc_needs_refresh(query, &doc, self.config.max_pdf_pages) {
-                self.memoize_doc_aliases([hit.url.as_str(), doc.url.as_str()], &doc);
-                return Ok(doc);
+        // Phase 1 (serial): resolve from the in-request memo / page cache and
+        // collect the hits that still need a network fetch.
+        let mut misses: Vec<(usize, &SearchHit)> = Vec::new();
+        for (index, hit) in selected.iter().enumerate() {
+            if let Some(doc) = self.resolve_cached_evidence_doc(query, hit) {
+                resolved[index] = Some(doc);
+            } else {
+                misses.push((index, hit));
             }
         }
 
+        // Dedup misses by canonical URL so two hits pointing at the same page
+        // fetch once — preserving the old request_docs memoization behavior.
+        let mut representative: BTreeMap<String, usize> = BTreeMap::new();
+        let mut unique: Vec<(usize, &SearchHit)> = Vec::new();
+        let mut duplicates: Vec<(usize, usize)> = Vec::new();
+        for &(index, hit) in &misses {
+            let key = normalize_url_cache_key(&hit.url);
+            match representative.get(&key) {
+                Some(&rep) => duplicates.push((index, rep)),
+                None => {
+                    representative.insert(key, index);
+                    unique.push((index, hit));
+                }
+            }
+        }
+
+        // Phase 2 (parallel): fetch the unique misses. build_evidence_doc is a
+        // pure function of (config, query, hit) that touches no session state,
+        // so the page fetches are independent and safe to run concurrently —
+        // this turns the evidence-fetch latency from sum-of-pages into
+        // slowest-single-page.
+        let config = self.config;
+        let fetched: Vec<(usize, Result<(EvidenceDoc, Option<String>)>)> =
+            std::thread::scope(|scope| {
+                let handles: Vec<(usize, _)> = unique
+                    .iter()
+                    .map(|&(index, hit)| {
+                        (
+                            index,
+                            scope.spawn(move || build_evidence_doc(config, query, hit)),
+                        )
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|(index, handle)| {
+                        let result = handle
+                            .join()
+                            .unwrap_or_else(|_| Err(anyhow!("evidence fetch thread panicked")));
+                        (index, result)
+                    })
+                    .collect()
+            });
+
+        // Phase 3 (serial): memoize + write the page cache for each fetched doc.
+        for (index, result) in fetched {
+            if let Ok((doc, content_type)) = result {
+                let hit = selected[index];
+                let canonical_url = doc.url.clone();
+                self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
+                self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
+                resolved[index] = Some(doc);
+            }
+        }
+
+        // Fill each duplicate slot from its representative's fetched doc.
+        for (index, rep) in duplicates {
+            if let Some(doc) = resolved[rep].clone() {
+                resolved[index] = Some(doc);
+            }
+        }
+
+        resolved.into_iter().flatten().collect()
+    }
+
+    fn fetch_evidence_doc(&mut self, query: &str, hit: &SearchHit) -> Result<EvidenceDoc> {
+        if let Some(doc) = self.resolve_cached_evidence_doc(query, hit) {
+            return Ok(doc);
+        }
         let (doc, content_type) = build_evidence_doc(self.config, query, hit)?;
         let canonical_url = doc.url.clone();
         self.memoize_doc_aliases([hit.url.as_str(), canonical_url.as_str()], &doc);
         self.store_page_doc(&hit.url, &canonical_url, content_type, &doc);
         Ok(doc)
+    }
+
+    /// Resolve an evidence doc from the in-request memo or the on-disk page
+    /// cache, or `None` if a network fetch is still required. Kept separate
+    /// from the fetch so the parallel `fetch_evidence` can do all cache
+    /// resolution serially (it mutates session state) and then fetch the
+    /// misses concurrently.
+    fn resolve_cached_evidence_doc(
+        &mut self,
+        query: &str,
+        hit: &SearchHit,
+    ) -> Option<EvidenceDoc> {
+        let original_key = normalize_url_cache_key(&hit.url);
+        if let Some(doc) = self.request_docs.get(&original_key).cloned() {
+            return Some(doc);
+        }
+        if let Some(cached_doc) = self.load_cached_page_doc(&hit.url) {
+            let doc = rebuild_cached_evidence_doc(self.config, query, hit, &cached_doc);
+            if !cached_pdf_doc_needs_refresh(query, &doc, self.config.max_pdf_pages) {
+                self.memoize_doc_aliases([hit.url.as_str(), doc.url.as_str()], &doc);
+                return Some(doc);
+            }
+        }
+        None
     }
 
     fn load_cached_page_doc(&mut self, url: &str) -> Option<EvidenceDoc> {
@@ -7962,6 +8050,48 @@ mod tests {
 
         assert_eq!(cached.url, warmed.url);
         assert!(cached.page_text.contains("CTOX_REMOTE_WEB_OK"));
+    }
+
+    #[test]
+    fn fetch_evidence_returns_every_doc_when_fetched_in_parallel() {
+        let root = unique_test_root("web_search_parallel_evidence");
+        fs::create_dir_all(root.join("runtime")).expect("runtime dir");
+        let config = test_config(ProviderKind::Mock);
+        let mock_hit = |n: &str, rank: usize| SearchHit {
+            title: n.to_string(),
+            url: format!("http://127.0.0.1:9/mock-{n}"),
+            snippet: String::new(),
+            source: "mock".to_string(),
+            rank,
+        };
+        let hits = vec![mock_hit("one", 1), mock_hit("two", 2), mock_hit("three", 3)];
+        let mut session = WebSearchSession::new(&root, &config).expect("session");
+        // ContextSize::High fetches 3 evidence docs — all in parallel.
+        let docs = session.fetch_evidence("find CTOX_REMOTE_WEB_OK", &hits, ContextSize::High);
+        assert_eq!(docs.len(), 3, "every hit yields a doc");
+        assert!(docs.iter().all(|d| d.page_text.contains("CTOX_REMOTE_WEB_OK")));
+        // Result order matches input hit order (resolved by slot index).
+        assert!(docs[0].url.contains("mock-one"));
+        assert!(docs[2].url.contains("mock-three"));
+    }
+
+    #[test]
+    fn fetch_evidence_dedups_identical_urls_but_returns_one_doc_per_hit() {
+        let root = unique_test_root("web_search_parallel_dedup");
+        fs::create_dir_all(root.join("runtime")).expect("runtime dir");
+        let config = test_config(ProviderKind::Mock);
+        let hit = SearchHit {
+            title: "dup".to_string(),
+            url: "http://127.0.0.1:9/mock-dup".to_string(),
+            snippet: String::new(),
+            source: "mock".to_string(),
+            rank: 1,
+        };
+        let hits = vec![hit.clone(), hit.clone()];
+        let mut session = WebSearchSession::new(&root, &config).expect("session");
+        let docs = session.fetch_evidence("q", &hits, ContextSize::Medium);
+        assert_eq!(docs.len(), 2, "both hits resolve even though only one is fetched");
+        assert_eq!(docs[0].url, docs[1].url);
     }
 
     #[test]
