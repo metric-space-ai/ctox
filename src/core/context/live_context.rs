@@ -431,7 +431,7 @@ pub(crate) fn render_chat_prompt(
         String::new(),
         render_execution_contract_block(
             &runtime_blocks.focus,
-            &runtime_blocks.anchors,
+            runtime_blocks.workspace_root.as_deref(),
             &runtime_blocks.workflow_state,
         ),
         String::new(),
@@ -469,11 +469,14 @@ pub(crate) fn render_chat_prompt(
 /// the persisted runtime config at boot.
 fn render_autonomy_policy_block(root: &Path) -> String {
     let level = crate::autonomy::AutonomyLevel::from_root(root);
-    format!(
-        "Autonomy policy:\nlevel: {}\npolicy: {}",
-        level,
-        level.runtime_policy_block()
-    )
+    // The policy text itself opens with "Autonomy policy: {level}." — strip
+    // that prefix so the block does not state the level three times.
+    let policy = level
+        .runtime_policy_block()
+        .split_once(". ")
+        .map(|(_, rest)| rest)
+        .unwrap_or_else(|| level.runtime_policy_block());
+    format!("Autonomy policy:\nlevel: {level}\npolicy: {policy}")
 }
 
 fn render_skill_dispatch_block(suggested_skill: Option<&str>) -> Option<String> {
@@ -488,6 +491,33 @@ fn render_skill_dispatch_block(suggested_skill: Option<&str>) -> Option<String> 
 pub(crate) fn continuity_block(label: &str, content: &str) -> String {
     let lines = match label {
         "Focus" => focus_block_lines(content),
+        // Anchors/Narrative documents are multi-line entry records; render
+        // them entry-aware (one dense line per entry) instead of tail-cutting
+        // raw lines, which preserved barely one entry and could cut
+        // mid-record. Falls back to line mode for free-form documents.
+        "Anchors" => {
+            let entries =
+                compact_entry_lines(content, "anchor_id", "anchor_type", "statement", None);
+            if entries.is_empty() {
+                compact_continuity_lines(content)
+            } else {
+                select_recent_within_budget(entries)
+            }
+        }
+        "Narrative" => {
+            let entries = compact_entry_lines(
+                content,
+                "entry_id",
+                "event_type",
+                "summary",
+                Some("consequence"),
+            );
+            if entries.is_empty() {
+                compact_continuity_lines(content)
+            } else {
+                select_recent_within_budget(entries)
+            }
+        }
         _ => compact_continuity_lines(content),
     };
     if lines.is_empty() {
@@ -497,6 +527,80 @@ pub(crate) fn continuity_block(label: &str, content: &str) -> String {
         rendered.extend(lines);
         rendered.join("\n")
     }
+}
+
+const MAX_CONTINUITY_ENTRY_CHARS: usize = 300;
+
+/// Parse template-shaped continuity entries (anchor/narrative records) and
+/// render each as one dense line: `- [tag] primary -> secondary`.
+fn compact_entry_lines(
+    content: &str,
+    start_key: &str,
+    tag_key: &str,
+    primary_key: &str,
+    secondary_key: Option<&str>,
+) -> Vec<String> {
+    let mut entries: Vec<std::collections::BTreeMap<String, String>> = Vec::new();
+    let mut current: Option<std::collections::BTreeMap<String, String>> = None;
+    for raw_line in content.lines() {
+        let trimmed = raw_line.trim().trim_start_matches("- ").trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let key = key.trim().to_ascii_lowercase();
+        let value = collapse_spaces(value.trim());
+        if key == start_key {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(std::collections::BTreeMap::new());
+        }
+        if let Some(entry) = current.as_mut() {
+            if !value.is_empty() {
+                entry.entry(key).or_insert(value);
+            }
+        }
+    }
+    if let Some(entry) = current.take() {
+        entries.push(entry);
+    }
+
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let primary = entry.get(primary_key)?;
+            let mut line = match entry.get(tag_key) {
+                Some(tag) => format!("- [{tag}] {primary}"),
+                None => format!("- {primary}"),
+            };
+            if let Some(secondary) = secondary_key.and_then(|key| entry.get(key)) {
+                line.push_str(" -> ");
+                line.push_str(secondary);
+            }
+            Some(clip_prompt_text(&line, MAX_CONTINUITY_ENTRY_CHARS))
+        })
+        .collect()
+}
+
+/// Keep the most recent lines that fit the block budget, in document order.
+fn select_recent_within_budget(lines: Vec<String>) -> Vec<String> {
+    let mut selected = Vec::new();
+    let mut total_chars = 0usize;
+    for line in lines.iter().rev() {
+        if selected.len() >= MAX_CONTINUITY_BLOCK_LINES {
+            break;
+        }
+        if total_chars + line.len() > MAX_CONTINUITY_BLOCK_CHARS {
+            break;
+        }
+        total_chars += line.len();
+        selected.push(line.clone());
+    }
+    selected.reverse();
+    selected
 }
 
 fn render_context_notice(omitted_items: usize) -> Option<String> {
@@ -520,16 +624,16 @@ fn workflow_state_has_open_runtime_work(workflow_state_block: &str) -> bool {
 
 fn render_execution_contract_block(
     focus_block: &str,
-    anchors_block: &str,
+    workspace_root: Option<&str>,
     workflow_state_block: &str,
 ) -> String {
     let mut lines = vec![
         "EXECUTION CONTRACT".to_string(),
         "- Treat this block as the plain-language exit gate for the current turn.".to_string(),
     ];
-    if let Some(goal) = continuity_named_value(focus_block, &["goal", "mission", "main task"]) {
-        lines.push(format!("- Current task: {goal}"));
-    }
+    // The task statement and next step render one screen above in the Focus
+    // block; the contract carries only what Focus cannot: the gate fallback,
+    // the workspace scope, and the open-work switch.
     if let Some(done_gate) =
         continuity_named_value(focus_block, &["done_gate", "done gate", "finish rule"])
     {
@@ -540,12 +644,7 @@ fn render_execution_contract_block(
                 .to_string(),
         );
     }
-    if let Some(next_step) =
-        continuity_named_value(focus_block, &["next_slice", "next slice", "next step"])
-    {
-        lines.push(format!("- If not finished, do this next: {next_step}"));
-    }
-    if let Some(workspace_root) = continuity_named_value(anchors_block, &["workspace_root"]) {
+    if let Some(workspace_root) = workspace_root {
         lines.push(format!(
             "- Files count only if they are under this workspace: {workspace_root}"
         ));
@@ -630,23 +729,12 @@ fn compact_continuity_lines(content: &str) -> Vec<String> {
             }
             format!("- {value}")
         };
-        candidates.push(rendered);
+        // Clip oversized lines so a single pasted blob cannot blank the
+        // whole block (the budget loop would otherwise select nothing).
+        candidates.push(clip_prompt_text(&rendered, MAX_CONTINUITY_ENTRY_CHARS));
     }
 
-    let mut selected = Vec::new();
-    let mut total_chars = 0usize;
-    for line in candidates.iter().rev() {
-        if selected.len() >= MAX_CONTINUITY_BLOCK_LINES {
-            break;
-        }
-        if total_chars + line.len() > MAX_CONTINUITY_BLOCK_CHARS {
-            break;
-        }
-        total_chars += line.len();
-        selected.push(line.clone());
-    }
-    selected.reverse();
-    selected
+    select_recent_within_budget(candidates)
 }
 
 fn continuity_named_value(content: &str, names: &[&str]) -> Option<String> {
@@ -671,6 +759,13 @@ fn collapse_spaces(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// LCM stamps timestamps as epoch-millis strings; render them human/model
+/// readable. Returns None for values that do not parse as millis.
+fn epoch_millis_to_rfc3339(value: &str) -> Option<String> {
+    let millis: i64 = value.trim().parse().ok()?;
+    chrono::DateTime::from_timestamp_millis(millis).map(|ts| ts.to_rfc3339())
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct RenderedContextSelection {
     pub(crate) entries: Vec<String>,
@@ -685,6 +780,9 @@ pub(crate) struct PromptRuntimeBlocks {
     pub(crate) verified_evidence: String,
     pub(crate) workflow_state: String,
     pub(crate) strategy: String,
+    /// Extracted from the FULL anchors document, not the rendered block —
+    /// the rendered tail can evict the workspace_root line.
+    pub(crate) workspace_root: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -789,7 +887,15 @@ pub(crate) fn select_rendered_context(
                         .iter()
                         .find(|entry| entry.summary_id == summary_id)
                     {
-                        summary_lines.push(format!("summary: {}", summary.content));
+                        // Summaries carry condensed history; sanitize and
+                        // clip like every other evidence entry so eight of
+                        // them cannot blow past the rendered-context budget
+                        // unchecked (~3.6k chars each at the default
+                        // summarizer settings).
+                        summary_lines.push(format!(
+                            "summary: {}",
+                            clip_prompt_text(&sanitize_context_message(&summary.content), 1_200)
+                        ));
                     }
                 }
             }
@@ -799,7 +905,19 @@ pub(crate) fn select_rendered_context(
     let summary_start = summary_lines
         .len()
         .saturating_sub(MAX_RENDERED_SUMMARY_ITEMS);
-    let selected_summaries = summary_lines[summary_start..].to_vec();
+    // Summaries respect the same overall char budget as messages: keep the
+    // most recent ones that fit instead of admitting all eight unbudgeted.
+    let mut selected_summaries = Vec::new();
+    let mut summary_chars = 0usize;
+    for line in summary_lines[summary_start..].iter().rev() {
+        if summary_chars + line.len() > MAX_RENDERED_CONTEXT_CHARS && !selected_summaries.is_empty()
+        {
+            break;
+        }
+        summary_chars += line.len();
+        selected_summaries.push(line.clone());
+    }
+    selected_summaries.reverse();
     let mut entries = selected_summaries.clone();
     let mut seen = BTreeSet::new();
     let mut selected_messages = Vec::new();
@@ -935,6 +1053,7 @@ fn derive_prompt_runtime_blocks(
     let verified_evidence = render_verified_evidence_block(mission_assurance, override_continuity);
     let workflow_state = render_workflow_state_block(root, &mission_context)?;
     let strategy_block = render_strategy_block(strategy);
+    let workspace_root = continuity_named_value(&continuity.anchors.content, &["workspace_root"]);
 
     Ok(PromptRuntimeBlocks {
         focus,
@@ -943,6 +1062,7 @@ fn derive_prompt_runtime_blocks(
         verified_evidence,
         workflow_state,
         strategy: strategy_block,
+        workspace_root,
     })
 }
 
@@ -1228,6 +1348,11 @@ fn render_verified_evidence_block(
                 "latest_run_source: {}",
                 collapse_spaces(run.source_label.trim())
             ));
+            // The system prompt ranks "fresh verified evidence" — without a
+            // timestamp the model cannot tell fresh from stale.
+            if let Some(run_at) = epoch_millis_to_rfc3339(&run.created_at) {
+                lines.push(format!("latest_run_at: {run_at}"));
+            }
             if !run.goal.trim().is_empty() {
                 lines.push(format!(
                     "latest_run_goal: {}",
@@ -1818,6 +1943,7 @@ mod tests {
             workflow_state: "Open CTOX work that counts right now:\nqueue_items: []".to_string(),
             strategy: "Strategy:\n- vision: not set\n- mission: not set\n- directives: none"
                 .to_string(),
+            workspace_root: None,
         };
         let prompt = render_chat_prompt(
             Path::new("/tmp/ctox"),
@@ -1941,6 +2067,40 @@ mod tests {
         // Historical entries keep the demoting summary.
         let historical = sanitize_context_message(email);
         assert!(historical.contains("treat it as prior mail context only"));
+    }
+
+    #[test]
+    fn anchors_render_entry_aware_and_survive_oversized_lines() {
+        // Three 9-line template entries used to render as barely one tail
+        // fragment; entry-aware rendering yields one dense line per entry.
+        let doc = "# CONTINUITY ANCHORS\n\n## Entries\nanchor_id: a1\nanchor_type: constraint\nstatement: never push directly to release branches\nsource_class: owner\nsource_ref: msg-1\nobserved_at: 1\nconfidence: high\nsupersedes:\nexpires_at:\nanchor_id: a2\nanchor_type: fact\nstatement: workspace_root is /srv/work\nsource_class: runtime\nsource_ref: msg-2\nobserved_at: 2\nconfidence: high\nsupersedes:\nexpires_at:\n";
+        let block = continuity_block("Anchors", doc);
+        assert!(block.contains("[constraint] never push directly to release branches"));
+        assert!(block.contains("[fact] workspace_root is /srv/work"));
+
+        // A single oversized line must clip, not blank the whole block.
+        let oversized = format!("## Entries\n- {}", "x".repeat(2_000));
+        let block = continuity_block("Narrative", &oversized);
+        assert!(
+            !block.contains("items: []"),
+            "oversized line blanked the block: {block}"
+        );
+    }
+
+    #[test]
+    fn execution_contract_keeps_workspace_root_from_full_document() {
+        // workspace_root comes from the FULL anchors document even when the
+        // rendered block tail would have evicted it.
+        let block = render_execution_contract_block(
+            "Focus:\n- Finish rule: artifact verified",
+            Some("/srv/work"),
+            "Open CTOX work that counts right now:\ncurrent_queue_item_id: null",
+        );
+        assert!(block.contains("under this workspace: /srv/work"));
+        assert!(block.contains("You may finish only when: artifact verified"));
+        // The task/next-step restatements moved out; Focus carries them.
+        assert!(!block.contains("Current task:"));
+        assert!(!block.contains("do this next"));
     }
 
     #[test]

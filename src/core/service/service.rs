@@ -3202,9 +3202,10 @@ fn start_prompt_worker(
             let conversation_thread_key = conversation_thread_key_for_queue_job(&root, &job);
             let conversation_id =
                 turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
-            // Task boundaries — plan-step messages or self-work item
-            // closures — must always trigger a continuity refresh, regardless
-            // of CTOX_CONTINUITY_REFRESH_EVERY_N_TURNS.
+            // Plan-step messages force a continuity refresh directly.
+            // Self-work closures (which the service performs after the
+            // turn, post completion review) are picked up by the turn
+            // loop's boundary window, which spans from the last refresh.
             let force_continuity_refresh = job
                 .leased_message_keys
                 .iter()

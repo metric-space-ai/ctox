@@ -33,7 +33,9 @@ const DEFAULT_ADAPTIVE_MIN_OUTPUT_TOKENS: i64 = 4_096;
 pub enum CompactMode {
     /// ThreadCompactStart on the live thread. Preserves the running session.
     MidTask,
-    /// ThreadUnsubscribe + enqueue follow-up slice. Clean break.
+    /// Deprecated: the clean-break path wrote a follow-up signal file that
+    /// nothing consumed. Behaves exactly like `MidTask`; kept only so
+    /// persisted legacy settings still parse.
     ForcedFollowup,
 }
 
@@ -154,15 +156,13 @@ impl CompactPolicy {
                 }
             }
             Some("off") => CompactTrigger::Off,
-            // Default = Adaptive(15%). The adaptive output/input drift signal
-            // is the only mid-task trigger that catches drift before the
-            // per-call input grows large enough to need an emergency. Leaving
-            // the default at Off (the previous behaviour) silently disabled
-            // both layers and let long worker cycles run unprotected until
-            // they overflowed the context window.
-            _ => CompactTrigger::Adaptive {
-                self_output_pct: 15,
-            },
+            // Default = Off, which still keeps the emergency layer armed:
+            // evaluate() runs the 75%-fill emergency check regardless of the
+            // trigger. The adaptive drift trigger stays opt-in — its metric
+            // (cumulative billed input minus first-call baseline) inflates
+            // with call count, and a misfire costs a 4-6-model-call
+            // compaction pipeline mid-turn under a turn-killing timeout.
+            _ => CompactTrigger::Off,
         };
         let mode = match mode_raw
             .map(str::trim)
@@ -220,16 +220,13 @@ impl CompactPolicy {
                     return CompactDecision::Continue;
                 }
                 // Layer 1: Emergency — per-call input approaching window.
-                // Fires in BOTH modes: a per-call input near the context limit
-                // is a hard overflow risk regardless of whether the cycle is
-                // mid-task or at a clean break. The previous implementation
-                // skipped the check in MidTask mode, which let long
-                // tool-loops (SWE-Bench, large workspaces) climb past 100% of
-                // the window and crash the inference call with a 400
-                // exceed_context_size_error. With this guard active, MidTask
-                // compaction triggers a ThreadCompactStart and ForcedFollowup
-                // triggers a clean-break unsubscribe — both handled in the
-                // direct-session loop.
+                // Fires regardless of the configured trigger: a per-call
+                // input near the context limit is a hard overflow risk. The
+                // previous implementation skipped the check in MidTask mode,
+                // which let long tool-loops (SWE-Bench, large workspaces)
+                // climb past 100% of the window and crash the inference call
+                // with a 400 exceed_context_size_error. The direct-session
+                // loop answers with a ThreadCompactStart.
                 if self.context_window > 0 {
                     let fill = (self.last_call_input_tokens as f64) / (self.context_window as f64);
                     if fill >= self.emergency_fill_ratio {

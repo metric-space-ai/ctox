@@ -18,7 +18,7 @@ use crate::inference::supervisor;
 /// Per-conversation refresh accounting since the last continuity refresh.
 /// Lives in process memory so that restarts do not preserve it — that is
 /// fine: a restart always starts a fresh budget window.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone)]
 struct RefreshState {
     /// Cumulative assistant reply characters since the last refresh.
     /// This is telemetry only. It must never be converted into token counts
@@ -27,6 +27,13 @@ struct RefreshState {
     /// Turns since the last refresh (used only by the optional legacy
     /// interval trigger when the operator explicitly sets one).
     turns_since_refresh: u64,
+    /// RFC3339 start of the window in which durable self-work/knowledge
+    /// transitions count as unprocessed task boundaries. The service closes
+    /// self-work items AFTER the turn (post completion review), outside the
+    /// turn's own bracket — so this window spans from the last refresh, not
+    /// from the current turn start. In-memory: a daemon restart starts a
+    /// fresh window (conservative; at worst one boundary refresh is missed).
+    boundary_window_start: Option<String>,
 }
 
 fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
@@ -94,11 +101,32 @@ pub struct RefreshBudgetSnapshot {
 /// mutating the per-conversation counters.
 pub fn refresh_budget_snapshot(conversation_id: i64) -> RefreshBudgetSnapshot {
     let counters = turn_counters().lock().expect("turn_counters poisoned");
-    let state = counters.get(&conversation_id).copied().unwrap_or_default();
+    let state = counters.get(&conversation_id).cloned().unwrap_or_default();
     RefreshBudgetSnapshot {
         output_chars_since_refresh: state.output_chars_since_refresh,
         turns_since_refresh: state.turns_since_refresh,
     }
+}
+
+/// Start of the boundary-detection window for this conversation: the moment
+/// of the last continuity refresh, or this turn's start on first contact.
+/// Service-side self-work closures land between turns; a turn-local bracket
+/// never sees them.
+fn boundary_window_start(conversation_id: i64, turn_start_ts: &str) -> String {
+    let mut counters = turn_counters().lock().expect("turn_counters poisoned");
+    let state = counters.entry(conversation_id).or_default();
+    state
+        .boundary_window_start
+        .get_or_insert_with(|| turn_start_ts.to_string())
+        .clone()
+}
+
+/// Close the boundary window after a refresh ran (successfully or not):
+/// boundaries observed up to now have been consumed by this refresh pass.
+fn mark_boundary_window_consumed(conversation_id: i64, now_ts: &str) {
+    let mut counters = turn_counters().lock().expect("turn_counters poisoned");
+    let state = counters.entry(conversation_id).or_default();
+    state.boundary_window_start = Some(now_ts.to_string());
 }
 
 /// Query the mission and LCM databases for durable state changes written
@@ -118,10 +146,14 @@ fn detect_durable_state_transition(
     lcm_db_path: &Path,
     conversation_id: i64,
     turn_start_ts: &str,
+    boundary_window_ts: &str,
 ) -> Result<bool> {
     use rusqlite::Connection;
 
-    // Mission-side tables live in the unified CTOX runtime database.
+    // Mission-side tables live in the unified CTOX runtime database. These
+    // use the boundary WINDOW (since the last refresh), not the turn
+    // bracket: the service closes self-work items after the turn, post
+    // completion review, and a turn-local bracket never sees those.
     let mission_db = crate::persistence::sqlite_path(root);
     if mission_db.exists() {
         let conn = Connection::open_with_flags(
@@ -132,7 +164,7 @@ fn detect_durable_state_transition(
             .query_row(
                 "SELECT COUNT(1) FROM ticket_self_work_items \
                  WHERE state = 'closed' AND updated_at > ?1",
-                rusqlite::params![turn_start_ts],
+                rusqlite::params![boundary_window_ts],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -142,7 +174,7 @@ fn detect_durable_state_transition(
         let knowledge_added: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
-                rusqlite::params![turn_start_ts],
+                rusqlite::params![boundary_window_ts],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -492,6 +524,7 @@ where
         .or(owned_session.as_ref())
         .map(|sess| sess.base_instructions().to_string())
         .unwrap_or_default();
+    let mut previous_preflight_tokens: Option<i64> = None;
     for exact_preflight_round in 0..=2 {
         let preflight_text = format!(
             "{preflight_base_instructions}\n\n{}",
@@ -510,6 +543,26 @@ where
         if count.tokens <= safe_budget {
             break;
         }
+        // LCM compaction only shrinks the conversation-evidence section;
+        // every other block (system prompt, CURRENT REQUEST, continuity,
+        // strategy, governance, workflow) is invariant under it. If a round
+        // barely moved the count, the overflow is invariant-dominated —
+        // bail now instead of permanently coarsening stored history for
+        // nothing.
+        if let Some(previous) = previous_preflight_tokens {
+            let progress = previous.saturating_sub(count.tokens);
+            if progress * 50 < previous {
+                anyhow::bail!(
+                    "context_preflight_exact_overflow: rendered prompt tokens {} exceed safe input budget {} for context window {} and LCM compaction reduced them by only {} tokens — the overflow is dominated by compaction-invariant sections (system prompt, current request, runtime blocks) via {}",
+                    count.tokens,
+                    safe_budget,
+                    count.context_limit,
+                    progress,
+                    count.source
+                );
+            }
+        }
+        previous_preflight_tokens = Some(count.tokens);
         if exact_preflight_round >= 2 {
             anyhow::bail!(
                 "context_preflight_exact_overflow: exact rendered prompt tokens {} exceed safe input budget {} for context window {} after {} LCM compaction rounds via {}",
@@ -593,13 +646,20 @@ where
     };
     emit("persist-assistant-turn");
     persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
-    // Detect durable state transitions triggered by the agent's tool calls
-    // during this turn (self-work closed, knowledge entry added, focus
-    // document replaced). These count as task boundaries and force a
-    // continuity refresh even if the output budget has not yet been hit.
-    let state_transition_detected =
-        detect_durable_state_transition(root, db_path, conversation_id, &turn_start_ts)
-            .unwrap_or(false);
+    // Detect durable state transitions since the last refresh (self-work
+    // closed — including service-side closures between turns — knowledge
+    // entry added, focus document replaced this turn). These count as task
+    // boundaries and force a continuity refresh even if the output budget
+    // has not yet been hit.
+    let boundary_window_ts = boundary_window_start(conversation_id, &turn_start_ts);
+    let state_transition_detected = detect_durable_state_transition(
+        root,
+        db_path,
+        conversation_id,
+        &turn_start_ts,
+        &boundary_window_ts,
+    )
+    .unwrap_or(false);
     let effective_force_refresh = force_continuity_refresh || state_transition_detected;
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
     // New adaptive model: refresh only on durable state transition
@@ -651,6 +711,12 @@ where
         emit("continuity-refresh-skipped");
         Default::default()
     };
+    if refresh_now {
+        // Boundaries observed up to now were consumed by this refresh pass;
+        // without closing the window the same service-side closure would
+        // force a refresh on every following turn.
+        mark_boundary_window_consumed(conversation_id, &current_rfc3339_timestamp());
+    }
     let budget_snapshot = refresh_budget_snapshot(conversation_id);
     emit(&format!(
         "refresh-telemetry output_chars_since_refresh={} turns_since_refresh={}",
@@ -890,7 +956,10 @@ fn refresh_continuity_documents(
         if kind == lcm::ContinuityKind::Anchors {
             emit("continuity-anchors-preserve-literals");
             match engine.continuity_preserve_recent_anchor_literals(conversation_id) {
-                Ok(Some(_)) => stats.updated += 1,
+                // Literal preservation is a mechanical safety net, not a
+                // model-driven refresh; counting it as `updated` masked
+                // refresh turns where the model never called the CLI.
+                Ok(Some(_)) => {}
                 Ok(None) => {}
                 Err(err) => {
                     stats.skipped_apply += 1;
@@ -1537,12 +1606,36 @@ mod tests {
                 )
                 .expect("apply focus document");
         }
-        let detected = detect_durable_state_transition(&root, &db_path, 7, &turn_start)
-            .expect("detection query must run");
+        let detected =
+            detect_durable_state_transition(&root, &db_path, 7, &turn_start, &turn_start)
+                .expect("detection query must run");
         assert!(
             detected,
             "a focus commit after turn start must register as a durable boundary"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn boundary_window_spans_turns_until_a_refresh_consumes_it() {
+        // Service-side self-work closures land BETWEEN turns; the detection
+        // window must start at the last refresh, not at the current turn.
+        let conversation_id = 991_001;
+        let first_turn = "2026-06-10T10:00:00+00:00";
+        let window = boundary_window_start(conversation_id, first_turn);
+        assert_eq!(window, first_turn);
+        // A later turn keeps the original window open...
+        let second_turn = "2026-06-10T11:00:00+00:00";
+        assert_eq!(
+            boundary_window_start(conversation_id, second_turn),
+            first_turn
+        );
+        // ...until a refresh consumes it.
+        mark_boundary_window_consumed(conversation_id, second_turn);
+        let third_turn = "2026-06-10T12:00:00+00:00";
+        assert_eq!(
+            boundary_window_start(conversation_id, third_turn),
+            second_turn
+        );
     }
 }

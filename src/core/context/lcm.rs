@@ -2587,7 +2587,17 @@ impl LcmEngine {
     ) -> Result<Option<ContinuityDocumentState>> {
         let document = self.ensure_continuity_document(conversation_id, ContinuityKind::Anchors)?;
         let snapshot = self.snapshot(conversation_id)?;
-        let literals = collect_explicit_anchor_literals(&snapshot.messages);
+        let mut literals = collect_explicit_anchor_literals(&snapshot.messages);
+        // Respect deliberate deletions: a literal whose anchor entry was
+        // removed by a refresh sits in the forgotten ledger — re-adding it
+        // here would resurrect what the refresh just deleted.
+        let forgotten =
+            self.continuity_forgotten(conversation_id, Some(ContinuityKind::Anchors), None)?;
+        literals.retain(|literal| {
+            !forgotten
+                .iter()
+                .any(|entry| entry.line.contains(&literal.literal))
+        });
         let Some(diff_text) = build_anchor_literal_preservation_diff(&document.content, &literals)
         else {
             return Ok(None);

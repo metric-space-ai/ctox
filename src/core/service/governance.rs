@@ -439,17 +439,20 @@ pub fn render_prompt_block(snapshot: &GovernancePromptSnapshot) -> String {
     lines.push(
         "how_to_use: read this as context only. It explains automatic CTOX actions. Do not invent extra work from this block.".to_string(),
     );
+    // The full mechanism inventory is static every-turn noise (~20 lines);
+    // render compact counts and spend the token budget on recent events,
+    // which carry the actual per-turn signal.
     if !autonomous.is_empty() {
-        lines.push("automatic_actions:".to_string());
-        for mechanism in autonomous {
-            lines.push(format!("- {}", mechanism.replace('_', " ")));
-        }
+        lines.push(format!(
+            "automatic_actions: {} mechanisms armed; they act on their own and their recorded events below are authoritative",
+            autonomous.len()
+        ));
     }
     if !advisory.is_empty() {
-        lines.push("advice_only:".to_string());
-        for mechanism in advisory {
-            lines.push(format!("- {}", mechanism.replace('_', " ")));
-        }
+        lines.push(format!(
+            "advice_only: {} mechanisms; they act only when explicitly invoked",
+            advisory.len()
+        ));
     }
     if snapshot.recent_events.is_empty() {
         lines.push("recent_events:".to_string());

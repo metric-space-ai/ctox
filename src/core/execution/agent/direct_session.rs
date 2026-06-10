@@ -19,9 +19,8 @@ use ctox_app_server_client::{
 };
 use ctox_app_server_protocol::{
     ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadStartParams, ThreadStartResponse, ThreadUnsubscribeParams,
-    ThreadUnsubscribeResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
-    TurnStartResponse,
+    ThreadCompactStartResponse, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
+    TurnInterruptResponse, TurnStartParams, TurnStartResponse,
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
@@ -994,7 +993,6 @@ impl PersistentSession {
 
         // Event loop
         let mut final_message: Option<String> = None;
-        let mut forced_followup_fired = false;
         let turn_started_at = Instant::now();
         let mut last_usage_event_at = turn_started_at;
         let mut last_recorded_cumulative_usage: Option<ApiTokenUsage> = None;
@@ -1100,8 +1098,12 @@ impl PersistentSession {
                                 policy.mode,
                                 reason.log_summary()
                             );
-                            match policy.mode {
-                                CompactMode::MidTask => {
+                            // ForcedFollowup is deprecated: its clean-break
+                            // path wrote a signal file nothing consumed, so
+                            // the promised follow-up slice never happened.
+                            // Both modes now run the in-thread compaction.
+                            {
+                                {
                                     ctx_log.log_compact_decision("decision", &reason, policy);
                                     let compact_req = ClientRequest::ThreadCompactStart {
                                         request_id: seq.next(),
@@ -1171,39 +1173,6 @@ impl PersistentSession {
                                         }
                                     }
                                 }
-                                CompactMode::ForcedFollowup => {
-                                    let unsub_req = ClientRequest::ThreadUnsubscribe {
-                                        request_id: seq.next(),
-                                        params: ThreadUnsubscribeParams {
-                                            thread_id: thread_id.to_string(),
-                                        },
-                                    };
-                                    let _ = tokio::time::timeout(
-                                        direct_session_control_request_timeout(deadline),
-                                        client
-                                            .request_typed::<ThreadUnsubscribeResponse>(unsub_req),
-                                    )
-                                    .await;
-                                    let signal = root.join("runtime/compact-followup-requested");
-                                    let _ =
-                                        std::fs::create_dir_all(signal.parent().unwrap_or(root));
-                                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                                        .create(true)
-                                        .append(true)
-                                        .open(&signal)
-                                    {
-                                        let _ = writeln!(
-                                            f,
-                                            "{}\t{}\t{}",
-                                            0,
-                                            thread_id,
-                                            reason.log_summary()
-                                        );
-                                    }
-                                    policy.note_compacted();
-                                    forced_followup_fired = true;
-                                    break;
-                                }
                             }
                         }
                         match msg {
@@ -1272,18 +1241,12 @@ impl PersistentSession {
         ctx_log.log(
             "turn_end",
             &format!(
-                "\"forced_followup\":{forced_followup_fired},\"reply_chars\":{}",
+                "\"reply_chars\":{}",
                 final_message.as_ref().map(|m| m.len()).unwrap_or(0)
             ),
         );
 
-        if forced_followup_fired {
-            final_message.ok_or_else(|| {
-                anyhow::anyhow!("forced follow-up compaction fired before assistant message")
-            })
-        } else {
-            final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
-        }
+        final_message.ok_or_else(|| anyhow::anyhow!("turn completed without assistant message"))
     }
 }
 

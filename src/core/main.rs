@@ -529,14 +529,28 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                      [--auto-approve-gates (deprecated alias for --autonomy progressive)]"
                 );
             }
-            if let Some(level_str) = find_flag_value(&args[1..], "--autonomy") {
-                let level = autonomy::AutonomyLevel::from_str_lossy(level_str);
-                std::env::set_var("CTOX_AUTONOMY_LEVEL", level.as_str());
-            } else if flags.contains(&"--auto-approve-gates") {
-                eprintln!(
-                    "warning: --auto-approve-gates is deprecated; use --autonomy progressive"
+            // Persist the autonomy level in the runtime store: nothing reads
+            // the process environment for this key (AutonomyLevel::from_root
+            // resolves via env_or_config), so the previous std::env::set_var
+            // made the flag a silent no-op.
+            let requested_autonomy =
+                if let Some(level_str) = find_flag_value(&args[1..], "--autonomy") {
+                    Some(autonomy::AutonomyLevel::from_str_lossy(level_str))
+                } else if flags.contains(&"--auto-approve-gates") {
+                    eprintln!(
+                        "warning: --auto-approve-gates is deprecated; use --autonomy progressive"
+                    );
+                    Some(autonomy::AutonomyLevel::Progressive)
+                } else {
+                    None
+                };
+            if let Some(level) = requested_autonomy {
+                let mut env_map = runtime_env::load_runtime_env_map(&root)?;
+                env_map.insert(
+                    "CTOX_AUTONOMY_LEVEL".to_string(),
+                    level.as_str().to_string(),
                 );
-                std::env::set_var("CTOX_AUTONOMY_LEVEL", "progressive");
+                runtime_env::save_runtime_env_map(&root, &env_map)?;
             }
             service::run_foreground(root)
         }

@@ -5053,8 +5053,8 @@ fn load_settings_items(root: &Path) -> Vec<SettingItem> {
                 .cloned()
                 .unwrap_or_else(|| "mid-task".to_string()),
             secret: false,
-            choices: vec!["mid-task", "forced-followup"],
-            help: "How to compact: mid-task (ThreadCompactStart, same thread) / forced-followup (unsubscribe + enqueue follow-up slice).",
+            choices: vec!["mid-task"],
+            help: "How to compact: mid-task (ThreadCompactStart, same thread). The legacy forced-followup value still parses but behaves like mid-task.",
             kind: SettingKind::Env,
         },
         SettingItem {
