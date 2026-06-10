@@ -1093,6 +1093,31 @@ function quoteSqlIdentifier(identifier) {
   return `"${String(identifier).replaceAll('"', '""')}"`;
 }
 
+// waitForHealthy reports ok as soon as the SHELL is healthy; lazily started
+// collections (desktop_file_chunks since the lazy-file-sync change) may still
+// be inside their first catch-up. The strict contract requires COMPLETE
+// initial sync, so poll until the lazy tail finishes (bounded) before
+// asserting. Returns the last observed status either way.
+async function waitForHealthyCompleteStatus(page, { timeoutMs = 60000, requiredCollections = null } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let status = null;
+  for (;;) {
+    status = await page.evaluate((options) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+      timeoutMs: options.timeoutMs,
+      ...(options.requiredCollections ? { requiredCollections: options.requiredCollections } : {}),
+    }), { timeoutMs, requiredCollections });
+    const initialSync = status?.sync?.initialSync || {};
+    const missing = Array.isArray(initialSync.missingInitialReplication)
+      ? initialSync.missingInitialReplication
+      : [];
+    const incomplete = Array.isArray(initialSync.entries)
+      && initialSync.entries.some((entry) => entry?.state !== 'complete');
+    if (status?.ok && missing.length === 0 && !incomplete) return status;
+    if (Date.now() > deadline) return status;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
 function assertHealthyAdvancedStatusContract(status) {
   const problems = [];
   if (!status || typeof status !== 'object') {
@@ -2642,25 +2667,10 @@ function ensureCtoxSmokeBinary() {
       // still be inside their first catch-up for a few hundred ms. The strict
       // contract below requires COMPLETE initial sync, so poll the status
       // until the lazy tail finishes (bounded) before asserting.
-      let advancedStatus = null;
-      {
-        const initialSyncDeadline = Date.now() + 60000;
-        for (;;) {
-          advancedStatus = await page.evaluate((requiredCollections) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
-            timeoutMs: 60000,
-            requiredCollections,
-          }), startupRequiredCollections);
-          const initialSync = advancedStatus?.sync?.initialSync || {};
-          const missing = Array.isArray(initialSync.missingInitialReplication)
-            ? initialSync.missingInitialReplication
-            : [];
-          const incomplete = Array.isArray(initialSync.entries)
-            && initialSync.entries.some((entry) => entry?.state !== 'complete');
-          if (advancedStatus?.ok && missing.length === 0 && !incomplete) break;
-          if (Date.now() > initialSyncDeadline) break;
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-      }
+      const advancedStatus = await waitForHealthyCompleteStatus(page, {
+        timeoutMs: 60000,
+        requiredCollections: startupRequiredCollections,
+      });
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
       if (!advancedStatus?.ok) {
         throw new Error(`Business OS advanced status unhealthy after startup: ${JSON.stringify(advancedStatus, null, 2)}`);
@@ -2722,7 +2732,7 @@ function ensureCtoxSmokeBinary() {
         await new Promise((resolve) => setTimeout(resolve, 5000));
         await cdp.send('Page.setWebLifecycleState', { state: 'active' });
         await cdp.detach().catch(() => {});
-        const resumedStatus = await page.evaluate(() => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+        const resumedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 60000,
           requiredCollections: [
             'business_module_catalog',
@@ -2732,7 +2742,7 @@ function ensureCtoxSmokeBinary() {
             'desktop_files',
             'desktop_file_chunks',
           ],
-        }));
+        });
         if (!resumedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after tab freeze resume: ${JSON.stringify(resumedStatus, null, 2)}`);
         }
@@ -2744,7 +2754,7 @@ function ensureCtoxSmokeBinary() {
         await page.context().setOffline(true);
         await new Promise((resolve) => setTimeout(resolve, 5000));
         await page.context().setOffline(false);
-        const resumedStatus = await page.evaluate(() => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+        const resumedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 90000,
           requiredCollections: [
             'business_module_catalog',
@@ -2754,7 +2764,7 @@ function ensureCtoxSmokeBinary() {
             'desktop_files',
             'desktop_file_chunks',
           ],
-        }));
+        });
         if (!resumedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after browser network flap: ${JSON.stringify(resumedStatus, null, 2)}`);
         }
@@ -3779,7 +3789,7 @@ function ensureCtoxSmokeBinary() {
           const loading = Boolean(document.body?.dataset?.moduleLoading);
           return modulesLoaded && shellOpened && !loading;
         }, null, { timeout: 60000 });
-        const reloadedStatus = await page.evaluate(() => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+        const reloadedStatus = await waitForHealthyCompleteStatus(page, {
           timeoutMs: 60000,
           requiredCollections: [
             'business_module_catalog',
@@ -3787,7 +3797,7 @@ function ensureCtoxSmokeBinary() {
             'business_commands',
             'ctox_queue_tasks',
           ],
-        }));
+        });
         if (!reloadedStatus?.ok) {
           throw new Error(`Business OS advanced status unhealthy after command reload: ${JSON.stringify(reloadedStatus, null, 2)}`);
         }
