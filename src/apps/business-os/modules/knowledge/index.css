@@ -1,16 +1,20 @@
 .knowledge-module {
-  --knowledge-bg: var(--bo-background, var(--bg, #f6f8fb));
-  --knowledge-surface: var(--bo-surface, var(--surface, #fff));
-  --knowledge-surface-muted: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-  --knowledge-text: var(--bo-text, var(--text, #18222d));
-  --knowledge-muted: var(--bo-muted, var(--muted, #64747c));
-  --knowledge-accent: var(--bo-accent, var(--accent, #23665f));
-  --knowledge-line: var(--bo-border, var(--line, #d8e1e5));
-  --knowledge-line-strong: var(--km-line-strong, color-mix(in srgb, var(--knowledge-line) 82%, var(--knowledge-text)));
+  /* Module palette = aliases of the shell tokens (app.css/base.css own
+     light/dark). --km-line-strong mirrors matching's module special; its
+     dark value is overridden in the data-theme block below. */
+  --knowledge-bg: var(--bg);
+  --knowledge-surface: var(--surface);
+  --knowledge-surface-muted: var(--surface-2);
+  --knowledge-text: var(--text);
+  --knowledge-muted: var(--muted);
+  --knowledge-accent: var(--accent);
+  --knowledge-line: var(--line);
+  --km-line-strong: #c8d4d9;
+  --knowledge-line-strong: var(--km-line-strong);
   --knowledge-soft-line: color-mix(in srgb, var(--knowledge-line) 78%, transparent);
-  --knowledge-panel-radius: var(--radius-panel, var(--radius-card, 14px));
-  --knowledge-control-radius: var(--radius-control, 6px);
-  --knowledge-shadow: var(--sh-subtle, 0 8px 22px rgba(23, 33, 38, 0.08));
+  --knowledge-panel-radius: 14px;
+  --knowledge-control-radius: 6px;
+  --knowledge-shadow: var(--panel-shadow);
   --knowledge-icon-settings: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M19.43 12.98c.04-.32.07-.65.07-.98s-.02-.66-.07-.98l2.11-1.65a.5.5 0 0 0 .12-.64l-2-3.46a.5.5 0 0 0-.6-.22l-2.49 1a7.3 7.3 0 0 0-1.7-.98L14.5 2.42A.5.5 0 0 0 14 2h-4a.5.5 0 0 0-.5.42L9.12 5.07c-.61.23-1.18.55-1.7.98l-2.49-1a.5.5 0 0 0-.6.22l-2 3.46a.5.5 0 0 0 .12.64l2.11 1.65c-.04.32-.08.65-.08.98s.03.66.08.98l-2.11 1.65a.5.5 0 0 0-.12.64l2 3.46c.13.22.39.31.6.22l2.49-1c.52.4 1.09.73 1.7.98l.38 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.38-2.65c.61-.25 1.18-.58 1.7-.98l2.49 1c.22.08.47 0 .6-.22l2-3.46a.5.5 0 0 0-.12-.64l-2.11-1.65ZM12 15.5A3.5 3.5 0 1 1 12 8a3.5 3.5 0 0 1 0 7.5Z'/%3E%3C/svg%3E");
   --knowledge-icon-plus: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z'/%3E%3C/svg%3E");
   --knowledge-icon-import: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M11 4h2v8.2l2.9-2.9 1.4 1.4L12 16l-5.3-5.3 1.4-1.4 2.9 2.9V4Zm-5 13h2v1h8v-1h2v3H6v-3Z'/%3E%3C/svg%3E");
@@ -28,8 +32,13 @@
   position: relative;
   background: var(--knowledge-bg);
   color: var(--knowledge-text);
-  font: 14px/1.5 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
+  font: 14px/1.5 var(--font-sans);
   -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme="dark"] .knowledge-module {
+  /* Dark-only special; the derived palette above flips with the shell. */
+  --km-line-strong: #3b484e;
 }
 
 .knowledge-module .knowledge-left {
@@ -884,9 +893,9 @@ body.is-knowledge-col-resizing * {
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--bo-surface, var(--surface, #fff));
-  color: var(--bo-text, var(--text, #18222d));
-  font: 14px/1.5 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--surface);
+  color: var(--text);
+  font: 14px/1.5 var(--font-sans);
 }
 
 .knowledge-edit-drawer .drawer-header-row {
@@ -895,7 +904,7 @@ body.is-knowledge-col-resizing * {
   justify-content: space-between;
   gap: 12px;
   min-height: 58px;
-  border-bottom: 1px solid var(--bo-border, var(--border, #d8e1e5));
+  border-bottom: 1px solid var(--line);
   padding: 14px 16px 12px;
 }
 
@@ -906,7 +915,7 @@ body.is-knowledge-col-resizing * {
 .knowledge-edit-drawer .drawer-header-row h2 {
   margin: 0;
   overflow: hidden;
-  color: var(--bo-text, var(--text, #18222d));
+  color: var(--text);
   font-size: 17px;
   font-weight: 820;
   line-height: 1.2;
@@ -916,7 +925,7 @@ body.is-knowledge-col-resizing * {
 
 .knowledge-edit-drawer .drawer-header-row p {
   margin: 4px 0 0;
-  color: var(--bo-muted, var(--muted, #64747c));
+  color: var(--muted);
   font-size: 12px;
   font-weight: 700;
   line-height: 1.25;
@@ -928,10 +937,10 @@ body.is-knowledge-col-resizing * {
   flex: 0 0 auto;
   width: 34px;
   height: 34px;
-  border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-  border-radius: var(--radius-control, 6px);
-  background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-  color: var(--bo-muted, var(--muted, #64747c));
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--muted);
   font-size: 20px;
   font-weight: 700;
   line-height: 1;
@@ -941,7 +950,7 @@ body.is-knowledge-col-resizing * {
   display: grid;
   gap: 8px;
   margin: 0;
-  border-bottom: 1px solid var(--bo-border, var(--border, #d8e1e5));
+  border-bottom: 1px solid var(--line);
   padding: 12px 16px;
 }
 
@@ -962,13 +971,13 @@ body.is-knowledge-col-resizing * {
 }
 
 .knowledge-drawer-meta dt {
-  color: var(--bo-muted, var(--muted, #64747c));
+  color: var(--muted);
   font-weight: 800;
 }
 
 .knowledge-drawer-meta dd {
   overflow: hidden;
-  color: var(--bo-text, var(--text, #18222d));
+  color: var(--text);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -986,11 +995,11 @@ body.is-knowledge-col-resizing * {
   min-width: 0;
   min-height: 0;
   height: 100%;
-  border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-  border-radius: var(--radius-control, 6px);
-  background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-  color: var(--bo-text, var(--text, #18222d));
-  font: 12.5px/1.5 ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 12.5px/1.5 var(--font-mono);
   padding: 10px;
   resize: none;
 }
@@ -1018,7 +1027,7 @@ body.is-knowledge-col-resizing * {
   display: grid;
   gap: 6px;
   min-width: 0;
-  color: var(--bo-muted, var(--muted, #64747c));
+  color: var(--muted);
   font-size: 11px;
   font-weight: 780;
 }
@@ -1028,11 +1037,11 @@ body.is-knowledge-col-resizing * {
 .knowledge-action-fields textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--bo-border, var(--border, #d8e1e5));
-  border-radius: var(--radius-control, 6px);
-  background: var(--bo-surface-muted, var(--surface-2, #eef3f7));
-  color: var(--bo-text, var(--text, #18222d));
-  font: 12px/1.45 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font: 12px/1.45 var(--font-sans);
   padding: 8px 9px;
 }
 
@@ -1050,14 +1059,14 @@ body.is-knowledge-col-resizing * {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  border-top: 1px solid var(--bo-border, var(--border, #d8e1e5));
+  border-top: 1px solid var(--line);
   padding: 10px 16px 14px;
 }
 
 .knowledge-drawer-actions [data-command-status] {
   min-width: 0;
   overflow: hidden;
-  color: var(--bo-muted, var(--muted, #64747c));
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
   text-overflow: ellipsis;
@@ -1066,10 +1075,10 @@ body.is-knowledge-col-resizing * {
 
 .knowledge-drawer-actions button {
   min-height: 32px;
-  border: 1px solid var(--bo-accent, var(--accent, #23665f));
-  border-radius: var(--radius-control, 6px);
-  background: color-mix(in srgb, var(--bo-accent, var(--accent, #23665f)) 14%, var(--bo-surface, var(--surface, #fff)));
-  color: var(--bo-accent, var(--accent, #23665f));
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
   font: inherit;
   font-size: 12px;
   font-weight: 780;
@@ -1113,7 +1122,7 @@ body.is-knowledge-col-resizing * {
   border: 1px solid var(--knowledge-line);
   border-radius: var(--knowledge-panel-radius);
   background: var(--knowledge-surface);
-  box-shadow: var(--sh-flat, 0 18px 50px rgba(0, 0, 0, 0.18));
+  box-shadow: var(--shadow-lg);
   padding: 6px;
 }
 

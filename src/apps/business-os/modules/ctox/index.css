@@ -23,10 +23,10 @@
   --ctox-flow-channel-fill: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
   --ctox-flow-channel-open-fill: color-mix(in srgb, var(--surface-2) 76%, var(--surface));
   --ctox-flow-muted-fill: color-mix(in srgb, var(--muted) 66%, transparent);
-  --ctox-shadow: 0 8px 24px oklch(0.22 0.015 235 / 0.1);
+  --ctox-shadow: var(--panel-shadow);
   --ctox-drawer-bg: radial-gradient(760px 540px at 0% 0%, color-mix(in srgb, var(--ctox-accent) 8%, transparent), transparent 58%), var(--ctox-surface);
-  --ctox-radius-panel: 16px;
-  --ctox-radius-control: 12px;
+  --ctox-radius-panel: var(--panel-radius);
+  --ctox-radius-control: var(--control-radius);
   --ctox-ok: #4f7f35;
   --ctox-blocked: #b74333;
   --ctox-left-width: 340px;
@@ -43,27 +43,25 @@
 }
 
 :root[data-theme="dark"] .ctox-harness-app {
-  --ctox-line: rgba(255, 255, 255, 0.08);
+  /* Dark-only specials. Everything that just restated the shell dark palette
+     (--ctox-muted/-surface/-surface-2/-shadow/-drawer-bg) now derives from the
+     shell tokens in the base block above and flips automatically. */
+  --ctox-line: var(--line);
   --ctox-hair: rgba(255, 255, 255, 0.055);
-  --ctox-muted: #a3afbd;
-  --ctox-surface: #11161b;
-  --ctox-surface-2: #161c22;
   --ctox-canvas: #0f1419;
-  --ctox-app-bg: radial-gradient(980px 760px at 18% -14%, #151c23 0%, #0e1216 62%);
+  --ctox-app-bg: radial-gradient(980px 760px at 18% -14%, #151c23 0%, var(--bg) 62%);
   --ctox-control-bg: linear-gradient(180deg, #141a20 0%, #10161b 100%);
   --ctox-canvas-grid-x: rgba(255, 255, 255, 0.032);
   --ctox-canvas-grid-y: rgba(255, 255, 255, 0.026);
-  --ctox-canvas-glow: rgba(108, 184, 170, 0.07);
+  --ctox-canvas-glow: color-mix(in srgb, var(--ctox-accent) 7%, transparent);
   --ctox-flow-lane-fill: rgba(255, 255, 255, 0.012);
   --ctox-flow-lane-stroke: rgba(255, 255, 255, 0.045);
-  --ctox-flow-edge: rgba(163, 175, 189, 0.22);
-  --ctox-flow-node-fill: rgba(17, 22, 27, 0.78);
-  --ctox-flow-node-stroke: rgba(255, 255, 255, 0.08);
-  --ctox-flow-channel-fill: rgba(17, 22, 27, 0.72);
-  --ctox-flow-channel-open-fill: rgba(17, 22, 27, 0.62);
+  --ctox-flow-edge: color-mix(in srgb, var(--muted) 22%, transparent);
+  --ctox-flow-node-fill: color-mix(in srgb, var(--surface) 78%, transparent);
+  --ctox-flow-node-stroke: var(--line);
+  --ctox-flow-channel-fill: color-mix(in srgb, var(--surface) 72%, transparent);
+  --ctox-flow-channel-open-fill: color-mix(in srgb, var(--surface) 62%, transparent);
   --ctox-flow-muted-fill: color-mix(in srgb, var(--ctox-muted) 44%, transparent);
-  --ctox-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-  --ctox-drawer-bg: radial-gradient(760px 540px at 0% 0%, rgba(108, 184, 170, 0.08), transparent 58%), var(--ctox-surface);
 }
 
 .ctox-harness-main {
@@ -982,25 +980,25 @@ body.ctox-column-resizing {
 }
 
 .ctox-task-row.tone-ok .ctox-task-status-wrapper {
-  color: #64b482;
-  background: rgba(100, 180, 130, 0.08);
-  border-color: rgba(100, 180, 130, 0.25);
-  box-shadow: 0 0 8px rgba(100, 180, 130, 0.1);
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 8%, transparent);
+  border-color: color-mix(in srgb, var(--success) 25%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--success) 10%, transparent);
 }
 
 .ctox-task-row.tone-ok .ctox-status-icon.is-ok {
-  color: #64b482;
+  color: var(--success);
 }
 
 .ctox-task-row.tone-blocked .ctox-task-status-wrapper {
-  color: #e56b5d;
-  background: rgba(229, 107, 93, 0.08);
-  border-color: rgba(229, 107, 93, 0.25);
-  box-shadow: 0 0 8px rgba(229, 107, 93, 0.1);
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 8%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--danger) 10%, transparent);
 }
 
 .ctox-task-row.tone-blocked .ctox-status-icon.is-blocked {
-  color: #e56b5d;
+  color: var(--danger);
 }
 
 .ctox-task-copy {
@@ -1290,7 +1288,7 @@ body.ctox-column-resizing {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--ctox-line);
   border-radius: 999px;
   background: color-mix(in srgb, var(--ctox-surface-2) 65%, transparent);
   backdrop-filter: blur(12px);
@@ -1511,8 +1509,8 @@ body.ctox-column-resizing {
 
 .ctox-flow-node-g.is-done .ctox-flow-node-box,
 .ctox-flow-node-g.is-done .ctox-flow-node-diamond {
-  fill: rgba(100, 180, 130, 0.08);
-  stroke: rgba(100, 180, 130, 0.48);
+  fill: color-mix(in srgb, var(--success) 8%, transparent);
+  stroke: color-mix(in srgb, var(--success) 48%, transparent);
 }
 
 .ctox-flow-node-g.is-current .ctox-flow-node-box,
@@ -1534,8 +1532,8 @@ body.ctox-column-resizing {
 
 .ctox-flow-node-g.is-blocked .ctox-flow-node-box,
 .ctox-flow-node-g.is-blocked .ctox-flow-node-diamond {
-  fill: rgba(229, 107, 93, 0.08);
-  stroke: rgba(229, 107, 93, 0.6);
+  fill: color-mix(in srgb, var(--danger) 8%, transparent);
+  stroke: color-mix(in srgb, var(--danger) 60%, transparent);
 }
 
 .ctox-flow-node-phase {
@@ -2107,7 +2105,7 @@ body.ctox-column-resizing {
   gap: 12px;
   border: 1px solid var(--ctox-hair);
   border-radius: var(--ctox-radius-panel);
-  background: rgba(105, 205, 190, 0.08);
+  background: color-mix(in srgb, var(--ctox-accent) 8%, transparent);
   padding: 10px 12px;
 }
 
@@ -2177,7 +2175,7 @@ body.ctox-column-resizing {
   min-width: 0;
   border: 1px solid var(--ctox-hair);
   border-radius: 8px;
-  background: var(--panel);
+  background: var(--ctox-surface);
   color: var(--text);
   font: inherit;
   font-size: 13px;
@@ -2197,7 +2195,7 @@ body.ctox-column-resizing {
 
 .ctox-task-save,
 .ctox-task-delete {
-  border: 1px solid var(--ctox-accent-line);
+  border: 1px solid color-mix(in srgb, var(--ctox-accent) 45%, var(--ctox-line));
   border-radius: 8px;
   background: color-mix(in srgb, var(--ctox-accent) 12%, transparent);
   color: color-mix(in srgb, var(--ctox-accent) 78%, var(--text));
@@ -2208,9 +2206,9 @@ body.ctox-column-resizing {
 }
 
 .ctox-task-delete {
-  border-color: color-mix(in srgb, #e4574f 58%, var(--ctox-hair));
-  background: color-mix(in srgb, #e4574f 10%, transparent);
-  color: color-mix(in srgb, #e4574f 72%, var(--text));
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--ctox-hair));
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: color-mix(in srgb, var(--danger) 72%, var(--text));
 }
 
 .ctox-task-save:disabled,
@@ -2337,7 +2335,7 @@ body.ctox-column-resizing {
   bottom: 20px;
   left: 16px;
   width: 1px;
-  background: rgba(105, 205, 190, 0.5);
+  background: color-mix(in srgb, var(--ctox-accent) 50%, transparent);
   z-index: 0;
 }
 
@@ -2356,7 +2354,7 @@ body.ctox-column-resizing {
 }
 
 .ctox-drawer-steps button.is-current {
-  background: rgba(105, 205, 190, 0.1);
+  background: color-mix(in srgb, var(--ctox-accent) 10%, transparent);
 }
 
 .ctox-drawer-steps span {
@@ -2365,7 +2363,7 @@ body.ctox-column-resizing {
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 1px solid rgba(105, 205, 190, 0.42);
+  border: 1px solid color-mix(in srgb, var(--ctox-accent) 42%, transparent);
   border-radius: 999px;
   background: var(--surface);
   color: var(--ctox-muted);
@@ -2376,10 +2374,10 @@ body.ctox-column-resizing {
 }
 
 .ctox-drawer-steps button.is-current span {
-  border-color: rgba(105, 205, 190, 0.92);
-  background: rgba(105, 205, 190, 0.16);
+  border-color: color-mix(in srgb, var(--ctox-accent) 92%, transparent);
+  background: color-mix(in srgb, var(--ctox-accent) 16%, transparent);
   color: color-mix(in srgb, var(--ctox-accent) 82%, var(--text));
-  box-shadow: 0 0 0 4px rgba(105, 205, 190, 0.1);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ctox-accent) 10%, transparent);
 }
 
 .ctox-drawer-steps strong,

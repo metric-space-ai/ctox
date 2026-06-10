@@ -9,23 +9,43 @@
   width: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
   overflow: hidden;
   position: relative;
   box-sizing: border-box;
 
-  /* Theme Tokens and Color Palette mapped to host variables */
-  --fibu-primary: var(--accent, #0b8a6f);
-  --fibu-primary-hover: color-mix(in srgb, var(--accent) 85%, #000 15%);
-  --fibu-accent: var(--accent, #00b080);
-  --fibu-accent-rgb: 0, 176, 128;
-  --fibu-success: #10b981;
-  --fibu-warning: #f59e0b;
-  --fibu-danger: var(--danger, #d9534f);
+  /* Theme Tokens and Color Palette — aliases of the shell tokens
+     (app.css/base.css own light/dark). Only the genuinely module-local
+     specials below carry literals; their dark values live in the single
+     dark override block after this rule. */
+  --fibu-primary: var(--accent);
+  --fibu-primary-hover: color-mix(in srgb, var(--accent) 85%, black);
+  --fibu-accent: var(--accent);
+  --fibu-success: var(--success);
+  --fibu-warning: var(--warning);
+  --fibu-danger: var(--danger);
   --fibu-bg-glass: var(--glass-bg);
   --fibu-border-glass: var(--line);
   --fibu-glow-color: var(--accent-soft);
-  --fibu-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --fibu-font-mono: var(--font-mono);
+  /* Module-local specials: blue mileage "commute" dot, E2E terminal look,
+     debit/credit glow (dark-only effect, none in light). */
+  --fibu-info: #2563eb;
+  --fibu-terminal-bg: var(--surface-2);
+  --fibu-terminal-line: var(--line);
+  --fibu-terminal-ink: var(--text);
+  --fibu-debit-glow: none;
+  --fibu-credit-glow: none;
+}
+
+:root[data-theme="dark"] .fibu-module[data-fibu-root] {
+  /* Dark-only specials; the aliased --fibu-* palette flips with the shell. */
+  --fibu-info: #3b82f6;
+  --fibu-terminal-bg: #05070f;
+  --fibu-terminal-line: rgba(255, 255, 255, 0.05);
+  --fibu-terminal-ink: #a3e635;
+  --fibu-debit-glow: 0 0 8px color-mix(in srgb, var(--success) 25%, transparent);
+  --fibu-credit-glow: 0 0 8px color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 /* Three Pane Layout with Gutters and Floating Cards */
@@ -44,14 +64,14 @@
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
 }
 
 .fibu-center {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
   display: flex;
   flex-direction: column;
 }
@@ -60,7 +80,7 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
   display: flex;
   flex-direction: column;
 }
@@ -89,7 +109,7 @@
   font-size: 14.5px;
   font-weight: 720;
   margin: 0;
-  color: var(--text-strong, var(--text));
+  color: var(--text-strong);
   letter-spacing: -0.01em;
 }
 
@@ -125,7 +145,7 @@
   align-items: center;
   gap: 10px;
   padding: 8px 14px;
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   border: 1px solid transparent;
   background: transparent;
   color: var(--muted);
@@ -233,7 +253,7 @@
 .fibu-select {
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   color: var(--text);
   padding: 8px 12px;
   font-size: 12.5px;
@@ -293,7 +313,7 @@
   width: 100%;
   background: var(--surface-2);
   border: 1px solid var(--line);
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   color: var(--text);
   padding: 8px 14px;
   font-size: 13px;
@@ -338,7 +358,7 @@
 
 .fibu-file-dropzone.compact {
   padding: 10px 18px;
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   flex-direction: row;
   font-size: 12px;
   gap: 8px;
@@ -377,7 +397,7 @@
   justify-content: center;
   gap: 8px;
   padding: 8px 16px;
-  border-radius: var(--control-radius, 10px);
+  border-radius: var(--control-radius);
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
@@ -389,7 +409,7 @@
 }
 
 .fibu-btn-primary {
-  background: var(--accent-gradient, var(--fibu-primary));
+  background: var(--fibu-primary);
   color: #ffffff;
   box-shadow: var(--shadow-sm);
 }
@@ -411,13 +431,13 @@
 }
 
 .fibu-btn-danger {
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid rgba(239, 68, 68, 0.25);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--fibu-danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fibu-danger) 25%, transparent);
+  color: var(--fibu-danger);
 }
 
 .fibu-btn-danger:hover {
-  background: rgba(239, 68, 68, 0.22);
+  background: color-mix(in srgb, var(--fibu-danger) 22%, transparent);
   transform: translateY(-1px);
 }
 
@@ -517,9 +537,9 @@
 }
 
 .fibu-badge.status-posted {
-  background: rgba(16, 185, 129, 0.12);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: color-mix(in srgb, var(--fibu-success) 12%, transparent);
+  color: var(--fibu-success);
+  border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
 }
 
 .fibu-badge.status-draft {
@@ -529,21 +549,21 @@
 }
 
 .fibu-badge.status-storno {
-  background: rgba(239, 68, 68, 0.12);
-  color: #ef4444;
-  border: 1px solid rgba(239, 68, 68, 0.2);
+  background: color-mix(in srgb, var(--fibu-danger) 12%, transparent);
+  color: var(--fibu-danger);
+  border: 1px solid color-mix(in srgb, var(--fibu-danger) 20%, transparent);
 }
 
 .fibu-badge.status-matched {
-  background: rgba(16, 185, 129, 0.12);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: color-mix(in srgb, var(--fibu-success) 12%, transparent);
+  color: var(--fibu-success);
+  border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
 }
 
 .fibu-badge.status-proposed {
-  background: rgba(245, 158, 11, 0.12);
-  color: #f59e0b;
-  border: 1px solid rgba(245, 158, 11, 0.25);
+  background: color-mix(in srgb, var(--fibu-warning) 12%, transparent);
+  color: var(--fibu-warning);
+  border: 1px solid color-mix(in srgb, var(--fibu-warning) 25%, transparent);
 }
 
 .fibu-badge.status-unmatched {
@@ -764,7 +784,7 @@
 .fibu-ustva-card.total {
   grid-column: span 2;
   border-color: color-mix(in srgb, var(--fibu-accent) 50%, transparent);
-  background: rgba(var(--fibu-accent-rgb), 0.08);
+  background: color-mix(in srgb, var(--fibu-accent) 8%, transparent);
   box-shadow: var(--shadow-sm);
 }
 
@@ -1337,40 +1357,29 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   min-width: 0;
 }
 
-/* Glowing Debit & Credit Typography - High contrast in both light and dark modes */
+/* Glowing Debit & Credit Typography — the shell success/danger tokens carry
+   the light/dark contrast; the glow is a dark-only special (--fibu-*-glow). */
 .fibu-text-debit {
-  color: #047857 !important; /* Deep emerald green for light mode readability */
+  color: var(--success) !important;
   font-weight: 600 !important;
+  text-shadow: var(--fibu-debit-glow);
 }
 
 .fibu-text-credit {
-  color: #b91c1c !important; /* Crimson red for light mode readability */
+  color: var(--danger) !important;
   font-weight: 600 !important;
-}
-
-:root[data-theme="dark"] .fibu-text-debit {
-  color: #34d399 !important; /* Glowing mint emerald in dark mode */
-  text-shadow: 0 0 8px rgba(52, 211, 153, 0.25);
-}
-
-:root[data-theme="dark"] .fibu-text-credit {
-  color: #f87171 !important; /* Glowing light red in dark mode */
-  text-shadow: 0 0 8px rgba(248, 113, 113, 0.25);
+  text-shadow: var(--fibu-credit-glow);
 }
 
 /* Warnings and secondary alignment utilities */
 .fibu-text-warning {
-  color: #b45309 !important; /* Amber 700 - very readable in light mode */
+  color: var(--warning) !important;
   font-weight: 600 !important;
 }
 
-:root[data-theme="dark"] .fibu-text-warning {
-  color: #fbbf24 !important; /* Bright amber for dark mode */
-}
-
 .fibu-btn-dashed-warning {
-  border: 1px dashed var(--accent, #0b8a6f) !important;
-  color: var(--accent, #0b8a6f) !important;
+  border: 1px dashed var(--accent) !important;
+  color: var(--accent) !important;
   background: transparent !important;
 }
 
@@ -1378,31 +1387,26 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   background: var(--accent-soft) !important;
 }
 
-/* Theme integrated terminal styling for E2E logs */
+/* Theme integrated terminal styling for E2E logs — the dark "phosphor"
+   look comes from the --fibu-terminal-* specials on the module root. */
 .fibu-e2e-terminal {
-  background: var(--surface-2) !important;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--control-radius, 10px);
+  background: var(--fibu-terminal-bg) !important;
+  border: 1px solid var(--fibu-terminal-line) !important;
+  border-radius: var(--control-radius);
   padding: 15px;
   font-family: var(--fibu-font-mono);
   font-size: 12px;
   height: 180px;
   overflow-y: auto;
-  color: var(--text) !important;
+  color: var(--fibu-terminal-ink) !important;
   line-height: 1.6;
-}
-
-:root[data-theme="dark"] .fibu-e2e-terminal {
-  background: #05070f !important;
-  border: 1px solid rgba(255, 255, 255, 0.05) !important;
-  color: #a3e635 !important;
 }
 
 /* GoBD Elegant Security Badge Card */
 .fibu-security-badge-card {
   margin-top: 20px;
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.06) 0%, rgba(52, 211, 153, 0.02) 100%);
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--fibu-success) 6%, transparent) 0%, color-mix(in srgb, var(--fibu-success) 2%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--fibu-success) 25%, transparent);
   border-radius: 12px;
   padding: 14px 20px;
   display: flex;
@@ -1414,7 +1418,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 .security-badge-icon {
   font-size: 24px;
-  filter: drop-shadow(0 0 8px rgba(16, 185, 129, 0.3));
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--fibu-success) 30%, transparent));
   flex-shrink: 0;
 }
 
@@ -1427,7 +1431,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .security-badge-title {
   font-size: 13px;
   font-weight: 700;
-  color: #10b981;
+  color: var(--fibu-success);
   letter-spacing: 0.02em;
 }
 
@@ -1508,9 +1512,9 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
   display: inline-block;
 }
 
-.mileage-share-item.business .share-color-dot { background: #10b981; box-shadow: 0 0 6px #10b981; }
-.mileage-share-item.private .share-color-dot { background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
-.mileage-share-item.commute .share-color-dot { background: #3b82f6; box-shadow: 0 0 6px #3b82f6; }
+.mileage-share-item.business .share-color-dot { background: var(--fibu-success); box-shadow: 0 0 6px var(--fibu-success); }
+.mileage-share-item.private .share-color-dot { background: var(--fibu-warning); box-shadow: 0 0 6px var(--fibu-warning); }
+.mileage-share-item.commute .share-color-dot { background: var(--fibu-info); box-shadow: 0 0 6px var(--fibu-info); }
 
 .share-val {
   font-size: 13px;
@@ -1527,7 +1531,7 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 
 /* Premium OCR Metadata badge card */
 .ocr-raw-meta-badge {
-  background: linear-gradient(135deg, rgba(var(--fibu-accent-rgb), 0.05) 0%, rgba(var(--fibu-accent-rgb), 0.01) 100%) !important;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--fibu-accent) 5%, transparent) 0%, color-mix(in srgb, var(--fibu-accent) 1%, transparent) 100%) !important;
   border: 1px solid var(--line) !important;
   border-radius: 12px !important;
   padding: 16px !important;
@@ -1554,9 +1558,9 @@ body[data-shell-taskbar-open] .fibu-module .ctox-bottom-drawer {
 .ocr-confidence-badge {
   font-size: 10px;
   font-weight: 700;
-  background: rgba(16, 185, 129, 0.12);
-  color: #10b981;
-  border: 1px solid rgba(16, 185, 129, 0.2);
+  background: color-mix(in srgb, var(--fibu-success) 12%, transparent);
+  color: var(--fibu-success);
+  border: 1px solid color-mix(in srgb, var(--fibu-success) 20%, transparent);
   padding: 2px 8px;
   border-radius: 99px;
   font-family: var(--fibu-font-mono);

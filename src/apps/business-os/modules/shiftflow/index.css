@@ -1,17 +1,18 @@
 /* src/apps/business-os/modules/shiftflow/index.css */
 
 .shiftflow-app {
-  --shiftflow-bg: var(--bo-background, var(--bg, oklch(0.965 0.006 235)));
-  --shiftflow-surface: var(--bo-surface, var(--surface, oklch(0.987 0.005 235)));
-  --shiftflow-surface-2: var(--bo-surface-muted, var(--surface-2, oklch(0.944 0.008 235)));
-  --shiftflow-line: var(--bo-border, var(--line, oklch(0.84 0.012 235)));
-  --shiftflow-text: var(--bo-text, var(--text, oklch(0.22 0.015 235)));
-  --shiftflow-muted: var(--bo-muted, var(--muted, oklch(0.48 0.015 235)));
-  --shiftflow-accent: var(--bo-accent, var(--accent, oklch(0.48 0.115 215)));
-  --shiftflow-accent-soft: var(--bo-accent-soft, var(--accent-soft, oklch(0.9 0.04 215)));
-  --shiftflow-danger: var(--danger, oklch(0.56 0.13 28));
-  --shiftflow-radius: var(--os-btn-radius, var(--radius-control, 8px));
-  --shiftflow-panel-radius: var(--radius-panel, 12px);
+  /* Module palette = aliases of the shell tokens (app.css owns light/dark). */
+  --shiftflow-bg: var(--bg);
+  --shiftflow-surface: var(--surface);
+  --shiftflow-surface-2: var(--surface-2);
+  --shiftflow-line: var(--line);
+  --shiftflow-text: var(--text);
+  --shiftflow-muted: var(--muted);
+  --shiftflow-accent: var(--accent);
+  --shiftflow-accent-soft: var(--accent-soft);
+  --shiftflow-danger: var(--danger);
+  --shiftflow-radius: 8px;
+  --shiftflow-panel-radius: 12px;
 
   /* Layout column width variables */
   --shiftflow-left-width: 280px;
@@ -39,7 +40,7 @@
   box-sizing: border-box;
   background: var(--shiftflow-bg);
   color: var(--shiftflow-text);
-  font: 13.5px/1.5 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  font: 13.5px/1.5 var(--font-sans);
   overflow: hidden;
   position: relative;
 }
@@ -931,7 +932,7 @@ body.is-shiftflow-resizing * {
 }
 
 .shiftflow-drawer-form label > span {
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 780;
   text-transform: uppercase;
@@ -958,7 +959,7 @@ body.is-shiftflow-resizing * {
   gap: 6px;
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--text, #18222d);
+  color: var(--text);
   text-transform: none;
   letter-spacing: normal;
   cursor: pointer;
@@ -1325,7 +1326,7 @@ body.is-shiftflow-resizing * {
 }
 
 .text-cost {
-  color: color-mix(in srgb, var(--shiftflow-text) 60%, #ef4444);
+  color: color-mix(in srgb, var(--shiftflow-text) 60%, var(--shiftflow-danger));
 }
 
 .text-margin {
@@ -1385,13 +1386,13 @@ body.is-shiftflow-resizing * {
 }
 
 .margin-badge.mid {
-  background: color-mix(in srgb, #f97316 15%, transparent);
-  color: #f97316;
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
 }
 
 .margin-badge.low {
-  background: color-mix(in srgb, #ef4444 15%, transparent);
-  color: #ef4444;
+  background: color-mix(in srgb, var(--shiftflow-danger) 15%, transparent);
+  color: var(--shiftflow-danger);
 }
 
 /* Project indicator badge in schedule slots */

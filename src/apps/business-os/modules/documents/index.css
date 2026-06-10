@@ -1,3 +1,9 @@
+/* Documents module — themed entirely from the shell design tokens
+   (app.css :root / :root[data-theme="dark"] + shared/base.css derived tokens).
+   No module palette, no shell-token redefinition (module conformance guard);
+   light/dark follow the shell theme switch automatically. The only dark-scoped
+   rules left are genuinely dark-only specials (shadow strength and accent
+   lighten/darken mixes). */
 .documents-module {
   height: 100%;
   min-height: 0;
@@ -15,7 +21,7 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
 }
 
 .documents-editor-shell {
@@ -67,10 +73,10 @@
   justify-content: center;
   gap: 7px;
   overflow: hidden;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface-2, #eef3f7);
-  color: var(--text, #18222d);
+  background: var(--surface-2);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   font-weight: 760;
@@ -82,8 +88,8 @@
 
 .documents-empty-actions button:hover,
 .documents-empty-actions button:focus-visible {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
   outline: none;
 }
 
@@ -123,14 +129,14 @@
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
 }
 
 .documents-runbooks {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 16px;
-  box-shadow: var(--sh-subtle, 0 8px 22px rgba(0, 0, 0, 0.05));
+  box-shadow: var(--panel-shadow);
 }
 
 .documents-column-head,
@@ -173,9 +179,9 @@
   min-height: 24px;
   align-items: center;
   overflow: hidden;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 999px;
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 820;
   line-height: 1;
@@ -207,8 +213,8 @@
 }
 
 .documents-column-icon:hover {
-  color: var(--accent, #2b6f73);
-  border-color: var(--accent, #2b6f73);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 
 .documents-column-icon:disabled {
@@ -273,7 +279,7 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 8px 12px;
-  border-bottom: 1px solid var(--line, #d7e0e8);
+  border-bottom: 1px solid var(--line);
 }
 
 .documents-column-tools input,
@@ -282,10 +288,10 @@
 .documents-runbook-form textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   box-shadow: none;
 }
@@ -326,8 +332,8 @@
 }
 
 .documents-card[aria-current="true"] {
-  background: var(--surface-2, #eef5f7);
-  border-color: var(--line, #bed1d8);
+  background: var(--surface-2);
+  border-color: var(--line);
 }
 
 .documents-card-main {
@@ -347,17 +353,17 @@
   height: 28px;
   margin: 6px 6px 0 0;
   place-items: center;
-  border: 1px solid var(--line, #d4e0e5);
+  border: 1px solid var(--line);
   border-radius: 6px;
   background: transparent;
-  color: var(--muted, #687684);
+  color: var(--muted);
   cursor: pointer;
 }
 
 .documents-card-manage:hover,
 .documents-card-manage:focus-visible {
-  color: var(--accent, #2b6f73);
-  border-color: var(--accent, #2b6f73);
+  color: var(--accent);
+  border-color: var(--accent);
   outline: none;
 }
 
@@ -388,7 +394,7 @@
 
 .documents-card-main .documents-card-filename,
 .documents-card-main .documents-card-description {
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 12px;
   white-space: normal;
   overflow-wrap: anywhere;
@@ -404,13 +410,13 @@
   line-clamp: 2;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
-  color: color-mix(in srgb, var(--text, #18222d) 72%, var(--muted, #687684));
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
 
 .documents-card-main small {
   display: block;
   margin-top: 4px;
-  color: var(--accent, #2b6f73);
+  color: var(--accent);
   font-size: 11px;
   font-weight: 700;
 }
@@ -426,10 +432,10 @@
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
-  border: 1px solid color-mix(in srgb, var(--accent, #2b6f73) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
   border-radius: 999px;
   padding: 1px 6px;
-  color: var(--accent, #2b6f73);
+  color: var(--accent);
   font-size: 10px;
   font-weight: 700;
 }
@@ -439,11 +445,11 @@
   z-index: 2400;
   width: min(560px, calc(100vw - 24px));
   overflow: hidden;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: var(--surface, #fff);
-  box-shadow: var(--shadow, 0 18px 50px rgba(20, 28, 36, 0.18));
-  color: var(--text, #18222d);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  color: var(--text);
   padding: 6px;
 }
 
@@ -478,13 +484,13 @@
 }
 
 .documents-context-chat strong {
-  color: var(--text, #18222d);
+  color: var(--text);
   font-size: 12.5px;
   font-weight: 820;
 }
 
 .documents-context-chat span {
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 700;
 }
@@ -503,9 +509,9 @@
   min-width: 0;
   min-height: 30px;
   overflow: hidden;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 11.5px;
   font-weight: 760;
   padding: 0 8px;
@@ -515,7 +521,7 @@
 
 .documents-context-mode input {
   margin: 0;
-  accent-color: var(--accent, #2b6f73);
+  accent-color: var(--accent);
 }
 
 .documents-context-chat textarea {
@@ -524,18 +530,18 @@
   min-height: 92px;
   max-height: 180px;
   box-sizing: border-box;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
-  font: 12.5px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--surface);
+  color: var(--text);
+  font: 12.5px/1.4 var(--font-sans);
   padding: 9px;
   resize: vertical;
 }
 
 .documents-context-chat textarea:focus {
-  border-color: var(--accent, #2b6f73);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #2b6f73) 16%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
   outline: none;
 }
 
@@ -543,10 +549,10 @@
   flex: 0 0 auto;
   min-height: 30px;
   overflow: hidden;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface-2, #eef3f7);
-  color: var(--text, #18222d);
+  background: var(--surface-2);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   font-weight: 760;
@@ -558,15 +564,15 @@
 
 .documents-context-chat button:hover,
 .documents-context-chat button:focus-visible {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
   outline: none;
 }
 
 .documents-context-chat button[type="submit"] {
-  border-color: var(--accent, #2b6f73);
-  background: color-mix(in srgb, var(--accent, #2b6f73) 14%, var(--surface, #fff));
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  color: var(--accent);
 }
 
 .documents-context-chat [data-open-ctox-task] {
@@ -590,16 +596,16 @@
 }
 
 .documents-context-chat code {
-  color: var(--accent, #2b6f73);
-  font: 11.5px/1.2 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color: var(--accent);
+  font: 11.5px/1.2 var(--font-mono);
 }
 
 .documents-workflow {
   display: grid;
   gap: 10px;
   padding: 10px 12px 12px;
-  border-bottom: 1px solid var(--line, #d7e0e8);
-  background: var(--surface-2, #eef3f7);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
 }
 
 .documents-workflow-head {
@@ -611,7 +617,7 @@
 
 .documents-workflow-head strong {
   font-size: 13px;
-  color: var(--text, #18222d);
+  color: var(--text);
 }
 
 .documents-workflow-field {
@@ -622,7 +628,7 @@
 .documents-workflow-field span {
   font-size: 11px;
   font-weight: 800;
-  color: var(--muted, #687684);
+  color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
@@ -632,10 +638,10 @@
 .documents-workflow textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
 }
 
@@ -660,18 +666,18 @@
 .documents-workflow-actions button,
 .documents-knowledge-link {
   min-height: 34px;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   font-weight: 760;
   cursor: pointer;
 }
 
 .documents-workflow-actions button[type="submit"] {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .documents-knowledge-link {
@@ -703,7 +709,7 @@
 }
 
 .documents-drawer-form label > span {
-  color: var(--muted, #687684);
+  color: var(--muted);
   font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
@@ -715,10 +721,10 @@
 .documents-drawer-form textarea {
   width: 100%;
   min-width: 0;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
 }
 
@@ -743,7 +749,7 @@
 .documents-form-status {
   min-height: 18px;
   margin: -2px 0 0;
-  color: var(--danger, #b94a45);
+  color: var(--danger);
   font-size: 12px;
   font-weight: 720;
 }
@@ -758,27 +764,27 @@
 
 .documents-drawer-actions button {
   min-height: 36px;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   font-weight: 760;
 }
 
 .documents-drawer-actions button[type="submit"] {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .documents-drawer-actions .documents-danger-button {
-  border-color: color-mix(in srgb, var(--danger, #e06b60) 70%, var(--line, #cdd8e2));
-  color: var(--danger, #e06b60);
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
+  color: var(--danger);
 }
 
 .documents-drawer-actions .documents-danger-button:hover,
 .documents-drawer-actions .documents-danger-button:focus-visible {
-  background: color-mix(in srgb, var(--danger, #e06b60) 12%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
   outline: none;
 }
 
@@ -796,10 +802,10 @@
 
 .documents-runbook-form button {
   min-height: 36px;
-  border: 1px solid var(--line, #cdd8e2);
+  border: 1px solid var(--line);
   border-radius: 6px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   font-weight: 760;
   cursor: pointer;
@@ -820,7 +826,7 @@
   height: 100%;
   min-height: 0;
   padding: 18px;
-  background: var(--surface-2, #eef3f7);
+  background: var(--surface-2);
   box-sizing: border-box;
 }
 
@@ -832,10 +838,10 @@
 
 .documents-markdown-toggle {
   min-height: 32px;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 7px;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
+  background: var(--surface);
+  color: var(--text);
   font: inherit;
   font-size: 12px;
   font-weight: 760;
@@ -845,8 +851,8 @@
 
 .documents-markdown-toggle:hover,
 .documents-markdown-toggle:focus-visible {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
   outline: none;
 }
 
@@ -856,20 +862,20 @@
   height: 100%;
   min-height: 0;
   box-sizing: border-box;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 8px;
   padding: 18px;
   resize: none;
-  background: var(--surface, #fff);
-  color: var(--text, #18222d);
-  font: 14px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  background: var(--surface);
+  color: var(--text);
+  font: 14px/1.55 var(--font-mono);
   outline: none;
 }
 
 .documents-markdown-preview {
   overflow: auto;
   white-space: normal;
-  font: 15px/1.65 system-ui, -apple-system, "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
+  font: 15px/1.65 var(--font-sans);
 }
 
 .documents-markdown-preview h1,
@@ -877,7 +883,7 @@
 .documents-markdown-preview h3,
 .documents-markdown-preview h4 {
   margin: 0 0 14px;
-  color: var(--text, #18222d);
+  color: var(--text);
   line-height: 1.18;
   letter-spacing: 0;
 }
@@ -912,18 +918,18 @@
 
 .documents-markdown-preview code {
   border-radius: 5px;
-  background: var(--surface-2, #eef3f7);
+  background: var(--surface-2);
   padding: 1px 4px;
-  font: 0.92em/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font: 0.92em/1.3 var(--font-mono);
 }
 
 .documents-markdown-empty {
-  color: var(--muted, #64747c);
+  color: var(--muted);
 }
 
 .documents-markdown-textarea:focus {
-  border-color: var(--accent, #2b6f73);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #2b6f73) 16%, transparent);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
 .documents-superdoc-frame {
@@ -933,7 +939,7 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background: var(--surface-2, #eef3f7);
+  background: var(--surface-2);
 }
 
 .documents-superdoc-controls {
@@ -947,27 +953,27 @@
 .documents-superdoc-toolbar-toggle {
   pointer-events: auto;
   min-height: 26px;
-  border: 1px solid var(--line, #d7e0e8);
+  border: 1px solid var(--line);
   border-radius: 6px;
   padding: 0 8px;
-  background: color-mix(in srgb, var(--surface, #fff) 88%, transparent);
-  color: var(--text, #18222d);
-  font: 700 11px/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--text);
+  font: 700 11px/1 var(--font-sans);
   cursor: pointer;
   box-shadow: 0 4px 12px rgba(20, 28, 36, 0.12);
 }
 
 .documents-superdoc-toolbar-toggle:hover,
 .documents-superdoc-toolbar-toggle:focus-visible {
-  border-color: var(--accent, #2b6f73);
-  color: var(--accent, #2b6f73);
+  border-color: var(--accent);
+  color: var(--accent);
   outline: none;
 }
 
 .documents-superdoc-toolbar {
   flex: 0 0 auto;
-  border-bottom: 1px solid var(--line, #d7e0e8);
-  background: var(--surface, #fff);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
   overflow: hidden;
   padding-right: 158px;
 }
@@ -990,8 +996,8 @@
   box-sizing: border-box;
   padding: 4px 0 !important;
   border: 0 !important;
-  background: var(--surface, #fff) !important;
-  color: var(--text, #18222d) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
 }
 
 .documents-superdoc-toolbar .button-group {
@@ -1009,7 +1015,7 @@
 .documents-superdoc-toolbar .toolbar-button,
 .documents-superdoc-toolbar .toolbar-dropdown-trigger,
 .documents-superdoc-toolbar .sd-tooltip-trigger {
-  color: var(--text, #18222d) !important;
+  color: var(--text) !important;
 }
 
 .documents-superdoc-toolbar .toolbar-button,
@@ -1020,21 +1026,21 @@
 
 .documents-superdoc-toolbar .toolbar-button:not(.disabled):hover,
 .documents-superdoc-toolbar .toolbar-item:focus-visible .toolbar-button {
-  background: color-mix(in srgb, var(--surface-2, #eef3f7) 78%, var(--accent, #2b6f73) 8%) !important;
-  border-color: var(--line, #d7e0e8) !important;
+  background: color-mix(in srgb, var(--surface-2) 78%, var(--accent) 8%) !important;
+  border-color: var(--line) !important;
 }
 
 .documents-superdoc-toolbar .toolbar-button.active,
 .documents-superdoc-toolbar .toolbar-button.is-active,
 .documents-superdoc-toolbar .toolbar-button[aria-pressed="true"] {
-  background: color-mix(in srgb, var(--accent, #2b6f73) 16%, var(--surface-2, #eef3f7)) !important;
-  border-color: color-mix(in srgb, var(--accent, #2b6f73) 46%, var(--line, #d7e0e8)) !important;
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)) !important;
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line)) !important;
 }
 
 .documents-superdoc-toolbar .toolbar-button.disabled,
 .documents-superdoc-toolbar .disabled .toolbar-button,
 .documents-superdoc-toolbar .disabled {
-  color: var(--muted, #7b8791) !important;
+  color: var(--muted) !important;
   opacity: 0.45;
 }
 
@@ -1044,13 +1050,13 @@
 }
 
 .documents-superdoc-toolbar .button-text-input {
-  border-color: var(--line, #d7e0e8) !important;
-  background: var(--surface, #fff) !important;
-  color: var(--text, #18222d) !important;
+  border-color: var(--line) !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
 }
 
 .documents-superdoc-toolbar .separator-inner {
-  background: var(--line, #d7e0e8) !important;
+  background: var(--line) !important;
 }
 
 .documents-superdoc-ruler {
@@ -1058,9 +1064,9 @@
   min-height: 27px;
   display: flex;
   justify-content: center;
-  border-bottom: 1px solid var(--line, #d7e0e8);
-  background: var(--surface, #fff);
-  color: var(--muted, #687684);
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
   overflow: hidden;
 }
 
@@ -1095,20 +1101,19 @@
 }
 
 .documents-superdoc-mount .super-editor-container.contained {
-  background: var(--surface-2, #eef3f7);
+  background: var(--surface-2);
 }
 
+/* Dark-only specials: a denser surface veil and a deeper shadow on the
+   floating toggle, and a slightly elevated text-input surface inside the
+   vendor toolbar. Everything else flips with the shell tokens. */
 :root[data-theme="dark"] .documents-superdoc-toolbar-toggle {
-  background: color-mix(in srgb, var(--surface, #171d20) 92%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
 }
 
-:root[data-theme="dark"] .documents-superdoc-toolbar .superdoc-toolbar {
-  background: var(--surface, #171d20) !important;
-}
-
 :root[data-theme="dark"] .documents-superdoc-toolbar .button-text-input {
-  background: color-mix(in srgb, var(--surface, #171d20) 84%, var(--surface-2, #20282c)) !important;
+  background: color-mix(in srgb, var(--surface) 84%, var(--surface-2)) !important;
 }
 
 .documents-superdoc-mount .presentation-editor__viewport {
@@ -1161,7 +1166,7 @@
 }
 
 .documents-card:hover {
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2, #eef3f7));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-2));
   transform: translateY(-0.5px) scale(1.008);
   box-shadow: 0 4px 12px oklch(0.22 0.015 235 / 0.03);
 }
@@ -1274,6 +1279,7 @@
 .documents-drawer-actions button[type="submit"]:hover {
   background: color-mix(in srgb, var(--accent) 88%, #fff) !important;
 }
+/* Dark-only special: hover darkens the accent instead of lightening it. */
 :root[data-theme="dark"] .documents-workflow-actions button[type="submit"]:hover,
 :root[data-theme="dark"] .documents-drawer-actions button[type="submit"]:hover {
   background: color-mix(in srgb, var(--accent) 88%, #000) !important;

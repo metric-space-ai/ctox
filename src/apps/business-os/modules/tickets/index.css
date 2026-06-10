@@ -1,13 +1,14 @@
 .tickets-module {
   --tickets-left-width: 340px;
   --tickets-right-width: 360px;
-  --tickets-bg: var(--ctox-bg, #0d141a);
-  --tickets-surface: var(--ctox-surface, #121a22);
-  --tickets-surface-2: var(--ctox-surface-2, #16212b);
-  --tickets-border: var(--ctox-border, rgba(148, 163, 184, 0.18));
-  --tickets-text: var(--ctox-text, #e5edf4);
-  --tickets-muted: var(--ctox-muted, #9aa8b5);
-  --tickets-accent: var(--ctox-accent, #53c7b5);
+  /* Module palette = aliases of the shell tokens (app.css owns light/dark). */
+  --tickets-bg: var(--bg);
+  --tickets-surface: var(--surface);
+  --tickets-surface-2: var(--surface-2);
+  --tickets-border: var(--line);
+  --tickets-text: var(--text);
+  --tickets-muted: var(--muted);
+  --tickets-accent: var(--accent);
   display: grid;
   grid-template-columns: var(--tickets-left-width) 6px minmax(420px, 1fr) 6px var(--tickets-right-width);
   height: 100%;
@@ -25,11 +26,11 @@
 
 .tickets-left,
 .tickets-center {
-  border-right: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border-right: 1px solid var(--tickets-border);
 }
 
 .tickets-right {
-  border-left: 1px solid var(--ctox-border, rgba(15, 23, 42, 0.12));
+  border-left: 1px solid var(--tickets-border);
 }
 
 .tickets-list,
@@ -252,7 +253,7 @@
 }
 
 .tickets-command-status[data-state="error"] {
-  color: #b42318;
+  color: var(--danger);
 }
 
 .tickets-action-row {
