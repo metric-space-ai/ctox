@@ -691,11 +691,17 @@ where
                             // browser validates EACH collection individually.
                             let schemas =
                                 collection_schemas_payload(&pool_task.collections()).await;
+                            // ... and the per-collection checkpoint map so every
+                            // collection deriving its protocol from this room
+                            // handshake advertises ITS OWN checkpoint epoch.
+                            let checkpoints =
+                                collection_checkpoints_payload(&pool_task.collections()).await;
                             ctox_protocol_response_with_flag(
                                 &target,
                                 peer_session_id.as_deref(),
                                 flag,
                                 schemas,
+                                checkpoints,
                             )
                             .await
                         }
@@ -815,11 +821,14 @@ where
                     // validate each collection individually too (symmetric).
                     let local_collection_schemas =
                         collection_schemas_payload(&pool_clone.collections()).await;
+                    let local_collection_checkpoints =
+                        collection_checkpoints_payload(&pool_clone.collections()).await;
                     let local_protocol = ctox_protocol_response_with_flag(
                         &representative,
                         peer_session_id.as_deref(),
                         local_flag,
                         local_collection_schemas.clone(),
+                        local_collection_checkpoints,
                     )
                     .await;
                     let protocol_response = match send_message_and_await_answer(
@@ -1129,11 +1138,41 @@ async fn collection_schemas_payload(collections: &[Arc<RxCollection>]) -> Option
     }
 }
 
+/// Phase 3 multiplex: per-collection checkpoint-status map for the room
+/// handshake. The single room-level `ctoxProtocol` answer used to carry only
+/// the REPRESENTATIVE collection's checkpoint; every other collection that
+/// derived its protocol from the room handshake then advertised a checkpoint
+/// epoch belonging to a different collection (visible as
+/// `checkpoint.collection != session.collection` in the browser's
+/// peer-session evidence after a native restart). Omitted (key absent) for
+/// single-collection rooms, mirroring `collection_schemas_payload`.
+async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Option<Value> {
+    if collections.len() <= 1 {
+        return None;
+    }
+    let mut map = serde_json::Map::with_capacity(collections.len());
+    for collection in collections.iter() {
+        let checkpoint = collection
+            .storage_instance
+            .replication_checkpoint_status()
+            .await;
+        if !checkpoint.is_null() {
+            map.insert(collection.name.clone(), checkpoint);
+        }
+    }
+    if map.is_empty() {
+        None
+    } else {
+        Some(Value::Object(map))
+    }
+}
+
 async fn ctox_protocol_response_with_flag(
     collection: &Arc<RxCollection>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
+    collection_checkpoints: Option<Value>,
 ) -> Value {
     let checkpoint = collection
         .storage_instance
@@ -1154,12 +1193,13 @@ async fn ctox_protocol_response_with_flag(
         peer_session_id,
         query_demand_loading_enabled,
         collection_schemas,
+        collection_checkpoints,
     )
 }
 
 #[cfg(test)]
 fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&str>) -> Value {
-    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None)
+    ctox_protocol_response_payload_with_flag(collection, peer_session_id, true, None, None)
 }
 
 fn ctox_protocol_response_payload_with_flag(
@@ -1167,6 +1207,7 @@ fn ctox_protocol_response_payload_with_flag(
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     collection_schemas: Option<Value>,
+    collection_checkpoints: Option<Value>,
 ) -> Value {
     let peer_session_id = peer_session_id
         .filter(|value| !value.trim().is_empty())
@@ -1202,6 +1243,13 @@ fn ctox_protocol_response_payload_with_flag(
     // individually. Omitted entirely (key absent) for single-collection rooms.
     if let Some(schemas) = collection_schemas {
         payload["collectionSchemas"] = schemas;
+    }
+    // Phase 3 multiplex: per-collection checkpoint epochs, so a collection
+    // deriving its protocol from the room handshake advertises ITS OWN
+    // checkpoint evidence (the browser prefers `collectionCheckpoints` in
+    // `remoteProtocolForCollection`).
+    if let Some(checkpoints) = collection_checkpoints {
+        payload["collectionCheckpoints"] = checkpoints;
     }
     payload
 }
@@ -2239,26 +2287,42 @@ mod tests {
 
     #[test]
     fn handshake_payload_omits_collection_schemas_when_none() {
-        // The single-collection handshake payload must not carry the new key,
+        // The single-collection handshake payload must not carry the new keys,
         // so the wire stays byte-compatible with V1 peers.
         let single = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
             None,
+            None,
         );
         assert!(single.get("collectionSchemas").is_none());
-        // Multiplexed payload carries the map.
+        assert!(single.get("collectionCheckpoints").is_none());
+        // Multiplexed payload carries the maps.
         let multi = ctox_protocol_response_payload_with_flag(
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
             Some(local_schemas_two()),
+            Some(serde_json::json!({
+                "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
+                "desktop_files": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "desktop_files" },
+            })),
         );
         assert!(multi.get("collectionSchemas").is_some());
         assert!(multi
             .pointer("/collectionSchemas/desktop_files/schemaHash")
             .is_some());
+        // REGRESSION: under multiplex every collection deriving its protocol
+        // from the room handshake must find ITS OWN checkpoint here — the
+        // representative-only checkpoint mislabeled every other collection's
+        // peer-session evidence after a native restart.
+        assert_eq!(
+            multi
+                .pointer("/collectionCheckpoints/desktop_files/collection")
+                .and_then(Value::as_str),
+            Some("desktop_files")
+        );
     }
 
     // -------------------------------------------------------------------------

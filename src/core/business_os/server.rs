@@ -676,6 +676,11 @@ fn is_business_os_control_plane_path(path: &str) -> bool {
         path,
         "/api/business-os/ctox/subscription-auth/start"
             | "/api/business-os/ctox/subscription-auth/callback"
+            // Peer-lifecycle control for the rxdb-soak rollover mode: restarts
+            // the in-process native peer. No Business OS records flow here and
+            // the route itself answers 403 unless
+            // CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS is set (smoke runs only).
+            | "/api/business-os/sync/native-peer/restart"
     )
 }
 
