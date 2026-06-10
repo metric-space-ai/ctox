@@ -76,12 +76,8 @@ const shellTokenPattern = new RegExp(
 );
 
 // Frozen pre-existing violations. Remove entries as modules are fixed.
-const ALLOWLIST = new Map(Object.entries({
-  // .theme-* blocks alias --accent onto itself with a fallback — a latent
-  // self-reference (invalid at computed-value time). Needs a real fix, not a
-  // rename; frozen until the coding-agents theme pass.
-  'coding-agents': ['css-no-shell-token-redefinition'],
-}));
+// Currently EMPTY — keep it that way: fix the module instead of adding here.
+const ALLOWLIST = new Map();
 
 const offenders = [];
 // collection name -> [{ module, fingerprint }] across all modules' schema.js

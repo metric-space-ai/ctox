@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260609-chat-timeout-visible2';
+const APP_BUILD = '20260610-shell-i18n-theme1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -455,6 +455,50 @@ const shellMessages = {
     chatPlaceholder: 'Was soll CTOX hier tun oder prüfen?',
     chatOpening: 'Öffne Chat...',
     send: 'Senden',
+    startMenuOpen: 'Startmenü öffnen',
+    ctoxCoreOpen: 'CTOX AI Core öffnen',
+    navBack: 'Zurück',
+    navForward: 'Vorwärts',
+    openApps: 'Geöffnete Apps',
+    shellStyleAria: 'Stil',
+    languageAria: 'Sprache',
+    themeAria: 'Design Theme',
+    loginOpen: 'Login öffnen',
+    appMenuOpen: 'App-Menü öffnen',
+    notificationsAria: 'Benachrichtigungen',
+    openWindowsAria: 'Offene Fenster',
+    startupStarting: 'System wird gestartet...',
+    startupFailedTitle: 'System-Start fehlgeschlagen',
+    startupFailedBody: 'Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Der lokale RxDB-Catalog-Sync meldet:',
+    startupRetry: 'Erneut versuchen',
+    gateSubtitle: 'Melden Sie sich an, um eine Verbindung zur ctox-Instanz herzustellen.',
+    gateUser: 'Benutzer',
+    gateUserPlaceholder: 'E-Mail oder Benutzername',
+    gatePassword: 'Passwort',
+    gateSubmit: 'Einloggen & Verbinden',
+    gateSso: 'Mit SSO einloggen',
+    gateFooter: 'Sichere Ende-zu-Ende verschlüsselte Verbindung.',
+    gateInvalidCredentials: 'Ungültiger Benutzername oder Passwort.',
+    drawerLoginHint: 'Bei Desktop-Start wird die CTOX-Instanz automatisch übernommen.',
+    drawerLoginSubmit: 'Einloggen',
+    drawerLoginExternal: 'Extern einloggen',
+    bootConfig: 'System-Konfiguration wird geladen...',
+    bootSession: 'Anmeldesitzung wird überprüft...',
+    bootDatastore: 'Lokaler Datenspeicher wird geladen...',
+    bootWorkspace: 'Workspace wird vorbereitet...',
+    bootApps: 'Ihre Anwendungen werden vorbereitet...',
+    bootCatalog: 'Modulkatalog wird synchronisiert...',
+    bootOptimize: 'Lokaler Datenspeicher wird optimiert...',
+    bootReady: 'Workspace ist bereit. CTOX wird gestartet...',
+    bootDbConfig: 'Datenspeicher-Konfiguration wird vorbereitet...',
+    bootDbOpen: 'Lokaler Speicher wird geöffnet...',
+    bootDbStructures: 'Systemdatenstrukturen werden aufgebaut...',
+    bootDesktopLayout: 'Desktop-Layout wird geladen...',
+    bootSyncStart: 'Echtzeit-Synchronisierung wird gestartet...',
+    bootServices: 'Dienste werden gestartet...',
+    bootSchemas: 'Datenstrukturen werden vorbereitet...',
+    bootSchemasRegister: 'Speicherstrukturen werden registriert...',
+    bootSchemasDone: 'Speicherstrukturen erfolgreich geladen.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'CTOX',
@@ -517,6 +561,50 @@ const shellMessages = {
     chatPlaceholder: 'What should CTOX do or check here?',
     chatOpening: 'Opening Chat...',
     send: 'Send',
+    startMenuOpen: 'Open start menu',
+    ctoxCoreOpen: 'Open CTOX AI Core',
+    navBack: 'Back',
+    navForward: 'Forward',
+    openApps: 'Open apps',
+    shellStyleAria: 'Style',
+    languageAria: 'Language',
+    themeAria: 'Theme',
+    loginOpen: 'Open login',
+    appMenuOpen: 'Open app menu',
+    notificationsAria: 'Notifications',
+    openWindowsAria: 'Open windows',
+    startupStarting: 'Starting system...',
+    startupFailedTitle: 'System startup failed',
+    startupFailedBody: 'A fatal error occurred while connecting to the local data network. The local RxDB catalog sync reports:',
+    startupRetry: 'Retry',
+    gateSubtitle: 'Sign in to connect to the ctox instance.',
+    gateUser: 'User',
+    gateUserPlaceholder: 'Email or username',
+    gatePassword: 'Password',
+    gateSubmit: 'Sign in & connect',
+    gateSso: 'Sign in with SSO',
+    gateFooter: 'Secure end-to-end encrypted connection.',
+    gateInvalidCredentials: 'Invalid username or password.',
+    drawerLoginHint: 'On desktop start the CTOX instance is taken over automatically.',
+    drawerLoginSubmit: 'Sign in',
+    drawerLoginExternal: 'External sign-in',
+    bootConfig: 'Loading system configuration...',
+    bootSession: 'Checking sign-in session...',
+    bootDatastore: 'Loading local datastore...',
+    bootWorkspace: 'Preparing workspace...',
+    bootApps: 'Preparing your applications...',
+    bootCatalog: 'Syncing module catalog...',
+    bootOptimize: 'Optimizing local datastore...',
+    bootReady: 'Workspace ready. Starting CTOX...',
+    bootDbConfig: 'Preparing datastore configuration...',
+    bootDbOpen: 'Opening local storage...',
+    bootDbStructures: 'Building system data structures...',
+    bootDesktopLayout: 'Loading desktop layout...',
+    bootSyncStart: 'Starting realtime sync...',
+    bootServices: 'Starting services...',
+    bootSchemas: 'Preparing data structures...',
+    bootSchemasRegister: 'Registering storage structures...',
+    bootSchemasDone: 'Storage structures loaded.',
     moduleTitles: {
       desktop: 'Desktop',
       ctox: 'CTOX',
@@ -599,28 +687,28 @@ async function bootstrap() {
     return;
   }
 
-  setStartupProgress(10, 'System-Konfiguration wird geladen...');
-  setStartupProgress(30, 'Anmeldesitzung wird überprüft...');
-  setStartupProgress(50, 'Lokaler Datenspeicher wird geladen...');
+  setStartupProgress(10, shellText('bootConfig'));
+  setStartupProgress(30, shellText('bootSession'));
+  setStartupProgress(50, shellText('bootDatastore'));
   const syncConfig = await loadSyncConfig();
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
 
-  setStartupProgress(70, 'Workspace wird vorbereitet...');
+  setStartupProgress(70, shellText('bootWorkspace'));
   let modules;
   try {
-    setStartupProgress(85, 'Ihre Anwendungen werden vorbereitet...');
+    setStartupProgress(85, shellText('bootApps'));
     modules = await loadModules();
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; extending WebRTC wait before local cache repair', error);
-    setStartupProgress(82, 'Modulkatalog wird synchronisiert...');
+    setStartupProgress(82, shellText('bootCatalog'));
     try {
       modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
     } catch (retryError) {
       if (!isModuleCatalogSyncError(retryError)) throw retryError;
       console.warn('[business-os] module catalog still unavailable; resetting local RxDB cache and retrying WebRTC sync', retryError);
-      setStartupProgress(80, 'Lokaler Datenspeicher wird optimiert...');
+      setStartupProgress(80, shellText('bootOptimize'));
       await repairBusinessDataPlane(syncConfig);
       modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
     }
@@ -688,7 +776,7 @@ async function bootstrap() {
   // Initialize the global ctox context menu
   initGlobalCtoxContextMenu();
 
-  setStartupProgress(95, 'Workspace ist bereit. CTOX wird gestartet...');
+  setStartupProgress(95, shellText('bootReady'));
   try {
     await openModule(currentHashModuleId() || state.modules[0]?.id || 'ctox');
     markBootTiming('shellVisibleMs');
@@ -741,24 +829,24 @@ async function resetBusinessDataPlaneForBuildIfNeeded(syncConfig) {
 
 async function openBusinessDataPlane(syncConfig) {
   resetDataPlaneReady('open-business-data-plane');
-  setStartupProgress(51, 'Datenspeicher-Konfiguration wird vorbereitet...');
+  setStartupProgress(51, shellText('bootDbConfig'));
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
 
-    setStartupProgress(54, 'Lokaler Speicher wird geöffnet...');
+    setStartupProgress(54, shellText('bootDbOpen'));
     const { createBusinessDb } = await loadBusinessDbModule();
     state.db = await createBusinessDb({ name: dbName });
     assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
-    setStartupProgress(58, 'Systemdatenstrukturen werden aufgebaut...');
+    setStartupProgress(58, shellText('bootDbStructures'));
     await registerCoreCollections();
 
-    setStartupProgress(62, 'Desktop-Layout wird geladen...');
+    setStartupProgress(62, shellText('bootDesktopLayout'));
     await hydrateTaskbarPinsFromDesktopLayout();
     renderTabs();
 
-    setStartupProgress(66, 'Echtzeit-Synchronisierung wird gestartet...');
+    setStartupProgress(66, shellText('bootSyncStart'));
     const { createSyncRuntime } = await loadSyncModule();
     state.sync = createSyncRuntime({
       db: state.db,
@@ -766,7 +854,7 @@ async function openBusinessDataPlane(syncConfig) {
       onDiagnostic: updateSyncDiagnostics,
     });
 
-    setStartupProgress(69, 'Dienste werden gestartet...');
+    setStartupProgress(69, shellText('bootServices'));
     const { createCommandBus } = await loadCommandBusModule();
     state.commandBus = createCommandBus({
       db: () => state.db,
@@ -878,7 +966,7 @@ function isModuleCatalogSyncError(error) {
 
 async function registerCoreCollections() {
   const t0 = performance.now();
-  setStartupProgress(58, 'Datenstrukturen werden vorbereitet...');
+  setStartupProgress(58, shellText('bootSchemas'));
 
   const { ctox, desktop } = await loadCoreSchemaModules();
   const ctoxSchemes = withMigrationStrategies(ctox.collections, ctox.migrationStrategies);
@@ -889,10 +977,10 @@ async function registerCoreCollections() {
     ...desktopSchemes,
   };
 
-  setStartupProgress(59, 'Speicherstrukturen werden registriert...');
+  setStartupProgress(59, shellText('bootSchemasRegister'));
   await state.db.addCollections(consolidated);
 
-  setStartupProgress(61, 'Speicherstrukturen erfolgreich geladen.');
+  setStartupProgress(61, shellText('bootSchemasDone'));
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
   await primeWindowGeometryCache();
@@ -2949,8 +3037,7 @@ function syncHeaderControls() {
 }
 
 function localizeShellChrome() {
-  document.querySelector('[data-left-pane] > .pane-title')?.replaceChildren(document.createTextNode(shellText('context')));
-  document.querySelector('[data-right-pane] > .pane-title')?.replaceChildren(document.createTextNode(shellText('topics')));
+  applyShellStaticTranslations();
 }
 
 async function handleModuleCommand(event) {
@@ -2985,9 +3072,26 @@ async function handleModuleCommand(event) {
 function applyShellLanguage(lang, options = {}) {
   const value = lang === 'en' ? 'en' : 'de';
   document.documentElement.lang = value;
+  applyShellStaticTranslations();
   if (options.persist !== false) {
     writeAccountPrefs({ language: value });
   }
+}
+
+// Translate the static shell chrome markup (index.html ships German defaults).
+// Scoped to elements carrying data-shell-t* attributes — module content inside
+// [data-module-content] never carries them, so module markup stays untouched.
+// Runs at boot and on every language switch.
+function applyShellStaticTranslations() {
+  document.querySelectorAll('[data-shell-t]').forEach((el) => {
+    el.textContent = shellText(el.dataset.shellT);
+  });
+  document.querySelectorAll('[data-shell-t-aria]').forEach((el) => {
+    el.setAttribute('aria-label', shellText(el.dataset.shellTAria));
+  });
+  document.querySelectorAll('[data-shell-t-title]').forEach((el) => {
+    el.setAttribute('title', shellText(el.dataset.shellTTitle));
+  });
 }
 
 function postCurrentPreferencesToModule() {
@@ -4380,7 +4484,7 @@ function renderLoginGate(session, options = {}) {
         </div>
         <div class="auth-gate-title">
           <h1>CTOX Business OS</h1>
-          <p>Melden Sie sich an, um eine Verbindung zur ctox-Instanz herzustellen.</p>
+          <p>${escapeHtml(shellText('gateSubtitle'))}</p>
         </div>
       </header>
 
@@ -4393,14 +4497,14 @@ function renderLoginGate(session, options = {}) {
       ` : `
       <form class="auth-gate-form" data-login-gate-form method="post" action="/login">
         <div class="auth-gate-field">
-          <label for="gate-user">Benutzer</label>
+          <label for="gate-user">${escapeHtml(shellText('gateUser'))}</label>
           <div class="auth-gate-input-wrapper">
             <input
               id="gate-user"
               name="user"
               autocomplete="username"
               value="${escapeHtml(savedUser)}"
-              placeholder="E-Mail oder Benutzername"
+              placeholder="${escapeHtml(shellText('gateUserPlaceholder'))}"
               class="auth-gate-input"
               required
             />
@@ -4412,14 +4516,14 @@ function renderLoginGate(session, options = {}) {
         </div>
 
         <div class="auth-gate-field">
-          <label for="gate-password">Passwort</label>
+          <label for="gate-password">${escapeHtml(shellText('gatePassword'))}</label>
           <div class="auth-gate-input-wrapper">
             <input
               id="gate-password"
               type="password"
               name="password"
               autocomplete="current-password"
-              placeholder="Passwort"
+              placeholder="${escapeHtml(shellText('gatePassword'))}"
               class="auth-gate-input"
               required
             />
@@ -4432,14 +4536,14 @@ function renderLoginGate(session, options = {}) {
 
         <div class="auth-gate-actions">
           <div class="auth-gate-error" data-gate-error hidden></div>
-          <button class="auth-gate-button" type="submit" data-gate-submit>Einloggen &amp; Verbinden</button>
-          ${loginUrl ? `<a class="auth-gate-external" href="${escapeHtml(loginUrl)}">Mit SSO einloggen</a>` : ''}
+          <button class="auth-gate-button" type="submit" data-gate-submit>${escapeHtml(shellText('gateSubmit'))}</button>
+          ${loginUrl ? `<a class="auth-gate-external" href="${escapeHtml(loginUrl)}">${escapeHtml(shellText('gateSso'))}</a>` : ''}
         </div>
       </form>
       `}
 
       <footer class="auth-gate-footer">
-        <small>CTOX Business OS · Sichere Ende-zu-Ende verschlüsselte Verbindung.</small>
+        <small>CTOX Business OS · ${escapeHtml(shellText('gateFooter'))}</small>
       </footer>
     </div>
   `;
@@ -4461,7 +4565,7 @@ function renderLoginGate(session, options = {}) {
 
   if (options.loginFailed) {
     clearStoredBrowserAuth();
-    showGateError("Ungültiger Benutzername oder Passwort.");
+    showGateError(shellText('gateInvalidCredentials'));
   }
 
   form.addEventListener('submit', async (event) => {
@@ -4510,7 +4614,7 @@ function renderLoginGate(session, options = {}) {
       }
       restoreSubmit();
       passwordInput.value = '';
-      showGateError("Ungültiger Benutzername oder Passwort.");
+      showGateError(shellText('gateInvalidCredentials'));
       passwordInput.focus();
     } catch (error) {
       restoreSubmit();
@@ -4627,21 +4731,21 @@ function renderLoginDrawer(session) {
     <header class="drawer-header-row">
       <div>
         <h2>Login</h2>
-        <p>Bei Desktop-Start wird die CTOX-Instanz automatisch übernommen.</p>
+        <p>${escapeHtml(shellText('drawerLoginHint'))}</p>
       </div>
-      <button class="icon-button" type="button" data-close-account aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
     <form class="account-form" data-login-form method="post" action="/login">
       <label>
-        <span>Benutzer</span>
-        <input name="user" autocomplete="username" value="${escapeHtml(savedUser)}" placeholder="E-Mail oder Benutzername" />
+        <span>${escapeHtml(shellText('gateUser'))}</span>
+        <input name="user" autocomplete="username" value="${escapeHtml(savedUser)}" placeholder="${escapeHtml(shellText('gateUserPlaceholder'))}" />
       </label>
       <label>
-        <span>Passwort</span>
-        <input type="password" name="password" autocomplete="current-password" placeholder="Passwort" />
+        <span>${escapeHtml(shellText('gatePassword'))}</span>
+        <input type="password" name="password" autocomplete="current-password" placeholder="${escapeHtml(shellText('gatePassword'))}" />
       </label>
-      <button class="text-button account-primary" type="submit">Einloggen</button>
-      ${loginUrl ? `<a class="text-button" href="${escapeHtml(loginUrl)}">Extern einloggen</a>` : ''}
+      <button class="text-button account-primary" type="submit">${escapeHtml(shellText('drawerLoginSubmit'))}</button>
+      ${loginUrl ? `<a class="text-button" href="${escapeHtml(loginUrl)}">${escapeHtml(shellText('drawerLoginExternal'))}</a>` : ''}
     </form>
   `;
   body.querySelector('[data-close-account]')?.addEventListener('click', closeDrawers);
@@ -4672,7 +4776,7 @@ function renderProfileDrawer() {
         <h2>Account</h2>
         <p>${escapeHtml(user.display_name || user.id || 'CTOX User')} · ${escapeHtml(roleDisplayName(role))}</p>
       </div>
-      <button class="icon-button" type="button" data-close-account aria-label="Schließen">×</button>
+      <button class="icon-button" type="button" data-close-account aria-label="${escapeHtml(shellText('windowClose'))}">×</button>
     </header>
     <section class="account-role-card">
       <span>Rolle</span>
@@ -6552,7 +6656,7 @@ function setStartupProgress(percent, statusText) {
     } else {
       // Creeping phase: asymptotic advance beyond target step to keep progress indicator active and alive
       if (endVal < 95) {
-        const remainingCap = (endVal + 12) - currentProgress;
+        const remainingCap = (endVal + 4) - currentProgress;
         if (remainingCap > 0) {
           currentProgress += remainingCap * 0.003;
           progressBar.style.width = `${currentProgress.toFixed(2)}%`;

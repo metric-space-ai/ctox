@@ -25,12 +25,9 @@
   --bg-card: var(--surface-2);
   --border-glow: var(--line);
   --border-glow-active: var(--accent);
-  --accent: var(--accent, hsl(217, 91%, 60%));
   --accent-glow: var(--accent-soft);
   --text-main: var(--text);
   --text-muted: var(--muted);
-
-  --gradient-brand: var(--accent-gradient);
 }
 
 /* Claude Theme Override */
@@ -40,12 +37,9 @@
   --bg-card: var(--surface-2);
   --border-glow: var(--line);
   --border-glow-active: var(--accent);
-  --accent: var(--accent, hsl(24, 85%, 55%));
   --accent-glow: var(--accent-soft);
   --text-main: var(--text);
   --text-muted: var(--muted);
-
-  --gradient-brand: var(--accent-gradient);
 }
 
 /* Codex Theme Override */
@@ -55,12 +49,9 @@
   --bg-card: var(--surface-2);
   --border-glow: var(--line);
   --border-glow-active: var(--accent);
-  --accent: var(--accent, hsl(150, 80%, 45%));
   --accent-glow: var(--accent-soft);
   --text-main: var(--text);
   --text-muted: var(--muted);
-
-  --gradient-brand: var(--accent-gradient);
 }
 
 /* Base resets & layout */

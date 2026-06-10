@@ -61,7 +61,7 @@
       <header class="topbar">
         <div class="topbar-left-group">
           <div class="topbar-brand-triad">
-            <button class="topbar-triad-button start-button" type="button" data-shell-start aria-label="Startmenü öffnen" title="Startmenü öffnen">
+            <button class="topbar-triad-button start-button" type="button" data-shell-start aria-label="Startmenü öffnen" title="Startmenü öffnen" data-shell-t-aria="startMenuOpen" data-shell-t-title="startMenuOpen">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <rect x="3" y="3" width="7" height="7" rx="1.5" />
                 <rect x="14" y="3" width="7" height="7" rx="1.5" />
@@ -69,13 +69,13 @@
                 <rect x="14" y="14" width="7" height="7" rx="1.5" />
               </svg>
             </button>
-            <button class="topbar-triad-button show-desktop-button" type="button" data-show-desktop aria-label="Desktop anzeigen" title="Desktop anzeigen">
+            <button class="topbar-triad-button show-desktop-button" type="button" data-show-desktop aria-label="Desktop anzeigen" title="Desktop anzeigen" data-shell-t-aria="showDesktop" data-shell-t-title="showDesktop">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M4 5.5h16v13H4z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
                 <path d="M8 9h8M8 12h8M8 15h5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
               </svg>
             </button>
-            <button class="topbar-triad-button ctox-button" type="button" data-shell-ctox aria-label="CTOX AI Core öffnen" title="CTOX AI Core öffnen">
+            <button class="topbar-triad-button ctox-button" type="button" data-shell-ctox aria-label="CTOX AI Core öffnen" title="CTOX AI Core öffnen" data-shell-t-aria="ctoxCoreOpen" data-shell-t-title="ctoxCoreOpen">
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <defs>
                   <linearGradient id="grad-triad-ctox" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -90,49 +90,49 @@
               </svg>
             </button>
             <span class="triad-separator" aria-hidden="true"></span>
-            <button class="topbar-triad-button back-button" type="button" data-shell-back aria-label="Zurück" title="Zurück" disabled>
+            <button class="topbar-triad-button back-button" type="button" data-shell-back aria-label="Zurück" title="Zurück" data-shell-t-aria="navBack" data-shell-t-title="navBack" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M19 12H5M12 19l-7-7 7-7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
-            <button class="topbar-triad-button forward-button" type="button" data-shell-forward aria-label="Vorwärts" title="Vorwärts" disabled>
+            <button class="topbar-triad-button forward-button" type="button" data-shell-forward aria-label="Vorwärts" title="Vorwärts" data-shell-t-aria="navForward" data-shell-t-title="navForward" disabled>
               <svg viewBox="0 0 24 24" aria-hidden="true">
                 <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </button>
           </div>
           <div class="topbar-status-bar">
-            <button class="ctox-shell-warning" type="button" data-ctox-shell-warning hidden>CTOX Verbindung prüfen</button>
+            <button class="ctox-shell-warning" type="button" data-ctox-shell-warning hidden data-shell-t="ctoxNotWorking">CTOX Verbindung prüfen</button>
             <span class="brand-status" data-status-text>Starting native runtime</span>
           </div>
         </div>
         <div class="module-nav">
-          <nav class="module-tabs" data-module-tabs aria-label="Geöffnete Apps"></nav>
+          <nav class="module-tabs" data-module-tabs aria-label="Geöffnete Apps" data-shell-t-aria="openApps"></nav>
         </div>
         <div class="topbar-actions">
           <span class="topbar-tray-group">
-            <select class="header-select" data-shell-style-select aria-label="Stil">
+            <select class="header-select" data-shell-style-select aria-label="Stil" data-shell-t-aria="shellStyleAria">
               <option value="windows">Windows</option>
               <option value="macos">macOS</option>
             </select>
-            <select class="header-select" data-language-select aria-label="Sprache">
+            <select class="header-select" data-language-select aria-label="Sprache" data-shell-t-aria="languageAria">
               <option value="de">DE</option>
               <option value="en">EN</option>
             </select>
-            <select class="header-select" data-theme-select aria-label="Design Theme">
+            <select class="header-select" data-theme-select aria-label="Design Theme" data-shell-t-aria="themeAria">
               <option value="dark">Dark</option>
               <option value="light">Light</option>
             </select>
           </span>
           <span class="topbar-tray-separator" aria-hidden="true"></span>
-          <button class="account-button" type="button" data-open-account aria-label="Login öffnen">
+          <button class="account-button" type="button" data-open-account aria-label="Login öffnen" data-shell-t-aria="loginOpen">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M12 12.5a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"></path>
               <path d="M4.75 20.25a7.25 7.25 0 0 1 14.5 0"></path>
             </svg>
             <span data-account-label>Login</span>
           </button>
-          <button class="icon-button app-menu-button" type="button" data-open-settings aria-label="App-Menü öffnen">
+          <button class="icon-button app-menu-button" type="button" data-open-settings aria-label="App-Menü öffnen" data-shell-t-aria="appMenuOpen">
             <svg viewBox="0 0 24 24" aria-hidden="true">
               <path d="M5 7h14M5 12h14M5 17h14"></path>
             </svg>
@@ -142,7 +142,7 @@
 
       <main class="workspace-frame">
         <aside class="workspace-pane workspace-pane-left" data-left-pane>
-          <div class="pane-title">Context</div>
+          <div class="pane-title" data-shell-t="context">Context</div>
           <div data-left-content></div>
         </aside>
 
@@ -169,7 +169,7 @@
             <div class="startup-progress-container">
               <div class="startup-progress-bar" id="startup-progress-bar"></div>
             </div>
-            <div class="startup-status-text" id="startup-status-text">System wird gestartet...</div>
+            <div class="startup-status-text" id="startup-status-text" data-shell-t="startupStarting">System wird gestartet...</div>
 
             <div class="startup-error-card" id="startup-error-card" hidden>
               <div class="error-header">
@@ -178,10 +178,10 @@
                   <line x1="12" y1="9" x2="12" y2="13" stroke-linecap="round" stroke-linejoin="round"/>
                   <line x1="12" y1="17" x2="12.01" y2="17" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
-                <h3>System-Start fehlgeschlagen</h3>
+                <h3 data-shell-t="startupFailedTitle">System-Start fehlgeschlagen</h3>
               </div>
               <div class="error-body">
-                <p>Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Der lokale RxDB-Catalog-Sync meldet:</p>
+                <p data-shell-t="startupFailedBody">Bei der Verbindung zum lokalen Daten-Netzwerk ist ein schwerwiegender Fehler aufgetreten. Der lokale RxDB-Catalog-Sync meldet:</p>
                 <code class="error-msg-block" id="startup-error-msg"></code>
               </div>
               <div class="error-footer">
@@ -189,7 +189,7 @@
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
                     <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 11-.57-8.38l5.67-5.67" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
-                  Erneut versuchen
+                  <span data-shell-t="startupRetry">Erneut versuchen</span>
                 </button>
               </div>
             </div>
@@ -197,7 +197,7 @@
         </section>
 
         <aside class="workspace-pane workspace-pane-right" data-right-pane>
-          <div class="pane-title">Topics</div>
+          <div class="pane-title" data-shell-t="topics">Topics</div>
           <div data-right-content></div>
         </aside>
       </main>
@@ -209,12 +209,12 @@
     <section class="drawer drawer-bottom" data-drawer-bottom hidden></section>
 
     <div class="shell-window-layer" data-shell-window-layer></div>
-    <nav class="shell-taskbar" data-shell-taskbar aria-label="Offene Fenster"></nav>
+    <nav class="shell-taskbar" data-shell-taskbar aria-label="Offene Fenster" data-shell-t-aria="openWindowsAria"></nav>
     <div class="shell-window-switcher" data-shell-window-switcher hidden aria-hidden="true">
       <div class="shell-window-switcher-panel" data-shell-window-switcher-panel role="listbox"></div>
     </div>
-    <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen"></aside>
+    <aside class="shell-notifications" data-shell-notifications aria-live="polite" aria-label="Benachrichtigungen" data-shell-t-aria="notificationsAria"></aside>
 
-    <script type="module" src="app.js?v=20260609-chat-timeout-visible2"></script>
+    <script type="module" src="app.js?v=20260610-shell-i18n-theme1"></script>
   </body>
 </html>
