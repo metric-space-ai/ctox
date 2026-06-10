@@ -66,6 +66,9 @@ const SOURCE_POLICY_NOTICE: &str = "Metadata-only scholarly discovery. For DOI-b
 pub enum ScholarlySearchProvider {
     Auto,
     AnnasArchive,
+    Crossref,
+    OpenAlex,
+    SemanticScholar,
 }
 
 impl ScholarlySearchProvider {
@@ -75,6 +78,11 @@ impl ScholarlySearchProvider {
             "annas_archive" | "annas-archive" | "anna_archive" | "anna-archive" | "annas" => {
                 Self::AnnasArchive
             }
+            "crossref" | "cross_ref" | "cross-ref" => Self::Crossref,
+            "openalex" | "open_alex" | "open-alex" => Self::OpenAlex,
+            "semantic_scholar" | "semantic-scholar" | "semanticscholar" | "s2" => {
+                Self::SemanticScholar
+            }
             _ => Self::Auto,
         }
     }
@@ -83,6 +91,9 @@ impl ScholarlySearchProvider {
         match self {
             Self::Auto => "auto",
             Self::AnnasArchive => "annas_archive",
+            Self::Crossref => "crossref",
+            Self::OpenAlex => "openalex",
+            Self::SemanticScholar => "semantic_scholar",
         }
     }
 }
@@ -192,6 +203,17 @@ pub fn execute_scholarly_search(
             }),
         },
         ScholarlySearchProvider::AnnasArchive => annas_archive_search(root, request),
+        ScholarlySearchProvider::Crossref => {
+            Ok(database_response("crossref", request, crossref_search(request)?))
+        }
+        ScholarlySearchProvider::OpenAlex => {
+            Ok(database_response("openalex", request, openalex_search(request)?))
+        }
+        ScholarlySearchProvider::SemanticScholar => Ok(database_response(
+            "semantic_scholar",
+            request,
+            semantic_scholar_search(request)?,
+        )),
     }
 }
 
@@ -870,6 +892,317 @@ fn trim_text(input: &str, max_len: usize) -> String {
     } else {
         trimmed
     }
+}
+
+// ---------------------------------------------------------------------------
+// Scholarly metadata-API backends (Crossref / OpenAlex / Semantic Scholar)
+//
+// Ported from the former clients in `crate::deep_research`. These return the
+// typed `ScholarlyResult` shape so every scholarly backend lives behind one
+// `ScholarlySearchProvider` enum, as the module header promised. The academic
+// APIs carry no per-host runtime config today, so they take only the request.
+// ---------------------------------------------------------------------------
+
+fn database_response(
+    provider: &str,
+    request: &ScholarlySearchRequest,
+    results: Vec<ScholarlyResult>,
+) -> ScholarlySearchResponse {
+    ScholarlySearchResponse {
+        provider: provider.to_string(),
+        query: request.query.trim().to_string(),
+        results,
+        executed_url: format!("api:{provider}"),
+        source_policy: SOURCE_POLICY_NOTICE.to_string(),
+    }
+}
+
+fn crossref_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+    let limit = request.max_results.unwrap_or(20).clamp(1, 20);
+    let url = format!(
+        "https://api.crossref.org/works?rows={}&query.bibliographic={}",
+        limit,
+        encode_query(request.query.trim())
+    );
+    let payload = fetch_json(&url)?;
+    let items = payload
+        .get("message")
+        .and_then(|message| message.get("items"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for item in items {
+        let title = first_string_field(item.get("title")).unwrap_or_else(|| "Untitled".to_string());
+        let doi = item
+            .get("DOI")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let Some(url) = item
+            .get("URL")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| doi.as_ref().map(|doi| format!("https://doi.org/{doi}")))
+        else {
+            continue;
+        };
+        let rank = out.len() + 1;
+        out.push(ScholarlyResult {
+            provider: "crossref".to_string(),
+            source_id: doi.clone().unwrap_or_else(|| url.clone()),
+            detail_url: url,
+            title,
+            authors: None,
+            publisher: first_string_field(item.get("container-title")),
+            year: crossref_year(&item).and_then(|year| i32::try_from(year).ok()),
+            language: None,
+            file_format: None,
+            file_size_label: None,
+            isbn: None,
+            doi,
+            open_access_pdf: None,
+            open_access_license: None,
+            thumbnail_url: None,
+            snippet: crossref_snippet_text(&item),
+            tags: Vec::new(),
+            rank,
+        });
+    }
+    Ok(out)
+}
+
+fn openalex_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+    let limit = request.max_results.unwrap_or(25).clamp(1, 25);
+    let url = format!(
+        "https://api.openalex.org/works?per-page={}&search={}",
+        limit,
+        encode_query(request.query.trim())
+    );
+    let payload = fetch_json(&url)?;
+    let items = payload
+        .get("results")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for item in items {
+        let title = item
+            .get("display_name")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled")
+            .to_string();
+        let doi = item
+            .get("doi")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let Some(url) = doi
+            .clone()
+            .or_else(|| item.get("id").and_then(Value::as_str).map(ToOwned::to_owned))
+        else {
+            continue;
+        };
+        let rank = out.len() + 1;
+        out.push(ScholarlyResult {
+            provider: "openalex".to_string(),
+            source_id: item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .unwrap_or_else(|| url.clone()),
+            detail_url: url,
+            title,
+            authors: None,
+            publisher: None,
+            year: item
+                .get("publication_year")
+                .and_then(Value::as_i64)
+                .and_then(|year| i32::try_from(year).ok()),
+            language: None,
+            file_format: None,
+            file_size_label: None,
+            isbn: None,
+            doi,
+            // Resolve the OpenAlex location PDF into the single canonical
+            // `open_access_pdf` field so the downstream read pipeline finds it
+            // (the former path stashed it under `primary_location.pdf_url`).
+            open_access_pdf: openalex_pdf_url(&item),
+            open_access_license: None,
+            thumbnail_url: None,
+            snippet: item
+                .get("abstract_inverted_index")
+                .map(|_| "OpenAlex abstract metadata available".to_string()),
+            tags: Vec::new(),
+            rank,
+        });
+    }
+    Ok(out)
+}
+
+fn openalex_pdf_url(item: &Value) -> Option<String> {
+    for key in ["best_oa_location", "primary_location"] {
+        if let Some(pdf) = item
+            .get(key)
+            .and_then(|location| location.get("pdf_url"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(pdf.to_string());
+        }
+    }
+    None
+}
+
+fn semantic_scholar_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+    let limit = request.max_results.unwrap_or(12).clamp(1, 20);
+    let url = format!(
+        "https://api.semanticscholar.org/graph/v1/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
+        limit,
+        encode_query(request.query.trim())
+    );
+    let payload = fetch_json(&url)?;
+    let items = payload
+        .get("data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for item in items {
+        let title = item
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled")
+            .to_string();
+        let doi = item
+            .get("externalIds")
+            .and_then(|ids| ids.get("DOI"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let Some(url) = item
+            .get("url")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| doi.as_ref().map(|doi| format!("https://doi.org/{doi}")))
+        else {
+            continue;
+        };
+        let rank = out.len() + 1;
+        out.push(ScholarlyResult {
+            provider: "semantic_scholar".to_string(),
+            source_id: doi.clone().unwrap_or_else(|| url.clone()),
+            detail_url: url,
+            title,
+            authors: semantic_scholar_authors(&item),
+            publisher: item
+                .get("venue")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            year: item
+                .get("year")
+                .and_then(Value::as_i64)
+                .and_then(|year| i32::try_from(year).ok()),
+            language: None,
+            file_format: None,
+            file_size_label: None,
+            isbn: None,
+            doi,
+            open_access_pdf: item
+                .get("openAccessPdf")
+                .and_then(|pdf| pdf.get("url"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            open_access_license: None,
+            thumbnail_url: None,
+            snippet: item
+                .get("abstract")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            tags: Vec::new(),
+            rank,
+        });
+    }
+    Ok(out)
+}
+
+fn semantic_scholar_authors(item: &Value) -> Option<String> {
+    let names: Vec<String> = item
+        .get("authors")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|author| author.get("name").and_then(Value::as_str).map(ToOwned::to_owned))
+        .collect();
+    if names.is_empty() {
+        None
+    } else {
+        Some(names.join(", "))
+    }
+}
+
+fn crossref_snippet_text(item: &Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(container) = first_string_field(item.get("container-title")) {
+        parts.push(container);
+    }
+    if let Some(kind) = item.get("type").and_then(Value::as_str) {
+        parts.push(kind.to_string());
+    }
+    if let Some(year) = crossref_year(item) {
+        parts.push(year.to_string());
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("; "))
+    }
+}
+
+fn crossref_year(item: &Value) -> Option<i64> {
+    for key in ["published-print", "published-online", "created"] {
+        let year = item
+            .get(key)
+            .and_then(|value| value.get("date-parts"))
+            .and_then(Value::as_array)
+            .and_then(|parts| parts.first())
+            .and_then(Value::as_array)
+            .and_then(|date| date.first())
+            .and_then(Value::as_i64);
+        if year.is_some() {
+            return year;
+        }
+    }
+    None
+}
+
+fn first_string_field(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+}
+
+fn encode_query(raw: &str) -> String {
+    url::form_urlencoded::byte_serialize(raw.as_bytes()).collect()
+}
+
+fn fetch_json(url: &str) -> Result<Value> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(8))
+        .build();
+    let text = agent
+        .get(url)
+        .set("User-Agent", "ctox-scholarly/0.1")
+        .call()
+        .map_err(anyhow::Error::from)?
+        .into_string()
+        .map_err(anyhow::Error::from)?;
+    serde_json::from_str(&text).map_err(anyhow::Error::from)
 }
 
 #[cfg(test)]

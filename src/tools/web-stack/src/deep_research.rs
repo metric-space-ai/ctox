@@ -15,7 +15,9 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use url::Url;
 
+use crate::scholarly_search::execute_scholarly_search;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
+use crate::scholarly_search::ScholarlyResult;
 use crate::scholarly_search::ScholarlySearchProvider;
 use crate::scholarly_search::ScholarlySearchRequest;
 use crate::web_search::run_ctox_web_read_tool;
@@ -184,7 +186,7 @@ pub fn run_ctox_deep_research_tool(root: &Path, request: &DeepResearchRequest) -
         collect_search_sources(&payload, plan, &mut seen_urls, &mut sources);
     }
     let database_runs =
-        collect_scholarly_database_sources(&plans, request, &mut seen_urls, &mut sources);
+        collect_scholarly_database_sources(root, &plans, request, &mut seen_urls, &mut sources);
 
     let read_budget = request.depth.read_budget().min(max_sources);
     let selected_sources = select_balanced_sources(sources, max_sources);
@@ -1319,6 +1321,7 @@ fn source_read_url(source: &Value) -> Option<String> {
 }
 
 fn collect_scholarly_database_sources(
+    root: &Path,
     plans: &[ResearchSearchPlan],
     request: &DeepResearchRequest,
     seen_urls: &mut BTreeSet<String>,
@@ -1335,61 +1338,85 @@ fn collect_scholarly_database_sources(
         .map(|plan| plan.query.clone())
         .take(request.depth.database_query_budget())
         .collect::<Vec<_>>();
+    // The academic metadata clients now live behind `ScholarlySearchProvider`
+    // in `crate::scholarly_search`; this loop drives them and keeps the
+    // `paper_metadata` source-type stamping + relevance scoring in
+    // `push_database_sources` exactly as before.
+    let databases = [
+        ("crossref", ScholarlySearchProvider::Crossref, 20usize),
+        ("openalex", ScholarlySearchProvider::OpenAlex, 20usize),
+        (
+            "semantic_scholar",
+            ScholarlySearchProvider::SemanticScholar,
+            12usize,
+        ),
+    ];
     for query in queries {
-        runs.push(match query_crossref(&query, 20) {
-            Ok(items) => {
-                let count = push_database_sources("crossref", &query, items, seen_urls, sources);
-                json!({
-                    "database": "crossref",
+        for (label, provider, limit) in databases {
+            runs.push(match scholarly_db_query(root, &query, provider, limit) {
+                Ok(items) => {
+                    let count = push_database_sources(label, &query, items, seen_urls, sources);
+                    json!({
+                        "database": label,
+                        "query": query,
+                        "ok": true,
+                        "result_count": count,
+                    })
+                }
+                Err(err) => json!({
+                    "database": label,
                     "query": query,
-                    "ok": true,
-                    "result_count": count,
-                })
-            }
-            Err(err) => json!({
-                "database": "crossref",
-                "query": query,
-                "ok": false,
-                "error": err.to_string(),
-            }),
-        });
-        runs.push(match query_openalex(&query, 20) {
-            Ok(items) => {
-                let count = push_database_sources("openalex", &query, items, seen_urls, sources);
-                json!({
-                    "database": "openalex",
-                    "query": query,
-                    "ok": true,
-                    "result_count": count,
-                })
-            }
-            Err(err) => json!({
-                "database": "openalex",
-                "query": query,
-                "ok": false,
-                "error": err.to_string(),
-            }),
-        });
-        runs.push(match query_semantic_scholar(&query, 12) {
-            Ok(items) => {
-                let count =
-                    push_database_sources("semantic_scholar", &query, items, seen_urls, sources);
-                json!({
-                    "database": "semantic_scholar",
-                    "query": query,
-                    "ok": true,
-                    "result_count": count,
-                })
-            }
-            Err(err) => json!({
-                "database": "semantic_scholar",
-                "query": query,
-                "ok": false,
-                "error": err.to_string(),
-            }),
-        });
+                    "ok": false,
+                    "error": err.to_string(),
+                }),
+            });
+        }
     }
     runs
+}
+
+fn scholarly_db_query(
+    root: &Path,
+    query: &str,
+    provider: ScholarlySearchProvider,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    let response = execute_scholarly_search(
+        root,
+        &ScholarlySearchRequest {
+            query: query.to_string(),
+            provider: Some(provider),
+            max_results: Some(limit),
+            ..Default::default()
+        },
+    )?;
+    Ok(response
+        .results
+        .into_iter()
+        .map(scholarly_result_to_db_value)
+        .collect())
+}
+
+/// Map a typed `ScholarlyResult` into the loose `Value` shape that
+/// `push_database_sources` consumes. `open_access_pdf` is surfaced at the top
+/// level so `source_read_url` can pick it up as the read target.
+fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
+    let mut value = json!({
+        "title": result.title,
+        "url": result.detail_url,
+        "snippet": result.snippet,
+        "rank": Value::Null,
+        "summary": Value::Null,
+        "excerpts": [],
+        "is_pdf": false,
+        "pdf_total_pages": Value::Null,
+        "doi": result.doi,
+        "year": result.year,
+    });
+    if let Some(pdf) = result.open_access_pdf {
+        value["open_access_pdf"] = Value::String(pdf);
+    }
+    value
 }
 
 fn push_database_sources(
@@ -1646,159 +1673,6 @@ fn snapshot_extension(url: &str, content_type: Option<&str>) -> &'static str {
     }
 }
 
-fn query_crossref(query: &str, limit: usize) -> Result<Vec<Value>> {
-    let url = format!(
-        "https://api.crossref.org/works?rows={}&query.bibliographic={}",
-        limit.clamp(1, 20),
-        encode_query(query)
-    );
-    let payload = fetch_json(&url)?;
-    let items = payload
-        .get("message")
-        .and_then(|message| message.get("items"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let title = first_string(item.get("title")).unwrap_or_else(|| "Untitled".to_string());
-            let url = item
-                .get("URL")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    item.get("DOI")
-                        .and_then(Value::as_str)
-                        .map(|doi| format!("https://doi.org/{doi}"))
-                })?;
-            Some(json!({
-                "title": title,
-                "url": url,
-                "snippet": crossref_snippet(&item),
-                "rank": Value::Null,
-                "summary": Value::Null,
-                "excerpts": [],
-                "is_pdf": false,
-                "pdf_total_pages": Value::Null,
-                "doi": item.get("DOI").cloned().unwrap_or(Value::Null),
-                "year": crossref_year(&item).map(Value::from).unwrap_or(Value::Null),
-            }))
-        })
-        .collect())
-}
-
-fn query_openalex(query: &str, limit: usize) -> Result<Vec<Value>> {
-    let url = format!(
-        "https://api.openalex.org/works?per-page={}&search={}",
-        limit.clamp(1, 25),
-        encode_query(query)
-    );
-    let payload = fetch_json(&url)?;
-    let items = payload
-        .get("results")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let title = item
-                .get("display_name")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled")
-                .to_string();
-            let url = item
-                .get("doi")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .or_else(|| item.get("id").and_then(Value::as_str).map(ToOwned::to_owned))?;
-            Some(json!({
-                "title": title,
-                "url": url,
-                "snippet": item.get("abstract_inverted_index").map(|_| Value::String("OpenAlex abstract metadata available".to_string())).unwrap_or(Value::Null),
-                "rank": Value::Null,
-                "summary": Value::Null,
-                "excerpts": [],
-                "is_pdf": false,
-                "pdf_total_pages": Value::Null,
-                "doi": item.get("doi").cloned().unwrap_or(Value::Null),
-                "year": item.get("publication_year").cloned().unwrap_or(Value::Null),
-                "open_access": item.get("open_access").cloned().unwrap_or(Value::Null),
-                "primary_location": item.get("primary_location").cloned().unwrap_or(Value::Null),
-            }))
-        })
-        .collect())
-}
-
-fn query_semantic_scholar(query: &str, limit: usize) -> Result<Vec<Value>> {
-    let url = format!(
-        "https://api.semanticscholar.org/graph/v1/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
-        limit.clamp(1, 20),
-        encode_query(query)
-    );
-    let payload = fetch_json(&url)?;
-    let items = payload
-        .get("data")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    Ok(items
-        .into_iter()
-        .filter_map(|item| {
-            let title = item
-                .get("title")
-                .and_then(Value::as_str)
-                .unwrap_or("Untitled")
-                .to_string();
-            let url = item
-                .get("url")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-                .or_else(|| {
-                    item.get("externalIds")
-                        .and_then(|ids| ids.get("DOI"))
-                        .and_then(Value::as_str)
-                        .map(|doi| format!("https://doi.org/{doi}"))
-                })?;
-            let open_access_pdf = item
-                .get("openAccessPdf")
-                .and_then(|pdf| pdf.get("url"))
-                .cloned()
-                .unwrap_or(Value::Null);
-            Some(json!({
-                "title": title,
-                "url": url,
-                "snippet": item.get("abstract").cloned().unwrap_or(Value::Null),
-                "rank": Value::Null,
-                "summary": Value::Null,
-                "excerpts": [],
-                "is_pdf": false,
-                "pdf_total_pages": Value::Null,
-                "venue": item.get("venue").cloned().unwrap_or(Value::Null),
-                "year": item.get("year").cloned().unwrap_or(Value::Null),
-                "doi": item.get("externalIds").and_then(|ids| ids.get("DOI")).cloned().unwrap_or(Value::Null),
-                "open_access_pdf": open_access_pdf,
-                "is_open_access": item.get("isOpenAccess").cloned().unwrap_or(Value::Bool(false)),
-            }))
-        })
-        .collect())
-}
-
-fn fetch_json(url: &str) -> Result<Value> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(8))
-        .build();
-    let text = agent
-        .get(url)
-        .set("User-Agent", "ctox-deep-research/0.1")
-        .call()
-        .map_err(anyhow::Error::from)?
-        .into_string()
-        .map_err(anyhow::Error::from)?;
-    serde_json::from_str(&text).map_err(anyhow::Error::from)
-}
-
 fn fetch_text(url: &str) -> Result<String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(8))
@@ -1810,53 +1684,6 @@ fn fetch_text(url: &str) -> Result<String> {
         .map_err(anyhow::Error::from)?
         .into_string()
         .map_err(anyhow::Error::from)
-}
-
-fn first_string(value: Option<&Value>) -> Option<String> {
-    value
-        .and_then(Value::as_array)
-        .and_then(|items| items.first())
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-}
-
-fn crossref_snippet(item: &Value) -> Value {
-    let mut parts = Vec::new();
-    if let Some(container) = first_string(item.get("container-title")) {
-        parts.push(container);
-    }
-    if let Some(kind) = item.get("type").and_then(Value::as_str) {
-        parts.push(kind.to_string());
-    }
-    if let Some(year) = crossref_year(item) {
-        parts.push(year.to_string());
-    }
-    if parts.is_empty() {
-        Value::Null
-    } else {
-        Value::String(parts.join("; "))
-    }
-}
-
-fn crossref_year(item: &Value) -> Option<i64> {
-    for key in ["published-print", "published-online", "created"] {
-        let year = item
-            .get(key)
-            .and_then(|value| value.get("date-parts"))
-            .and_then(Value::as_array)
-            .and_then(|parts| parts.first())
-            .and_then(Value::as_array)
-            .and_then(|date| date.first())
-            .and_then(Value::as_i64);
-        if year.is_some() {
-            return year;
-        }
-    }
-    None
-}
-
-fn encode_query(raw: &str) -> String {
-    url::form_urlencoded::byte_serialize(raw.as_bytes()).collect()
 }
 
 fn classify_source(url: &str, scholarly: bool, metadata_only: bool) -> &'static str {
