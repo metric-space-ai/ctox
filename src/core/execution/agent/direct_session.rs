@@ -536,7 +536,7 @@ impl PersistentSession {
             .client
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("session already shut down"))?;
-        let thread_id = self.thread_id.clone();
+        let mut thread_id = self.thread_id.clone();
         let cwd = self.cwd.clone();
         let model = self.model.clone();
         let model_provider = self.model_provider.clone();
@@ -559,7 +559,7 @@ impl PersistentSession {
         let result = runtime.block_on(async {
             Self::run_turn_async(
                 client,
-                &thread_id,
+                &mut thread_id,
                 &cwd,
                 &model,
                 model_provider.as_deref(),
@@ -577,6 +577,9 @@ impl PersistentSession {
             )
             .await
         });
+        // Adopt a rotated thread id so follow-up turns in this session keep
+        // using the live thread.
+        self.thread_id = thread_id;
 
         result
     }
@@ -886,7 +889,7 @@ impl PersistentSession {
 
     async fn run_turn_async(
         client: &mut InProcessAppServerClient,
-        _old_thread_id: &str,
+        session_thread_id: &mut String,
         cwd: &Path,
         model: &str,
         model_provider: Option<&str>,
@@ -902,32 +905,17 @@ impl PersistentSession {
         disable_active_tools: bool,
         read_only_sandbox: bool,
     ) -> Result<String> {
-        // Create a fresh thread per turn — reuse the same CLIENT but not
-        // the same thread. After TurnComplete, the thread may not accept
-        // new TurnStart requests in all ctox-core versions.
-        let thread_resp: ThreadStartResponse = client
-            .request_typed(ClientRequest::ThreadStart {
-                request_id: seq.next(),
-                params: ThreadStartParams {
-                    model: Some(model.to_string()),
-                    model_provider: model_provider.map(str::to_string),
-                    cwd: Some(cwd.to_string_lossy().to_string()),
-                    approval_policy: Some(AskForApproval::Never.into()),
-                    sandbox: Some(if read_only_sandbox {
-                        ctox_app_server_protocol::SandboxMode::ReadOnly
-                    } else {
-                        ctox_app_server_protocol::SandboxMode::DangerFullAccess
-                    }),
-                    base_instructions: Some(base_instructions.to_string()),
-                    dynamic_tools: disable_active_tools.then(Vec::new),
-                    ephemeral: Some(true),
-                    ..ThreadStartParams::default()
-                },
-            })
-            .await
-            .map_err(|err| anyhow::anyhow!("thread/start: {err}"))?;
-        let thread_id = thread_resp.thread.id;
-        eprintln!("[ctox direct-session] new thread for turn: {}", thread_id);
+        // Reuse the session's thread across turns. The previous fresh-thread-
+        // per-turn workaround ("the thread may not accept new TurnStart
+        // requests") has no backing mechanism in the current fork: turn_start
+        // is load_thread + Op::UserInput with no completed-thread rejection,
+        // and ephemeral threads stay registered in the in-memory manager.
+        // Reuse makes a slice (main turn + continuity refreshes) one thread,
+        // sends the base instructions once instead of four times, and is the
+        // first building block of the long-lived worker session. A defensive
+        // fallback below still rotates the thread if TurnStart reports it
+        // missing.
+        let thread_id = session_thread_id.clone();
 
         let preflight_text = format!("{base_instructions}\n\n{prompt}");
         if let Some(count) = exact_prompt_token_count(root, &preflight_text)? {
@@ -953,42 +941,83 @@ impl PersistentSession {
             }
         }
 
-        // TurnStart
-        let turn_resp: TurnStartResponse = client
+        // TurnStart on the session thread, with a one-shot rotation fallback
+        // if the thread genuinely went away (defensive; see comment above).
+        let turn_start_params = |thread_id: &str| TurnStartParams {
+            thread_id: thread_id.to_string(),
+            input: vec![UserInput::Text {
+                text: prompt.to_string(),
+                text_elements: Vec::new(),
+            }
+            .into()],
+            cwd: Some(cwd.to_path_buf()),
+            approval_policy: Some(AskForApproval::Never.into()),
+            approvals_reviewer: None,
+            sandbox_policy: Some(
+                if read_only_sandbox {
+                    SandboxPolicy::ReadOnly {
+                        access: ReadOnlyAccess::FullAccess,
+                        network_access: true,
+                    }
+                } else {
+                    SandboxPolicy::DangerFullAccess
+                }
+                .into(),
+            ),
+            model: None,
+            service_tier: None,
+            effort: reasoning_effort,
+            summary: None,
+            personality: None,
+            output_schema: None,
+            collaboration_mode: None,
+        };
+        let turn_resp: TurnStartResponse = match client
             .request_typed(ClientRequest::TurnStart {
                 request_id: seq.next(),
-                params: TurnStartParams {
-                    thread_id: thread_id.to_string(),
-                    input: vec![UserInput::Text {
-                        text: prompt.to_string(),
-                        text_elements: Vec::new(),
-                    }
-                    .into()],
-                    cwd: Some(cwd.to_path_buf()),
-                    approval_policy: Some(AskForApproval::Never.into()),
-                    approvals_reviewer: None,
-                    sandbox_policy: Some(
-                        if read_only_sandbox {
-                            SandboxPolicy::ReadOnly {
-                                access: ReadOnlyAccess::FullAccess,
-                                network_access: true,
-                            }
-                        } else {
-                            SandboxPolicy::DangerFullAccess
-                        }
-                        .into(),
-                    ),
-                    model: None,
-                    service_tier: None,
-                    effort: reasoning_effort,
-                    summary: None,
-                    personality: None,
-                    output_schema: None,
-                    collaboration_mode: None,
-                },
+                params: turn_start_params(&thread_id),
             })
             .await
-            .map_err(|err| anyhow::anyhow!("turn/start: {err}"))?;
+        {
+            Ok(resp) => resp,
+            Err(err) => {
+                eprintln!(
+                    "[ctox direct-session] turn/start on session thread {thread_id} failed ({err}); rotating thread"
+                );
+                let thread_resp: ThreadStartResponse = client
+                    .request_typed(ClientRequest::ThreadStart {
+                        request_id: seq.next(),
+                        params: ThreadStartParams {
+                            model: Some(model.to_string()),
+                            model_provider: model_provider.map(str::to_string),
+                            cwd: Some(cwd.to_string_lossy().to_string()),
+                            approval_policy: Some(AskForApproval::Never.into()),
+                            sandbox: Some(if read_only_sandbox {
+                                ctox_app_server_protocol::SandboxMode::ReadOnly
+                            } else {
+                                ctox_app_server_protocol::SandboxMode::DangerFullAccess
+                            }),
+                            base_instructions: Some(base_instructions.to_string()),
+                            dynamic_tools: disable_active_tools.then(Vec::new),
+                            ephemeral: Some(true),
+                            ..ThreadStartParams::default()
+                        },
+                    })
+                    .await
+                    .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
+                let rotated_thread_id = thread_resp.thread.id.to_string();
+                eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
+                *session_thread_id = rotated_thread_id.clone();
+                client
+                    .request_typed(ClientRequest::TurnStart {
+                        request_id: seq.next(),
+                        params: turn_start_params(&rotated_thread_id),
+                    })
+                    .await
+                    .map_err(|err| anyhow::anyhow!("turn/start: {err}"))?
+            }
+        };
+        let thread_id = session_thread_id.clone();
         let turn_id = turn_resp.turn.id;
 
         // Event loop
