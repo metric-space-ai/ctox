@@ -2637,10 +2637,30 @@ function ensureCtoxSmokeBinary() {
             'desktop_file_chunks',
           ];
       const startupAdvancedStatusStartedAt = Date.now();
-      const advancedStatus = await page.evaluate((requiredCollections) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
-        timeoutMs: 60000,
-        requiredCollections,
-      }), startupRequiredCollections);
+      // waitForHealthy reports ok as soon as the SHELL is healthy; lazy
+      // collections (desktop_file_chunks since the lazy-file-sync change) may
+      // still be inside their first catch-up for a few hundred ms. The strict
+      // contract below requires COMPLETE initial sync, so poll the status
+      // until the lazy tail finishes (bounded) before asserting.
+      let advancedStatus = null;
+      {
+        const initialSyncDeadline = Date.now() + 60000;
+        for (;;) {
+          advancedStatus = await page.evaluate((requiredCollections) => globalThis.CTOX_BUSINESS_OS_STATUS?.waitForHealthy?.({
+            timeoutMs: 60000,
+            requiredCollections,
+          }), startupRequiredCollections);
+          const initialSync = advancedStatus?.sync?.initialSync || {};
+          const missing = Array.isArray(initialSync.missingInitialReplication)
+            ? initialSync.missingInitialReplication
+            : [];
+          const incomplete = Array.isArray(initialSync.entries)
+            && initialSync.entries.some((entry) => entry?.state !== 'complete');
+          if (advancedStatus?.ok && missing.length === 0 && !incomplete) break;
+          if (Date.now() > initialSyncDeadline) break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      }
       outerPhaseTimings.startupAdvancedStatusMs = Date.now() - startupAdvancedStatusStartedAt;
       if (!advancedStatus?.ok) {
         throw new Error(`Business OS advanced status unhealthy after startup: ${JSON.stringify(advancedStatus, null, 2)}`);
