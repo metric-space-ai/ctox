@@ -1455,6 +1455,11 @@ fn scholarly_result_to_db_value(result: ScholarlyResult) -> Value {
         "pdf_total_pages": Value::Null,
         "doi": result.doi,
         "year": result.year,
+        // Preserve the structured metadata the old per-provider clients wrote
+        // into the bundle (venue/journal + authors) so the evidence the agent
+        // reads stays as rich as before the consolidation.
+        "authors": result.authors,
+        "venue": result.publisher,
     });
     if let Some(pdf) = result.open_access_pdf {
         value["open_access_pdf"] = Value::String(pdf);
@@ -2210,6 +2215,47 @@ mod tests {
         assert!(!generic_labels.contains(&"eddy_current_lsp"));
         assert!(!generic_labels.contains(&"aircraft_composites_ndt"));
         assert!(generic_labels.contains(&"topic_literature"));
+    }
+
+    #[test]
+    fn scholarly_db_value_surfaces_oa_pdf_as_read_target() {
+        let base = ScholarlyResult {
+            provider: "openalex".to_string(),
+            source_id: "https://openalex.org/W1".to_string(),
+            detail_url: "https://doi.org/10.1/x".to_string(),
+            title: "Paper".to_string(),
+            authors: Some("A. Author".to_string()),
+            publisher: Some("J. Venue".to_string()),
+            year: Some(2020),
+            language: None,
+            file_format: None,
+            file_size_label: None,
+            isbn: None,
+            doi: Some("10.1/x".to_string()),
+            open_access_pdf: Some("https://repo.example/free.pdf".to_string()),
+            open_access_license: None,
+            thumbnail_url: None,
+            snippet: None,
+            tags: Vec::new(),
+            rank: 1,
+        };
+        let value = scholarly_result_to_db_value(base.clone());
+        // Restored metadata + the resolved OA PDF land at the top level.
+        assert_eq!(value["authors"], "A. Author");
+        assert_eq!(value["venue"], "J. Venue");
+        assert_eq!(value["open_access_pdf"], "https://repo.example/free.pdf");
+        // source_read_url must pick the OA PDF as the read target.
+        assert_eq!(
+            source_read_url(&value).as_deref(),
+            Some("https://repo.example/free.pdf")
+        );
+        // Without an OA PDF it falls back to the detail/DOI url.
+        let mut no_pdf = base.clone();
+        no_pdf.open_access_pdf = None;
+        assert_eq!(
+            source_read_url(&scholarly_result_to_db_value(no_pdf)).as_deref(),
+            Some("https://doi.org/10.1/x")
+        );
     }
 
     #[test]

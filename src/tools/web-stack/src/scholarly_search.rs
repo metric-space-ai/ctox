@@ -185,34 +185,53 @@ pub fn execute_scholarly_search(
     if query.is_empty() {
         bail!("ctox scholarly search requires a non-empty query");
     }
-    if !is_enabled(root) {
-        bail!("CTOX scholarly search is disabled (CTOX_SCHOLARLY_SEARCH_ENABLED=false)");
-    }
     let provider = resolve_provider(root, request.provider);
     match provider {
-        ScholarlySearchProvider::Auto => match annas_archive_search(root, request) {
-            Ok(response) => Ok(response),
-            Err(err) => Ok(ScholarlySearchResponse {
-                provider: ScholarlySearchProvider::Auto.as_str().to_string(),
-                query: request.query.trim().to_string(),
-                results: Vec::new(),
-                executed_url: "auto:annas_archive_unavailable".to_string(),
-                source_policy: format!(
-                    "{SOURCE_POLICY_NOTICE} Scholarly auto-discovery returned no records because the configured metadata backend was unavailable: {err}"
-                ),
-            }),
-        },
-        ScholarlySearchProvider::AnnasArchive => annas_archive_search(root, request),
-        ScholarlySearchProvider::Crossref => {
-            Ok(database_response("crossref", request, crossref_search(request)?))
+        // Anna's Archive shadow-archive search is governed by the
+        // CTOX_SCHOLARLY_SEARCH_ENABLED kill-switch. The open academic metadata
+        // APIs (Crossref / OpenAlex / Semantic Scholar) are legal open APIs and
+        // are NOT gated by it — deep-research relies on them unconditionally,
+        // and disabling shadow-archive search must not silently kill them.
+        ScholarlySearchProvider::Auto => {
+            if !is_enabled(root) {
+                bail!("CTOX scholarly search is disabled (CTOX_SCHOLARLY_SEARCH_ENABLED=false)");
+            }
+            match annas_archive_search(root, request) {
+                Ok(response) => Ok(response),
+                Err(err) => Ok(ScholarlySearchResponse {
+                    provider: ScholarlySearchProvider::Auto.as_str().to_string(),
+                    query: request.query.trim().to_string(),
+                    results: Vec::new(),
+                    executed_url: "auto:annas_archive_unavailable".to_string(),
+                    source_policy: format!(
+                        "{SOURCE_POLICY_NOTICE} Scholarly auto-discovery returned no records because the configured metadata backend was unavailable: {err}"
+                    ),
+                }),
+            }
         }
-        ScholarlySearchProvider::OpenAlex => {
-            Ok(database_response("openalex", request, openalex_search(request)?))
+        ScholarlySearchProvider::AnnasArchive => {
+            if !is_enabled(root) {
+                bail!("CTOX scholarly search is disabled (CTOX_SCHOLARLY_SEARCH_ENABLED=false)");
+            }
+            annas_archive_search(root, request)
         }
+        ScholarlySearchProvider::Crossref => Ok(database_response(
+            root,
+            "crossref",
+            request,
+            crossref_search(root, request)?,
+        )),
+        ScholarlySearchProvider::OpenAlex => Ok(database_response(
+            root,
+            "openalex",
+            request,
+            openalex_search(root, request)?,
+        )),
         ScholarlySearchProvider::SemanticScholar => Ok(database_response(
+            root,
             "semantic_scholar",
             request,
-            semantic_scholar_search(request)?,
+            semantic_scholar_search(root, request)?,
         )),
     }
 }
@@ -899,15 +918,28 @@ fn trim_text(input: &str, max_len: usize) -> String {
 //
 // Ported from the former clients in `crate::deep_research`. These return the
 // typed `ScholarlyResult` shape so every scholarly backend lives behind one
-// `ScholarlySearchProvider` enum, as the module header promised. The academic
-// APIs carry no per-host runtime config today, so they take only the request.
+// `ScholarlySearchProvider` enum, as the module header promised. Each backend
+// reads its base URL from runtime config (default the public API host) so it
+// can be pointed at a mirror or a test server.
 // ---------------------------------------------------------------------------
 
 fn database_response(
+    root: &Path,
     provider: &str,
     request: &ScholarlySearchRequest,
-    results: Vec<ScholarlyResult>,
+    mut results: Vec<ScholarlyResult>,
 ) -> ScholarlySearchResponse {
+    // Honor the documented request filters for the academic providers too;
+    // these were previously applied only on the Anna's Archive path.
+    if request.only_doi {
+        results.retain(|hit| hit.doi.is_some());
+    }
+    if request.with_oa_pdf {
+        augment_results_with_open_access_pdfs(root, &mut results);
+    }
+    for (index, hit) in results.iter_mut().enumerate() {
+        hit.rank = index + 1;
+    }
     ScholarlySearchResponse {
         provider: provider.to_string(),
         query: request.query.trim().to_string(),
@@ -917,10 +949,13 @@ fn database_response(
     }
 }
 
-fn crossref_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+fn crossref_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
     let limit = request.max_results.unwrap_or(20).clamp(1, 20);
+    let base = runtime_config::get(root, "CTOX_CROSSREF_BASE_URL")
+        .unwrap_or_else(|| "https://api.crossref.org".to_string());
     let url = format!(
-        "https://api.crossref.org/works?rows={}&query.bibliographic={}",
+        "{}/works?rows={}&query.bibliographic={}",
+        base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
@@ -971,10 +1006,13 @@ fn crossref_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResu
     Ok(out)
 }
 
-fn openalex_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+fn openalex_search(root: &Path, request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
     let limit = request.max_results.unwrap_or(25).clamp(1, 25);
+    let base = runtime_config::get(root, "CTOX_OPENALEX_BASE_URL")
+        .unwrap_or_else(|| "https://api.openalex.org".to_string());
     let url = format!(
-        "https://api.openalex.org/works?per-page={}&search={}",
+        "{}/works?per-page={}&search={}",
+        base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
@@ -1022,9 +1060,12 @@ fn openalex_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResu
             file_size_label: None,
             isbn: None,
             doi,
-            // Resolve the OpenAlex location PDF into the single canonical
-            // `open_access_pdf` field so the downstream read pipeline finds it
-            // (the former path stashed it under `primary_location.pdf_url`).
+            // Resolve the OpenAlex OA PDF into the canonical `open_access_pdf`
+            // field so the read pipeline finds it. We prefer best_oa_location
+            // (the curated free full-text copy, OpenAlex's recommended read
+            // target) over primary_location (often the paywalled version of
+            // record). This deliberately differs from the pre-consolidation
+            // path, which consulted only primary_location.pdf_url.
             open_access_pdf: openalex_pdf_url(&item),
             open_access_license: None,
             thumbnail_url: None,
@@ -1053,10 +1094,16 @@ fn openalex_pdf_url(item: &Value) -> Option<String> {
     None
 }
 
-fn semantic_scholar_search(request: &ScholarlySearchRequest) -> Result<Vec<ScholarlyResult>> {
+fn semantic_scholar_search(
+    root: &Path,
+    request: &ScholarlySearchRequest,
+) -> Result<Vec<ScholarlyResult>> {
     let limit = request.max_results.unwrap_or(12).clamp(1, 20);
+    let base = runtime_config::get(root, "CTOX_SEMANTIC_SCHOLAR_BASE_URL")
+        .unwrap_or_else(|| "https://api.semanticscholar.org/graph/v1".to_string());
     let url = format!(
-        "https://api.semanticscholar.org/graph/v1/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
+        "{}/paper/search?limit={}&fields=title,authors,year,url,abstract,venue,externalIds,openAccessPdf,isOpenAccess&query={}",
+        base.trim_end_matches('/'),
         limit,
         encode_query(request.query.trim())
     );
@@ -1798,6 +1845,96 @@ mod tests {
         assert_eq!(response.results[0].title, "Has DOI");
         assert_eq!(response.results[0].rank, 1);
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn openalex_pdf_prefers_best_oa_location_then_primary() {
+        // best_oa_location (free copy) wins over primary_location (often the
+        // paywalled version of record) — the intended read target.
+        let both = json!({
+            "best_oa_location": {"pdf_url": "https://repo.example/free.pdf"},
+            "primary_location": {"pdf_url": "https://publisher.example/paywalled.pdf"},
+        });
+        assert_eq!(
+            openalex_pdf_url(&both).as_deref(),
+            Some("https://repo.example/free.pdf")
+        );
+        // Falls back to primary_location when best_oa_location has no pdf_url.
+        let primary_only = json!({
+            "best_oa_location": {"pdf_url": Value::Null},
+            "primary_location": {"pdf_url": "https://publisher.example/vor.pdf"},
+        });
+        assert_eq!(
+            openalex_pdf_url(&primary_only).as_deref(),
+            Some("https://publisher.example/vor.pdf")
+        );
+        // None when neither location exposes a pdf_url.
+        let none = json!({"primary_location": {"pdf_url": Value::Null}});
+        assert!(openalex_pdf_url(&none).is_none());
+    }
+
+    #[test]
+    fn crossref_runs_even_when_shadow_archive_search_is_disabled() {
+        use std::net::TcpListener;
+        // CTOX_SCHOLARLY_SEARCH_ENABLED governs the Anna's Archive shadow-archive
+        // path only; the open academic metadata APIs must NOT be gated by it.
+        const CROSSREF_JSON: &str = r#"{"message":{"items":[{"title":["A Test Paper"],"DOI":"10.1234/test","URL":"https://doi.org/10.1234/test","type":"journal-article"}]}}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind crossref mock");
+        let port = listener.local_addr().expect("addr").port();
+        let body = CROSSREF_JSON.to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = read_http_request_path(&mut stream);
+            write_http_response(&mut stream, &body, "application/json");
+        });
+        let root = unique_test_root("mock-crossref-disabled");
+        let db = root.join("runtime/ctox.sqlite3");
+        write_runtime_kv(&db, "CTOX_SCHOLARLY_SEARCH_ENABLED", "false");
+        write_runtime_kv(&db, "CTOX_CROSSREF_BASE_URL", &format!("http://127.0.0.1:{port}"));
+        let request = ScholarlySearchRequest {
+            query: "anything".to_string(),
+            provider: Some(ScholarlySearchProvider::Crossref),
+            ..Default::default()
+        };
+        let response = execute_scholarly_search(&root, &request)
+            .expect("crossref must run even when CTOX_SCHOLARLY_SEARCH_ENABLED=false");
+        let _ = server.join();
+        assert_eq!(response.provider, "crossref");
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].doi.as_deref(), Some("10.1234/test"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn academic_only_doi_filter_drops_doiless_results() {
+        use std::net::TcpListener;
+        const CROSSREF_JSON: &str = r#"{"message":{"items":[{"title":["Has DOI"],"DOI":"10.1/has"},{"title":["No DOI"],"URL":"https://example.org/no-doi"}]}}"#;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let body = CROSSREF_JSON.to_string();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let _ = read_http_request_path(&mut stream);
+            write_http_response(&mut stream, &body, "application/json");
+        });
+        let root = unique_test_root("mock-crossref-only-doi");
+        write_runtime_kv(
+            &root.join("runtime/ctox.sqlite3"),
+            "CTOX_CROSSREF_BASE_URL",
+            &format!("http://127.0.0.1:{port}"),
+        );
+        let request = ScholarlySearchRequest {
+            query: "x".to_string(),
+            provider: Some(ScholarlySearchProvider::Crossref),
+            only_doi: true,
+            ..Default::default()
+        };
+        let response = execute_scholarly_search(&root, &request).expect("execute");
+        let _ = server.join();
+        assert_eq!(response.results.len(), 1);
+        assert_eq!(response.results[0].title, "Has DOI");
+        assert_eq!(response.results[0].rank, 1);
         let _ = std::fs::remove_dir_all(&root);
     }
 
