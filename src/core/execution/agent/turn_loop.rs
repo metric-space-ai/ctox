@@ -447,8 +447,13 @@ where
         prompt,
         config.max_context_tokens,
     );
-    let mut governance_snapshot =
-        governance::prompt_snapshot(root, conversation_id).unwrap_or_default();
+    let mut governance_snapshot = governance::prompt_snapshot(root, conversation_id)
+        .unwrap_or_else(|err| {
+            // An empty governance block is indistinguishable from a quiet
+            // one for the model; at least leave an operator-visible trace.
+            eprintln!("ctox turn: governance snapshot unavailable: {err:#}");
+            Default::default()
+        });
     emit(&format!(
         "context-health {} {}",
         health.status.as_str(),
@@ -477,9 +482,22 @@ where
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
     ));
+    // Budget the SAME text the session-level preflight counts: the session
+    // sends base_instructions + prompt, so counting the rendered prompt
+    // alone lets a turn pass this loop and then hard-fail inside
+    // run_turn_async with no compaction retry (the worker system prompt is
+    // several thousand tokens, not noise).
+    let preflight_base_instructions = session
+        .as_deref()
+        .or(owned_session.as_ref())
+        .map(|sess| sess.base_instructions().to_string())
+        .unwrap_or_default();
     for exact_preflight_round in 0..=2 {
-        let Some(count) =
-            super::direct_session::exact_prompt_token_count(root, &rendered_prompt.prompt)?
+        let preflight_text = format!(
+            "{preflight_base_instructions}\n\n{}",
+            rendered_prompt.prompt
+        );
+        let Some(count) = super::direct_session::exact_prompt_token_count(root, &preflight_text)?
         else {
             break;
         };
@@ -531,7 +549,10 @@ where
             config.max_context_tokens,
         );
         governance_snapshot =
-            governance::prompt_snapshot(root, conversation_id).unwrap_or_default();
+            governance::prompt_snapshot(root, conversation_id).unwrap_or_else(|err| {
+                eprintln!("ctox turn: governance snapshot unavailable: {err:#}");
+                Default::default()
+            });
         rendered_prompt = live_context::render_runtime_prompt(
             root,
             &snapshot,

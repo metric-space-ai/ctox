@@ -1942,4 +1942,49 @@ mod tests {
         let historical = sanitize_context_message(email);
         assert!(historical.contains("treat it as prior mail context only"));
     }
+
+    #[test]
+    fn system_prompt_legend_matches_emitted_block_headers_and_names_no_phantoms() {
+        // Congruence gate: every block header the system prompt's legend
+        // names must be a header the renderer actually emits, and the prompt
+        // must not reference retired labels or nonexistent mechanisms/tools.
+        let prompt = CTOX_CHAT_SYSTEM_PROMPT;
+        for header in [
+            "CURRENT REQUEST",
+            "Suggested skill dispatch",
+            "Verified evidence",
+            "Strategy",
+            "Anchors",
+            "Focus",
+            "EXECUTION CONTRACT",
+            "Open CTOX work that counts right now",
+            "Narrative",
+            "Governance",
+            "Autonomy policy",
+            "Context health",
+            "RECENT CONVERSATION EVIDENCE",
+        ] {
+            assert!(
+                prompt.contains(header),
+                "system prompt legend is missing emitted block header: {header}"
+            );
+        }
+        for stale in [
+            "Latest user turn",
+            "mission_idle_watchdog",
+            "agy session",
+            "`WebSearch`",
+            "`WebRead`",
+            "`WebScrape`",
+            "test_dashboard.js",
+            "claude_subscription_auth_json",
+            "antigravity_subscription_auth_json",
+            "read_scope",
+        ] {
+            assert!(
+                !prompt.contains(stale),
+                "system prompt references retired/nonexistent: {stale}"
+            );
+        }
+    }
 }

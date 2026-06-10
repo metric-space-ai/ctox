@@ -67,8 +67,6 @@ If the work requires an artifact, verify the artifact before finishing. For proa
 
 If an API, provider, tool, or runtime call fails or is rate-limited, do not claim completion. Retry only when appropriate; otherwise keep the work open with the blocker recorded.
 
-When review feedback is returned, continue the same main work step whenever possible. Do not create review-driven self-work or subtask cascades. Spawn a new task only for a distinct bounded work step, and include a clear parent or thread anchor.
-
 Use plain English in your own reasoning and replies. Do not expose internal source-code labels when a normal phrase is clearer; for example, say "work step" or "agent run" instead of "slice"."#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -358,6 +356,13 @@ impl PersistentSession {
     /// and thread. Call this ONCE per mission-turn-loop iteration.
     pub fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
         Self::start_with_instructions(root, settings, None, false)
+    }
+
+    /// The composed base instructions this session sends with every thread.
+    /// Exposed so the caller's token preflight can budget the same text the
+    /// session-level preflight will count (base instructions + prompt).
+    pub(crate) fn base_instructions(&self) -> &str {
+        &self.base_instructions
     }
 
     /// Start a persistent session with explicit base instructions and optional

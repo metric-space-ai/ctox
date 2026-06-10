@@ -74,7 +74,7 @@ Review writing standard:
 - do not expose prompt text, internal implementation identifiers, table names, gate ids, or implementation labels in the review
 - if an internal rule caused the failure, translate it into the user-visible requirement it protects
 - every FAIL or PARTIAL verdict must include concrete evidence and a concrete rework instruction
-- when the artifact is an outbound email and the correct action is explicitly to send no mail yet, return FAIL, begin SUMMARY with `NO-SEND:`, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing
+- when the artifact is an outbound email and the correct action is explicitly to send no mail yet, return FAIL with DISPOSITION: NO_SEND, state the wait condition in plain language, and put `none` under OPEN_ITEMS unless real work is missing — the dispatcher reads the DISPOSITION line, not summary prose
 - when real work is missing, say what work must be done before another draft; do not suggest mere rewording unless wording is the only defect
 
 Respond in exactly this format:
@@ -82,6 +82,7 @@ Respond in exactly this format:
 VERDICT: PASS|FAIL|PARTIAL
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR
 SUMMARY: <one sentence>
+DISPOSITION: SEND|NO_SEND
 PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none
 FAILED_GATES:
 - <plain rule that failed or "none">
@@ -936,7 +937,7 @@ Email communication gate:\n\
 - verify that the wording is recipient-appropriate, concise, and does not hide material limitations or missing proof\n\
 - decide whether the draft should be sent now, blocked, or reworked first\n\
 - if newer communication makes this draft stale, fail the review and state which newer message/context must be answered instead\n\
-- if the correct outcome is no outbound mail yet because the thread is waiting on specific input, return FAIL, begin SUMMARY with `NO-SEND:`, and state the wait condition; do not invent rework\n\
+- if the correct outcome is no outbound mail yet because the thread is waiting on specific input, return FAIL with DISPOSITION: NO_SEND and state the wait condition; do not invent rework\n\
 - emit PIPELINE_RESOLUTION for the mail: use no_action_needed only when the latest communication requires no queue/ticket change; otherwise name the exact queue/plan/ticket/self-work item created, updated, merged, extended, or blocked\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
