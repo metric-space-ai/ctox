@@ -4442,7 +4442,10 @@ function stableSignalingUrlKey(signalingUrl) {
 }
 var replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
-  stableSignalingUrlKey
+  stableSignalingUrlKey,
+  // Lazy accessor (class is declared below): lets the activation-catch-up
+  // smoke drive the real SharedRoomPeer registry wiring without a network.
+  getSharedRoomPeerClass: () => SharedRoomPeer
 });
 function isTransientSharedPeerError(error) {
   const message = String(error?.message || error || "");
@@ -4471,6 +4474,7 @@ var SharedRoomPeer = class {
     this.activeRegistry = getActiveCollectionRegistry();
     this.activeRegistryUnsub = null;
     this.lastActiveCollectionsSent = null;
+    this.lastActiveCollectionsSet = null;
   }
   representativeCollection() {
     const first = this.collections.keys().next();
@@ -4594,7 +4598,18 @@ var SharedRoomPeer = class {
     });
     if (!this.activeRegistryUnsub) {
       this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
+        const previous = this.lastActiveCollectionsSet || /* @__PURE__ */ new Set();
+        const current = new Set(Array.isArray(names) ? names : []);
+        this.lastActiveCollectionsSet = current;
         this.sendActiveCollections(names);
+        for (const name of current) {
+          if (previous.has(name)) continue;
+          const registration = this.collections.get(name);
+          try {
+            registration?.state?.onMasterChange?.();
+          } catch {
+          }
+        }
       });
     }
     return this.peer;

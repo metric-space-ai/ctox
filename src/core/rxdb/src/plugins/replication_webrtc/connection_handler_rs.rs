@@ -874,11 +874,18 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     fn is_collection_active_for_peer(&self, peer: &Self::Peer, collection: &str) -> bool {
+        // Fail-open contract: a peer that has NEVER reported an active set is
+        // treated as all-active. Master-change relays are DROPPED for
+        // inactive collections, so a fail-closed default silently lost every
+        // event in the handshake→first-`rxdb.activeCollections` window (the
+        // browser stayed stale forever because pulls are event-driven). Once
+        // the peer reports a set it is authoritative; (re-)activation
+        // catch-up is covered by the resync push in the message loop.
         self.active_collections
             .lock()
             .get(peer)
             .map(|active| active.contains(collection))
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 
     /// Tear down ONE peer's transport. Emits the disconnect event, so the
@@ -895,7 +902,20 @@ impl WebRTCRsConnectionHandler {
     /// the collection-name array from `params[0]`, replaces the peer's active
     /// set, and re-buckets anything still queued for that peer so foreground
     /// frames jump ahead immediately. Idempotent: an unchanged set is a no-op.
-    fn apply_active_collections(&self, peer: &WebRTCRsPeer, message: &WebRTCMessage) {
+    ///
+    /// Returns the collections that this update RE-ACTIVATED (present in the
+    /// new set, absent from the previously reported one). Master-change relays
+    /// for inactive collections are dropped, so a re-activated collection may
+    /// have missed events — the message loop pushes a resync master-change for
+    /// each returned name so the browser runs a checkpoint catch-up pull.
+    /// The first report from a peer returns nothing: before it the peer was
+    /// fail-open all-active (see `is_collection_active_for_peer`), so no
+    /// events were dropped.
+    fn apply_active_collections(
+        &self,
+        peer: &WebRTCRsPeer,
+        message: &WebRTCMessage,
+    ) -> Vec<String> {
         let names: HashSet<String> = message
             .params
             .first()
@@ -908,13 +928,28 @@ impl WebRTCRsConnectionHandler {
                     .collect::<HashSet<String>>()
             })
             .unwrap_or_default();
+        let newly_activated: Vec<String>;
         {
             let mut active_map = self.active_collections.lock();
-            let entry = active_map.entry(peer.clone()).or_default();
-            if *entry == names {
-                return;
+            match active_map.entry(peer.clone()) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    if *entry.get() == names {
+                        return Vec::new();
+                    }
+                    newly_activated = names
+                        .iter()
+                        .filter(|name| !entry.get().contains(*name))
+                        .cloned()
+                        .collect();
+                    *entry.get_mut() = names.clone();
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    // First report: the peer was fail-open all-active until
+                    // now, nothing was dropped, nothing to resync.
+                    entry.insert(names.clone());
+                    newly_activated = Vec::new();
+                }
             }
-            *entry = names.clone();
         }
         // Re-bucket the existing queue against the new active set so a frame
         // already waiting for a now-foreground collection is promoted.
@@ -922,6 +957,7 @@ impl WebRTCRsConnectionHandler {
             queue.reprioritize(&names);
         }
         self.refresh_send_queue_status();
+        newly_activated
     }
 
     async fn send_queued_text(
@@ -1851,8 +1887,34 @@ fn install_data_channel(
                                 // anything still queued, and do NOT forward it to
                                 // the pool's message stream.
                                 if message.method == ACTIVE_COLLECTIONS_METHOD {
-                                    handler_for_task
+                                    let newly_activated = handler_for_task
                                         .apply_active_collections(&peer_for_task, &message);
+                                    // Re-activated collections may have missed
+                                    // master-change relays while inactive
+                                    // (relays are dropped, pulls are event-
+                                    // driven). Push one resync master-change
+                                    // per re-activated collection so the
+                                    // browser runs a checkpoint catch-up pull.
+                                    if !newly_activated.is_empty() {
+                                        let handler_resync = Arc::clone(&handler_for_task);
+                                        let peer_resync = peer_for_task.clone();
+                                        tokio::spawn(async move {
+                                            for collection in newly_activated {
+                                                let resp = WebRTCResponse {
+                                                    id: crate::plugins::replication_webrtc::index_mod::master_change_stream_id(&collection),
+                                                    result: serde_json::json!({ "resync": true }),
+                                                    error: None,
+                                                    collection: Some(collection),
+                                                };
+                                                let _ = handler_resync
+                                                    .send(
+                                                        &peer_resync,
+                                                        WebRTCWireFrame::Response(resp),
+                                                    )
+                                                    .await;
+                                            }
+                                        });
+                                    }
                                 } else {
                                     message_subject.next(PeerWithMessage {
                                         peer: peer_for_task.clone(),
@@ -2549,7 +2611,10 @@ mod tests {
         let handler = WebRTCRsConnectionHandler::new();
         let peer = "peer-1".to_string();
 
-        assert!(!handler.is_collection_active_for_peer(&peer, "documents"));
+        // Fail-open before the first report: relays for inactive collections
+        // are DROPPED, so an unreported peer must count as all-active or the
+        // handshake→first-report window silently loses events forever.
+        assert!(handler.is_collection_active_for_peer(&peer, "documents"));
 
         let msg = WebRTCMessage {
             id: "ac".to_string(),
@@ -2557,11 +2622,59 @@ mod tests {
             params: vec![serde_json::json!(["documents", "business_commands"])],
             collection: None,
         };
-        handler.apply_active_collections(&peer, &msg);
+        // The first report transitions from fail-open: nothing was dropped
+        // before it, so nothing needs a resync.
+        let newly_activated = handler.apply_active_collections(&peer, &msg);
+        assert!(newly_activated.is_empty());
 
         assert!(handler.is_collection_active_for_peer(&peer, "documents"));
         assert!(handler.is_collection_active_for_peer(&peer, "business_commands"));
         assert!(!handler.is_collection_active_for_peer(&peer, "ctox_ticket_self_work_notes"));
+    }
+
+    /// REGRESSION (gating catch-up): relays for inactive collections are
+    /// dropped and browser pulls are purely event-driven, so RE-ACTIVATING a
+    /// collection must surface which names need a resync push — otherwise a
+    /// collection that was inactive while the master wrote (rxdb-soak
+    /// workspace-large-file-viewer-restart: desktop_files inactive during
+    /// ctox.file.materialize) stays stale in the browser forever.
+    #[test]
+    fn apply_active_collections_reports_reactivated_names() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = "peer-1".to_string();
+        let report = |names: serde_json::Value| WebRTCMessage {
+            id: "ac".to_string(),
+            method: ACTIVE_COLLECTIONS_METHOD.to_string(),
+            params: vec![names],
+            collection: None,
+        };
+
+        assert!(handler
+            .apply_active_collections(&peer, &report(serde_json::json!(["business_commands"])))
+            .is_empty());
+        // Re-activation after a reported set without the collection: resync.
+        let activated = handler.apply_active_collections(
+            &peer,
+            &report(serde_json::json!(["business_commands", "desktop_files"])),
+        );
+        assert_eq!(activated, vec!["desktop_files".to_string()]);
+        // Unchanged set: idempotent no-op.
+        assert!(handler
+            .apply_active_collections(
+                &peer,
+                &report(serde_json::json!(["business_commands", "desktop_files"])),
+            )
+            .is_empty());
+        // Dropping a collection re-activates nothing.
+        assert!(handler
+            .apply_active_collections(&peer, &report(serde_json::json!(["desktop_files"])))
+            .is_empty());
+        // ...but bringing it back resyncs it.
+        let reactivated = handler.apply_active_collections(
+            &peer,
+            &report(serde_json::json!(["business_commands", "desktop_files"])),
+        );
+        assert_eq!(reactivated, vec!["business_commands".to_string()]);
     }
 
     #[test]

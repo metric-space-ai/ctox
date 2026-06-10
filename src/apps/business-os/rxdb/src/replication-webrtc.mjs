@@ -130,6 +130,9 @@ function stableSignalingUrlKey(signalingUrl) {
 export const replicationWebRtcTestInternals = Object.freeze({
   sharedRoomPeerKey,
   stableSignalingUrlKey,
+  // Lazy accessor (class is declared below): lets the activation-catch-up
+  // smoke drive the real SharedRoomPeer registry wiring without a network.
+  getSharedRoomPeerClass: () => SharedRoomPeer,
 });
 
 function isTransientSharedPeerError(error) {
@@ -178,6 +181,7 @@ class SharedRoomPeer {
     this.activeRegistry = getActiveCollectionRegistry();
     this.activeRegistryUnsub = null;
     this.lastActiveCollectionsSent = null;
+    this.lastActiveCollectionsSet = null;
   }
 
   representativeCollection() {
@@ -321,7 +325,25 @@ class SharedRoomPeer {
     // set and on every subsequent change (debounced inside the registry).
     if (!this.activeRegistryUnsub) {
       this.activeRegistryUnsub = this.activeRegistry.onChange((names) => {
+        const previous = this.lastActiveCollectionsSet || new Set();
+        const current = new Set(Array.isArray(names) ? names : []);
+        this.lastActiveCollectionsSet = current;
         this.sendActiveCollections(names);
+        // Catch-up on (re-)activation: the native peer DROPS master-change
+        // relays for collections outside the reported active set, and pulls
+        // are purely event-driven. A collection that just became active may
+        // therefore have missed events while inactive — run one
+        // checkpoint-based pull now so it converges instead of staying stale
+        // until the next native write (rxdb-soak viewer-restart: a
+        // ctox.file.materialize landing while desktop_files was inactive
+        // never reached the browser). The native peer additionally pushes a
+        // resync master-change when it applies the new set; this local pull
+        // covers peers that predate that contract.
+        for (const name of current) {
+          if (previous.has(name)) continue;
+          const registration = this.collections.get(name);
+          try { registration?.state?.onMasterChange?.(); } catch {}
+        }
       });
     }
     return this.peer;

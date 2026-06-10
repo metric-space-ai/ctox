@@ -6580,9 +6580,17 @@ fn business_record_projection_collections() -> Vec<String> {
         // rows-bearing projection the single writer, so the generic
         // business-record projection cannot overwrite it with a row-less doc.
         .filter(|name| {
+            // `desktop_files` is owned by the desktop-file index
+            // (scan/materialize/browser masterWrite write the RxDB directly);
+            // its store records exist for the MCP/store view only. Projecting
+            // them here overwrote a freshly materialized 'available' doc with
+            // the store's stale 'lazy' snapshot every interval — the browser
+            // file viewer flipped back to an unreadable lazy state ~3s after
+            // each ctox.file.materialize (rxdb-soak viewer-restart). Same
+            // single-writer rule as `knowledge_tables` below.
             !matches!(
                 name.as_str(),
-                "browser_frames" | "desktop_file_chunks" | "knowledge_tables"
+                "browser_frames" | "desktop_files" | "desktop_file_chunks" | "knowledge_tables"
             )
         })
         .collect()
@@ -7029,8 +7037,13 @@ mod tests {
         // projection (`sync_knowledge_tables_with_database`); the generic
         // business-record projection must not also write it.
         assert!(!collections.iter().any(|name| name == "knowledge_tables"));
+        // `desktop_files` is owned by the desktop-file index (scan /
+        // materialize / browser masterWrite). Projecting the store snapshot
+        // here overwrote freshly materialized 'available' docs with stale
+        // 'lazy' ones every interval (rxdb-soak viewer-restart failure) —
+        // single-writer rule, same as knowledge_tables.
+        assert!(!collections.iter().any(|name| name == "desktop_files"));
         assert!(collections.iter().any(|name| name == "browser_tabs"));
-        assert!(collections.iter().any(|name| name == "desktop_files"));
     }
 
     #[test]
