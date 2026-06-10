@@ -292,55 +292,66 @@ impl RxStorageInstance for DatabaseWrappedStorageInstance {
         rows: Vec<BulkWriteRow>,
         context: &str,
     ) -> Result<RxStorageBulkWriteResponse, RxError> {
-        let time = now();
-        let mut to_storage_write_rows = Vec::with_capacity(rows.len());
-        for write_row in rows.into_iter() {
-            let previous = write_row.previous;
-            let mut document = flat_clone_doc_with_meta(&write_row.document);
-            if let Some(obj) = document.as_object_mut() {
-                let meta = obj
-                    .entry("_meta".to_string())
-                    .or_insert_with(|| json!({ "lwt": time }));
-                if let Some(meta_obj) = meta.as_object_mut() {
-                    meta_obj.insert("lwt".to_string(), json!(time));
-                } else {
-                    *meta = json!({ "lwt": time });
-                }
-                let previous_rev = previous
-                    .as_ref()
-                    .and_then(|doc| doc.get("_rev"))
-                    .and_then(|rev| rev.as_str())
-                    .filter(|rev| !rev.is_empty());
-                obj.insert(
-                    "_rev".to_string(),
-                    Value::String(create_revision(&self.database.token, previous_rev)?),
-                );
-            }
-            to_storage_write_rows.push(BulkWriteRow { previous, document });
-        }
-
-        let mut hook_payload = json!({
-            "storageInstance": {
-                "databaseName": self.inner.database_name(),
-                "collectionName": self.inner.collection_name()
-            },
-            "rows": to_storage_write_rows
-        });
-        run_plugin_hooks("preStorageWrite", &mut hook_payload);
-        let to_storage_write_rows: Vec<BulkWriteRow> = hook_payload
-            .get("rows")
-            .cloned()
-            .and_then(|rows| serde_json::from_value(rows).ok())
-            .unwrap_or_default();
-
-        let write_rows_for_retry = to_storage_write_rows.clone();
+        // INVARIANT (checkpoint safety): `_meta.lwt` stamping and the storage
+        // commit happen ATOMICALLY under the same `locked_run` lock that also
+        // serializes `get_changed_documents_since`. Stamping outside the lock
+        // let a concurrent writer with a HIGHER lwt commit first; a pull
+        // reading in that window advanced its checkpoint past the still
+        // uncommitted lower-lwt rows, which were then invisible to checkpoint
+        // iteration forever (observed as silently missing desktop_file_chunks
+        // after workspace churn). Upstream JS is single-threaded, so it gets
+        // this ordering for free; the Rust port must enforce it explicitly.
         let storage = Arc::clone(&self.inner);
+        let database = Arc::clone(&self.database);
         let ctx = context.to_string();
-        let write_result = self
+        let (write_result, write_rows_for_retry) = self
             .database
-            .locked_run(
-                move || async move { storage.bulk_write(to_storage_write_rows, &ctx).await },
-            )
+            .locked_run(move || async move {
+                let time = now();
+                let mut to_storage_write_rows = Vec::with_capacity(rows.len());
+                for write_row in rows.into_iter() {
+                    let previous = write_row.previous;
+                    let mut document = flat_clone_doc_with_meta(&write_row.document);
+                    if let Some(obj) = document.as_object_mut() {
+                        let meta = obj
+                            .entry("_meta".to_string())
+                            .or_insert_with(|| json!({ "lwt": time }));
+                        if let Some(meta_obj) = meta.as_object_mut() {
+                            meta_obj.insert("lwt".to_string(), json!(time));
+                        } else {
+                            *meta = json!({ "lwt": time });
+                        }
+                        let previous_rev = previous
+                            .as_ref()
+                            .and_then(|doc| doc.get("_rev"))
+                            .and_then(|rev| rev.as_str())
+                            .filter(|rev| !rev.is_empty());
+                        obj.insert(
+                            "_rev".to_string(),
+                            Value::String(create_revision(&database.token, previous_rev)?),
+                        );
+                    }
+                    to_storage_write_rows.push(BulkWriteRow { previous, document });
+                }
+
+                let mut hook_payload = json!({
+                    "storageInstance": {
+                        "databaseName": storage.database_name(),
+                        "collectionName": storage.collection_name()
+                    },
+                    "rows": to_storage_write_rows
+                });
+                run_plugin_hooks("preStorageWrite", &mut hook_payload);
+                let to_storage_write_rows: Vec<BulkWriteRow> = hook_payload
+                    .get("rows")
+                    .cloned()
+                    .and_then(|rows| serde_json::from_value(rows).ok())
+                    .unwrap_or_default();
+
+                let write_rows_for_retry = to_storage_write_rows.clone();
+                let result = storage.bulk_write(to_storage_write_rows, &ctx).await?;
+                Ok::<_, RxError>((result, write_rows_for_retry))
+            })
             .await?;
 
         let mut use_write_result = RxStorageBulkWriteResponse { error: Vec::new() };
@@ -390,7 +401,28 @@ impl RxStorageInstance for DatabaseWrappedStorageInstance {
         let ctx = context.to_string();
         let sub_result = self
             .database
-            .locked_run(move || async move { storage.bulk_write(re_inserts, &ctx).await })
+            .locked_run(move || async move {
+                // Same checkpoint-safety invariant as the first pass: the rows
+                // still carry the lwt stamped during the first locked_run; by
+                // now other writers may have committed higher lwts. Re-stamp
+                // inside THIS lock so commit order keeps matching lwt order.
+                let time = now();
+                let re_inserts: Vec<BulkWriteRow> = re_inserts
+                    .into_iter()
+                    .map(|mut row| {
+                        if let Some(meta) = row
+                            .document
+                            .as_object_mut()
+                            .and_then(|obj| obj.get_mut("_meta"))
+                            .and_then(|meta| meta.as_object_mut())
+                        {
+                            meta.insert("lwt".to_string(), json!(time));
+                        }
+                        row
+                    })
+                    .collect();
+                storage.bulk_write(re_inserts, &ctx).await
+            })
             .await?;
         use_write_result.error.extend(sub_result.error.clone());
 
@@ -1507,6 +1539,91 @@ mod tests {
             docs[0].get("_rev").and_then(Value::as_str),
             Some("2-db-token")
         );
+    }
+
+    /// REGRESSION (checkpoint safety): `_meta.lwt` stamping and the storage
+    /// commit must be atomic under `locked_run`. When stamping happened
+    /// outside the lock, a writer could commit a HIGHER lwt before a
+    /// concurrent writer's LOWER lwt landed; a checkpoint iterator reading in
+    /// that window advanced past the uncommitted rows and never saw them
+    /// (observed as silently missing desktop_file_chunks after workspace
+    /// churn in the rxdb-soak E2E). Hammers concurrent single-row writers
+    /// against a continuous checkpoint drain and asserts nothing is skipped.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn checkpoint_iteration_never_skips_docs_under_concurrent_writers() {
+        const WRITERS: usize = 4;
+        const DOCS_PER_WRITER: usize = 50;
+
+        let schema = test_schema();
+        let storage: Arc<dyn RxStorage> = crate::plugins::storage_memory::get_rx_storage_memory(());
+        let inner = storage
+            .create_storage_instance(storage_params(schema.clone()))
+            .await
+            .unwrap();
+        let database = test_database(storage);
+        let wrapped =
+            get_wrapped_storage_instance(Arc::clone(&database), Arc::clone(&inner), schema);
+
+        let mut writers = Vec::new();
+        for writer in 0..WRITERS {
+            let wrapped = Arc::clone(&wrapped);
+            writers.push(tokio::spawn(async move {
+                for doc in 0..DOCS_PER_WRITER {
+                    let id = format!("w{writer}-d{doc:03}");
+                    let result = wrapped
+                        .bulk_write(
+                            vec![BulkWriteRow {
+                                previous: None,
+                                document: base_doc(&id, "0-new", false, serde_json::json!({})),
+                            }],
+                            "checkpoint-race-test",
+                        )
+                        .await
+                        .unwrap();
+                    assert!(result.error.is_empty());
+                    tokio::task::yield_now().await;
+                }
+            }));
+        }
+
+        // Drain checkpoint iteration continuously while the writers run. A
+        // small limit forces many iterations so a reader interleaves with
+        // writers as often as possible.
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut checkpoint: Option<Value> = None;
+        let total = WRITERS * DOCS_PER_WRITER;
+        let mut writers_done = false;
+        loop {
+            let result = wrapped
+                .get_changed_documents_since(7, checkpoint.as_ref())
+                .await
+                .unwrap();
+            let empty = result.documents.is_empty();
+            for doc in &result.documents {
+                if let Some(id) = doc.get("id").and_then(Value::as_str) {
+                    seen.insert(id.to_string());
+                }
+            }
+            checkpoint = Some(result.checkpoint);
+            if empty {
+                if writers_done {
+                    break;
+                }
+                writers_done = writers.iter().all(|writer| writer.is_finished());
+                tokio::task::yield_now().await;
+            }
+        }
+        for writer in writers {
+            writer.await.unwrap();
+        }
+
+        assert_eq!(
+            seen.len(),
+            total,
+            "checkpoint iteration skipped {} docs (lwt stamped outside locked_run?)",
+            total - seen.len()
+        );
+        wrapped.close().await.unwrap();
     }
 
     fn schema(extra: serde_json::Map<String, Value>) -> RxJsonSchema {
