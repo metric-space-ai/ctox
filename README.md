@@ -64,6 +64,12 @@ the browser and `rxdb-rs` in the daemon. It is derived from RxDB concepts, but
 it is not upstream npm `rxdb` and not a drop-in replacement for arbitrary RxDB
 plugins. Business OS apps use the database handles supplied by the shell.
 
+The full reference for CTOX DB — architecture on both sides, the wire
+protocol, the contracts pipeline, failure/recovery semantics with their
+hard invariants, the test map, and the agent guardrails — is
+[`docs/ctox-rxdb.md`](docs/ctox-rxdb.md). Read it before changing anything
+in the data plane.
+
 ```mermaid
 flowchart LR
   Browser["Browser Business OS<br/>CTOX DB / IndexedDB"] -- "CTOX DB WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]

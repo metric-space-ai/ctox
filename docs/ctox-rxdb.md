@@ -58,7 +58,7 @@ CTOX SQLite store.
 
 ## 2. The Data Boundary (normative)
 
-Root `README.md:159-170` ("### Data Boundary") is the normative statement.
+Root `README.md:165-176` ("### Data Boundary") is the normative statement.
 Verbatim:
 
 > The following records must never be proxied through HTTP between the
@@ -79,7 +79,7 @@ simplification, not a path spec.)
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed
 mode that well-known file must keep `httpDataProxy:false` and
-`businessDataPath:"rxdb-webrtc"` (`README.md:151-152`). The daemon's sync
+`businessDataPath:"rxdb-webrtc"` (`README.md:157-158`). The daemon's sync
 config hard-codes `http_bridge_available: false` and `transport: "webrtc"`
 (`src/core/business_os/store.rs::sync_config`). The browser runtime refuses to
 start without a WebRTC-capable sync contract — `createSyncRuntime` throws
@@ -252,7 +252,7 @@ state into the RxDB store for replication.
 | Core runtime store | `runtime/ctox.sqlite3` | The daemon's unified store (queue, tickets, settings, engine tables). Not the RxDB document store; the projection loops read it and write into the RxDB store. |
 | Peer liveness | `runtime/business-os-rxdb-peer.lock`, `runtime/business-os-rxdb-peer.status.json` | Process lock + heartbeat. |
 
-Note: root `README.md:169-170` names `runtime/ctox.sqlite3` as the
+Note: root `README.md:175-176` names `runtime/ctox.sqlite3` as the
 persistence target. At boundary level that is the right message (data stays
 in CTOX's local SQLite, never an HTTP service); the precise file for RxDB
 documents is `runtime/business-os-rxdb.sqlite3` as above.
@@ -488,6 +488,26 @@ parity.
 | Browser-side repair | Error classification (§3.2) decides between recording a reconnect hint (blips, lifecycle events) and scheduling the unhealthy-collection sweep / full restart; an `active$` drop schedules a 750 ms restart. | `sync.js` |
 | Native peer death | Supervised respawn with capped backoff; config re-read per attempt (room-password rotation applies); bring-up failure or stale heartbeat ⇒ fatal exit ⇒ respawn — never a zombie. | `rxdb_peer.rs` (§4.2) |
 
+### 8.1 Hard invariants (2026-06-10 soak campaign)
+
+Each invariant below encodes a **real, reproduced data-loss or divergence
+bug** found by driving the rxdb-soak matrix to its first fully green run
+(`ok=true cycles=3 retries=0`, commit `ad81aff5`). Violating any of them
+re-introduces silent data loss; every one is pinned by a regression test
+that fails on the pre-fix code.
+
+| Invariant | Bug it encodes (symptom) | Enforced in | Pinned by |
+|---|---|---|---|
+| **lwt stamping and storage commit are atomic** under `locked_run`. Never stamp `_meta.lwt` before taking the database lock. | Concurrent writers committed out of lwt order; a pull reading in the window advanced its checkpoint past uncommitted lower-lwt rows — those rows were invisible to checkpoint iteration forever (churn mode: 21/23 chunks of an updated file never reached the browser). | `rx_storage_helper.rs::DatabaseWrappedStorageInstance::bulk_write` | `checkpoint_iteration_never_skips_docs_under_concurrent_writers` |
+| **Master pulls are authoritative in the browser LWW gate.** Master rows arrive without `_meta.lwt` (keep_meta=false), so their lwt falls back to the app-level `updated_at_ms` field — that heuristic must never veto a replication write. Only an unsynced LOCAL write (no `ctoxReplicationOrigin` marker) with a newer lwt may win. Accepted master rows keep the stored lwt monotonic. | Any master change whose payload timestamp did not advance was silently dropped while the pull checkpoint advanced past it — permanent divergence per document. | `storage-indexeddb.mjs::shouldAcceptDocumentWrite` / `bulkWrite` | `replication-lww-origin-smoke` |
+| **Every browser-store write carrying master state passes `{ replicationOrigin }`** — replication pulls, query/file demand-loader materialisation, cache-eviction tombstones. | Unstamped demand-fetched docs counted as local writes: they vetoed later master pulls (above) **and** were push-eligible — cache-eviction tombstones (`_deleted: true`) of partial query windows could replay to the master as real deletions. | `query-demand-loader.mjs`, `file-demand-loader.mjs`, wired in `replication-webrtc.mjs::enableDemandLoading` | `replication-lww-origin-smoke` (§4) |
+| **The desktop-file index scan is change-detecting and self-healing.** A rescan of an unchanged file is a byte-level no-op (fingerprint match + chunk-set completeness check); content changes re-chunk; incomplete chunk sets are repaired. | Every 15 s scan pass minted a fresh timestamped generation per file and tombstoned the previous one — ~200 docs/scan of insert/tombstone churn that pull (batchSize 2 for chunks) could never catch up with. | `rxdb_peer.rs::upsert_desktop_file_with_parent` | `rescan_of_unchanged_workspace_is_a_no_op` |
+| **Materialisation is sticky.** Once `ctox.file.materialize` made a file `available`, the scan keeps maintaining it eagerly — it must never demote it back to its size/extension lazy policy. | The next scan rewrote the doc to `lazy` with an empty generation id, stranding replicated chunks; the file viewer reverted to unreadable ~15 s after every materialise. | `rxdb_peer.rs` (policy upgrade before the fast path) | `materialized_large_file_survives_lazy_rescan` |
+| **Active-collection gating must never lose events permanently.** Three sub-rules: (a) a peer that has never reported an active set is fail-open (all relays delivered) until its first report; (b) applying a new active set pushes one resync master-change per re-activated collection (closes the send→apply transit window); (c) the browser runs one checkpoint pull per newly-activated collection on every registry change. | Relays for "inactive" collections are dropped and browser pulls are purely event-driven — each hole left a collection permanently stale (viewer-restart soak mode: the browser file doc stayed `lazy` forever while the native doc was `available`). | `connection_handler_rs.rs::is_collection_active_for_peer` / `apply_active_collections` (+ the resync push in its message loop); relay drop point in `index_mod.rs`; `replication-webrtc.mjs` registry subscription | gating tests in `connection_handler_rs.rs`; `active-collections-catchup-smoke` (browser); viewer-restart soak mode |
+| **The multiplex room handshake carries per-collection checkpoints** (`collectionCheckpoints`, mirroring `collectionSchemas`; key absent for single-collection rooms). | Collections deriving their protocol from the room handshake advertised the REPRESENTATIVE collection's checkpoint epoch — wrong-collection checkpoint evidence after every native restart. | `index_mod.rs::collection_checkpoints_payload`; consumed by `replication-webrtc.mjs::remoteProtocolForCollection` | `handshake_payload_omits_collection_schemas_when_none` |
+| **A terminal `completed` command ack without `task_id` is success.** Control commands (`ctox.file.materialize`, `ctox.module.*`, …) are executed directly and intentionally never get a queue-task projection. | The command bus waited 45 s for a task that never comes — every control command dispatched through it failed. | `command-bus.js::waitForAuthoritativeQueueProjection` | `command-bus-projection-smoke` |
+| **The 410 data-plane gate has an explicit control-plane allowlist** (subscription auth, `sync/native-peer/restart`). Control routes carry no Business OS records; the peer-restart route additionally answers 403 unless `CTOX_BUSINESS_OS_ENABLE_SMOKE_CONTROLS` is set. This is NOT a precedent for HTTP data routes. | The blanket 410 also killed the peer-lifecycle hook the rollover soak mode uses. | `server.rs::is_business_os_control_plane_path` | rollover soak mode |
+
 ---
 
 ## 9. Build & release
@@ -515,7 +535,7 @@ A mismatch makes the browser load a **second copy of the bundle** — two
 module graphs, two shared-room-peer registries, duplicate peers in the room.
 After any `src/` change: rebuild dist with the command above **and** bump the
 buster in all three files (current value at the time of writing:
-`20260610-rxdb-hardening2`).
+`20260610-rxdb-lww-origin`).
 
 `src/scripts/vendor-builds/build-ctox-rxdb-js.mjs` does **not** build
 anything: it verifies the manifest identity (name/public name,
@@ -537,8 +557,10 @@ not noise — never delete or weaken a test to make the suite pass.*
 
 | Test | One line |
 |---|---|
+| `active-collections-catchup-smoke` | **Regression:** a collection transitioning inactive→active triggers one catch-up pull through the real shared-peer registry wiring (§8.1 gating invariant). |
 | `advanced-status-bridge-smoke` | V1.5 → `business-os-advanced-status-v1` envelope mapping. |
 | `bundle-reproducible-smoke` | **Guard:** dist must be byte-reproducible from src with the pinned esbuild (skips loudly offline; CI enforces). |
+| `command-bus-projection-smoke` | **Regression:** queue commands wait for the task projection; control commands' terminal `completed` ack without `task_id` is success; `failed` rejects. |
 | `compression-roundtrip-smoke` | JS decoder reads inline and deflate-compressed chunks shaped like the Rust dispatcher's. |
 | `contract-drift-smoke` | **Guard:** re-runs both contract generators; generated files must match the fixtures (side-effect free). |
 | `correctness-reconnect-smoke` | Demand-loader correctness and window invalidation across reconnects. |
@@ -563,6 +585,7 @@ not noise — never delete or weaken a test to make the suite pass.*
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |
+| `replication-lww-origin-smoke` | **Regression:** master pulls are authoritative in the LWW gate; unsynced local writes survive; demand loaders stamp the replication origin (§8.1). |
 | `replication-recovery-smoke` | **Regression:** push re-run flag, pull retry, validity-keyed checkpoint retention. |
 | `rollback-drill-smoke` | V1.5 activation leaves the V1 primary data path byte-identical. |
 | `rtc-critical-pool-smoke` | Phase-3 multiplex admission contract + shell-critical collection set. |
@@ -583,8 +606,13 @@ cargo test --manifest-path src/core/rxdb/Cargo.toml
 ```
 
 This runs the unit tests embedded in the modules (chunk splitter, signaling
-reconnect chaos test, wire-frame classification, …) plus the conformance
-suite under `src/core/rxdb/tests/`. The cross-process JS smokes additionally
+reconnect chaos test, wire-frame classification,
+`checkpoint_iteration_never_skips_docs_under_concurrent_writers`, …) plus
+the conformance suite under `src/core/rxdb/tests/`. The desktop-file index
+invariants (§8.1) live in the main binary's tests
+(`cargo test --bin ctox rxdb_peer`):
+`rescan_of_unchanged_workspace_is_a_no_op`,
+`materialized_large_file_survives_lazy_rescan`. The cross-process JS smokes additionally
 need the release wire daemon:
 
 ```sh
@@ -597,9 +625,30 @@ need the release wire daemon:
 ### 10.3 Soak
 
 `.github/workflows/rxdb-soak.yml` — manual (`workflow_dispatch`) only.
-Drives the full browser↔Rust smoke-mode matrix (restart, signaling errors,
-network flap, tab freeze, native-peer rollover, large-file materialisation,
-…) for N cycles on ubuntu-22.04, optionally failing on any retried mode.
+Drives the workflow's default mode matrix — 31 modes covering startup,
+command/ticket round-trips, workspace artifact stress/churn, large-file
+materialisation and the file viewer, daemon/signaling/native-peer restarts,
+tab freeze, network flap, and ten injected-error status modes — for N cycles
+on ubuntu-22.04 with `SOAK_FAIL_ON_RETRY=1` (a mode that only passes on its
+retry attempt fails the run; default inputs resolve it to `1`). First fully
+green run: 2026-06-10 on `ad81aff5`
+(`rxdb_soak_summary ok=true cycles=3 retries=0`).
+
+Every mode also runs locally, which is the fastest way to iterate:
+
+```sh
+cargo build --bin ctox
+CTOX_BIN=$PWD/runtime/build/cargo-target/debug/ctox \
+  SMOKE_PAGE_PATH=/index.html \
+  SMOKE_MODE=workspace-agent-artifacts-churn-rust-to-browser \
+  node src/core/rxdb/tools/browser_rust_smoke.js
+```
+
+(Playwright must be importable; the harness also honours
+`PLAYWRIGHT_MODULE_PATH`. The harness validates `SMOKE_MODE` against the
+list at the top of `browser_rust_smoke.js` — 41 modes in total; the soak's
+default matrix runs 31 of them, the rest are UI/clarification modes driven
+by other CI entry points.)
 
 ### 10.4 Canonical commands after touching the data plane
 
@@ -691,5 +740,12 @@ Each has shipped (or would ship) real production breakage.
   contract-drift, bundle-reproducible, data-plane-guard, `run-all.mjs` —
   plus the byte-correct browser chunk splitter and in-source guard comments)
   lands in the commits immediately after it.
+- The 2026-06-10 soak campaign (§8.1) — nine real findings fixed while
+  driving rxdb-soak to its first fully green run: `680698d3` (lwt stamping
+  under `locked_run`), `fbe84a02` (scan change-detection),
+  `aee838d7` (control-command acks), `008a530b` (sticky materialisation),
+  `24a1bf6f` (active-collection gating catch-up), `d53e1010`
+  (`collectionCheckpoints` + control-plane allowlist), `ad81aff5`
+  (browser LWW gate + demand-loader origin stamps).
 - Directory-local agent rules: `src/apps/business-os/rxdb/CLAUDE.md` /
   `AGENTS.md` summarise §11 for agents working in that tree.
