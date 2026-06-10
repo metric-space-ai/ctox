@@ -8,9 +8,9 @@
       "families": ["BrowseComp"],
       "setup": [
         {
-          "write_text": {
+          "seed_runtime_config": {
             "path": "${TMP_ROOT}/runtime/ctox.sqlite3",
-            "content": "CTOX_WEB_SEARCH_PROVIDER=mock\n"
+            "values": { "CTOX_WEB_SEARCH_PROVIDER": "mock" }
           }
         }
       ],
@@ -93,9 +93,9 @@
       "families": ["BrowseComp"],
       "setup": [
         {
-          "write_text": {
+          "seed_runtime_config": {
             "path": "${TMP_ROOT}/runtime/ctox.sqlite3",
-            "content": "CTOX_WEB_SEARCH_PROVIDER=mock\n"
+            "values": { "CTOX_WEB_SEARCH_PROVIDER": "mock" }
           }
         }
       ],

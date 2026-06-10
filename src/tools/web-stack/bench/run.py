@@ -8,6 +8,7 @@ import json
 import os
 import re
 import socketserver
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,24 @@ PLACEHOLDER_RE = re.compile(r"\$\{([A-Z0-9_]+)\}")
 
 class BenchError(RuntimeError):
     pass
+
+
+def seed_ctox_root_markers(root: Path) -> None:
+    """Make `root` pass ctox's `looks_like_ctox_root` check so CTOX_ROOT is
+    honored and the run is isolated to this temp dir. Without these markers
+    ctox ignores CTOX_ROOT and resolves the real repo root from the binary's
+    ancestors — which pollutes the live runtime/ctox.sqlite3 and lets fixture
+    cases hit the real network. Marker contents are irrelevant; only presence
+    is checked (src/core/main.rs:looks_like_ctox_root)."""
+    (root / "src" / "core").mkdir(parents=True, exist_ok=True)
+    (root / "contracts" / "history").mkdir(parents=True, exist_ok=True)
+    (root / "Cargo.toml").write_text(
+        "[package]\nname = \"ctox-web-bench-sandbox\"\n", encoding="utf-8"
+    )
+    (root / "src" / "core" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
+    (root / "contracts" / "history" / "creation-ledger.md").write_text(
+        "# bench sandbox\n", encoding="utf-8"
+    )
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -90,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--tier",
-        choices=["fixture", "live", "all"],
+        choices=["fixture", "live", "strength", "all"],
         default="fixture",
         help="Which case tier to run.",
     )
@@ -149,7 +168,7 @@ def validate_case(case: dict[str, Any]) -> None:
     for key in required:
         if key not in case:
             raise BenchError(f"case in {case.get('_manifest_path')} is missing `{key}`")
-    if case["tier"] not in {"fixture", "live"}:
+    if case["tier"] not in {"fixture", "live", "strength"}:
         raise BenchError(f"case {case['id']} has unsupported tier {case['tier']}")
     if not isinstance(case["command"], list) or not case["command"]:
         raise BenchError(f"case {case['id']} must provide a non-empty command array")
@@ -168,16 +187,18 @@ def validate_case(case: dict[str, Any]) -> None:
 
 
 def validate_step(step: dict[str, Any], case_id: str, label: str) -> None:
-    if "write_json" not in step and "write_text" not in step and "command" not in step:
+    step_kinds = ("write_json", "write_text", "seed_runtime_config", "command")
+    if not any(kind in step for kind in step_kinds):
         raise BenchError(
-            f"{label} step in {case_id} must contain write_json, write_text, or command"
+            f"{label} step in {case_id} must contain write_json, write_text, "
+            f"seed_runtime_config, or command"
         )
 
 
 def validate_assertion(case_id: str, assertion: dict[str, Any]) -> None:
     if "path" not in assertion:
         raise BenchError(f"assertion in {case_id} must contain a path")
-    operators = ["equals", "contains", "len_eq", "len_gte", "truthy"]
+    operators = ["equals", "contains", "not_contains", "len_eq", "len_gte", "truthy"]
     if not any(name in assertion for name in operators):
         raise BenchError(f"assertion {assertion['path']} in {case_id} has no operator")
 
@@ -255,6 +276,13 @@ def run_assertions(payload: Any, assertions: list[dict[str, Any]], case_id: str)
             if needle not in haystack:
                 raise BenchError(
                     f"{case_id}: {assertion['path']} does not contain {needle!r}"
+                )
+        if "not_contains" in assertion:
+            needle = assertion["not_contains"]
+            haystack = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+            if needle in haystack:
+                raise BenchError(
+                    f"{case_id}: {assertion['path']} unexpectedly contains {needle!r}"
                 )
         if "len_eq" in assertion:
             if not hasattr(value, "__len__"):
@@ -345,6 +373,29 @@ def execute_setup_step(
         path.write_text(spec["content"], encoding="utf-8")
         return
 
+    if "seed_runtime_config" in step:
+        spec = substitute_placeholders(step["seed_runtime_config"], variables)
+        path = Path(spec["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Seed a real SQLite runtime_env_kv table — this is the same store
+        # ctox's runtime_config::get reads. A plain-text KEY=value file at
+        # this path is NOT a valid database and is silently ignored by ctox.
+        conn = sqlite3.connect(str(path))
+        try:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS runtime_env_kv "
+                "(env_key TEXT PRIMARY KEY, env_value TEXT NOT NULL)"
+            )
+            conn.executemany(
+                "INSERT OR REPLACE INTO runtime_env_kv (env_key, env_value) "
+                "VALUES (?, ?)",
+                list(spec["values"].items()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return
+
     command = substitute_placeholders(step["command"], variables)
     step_env = env.copy()
     step_env.update(substitute_placeholders(step.get("env", {}), variables))
@@ -402,6 +453,7 @@ def main() -> int:
     try:
         shared_root_handle = tempfile.TemporaryDirectory(prefix="ctox-web-bench-shared-")
         shared_root = Path(shared_root_handle.name)
+        seed_ctox_root_markers(shared_root)
         fixture_server = FixtureServer(FIXTURE_SITE_DIR)
         fixture_base_url = fixture_server.start()
         executed_shared_setup: set[str] = set()
@@ -420,6 +472,7 @@ def main() -> int:
             case_tmp_root = Path(case_tmp_handle.name)
             try:
                 case_tmp_root.joinpath("runtime").mkdir(parents=True, exist_ok=True)
+                seed_ctox_root_markers(case_tmp_root)
                 case_variables = {
                     "BENCH_ROOT": str(BENCH_ROOT),
                     "REPO_ROOT": str(REPO_ROOT),

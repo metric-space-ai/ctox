@@ -1,0 +1,219 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "strength.scrape.classify.portal_drift",
+      "tier": "strength",
+      "tool": "ctox_scrape",
+      "families": ["CTOX-Strength"],
+      "setup": [
+        {
+          "write_text": {
+            "path": "${TMP_ROOT}/scripts/drift.sh",
+            "content": "echo '{\"failure_mode\":\"portal_drift\"}'\n"
+          }
+        },
+        {
+          "write_json": {
+            "path": "${TMP_ROOT}/seed/target-drift.json",
+            "value": {
+              "target_key": "strength-drift",
+              "display_name": "Strength Drift",
+              "start_url": "https://example.com",
+              "config": { "skip_probe": true },
+              "output_schema": { "schema_key": "v1", "record_key_fields": ["id"] }
+            }
+          }
+        },
+        {
+          "command": ["scrape", "upsert-target", "--input", "${TMP_ROOT}/seed/target-drift.json", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "register-script", "--target-key", "strength-drift", "--script-file", "${TMP_ROOT}/scripts/drift.sh", "--language", "sh", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        }
+      ],
+      "command": ["scrape", "execute", "--target-key", "strength-drift", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "status", "equals": "portal_drift" },
+        { "path": "should_queue_repair", "equals": true }
+      ]
+    },
+    {
+      "id": "strength.scrape.classify.blocked",
+      "tier": "strength",
+      "tool": "ctox_scrape",
+      "families": ["CTOX-Strength"],
+      "setup": [
+        {
+          "write_text": {
+            "path": "${TMP_ROOT}/scripts/blocked.sh",
+            "content": "echo '{\"failure_mode\":\"blocked\"}'\n"
+          }
+        },
+        {
+          "write_json": {
+            "path": "${TMP_ROOT}/seed/target-blocked.json",
+            "value": {
+              "target_key": "strength-blocked",
+              "display_name": "Strength Blocked",
+              "start_url": "https://example.com",
+              "config": { "skip_probe": true },
+              "output_schema": { "schema_key": "v1", "record_key_fields": ["id"] }
+            }
+          }
+        },
+        {
+          "command": ["scrape", "upsert-target", "--input", "${TMP_ROOT}/seed/target-blocked.json", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "register-script", "--target-key", "strength-blocked", "--script-file", "${TMP_ROOT}/scripts/blocked.sh", "--language", "sh", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        }
+      ],
+      "command": ["scrape", "execute", "--target-key", "strength-blocked", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "status", "equals": "blocked" },
+        { "path": "should_queue_repair", "equals": false }
+      ]
+    },
+    {
+      "id": "strength.scrape.classify.temporary_unreachable",
+      "tier": "strength",
+      "tool": "ctox_scrape",
+      "families": ["CTOX-Strength"],
+      "setup": [
+        {
+          "write_text": {
+            "path": "${TMP_ROOT}/scripts/transient.sh",
+            "content": "echo '{\"failure_mode\":\"temporary_unreachable\"}'\n"
+          }
+        },
+        {
+          "write_json": {
+            "path": "${TMP_ROOT}/seed/target-transient.json",
+            "value": {
+              "target_key": "strength-transient",
+              "display_name": "Strength Transient",
+              "start_url": "https://example.com",
+              "config": { "skip_probe": true },
+              "output_schema": { "schema_key": "v1", "record_key_fields": ["id"] }
+            }
+          }
+        },
+        {
+          "command": ["scrape", "upsert-target", "--input", "${TMP_ROOT}/seed/target-transient.json", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "register-script", "--target-key", "strength-transient", "--script-file", "${TMP_ROOT}/scripts/transient.sh", "--language", "sh", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        }
+      ],
+      "command": ["scrape", "execute", "--target-key", "strength-transient", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "status", "equals": "temporary_unreachable" },
+        { "path": "should_queue_repair", "equals": false }
+      ]
+    },
+    {
+      "id": "strength.scrape.classify.portal_drift_queues_repair",
+      "tier": "strength",
+      "tool": "ctox_scrape",
+      "families": ["CTOX-Strength"],
+      "setup": [
+        {
+          "write_text": {
+            "path": "${TMP_ROOT}/scripts/drift_heal.sh",
+            "content": "echo '{\"failure_mode\":\"portal_drift\"}'\n"
+          }
+        },
+        {
+          "write_json": {
+            "path": "${TMP_ROOT}/seed/target-drift-heal.json",
+            "value": {
+              "target_key": "strength-drift-heal",
+              "display_name": "Strength Drift Heal",
+              "start_url": "https://example.com",
+              "config": { "skip_probe": true },
+              "output_schema": { "schema_key": "v1", "record_key_fields": ["id"] }
+            }
+          }
+        },
+        {
+          "command": ["scrape", "upsert-target", "--input", "${TMP_ROOT}/seed/target-drift-heal.json", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "register-script", "--target-key", "strength-drift-heal", "--script-file", "${TMP_ROOT}/scripts/drift_heal.sh", "--language", "sh", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        }
+      ],
+      "command": ["scrape", "execute", "--target-key", "strength-drift-heal", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30", "--allow-heal"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "status", "equals": "portal_drift" },
+        { "path": "should_queue_repair", "equals": true },
+        { "path": "repair_queue_task", "truthy": true }
+      ]
+    },
+    {
+      "id": "strength.scrape.materialize.delta",
+      "tier": "strength",
+      "tool": "ctox_scrape",
+      "families": ["CTOX-Strength"],
+      "setup": [
+        {
+          "write_text": {
+            "path": "${TMP_ROOT}/scripts/delta.sh",
+            "content": "if printf '%s' \"$CTOX_SCRAPE_INPUT_JSON\" | grep -q '\"phase\":2'; then\n  echo '[{\"id\":\"A\",\"v\":\"2\"},{\"id\":\"C\",\"v\":\"1\"},{\"id\":\"D\",\"v\":\"1\"}]'\nelse\n  echo '[{\"id\":\"A\",\"v\":\"1\"},{\"id\":\"B\",\"v\":\"1\"},{\"id\":\"D\",\"v\":\"1\"}]'\nfi\n"
+          }
+        },
+        {
+          "write_json": {
+            "path": "${TMP_ROOT}/seed/target-delta.json",
+            "value": {
+              "target_key": "strength-delta",
+              "display_name": "Strength Delta",
+              "start_url": "https://example.com",
+              "config": { "skip_probe": true, "record_key_fields": ["id"] },
+              "output_schema": { "schema_key": "v1", "record_key_fields": ["id"] }
+            }
+          }
+        },
+        {
+          "command": ["scrape", "upsert-target", "--input", "${TMP_ROOT}/seed/target-delta.json", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "register-script", "--target-key", "strength-delta", "--script-file", "${TMP_ROOT}/scripts/delta.sh", "--language", "sh", "--runtime-root", "${TMP_ROOT}/rt"],
+          "assertions": [{ "path": "ok", "equals": true }]
+        },
+        {
+          "command": ["scrape", "execute", "--target-key", "strength-delta", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30", "--input-json", "{\"phase\":1}"],
+          "assertions": [
+            { "path": "status", "equals": "succeeded" },
+            { "path": "records_found", "equals": 3 },
+            { "path": "materialization.inserted_count", "equals": 3 },
+            { "path": "materialization.deleted_count", "equals": 0 }
+          ]
+        }
+      ],
+      "command": ["scrape", "execute", "--target-key", "strength-delta", "--runtime-root", "${TMP_ROOT}/rt", "--timeout-seconds", "30", "--input-json", "{\"phase\":2}"],
+      "assertions": [
+        { "path": "ok", "equals": true },
+        { "path": "status", "equals": "succeeded" },
+        { "path": "records_found", "equals": 3 },
+        { "path": "materialization.inserted_count", "equals": 1 },
+        { "path": "materialization.updated_count", "equals": 1 },
+        { "path": "materialization.deleted_count", "equals": 1 },
+        { "path": "materialization.unchanged_count", "equals": 1 }
+      ]
+    }
+  ]
+}
