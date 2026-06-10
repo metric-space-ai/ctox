@@ -81,9 +81,6 @@ const ALLOWLIST = new Map(Object.entries({
   // self-reference (invalid at computed-value time). Needs a real fix, not a
   // rename; frozen until the coding-agents theme pass.
   'coding-agents': ['css-no-shell-token-redefinition'],
-  // Known token-system rebuild backlog: matching still shadows shell tokens
-  // with its --bo-*/--km-* palette inside its module scope.
-  matching: ['css-no-shell-token-redefinition'],
 }));
 
 const offenders = [];

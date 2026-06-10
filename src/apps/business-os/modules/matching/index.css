@@ -34,7 +34,6 @@
   --txt-dim:#7c8997;
 
   /* accents (default; wird von data-engine überschrieben) */
-  --accent:#67e8f9;
   --accent-600:#43cfe4;
 
   /* borders & shadows */
@@ -112,8 +111,8 @@
 
 .module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):focus-visible{
   outline:none;
-  box-shadow:0 0 0 3px color-mix(in oklab, var(--accent) 24%, transparent) inset;
-  border-color:color-mix(in oklab, var(--accent) 38%, transparent);
+  box-shadow:0 0 0 3px color-mix(in oklab, var(--km-accent) 24%, transparent) inset;
+  border-color:color-mix(in oklab, var(--km-accent) 38%, transparent);
   transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
 
@@ -153,11 +152,11 @@
 }
 
 .module-root[data-module-root="matching"] .footer-update-btn{
-  border:1px solid color-mix(in oklab, var(--accent) 55%, transparent);
+  border:1px solid color-mix(in oklab, var(--km-accent) 55%, transparent);
   border-radius:999px;
   padding:4px 9px;
   color:#06131a;
-  background:var(--accent);
+  background:var(--km-accent);
   font-size:var(--text-size-xs);
   font-weight:800;
   line-height:1.2;
@@ -166,8 +165,8 @@
   box-shadow:0 0 0 1px rgba(255,255,255,.16) inset, 0 0 0 3px rgba(103,232,249,.12);
 }
 .module-root[data-module-root="matching"] .footer-update-btn:hover{
-  background:color-mix(in oklab, var(--accent) 86%, white);
-  border-color:color-mix(in oklab, var(--accent) 68%, transparent);
+  background:color-mix(in oklab, var(--km-accent) 86%, white);
+  border-color:color-mix(in oklab, var(--km-accent) 68%, transparent);
 }
 .module-root[data-module-root="matching"] .footer-update-btn.is-idle{
   color:var(--txt-2);
@@ -281,16 +280,16 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .bubble-user{
   align-self:flex-end;
-  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  border-color: color-mix(in oklab, var(--km-accent) 22%, transparent);
   background:
-    radial-gradient(90% 90% at 20% -20%, color-mix(in oklab, var(--accent) 12%, transparent) 0%, transparent 60%),
+    radial-gradient(90% 90% at 20% -20%, color-mix(in oklab, var(--km-accent) 12%, transparent) 0%, transparent 60%),
     linear-gradient(180deg,#152a2f 0%, #101e22 100%);
   color:#e8fbff;
   transition: border-color var(--snap-ms) var(--snappy), background var(--snap-ms) var(--snappy);
 }
 .module-root[data-module-root="matching"] .bubble-assistant{ align-self:flex-start; }
 .module-root[data-module-root="matching"] .bubble-role{ font-size:var(--text-size-xs); font-weight:700; color:var(--txt-dim); margin-bottom:4px; letter-spacing:.2px; }
-.module-root[data-module-root="matching"] .bubble-user .bubble-role{ color:color-mix(in oklab, var(--accent) 70%, #bdf6ff); }
+.module-root[data-module-root="matching"] .bubble-user .bubble-role{ color:color-mix(in oklab, var(--km-accent) 70%, #bdf6ff); }
 .module-root[data-module-root="matching"] .bubble-body{ font-size:var(--text-size-sm); line-height:var(--lh-relaxed); }
 .module-root[data-module-root="matching"] .bubble-meta{ font-size:var(--text-size-xs); color:var(--txt-dim); margin-top:6px; text-align:right; }
 
@@ -323,7 +322,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   margin-bottom:6px;
   padding:4px 6px;
   border-radius:8px;
-  border:1px solid color-mix(in oklab, var(--accent) 20%, var(--bd-hair));
+  border:1px solid color-mix(in oklab, var(--km-accent) 20%, var(--bd-hair));
   background:linear-gradient(180deg,#123037 0%, #10262d 100%);
 }
 .module-root[data-module-root="matching"] .assist-item-body{
@@ -337,9 +336,9 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .chat-input{ width:100%; resize:none; font-size:var(--text-size-sm); line-height:var(--lh-normal);
   padding:10px 12px; min-height:52px; max-height:110px; }
 .module-root[data-module-root="matching"] .chat-input:focus{
-  border-color: color-mix(in oklab, var(--accent) 35%, transparent);
+  border-color: color-mix(in oklab, var(--km-accent) 35%, transparent);
   box-shadow:
-    0 0 0 4px color-mix(in oklab, var(--accent) 14%, transparent),
+    0 0 0 4px color-mix(in oklab, var(--km-accent) 14%, transparent),
     0 8px 24px rgba(0,0,0,.22);
   transition: box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
@@ -394,8 +393,8 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .slash-item:hover,
 .module-root[data-module-root="matching"] .slash-item.is-active{
-  border-color:color-mix(in oklab, var(--accent) 35%, transparent);
-  background:linear-gradient(180deg, color-mix(in oklab, var(--accent) 10%, #1a222b) 0%, #141c24 100%);
+  border-color:color-mix(in oklab, var(--km-accent) 35%, transparent);
+  background:linear-gradient(180deg, color-mix(in oklab, var(--km-accent) 10%, #1a222b) 0%, #141c24 100%);
 }
 .module-root[data-module-root="matching"] .slash-item-main{
   display:flex;
@@ -452,17 +451,17 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .session-indicator .dot{ width:8px; height:8px; border-radius:50%; background:#6b7785; }
 .module-root[data-module-root="matching"] .session-indicator.is-active .dot{
-  background: var(--accent);
-  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 18%, transparent);
+  background: var(--km-accent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--km-accent) 18%, transparent);
   transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy);
 }
 
 /* ---- Buttons ---- */
 .module-root[data-module-root="matching"] .btn{
-  --bg:#171e26; --bd:var(--bd-hair); --fg:var(--txt-1);
+  --btn-bg:#171e26; --bd:var(--bd-hair); --fg:var(--txt-1);
   display:inline-flex; align-items:center; justify-content:center; gap:8px;
   height:36px; padding:0 12px; border-radius:var(--r-10); border:1px solid var(--bd);
-  background:linear-gradient(180deg,var(--bg) 0%, #12171d 100%); color:var(--fg); font-weight:700;
+  background:linear-gradient(180deg,var(--btn-bg) 0%, #12171d 100%); color:var(--fg); font-weight:700;
   box-shadow:0 4px 14px rgba(0,0,0,.28);
   transition:transform .06s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
   font-size:var(--text-size-sm);
@@ -470,28 +469,28 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .btn:hover{ transform:translateY(-1px); }
 .module-root[data-module-root="matching"] .btn:active{ transform:none; box-shadow:0 2px 8px rgba(0,0,0,.34) inset; }
 .module-root[data-module-root="matching"] .btn:focus-visible{
-  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  outline:2px solid color-mix(in oklab, var(--km-accent) 70%, transparent);
   outline-offset:2px;
-  box-shadow:0 0 0 4px color-mix(in oklab, var(--accent) 20%, transparent);
+  box-shadow:0 0 0 4px color-mix(in oklab, var(--km-accent) 20%, transparent);
 }
 
 .module-root[data-module-root="matching"] .btn-primary{
-  border-color: color-mix(in oklab, var(--accent) 28%, transparent);
+  border-color: color-mix(in oklab, var(--km-accent) 28%, transparent);
   background:
-    radial-gradient(90% 90% at 50% -30%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 55%),
-    linear-gradient(180deg, color-mix(in oklab, var(--accent) 30%, #0f2327) 0%, #0f2327 100%);
+    radial-gradient(90% 90% at 50% -30%, color-mix(in oklab, var(--km-accent) 14%, transparent) 0%, transparent 55%),
+    linear-gradient(180deg, color-mix(in oklab, var(--km-accent) 30%, #0f2327) 0%, #0f2327 100%);
   color:#eafcff;
   box-shadow:
-    0 10px 26px color-mix(in oklab, var(--accent) 20%, transparent),
+    0 10px 26px color-mix(in oklab, var(--km-accent) 20%, transparent),
     0 4px 14px rgba(0,0,0,.28);
   transition: background var(--snap-ms) var(--snappy), box-shadow var(--snap-ms) var(--snappy), border-color var(--snap-ms) var(--snappy);
 }
 .module-root[data-module-root="matching"] .btn-primary:hover{
   box-shadow:
-    0 16px 40px color-mix(in oklab, var(--accent) 28%, transparent),
+    0 16px 40px color-mix(in oklab, var(--km-accent) 28%, transparent),
     0 6px 16px rgba(0,0,0,.3);
 }
-.module-root[data-module-root="matching"] .btn-secondary{ --bg:#1a2129; }
+.module-root[data-module-root="matching"] .btn-secondary{ --btn-bg:#1a2129; }
 .module-root[data-module-root="matching"] .btn-ghost{ color:var(--txt-2); border:1px solid var(--bd-hair); background:linear-gradient(180deg,#161c22 0%, #12171d 100%); }
 .module-root[data-module-root="matching"] .btn-sm{ height:30px; padding:0 10px; }
 .module-root[data-module-root="matching"] .btn-xs{ height:24px; padding:0 8px; font-size:var(--text-size-xs); border-radius:var(--r-10); }
@@ -552,7 +551,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   transition:background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
 }
 .module-root[data-module-root="matching"] #history-items > li:hover{
-  background:#131920; border-color:color-mix(in oklab, var(--accent) 18%, transparent);
+  background:#131920; border-color:color-mix(in oklab, var(--km-accent) 18%, transparent);
   box-shadow: inset 0 6px 18px rgba(0,0,0,.18);
 }
 
@@ -567,7 +566,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 }
 .module-root[data-module-root="matching"] .busy-spinner{
   width:24px;height:24px;border:3px solid rgba(255,255,255,.15);
-  border-top-color:var(--accent);
+  border-top-color:var(--km-accent);
   border-radius:50%;animation:busy-spin 1s linear infinite;margin:auto;
 }
 .module-root[data-module-root="matching"] .busy-text{ font-size:.95rem; color:#dffaff; }
@@ -600,11 +599,11 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
   color:var(--txt-2);
 }
 .module-root[data-module-root="matching"] .icon-pill:hover{
-  background: color-mix(in oklab, var(--accent) 6%, #151b21);
-  border-color: color-mix(in oklab, var(--accent) 22%, transparent);
+  background: color-mix(in oklab, var(--km-accent) 6%, #151b21);
+  border-color: color-mix(in oklab, var(--km-accent) 22%, transparent);
 }
 .module-root[data-module-root="matching"] .icon-pill:active{ transform:translateY(1px); }
-.module-root[data-module-root="matching"] .icon-pill:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+.module-root[data-module-root="matching"] .icon-pill:focus-visible{ outline:2px solid var(--km-accent); outline-offset:2px; }
 
 /* ---- Quickbar sichtbar & positioniert, wenn geöffnet ---- */
 .module-root[data-module-root="matching"] #execution-quickbar-body[aria-hidden="false"]{
@@ -629,7 +628,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .sr-only{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .module-root[data-module-root="matching"] .muted{ color:var(--txt-dim); font-weight:400; }
 .module-root[data-module-root="matching"] :where(.btn, .icon-pill, .pill, .assist-item, .dropdown, .chat-log):focus-visible{
-  outline:2px solid color-mix(in oklab, var(--accent) 70%, transparent);
+  outline:2px solid color-mix(in oklab, var(--km-accent) 70%, transparent);
   outline-offset:2px;
 }
 
@@ -673,30 +672,24 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 
 /* ---------- Engine-Themes (per <html|body data-engine="…">) ---------- */
 /* Passe Farben je nach Dropdown-Wert an */
-:root[data-engine="leadgen"] .module-root[data-module-root="matching"]  { --accent:#67e8f9; --accent-600:#43cfe4; } /* cyan */
-:root[data-engine="research"] .module-root[data-module-root="matching"] { --accent:#a78bfa; --accent-600:#8b5cf6; } /* violet */
-:root[data-engine="code"] .module-root[data-module-root="matching"]     { --accent:#22d3ee; --accent-600:#06b6d4; } /* teal */
-:root[data-engine="finance"] .module-root[data-module-root="matching"]  { --accent:#34d399; --accent-600:#10b981; } /* green */
-:root[data-engine="vision"] .module-root[data-module-root="matching"]   { --accent:#f472b6; --accent-600:#ec4899; } /* pink */
-:root[data-engine="qa"] .module-root[data-module-root="matching"]       { --accent:#f59e0b; --accent-600:#d97706; } /* amber */
+:root[data-engine="leadgen"] .module-root[data-module-root="matching"]  { --km-accent:#67e8f9; --accent-600:#43cfe4; } /* cyan */
+:root[data-engine="research"] .module-root[data-module-root="matching"] { --km-accent:#a78bfa; --accent-600:#8b5cf6; } /* violet */
+:root[data-engine="code"] .module-root[data-module-root="matching"]     { --km-accent:#22d3ee; --accent-600:#06b6d4; } /* teal */
+:root[data-engine="finance"] .module-root[data-module-root="matching"]  { --km-accent:#34d399; --accent-600:#10b981; } /* green */
+:root[data-engine="vision"] .module-root[data-module-root="matching"]   { --km-accent:#f472b6; --accent-600:#ec4899; } /* pink */
+:root[data-engine="qa"] .module-root[data-module-root="matching"]       { --km-accent:#f59e0b; --accent-600:#d97706; } /* amber */
 /* Agent – setze hier deine Wunschfarbe; aktuell neutral-blue */
-:root[data-engine="agent"] .module-root[data-module-root="matching"]    { --accent:#60a5fa; --accent-600:#3b82f6; } /* blue */
+:root[data-engine="agent"] .module-root[data-module-root="matching"]    { --km-accent:#60a5fa; --accent-600:#3b82f6; } /* blue */
 
 /* Optional: Fallback für unbekannte Werte */
-:root[data-engine="default"] .module-root[data-module-root="matching"]  { --accent:#67e8f9; --accent-600:#43cfe4; }
+:root[data-engine="default"] .module-root[data-module-root="matching"]  { --km-accent:#67e8f9; --accent-600:#43cfe4; }
 
 /* Requirement matching view */
 .module-root[data-module-root="matching"]{
-  --bg:var(--bg-app);
   --panel:var(--surf-1);
   --panel-2:#1a2129;
-  --text:var(--txt-1);
-  --muted:var(--txt-2);
-  --primary:var(--accent);
+  --primary:var(--km-accent);
   --primary-2:#9fdfff;
-  --success:#34d399;
-  --warning:#f59e0b;
-  --danger:#f87171;
   --badge:#1b2430;
   --stroke:var(--bd-hair);
   --chip:#111923;
@@ -710,7 +703,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"],.module-root[data-module-root="matching"]{height:100%}
 .module-root[data-module-root="matching"]{
   margin:0;
-  font-family:system-ui,-apple-system,"Inter","SF Pro Text","Segoe UI",Roboto,Arial,sans-serif;
+  font-family:var(--font-sans);
   background:radial-gradient(1200px 1200px at 20% -10%, #131920 0%, var(--bg) 60%);
   color:var(--text);
   overflow:hidden;
@@ -781,7 +774,7 @@ body.is-resizing .module-root[data-module-root="matching"], body.is-resizing .mo
 .module-root[data-module-root="matching"] .col-resizer:hover::before,
 .module-root[data-module-root="matching"] .col-resizer.is-active::before{
   opacity:1;
-  background:var(--accent);
+  background:var(--km-accent);
   box-shadow:0 0 0 2px rgba(255,255,255,.05);
 }
 body.is-col-resizing .module-root[data-module-root="matching"],
@@ -888,8 +881,8 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 
 .module-root[data-module-root="matching"] .ctox-pane-icon:hover,
 .module-root[data-module-root="matching"] .ctox-pane-icon:focus-visible{
-  color:var(--bo-accent, var(--accent)) !important;
-  border-color:var(--bo-accent, var(--accent)) !important;
+  color:var(--bo-accent, var(--km-accent)) !important;
+  border-color:var(--bo-accent, var(--km-accent)) !important;
   outline:none;
 }
 
@@ -923,13 +916,13 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 
 .module-root[data-module-root="matching"] .ctox-pane-tab.active,
 .module-root[data-module-root="matching"] .ctox-pane-tab[aria-selected="true"]{
-  border-color:color-mix(in oklab, var(--bo-accent, var(--accent)) 48%, transparent);
-  background:color-mix(in oklab, var(--bo-accent, var(--accent)) 16%, var(--bo-surface, var(--panel)));
+  border-color:color-mix(in oklab, var(--bo-accent, var(--km-accent)) 48%, transparent);
+  background:color-mix(in oklab, var(--bo-accent, var(--km-accent)) 16%, var(--bo-surface, var(--panel)));
   color:var(--bo-text, var(--text));
 }
 
 .module-root[data-module-root="matching"] .ctox-pane-tab:focus-visible{
-  outline:2px solid var(--bo-accent, var(--accent));
+  outline:2px solid var(--bo-accent, var(--km-accent));
   outline-offset:2px;
 }
 
@@ -2506,14 +2499,14 @@ body.is-resizing .module-root[data-module-root="matching"] *{
   background:
     linear-gradient(
       90deg,
-      color-mix(in oklab, var(--accent) 28%, #131920),
+      color-mix(in oklab, var(--km-accent) 28%, #131920),
       color-mix(in oklab, var(--success) 22%, #131920)
     );
-  border-color:color-mix(in oklab, var(--accent) 34%, transparent);
+  border-color:color-mix(in oklab, var(--km-accent) 34%, transparent);
 }
 
 .module-root[data-module-root="matching"] .match-pill{
-  --matchColor:var(--accent);
+  --matchColor:var(--km-accent);
   background:#121a24;
 }
 
@@ -2523,13 +2516,13 @@ body.is-resizing .module-root[data-module-root="matching"] *{
 }
 
 .module-root[data-module-root="matching"] .match-highlight{
-  background:color-mix(in oklab, var(--matchColor, var(--accent)) 14%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 26%, transparent);
+  background:color-mix(in oklab, var(--matchColor, var(--km-accent)) 14%, transparent);
+  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--km-accent)) 26%, transparent);
 }
 
 .module-root[data-module-root="matching"] .match-highlight.is-active{
-  background:color-mix(in oklab, var(--matchColor, var(--accent)) 45%, transparent);
-  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--accent)) 70%, transparent);
+  background:color-mix(in oklab, var(--matchColor, var(--km-accent)) 45%, transparent);
+  box-shadow:0 0 0 1px color-mix(in oklab, var(--matchColor, var(--km-accent)) 70%, transparent);
 }
 
 .module-root[data-module-root="matching"] .sync-feedback-host,
@@ -2744,23 +2737,21 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   }
 }
 
-/* Business OS theme */
+/* Business OS theme — the module palette derives from the shell tokens
+   (app.css/base.css own light/dark). Only matching-specific specials keep
+   literal values, with a dark override block below. Shell token names are
+   never redefined here (module conformance guard). */
 .module-root[data-module-root="matching"] {
-  color-scheme: light;
-  --bo-background: #f7f9fb;
-  --bo-surface: #ffffff;
-  --bo-surface-muted: #eef3f5;
-  --bo-border: #d8e1e5;
-  --bo-text: #172126;
-  --bo-muted: #64747c;
-  --bo-accent: #23665f;
+  --bo-background: var(--bg);
+  --bo-surface: var(--surface);
+  --bo-surface-muted: var(--surface-2);
+  --bo-border: var(--line);
+  --bo-text: var(--text);
+  --bo-muted: var(--muted);
+  --bo-accent: var(--accent);
   --background: var(--bo-background);
-  --surface: var(--bo-surface);
   --surface-muted: var(--bo-surface-muted);
   --border: var(--bo-border);
-  --text: var(--bo-text);
-  --muted: var(--bo-muted);
-  --accent: var(--bo-accent);
   --radius-control: 6px;
   --radius-card: 8px;
   --module-accent: var(--bo-accent);
@@ -2774,7 +2765,6 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   --km-green: #0f6e49;
   --km-red: #a33b31;
   --bg-app: var(--bo-background);
-  --bg: var(--bo-background);
   --surf-0: var(--bo-surface-muted);
   --surf-1: var(--bo-surface);
   --surf-2: var(--bo-surface-muted);
@@ -2788,9 +2778,6 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
   --panel-2: var(--bo-surface-muted);
   --primary: var(--km-accent);
   --primary-2: #2e766e;
-  --success: var(--km-green);
-  --warning: #9a6414;
-  --danger: var(--km-red);
   --badge: var(--bo-surface-muted);
   --stroke: var(--km-line);
   --chip: var(--bo-surface-muted);
@@ -2802,90 +2789,21 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 :root[data-theme="dark"] .module-root[data-module-root="matching"] {
-  color-scheme: dark;
-  --bo-background: #101416;
-  --bo-surface: #171d20;
-  --bo-surface-muted: #20282c;
-  --bo-border: #303b40;
-  --bo-text: #eef4f6;
-  --bo-muted: #9aa8ae;
-  --bo-accent: #6cb8aa;
-  --background: var(--bo-background);
-  --surface: var(--bo-surface);
-  --surface-muted: var(--bo-surface-muted);
-  --border: var(--bo-border);
-  --text: var(--bo-text);
-  --muted: var(--bo-muted);
-  --accent: var(--bo-accent);
-  --module-surface: var(--bo-surface);
-  --km-ink: var(--bo-text);
-  --km-muted: var(--bo-muted);
+  /* Dark-only specials; the derived --bo-* palette flips with the shell. */
   --km-faint: #74848b;
-  --km-line: var(--bo-border);
   --km-line-strong: #3b484e;
-  --km-accent: var(--bo-accent);
   --km-green: #65c796;
   --km-red: #e06b60;
-  --bg-app: var(--bo-background);
-  --bg: var(--bo-background);
-  --surf-0: var(--bo-surface-muted);
-  --surf-1: var(--bo-surface);
-  --surf-2: var(--bo-surface-muted);
   --accent-600: #5aa99c;
   --bd-hair: rgba(238, 244, 246, 0.08);
   --bd-soft: rgba(238, 244, 246, 0.12);
-  --panel: var(--bo-surface);
-  --panel-2: var(--bo-surface-muted);
-  --badge: var(--bo-surface-muted);
-  --chip: var(--bo-surface-muted);
   --overlay: rgba(16, 20, 22, 0.68);
   --sh-flat: 0 18px 50px rgba(0, 0, 0, 0.34);
   --sh-subtle: 0 8px 24px rgba(0, 0, 0, 0.26);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .module-root[data-module-root="matching"] {
-    color-scheme: dark;
-    --bo-background: #101416;
-    --bo-surface: #171d20;
-    --bo-surface-muted: #20282c;
-    --bo-border: #303b40;
-    --bo-text: #eef4f6;
-    --bo-muted: #9aa8ae;
-    --bo-accent: #6cb8aa;
-    --background: var(--bo-background);
-    --surface: var(--bo-surface);
-    --surface-muted: var(--bo-surface-muted);
-    --border: var(--bo-border);
-    --text: var(--bo-text);
-    --muted: var(--bo-muted);
-    --accent: var(--bo-accent);
-    --module-surface: var(--bo-surface);
-    --km-ink: var(--bo-text);
-    --km-muted: var(--bo-muted);
-    --km-faint: #74848b;
-    --km-line: var(--bo-border);
-    --km-line-strong: #3b484e;
-    --km-accent: var(--bo-accent);
-    --km-green: #65c796;
-    --km-red: #e06b60;
-    --bg-app: var(--bo-background);
-    --bg: var(--bo-background);
-    --surf-0: var(--bo-surface-muted);
-    --surf-1: var(--bo-surface);
-    --surf-2: var(--bo-surface-muted);
-    --accent-600: #5aa99c;
-    --bd-hair: rgba(238, 244, 246, 0.08);
-    --bd-soft: rgba(238, 244, 246, 0.12);
-    --panel: var(--bo-surface);
-    --panel-2: var(--bo-surface-muted);
-    --badge: var(--bo-surface-muted);
-    --chip: var(--bo-surface-muted);
-    --overlay: rgba(16, 20, 22, 0.68);
-    --sh-flat: 0 18px 50px rgba(0, 0, 0, 0.34);
-    --sh-subtle: 0 8px 24px rgba(0, 0, 0, 0.26);
-  }
-}
+/* The shell always sets [data-theme]; no prefers-color-scheme fallback needed. */
+
 
 .module-root[data-module-root="matching"],
 .module-root[data-module-root="matching"] {
@@ -3670,11 +3588,11 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .btn:hover,
 .module-root[data-module-root="matching"] .btn-pill:hover {
   transform: translateY(-1.5px) scale(1.02) !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--km-accent)) !important;
 }
 
 .module-root[data-module-root="matching"] .btn-primary:hover {
-  box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--km-accent) 30%, transparent), 0 4px 14px rgba(0,0,0,.35) !important;
 }
 
 .module-root[data-module-root="matching"] .btn:active,
@@ -3695,8 +3613,8 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 }
 
 .module-root[data-module-root="matching"] :where(select, input, textarea, .input-text, .input-select, .input-textarea):focus-visible {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent) !important;
+  border-color: var(--km-accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--km-accent) 15%, transparent) !important;
   transform: translateY(-0.5px);
 }
 
@@ -3716,7 +3634,7 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 .module-root[data-module-root="matching"] .object-card:hover,
 .module-root[data-module-root="matching"] .import-status-card:hover {
   transform: translateY(-2px) scale(1.01) !important;
-  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--accent)) !important;
+  border-color: color-mix(in srgb, var(--bd-soft) 80%, var(--km-accent)) !important;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
 }
 
@@ -3729,6 +3647,6 @@ body > #sync-feedback-host-matching-view .sync-feedback-progress-bar.is-indeterm
 
 .module-root[data-module-root="matching"] .match-item-card.is-active,
 .module-root[data-module-root="matching"] .object-card.is-active {
-  border-color: var(--accent) !important;
-  box-shadow: 0 0 0 1px var(--accent), 0 8px 24px rgba(0,0,0,.4) !important;
+  border-color: var(--km-accent) !important;
+  box-shadow: 0 0 0 1px var(--km-accent), 0 8px 24px rgba(0,0,0,.4) !important;
 }
