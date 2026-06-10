@@ -1789,7 +1789,12 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
                 );
             }
             let mut conn = open_channel_db(&db_path)?;
-            let updated = ack_messages(&mut conn, &message_keys, status, failure_reason)?;
+            let (failure_note, ack_reason) = if status == "failed" {
+                (failure_reason, None)
+            } else {
+                (None, failure_reason)
+            };
+            let updated = ack_messages(&mut conn, &message_keys, status, failure_note, ack_reason)?;
             print_json(&json!({
                 "ok": true,
                 "db_path": db_path,
@@ -2181,7 +2186,23 @@ pub fn ack_leased_messages(root: &Path, message_keys: &[String], status: &str) -
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     guard_founder_handled_ack(root, &conn, message_keys, status)?;
-    ack_messages(&mut conn, message_keys, status, None)
+    ack_messages(&mut conn, message_keys, status, None, None)
+}
+
+/// Ack with an explicit routing reason. The reason feeds the core-transition
+/// audit trail and, for terminal-success policy paths (e.g. an inbound
+/// message fully handled by scheduling a meeting), selects the matching
+/// `queue_terminal_policy_proof` entry.
+pub fn ack_leased_messages_with_reason(
+    root: &Path,
+    message_keys: &[String],
+    status: &str,
+    reason: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    guard_founder_handled_ack(root, &conn, message_keys, status)?;
+    ack_messages(&mut conn, message_keys, status, None, Some(reason))
 }
 
 pub fn ack_leased_messages_with_failure_reason(
@@ -2197,7 +2218,7 @@ pub fn ack_leased_messages_with_failure_reason(
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
     guard_founder_handled_ack(root, &conn, message_keys, status)?;
-    ack_messages(&mut conn, message_keys, status, Some(failure_reason))
+    ack_messages(&mut conn, message_keys, status, Some(failure_reason), None)
 }
 
 pub fn set_queue_task_route_status(
@@ -6809,6 +6830,7 @@ fn ack_messages(
     message_keys: &[String],
     status: &str,
     failure_note: Option<&str>,
+    ack_reason: Option<&str>,
 ) -> Result<usize> {
     let now = now_iso_string();
     let acked_at = if matches!(status, "handled" | "cancelled") {
@@ -6836,7 +6858,7 @@ fn ack_messages(
             &previous_route_status,
             status,
             "ctox-queue-ack",
-            failure_note.unwrap_or("ack_messages"),
+            ack_reason.or(failure_note).unwrap_or("ack_messages"),
         )?;
         let routing_updates = tx.execute(
             r#"
@@ -7590,6 +7612,18 @@ pub(crate) fn current_queue_route_status(conn: &Connection, message_key: &str) -
     .map_err(anyhow::Error::from)
 }
 
+/// Legacy routing statuses that older builds wrote directly into
+/// `communication_routing_state`. They stay readable as transition SOURCES
+/// so normalization/healing can move such rows to canonical statuses, but
+/// they are not writable targets. `Blocked` is the non-terminal state with
+/// healing edges to Pending, Completed, Failed, and Superseded.
+fn legacy_queue_route_status_core_state(route_status: &str) -> Option<CoreState> {
+    match route_status.trim().to_ascii_lowercase().as_str() {
+        "duplicate" | "blocked_sender" | "meeting_scheduled" => Some(CoreState::Blocked),
+        _ => None,
+    }
+}
+
 pub(crate) fn enforce_queue_route_status_transition(
     conn: &Connection,
     message_key: &str,
@@ -7598,7 +7632,10 @@ pub(crate) fn enforce_queue_route_status_transition(
     actor: &str,
     reason: &str,
 ) -> Result<()> {
-    let from_state = queue_route_status_core_state(from_route_status)?;
+    let from_state = match queue_route_status_core_state(from_route_status) {
+        Ok(state) => state,
+        Err(err) => legacy_queue_route_status_core_state(from_route_status).ok_or(err)?,
+    };
     let to_state = queue_route_status_core_state(to_route_status)?;
     if from_state == to_state {
         return Ok(());
@@ -7697,6 +7734,16 @@ fn queue_terminal_policy_proof(actor: &str, reason: &str) -> Option<String> {
         return Some("policy:business-os-queued-command-terminal-success".to_string());
     }
     match (actor, reason) {
+        // Inbound mail fully handled by scheduling the requested meeting:
+        // routing closes the message without a worker/review pass.
+        ("ctox-queue-ack", "meeting_scheduled") => {
+            Some("policy:meeting-scheduled-terminal-no-send".to_string())
+        }
+        // Inbound mail that only passively mentions a meeting; routing
+        // closes it as non-work without a worker/review pass.
+        ("ctox-queue-ack", "meeting_passive_mention") => {
+            Some("policy:meeting-passive-inbound-terminal-no-send".to_string())
+        }
         ("ctox-boot-reclassifier", "mark_historical_auto_submitted_inbound_handled") => {
             Some("policy:auto-submitted-inbound-terminal-no-send".to_string())
         }
@@ -11610,5 +11657,37 @@ mod tests {
         assert_eq!(folder_hint, "sent");
 
         let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn routing_ack_statuses_are_core_mapped_with_policy_proofs() {
+        // duplicate/blocked_sender inbound routing acks now use the
+        // canonical "cancelled" status (Superseded); meeting acks use
+        // "handled" with a terminal policy proof. The former custom status
+        // strings bailed in the guard and the swallowed error re-leased the
+        // message forever.
+        assert_eq!(
+            super::queue_route_status_core_state("cancelled").unwrap(),
+            CoreState::Superseded
+        );
+        assert_eq!(
+            super::queue_route_status_core_state("handled").unwrap(),
+            CoreState::Completed
+        );
+        assert!(super::queue_route_status_core_state("duplicate").is_err());
+        assert!(super::queue_route_status_core_state("blocked_sender").is_err());
+        assert!(super::queue_route_status_core_state("meeting_scheduled").is_err());
+        assert_eq!(
+            super::queue_terminal_policy_proof("ctox-queue-ack", "meeting_scheduled").as_deref(),
+            Some("policy:meeting-scheduled-terminal-no-send")
+        );
+        assert_eq!(
+            super::queue_terminal_policy_proof("ctox-queue-ack", "meeting_passive_mention")
+                .as_deref(),
+            Some("policy:meeting-passive-inbound-terminal-no-send")
+        );
+        assert!(
+            super::queue_terminal_policy_proof("ctox-queue-ack", "duplicate_inbound").is_none()
+        );
     }
 }

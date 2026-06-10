@@ -8783,17 +8783,55 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             ),
         );
     }
+    // "duplicate"/"blocked_sender"/"meeting_scheduled" are not core-mapped
+    // route statuses: acking them used to fail inside the transition guard
+    // and the swallowed error left the lease to expire and re-route forever.
+    // Route to canonical statuses with an explicit reason, and surface ack
+    // failures instead of silently re-looping the message.
+    let mut log_ack_failure = |label: &str, keys: &[String], result: Result<usize>| {
+        if let Err(err) = result {
+            eprintln!(
+                "ctox service: routing ack '{label}' failed for {} message(s) [{}]: {err:#}",
+                keys.len(),
+                keys.join(", ")
+            );
+        }
+    };
     if !duplicates.is_empty() {
-        let _ = channels::ack_leased_messages(root, &duplicates, "duplicate");
+        let result = channels::ack_leased_messages_with_reason(
+            root,
+            &duplicates,
+            "cancelled",
+            "duplicate_inbound",
+        );
+        log_ack_failure("duplicate_inbound", &duplicates, result);
     }
     if !blocked.is_empty() {
-        let _ = channels::ack_leased_messages(root, &blocked, "blocked_sender");
+        let result = channels::ack_leased_messages_with_reason(
+            root,
+            &blocked,
+            "cancelled",
+            "blocked_sender",
+        );
+        log_ack_failure("blocked_sender", &blocked, result);
     }
     if !meeting_handled.is_empty() {
-        let _ = channels::ack_leased_messages(root, &meeting_handled, "meeting_scheduled");
+        let result = channels::ack_leased_messages_with_reason(
+            root,
+            &meeting_handled,
+            "handled",
+            "meeting_scheduled",
+        );
+        log_ack_failure("meeting_scheduled", &meeting_handled, result);
     }
     if !meeting_passive.is_empty() {
-        let _ = channels::ack_leased_messages(root, &meeting_passive, "handled");
+        let result = channels::ack_leased_messages_with_reason(
+            root,
+            &meeting_passive,
+            "handled",
+            "meeting_passive_mention",
+        );
+        log_ack_failure("meeting_passive_mention", &meeting_passive, result);
     }
     if !deferred_for_founder_rework.is_empty() {
         let _ = channels::ack_leased_messages(root, &deferred_for_founder_rework, "pending");

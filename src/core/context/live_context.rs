@@ -418,7 +418,7 @@ pub(crate) fn render_chat_prompt(
         "CURRENT REQUEST".to_string(),
         format!(
             "- User asked: {}",
-            sanitize_context_message(latest_user_prompt)
+            sanitize_latest_prompt(latest_user_prompt)
         ),
         String::new(),
         runtime_blocks.verified_evidence.clone(),
@@ -1026,7 +1026,10 @@ fn render_focus_block_from_sources(
     mission_state: &lcm::MissionStateRecord,
 ) -> String {
     let mut lines = focus_block_lines(&continuity.focus.content);
-    if lines.len() == 1 && lines.first().map(String::as_str) == Some("status: unknown") {
+    // `focus_block_lines` signals an empty/foreign focus document with this
+    // exact placeholder line; fall back to the durable mission_state record
+    // so the EXECUTION CONTRACT keeps its real done_gate/next_step.
+    if lines.len() == 1 && lines.first().map(String::as_str) == Some("- Current status: unknown") {
         lines = synthesize_focus_lines_from_mission_state(mission_state);
     }
     if lines.is_empty() {
@@ -1259,10 +1262,31 @@ fn render_workflow_state_block(root: &Path, context: &MissionContext) -> Result<
         "Read this first: queue items count as open work only when their status is pending or leased. Plan items count until they are done. Blocked or failed queue rows are shown separately for context only."
             .to_string(),
     );
-    let tasks = channels::list_queue_tasks(root, &[], 8).unwrap_or_default();
-    let plans = plan::list_goals(root).unwrap_or_default();
-    let schedules = schedule::list_tasks(root).unwrap_or_default();
-    let ticket_cases = tickets::list_cases(root, None, 8).unwrap_or_default();
+    // A failed loader must be visible to the model: rendering "no open work"
+    // over a locked/corrupt store would trigger duplicate work creation.
+    let mut unavailable_sources: Vec<&str> = Vec::new();
+    let tasks = channels::list_queue_tasks(root, &[], 8).unwrap_or_else(|_| {
+        unavailable_sources.push("queue");
+        Vec::new()
+    });
+    let plans = plan::list_goals(root).unwrap_or_else(|_| {
+        unavailable_sources.push("plans");
+        Vec::new()
+    });
+    let schedules = schedule::list_tasks(root).unwrap_or_else(|_| {
+        unavailable_sources.push("schedules");
+        Vec::new()
+    });
+    let ticket_cases = tickets::list_cases(root, None, 8).unwrap_or_else(|_| {
+        unavailable_sources.push("tickets");
+        Vec::new()
+    });
+    if !unavailable_sources.is_empty() {
+        lines.push(format!(
+            "workflow_state_unavailable: {} (treat open work as unknown for these sources; do not create new work items to compensate)",
+            unavailable_sources.join(", ")
+        ));
+    }
     let task_terms = mission_search_terms(context);
 
     let matched_schedules = schedules
@@ -1473,8 +1497,11 @@ fn mission_search_terms(context: &MissionContext) -> Vec<String> {
 }
 
 fn workflow_matches_terms(thread_key: &str, title: &str, prompt: &str, terms: &[String]) -> bool {
+    // No mission text means no relevance filter: open work must still be
+    // visible, otherwise the EXECUTION CONTRACT instructs the model to
+    // create a new work item on top of existing ones.
     if terms.is_empty() {
-        return false;
+        return true;
     }
     let haystack = format!("{thread_key}\n{title}\n{prompt}").to_ascii_lowercase();
     terms.iter().any(|term| haystack.contains(term))
@@ -1523,6 +1550,14 @@ pub(crate) fn extract_codex_text_response(stdout: &str) -> Option<String> {
         }
     }
     last_agent_message
+}
+
+/// Sanitization for the CURRENT REQUEST echo. The latest prompt IS the task
+/// statement: it must never be rewritten into an "email context package /
+/// treat as prior mail context" summary or an event-stream placeholder —
+/// those rewrites exist for HISTORICAL entries. Only the size clip applies.
+pub(crate) fn sanitize_latest_prompt(content: &str) -> String {
+    clip_prompt_text(content.trim(), 8_000)
 }
 
 pub(crate) fn sanitize_context_message(content: &str) -> String {
@@ -1828,5 +1863,83 @@ mod tests {
         let prompt = render_system_prompt(&root, &settings).expect("rendered prompt");
         assert!(prompt.contains("Custom CTO contract."));
         assert!(!prompt.contains("You own the mission outcome, not just the next task."));
+    }
+
+    fn test_continuity_doc(
+        kind: lcm::ContinuityKind,
+        content: &str,
+    ) -> lcm::ContinuityDocumentState {
+        lcm::ContinuityDocumentState {
+            conversation_id: 1,
+            kind,
+            head_commit_id: "test-head".to_string(),
+            content: content.to_string(),
+            created_at: "0".to_string(),
+            updated_at: "0".to_string(),
+        }
+    }
+
+    fn test_mission_state(done_gate: &str, next_slice: &str) -> lcm::MissionStateRecord {
+        lcm::MissionStateRecord {
+            conversation_id: 1,
+            mission: "ship the harness fix".to_string(),
+            mission_status: "open".to_string(),
+            continuation_mode: "continue".to_string(),
+            trigger_intensity: "normal".to_string(),
+            blocker: String::new(),
+            next_slice: next_slice.to_string(),
+            done_gate: done_gate.to_string(),
+            closure_confidence: "low".to_string(),
+            is_open: true,
+            allow_idle: false,
+            focus_head_commit_id: "test-head".to_string(),
+            last_synced_at: "0".to_string(),
+            watcher_last_triggered_at: None,
+            watcher_trigger_count: 0,
+            agent_failure_count: 0,
+            deferred_reason: None,
+            rewrite_failure_count: 0,
+        }
+    }
+
+    #[test]
+    fn empty_focus_document_falls_back_to_mission_state_contract() {
+        let continuity = lcm::ContinuityShowAll {
+            conversation_id: 1,
+            narrative: test_continuity_doc(lcm::ContinuityKind::Narrative, ""),
+            anchors: test_continuity_doc(lcm::ContinuityKind::Anchors, ""),
+            focus: test_continuity_doc(lcm::ContinuityKind::Focus, ""),
+        };
+        let mission_state = test_mission_state(
+            "tests green and pushed to main",
+            "run the channel ack regression",
+        );
+        let block = render_focus_block_from_sources(&continuity, &mission_state);
+        assert!(
+            block.contains("Finish rule: tests green and pushed to main"),
+            "mission-state fallback must supply the done gate, got: {block}"
+        );
+        assert!(block.contains("Next step: run the channel ack regression"));
+    }
+
+    #[test]
+    fn workflow_terms_empty_means_no_relevance_filter() {
+        // No mission text must not hide open work, otherwise the EXECUTION
+        // CONTRACT instructs the model to create duplicate work items.
+        assert!(workflow_matches_terms("thread", "title", "prompt", &[]));
+        let terms = vec!["deploy".to_string()];
+        assert!(workflow_matches_terms("t", "deploy the fix", "p", &terms));
+        assert!(!workflow_matches_terms("t", "unrelated", "p", &terms));
+    }
+
+    #[test]
+    fn latest_prompt_sanitizer_keeps_email_wrapper_and_event_streams_verbatim() {
+        let email = "[E-Mail eingegangen]\nSender: ceo@example.com\nBetreff: Serverausfall\nThread: t-1\n\nBitte Server pruefen und Bericht senden.";
+        let echoed = sanitize_latest_prompt(email);
+        assert!(echoed.contains("Bitte Server pruefen und Bericht senden."));
+        assert!(!echoed.contains("treat it as prior mail context only"));
+        // Historical entries keep the demoting summary.
+        let historical = sanitize_context_message(email);
+        assert!(historical.contains("treat it as prior mail context only"));
     }
 }

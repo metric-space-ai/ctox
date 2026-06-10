@@ -153,18 +153,28 @@ fn detect_durable_state_transition(
 
     // Focus-document commits live in the LCM database alongside Narrative
     // and Anchors. A focus replacement during the turn is a boundary.
+    // LCM stamps `continuity_commits.created_at` as an epoch-millis string
+    // (lcm::iso_now), NOT RFC3339 — compare numerically, otherwise the text
+    // collation ("17..." vs "20...") makes this check permanently false.
     if lcm_db_path.exists() {
+        let turn_start_millis = chrono::DateTime::parse_from_rfc3339(turn_start_ts)
+            .map(|ts| ts.timestamp_millis())
+            .unwrap_or(i64::MAX);
         let conn = Connection::open_with_flags(
             lcm_db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
+        // `continuity_documents.kind` is stored lowercase ("focus", see
+        // ContinuityKind::as_str) and its primary key is `document_id`; the
+        // previous query (capitalized kind, join on nonexistent `d.id`)
+        // errored and the error was swallowed into "no boundary".
         let focus_commits: i64 = conn
             .query_row(
                 "SELECT COUNT(1) FROM continuity_commits c \
-                 JOIN continuity_documents d ON c.document_id = d.id \
-                 WHERE d.conversation_id = ?1 AND d.kind = 'Focus' \
-                 AND c.created_at > ?2",
-                rusqlite::params![conversation_id, turn_start_ts],
+                 JOIN continuity_documents d ON c.document_id = d.document_id \
+                 WHERE d.conversation_id = ?1 AND d.kind = 'focus' \
+                 AND CAST(c.created_at AS INTEGER) > ?2",
+                rusqlite::params![conversation_id, turn_start_millis],
                 |row| row.get(0),
             )
             .unwrap_or(0);
@@ -703,8 +713,13 @@ fn ensure_rendered_prompt_is_invocable(
 ) -> Result<()> {
     let current_prompt = prompt.trim();
     let latest_empty = rendered_prompt.latest_user_prompt.trim().is_empty();
-    let missing_current_prompt =
-        !current_prompt.is_empty() && !rendered_prompt.prompt.contains(current_prompt);
+    // Compare against the clipped form the renderer actually emits: for
+    // prompts over the echo budget the raw text can never be contained, and
+    // prepending it would duplicate the first 8k chars on every such turn.
+    let rendered_echo = live_context::sanitize_latest_prompt(current_prompt);
+    let missing_current_prompt = !current_prompt.is_empty()
+        && !rendered_echo.is_empty()
+        && !rendered_prompt.prompt.contains(rendered_echo.as_str());
     if latest_empty || missing_current_prompt {
         emit(&format!(
             "context-selection fallback-current-prompt latest_empty={} missing_current={}",
@@ -1427,5 +1442,86 @@ mod tests {
             omitted_context_items: 0,
         };
         assert!(critical_context_selection_is_empty(&empty));
+    }
+
+    #[test]
+    fn invocable_guard_accepts_clipped_echo_of_oversized_prompt() {
+        // A prompt over the echo budget renders clipped; the guard must
+        // compare against that clipped form instead of prepending the full
+        // raw prompt again (which duplicated the first 8k chars per turn).
+        let oversized = format!("execute the long task. {}", "x".repeat(9_000));
+        let rendered_echo = live_context::sanitize_latest_prompt(&oversized);
+        assert!(rendered_echo.len() < oversized.len());
+        let mut rendered = live_context::RenderedRuntimePrompt {
+            prompt: format!("CURRENT REQUEST\n- User asked: {rendered_echo}\n"),
+            latest_user_prompt: oversized.clone(),
+            rendered_context_items: 1,
+            omitted_context_items: 0,
+        };
+        let snapshot = lcm::LcmSnapshot {
+            conversation_id: 9,
+            messages: Vec::new(),
+            summaries: Vec::new(),
+            context_items: Vec::new(),
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+        let health = context_health::ContextHealthSnapshot {
+            conversation_id: 9,
+            overall_score: 90,
+            status: context_health::ContextHealthStatus::Healthy,
+            summary: "healthy".to_string(),
+            repair_recommended: false,
+            dimensions: Vec::new(),
+            warnings: Vec::new(),
+        };
+        let before = rendered.prompt.clone();
+        ensure_rendered_prompt_is_invocable(
+            &snapshot,
+            &mut rendered,
+            &oversized,
+            &health,
+            &mut |_event| {},
+        )
+        .expect("guard must accept the clipped echo");
+        assert_eq!(
+            rendered.prompt, before,
+            "guard must not prepend the raw prompt when the clipped echo is present"
+        );
+    }
+
+    #[test]
+    fn focus_commit_boundary_detection_compares_epoch_millis() {
+        // continuity_commits.created_at is an epoch-millis string; the
+        // RFC3339 turn timestamp must be converted before comparing,
+        // otherwise text collation makes the check permanently false.
+        let root = std::env::temp_dir().join(format!(
+            "ctox-turn-boundary-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let db_path = crate::paths::lcm_db(&root);
+        let turn_start = current_rfc3339_timestamp();
+        {
+            let engine =
+                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).expect("open lcm engine");
+            engine
+                .continuity_full_replace_document(
+                    7,
+                    lcm::ContinuityKind::Focus,
+                    "## Status\n- Mission state: open\n",
+                )
+                .expect("apply focus document");
+        }
+        let detected = detect_durable_state_transition(&root, &db_path, 7, &turn_start)
+            .expect("detection query must run");
+        assert!(
+            detected,
+            "a focus commit after turn start must register as a durable boundary"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

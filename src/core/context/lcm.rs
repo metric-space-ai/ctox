@@ -2148,7 +2148,11 @@ impl LcmEngine {
             return Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?);
         }
 
-        let now = iso_now();
+        // Bind the expiry cutoff as an INTEGER: binding the epoch-millis
+        // string as TEXT makes `CAST(expires_at AS INTEGER) <= ?2` compare
+        // INTEGER vs TEXT, which is always true in SQLite — every verified
+        // claim with an expiry then permanently re-enters the open set.
+        let now_millis: i64 = iso_now().parse().unwrap_or(i64::MAX);
         let mut stmt = self.conn.prepare(
             "SELECT claim_key, last_run_id, claim_kind, claim_status, blocks_closure, subject, summary, evidence_summary, recheck_policy, expires_at, created_at, updated_at
              FROM mission_claims
@@ -2157,7 +2161,7 @@ impl LcmEngine {
              ORDER BY CAST(updated_at AS INTEGER) DESC
              LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![conversation_id, now, limit as i64], |row| {
+        let rows = stmt.query_map(params![conversation_id, now_millis, limit as i64], |row| {
             Ok(map_mission_claim_row(row, conversation_id)?)
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -5652,23 +5656,25 @@ fn build_continuity_prompt_text(
         String::new(),
         "MODE A — full replacement (write the new document body to stdin):".to_string(),
         format!(
-            "    printf '%s' \"<FULL NEW DOCUMENT BODY>\" | ctox continuity-update --kind {kind_str} --mode full"
+            "    printf '%s' \"<FULL NEW DOCUMENT BODY>\" | ctox continuity-update --kind {kind_str} --mode full --conversation-id {conversation_id}"
         ),
         "  Use this when the current document is empty or its structure has to change substantially. \
          Keep section headers the same (`## Status`, `## Blocker`, ...). Write each field on its own line as `- field: value` or `field: value`.".to_string(),
         String::new(),
         "MODE B — single targeted string replacement (best for one-field updates):".to_string(),
         format!(
-            "    ctox continuity-update --kind {kind_str} --mode replace --find '<OLD EXACT TEXT>' --replace '<NEW EXACT TEXT>'"
+            "    ctox continuity-update --kind {kind_str} --mode replace --find '<OLD EXACT TEXT>' --replace '<NEW EXACT TEXT>' --conversation-id {conversation_id}"
         ),
         "  `--find` must match exactly once in the document. A match of zero or >1 fails loudly. \
          Best for edits like changing `Mission state: open` to `Mission state: done`.".to_string(),
         String::new(),
         "MODE C — structured +/- diff (advanced; read from stdin):".to_string(),
         format!(
-            "    printf '## Section\\n- old line\\n+ new line\\n' | ctox continuity-update --kind {kind_str} --mode diff"
+            "    printf '## Section\\n- old line\\n+ new line\\n' | ctox continuity-update --kind {kind_str} --mode diff --conversation-id {conversation_id}"
         ),
         "  Use only when you have several coordinated changes across the same document.".to_string(),
+        String::new(),
+        "Always pass --conversation-id exactly as shown; omitting it writes to the wrong conversation.".to_string(),
         String::new(),
         "CONTENT RULES".to_string(),
         "- Keep the existing `##` section names. Do not invent new headings.".to_string(),
@@ -7082,5 +7088,30 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(root);
         Ok(())
+    }
+
+    #[test]
+    fn continuity_refresh_prompt_pins_the_conversation_id() {
+        // Without --conversation-id the CLI defaults to conversation 1 and
+        // hashed worker conversations silently lose every refresh.
+        let prompt = build_continuity_prompt_text(
+            42,
+            ContinuityKind::Focus,
+            "## Status\n- Mission state: open\n",
+            &[],
+            &[],
+            &[],
+            &[],
+        );
+        for mode_marker in ["--mode full", "--mode replace", "--mode diff"] {
+            let line = prompt
+                .lines()
+                .find(|line| line.contains(mode_marker))
+                .unwrap_or_else(|| panic!("prompt must show a {mode_marker} command"));
+            assert!(
+                line.contains("--conversation-id 42"),
+                "{mode_marker} command must pin the conversation id, got: {line}"
+            );
+        }
     }
 }

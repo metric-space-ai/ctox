@@ -282,7 +282,7 @@ fn context_health_preempts_current_slice(health: &ContextHealthSnapshot) -> bool
         && health.warnings.iter().any(|warning| {
             matches!(
                 warning.code.as_str(),
-                "thin_mission_contract" | "missing_failure_memory"
+                "mission_contract_thin" | "failure_memory_missing"
             ) && warning.severity == WarningSeverity::Critical
         })
 }
@@ -301,12 +301,21 @@ fn health_warning_action_label(code: &str) -> &'static str {
         "mission_contamination" => {
             "drop stale mission detail that no longer matches the current task"
         }
-        "thin_mission_contract" => {
+        "mission_contract_thin" => {
             "rewrite the current task in simple terms: what to do now, blocker, next step, completion rule"
         }
-        "missing_failure_memory" => "record what failed and what evidence would justify retrying",
-        "context_pressure" => {
+        "failure_memory_missing" => "record what failed and what evidence would justify retrying",
+        "context_window_pressure" => {
             "load less detail and rely on durable state until the current task is complete"
+        }
+        "recent_user_turn_repeated" => {
+            "do not repeat the previous attempt unchanged; change the approach or record the blocker"
+        }
+        "blocked_status_loop" => {
+            "the same blocker keeps recurring; resolve or escalate it instead of retrying"
+        }
+        "focus_document_thin" => {
+            "refresh the Focus continuity document with the current task, blocker, and finish rule"
         }
         _ => "inspect the current task state before changing course",
     }
@@ -1372,5 +1381,50 @@ mod tests {
         );
         assert!(!decision.should_enqueue_repair);
         assert!(decision.reason.contains("already is"));
+    }
+
+    #[test]
+    fn warning_action_labels_cover_emitted_codes() {
+        // The matcher strings must use the codes build_warnings actually
+        // emits; the previous drift ("thin_mission_contract" vs
+        // "mission_contract_thin") silenced every specific repair action.
+        let generic = super::health_warning_action_label("unknown_code");
+        for code in [
+            "mission_contract_thin",
+            "failure_memory_missing",
+            "context_window_pressure",
+            "recent_user_turn_repeated",
+            "blocked_status_loop",
+            "focus_document_thin",
+            "mission_switch_pending",
+        ] {
+            assert_ne!(
+                super::health_warning_action_label(code),
+                generic,
+                "warning code {code} fell through to the generic action"
+            );
+        }
+    }
+
+    #[test]
+    fn preempt_matches_emitted_critical_codes() {
+        let snapshot = super::ContextHealthSnapshot {
+            conversation_id: 1,
+            overall_score: 10,
+            status: ContextHealthStatus::Critical,
+            summary: "critical".to_string(),
+            repair_recommended: true,
+            dimensions: Vec::new(),
+            warnings: vec![super::ContextHealthWarning {
+                code: "mission_contract_thin".to_string(),
+                severity: WarningSeverity::Critical,
+                summary: "thin".to_string(),
+                evidence: "".to_string(),
+                recommended_action: "".to_string(),
+            }],
+        };
+        assert!(super::context_health_preempts_current_slice(&snapshot));
+        let rendered = render_prompt_block(&snapshot);
+        assert!(rendered.contains("preempt_current_slice: yes"));
     }
 }
