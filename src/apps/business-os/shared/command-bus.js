@@ -113,6 +113,23 @@ async function waitForAuthoritativeQueueProjection(db, commandId) {
         transport: 'rxdb-command-bus',
       };
     }
+    // Control commands (ctox.file.materialize, ctox.module.*, ...) are
+    // executed directly by the daemon and acknowledged with a terminal
+    // 'completed' command document that intentionally carries NO queue-task
+    // projection (write_rxdb_control_command_outcome stamps an empty
+    // task_id). That acknowledgement IS the authoritative result — waiting
+    // for a task here timed out after 45s for every control command.
+    // Queue-backed commands always carry a task_id alongside their status.
+    if (!taskId && lastCommand?.status === 'completed') {
+      return {
+        ok: true,
+        command_id: commandId,
+        status: 'completed',
+        task_id: '',
+        task_status: String(lastCommand?.task_status || 'completed'),
+        transport: 'rxdb-command-bus',
+      };
+    }
     await delay(250);
   }
   throw commandError(
