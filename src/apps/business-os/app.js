@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260611-shell-settings-hotfix1';
+const APP_BUILD = '20260611-snappy-modules1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -3659,7 +3659,17 @@ async function openModule(moduleId, options = {}) {
   try {
     const moduleScript = await moduleScriptPromise;
     if (typeof moduleScript.mount === 'function') {
-      state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
+      try {
+        state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
+      } catch (error) {
+        // A failing module mount must not take the shell down with it: the
+        // module usually rendered its markup before the error (data wiring is
+        // what tends to fail), and shell-owned wiring below — column resizers,
+        // chrome — must still run. Surface the error instead of letting it
+        // escape as an unhandled rejection that silently skips the rest.
+        console.error(`[business-os] mount failed for ${mod.id}`, error);
+        setStatus(`${moduleDisplayTitle(mod)}: ${error?.message || error}`);
+      }
     }
     // Wire shell-owned column resizing for any declarative handles the module
     // rendered. Runs before paint so restored widths apply without a flash.
