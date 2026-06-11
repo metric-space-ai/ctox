@@ -7,6 +7,7 @@ const CTOX_APP_ROOT = 'src/apps/business-os';
 const CTOX_TREE_URL = `https://api.github.com/repos/${CTOX_REPO}/git/trees/${CTOX_BRANCH}?recursive=1`;
 const CTOX_RAW_ROOT = `https://raw.githubusercontent.com/${CTOX_REPO}/${CTOX_BRANCH}/${CTOX_APP_ROOT}`;
 const CTOX_DOWNLOAD_URL = `https://github.com/${CTOX_REPO}/archive/refs/heads/${CTOX_BRANCH}.zip`;
+const STORE_COMMAND_TIMEOUT_MS = 3 * 60 * 1000;
 
 
 const state = {
@@ -21,6 +22,7 @@ const state = {
   query: '',
   busy: false,
   status: null,
+  operations: {},
   unsubscribe: null,
   viewMode: 'grid',
   drawerOpen: false,
@@ -180,8 +182,8 @@ function wireEvents() {
 }
 
 async function triggerCardAction(appId, actionType) {
-  const item = catalogItems().find((candidate) => candidate.id === appId);
-  if (!item || state.busy) return;
+  const item = currentCatalogItem(appId);
+  if (!item || (state.busy && !['details', 'repository'].includes(actionType))) return;
 
   if (actionType === 'install') {
     await installMarketplaceItem(item);
@@ -289,7 +291,7 @@ async function manifestPathToMarketplaceItem(path) {
   const manifest = await manifestResponse.json();
   const moduleId = sanitizeId(manifest.id || path.split('/').at(-2));
   if (!moduleId) return null;
-  const relativePath = path.replace(`${CTOX_APP_ROOT}/`, '').replace('/module.json', '');
+  const repoSourcePath = path.replace('/module.json', '');
   return normalizeMarketplaceItem({
     id: moduleId,
     module_id: moduleId,
@@ -301,7 +303,7 @@ async function manifestPathToMarketplaceItem(path) {
     license: manifest.license || 'AGPL-3.0-only',
     repo: CTOX_REPO,
     source: 'ctox-github',
-    source_path: relativePath,
+    source_path: repoSourcePath,
     manifest_url: manifestUrl,
     download_url: CTOX_DOWNLOAD_URL,
     homepage: `https://github.com/${CTOX_REPO}/tree/${CTOX_BRANCH}/${path.replace('/module.json', '')}`,
@@ -312,6 +314,10 @@ async function manifestPathToMarketplaceItem(path) {
 }
 
 function catalogItems() {
+  return uniqueCatalogItems(rawCatalogItems()).sort(sortItems);
+}
+
+function rawCatalogItems() {
   const modules = Array.isArray(state.catalog?.modules) ? state.catalog.modules : [];
   const templates = Array.isArray(state.catalog?.templates) ? state.catalog.templates : [];
   const moduleIds = new Set(modules.map((item) => item?.id).filter(Boolean));
@@ -335,7 +341,6 @@ function catalogItems() {
   const items = [
     normalizeItem(scratchTemplate, 'template'),
     ...state.marketplace
-      .filter((item) => !moduleIds.has(item.module_id || item.id))
       .map((item) => normalizeItem(item, 'marketplace')),
     ...templates.map((item) => normalizeItem(item, 'template')),
     ...modules
@@ -345,7 +350,7 @@ function catalogItems() {
       .filter((item) => item?.id && !moduleIds.has(item.id))
       .map(normalizeDesktopAppItem),
   ];
-  return uniqueCatalogItems(items).sort(sortItems);
+  return items.filter(Boolean);
 }
 
 function isLaunchableModule(item) {
@@ -505,11 +510,19 @@ function filteredItems() {
 }
 
 function scopedCatalogItems(scope) {
-  const items = catalogItems();
+  const items = scope === 'marketplace' ? rawCatalogItems() : catalogItems();
   const scoped = scope === 'all'
     ? items
     : items.filter((item) => itemMatchesScope(item, scope));
   return uniqueCatalogItems(scoped);
+}
+
+function currentCatalogItem(appId) {
+  if (!appId) return null;
+  return scopedCatalogItems(state.scope).find((candidate) => candidate.id === appId)
+    || catalogItems().find((candidate) => candidate.id === appId)
+    || rawCatalogItems().find((candidate) => candidate.id === appId)
+    || null;
 }
 
 function itemMatchesScope(item, scope) {
@@ -600,20 +613,26 @@ function renderEmptyCatalogState({ title, body }) {
 }
 
 function renderCard(item) {
+  const operation = operationForItem(item);
+  const cardStatus = statusForCard(item, operation);
   const card = document.createElement('article');
   card.className = 'app-card';
   card.dataset.appId = item.id;
+  if (operation?.kind) card.dataset.operation = operation.kind;
   card.classList.toggle('active', item.id === state.selectedId);
+  card.classList.toggle('is-operating', operation?.kind === 'running');
   card.tabIndex = 0;
   card.setAttribute('aria-selected', item.id === state.selectedId ? 'true' : 'false');
-  card.setAttribute('aria-label', `${item.title}. ${statusLabel(item.status)}. ${item.category}.`);
+  card.setAttribute('aria-label', `${item.title}. ${statusLabel(cardStatus)}. ${item.category}.`);
 
   let actionsHtml = `<div class="app-card-actions">`;
 
-  if (item.id === 'create-scratch') {
+  if (operation?.kind === 'running') {
+    actionsHtml += progressButtonHtml(operation.text || `${item.title} wird installiert...`);
+  } else if (item.id === 'create-scratch') {
     actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'marketplace') {
-    if (item.status === 'installed') {
+    if (cardStatus === 'installed') {
       actionsHtml += `<button type="button" class="card-btn primary" data-card-action="open" aria-label="${escapeHtml(item.title)} öffnen">${escapeHtml(state.t('actionOpen', 'Öffnen'))}</button>`;
     } else if (item.installable) {
       actionsHtml += `<button type="button" class="card-btn primary" data-card-action="install" aria-label="${escapeHtml(item.title)} installieren">${escapeHtml(state.t('actionInstall', 'Installieren'))}</button>`;
@@ -642,6 +661,7 @@ function renderCard(item) {
   }
 
   actionsHtml += `</div>`;
+  const operationHtml = operationMessageHtml(operation);
 
   card.innerHTML = `
     <div class="app-card-head">
@@ -658,12 +678,39 @@ function renderCard(item) {
       <span class="app-mod-state ${escapeHtml(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
     </div>
     ${actionsHtml}
+    ${operationHtml}
     <footer class="app-card-footer">
-      <span class="app-status-badge ${escapeHtml(item.status)}">${escapeHtml(statusLabel(item.status))}</span>
+      <span class="app-status-badge ${escapeHtml(cardStatus)}">${escapeHtml(statusLabel(cardStatus))}</span>
       <span class="app-card-source">${escapeHtml(sourceShort(item))}</span>
     </footer>
   `;
   return card;
+}
+
+function operationForItem(itemOrId) {
+  const id = typeof itemOrId === 'string' ? itemOrId : itemOrId?.id;
+  return id ? state.operations[id] || null : null;
+}
+
+function statusForCard(item, operation = operationForItem(item)) {
+  if (operation?.kind === 'running') return 'installing';
+  if (operation?.kind === 'error') return 'error';
+  if (operation?.kind === 'success') return 'installed';
+  return item?.status || '';
+}
+
+function progressButtonHtml(label) {
+  return `
+    <button type="button" class="card-btn primary is-progress" disabled aria-disabled="true" aria-live="polite">
+      <span class="card-btn-progress-label">${escapeHtml(label)}</span>
+      <span class="card-btn-progress-track" aria-hidden="true"><span></span></span>
+    </button>`;
+}
+
+function operationMessageHtml(operation) {
+  if (!operation?.text) return '';
+  const kind = operation.kind || 'running';
+  return `<div class="app-card-operation" data-kind="${escapeHtml(kind)}" role="status">${escapeHtml(operation.text)}</div>`;
 }
 
 function renderDetails() {
@@ -851,11 +898,18 @@ async function rollbackToVersion(item, versionId) {
 }
 
 async function runStoreCommand({ label, success, commandType, moduleId, payload }) {
+  setOperation(moduleId, {
+    kind: 'running',
+    text: label,
+    commandType,
+    startedAt: Date.now(),
+  });
   setBusy(true, label);
   try {
     const commandId = `cmd_${newId()}`;
     await state.ctx.commandBus.dispatch({
       id: commandId,
+      wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
       module: 'app-store',
       type: commandType,
       record_id: moduleId,
@@ -864,15 +918,30 @@ async function runStoreCommand({ label, success, commandType, moduleId, payload 
       client_context: {
         source: 'business-os-app-store',
         module_id: moduleId,
+        command_wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
         actor: actorContext(state.ctx.session),
       },
     });
-    const result = await waitForCommandProjection(commandId);
-    state.status = { kind: 'success', text: success, result };
+    const result = await waitForCommandProjection(commandId, STORE_COMMAND_TIMEOUT_MS);
     await loadCatalog();
+    setOperation(moduleId, {
+      kind: 'success',
+      text: success,
+      commandType,
+      result,
+      completedAt: Date.now(),
+    });
+    state.status = { kind: 'success', text: success, result };
     render();
   } catch (error) {
-    state.status = { kind: 'error', text: error?.message || String(error) };
+    const text = error?.message || String(error);
+    setOperation(moduleId, {
+      kind: 'error',
+      text,
+      commandType,
+      completedAt: Date.now(),
+    });
+    state.status = { kind: 'error', text };
     render();
   } finally {
     setBusy(false);
@@ -899,14 +968,22 @@ async function waitForCommandProjection(commandId, timeoutMs = 60000) {
 
 function setBusy(busy, text = '') {
   state.busy = busy;
-  if (els.action) els.action.disabled = busy;
-  if (els.secondaryAction) els.secondaryAction.disabled = busy;
   const showLoading = busy || state.marketplaceStatus === 'loading';
   if (els.loading) els.loading.hidden = !showLoading;
   if (els.loadingText) {
     els.loadingText.textContent = text || state.marketplaceMessage || 'GitHub Discovery wird synchronisiert.';
   }
   if (els.refresh) els.refresh.disabled = busy || state.marketplaceStatus === 'loading';
+}
+
+function setOperation(moduleId, operation) {
+  const id = sanitizeId(moduleId);
+  if (!id) return;
+  state.operations = {
+    ...state.operations,
+    [id]: operation,
+  };
+  render();
 }
 
 function setScope(scope) {
@@ -939,6 +1016,11 @@ function countsByScope() {
   };
 }
 
+function availableMarketplaceCount() {
+  const installed = installedIds();
+  return state.marketplace.filter((item) => !installed.has(item.module_id || item.id)).length;
+}
+
 function renderMarketplaceState() {
   if (!els.marketplaceState) return;
   const counts = countsByScope();
@@ -946,7 +1028,7 @@ function renderMarketplaceState() {
     status: state.marketplaceStatus,
     message: state.marketplaceMessage,
     discoveredCount: state.marketplace.length,
-    availableCount: counts.marketplace,
+    availableCount: availableMarketplaceCount(),
     installedCount: counts.installed,
   });
   els.marketplaceState.dataset.state = state.marketplaceStatus;
@@ -1208,6 +1290,8 @@ function statusLabel(status) {
   return {
     available: 'Available',
     installed: 'Installed',
+    installing: 'Installing',
+    error: 'Fehler',
     starter: 'Starter',
     template: 'Template',
     system: 'System',
@@ -1314,7 +1398,10 @@ export const __appStoreTestHooks = {
   marketplaceStateLabel,
   modificationStateFor,
   originLabel,
+  operationMessageHtml,
+  progressButtonHtml,
   sanitizeId,
+  statusForCard,
   statusLabel,
   updateStateFor,
   versionsButtonHtml,

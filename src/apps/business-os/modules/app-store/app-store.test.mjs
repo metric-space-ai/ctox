@@ -153,6 +153,21 @@ test('versions button reflects the recorded timeline', () => {
   assert.match(html, /data-card-action="versions"/);
 });
 
+test('install operations render card-local progress and terminal status', () => {
+  assert.equal(hooks.statusForCard({ status: 'available' }, { kind: 'running' }), 'installing');
+  assert.equal(hooks.statusForCard({ status: 'available' }, { kind: 'success' }), 'installed');
+  assert.equal(hooks.statusForCard({ status: 'available' }, { kind: 'error' }), 'error');
+
+  const progress = hooks.progressButtonHtml('Installing Outbound...');
+  assert.match(progress, /card-btn primary is-progress/);
+  assert.match(progress, /card-btn-progress-track/);
+  assert.match(progress, /disabled/);
+
+  const message = hooks.operationMessageHtml({ kind: 'success', text: 'Outbound installed.' });
+  assert.match(message, /data-kind="success"/);
+  assert.match(message, /Outbound installed\./);
+});
+
 test('origin labels are humanized for the timeline', () => {
   assert.equal(hooks.originLabel('install'), 'Installation');
   assert.equal(hooks.originLabel('rollback'), 'Rollback');

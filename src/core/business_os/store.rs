@@ -23,6 +23,7 @@ use std::io;
 use std::io::Cursor;
 use std::io::Read;
 use std::io::Write;
+use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 use std::thread;
@@ -4409,24 +4410,56 @@ fn find_module_json_dir_by_source_path(
     dir: &Path,
     source_path: &str,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if dir.join("module.json").is_file()
-        && dir
-            .to_string_lossy()
-            .replace('\\', "/")
-            .ends_with(source_path)
-    {
+    let source_segments = normalized_source_path_segments(source_path);
+    find_module_json_dir_by_source_segments(dir, &source_segments)
+}
+
+fn find_module_json_dir_by_source_segments(
+    dir: &Path,
+    source_segments: &[String],
+) -> anyhow::Result<Option<PathBuf>> {
+    if dir.join("module.json").is_file() && path_ends_with_segments(dir, source_segments) {
         return Ok(Some(dir.to_path_buf()));
     }
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
-            if let Some(found) = find_module_json_dir_by_source_path(&path, source_path)? {
+            if let Some(found) = find_module_json_dir_by_source_segments(&path, source_segments)? {
                 return Ok(Some(found));
             }
         }
     }
     Ok(None)
+}
+
+fn normalized_source_path_segments(source_path: &str) -> Vec<String> {
+    source_path
+        .replace('\\', "/")
+        .split('/')
+        .filter_map(|segment| {
+            let trimmed = segment.trim();
+            if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect()
+}
+
+fn path_ends_with_segments(path: &Path, source_segments: &[String]) -> bool {
+    if source_segments.is_empty() {
+        return false;
+    }
+    let path_segments: Vec<String> = path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect();
+    path_segments.ends_with(source_segments)
 }
 
 fn find_module_json_dir_by_id(dir: &Path, module_id: &str) -> anyhow::Result<Option<PathBuf>> {
@@ -16232,6 +16265,43 @@ mod tests {
                 content: content.to_string(),
             },
         )?;
+        Ok(())
+    }
+
+    fn write_test_manifest(dir: &Path, module_id: &str) -> anyhow::Result<()> {
+        fs::create_dir_all(dir)?;
+        fs::write(
+            dir.join("module.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "id": module_id,
+                "title": module_id,
+                "entry": "index.html"
+            }))?,
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn app_store_install_source_path_matches_exact_path_segments() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let app_root = temp
+            .path()
+            .join("src")
+            .join("apps")
+            .join("business-os");
+        let installed = app_root.join("installed-modules").join("matching");
+        write_test_manifest(&installed, "matching")?;
+
+        assert!(
+            find_module_json_dir_by_source_path(&app_root, "modules/matching")?.is_none(),
+            "installed-modules/matching must not satisfy modules/matching"
+        );
+
+        let source = app_root.join("modules").join("matching");
+        write_test_manifest(&source, "matching")?;
+        let found = find_module_json_dir_by_source_path(&app_root, "modules/matching")?
+            .expect("source module path is found");
+        assert_eq!(found, source);
         Ok(())
     }
 

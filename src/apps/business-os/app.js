@@ -5592,6 +5592,9 @@ function resolveModuleAllowlist(catalogAllowlist) {
     const trimmed = String(id || '').trim();
     if (trimmed) allow.add(trimmed);
   }
+  if (allow.has('app-store')) {
+    allow.add('creator');
+  }
   return allow;
 }
 

@@ -19,7 +19,7 @@ async function dispatchRxdbCommand({ db, sync, command }) {
   const bridges = await prepareCommandSync({ db: currentDb, sync });
   await insertOrPatchCommandDocument(collection, commandId, doc);
   await flushSyncBridges(bridges);
-  return waitForAuthoritativeQueueProjection(currentDb, commandId);
+  return waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
 }
 
 function commandDocument(command, commandId) {
@@ -91,10 +91,19 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   }
 }
 
-async function waitForAuthoritativeQueueProjection(db, commandId) {
+function commandWaitTimeoutMs(command) {
+  const raw = command?.wait_timeout_ms
+    ?? command?.client_context?.command_wait_timeout_ms
+    ?? command?.client_context?.wait_timeout_ms;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed <= 0) return COMMAND_ACCEPT_TIMEOUT_MS;
+  return Math.min(Math.max(parsed, 1000), 10 * 60 * 1000);
+}
+
+async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = COMMAND_ACCEPT_TIMEOUT_MS) {
   const commands = db?.raw?.business_commands;
   const queue = db?.raw?.ctox_queue_tasks;
-  const deadline = Date.now() + COMMAND_ACCEPT_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   let lastCommand = null;
   while (Date.now() < deadline) {
     lastCommand = await findDoc(commands, commandId);

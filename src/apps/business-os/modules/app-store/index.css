@@ -430,6 +430,10 @@
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
 }
 
+.app-card.is-operating {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--line));
+}
+
 .app-card-head {
   display: flex;
   align-items: center;
@@ -694,6 +698,16 @@
   color: var(--muted);
 }
 
+.app-status-badge.installing {
+  background: color-mix(in srgb, var(--warning) 15%, transparent);
+  color: var(--warning);
+}
+
+.app-status-badge.error {
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+  color: var(--danger);
+}
+
 .app-status-badge.core {
   background: color-mix(in srgb, var(--app-store-info) 15%, transparent);
   color: var(--app-store-info);
@@ -768,10 +782,12 @@
   gap: 8px;
   margin-top: 12px;
   margin-bottom: 12px;
+  min-height: 31px;
 }
 
 /* Premium Card Buttons */
 .card-btn {
+  min-height: 31px;
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 700;
@@ -781,6 +797,13 @@
   transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
   white-space: nowrap;
   outline: none;
+}
+
+.card-btn:disabled {
+  cursor: default;
+  opacity: 0.78;
+  transform: none;
+  box-shadow: none;
 }
 
 .card-btn.primary {
@@ -796,6 +819,69 @@
 
 .card-btn.primary:active {
   transform: translateY(0);
+}
+
+.card-btn.is-progress {
+  position: relative;
+  display: inline-grid;
+  align-content: center;
+  gap: 4px;
+  min-width: 142px;
+  overflow: hidden;
+  color: var(--bg);
+}
+
+.card-btn.is-progress:hover {
+  transform: none;
+  box-shadow: none;
+}
+
+.card-btn-progress-label {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-btn-progress-track {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 28%, transparent);
+}
+
+.card-btn-progress-track span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 42%;
+  border-radius: inherit;
+  background: var(--bg);
+  animation: app-store-install-progress 1100ms ease-in-out infinite;
+}
+
+.app-card-operation {
+  min-height: 18px;
+  margin: -4px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.app-card-operation[data-kind="running"] {
+  color: var(--warning);
+}
+
+.app-card-operation[data-kind="success"] {
+  color: var(--success);
+}
+
+.app-card-operation[data-kind="error"] {
+  color: var(--danger);
 }
 
 .card-btn.secondary {
@@ -1038,6 +1124,18 @@
   50% {
     transform: scale(0.86);
     box-shadow: 0 0 0 7px transparent;
+  }
+}
+
+@keyframes app-store-install-progress {
+  0% {
+    transform: translateX(-110%);
+  }
+  50% {
+    transform: translateX(80%);
+  }
+  100% {
+    transform: translateX(240%);
   }
 }
 

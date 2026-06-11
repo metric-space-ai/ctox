@@ -397,7 +397,8 @@ async function ensureRequiredAccountsExist() {
   for (const acct of currentList) {
     const id = `${state.skrName}_${acct.code}`;
     const parentId = acct.parent_id ? `${state.skrName}_${acct.parent_id}` : '';
-    const existing = await db.accounting_accounts.findOne({ selector: { id } }).exec();
+    const existing = await db.accounting_accounts.findOne(id).exec();
+    const existingData = docToRecord(existing);
     if (!existing) {
       await db.accounting_accounts.insert({
         id,
@@ -412,7 +413,7 @@ async function ensureRequiredAccountsExist() {
         updated_at_ms: now
       });
       console.log(`[fibu] Ensured account exists: ${acct.code} in ${state.skrName}`);
-    } else if (existing.parent_id !== parentId) {
+    } else if (existingData.parent_id !== parentId) {
       await existing.patch({
         parent_id: parentId,
         updated_at_ms: now
@@ -430,8 +431,10 @@ async function autoInitializeAccounts() {
   if (!db) return;
 
   try {
-    const existingCount = await db.accounting_accounts.find({ selector: { skr: state.skrName } }).exec();
-    if (existingCount.length === 0) {
+    const existingAccounts = (await collectionRecords(db.accounting_accounts))
+      .map(normalizeAccountRecord)
+      .filter(accountMatchesCurrentSkr);
+    if (existingAccounts.length === 0) {
       await importTemplateToDb(db, state.skrName);
       console.log(`[fibu] initialized chart of accounts: ${state.skrName}`);
     }
@@ -439,6 +442,49 @@ async function autoInitializeAccounts() {
   } catch (err) {
     console.error('[fibu] failed to auto-initialize accounts', err);
   }
+}
+
+async function collectionRecords(collection) {
+  const docs = await collection?.find?.().exec();
+  return Array.isArray(docs) ? docs.map(docToRecord) : [];
+}
+
+function docToRecord(doc) {
+  return doc?.toJSON?.() || doc || {};
+}
+
+function sortRecordsDesc(records, field) {
+  return [...records].sort((left, right) => {
+    const a = left?.[field] ?? '';
+    const b = right?.[field] ?? '';
+    if (typeof a === 'number' || typeof b === 'number') {
+      return Number(b || 0) - Number(a || 0);
+    }
+    return String(b).localeCompare(String(a));
+  });
+}
+
+function normalizeAccountRecord(account) {
+  const id = String(account?.id || '');
+  const inferredSkr = /skr04/i.test(id) ? 'SKR04' : (/skr03/i.test(id) ? 'SKR03' : '');
+  const classification = String(account?.classification || account?.root_type || account?.account_type || '').toLowerCase();
+  return {
+    ...account,
+    name: account?.name || account?.title || account?.label || account?.code || id,
+    root_type: account?.root_type || classification || 'asset',
+    account_type: account?.account_type || classification || 'regular',
+    parent_id: account?.parent_id || '',
+    is_group: Boolean(account?.is_group || account?.isGroup || account?.group),
+    tax_rate_id: account?.tax_rate_id || '',
+    skr: account?.skr || inferredSkr,
+    updated_at_ms: Number(account?.updated_at_ms || account?.updatedAtMs || account?.lastWriteTime || 0),
+  };
+}
+
+function accountMatchesCurrentSkr(account) {
+  if (account?.skr) return account.skr === state.skrName;
+  const marker = state.skrName.toLowerCase();
+  return String(account?.id || '').toLowerCase().includes(marker);
 }
 
 // =========================================================================
@@ -477,23 +523,29 @@ async function loadAllFibuData() {
 
   try {
     // 1. Fetch from RxDB
-    const acctsDocs = await db.accounting_accounts.find({ selector: { skr: state.skrName } }).exec();
-    state.accounts = acctsDocs.map(d => d.toJSON());
+    state.accounts = (await collectionRecords(db.accounting_accounts))
+      .map(normalizeAccountRecord)
+      .filter(accountMatchesCurrentSkr)
+      .sort((a, b) => String(a.code || '').localeCompare(String(b.code || '')));
 
-    const entriesDocs = await db.accounting_journal_entries.find({ sort: [{ posting_date: 'desc' }] }).exec();
-    state.journalEntries = entriesDocs.map(d => d.toJSON());
+    state.journalEntries = sortRecordsDesc(
+      await collectionRecords(db.accounting_journal_entries),
+      'posting_date'
+    );
 
-    const linesDocs = await db.accounting_journal_entry_lines.find().exec();
-    state.journalEntryLines = linesDocs.map(d => d.toJSON());
+    state.journalEntryLines = await collectionRecords(db.accounting_journal_entry_lines);
 
-    const receiptsDocs = await db.accounting_receipts.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
-    state.receipts = receiptsDocs.map(d => d.toJSON());
+    state.receipts = sortRecordsDesc(
+      await collectionRecords(db.accounting_receipts),
+      'updated_at_ms'
+    );
 
-    const statementsDocs = await db.accounting_bank_statements.find().exec();
-    state.bankStatements = statementsDocs.map(d => d.toJSON());
+    state.bankStatements = await collectionRecords(db.accounting_bank_statements);
 
-    const bankLinesDocs = await db.accounting_bank_statement_lines.find({ sort: [{ value_date: 'desc' }] }).exec();
-    state.bankStatementLines = bankLinesDocs.map(d => d.toJSON());
+    state.bankStatementLines = sortRecordsDesc(
+      await collectionRecords(db.accounting_bank_statement_lines),
+      'value_date'
+    );
 
     // 2. Build local DataFrame for instant ledger indexing
     rebuildLedgerDataFrame();
@@ -835,7 +887,9 @@ async function forceReInitSKR() {
 
   if (confirmed) {
     // Delete existing
-    const existing = await db.accounting_accounts.find({ selector: { skr: state.skrName } }).exec();
+    const allAccountDocs = await db.accounting_accounts.find().exec();
+    const existing = allAccountDocs
+      .filter((doc) => accountMatchesCurrentSkr(normalizeAccountRecord(docToRecord(doc))));
     for (const doc of existing) {
       await doc.remove();
     }
@@ -2157,7 +2211,7 @@ async function triggerAutoReconcile() {
 
       // If we have a robust match proposal (exact amount matched is 50+ score)
       if (bestReceipt && highestScore >= 50) {
-        const doc = await db.accounting_bank_statement_lines.findOne({ selector: { id: line.id } }).exec();
+        const doc = await db.accounting_bank_statement_lines.findOne(line.id).exec();
         if (doc) {
           await doc.patch({ match_status: 'proposed' });
           matchCount++;
@@ -2335,7 +2389,7 @@ window.postReceiptWithAdvancedOptions = async (receiptId) => {
   }
 
   // 3. Mark receipt as posted
-  const rcptDoc = await db.accounting_receipts.findOne({ selector: { id: receiptId } }).exec();
+  const rcptDoc = await db.accounting_receipts.findOne(receiptId).exec();
   if (rcptDoc) {
     await rcptDoc.patch({ status: 'posted' });
   }
@@ -2486,7 +2540,7 @@ window.postBankSplitReconciliation = async (lineId) => {
   }
 
   // 3. Mark bank statement line as matched
-  const bankLineDoc = await db.accounting_bank_statement_lines.findOne({ selector: { id: lineId } }).exec();
+  const bankLineDoc = await db.accounting_bank_statement_lines.findOne(lineId).exec();
   if (bankLineDoc) {
     await bankLineDoc.patch({ match_status: 'matched', reconciled_entry_id: entryId });
   }
@@ -2566,7 +2620,7 @@ window.postReceiptDirectly = async (receiptId) => {
   });
 
   // 3. Mark receipt as posted
-  const rcptDoc = await db.accounting_receipts.findOne({ selector: { id: receiptId } }).exec();
+  const rcptDoc = await db.accounting_receipts.findOne(receiptId).exec();
   if (rcptDoc) {
     await rcptDoc.patch({ status: 'posted' });
   }
@@ -2590,7 +2644,7 @@ window.matchBankLineDirectly = async (lineId, receiptId) => {
   }
 
   // Link bank statement line to the posted transaction
-  const lineDoc = await db.accounting_bank_statement_lines.findOne({ selector: { id: lineId } }).exec();
+  const lineDoc = await db.accounting_bank_statement_lines.findOne(lineId).exec();
   if (lineDoc) {
     await lineDoc.patch({
       match_status: 'matched',
@@ -2645,7 +2699,7 @@ window.triggerStorno = async (entryId) => {
     }
 
     // 3. Mark original entry as reversed
-    const entryDoc = await db.accounting_journal_entries.findOne({ selector: { id: entryId } }).exec();
+    const entryDoc = await db.accounting_journal_entries.findOne(entryId).exec();
     if (entryDoc) {
       await entryDoc.patch({ reversed_by_id: stornoId });
     }
@@ -3451,7 +3505,7 @@ window.postTravelEntryDirectly = async function(entryId) {
   const now = Date.now();
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
-  const doc = await db.accounting_journal_entries.findOne({ selector: { id: entryId } }).exec();
+  const doc = await db.accounting_journal_entries.findOne(entryId).exec();
   if (doc) {
     await doc.patch({
       number: nextNum,
@@ -3754,7 +3808,7 @@ window.postMileageEntryDirectly = async function(entryId) {
   const now = Date.now();
   const nextNum = 'J-2026-' + String(state.journalEntries.filter(e => e.posted_at).length + 1).padStart(4, '0');
 
-  const doc = await db.accounting_journal_entries.findOne({ selector: { id: entryId } }).exec();
+  const doc = await db.accounting_journal_entries.findOne(entryId).exec();
   if (doc) {
     await doc.patch({
       number: nextNum,
