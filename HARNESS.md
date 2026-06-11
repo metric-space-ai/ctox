@@ -125,7 +125,10 @@ There are two context-protection mechanisms in the current code:
 The default context window is 262144 tokens (256k) when no runtime/model value
 overrides it. 256k is the only supported chat-context choice; the retired 128k
 option is gone, and legacy persisted 128k values fall back to the 256k default.
-The installer seeds `max_seq = 262144` for every local model.
+The installer seeds `max_seq` per model from the manifest context caps in
+`contracts/models/` (262144 for `Qwen/Qwen3.5-35B-A3B`, 131072 for the other
+local profiles); the 256k chat-context default is independent of those engine
+caps.
 
 ## Continuity Refresh
 
