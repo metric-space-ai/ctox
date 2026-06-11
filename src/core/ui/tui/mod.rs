@@ -65,11 +65,13 @@ mod jami;
 mod render;
 mod skills_catalog;
 mod text_editor;
+mod worker;
 
 use gpu::*;
 use images::*;
 use jami::*;
 use skills_catalog::*;
+use worker::*;
 
 const DEFAULT_CHAT_SOURCE: &str = "local";
 const DEFAULT_API_PROVIDER: &str = "local";
@@ -755,8 +757,12 @@ struct App {
     last_choice_refresh_at: Option<Instant>,
     last_header_inputs_fingerprint: Option<u64>,
     last_header_refresh_at: Option<Instant>,
-    /// Long-lived read connection to the LCM store. Opened lazily, kept for
-    /// the lifetime of the TUI, dropped and reopened after a failed read.
+    /// Background data plane. `Some` in the interactive TUI; `None` in
+    /// tests and the headless smoke renderers, which then run the same
+    /// collectors inline through `refresh`.
+    worker: Option<TuiWorker>,
+    /// Long-lived read connection to the LCM store, used only on the
+    /// inline (worker-less) path; the poll thread owns its own.
     lcm_engine: Option<lcm::LcmEngine>,
     /// Marker of the last materialized chat window; the message reload is
     /// skipped while the stored marker matches.
@@ -837,7 +843,8 @@ pub fn run_tui(root: &Path) -> Result<()> {
     // per-tick status poll deliberately skips this write path.
     let _ = runtime_control::reconcile_runtime_switch_transaction(root);
     let db_path = crate::persistence::sqlite_path(root);
-    let mut app = App::new(root.to_path_buf(), db_path);
+    let mut app = App::new(root.to_path_buf(), db_path.clone());
+    app.worker = Some(TuiWorker::spawn(root.to_path_buf(), db_path));
     let mut stdout = io::stdout();
     let _guard = TerminalGuard::enter(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
@@ -1115,6 +1122,7 @@ impl App {
             last_choice_refresh_at: None,
             last_header_inputs_fingerprint: None,
             last_header_refresh_at: None,
+            worker: None,
             lcm_engine: None,
             chat_refresh_marker: None,
             harness_flow_text: String::new(),
@@ -1565,10 +1573,20 @@ impl App {
     }
 
     fn toggle_service(&mut self) -> Result<()> {
-        self.status_line = if self.service_status.running {
-            service::stop_background(&self.root)?
-        } else {
+        let start = !self.service_status.running;
+        if let Some(worker) = self.worker.as_ref() {
+            worker.submit_action(ActionJob::ToggleService { start });
+            self.status_line = if start {
+                "Starting the CTOX loop…".to_string()
+            } else {
+                "Stopping the CTOX loop…".to_string()
+            };
+            return Ok(());
+        }
+        self.status_line = if start {
             service::start_background(&self.root)?
+        } else {
+            service::stop_background(&self.root)?
         };
         self.push_local_activity(self.status_line.clone());
         self.last_service_refresh_at = None;
@@ -1613,12 +1631,11 @@ impl App {
         } else {
             prompt.push_str(&raw);
         }
-        let prepared_prompt = service::prepare_chat_prompt(&self.root, &prompt)?;
-        prompt = prepared_prompt.prompt;
-
         let attachment_count = self.pending_images.len();
 
         if self.request_in_flight {
+            // Drafts hold the raw composed prompt; preparation happens at
+            // submit time so a re-submitted draft is not prepared twice.
             self.draft_queue.push_back(prompt.clone());
             self.chat_input.clear();
             self.pending_images.clear();
@@ -1634,7 +1651,22 @@ impl App {
         }
         self.chat_input.clear();
         self.pending_images.clear();
-        service::submit_chat_prompt(&self.root, &prompt)?;
+        if let Some(worker) = self.worker.as_ref() {
+            worker.submit_action(ActionJob::SubmitPrompt {
+                prompt: prompt.clone(),
+                attachment_count,
+            });
+            self.status_line = "Submitting request to the CTOX loop…".to_string();
+            self.push_local_activity(format!(
+                "Submitting prompt: {}",
+                summarize_inline(&prompt, 72)
+            ));
+            // Optimistic: reverted by the PromptSubmitted error payload.
+            self.request_in_flight = true;
+            return Ok(());
+        }
+        let prepared_prompt = service::prepare_chat_prompt(&self.root, &prompt)?;
+        service::submit_chat_prompt(&self.root, &prepared_prompt.prompt)?;
         self.status_line = if attachment_count > 0 {
             format!("CTOX loop accepted the request (with {attachment_count} image attachment(s)).")
         } else {
@@ -1682,7 +1714,93 @@ impl App {
                 }
             }
         }
+        loop {
+            let payload = match self.worker.as_mut().and_then(TuiWorker::try_recv) {
+                Some(payload) => payload,
+                None => break,
+            };
+            self.apply_worker_payload(payload);
+        }
         Ok(())
+    }
+
+    fn apply_worker_payload(&mut self, payload: WorkerPayload) {
+        match payload {
+            WorkerPayload::ServiceStatus {
+                status,
+                lifecycle_included,
+            } => self.apply_service_status(status, lifecycle_included),
+            WorkerPayload::ChatMessages {
+                messages,
+                mission_state,
+                error,
+            } => {
+                if let Some(err) = error {
+                    self.status_line = format!("LCM refresh error: {}", summarize_inline(&err, 96));
+                } else {
+                    self.apply_chat_window(messages, mission_state);
+                }
+            }
+            WorkerPayload::CommunicationFeed(feed) => {
+                self.communication_feed = feed;
+            }
+            WorkerPayload::SkillCatalog(catalog) => self.apply_skill_catalog(catalog),
+            WorkerPayload::HarnessFlow(text) => {
+                self.harness_flow_text = text;
+            }
+            WorkerPayload::GpuCards(cards) => {
+                if let Some(cards) = cards {
+                    self.gpu_cards = cards;
+                }
+            }
+            WorkerPayload::RuntimeTelemetry(telemetry) => {
+                self.runtime_telemetry = telemetry;
+            }
+            WorkerPayload::JamiResolve {
+                refresh_key,
+                configured_id,
+                configured_name,
+                resolved,
+            } => self.apply_jami_resolution(refresh_key, configured_id, configured_name, resolved),
+            WorkerPayload::UpdateAction { action, result } => {
+                self.apply_update_action_result(action, result);
+            }
+            WorkerPayload::PromptSubmitted {
+                prompt,
+                attachment_count,
+                result,
+            } => match result {
+                Ok(()) => {
+                    self.status_line = if attachment_count > 0 {
+                        format!(
+                            "CTOX loop accepted the request (with {attachment_count} image attachment(s))."
+                        )
+                    } else {
+                        "CTOX loop accepted the request.".to_string()
+                    };
+                    self.push_local_activity(format!(
+                        "Submitted prompt: {}",
+                        summarize_inline(&prompt, 72)
+                    ));
+                }
+                Err(err) => {
+                    self.request_in_flight = false;
+                    self.draft_queue.push_back(prompt);
+                    self.status_line = format!(
+                        "Submit failed (prompt kept as draft): {}",
+                        summarize_inline(&err, 96)
+                    );
+                }
+            },
+            WorkerPayload::ServiceToggled { result } => {
+                self.status_line = match result {
+                    Ok(message) => message,
+                    Err(err) => format!("Service toggle failed: {err}"),
+                };
+                self.push_local_activity(self.status_line.clone());
+                self.last_service_refresh_at = None;
+            }
+        }
     }
 
     fn invalidate_runtime_observations(&mut self) {
@@ -1697,7 +1815,6 @@ impl App {
     }
 
     fn refresh_service_status(&mut self) {
-        let previous = self.service_status.clone();
         // UI-cadence probe: the reconcile write path ran once at TUI start
         // (and after runtime switches); systemd state and lifecycle alerts
         // do not change between sub-second ticks; a healthy local daemon
@@ -1713,34 +1830,50 @@ impl App {
             status_ipc_timeout: Some(TUI_STATUS_IPC_TIMEOUT),
             lifecycle_alerts: lifecycle_due,
         };
-        self.service_status = service::service_status_snapshot_with(&self.root, &probe)
-            .unwrap_or_else(|_| service::ServiceStatus {
-                running: false,
-                busy: false,
-                pid: None,
-                listen_addr: "127.0.0.1:12435".to_string(),
-                autostart_enabled: false,
-                manager: "process".to_string(),
-                pending_count: 0,
-                pending_previews: Vec::new(),
-                blocked_count: 0,
-                blocked_previews: Vec::new(),
-                current_goal_preview: None,
-                active_source_label: None,
-                recent_events: Vec::new(),
-                last_error: None,
-                last_completed_at: None,
-                last_reply_chars: None,
-                monitor_last_check_at: None,
-                monitor_alerts: Vec::new(),
-                monitor_last_error: None,
-                last_agent_outcome: None,
-                worker_active_count: 0,
-                worker_phase: None,
-                business_os: None,
-                work_hours: service::working_hours::snapshot(&self.root),
-            });
-        if !lifecycle_due {
+        if self.worker.is_some() {
+            let job = PollJob::ServiceStatus { probe };
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(job);
+            }
+            return;
+        }
+        let status = service::service_status_snapshot_with(&self.root, &probe).ok();
+        self.apply_service_status(status, lifecycle_due);
+    }
+
+    fn apply_service_status(
+        &mut self,
+        status: Option<service::ServiceStatus>,
+        lifecycle_included: bool,
+    ) {
+        let previous = self.service_status.clone();
+        self.service_status = status.unwrap_or_else(|| service::ServiceStatus {
+            running: false,
+            busy: false,
+            pid: None,
+            listen_addr: "127.0.0.1:12435".to_string(),
+            autostart_enabled: false,
+            manager: "process".to_string(),
+            pending_count: 0,
+            pending_previews: Vec::new(),
+            blocked_count: 0,
+            blocked_previews: Vec::new(),
+            current_goal_preview: None,
+            active_source_label: None,
+            recent_events: Vec::new(),
+            last_error: None,
+            last_completed_at: None,
+            last_reply_chars: None,
+            monitor_last_check_at: None,
+            monitor_alerts: Vec::new(),
+            monitor_last_error: None,
+            last_agent_outcome: None,
+            worker_active_count: 0,
+            worker_phase: None,
+            business_os: None,
+            work_hours: service::working_hours::snapshot(&self.root),
+        });
+        if !lifecycle_included {
             // Alerts were not recomputed this tick; keep the last observed
             // set instead of flickering to empty.
             self.service_status.monitor_alerts = previous.monitor_alerts.clone();
@@ -2256,38 +2389,16 @@ impl App {
                         PendingUpdateAction::Upgrade => {
                             self.update_view.last_action_line =
                                 "running `ctox upgrade` — service will restart…".to_string();
-                            match self.run_update_subprocess(&["upgrade"]) {
-                                Ok(output) => {
-                                    self.update_view.check_json = output;
-                                    self.refresh_update_view_info();
-                                    self.update_view.last_action_line = format!(
-                                        "upgrade completed at {}",
-                                        chrono::Local::now().format("%H:%M:%S")
-                                    );
-                                }
-                                Err(err) => {
-                                    self.update_view.last_action_line =
-                                        format!("upgrade failed: {err}");
-                                }
-                            }
+                            self.run_update_action(UpdateActionKind::Upgrade, &["upgrade"]);
                         }
                         PendingUpdateAction::EngineRebuild => {
                             self.update_view.last_action_line =
                                 "running `ctox engine rebuild` — this can take several minutes…"
                                     .to_string();
-                            match self.run_update_subprocess(&["engine", "rebuild"]) {
-                                Ok(output) => {
-                                    self.update_view.check_json = output;
-                                    self.update_view.last_action_line = format!(
-                                        "engine rebuild completed at {}",
-                                        chrono::Local::now().format("%H:%M:%S")
-                                    );
-                                }
-                                Err(err) => {
-                                    self.update_view.last_action_line =
-                                        format!("engine rebuild failed: {err}");
-                                }
-                            }
+                            self.run_update_action(
+                                UpdateActionKind::EngineRebuild,
+                                &["engine", "rebuild"],
+                            );
                         }
                     }
                 }
@@ -2302,18 +2413,7 @@ impl App {
         match key_event.code {
             KeyCode::Char('c') | KeyCode::Char('C') => {
                 self.update_view.last_action_line = "Running `ctox update check`…".to_string();
-                match self.run_update_subprocess(&["update", "check"]) {
-                    Ok(output) => {
-                        self.update_view.check_json = output;
-                        self.update_view.last_action_line = format!(
-                            "check completed at {}",
-                            chrono::Local::now().format("%H:%M:%S")
-                        );
-                    }
-                    Err(err) => {
-                        self.update_view.last_action_line = format!("check failed: {err}");
-                    }
-                }
+                self.run_update_action(UpdateActionKind::Check, &["update", "check"]);
             }
             KeyCode::Char('u') | KeyCode::Char('U') => {
                 self.update_view.pending = Some(PendingUpdateAction::Upgrade);
@@ -2328,15 +2428,8 @@ impl App {
                         .to_string();
             }
             KeyCode::Char('d') | KeyCode::Char('D') => {
-                match self.run_update_subprocess(&["doctor"]) {
-                    Ok(output) => {
-                        self.update_view.check_json = output;
-                        self.update_view.last_action_line = "doctor report ready".to_string();
-                    }
-                    Err(err) => {
-                        self.update_view.last_action_line = format!("doctor failed: {err}");
-                    }
-                }
+                self.update_view.last_action_line = "Running `ctox doctor`…".to_string();
+                self.run_update_action(UpdateActionKind::Doctor, &["doctor"]);
             }
             KeyCode::Char('r') | KeyCode::Char('R') => {
                 self.refresh_update_view_info();
@@ -2347,19 +2440,43 @@ impl App {
         Ok(())
     }
 
-    fn run_update_subprocess(&self, args: &[&str]) -> Result<String> {
-        let exe = std::env::current_exe().context("failed to resolve current ctox executable")?;
-        let output = std::process::Command::new(exe)
-            .args(args)
-            .env("CTOX_ROOT", &self.root)
-            .output()
-            .context("failed to spawn ctox subprocess")?;
-        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        if output.status.success() {
-            Ok(stdout)
-        } else {
-            anyhow::bail!("{}{}", stdout, stderr.trim())
+    /// Run an update-view subprocess on the action thread (interactive TUI)
+    /// or inline (tests). The update view shows the queued "running…" line
+    /// until the result payload lands.
+    fn run_update_action(&mut self, action: UpdateActionKind, args: &[&str]) {
+        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+        if let Some(worker) = self.worker.as_ref() {
+            worker.submit_action(ActionJob::UpdateSubprocess { args, action });
+            return;
+        }
+        let result = run_update_subprocess(&self.root, &args).map_err(|err| err.to_string());
+        self.apply_update_action_result(action, result);
+    }
+
+    fn apply_update_action_result(
+        &mut self,
+        action: UpdateActionKind,
+        result: Result<String, String>,
+    ) {
+        match result {
+            Ok(output) => {
+                self.update_view.check_json = output;
+                if action == UpdateActionKind::Upgrade {
+                    self.refresh_update_view_info();
+                }
+                self.update_view.last_action_line = match action {
+                    UpdateActionKind::Doctor => "doctor report ready".to_string(),
+                    other => format!(
+                        "{} completed at {}",
+                        other.completion_label(),
+                        chrono::Local::now().format("%H:%M:%S")
+                    ),
+                };
+            }
+            Err(err) => {
+                self.update_view.last_action_line =
+                    format!("{} failed: {err}", action.completion_label());
+            }
         }
     }
 
@@ -2528,9 +2645,12 @@ impl App {
                 self.settings_selected = first;
             }
         }
-        if self.page == Page::Settings {
-            self.refresh_service_status_if_due();
-        }
+        // Poll the service status on every page. 59ecf98c restricted this
+        // to the settings page as a workaround for the then-blocking probe;
+        // that left the chat sidebar (busy state, queue, recent events) and
+        // request_in_flight frozen while chatting. The probe is now either
+        // off-thread (worker) or budgeted at 250ms (inline).
+        self.refresh_service_status_if_due();
         let chat_refresh_interval = self.chat_refresh_interval();
         if self.should_refresh_chat_messages()
             && refresh_due(&mut self.last_chat_refresh_at, chat_refresh_interval)
@@ -2613,11 +2733,27 @@ impl App {
         if !refresh_due(&mut self.last_runtime_refresh_at, proxy_refresh_interval) {
             return;
         }
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::RuntimeTelemetry);
+            }
+            return;
+        }
         self.runtime_telemetry = load_runtime_telemetry(&self.root).ok().flatten();
     }
 
     fn refresh_skill_catalog(&mut self) {
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::SkillCatalog);
+            }
+            return;
+        }
         let refreshed = load_skill_catalog(&self.root);
+        self.apply_skill_catalog(refreshed);
+    }
+
+    fn apply_skill_catalog(&mut self, refreshed: Vec<SkillCatalogEntry>) {
         if refreshed.len() != self.skill_catalog.len()
             || refreshed
                 .iter()
@@ -2650,13 +2786,13 @@ impl App {
     }
 
     fn refresh_harness_flow(&mut self) {
-        self.harness_flow_text = match service::harness_flow::render_latest_ascii(&self.root, 132) {
-            Ok(text) => text,
-            Err(err) => format!(
-                "Harness flow unavailable.\n\n{}",
-                summarize_inline(&err.to_string(), 140)
-            ),
-        };
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::HarnessFlow);
+            }
+            return;
+        }
+        self.harness_flow_text = collect_harness_flow_text(&self.root);
     }
 
     fn move_skills_selection(&mut self, delta: isize) {
@@ -2707,6 +2843,12 @@ impl App {
         if !refresh_due(&mut self.last_gpu_refresh_at, gpu_refresh_interval) {
             return;
         }
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::GpuCards);
+            }
+            return;
+        }
         if let Ok(cards) = sample_gpu_cards() {
             self.gpu_cards = cards;
         }
@@ -2730,6 +2872,12 @@ impl App {
     }
 
     fn refresh_chat_messages(&mut self) -> Result<()> {
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::ChatMessages);
+            }
+            return Ok(());
+        }
         let previous_marker = self.chat_refresh_marker;
         let loaded = self.lcm_engine().and_then(|engine| {
             let marker = engine.conversation_refresh_marker(turn_loop::CHAT_CONVERSATION_ID, 80)?;
@@ -2746,13 +2894,10 @@ impl App {
         });
         match loaded {
             Ok((marker, messages, mission_state)) => {
-                if let Some(messages) = messages {
-                    self.prompt_context_breakdown = None;
-                    self.context_health = None;
-                    self.chat_messages = messages;
+                if messages.is_some() {
                     self.chat_refresh_marker = Some(marker);
                 }
-                self.mission_state = mission_state;
+                self.apply_chat_window(messages, mission_state);
                 Ok(())
             }
             Err(err) => {
@@ -2764,7 +2909,26 @@ impl App {
         }
     }
 
+    fn apply_chat_window(
+        &mut self,
+        messages: Option<Vec<lcm::MessageRecord>>,
+        mission_state: Option<lcm::MissionStateRecord>,
+    ) {
+        if let Some(messages) = messages {
+            self.prompt_context_breakdown = None;
+            self.context_health = None;
+            self.chat_messages = messages;
+        }
+        self.mission_state = mission_state;
+    }
+
     fn refresh_communication_feed(&mut self) {
+        if self.worker.is_some() {
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(PollJob::CommunicationFeed);
+            }
+            return;
+        }
         self.communication_feed =
             channels::load_recent_communication_feed(&self.root, 10).unwrap_or_default();
     }
@@ -3665,8 +3829,56 @@ impl App {
         if !should_probe && !self.jami_qr_lines.is_empty() {
             return;
         }
+        if self.worker.is_some() {
+            let job = PollJob::JamiResolve {
+                refresh_key,
+                configured_id: configured_jami_id,
+                configured_name: configured_profile_name,
+            };
+            if let Some(worker) = self.worker.as_mut() {
+                worker.schedule(job);
+            }
+            return;
+        }
         let resolved =
             resolve_jami_runtime_account(&self.root, &configured_jami_id, &configured_profile_name);
+        self.apply_jami_resolution(
+            refresh_key,
+            configured_jami_id,
+            configured_profile_name,
+            resolved,
+        );
+    }
+
+    /// Render the QR/diagnostic lines for a resolved Jami account. Stale
+    /// resolutions (the focused field or configured values changed while
+    /// the probe ran) are dropped.
+    fn apply_jami_resolution(
+        &mut self,
+        refresh_key: String,
+        configured_jami_id: String,
+        configured_profile_name: String,
+        resolved: JamiResolveOutcome,
+    ) {
+        if !self.jami_details_active() {
+            return;
+        }
+        let channel = self
+            .value_for_setting("CTOX_OWNER_PREFERRED_CHANNEL")
+            .unwrap_or("tui");
+        let current_id = self
+            .value_for_setting("CTO_JAMI_ACCOUNT_ID")
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let current_name = self
+            .value_for_setting("CTO_JAMI_PROFILE_NAME")
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if refresh_key != format!("{channel}:{current_id}:{current_name}") {
+            return;
+        }
         let qr_payload = resolved
             .account
             .as_ref()
