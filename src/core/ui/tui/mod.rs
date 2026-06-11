@@ -827,6 +827,21 @@ struct App {
     /// Transcript scrollback offset in lines from the bottom; 0 follows the
     /// newest messages. Render clamps it against the actual line count.
     chat_scroll: usize,
+    /// Maximum scroll offset observed at the last render; lets the key
+    /// handlers pin the offset at the top of the window instead of letting
+    /// it accumulate past the content.
+    chat_scroll_max: std::cell::Cell<usize>,
+    /// Set when an async prompt submit is enqueued; only a busy=true status
+    /// observation or a failed submit clears it. ORed into
+    /// request_in_flight so a stale status snapshot cannot unlock the
+    /// composer mid-submit.
+    submit_pending: bool,
+    /// One service start/stop at a time; cleared by the ServiceToggled
+    /// payload.
+    service_toggle_pending: bool,
+    /// One update-view subprocess at a time; cleared by the UpdateAction
+    /// payload.
+    update_action_in_flight: Option<UpdateActionKind>,
     harness_flow_text: String,
     /// First-run wizard overlay; `Some` while the guided checklist is on
     /// screen. Only `run_tui` arms it (never tests/smoke), and only while
@@ -837,7 +852,6 @@ struct App {
     /// Structured harness flow for native rendering; `harness_flow_text`
     /// holds the error fallback when loading fails.
     harness_flow: Option<service::harness_flow::HarnessFlow>,
-    business_os_reveal_secrets: bool,
     harness_flow_scroll: u16,
     last_harness_flow_refresh_at: Option<Instant>,
     /// Images the user has attached to the next chat submission. Populated
@@ -1156,6 +1170,7 @@ impl App {
             worker_phase: None,
             business_os: None,
             work_hours: service::working_hours::WorkHoursSnapshot::default(),
+            degraded_probe: false,
         };
         let model_perf_stats = load_model_perf_stats(&root);
         let skill_catalog = Vec::new();
@@ -1216,11 +1231,14 @@ impl App {
             lcm_engine: None,
             chat_refresh_marker: None,
             chat_scroll: 0,
+            chat_scroll_max: std::cell::Cell::new(0),
+            submit_pending: false,
+            service_toggle_pending: false,
+            update_action_in_flight: None,
             harness_flow_text: String::new(),
             setup_wizard: None,
             work_view: WorkView::Flow,
             harness_flow: None,
-            business_os_reveal_secrets: false,
             harness_flow_scroll: 0,
             last_harness_flow_refresh_at: None,
             pending_images: Vec::new(),
@@ -1502,9 +1520,9 @@ impl App {
     }
 
     fn scroll_chat(&mut self, lines: usize) {
-        // Upper bound is enforced at render time against the actual line
-        // count; clamp loosely here so the offset cannot run away.
-        self.chat_scroll = (self.chat_scroll + lines).min(4096);
+        // Pin at the top of the window: the render pass records the actual
+        // maximum offset, so PageDown reacts immediately after over-scroll.
+        self.chat_scroll = (self.chat_scroll + lines).min(self.chat_scroll_max.get());
     }
 
     fn scroll_chat_back(&mut self, lines: usize) {
@@ -1735,7 +1753,13 @@ impl App {
     fn toggle_service(&mut self) -> Result<()> {
         let start = !self.service_status.running;
         if let Some(worker) = self.worker.as_ref() {
+            if self.service_toggle_pending {
+                self.status_line =
+                    "A service start/stop is already running — wait for it to finish.".to_string();
+                return Ok(());
+            }
             worker.submit_action(ActionJob::ToggleService { start });
+            self.service_toggle_pending = true;
             self.status_line = if start {
                 "Starting the CTOX loop…".to_string()
             } else {
@@ -1802,6 +1826,8 @@ impl App {
         });
 
         if source_is_api {
+            // Minimax has no settings row yet; route to the provider row
+            // and point at the secret store instead of a hidden target.
             let (credential_key, hint): (&'static str, &str) =
                 if provider.eq_ignore_ascii_case("azure_foundry") {
                     (
@@ -1812,6 +1838,11 @@ impl App {
                     ("ANTHROPIC_API_KEY", "API key")
                 } else if provider.eq_ignore_ascii_case("openrouter") {
                     ("OPENROUTER_API_KEY", "API key")
+                } else if provider.eq_ignore_ascii_case("minimax") {
+                    (
+                        "CTOX_API_PROVIDER",
+                        "key via `ctox secret put --scope credentials --name MINIMAX_API_KEY`",
+                    )
                 } else {
                     ("OPENAI_API_KEY", "API key or chatgpt_subscription auth")
                 };
@@ -1923,7 +1954,16 @@ impl App {
                             if let Some(index) =
                                 self.settings_items.iter().position(|item| item.key == key)
                             {
-                                self.settings_selected = index;
+                                // Never land on a row the visibility rules
+                                // hide for the current values — fall back
+                                // to the first visible row instead.
+                                if self.visible_setting_indices().contains(&index) {
+                                    self.settings_selected = index;
+                                } else if let Some(first) =
+                                    self.visible_setting_indices().first().copied()
+                                {
+                                    self.settings_selected = first;
+                                }
                             }
                             self.status_line = format!(
                                 "Configure {} — Ctrl-S saves; the wizard returns on next start until setup is complete.",
@@ -2019,7 +2059,9 @@ impl App {
                 "Submitting prompt: {}",
                 summarize_inline(&prompt, 72)
             ));
-            // Optimistic: reverted by the PromptSubmitted error payload.
+            // Latched until the daemon is observed busy or the submit
+            // fails; apply_service_status ORs it into request_in_flight.
+            self.submit_pending = true;
             self.request_in_flight = true;
             return Ok(());
         }
@@ -2130,6 +2172,9 @@ impl App {
                 result,
             } => match result {
                 Ok(()) => {
+                    // The daemon accepted the prompt; keep the latch until
+                    // a status poll observes it busy.
+                    self.request_in_flight = true;
                     self.status_line = if attachment_count > 0 {
                         format!(
                             "CTOX loop accepted the request (with {attachment_count} image attachment(s))."
@@ -2143,6 +2188,7 @@ impl App {
                     ));
                 }
                 Err(err) => {
+                    self.submit_pending = false;
                     self.request_in_flight = false;
                     self.draft_queue.push_back(prompt);
                     self.status_line = format!(
@@ -2151,7 +2197,14 @@ impl App {
                     );
                 }
             },
+            WorkerPayload::PollFailed { kind, error } => {
+                self.status_line = format!(
+                    "Background refresh failed ({kind:?}): {}",
+                    summarize_inline(&error, 96)
+                );
+            }
             WorkerPayload::ServiceToggled { result } => {
+                self.service_toggle_pending = false;
                 self.status_line = match result {
                     Ok(message) => message,
                     Err(err) => format!("Service toggle failed: {err}"),
@@ -2206,7 +2259,7 @@ impl App {
         lifecycle_included: bool,
     ) {
         let previous = self.service_status.clone();
-        self.service_status = status.unwrap_or_else(|| service::ServiceStatus {
+        let mut next = status.unwrap_or_else(|| service::ServiceStatus {
             running: false,
             busy: false,
             pid: None,
@@ -2231,13 +2284,46 @@ impl App {
             worker_phase: None,
             business_os: None,
             work_hours: service::working_hours::snapshot(&self.root),
+            degraded_probe: false,
         });
+        if next.degraded_probe {
+            // The daemon is alive but missed the IPC budget; the fallback's
+            // empty dynamic fields are not fresh truth. Carrying the last
+            // observed state forward keeps the completion edge (busy →
+            // !busy) from misfiring mid-turn — which would print a false
+            // 'completed reply' and move a queued draft into the composer.
+            next.busy = previous.busy;
+            next.pending_count = previous.pending_count;
+            next.pending_previews = previous.pending_previews.clone();
+            next.blocked_count = previous.blocked_count;
+            next.blocked_previews = previous.blocked_previews.clone();
+            next.current_goal_preview = previous.current_goal_preview.clone();
+            next.active_source_label = previous.active_source_label.clone();
+            next.recent_events = previous.recent_events.clone();
+            next.last_error = previous.last_error.clone();
+            next.last_completed_at = previous.last_completed_at.clone();
+            next.last_reply_chars = previous.last_reply_chars;
+            next.last_agent_outcome = previous.last_agent_outcome.clone();
+            next.worker_active_count = previous.worker_active_count;
+            next.worker_phase = previous.worker_phase.clone();
+            next.business_os = previous.business_os.clone();
+        }
+        self.service_status = next;
         if !lifecycle_included {
             // Alerts were not recomputed this tick; keep the last observed
             // set instead of flickering to empty.
             self.service_status.monitor_alerts = previous.monitor_alerts.clone();
         }
-        self.request_in_flight = self.service_status.running && self.service_status.busy;
+        if self.service_status.busy {
+            // The daemon has been observed working on the submitted prompt;
+            // the optimistic latch has served its purpose.
+            self.submit_pending = false;
+        }
+        // A status snapshot taken before the daemon accepted an in-flight
+        // async submit must not unlock the composer: OR the submit latch in
+        // instead of letting the snapshot overwrite it.
+        self.request_in_flight =
+            (self.service_status.running && self.service_status.busy) || self.submit_pending;
         if previous.busy && !self.service_status.busy {
             self.status_line = match self.service_status.last_error.as_deref() {
                 Some(err) => format!("CTOX loop failed: {err}"),
@@ -2799,7 +2885,15 @@ impl App {
     fn run_update_action(&mut self, action: UpdateActionKind, args: &[&str]) {
         let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
         if let Some(worker) = self.worker.as_ref() {
+            if let Some(running) = self.update_action_in_flight {
+                self.update_view.last_action_line = format!(
+                    "{} still running — wait for it to finish",
+                    running.completion_label()
+                );
+                return;
+            }
             worker.submit_action(ActionJob::UpdateSubprocess { args, action });
+            self.update_action_in_flight = Some(action);
             return;
         }
         let result = run_update_subprocess(&self.root, &args).map_err(|err| err.to_string());
@@ -2811,6 +2905,7 @@ impl App {
         action: UpdateActionKind,
         result: Result<String, String>,
     ) {
+        self.update_action_in_flight = None;
         match result {
             Ok(output) => {
                 self.update_view.check_json = output;
@@ -3178,11 +3273,6 @@ impl App {
                 self.last_harness_flow_refresh_at = None;
                 self.refresh_harness_flow();
             }
-            KeyCode::Char('p') | KeyCode::Char('P') => {
-                if self.work_view == WorkView::BusinessOs {
-                    self.business_os_reveal_secrets = !self.business_os_reveal_secrets;
-                }
-            }
             KeyCode::Char('[') => self.switch_work_view(previous_work_view(self.work_view)),
             KeyCode::Char(']') => self.switch_work_view(next_work_view(self.work_view)),
             KeyCode::Left if key_event.modifiers.contains(KeyModifiers::ALT) => {
@@ -3201,9 +3291,6 @@ impl App {
         if view == WorkView::Flow {
             self.harness_flow_scroll = 0;
             self.last_harness_flow_refresh_at = None;
-        }
-        if view != WorkView::BusinessOs {
-            self.business_os_reveal_secrets = false;
         }
     }
 
@@ -7322,6 +7409,15 @@ mod tests {
         }
         app.refresh_dynamic_setting_choices();
         app.save_settings().unwrap();
+        // save_settings spawns the runtime switch on a background thread;
+        // drain it before asserting or the test races the projection
+        // (observed as an order-dependent failure in full parallel runs).
+        if let Some(rx) = app.runtime_switch_rx.take() {
+            let result = rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("runtime switch result");
+            assert!(result.is_ok(), "runtime switch failed: {result:?}");
+        }
 
         let state = runtime_state::load_or_resolve_runtime_state(&root)
             .unwrap()

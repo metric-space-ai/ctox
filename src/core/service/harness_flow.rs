@@ -1420,16 +1420,24 @@ fn load_flow_events(
     }
 
     let limit = limit.min(500) as i64;
+    // Select the NEWEST window (a long chain would otherwise pin the
+    // ledger to its oldest events forever), then restore oldest-first
+    // ordering for the renderers.
     let mut stmt = conn.prepare(
         "SELECT event_id, chain_key, event_kind, title, body_text,
                 message_key, work_id, ticket_key, attempt_index, metadata_json, created_at
-         FROM ctox_harness_flow_events
-         WHERE (?1 IS NOT NULL AND message_key = ?1)
-            OR (?2 IS NOT NULL AND work_id = ?2)
-            OR (?3 IS NOT NULL AND ticket_key = ?3)
-            OR (?1 IS NULL AND ?2 IS NULL AND ?3 IS NULL)
-         ORDER BY created_at ASC
-         LIMIT ?4",
+         FROM (
+             SELECT event_id, chain_key, event_kind, title, body_text,
+                    message_key, work_id, ticket_key, attempt_index, metadata_json, created_at
+             FROM ctox_harness_flow_events
+             WHERE (?1 IS NOT NULL AND message_key = ?1)
+                OR (?2 IS NOT NULL AND work_id = ?2)
+                OR (?3 IS NOT NULL AND ticket_key = ?3)
+                OR (?1 IS NULL AND ?2 IS NULL AND ?3 IS NULL)
+             ORDER BY created_at DESC
+             LIMIT ?4
+         )
+         ORDER BY created_at ASC",
     )?;
     let rows = stmt.query_map(params![message_key, work_id, ticket_key, limit], |row| {
         Ok(HarnessFlowEvent {

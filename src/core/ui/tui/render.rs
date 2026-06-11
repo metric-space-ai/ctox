@@ -1403,39 +1403,13 @@ fn business_os_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
         json_str(&sync, "sync_mode").unwrap_or("—").to_string(),
         Color::White,
     );
-    push_kv(
-        &mut lines,
-        "instance",
-        json_str(&sync, "instance_id").unwrap_or("—").to_string(),
-        Color::White,
-    );
-    push_kv(
-        &mut lines,
-        "peer",
-        format!(
-            "{} ({})",
-            json_str(&sync, "peer_id").unwrap_or("—"),
-            json_str(&sync, "peer_role").unwrap_or("—")
-        ),
-        Color::White,
-    );
+    // The health snapshot intentionally omits identifiers and the room
+    // password; the footnote points at `ctox business-os peer status` for
+    // the full pairing values.
     push_kv(
         &mut lines,
         "room",
         json_str(&sync, "sync_room").unwrap_or("—").to_string(),
-        Color::White,
-    );
-    let password = json_str(&sync, "signaling_room_password").unwrap_or("");
-    push_kv(
-        &mut lines,
-        "password",
-        if password.is_empty() {
-            "—".to_string()
-        } else if app.business_os_reveal_secrets {
-            password.to_string()
-        } else {
-            format!("{} ([p] reveals)", mask_secret(password))
-        },
         Color::White,
     );
     if let Some(urls) = sync
@@ -1504,14 +1478,46 @@ fn business_os_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::BOLD),
         )));
         for (key, entry) in data_plane.iter().take(10) {
-            let rendered = match entry {
-                serde_json::Value::String(text) => text.clone(),
-                other => other.to_string(),
-            };
-            lines.push(Line::from(Span::styled(
-                truncate_line(&format!("  {key} {rendered}"), width),
-                Style::default().fg(Color::Gray),
-            )));
+            match entry {
+                // `collections` is a nested per-collection object; render
+                // one line each instead of dumping serialized JSON.
+                serde_json::Value::Object(map) if key == "collections" => {
+                    lines.push(Line::from(Span::styled(
+                        format!("  collections ({})", map.len()),
+                        Style::default().fg(Color::Gray),
+                    )));
+                    for (name, info) in map.iter().take(12) {
+                        let ok = info
+                            .get("ok")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        let rows = info
+                            .get("row_count")
+                            .and_then(serde_json::Value::as_i64)
+                            .map(|count| format!("{count} rows"))
+                            .unwrap_or_default();
+                        lines.push(Line::from(Span::styled(
+                            truncate_line(
+                                &format!("    {} {name} {rows}", if ok { "✓" } else { "✗" }),
+                                width,
+                            ),
+                            Style::default().fg(if ok { Color::Gray } else { Color::LightRed }),
+                        )));
+                    }
+                }
+                serde_json::Value::String(text) => {
+                    lines.push(Line::from(Span::styled(
+                        truncate_line(&format!("  {key} {text}"), width),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+                other => {
+                    lines.push(Line::from(Span::styled(
+                        truncate_line(&format!("  {key} {other}"), width),
+                        Style::default().fg(Color::Gray),
+                    )));
+                }
+            }
         }
     }
     lines.push(Line::from(String::new()));
@@ -2245,8 +2251,9 @@ fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'
             width,
         ));
     }
+    let max_scroll = lines.len().saturating_sub(height);
+    app.chat_scroll_max.set(max_scroll);
     if lines.len() > height {
-        let max_scroll = lines.len().saturating_sub(height);
         let scroll = app.chat_scroll.min(max_scroll);
         let end = lines.len() - scroll;
         lines = lines[end - height..end].to_vec();
@@ -5477,20 +5484,25 @@ mod tests {
         let mut app = test_app();
         app.page = Page::Work;
         app.work_view = WorkView::BusinessOs;
+        // Shape mirrors business_os::store::status(): the health snapshot
+        // omits instance/peer ids and the room password by design, and
+        // data_plane.collections is a nested per-collection object.
         app.service_status.business_os = Some(serde_json::json!({
             "ok": true,
             "sync": {
                 "sync_mode": "rxdb-webrtc",
-                "instance_id": "cto1.example.com",
-                "peer_id": "peer-abc",
-                "peer_role": "native",
                 "sync_room": "ctox-business-os:cto1.example.com",
-                "signaling_room_password": "super-secret",
                 "signaling_urls": ["wss://signaling.ctox.dev"],
                 "native_rxdb_peer_available": true,
                 "http_bridge_available": false,
             },
-            "data_plane": { "collections": 12 },
+            "data_plane": {
+                "ok": true,
+                "collections": {
+                    "business_apps": { "ok": true, "row_count": 12 },
+                    "business_commands": { "ok": true, "row_count": 3 },
+                },
+            },
         }));
         terminal.draw(|frame| draw(frame, &app)).unwrap();
         let text = buffer_text(terminal.backend().buffer());
@@ -5499,9 +5511,10 @@ mod tests {
         assert!(text.contains("ctox-business-os:cto1.example.com"), "{text}");
         assert!(text.contains("rxdb peer"), "{text}");
         assert!(text.contains("available"), "{text}");
-        // The room password stays masked until [p] reveals it.
-        assert!(!text.contains("super-secret"), "{text}");
-        assert!(text.contains("collections 12"), "{text}");
+        assert!(text.contains("collections (2)"), "{text}");
+        assert!(text.contains("business_apps"), "{text}");
+        assert!(text.contains("12 rows"), "{text}");
+        assert!(text.contains("ctox business-os peer status"), "{text}");
     }
 
     #[test]

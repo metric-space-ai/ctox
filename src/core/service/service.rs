@@ -166,6 +166,12 @@ pub struct ServiceStatus {
     pub business_os: Option<Value>,
     #[serde(default)]
     pub work_hours: crate::service::working_hours::WorkHoursSnapshot,
+    /// True when this snapshot came from the pid/systemd fallback because
+    /// the daemon missed the status-IPC budget: the daemon is alive but
+    /// too busy to answer, and the busy/queue fields are NOT fresh truth.
+    /// Local-only; never crosses the wire.
+    #[serde(skip)]
+    pub degraded_probe: bool,
 }
 
 #[cfg(any(test, not(unix)))]
@@ -231,6 +237,7 @@ impl ServiceStatus {
             worker_phase: None,
             business_os: Some(business_os_health_snapshot(root)),
             work_hours: crate::service::working_hours::snapshot(root),
+            degraded_probe: false,
         };
         status.apply_durable_queue_snapshot(root);
         status
@@ -317,6 +324,7 @@ fn parse_service_status(body: &str, root: &Path) -> Result<ServiceStatus> {
         worker_phase: wire.worker_phase,
         business_os: wire.business_os,
         work_hours: wire.work_hours,
+        degraded_probe: false,
     })
 }
 
@@ -1849,7 +1857,8 @@ pub fn service_status_snapshot_with(
             Ok(Vec::new())
         }
     };
-    if let Some(mut status) = live_service_status_snapshot(root, probe.status_ipc_timeout)? {
+    let live = live_service_status_snapshot(root, probe.status_ipc_timeout);
+    if let LiveStatusProbe::Status(mut status) = live {
         status.business_os = Some(business_os_health_snapshot(root));
         if let Some(systemd) = systemd {
             status.autostart_enabled = systemd.enabled;
@@ -1867,44 +1876,77 @@ pub fn service_status_snapshot_with(
         status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
         return Ok(status);
     }
+    // The daemon missed the reply budget but the socket connected: it is
+    // alive and busy, not down. The fallback's empty busy/queue fields are
+    // not fresh truth — UI-cadence callers must keep their previously
+    // observed state for those.
+    let degraded = matches!(live, LiveStatusProbe::Slow);
     if let Some(systemd) = systemd {
         let mut status = ServiceStatus::stopped(root);
-        status.running = systemd.active;
+        status.running = systemd.active || degraded;
         status.pid = systemd.pid.or(status.pid);
         if !status.running && status.pid.is_some_and(process_is_running) {
             status.running = true;
         }
         status.autostart_enabled = systemd.enabled;
         status.manager = "systemd-user".to_string();
+        status.degraded_probe = degraded;
         status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
         return Ok(status);
     }
     #[cfg(unix)]
     {
         let mut status = ServiceStatus::stopped(root);
-        if status.pid.is_some_and(process_is_running) {
+        if degraded || status.pid.is_some_and(process_is_running) {
             status.running = true;
             status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
         }
+        status.degraded_probe = degraded;
         return Ok(status);
     }
     #[cfg(not(unix))]
     {
-        Ok(ServiceStatus::stopped(root))
+        let mut status = ServiceStatus::stopped(root);
+        status.degraded_probe = degraded;
+        Ok(status)
     }
+}
+
+/// Outcome of the live status IPC: a fresh snapshot, a daemon that is
+/// reachable but missed the reply budget (`Slow`), or no daemon (`Down`).
+enum LiveStatusProbe {
+    Status(ServiceStatus),
+    Slow,
+    Down,
 }
 
 fn live_service_status_snapshot(
     root: &Path,
     timeout_override: Option<Duration>,
-) -> Result<Option<ServiceStatus>> {
+) -> LiveStatusProbe {
     #[cfg(unix)]
     {
         let timeout =
             timeout_override.unwrap_or_else(|| service_ipc_timeout(&ServiceIpcRequest::Status));
         match send_service_ipc_request_with_timeout(root, ServiceIpcRequest::Status, timeout) {
-            Ok(ServiceIpcResponse::Status(status)) => Ok(Some(status)),
-            Ok(_) | Err(_) => Ok(None),
+            Ok(ServiceIpcResponse::Status(status)) => LiveStatusProbe::Status(status),
+            Ok(_) => LiveStatusProbe::Down,
+            Err(err) => {
+                let timed_out = err
+                    .root_cause()
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io_err| {
+                        matches!(
+                            io_err.kind(),
+                            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                        )
+                    });
+                if timed_out {
+                    LiveStatusProbe::Slow
+                } else {
+                    LiveStatusProbe::Down
+                }
+            }
         }
     }
     #[cfg(not(unix))]
@@ -1918,12 +1960,21 @@ fn live_service_status_snapshot(
         let url = format!("{}/ctox/service/status", service_base_url(root));
         let response = match status_agent.get(&url).call() {
             Ok(response) => response,
-            Err(_) => return Ok(None),
+            Err(ureq::Error::Transport(transport))
+                if matches!(transport.kind(), ureq::ErrorKind::Io) =>
+            {
+                return LiveStatusProbe::Slow;
+            }
+            Err(_) => return LiveStatusProbe::Down,
         };
-        let body = response
-            .into_string()
-            .context("failed to read CTOX service status response")?;
-        Ok(Some(parse_service_status(&body, root)?))
+        let body = match response.into_string() {
+            Ok(body) => body,
+            Err(_) => return LiveStatusProbe::Down,
+        };
+        match parse_service_status(&body, root) {
+            Ok(status) => LiveStatusProbe::Status(status),
+            Err(_) => LiveStatusProbe::Down,
+        }
     }
 }
 
@@ -2564,19 +2615,24 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
             })
             .map(|outcome| outcome.as_str().to_string())
     };
+    // One cached probe instead of two fresh rounds (six systemctl spawns)
+    // per status request: this handler answers the 250ms-budget UI poll
+    // every 500ms, and a slow answer makes the TUI fall back to a degraded
+    // snapshot.
+    let systemd = systemd_unit_status_cached(root, Duration::from_secs(5))
+        .ok()
+        .flatten();
     Ok(ServiceStatus {
         running: true,
         busy,
         pid,
         listen_addr: service_listen_addr(root),
-        autostart_enabled: systemd_unit_status(root)
-            .ok()
-            .flatten()
+        autostart_enabled: systemd
+            .as_ref()
             .map(|status| status.enabled)
             .unwrap_or(false),
-        manager: systemd_unit_status(root)
-            .ok()
-            .flatten()
+        manager: systemd
+            .as_ref()
             .map(|_| "systemd-user".to_string())
             .unwrap_or_else(|| "process".to_string()),
         pending_count: in_memory_pending_count
@@ -2602,6 +2658,7 @@ fn status_from_shared_state(root: &Path, state: &Arc<Mutex<SharedState>>) -> Res
         // its short control-plane timeout while an agent turn is busy.
         business_os: None,
         work_hours: crate::service::working_hours::snapshot(root),
+        degraded_probe: false,
     })
 }
 
@@ -16285,6 +16342,7 @@ mod tests {
             worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
+            degraded_probe: false,
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -16386,6 +16444,7 @@ mod tests {
             worker_phase: None,
             business_os: None,
             work_hours: crate::service::working_hours::snapshot(&root),
+            degraded_probe: false,
         }))
         .unwrap();
         let handle = std::thread::spawn(move || {
@@ -16402,7 +16461,11 @@ mod tests {
         let status = service_status_snapshot(&root).unwrap();
         handle.join().unwrap();
 
-        assert!(!status.running);
+        // A daemon that misses the reply budget is alive-but-slow, not
+        // down: the probe degrades (callers keep their previous dynamic
+        // state) instead of fabricating a stopped loop.
+        assert!(status.running);
+        assert!(status.degraded_probe);
         assert_eq!(status.pid, None);
         assert!(status.business_os.is_some());
         assert!(status.recent_events.is_empty());

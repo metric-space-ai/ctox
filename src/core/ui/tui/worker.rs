@@ -137,6 +137,12 @@ pub(super) enum WorkerPayload {
     ServiceToggled {
         result: Result<String, String>,
     },
+    /// A poll job died (panic on the poll thread). Clears the in-flight
+    /// kind so the refresh cycle keeps running instead of silently dying.
+    PollFailed {
+        kind: PollKind,
+        error: String,
+    },
 }
 
 impl WorkerPayload {
@@ -150,6 +156,7 @@ impl WorkerPayload {
             WorkerPayload::GpuCards(_) => Some(PollKind::GpuCards),
             WorkerPayload::RuntimeTelemetry(_) => Some(PollKind::RuntimeTelemetry),
             WorkerPayload::JamiResolve { .. } => Some(PollKind::JamiResolve),
+            WorkerPayload::PollFailed { kind, .. } => Some(*kind),
             _ => None,
         }
     }
@@ -157,7 +164,11 @@ impl WorkerPayload {
 
 pub(super) struct TuiWorker {
     poll_tx: mpsc::Sender<PollJob>,
+    /// Long-running update subprocesses (upgrade, engine rebuild, …).
     action_tx: mpsc::Sender<ActionJob>,
+    /// Sub-second interactive actions (prompt submit, service toggle);
+    /// separate thread so they never starve behind a minutes-long upgrade.
+    interactive_tx: mpsc::Sender<ActionJob>,
     results_rx: Receiver<WorkerPayload>,
     in_flight: HashSet<PollKind>,
 }
@@ -166,14 +177,39 @@ impl TuiWorker {
     pub(super) fn spawn(root: PathBuf, db_path: PathBuf) -> Self {
         let (poll_tx, poll_rx) = mpsc::channel::<PollJob>();
         let (action_tx, action_rx) = mpsc::channel::<ActionJob>();
+        let (interactive_tx, interactive_rx) = mpsc::channel::<ActionJob>();
         let (results_tx, results_rx) = mpsc::channel::<WorkerPayload>();
+
+        let interactive_results = results_tx.clone();
+        let interactive_root = root.clone();
+        thread::spawn(move || {
+            while let Ok(job) = interactive_rx.recv() {
+                let recovery = ActionRecovery::from_job(&job);
+                let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_action_job(&interactive_root, job)
+                }))
+                .unwrap_or_else(|panic| recovery.into_payload(panic_message(&panic)));
+                if interactive_results.send(payload).is_err() {
+                    break;
+                }
+            }
+        });
 
         let poll_results = results_tx.clone();
         let poll_root = root.clone();
         thread::spawn(move || {
             let mut chat_source = ChatWindowSource::new(db_path);
             while let Ok(job) = poll_rx.recv() {
-                let payload = run_poll_job(&poll_root, &mut chat_source, job);
+                // A panic in one collector must not silently kill every
+                // future refresh: report it and keep the loop alive.
+                let kind = job.kind();
+                let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_poll_job(&poll_root, &mut chat_source, job)
+                }))
+                .unwrap_or_else(|panic| WorkerPayload::PollFailed {
+                    kind,
+                    error: panic_message(&panic),
+                });
                 if poll_results.send(payload).is_err() {
                     break;
                 }
@@ -183,7 +219,11 @@ impl TuiWorker {
         let action_root = root;
         thread::spawn(move || {
             while let Ok(job) = action_rx.recv() {
-                let payload = run_action_job(&action_root, job);
+                let recovery = ActionRecovery::from_job(&job);
+                let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    run_action_job(&action_root, job)
+                }))
+                .unwrap_or_else(|panic| recovery.into_payload(panic_message(&panic)));
                 if results_tx.send(payload).is_err() {
                     break;
                 }
@@ -193,6 +233,7 @@ impl TuiWorker {
         Self {
             poll_tx,
             action_tx,
+            interactive_tx,
             results_rx,
             in_flight: HashSet::new(),
         }
@@ -210,7 +251,13 @@ impl TuiWorker {
     }
 
     pub(super) fn submit_action(&self, job: ActionJob) {
-        let _ = self.action_tx.send(job);
+        let channel = match &job {
+            ActionJob::UpdateSubprocess { .. } => &self.action_tx,
+            ActionJob::SubmitPrompt { .. } | ActionJob::ToggleService { .. } => {
+                &self.interactive_tx
+            }
+        };
+        let _ = channel.send(job);
     }
 
     pub(super) fn try_recv(&mut self) -> Option<WorkerPayload> {
@@ -327,6 +374,60 @@ fn run_poll_job(root: &Path, chat: &mut ChatWindowSource, job: PollJob) -> Worke
             }
         }
     }
+}
+
+/// Minimal pre-extracted state to synthesize an error payload when an
+/// action job panics — the original job is consumed by the call.
+enum ActionRecovery {
+    Update(UpdateActionKind),
+    Submit {
+        prompt: String,
+        attachment_count: usize,
+    },
+    Toggle,
+}
+
+impl ActionRecovery {
+    fn from_job(job: &ActionJob) -> Self {
+        match job {
+            ActionJob::UpdateSubprocess { action, .. } => ActionRecovery::Update(*action),
+            ActionJob::SubmitPrompt {
+                prompt,
+                attachment_count,
+            } => ActionRecovery::Submit {
+                prompt: prompt.clone(),
+                attachment_count: *attachment_count,
+            },
+            ActionJob::ToggleService { .. } => ActionRecovery::Toggle,
+        }
+    }
+
+    fn into_payload(self, error: String) -> WorkerPayload {
+        match self {
+            ActionRecovery::Update(action) => WorkerPayload::UpdateAction {
+                action,
+                result: Err(error),
+            },
+            ActionRecovery::Submit {
+                prompt,
+                attachment_count,
+            } => WorkerPayload::PromptSubmitted {
+                prompt,
+                attachment_count,
+                result: Err(error),
+            },
+            ActionRecovery::Toggle => WorkerPayload::ServiceToggled { result: Err(error) },
+        }
+    }
+}
+
+fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    let detail = panic
+        .downcast_ref::<&str>()
+        .map(|message| (*message).to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string());
+    format!("worker thread panicked: {detail}")
 }
 
 fn run_action_job(root: &Path, job: ActionJob) -> WorkerPayload {
