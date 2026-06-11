@@ -3183,25 +3183,28 @@ impl LcmEngine {
     }
 
     /// Cheap change-detection marker for UI polling over the most recent
-    /// `limit` messages: (max seq, row count, agent-outcome count). UI
-    /// consumers compare markers between ticks and skip materializing the
-    /// full message window when nothing changed. The outcome count is part
-    /// of the marker because worker failures update `agent_outcome` on
-    /// existing rows without inserting new ones.
+    /// `limit` messages: (max seq, row count, agent-outcome count, summed
+    /// token count). UI consumers compare markers between ticks and skip
+    /// materializing the full message window when nothing changed. The
+    /// token-count sum makes in-place rewrites visible
+    /// (`rewrite_message_rows_with` updates content and token_count without
+    /// touching seq or row count); the outcome count covers any path that
+    /// back-fills `agent_outcome` on an existing row.
     pub fn conversation_refresh_marker(
         &self,
         conversation_id: i64,
         limit: usize,
-    ) -> Result<(i64, i64, i64)> {
+    ) -> Result<(i64, i64, i64, i64)> {
         let limit = limit.max(1).min(500) as i64;
         self.conn
             .query_row(
                 "SELECT COALESCE(MAX(seq), 0), COUNT(*),
-                        COALESCE(SUM(CASE WHEN agent_outcome IS NOT NULL THEN 1 ELSE 0 END), 0)
-                 FROM (SELECT seq, agent_outcome FROM messages
+                        COALESCE(SUM(CASE WHEN agent_outcome IS NOT NULL THEN 1 ELSE 0 END), 0),
+                        COALESCE(SUM(token_count), 0)
+                 FROM (SELECT seq, agent_outcome, token_count FROM messages
                        WHERE conversation_id = ?1 ORDER BY seq DESC LIMIT ?2)",
                 (conversation_id, limit),
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .map_err(Into::into)
     }

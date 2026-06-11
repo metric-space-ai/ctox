@@ -1407,6 +1407,7 @@ fn normalize_state_token(value: &str) -> String {
 }
 
 pub fn start_background(root: &Path) -> Result<String> {
+    let _systemd_cache_guard = SystemdCacheInvalidator;
     if let Some(reason) = crate::service::working_hours::hold_reason(root) {
         return Ok(format!("CTOX service not started: {reason}"));
     }
@@ -1531,6 +1532,7 @@ fn configure_background_service_process(command: &mut Command) {
 fn configure_background_service_process(_command: &mut Command) {}
 
 pub fn stop_background(root: &Path) -> Result<String> {
+    let _systemd_cache_guard = SystemdCacheInvalidator;
     let preflight_backend_shutdown_error = supervisor::shutdown_persistent_backends(root)
         .err()
         .map(|err| err.to_string());
@@ -14299,10 +14301,34 @@ struct SystemdUnitStatus {
 /// TTL-cached variant of `systemd_unit_status` for UI-cadence polling. The
 /// unit's enabled/active state changes on operator action, not between
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
-fn systemd_unit_status_cached(root: &Path, ttl: Duration) -> Result<Option<SystemdUnitStatus>> {
+/// `start_background`/`stop_background` drop the cache on every exit path
+/// so an in-process toggle is visible on the next poll.
+fn systemd_unit_status_cache() -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>
+{
     static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
         OnceLock::new();
-    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn invalidate_systemd_unit_status_cache() {
+    *systemd_unit_status_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+}
+
+/// Drops the systemd probe cache when it goes out of scope. Held across the
+/// service start/stop mutators so every exit path (including `?` errors
+/// after a partial enable/stop) invalidates the cached unit state.
+struct SystemdCacheInvalidator;
+
+impl Drop for SystemdCacheInvalidator {
+    fn drop(&mut self) {
+        invalidate_systemd_unit_status_cache();
+    }
+}
+
+fn systemd_unit_status_cached(root: &Path, ttl: Duration) -> Result<Option<SystemdUnitStatus>> {
+    let cache = systemd_unit_status_cache();
     if let Some((probed_at, cached_root, cached)) = cache
         .lock()
         .unwrap_or_else(|err| err.into_inner())

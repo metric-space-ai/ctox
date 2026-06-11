@@ -885,6 +885,7 @@ struct App {
     last_skill_catalog_refresh_at: Option<Instant>,
     last_lifecycle_alert_refresh_at: Option<Instant>,
     last_choice_inputs_fingerprint: Option<u64>,
+    last_choice_refresh_at: Option<Instant>,
     last_header_inputs_fingerprint: Option<u64>,
     last_header_refresh_at: Option<Instant>,
     /// Long-lived read connection to the LCM store. Opened lazily, kept for
@@ -892,7 +893,7 @@ struct App {
     lcm_engine: Option<lcm::LcmEngine>,
     /// Marker of the last materialized chat window; the message reload is
     /// skipped while the stored marker matches.
-    chat_refresh_marker: Option<(i64, i64, i64)>,
+    chat_refresh_marker: Option<(i64, i64, i64, i64)>,
     harness_flow_text: String,
     harness_flow_scroll: u16,
     last_harness_flow_refresh_at: Option<Instant>,
@@ -1244,6 +1245,7 @@ impl App {
             last_skill_catalog_refresh_at: None,
             last_lifecycle_alert_refresh_at: None,
             last_choice_inputs_fingerprint: None,
+            last_choice_refresh_at: None,
             last_header_inputs_fingerprint: None,
             last_header_refresh_at: None,
             lcm_engine: None,
@@ -1821,6 +1823,7 @@ impl App {
         self.last_runtime_refresh_at = None;
         self.runtime_telemetry = None;
         self.last_choice_inputs_fingerprint = None;
+        self.last_choice_refresh_at = None;
         self.last_header_inputs_fingerprint = None;
         self.last_header_refresh_at = None;
         invalidate_local_gpu_probe_cache();
@@ -2638,10 +2641,17 @@ impl App {
         if self.page == Page::Settings {
             self.ensure_settings_items_loaded();
             // Choice rebuilding consults the GPU probe and the runtime
-            // planner; only rerun it when a settings value actually moved
-            // (key handlers additionally trigger it directly on edits).
+            // planner; rerun it when a settings value moved (key handlers
+            // additionally trigger it directly on edits) and on the same
+            // slow heartbeat as the header, because the daemon can change
+            // the runtime plan and GPU availability underneath the TUI.
             let fingerprint = self.settings_values_fingerprint();
-            if self.last_choice_inputs_fingerprint != Some(fingerprint) {
+            if self.last_choice_inputs_fingerprint != Some(fingerprint)
+                || refresh_due(
+                    &mut self.last_choice_refresh_at,
+                    HEADER_REFRESH_INTERVAL_SETTINGS,
+                )
+            {
                 self.refresh_dynamic_setting_choices();
                 // The rebuild may coerce values, so re-fingerprint after.
                 self.last_choice_inputs_fingerprint =
