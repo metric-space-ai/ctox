@@ -1701,6 +1701,57 @@ sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
 }
 
+# write_runtime_sqlite_config seeds runtime_env_kv in two tiers (the helpers
+# append to the caller's RUNTIME_KV_DEFAULT_ROWS / RUNTIME_KV_OVERRIDE_ROWS
+# arrays via bash dynamic scoping):
+#   * defaults  → INSERT OR IGNORE   first install seeds them; re-running the
+#                                    installer preserves whatever the operator
+#                                    has since configured in the TUI/CLI
+#   * overrides → INSERT OR REPLACE  only values the operator set explicitly
+#                                    in this run (flags/env) and layout paths
+#                                    the installer owns
+kv_default() {
+  RUNTIME_KV_DEFAULT_ROWS+=("('$(sql_escape "$1")', '$(sql_escape "$2")')")
+}
+
+kv_override() {
+  RUNTIME_KV_OVERRIDE_ROWS+=("('$(sql_escape "$1")', '$(sql_escape "$2")')")
+}
+
+# kv_seed <key> <value> [env-name] [derived-explicit 0/1]
+# Routes to kv_override when the named environment variable is non-empty or
+# the derived-explicit flag is 1; otherwise the value is a preservable default.
+kv_seed() {
+  local key="$1" value="$2" env_name="${3:-}" derived_explicit="${4:-0}"
+  local explicit=0
+  if [[ -n "$env_name" && -n "${!env_name:-}" ]]; then
+    explicit=1
+  fi
+  [[ "$derived_explicit" == "1" ]] && explicit=1
+  if [[ "$explicit" -eq 1 ]]; then
+    kv_override "$key" "$value"
+  else
+    kv_default "$key" "$value"
+  fi
+}
+
+emit_runtime_kv_insert() {
+  local verb="$1"
+  shift
+  [[ $# -gt 0 ]] || return 0
+  printf 'INSERT %s INTO runtime_env_kv(env_key, env_value) VALUES\n' "$verb"
+  local row first=1
+  for row in "$@"; do
+    if [[ "$first" -eq 1 ]]; then
+      first=0
+      printf '%s' "$row"
+    else
+      printf ',\n%s' "$row"
+    fi
+  done
+  printf ';\n'
+}
+
 run_sqlite_script() {
   local db_path="$1"
   local label="$2"
@@ -1749,6 +1800,22 @@ write_runtime_sqlite_config() {
   local chat_model="${CTOX_CHAT_MODEL:-$model}"
   local active_model="${CTOX_ACTIVE_MODEL:-$chat_model}"
 
+  # Explicit operator input in THIS run. Only these (plus installer-owned
+  # layout paths) may replace existing rows; everything else is seeded with
+  # INSERT OR IGNORE so re-running the installer never wipes configuration
+  # the operator has since changed in the TUI — `ctox upgrade` protects
+  # exactly these keys through its runtime credential invariants, and the
+  # full installer must not be the unguarded back door around that.
+  local model_explicit=0 provider_explicit=0 endpoint_explicit=0 deployment_explicit=0
+  [[ -n "$MODEL_FLAG" ]] && model_explicit=1
+  [[ -n "$API_PROVIDER_FLAG" ]] && provider_explicit=1
+  [[ -n "$AZURE_FOUNDRY_ENDPOINT_FLAG" ]] && endpoint_explicit=1
+  [[ -n "$AZURE_FOUNDRY_DEPLOYMENT_ID_FLAG" ]] && deployment_explicit=1
+  local chat_source_explicit=0
+  [[ -n "${CTOX_CHAT_SOURCE:-}" ]] && chat_source_explicit=1
+  local chat_model_explicit=0
+  [[ "$model_explicit" -eq 1 || "$deployment_explicit" -eq 1 ]] && chat_model_explicit=1
+
   # Model-specific defaults. The CTOX chat context default is 256k; max_seq
   # is seeded to each model's manifest context cap (contracts/models/
   # runtime_manifests). Models whose manifest caps at 131072 keep that cap —
@@ -1777,6 +1844,7 @@ write_runtime_sqlite_config() {
   fi
   if [[ "$api_provider" == "azure_foundry" ]]; then
     chat_source="api"
+    [[ "$provider_explicit" -eq 1 ]] && chat_source_explicit=1
     if [[ -n "$azure_deployment_id" ]]; then
       chat_model="$azure_deployment_id"
       active_model="$azure_deployment_id"
@@ -1785,6 +1853,8 @@ write_runtime_sqlite_config() {
       upstream_base_url="$(azure_foundry_responses_base_url "$azure_endpoint")"
     fi
   fi
+  local upstream_explicit=0
+  [[ "$model_explicit" -eq 1 || "$endpoint_explicit" -eq 1 ]] && upstream_explicit=1
 
   # Auxiliary models require a local inference runtime.  On hosts without a
   # GPU (detected_gpu=none) leave them empty so CTOX does not attempt to
@@ -1798,82 +1868,89 @@ write_runtime_sqlite_config() {
     tts_model="speaches-ai/piper-en_US-lessac-medium [CPU EN]"
   fi
 
+  local -a RUNTIME_KV_DEFAULT_ROWS=() RUNTIME_KV_OVERRIDE_ROWS=()
+
+  kv_seed CTOX_ENGINE_MODEL "${CTOX_ENGINE_MODEL:-$model}" CTOX_ENGINE_MODEL "$model_explicit"
+  kv_seed CTOX_ENGINE_PORT "${CTOX_ENGINE_PORT:-$port}" CTOX_ENGINE_PORT "$model_explicit"
+  kv_seed CTOX_ENGINE_ARCH "${CTOX_ENGINE_ARCH:-$arch}" CTOX_ENGINE_ARCH "$model_explicit"
+  kv_seed CTOX_ENGINE_MAX_SEQS "${CTOX_ENGINE_MAX_SEQS:-1}" CTOX_ENGINE_MAX_SEQS
+  kv_seed CTOX_ENGINE_MAX_BATCH_SIZE "${CTOX_ENGINE_MAX_BATCH_SIZE:-1}" CTOX_ENGINE_MAX_BATCH_SIZE
+  kv_seed CTOX_ENGINE_MAX_SEQ_LEN "${CTOX_ENGINE_MAX_SEQ_LEN:-$max_seq}" CTOX_ENGINE_MAX_SEQ_LEN "$model_explicit"
+  kv_seed CTOX_ENGINE_PAGED_ATTN "${CTOX_ENGINE_PAGED_ATTN:-$paged_attn}" CTOX_ENGINE_PAGED_ATTN
+  kv_seed CTOX_ENGINE_TENSOR_PARALLEL_BACKEND "${CTOX_ENGINE_TENSOR_PARALLEL_BACKEND:-$tp_backend}" CTOX_ENGINE_TENSOR_PARALLEL_BACKEND
+  kv_seed CTOX_ENGINE_ISQ "${CTOX_ENGINE_ISQ:-$isq}" CTOX_ENGINE_ISQ "$model_explicit"
+  kv_seed CTOX_ENGINE_PA_CACHE_TYPE "${CTOX_ENGINE_PA_CACHE_TYPE:-$pa_cache_type}" CTOX_ENGINE_PA_CACHE_TYPE "$model_explicit"
+  kv_seed CTOX_ENGINE_PA_MEMORY_FRACTION "${CTOX_ENGINE_PA_MEMORY_FRACTION:-$pa_mem_frac}" CTOX_ENGINE_PA_MEMORY_FRACTION "$model_explicit"
+  kv_seed CTOX_ENGINE_PA_CONTEXT_LEN "${CTOX_ENGINE_PA_CONTEXT_LEN:-}" CTOX_ENGINE_PA_CONTEXT_LEN
+  kv_seed CTOX_ENGINE_CUDA_VISIBLE_DEVICES "${CTOX_ENGINE_CUDA_VISIBLE_DEVICES:-}" CTOX_ENGINE_CUDA_VISIBLE_DEVICES
+  kv_seed CTOX_ENGINE_DISABLE_NCCL "${CTOX_ENGINE_DISABLE_NCCL:-$disable_nccl}" CTOX_ENGINE_DISABLE_NCCL
+  kv_seed CTOX_ENGINE_MN_LOCAL_WORLD_SIZE "${CTOX_ENGINE_MN_LOCAL_WORLD_SIZE:-$world_size}" CTOX_ENGINE_MN_LOCAL_WORLD_SIZE
+  kv_seed CTOX_ENGINE_TOPOLOGY "${CTOX_ENGINE_TOPOLOGY:-}" CTOX_ENGINE_TOPOLOGY
+  kv_seed CTOX_ENGINE_NUM_DEVICE_LAYERS "${CTOX_ENGINE_NUM_DEVICE_LAYERS:-}" CTOX_ENGINE_NUM_DEVICE_LAYERS
+  kv_seed CTOX_API_PROVIDER "$api_provider" "" "$provider_explicit"
+  kv_seed CTOX_CHAT_SOURCE "$chat_source" "" "$chat_source_explicit"
+  kv_seed CTOX_AZURE_FOUNDRY_ENDPOINT "$azure_endpoint" "" "$endpoint_explicit"
+  kv_seed CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID "$azure_deployment_id" "" "$deployment_explicit"
+  kv_seed CTOX_CHAT_MODEL "$chat_model" CTOX_CHAT_MODEL "$chat_model_explicit"
+  kv_seed CTOX_CHAT_MODEL_MAX_CONTEXT "${CTOX_CHAT_MODEL_MAX_CONTEXT:-262144}" CTOX_CHAT_MODEL_MAX_CONTEXT
+  kv_seed CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT "${CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT:-75}" CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT
+  kv_seed CTOX_ACTIVE_MODEL "$active_model" CTOX_ACTIVE_MODEL "$chat_model_explicit"
+  kv_seed CTOX_PROXY_HOST "${CTOX_PROXY_HOST:-127.0.0.1}" CTOX_PROXY_HOST
+  kv_seed CTOX_PROXY_PORT "${CTOX_PROXY_PORT:-$proxy_port}" CTOX_PROXY_PORT
+  kv_seed CTOX_UPSTREAM_BASE_URL "$upstream_base_url" CTOX_UPSTREAM_BASE_URL "$upstream_explicit"
+
+  # Layout paths are owned by the installer and always describe THIS install.
+  kv_override CTOX_INSTALL_ROOT "${CTOX_INSTALL_ROOT:-$INSTALL_ROOT}"
+  kv_override CTOX_STATE_ROOT "${CTOX_STATE_ROOT:-$state_root}"
+  kv_override CTOX_CACHE_ROOT "${CTOX_CACHE_ROOT:-$CACHE_ROOT}"
+  kv_override CTOX_BIN_DIR "${CTOX_BIN_DIR:-$BIN_DIR}"
+  kv_override CTOX_TOOLS_ROOT "${CTOX_TOOLS_ROOT:-$TOOLS_ROOT}"
+  kv_override CTOX_DEPENDENCIES_ROOT "${CTOX_DEPENDENCIES_ROOT:-$DEPENDENCIES_ROOT}"
+  kv_override CTOX_ENGINE_BINARY "${CTOX_ENGINE_BINARY:-$engine_binary}"
+  kv_override CTOX_ENGINE_LOG "${CTOX_ENGINE_LOG:-$engine_log}"
+
+  kv_seed CTOX_EMBEDDING_MODEL "${CTOX_EMBEDDING_MODEL:-$emb_model}" CTOX_EMBEDDING_MODEL
+  kv_seed CTOX_EMBEDDING_PORT "${CTOX_EMBEDDING_PORT:-$emb_port}" CTOX_EMBEDDING_PORT
+  kv_seed CTOX_EMBEDDING_ISQ "${CTOX_EMBEDDING_ISQ:-$emb_isq}" CTOX_EMBEDDING_ISQ
+  kv_seed CTOX_STT_MODEL "${CTOX_STT_MODEL:-$stt_model}" CTOX_STT_MODEL
+  kv_seed CTOX_STT_PORT "${CTOX_STT_PORT:-$stt_port}" CTOX_STT_PORT
+  kv_seed CTOX_STT_ISQ "${CTOX_STT_ISQ:-$stt_isq}" CTOX_STT_ISQ
+  kv_seed CTOX_TTS_MODEL "${CTOX_TTS_MODEL:-$tts_model}" CTOX_TTS_MODEL
+  kv_seed CTOX_TTS_PORT "${CTOX_TTS_PORT:-$tts_port}" CTOX_TTS_PORT
+  kv_seed CTOX_TTS_ISQ "${CTOX_TTS_ISQ:-$tts_isq}" CTOX_TTS_ISQ
+  kv_seed CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES "${CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES:-}" CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES
+  kv_seed CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES "${CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES:-}" CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES
+  kv_seed CTOX_STT_CUDA_VISIBLE_DEVICES "${CTOX_STT_CUDA_VISIBLE_DEVICES:-}" CTOX_STT_CUDA_VISIBLE_DEVICES
+  kv_seed CTOX_TTS_CUDA_VISIBLE_DEVICES "${CTOX_TTS_CUDA_VISIBLE_DEVICES:-}" CTOX_TTS_CUDA_VISIBLE_DEVICES
+  kv_seed CTOX_CHAT_SHARE_AUXILIARY_GPUS "${CTOX_CHAT_SHARE_AUXILIARY_GPUS:-1}" CTOX_CHAT_SHARE_AUXILIARY_GPUS
+  kv_seed CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP "${CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP:-}" CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP
+  kv_seed CTOX_EMBEDDING_GPU_LAYER_RESERVATION "${CTOX_EMBEDDING_GPU_LAYER_RESERVATION:-0.30}" CTOX_EMBEDDING_GPU_LAYER_RESERVATION
+  kv_seed CTOX_STT_GPU_LAYER_RESERVATION "${CTOX_STT_GPU_LAYER_RESERVATION:-0.55}" CTOX_STT_GPU_LAYER_RESERVATION
+  kv_seed CTOX_TTS_GPU_LAYER_RESERVATION "${CTOX_TTS_GPU_LAYER_RESERVATION:-0.35}" CTOX_TTS_GPU_LAYER_RESERVATION
+  kv_seed CTOX_WEB_SEARCH_ENABLED "true"
+  kv_seed CTOX_WEB_SEARCH_PROVIDER "auto"
+  kv_seed CTOX_WEB_SEARCH_TIMEOUT_MS "10000"
+  kv_seed CTOX_WEB_SEARCH_TOP_K "5"
+  kv_seed CTOX_WEB_SEARCH_MAX_TOP_K "8"
+  kv_seed CTOX_WEB_SEARCH_CACHE_TTL_SECS "86400"
+  kv_seed CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS "259200"
+
   local sql_file
   sql_file="$(mktemp)"
-  cat > "$sql_file" <<SQL
-.timeout 60000
-PRAGMA journal_mode=WAL;
-PRAGMA busy_timeout=60000;
-CREATE TABLE IF NOT EXISTS runtime_env_kv (
-  env_key TEXT PRIMARY KEY,
-  env_value TEXT NOT NULL
-);
-BEGIN IMMEDIATE;
-DELETE FROM runtime_env_kv;
-INSERT INTO runtime_env_kv(env_key, env_value) VALUES
-('CTOX_ENGINE_MODEL', '$(sql_escape "${CTOX_ENGINE_MODEL:-$model}")'),
-('CTOX_ENGINE_PORT', '$(sql_escape "${CTOX_ENGINE_PORT:-$port}")'),
-('CTOX_ENGINE_ARCH', '$(sql_escape "${CTOX_ENGINE_ARCH:-$arch}")'),
-('CTOX_ENGINE_MAX_SEQS', '$(sql_escape "${CTOX_ENGINE_MAX_SEQS:-1}")'),
-('CTOX_ENGINE_MAX_BATCH_SIZE', '$(sql_escape "${CTOX_ENGINE_MAX_BATCH_SIZE:-1}")'),
-('CTOX_ENGINE_MAX_SEQ_LEN', '$(sql_escape "${CTOX_ENGINE_MAX_SEQ_LEN:-$max_seq}")'),
-('CTOX_ENGINE_PAGED_ATTN', '$(sql_escape "${CTOX_ENGINE_PAGED_ATTN:-$paged_attn}")'),
-('CTOX_ENGINE_TENSOR_PARALLEL_BACKEND', '$(sql_escape "${CTOX_ENGINE_TENSOR_PARALLEL_BACKEND:-$tp_backend}")'),
-('CTOX_ENGINE_ISQ', '$(sql_escape "${CTOX_ENGINE_ISQ:-$isq}")'),
-('CTOX_ENGINE_PA_CACHE_TYPE', '$(sql_escape "${CTOX_ENGINE_PA_CACHE_TYPE:-$pa_cache_type}")'),
-('CTOX_ENGINE_PA_MEMORY_FRACTION', '$(sql_escape "${CTOX_ENGINE_PA_MEMORY_FRACTION:-$pa_mem_frac}")'),
-('CTOX_ENGINE_PA_CONTEXT_LEN', '$(sql_escape "${CTOX_ENGINE_PA_CONTEXT_LEN:-}")'),
-('CTOX_ENGINE_CUDA_VISIBLE_DEVICES', '$(sql_escape "${CTOX_ENGINE_CUDA_VISIBLE_DEVICES:-}")'),
-('CTOX_ENGINE_DISABLE_NCCL', '$(sql_escape "${CTOX_ENGINE_DISABLE_NCCL:-$disable_nccl}")'),
-('CTOX_ENGINE_MN_LOCAL_WORLD_SIZE', '$(sql_escape "${CTOX_ENGINE_MN_LOCAL_WORLD_SIZE:-$world_size}")'),
-('CTOX_ENGINE_TOPOLOGY', '$(sql_escape "${CTOX_ENGINE_TOPOLOGY:-}")'),
-('CTOX_ENGINE_NUM_DEVICE_LAYERS', '$(sql_escape "${CTOX_ENGINE_NUM_DEVICE_LAYERS:-}")'),
-('CTOX_API_PROVIDER', '$(sql_escape "$api_provider")'),
-('CTOX_CHAT_SOURCE', '$(sql_escape "$chat_source")'),
-('CTOX_AZURE_FOUNDRY_ENDPOINT', '$(sql_escape "$azure_endpoint")'),
-('CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID', '$(sql_escape "$azure_deployment_id")'),
-('CTOX_CHAT_MODEL', '$(sql_escape "$chat_model")'),
-('CTOX_CHAT_MODEL_MAX_CONTEXT', '$(sql_escape "${CTOX_CHAT_MODEL_MAX_CONTEXT:-262144}")'),
-('CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT', '$(sql_escape "${CTOX_CHAT_COMPACTION_THRESHOLD_PERCENT:-75}")'),
-('CTOX_ACTIVE_MODEL', '$(sql_escape "$active_model")'),
-('CTOX_PROXY_HOST', '$(sql_escape "${CTOX_PROXY_HOST:-127.0.0.1}")'),
-('CTOX_PROXY_PORT', '$(sql_escape "${CTOX_PROXY_PORT:-$proxy_port}")'),
-('CTOX_UPSTREAM_BASE_URL', '$(sql_escape "$upstream_base_url")'),
-('CTOX_INSTALL_ROOT', '$(sql_escape "${CTOX_INSTALL_ROOT:-$INSTALL_ROOT}")'),
-('CTOX_STATE_ROOT', '$(sql_escape "${CTOX_STATE_ROOT:-$state_root}")'),
-('CTOX_CACHE_ROOT', '$(sql_escape "${CTOX_CACHE_ROOT:-$CACHE_ROOT}")'),
-('CTOX_BIN_DIR', '$(sql_escape "${CTOX_BIN_DIR:-$BIN_DIR}")'),
-('CTOX_TOOLS_ROOT', '$(sql_escape "${CTOX_TOOLS_ROOT:-$TOOLS_ROOT}")'),
-('CTOX_DEPENDENCIES_ROOT', '$(sql_escape "${CTOX_DEPENDENCIES_ROOT:-$DEPENDENCIES_ROOT}")'),
-('CTOX_ENGINE_BINARY', '$(sql_escape "${CTOX_ENGINE_BINARY:-$engine_binary}")'),
-('CTOX_ENGINE_LOG', '$(sql_escape "${CTOX_ENGINE_LOG:-$engine_log}")'),
-('CTOX_EMBEDDING_MODEL', '$(sql_escape "${CTOX_EMBEDDING_MODEL:-$emb_model}")'),
-('CTOX_EMBEDDING_PORT', '$(sql_escape "${CTOX_EMBEDDING_PORT:-$emb_port}")'),
-('CTOX_EMBEDDING_ISQ', '$(sql_escape "${CTOX_EMBEDDING_ISQ:-$emb_isq}")'),
-('CTOX_STT_MODEL', '$(sql_escape "${CTOX_STT_MODEL:-$stt_model}")'),
-('CTOX_STT_PORT', '$(sql_escape "${CTOX_STT_PORT:-$stt_port}")'),
-('CTOX_STT_ISQ', '$(sql_escape "${CTOX_STT_ISQ:-$stt_isq}")'),
-('CTOX_TTS_MODEL', '$(sql_escape "${CTOX_TTS_MODEL:-$tts_model}")'),
-('CTOX_TTS_PORT', '$(sql_escape "${CTOX_TTS_PORT:-$tts_port}")'),
-('CTOX_TTS_ISQ', '$(sql_escape "${CTOX_TTS_ISQ:-$tts_isq}")'),
-('CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES', '$(sql_escape "${CTOX_AUXILIARY_CUDA_VISIBLE_DEVICES:-}")'),
-('CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES', '$(sql_escape "${CTOX_EMBEDDING_CUDA_VISIBLE_DEVICES:-}")'),
-('CTOX_STT_CUDA_VISIBLE_DEVICES', '$(sql_escape "${CTOX_STT_CUDA_VISIBLE_DEVICES:-}")'),
-('CTOX_TTS_CUDA_VISIBLE_DEVICES', '$(sql_escape "${CTOX_TTS_CUDA_VISIBLE_DEVICES:-}")'),
-('CTOX_CHAT_SHARE_AUXILIARY_GPUS', '$(sql_escape "${CTOX_CHAT_SHARE_AUXILIARY_GPUS:-1}")'),
-('CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP', '$(sql_escape "${CTOX_AUXILIARY_GPU_LAYER_RESERVATION_MAP:-}")'),
-('CTOX_EMBEDDING_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_EMBEDDING_GPU_LAYER_RESERVATION:-0.30}")'),
-('CTOX_STT_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_STT_GPU_LAYER_RESERVATION:-0.55}")'),
-('CTOX_TTS_GPU_LAYER_RESERVATION', '$(sql_escape "${CTOX_TTS_GPU_LAYER_RESERVATION:-0.35}")'),
-('CTOX_WEB_SEARCH_ENABLED', 'true'),
-('CTOX_WEB_SEARCH_PROVIDER', 'auto'),
-('CTOX_WEB_SEARCH_TIMEOUT_MS', '10000'),
-('CTOX_WEB_SEARCH_TOP_K', '5'),
-('CTOX_WEB_SEARCH_MAX_TOP_K', '8'),
-('CTOX_WEB_SEARCH_CACHE_TTL_SECS', '86400'),
-('CTOX_WEB_SEARCH_PAGE_CACHE_TTL_SECS', '259200');
-COMMIT;
-SQL
+  {
+    printf '.timeout 60000\n'
+    printf 'PRAGMA journal_mode=WAL;\n'
+    printf 'PRAGMA busy_timeout=60000;\n'
+    printf 'CREATE TABLE IF NOT EXISTS runtime_env_kv (\n  env_key TEXT PRIMARY KEY,\n  env_value TEXT NOT NULL\n);\n'
+    printf 'BEGIN IMMEDIATE;\n'
+    if [[ "${#RUNTIME_KV_DEFAULT_ROWS[@]}" -gt 0 ]]; then
+      emit_runtime_kv_insert 'OR IGNORE' "${RUNTIME_KV_DEFAULT_ROWS[@]}"
+    fi
+    if [[ "${#RUNTIME_KV_OVERRIDE_ROWS[@]}" -gt 0 ]]; then
+      emit_runtime_kv_insert 'OR REPLACE' "${RUNTIME_KV_OVERRIDE_ROWS[@]}"
+    fi
+    printf 'COMMIT;\n'
+  } > "$sql_file"
   run_sqlite_script "$db_path" "runtime sqlite config" "$sql_file"
   local rc=$?
   rm -f "$sql_file"
