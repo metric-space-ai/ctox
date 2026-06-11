@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::inference::engine;
 use crate::inference::runtime_env;
@@ -872,8 +872,80 @@ fn apply_remote_update(
         keep_failed_release,
         kind,
     )?;
+    prune_release_cache(
+        &layout.cache_root,
+        &channel.config,
+        Some(result.release.as_str()),
+        result.previous_release.as_deref(),
+    );
     progress_done("remote upgrade", started);
     Ok(result)
+}
+
+/// Remove cached archives and extracted trees that belong to neither the
+/// current nor the previous release. Without this the cache grows without
+/// bound — `ctox upgrade --dev` mints a unique `branch-main-<timestamp>` tag
+/// per run, so every dev upgrade would otherwise leave a full tarball plus an
+/// extracted source tree behind forever.
+fn prune_release_cache(
+    cache_root: &Path,
+    channel: &ReleaseChannelConfig,
+    current_release: Option<&str>,
+    previous_release: Option<&str>,
+) {
+    let repo_key = match channel {
+        ReleaseChannelConfig::GitHub { repo, .. } => repo.replace('/', "--"),
+    };
+    let keep_tags: Vec<&str> = [current_release, previous_release]
+        .into_iter()
+        .flatten()
+        .collect();
+    let entry_is_kept = |name: &str| {
+        keep_tags.iter().any(|tag| {
+            // Cache entries are `<tag>` (extracted trees), `<tag>.tar.gz`
+            // (source archives), or `<tag>-<asset>` (binary bundles). Require
+            // the delimiter so v0.4.2 never shields v0.4.21 from pruning.
+            name == *tag
+                || name.starts_with(&format!("{tag}."))
+                || name.starts_with(&format!("{tag}-"))
+        })
+    };
+    for area in ["downloads", "sources", "bundles"] {
+        let dir = cache_root.join(area).join(&repo_key);
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut removed = 0_usize;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            // Stale `.partial` staging files are always garbage; the active
+            // download in this process has already completed by now.
+            if !name.ends_with(".partial") && entry_is_kept(name) {
+                continue;
+            }
+            let result = if path.is_dir() {
+                fs::remove_dir_all(&path)
+            } else {
+                fs::remove_file(&path)
+            };
+            match result {
+                Ok(()) => removed += 1,
+                Err(err) => progress_info(format!(
+                    "warning: failed to prune cached release artifact {}: {err}",
+                    path.display()
+                )),
+            }
+        }
+        if removed > 0 {
+            progress_step(format!(
+                "pruned {removed} cached release artifact(s) under {}",
+                dir.display()
+            ));
+        }
+    }
 }
 
 fn adopt_installation(
@@ -1701,28 +1773,24 @@ fn verify_sha256_asset(
     let Some(sha_asset) = release.assets.iter().find(|a| a.name == sha_asset_name) else {
         return Ok(());
     };
-    let response = github_request(channel, &sha_asset.browser_download_url)?
-        .call()
-        .with_context(|| {
-            format!(
-                "failed to download {sha_asset_name} from {}",
-                sha_asset.browser_download_url
-            )
-        })?;
-    let expected_line = response
-        .into_string()
-        .context("failed to read sha256 checksum body")?;
+    let expected_line = with_download_retries(&format!("download {sha_asset_name}"), || {
+        github_request(channel, &sha_asset.browser_download_url)?
+            .call()
+            .with_context(|| {
+                format!(
+                    "failed to download {sha_asset_name} from {}",
+                    sha_asset.browser_download_url
+                )
+            })?
+            .into_string()
+            .context("failed to read sha256 checksum body")
+    })?;
     let expected = expected_line
         .split_whitespace()
         .next()
         .context("sha256 asset is empty")?
         .to_ascii_lowercase();
-    let bytes = fs::read(archive_path)
-        .with_context(|| format!("failed to read {}", archive_path.display()))?;
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(&bytes);
-    let actual = format!("{:x}", hasher.finalize());
+    let actual = sha256_file_hex(archive_path)?;
     if actual != expected {
         anyhow::bail!(
             "sha256 mismatch for {}: expected {}, got {}",
@@ -1783,12 +1851,25 @@ fn download_release_source(
 }
 
 fn github_api_get_json(channel: &ReleaseChannelConfig, url: &str) -> Result<String> {
-    let response = github_request(channel, url)?
-        .call()
-        .with_context(|| format!("failed to fetch release metadata from {url}"))?;
-    response
-        .into_string()
-        .context("failed to read release metadata response")
+    with_download_retries(&format!("fetch {url}"), || {
+        github_request(channel, url)?
+            .call()
+            .with_context(|| format!("failed to fetch release metadata from {url}"))?
+            .into_string()
+            .context("failed to read release metadata response")
+    })
+}
+
+/// Hash a file by streaming it through SHA-256 — release bundles are large
+/// enough that reading them into memory at once is a real RAM spike.
+fn sha256_file_hex(path: &Path) -> Result<String> {
+    use sha2::Digest;
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut hasher = sha2::Sha256::new();
+    std::io::copy(&mut file, &mut hasher)
+        .with_context(|| format!("failed to hash {}", path.display()))?;
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn download_remote_archive(
@@ -1799,19 +1880,50 @@ fn download_remote_archive(
     if let Some(parent) = destination.parent() {
         ensure_dir(parent)?;
     }
-    let response = github_request(channel, url)?
-        .call()
-        .with_context(|| format!("failed to download release archive from {url}"))?;
-    let mut reader = response.into_reader();
-    let mut file = fs::File::create(destination)
-        .with_context(|| format!("failed to create {}", destination.display()))?;
-    copy(&mut reader, &mut file)
-        .with_context(|| format!("failed to write {}", destination.display()))?;
-    Ok(())
+    // Stage under a `.partial` name and rename only after the body completed.
+    // Callers treat an existing archive path as a finished download — an
+    // interrupted write must never be able to poison that cache.
+    let staging = staging_download_path(destination)?;
+    with_download_retries(&format!("download {url}"), || {
+        let _ = fs::remove_file(&staging);
+        let response = github_request(channel, url)?
+            .call()
+            .with_context(|| format!("failed to download release archive from {url}"))?;
+        let mut reader = response.into_reader();
+        let mut file = fs::File::create(&staging)
+            .with_context(|| format!("failed to create {}", staging.display()))?;
+        copy(&mut reader, &mut file)
+            .with_context(|| format!("failed to write {}", staging.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to flush {}", staging.display()))?;
+        Ok(())
+    })?;
+    fs::rename(&staging, destination).with_context(|| {
+        format!(
+            "failed to move {} into place as {}",
+            staging.display(),
+            destination.display()
+        )
+    })
+}
+
+fn staging_download_path(destination: &Path) -> Result<PathBuf> {
+    let name = destination
+        .file_name()
+        .and_then(OsStr::to_str)
+        .with_context(|| format!("invalid download destination {}", destination.display()))?;
+    Ok(destination.with_file_name(format!("{name}.partial")))
 }
 
 fn github_request(channel: &ReleaseChannelConfig, url: &str) -> Result<ureq::Request> {
-    let agent = ureq::AgentBuilder::new().build();
+    // No overall timeout: release bundles are large and slow links are fine.
+    // The read timeout only fires when the socket stalls completely — without
+    // it a dead GitHub connection hangs the upgrade until the update lock is
+    // declared stale and stolen.
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(GITHUB_CONNECT_TIMEOUT)
+        .timeout_read(GITHUB_READ_STALL_TIMEOUT)
+        .build();
     let mut request = agent
         .get(url)
         .set("accept", "application/vnd.github+json")
@@ -1820,6 +1932,44 @@ fn github_request(channel: &ReleaseChannelConfig, url: &str) -> Result<ureq::Req
         request = request.set("authorization", &format!("Bearer {token}"));
     }
     Ok(request)
+}
+
+const GITHUB_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const GITHUB_READ_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+const DOWNLOAD_RETRY_ATTEMPTS: usize = 3;
+const DOWNLOAD_RETRY_DELAY: Duration = Duration::from_secs(3);
+
+/// Retry transient network failures. Client errors (4xx) are terminal — a
+/// missing tag or asset does not become available by retrying.
+fn with_download_retries<T>(label: &str, mut attempt_fn: impl FnMut() -> Result<T>) -> Result<T> {
+    let mut last_error = None;
+    for attempt in 1..=DOWNLOAD_RETRY_ATTEMPTS {
+        match attempt_fn() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                let retryable = is_retryable_download_error(&err);
+                if !retryable || attempt == DOWNLOAD_RETRY_ATTEMPTS {
+                    return Err(err);
+                }
+                progress_info(format!(
+                    "{label} failed (attempt {attempt}/{DOWNLOAD_RETRY_ATTEMPTS}): {err:#}; retrying"
+                ));
+                last_error = Some(err);
+                std::thread::sleep(DOWNLOAD_RETRY_DELAY);
+            }
+        }
+    }
+    Err(last_error.expect("retry loop returns before draining all attempts"))
+}
+
+fn is_retryable_download_error(err: &anyhow::Error) -> bool {
+    match err.downcast_ref::<ureq::Error>() {
+        Some(ureq::Error::Status(status, _)) => *status >= 500,
+        Some(ureq::Error::Transport(_)) => true,
+        // No ureq error in the chain: an I/O error while streaming the body,
+        // which is just as transient as a transport error.
+        None => true,
+    }
 }
 
 fn github_token(channel: &ReleaseChannelConfig) -> Option<String> {
@@ -2144,6 +2294,86 @@ fn ensure_runtime_symlink(release_root: &Path, state_root: &Path) -> Result<()> 
     create_symlink(state_root, &runtime_path)
 }
 
+const SQLITE_DATABASE_EXTENSIONS: &[&str] = &["db", "sqlite", "sqlite3"];
+const SQLITE_SIDECAR_SUFFIXES: &[&str] = &["-wal", "-shm"];
+
+fn is_sqlite_database_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(OsStr::to_str)
+        .is_some_and(|extension| SQLITE_DATABASE_EXTENSIONS.contains(&extension))
+}
+
+fn is_sqlite_sidecar_file(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+        return false;
+    };
+    SQLITE_SIDECAR_SUFFIXES.iter().any(|suffix| {
+        name.strip_suffix(suffix)
+            .is_some_and(|stem| is_sqlite_database_file(Path::new(stem)))
+    })
+}
+
+fn collect_sqlite_database_files(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            // Earlier backups under `backups/` carry their own database
+            // snapshots; they are never part of a new backup or restore.
+            if path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name == "backups")
+            {
+                continue;
+            }
+            found.extend(collect_sqlite_database_files(&path));
+        } else if file_type.is_file() && is_sqlite_database_file(&path) {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Snapshot a SQLite database into `destination` via `VACUUM INTO`, which runs
+/// inside a read transaction and therefore stays consistent even while the
+/// daemon is still writing through WAL. A plain `fs::copy` of the main file
+/// plus live `-wal`/`-shm` sidecars can capture a torn state — and this backup
+/// is taken before the service is stopped.
+fn backup_sqlite_database(source: &Path, destination: &Path) -> Result<()> {
+    if let Some(parent) = destination.parent() {
+        ensure_dir(parent)?;
+    }
+    // VACUUM INTO refuses to write over an existing file.
+    let _ = fs::remove_file(destination);
+    let destination_str = destination.to_str().with_context(|| {
+        format!(
+            "backup destination is not valid UTF-8: {}",
+            destination.display()
+        )
+    })?;
+    let connection =
+        rusqlite::Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open {} for backup", source.display()))?;
+    connection.busy_timeout(Duration::from_secs(60))?;
+    connection
+        .execute("VACUUM INTO ?1", [destination_str])
+        .with_context(|| {
+            format!(
+                "failed to snapshot {} into {}",
+                source.display(),
+                destination.display()
+            )
+        })?;
+    Ok(())
+}
+
 fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     let backup_root = state_root
         .join("backups")
@@ -2162,18 +2392,48 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
         if is_dir {
             return false;
         }
+        // Databases are snapshotted separately below; live WAL/SHM sidecars
+        // must never land in a backup — restoring them next to a snapshot
+        // would let SQLite replay a mismatched WAL over it.
+        if is_sqlite_database_file(path) || is_sqlite_sidecar_file(path) {
+            return true;
+        }
         !matches!(
             path.extension().and_then(OsStr::to_str),
-            Some("db")
-                | Some("sqlite")
-                | Some("sqlite3")
-                | Some("sqlite3-wal")
-                | Some("sqlite3-shm")
-                | Some("json")
-                | Some("env")
-                | Some("md")
+            Some("json") | Some("env") | Some("md")
         )
     })?;
+    for database in collect_sqlite_database_files(state_root) {
+        let Ok(relative) = database.strip_prefix(state_root) else {
+            continue;
+        };
+        let destination = backup_root.join(relative);
+        if let Err(err) = backup_sqlite_database(&database, &destination) {
+            // Not a readable database (corrupt file, foreign format) — keep a
+            // plain copy so the backup still carries what was on disk.
+            progress_info(format!(
+                "sqlite snapshot failed for {} ({err:#}); falling back to a plain file copy",
+                database.display()
+            ));
+            let _ = fs::remove_file(&destination);
+            if let Some(parent) = destination.parent() {
+                ensure_dir(parent)?;
+            }
+            match fs::copy(&database, &destination) {
+                Ok(_) => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(err).with_context(|| {
+                        format!(
+                            "failed to copy {} to {}",
+                            database.display(),
+                            destination.display()
+                        )
+                    });
+                }
+            }
+        }
+    }
     let manifest_path = backup_root.join("backup_manifest.json");
     let manifest = json!({
         "created_at": now_rfc3339(),
@@ -2192,7 +2452,23 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
         path.file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name == "backup_manifest.json")
-    })
+    })?;
+    // The restored databases are self-contained snapshots. WAL/SHM sidecars
+    // still on disk belong to the release being rolled away; SQLite must not
+    // recover that mismatched WAL over the snapshot.
+    for database in collect_sqlite_database_files(backup_root) {
+        let Ok(relative) = database.strip_prefix(backup_root) else {
+            continue;
+        };
+        let restored = state_root.join(relative);
+        let Some(name) = restored.file_name().and_then(OsStr::to_str) else {
+            continue;
+        };
+        for suffix in SQLITE_SIDECAR_SUFFIXES {
+            let _ = fs::remove_file(restored.with_file_name(format!("{name}{suffix}")));
+        }
+    }
+    Ok(())
 }
 
 fn state_root_has_files(state_root: &Path) -> Result<bool> {
@@ -2939,7 +3215,39 @@ mod tests {
     }
 
     #[test]
-    fn state_backup_includes_sqlite_runtime_state() {
+    fn state_backup_snapshots_live_wal_database_without_sidecars() {
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        ensure_dir(&state_root).unwrap();
+        let db_path = state_root.join("ctox.sqlite3");
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", "wal")
+            .unwrap();
+        connection
+            .execute("CREATE TABLE runtime_probe (value TEXT NOT NULL)", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO runtime_probe (value) VALUES ('main')", [])
+            .unwrap();
+        // The connection stays open across the backup, like a daemon that is
+        // still running while the upgrade snapshots state.
+        assert!(state_root.join("ctox.sqlite3-wal").exists());
+
+        let backup = backup_state_root(&state_root).unwrap();
+
+        let snapshot = rusqlite::Connection::open(backup.join("ctox.sqlite3")).unwrap();
+        let value: String = snapshot
+            .query_row("SELECT value FROM runtime_probe", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "main");
+        assert!(!backup.join("ctox.sqlite3-wal").exists());
+        assert!(!backup.join("ctox.sqlite3-shm").exists());
+        drop(connection);
+    }
+
+    #[test]
+    fn state_backup_falls_back_to_plain_copy_for_non_database_files() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
         ensure_dir(&state_root).unwrap();
@@ -2953,32 +3261,77 @@ mod tests {
             fs::read_to_string(backup.join("ctox.sqlite3")).unwrap(),
             "main"
         );
-        assert_eq!(
-            fs::read_to_string(backup.join("ctox.sqlite3-wal")).unwrap(),
-            "wal"
-        );
-        assert_eq!(
-            fs::read_to_string(backup.join("ctox.sqlite3-shm")).unwrap(),
-            "shm"
-        );
+        assert!(!backup.join("ctox.sqlite3-wal").exists());
+        assert!(!backup.join("ctox.sqlite3-shm").exists());
     }
 
     #[test]
-    fn state_backup_tolerates_disappearing_sqlite_sidecars() {
+    fn restore_state_backup_drops_stale_wal_sidecars() {
         let temp = tempdir().unwrap();
         let state_root = temp.path().join("state");
         ensure_dir(&state_root).unwrap();
-        fs::write(state_root.join("ctox.sqlite3"), "main").unwrap();
-        fs::write(state_root.join("ctox.sqlite3-wal"), "wal").unwrap();
-        fs::remove_file(state_root.join("ctox.sqlite3-wal")).unwrap();
-
+        let db_path = state_root.join("ctox.sqlite3");
+        {
+            let connection = rusqlite::Connection::open(&db_path).unwrap();
+            connection
+                .execute("CREATE TABLE runtime_probe (value TEXT NOT NULL)", [])
+                .unwrap();
+            connection
+                .execute("INSERT INTO runtime_probe (value) VALUES ('before')", [])
+                .unwrap();
+        }
         let backup = backup_state_root(&state_root).unwrap();
+        // Simulate the failed new release leaving live sidecars behind.
+        fs::write(state_root.join("ctox.sqlite3-wal"), "stale").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-shm"), "stale").unwrap();
 
-        assert_eq!(
-            fs::read_to_string(backup.join("ctox.sqlite3")).unwrap(),
-            "main"
-        );
-        assert!(!backup.join("ctox.sqlite3-wal").exists());
+        restore_state_backup(&backup, &state_root).unwrap();
+
+        assert!(!state_root.join("ctox.sqlite3-wal").exists());
+        assert!(!state_root.join("ctox.sqlite3-shm").exists());
+        let restored = rusqlite::Connection::open(&db_path).unwrap();
+        let value: String = restored
+            .query_row("SELECT value FROM runtime_probe", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, "before");
+    }
+
+    #[test]
+    fn prune_release_cache_keeps_current_and_previous_artifacts() {
+        let temp = tempdir().unwrap();
+        let cache_root = temp.path().join("cache");
+        let channel = ReleaseChannelConfig::GitHub {
+            repo: "metric-space-ai/ctox".to_string(),
+            api_base: default_github_api_base_string(),
+            token_env: None,
+        };
+        let repo_key = "metric-space-ai--ctox";
+        let downloads = cache_root.join("downloads").join(repo_key);
+        let sources = cache_root.join("sources").join(repo_key);
+        let bundles = cache_root.join("bundles").join(repo_key);
+        ensure_dir(&downloads).unwrap();
+        fs::write(downloads.join("v0.4.2.tar.gz"), "current").unwrap();
+        fs::write(downloads.join("v0.4.2-ctox-linux-x64.tar.gz"), "current").unwrap();
+        // Tag-prefix boundary: v0.4.2 must not shield v0.4.21.
+        fs::write(downloads.join("v0.4.21.tar.gz"), "other").unwrap();
+        fs::write(downloads.join("branch-main-old.tar.gz"), "old").unwrap();
+        fs::write(downloads.join("v0.4.2.tar.gz.partial"), "torn").unwrap();
+        ensure_dir(&sources.join("v0.4.1")).unwrap();
+        ensure_dir(&sources.join("branch-main-old")).unwrap();
+        ensure_dir(&bundles.join("v0.4.2")).unwrap();
+        ensure_dir(&bundles.join("v0.3.9")).unwrap();
+
+        prune_release_cache(&cache_root, &channel, Some("v0.4.2"), Some("v0.4.1"));
+
+        assert!(downloads.join("v0.4.2.tar.gz").exists());
+        assert!(downloads.join("v0.4.2-ctox-linux-x64.tar.gz").exists());
+        assert!(!downloads.join("v0.4.21.tar.gz").exists());
+        assert!(!downloads.join("branch-main-old.tar.gz").exists());
+        assert!(!downloads.join("v0.4.2.tar.gz.partial").exists());
+        assert!(sources.join("v0.4.1").is_dir());
+        assert!(!sources.join("branch-main-old").exists());
+        assert!(bundles.join("v0.4.2").is_dir());
+        assert!(!bundles.join("v0.3.9").exists());
     }
 
     #[test]
