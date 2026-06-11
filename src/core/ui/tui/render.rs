@@ -234,7 +234,7 @@ fn render_chat(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     ))
     .block(
         pane_block().borders(Borders::TOP).title(Span::styled(
-            " chat ",
+            chat_pane_title(app),
             Style::default()
                 .fg(Color::LightGreen)
                 .add_modifier(Modifier::BOLD),
@@ -814,26 +814,61 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let visible_indices = app.visible_setting_indices();
     let max_rows = body[0].height.saturating_sub(2) as usize;
-    let window_indices = settings_window_indices(app, &visible_indices, max_rows);
-    let items = window_indices
+    let mut window_indices = settings_window_indices(app, &visible_indices, max_rows);
+    // Section headers consume rows; shrink the item window so the selected
+    // row never gets pushed off screen.
+    let header_count = count_setting_sections(app, &window_indices);
+    if header_count > 0 {
+        window_indices =
+            settings_window_indices(app, &visible_indices, max_rows.saturating_sub(header_count));
+    }
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut current_section: Option<&'static str> = None;
+    for (index, item) in window_indices
         .into_iter()
         .filter_map(|idx| app.settings_items.get(idx).map(|item| (idx, item)))
-        .map(|(index, item)| {
-            let rendered_value = app.rendered_setting_value(item);
-            let base = format!("{:18} {}", item.label, truncate_line(&rendered_value, 44));
-            let row_style = setting_row_style(item.key, item.value.trim());
-            if index == app.settings_selected {
+    {
+        let section = setting_section(item.key);
+        if current_section != Some(section) {
+            current_section = Some(section);
+            items.push(
+                ListItem::new(format!("· {section}")).style(
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        }
+        let rendered_value = app.rendered_setting_value(item);
+        // Single-choice rows are display-only facts, not decisions; render
+        // them dimmed and say so instead of pretending they cycle.
+        let fixed = item.kind == super::SettingKind::Env
+            && item.choices.len() == 1
+            && !item.value.trim().is_empty();
+        let value_text = if fixed {
+            format!("{rendered_value} (fixed)")
+        } else {
+            rendered_value
+        };
+        let base = format!("  {:18} {}", item.label, truncate_line(&value_text, 42));
+        let row_style = if fixed {
+            Style::default().fg(Color::DarkGray)
+        } else {
+            setting_row_style(item.key, item.value.trim())
+        };
+        if index == app.settings_selected {
+            items.push(
                 ListItem::new(base).style(
                     row_style
                         .bg(Color::LightCyan)
                         .fg(Color::Black)
                         .add_modifier(Modifier::BOLD),
-                )
-            } else {
-                ListItem::new(base).style(row_style)
-            }
-        })
-        .collect::<Vec<_>>();
+                ),
+            );
+        } else {
+            items.push(ListItem::new(base).style(row_style));
+        }
+    }
     let title = if app.settings_dirty {
         " settings * "
     } else {
@@ -1828,7 +1863,7 @@ fn render_chat_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect)
     ))
     .block(
         pane_block().borders(Borders::TOP).title(Span::styled(
-            " chat ",
+            chat_pane_title(app),
             Style::default()
                 .fg(Color::LightGreen)
                 .add_modifier(Modifier::BOLD),
@@ -2109,13 +2144,23 @@ fn render_secrets_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::Re
     );
 }
 
+fn chat_pane_title(app: &App) -> String {
+    if app.chat_scroll > 0 {
+        format!(" chat ↑{} (End follows) ", app.chat_scroll)
+    } else {
+        " chat ".to_string()
+    }
+}
+
 fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    // The loaded window holds up to 80 messages; with scrollback the whole
+    // window is renderable, not just the visible tail.
     for message in app
         .chat_messages
         .iter()
         .rev()
-        .take(18)
+        .take(80)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -2148,12 +2193,33 @@ fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'
             ],
             width,
         ));
-        let rendered_body = wrap_text_lines(&message.content, width.saturating_sub(2));
-        for chunk in rendered_body {
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                Span::styled(chunk, Style::default().fg(body_color)),
-            ]));
+        // Fenced code blocks render in a distinct tint; the fences
+        // themselves stay dim. Wrapping happens per source line, which is
+        // what wrap_text_lines does internally anyway.
+        let mut in_code_block = false;
+        for source_line in message.content.lines() {
+            if source_line.trim_start().starts_with("```") {
+                in_code_block = !in_code_block;
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        truncate_line(source_line, width.saturating_sub(2)),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+                continue;
+            }
+            let chunk_color = if in_code_block {
+                Color::Cyan
+            } else {
+                body_color
+            };
+            for chunk in wrap_text_lines(source_line, width.saturating_sub(2)) {
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(chunk, Style::default().fg(chunk_color)),
+                ]));
+            }
         }
         lines.push(Line::from(String::new()));
     }
@@ -2180,9 +2246,80 @@ fn render_transcript_lines(app: &App, width: usize, height: usize) -> Vec<Line<'
         ));
     }
     if lines.len() > height {
-        lines = lines.split_off(lines.len().saturating_sub(height));
+        let max_scroll = lines.len().saturating_sub(height);
+        let scroll = app.chat_scroll.min(max_scroll);
+        let end = lines.len() - scroll;
+        lines = lines[end - height..end].to_vec();
     }
     lines
+}
+
+/// Section a settings key renders under. Purely presentational — the flat
+/// item list, visibility rules and selection indices stay untouched, so
+/// the save path and the key-list tests are unaffected.
+fn setting_section(key: &str) -> &'static str {
+    match key {
+        "CTOX_SERVICE_TOGGLE"
+        | "CTOX_WORK_HOURS_ENABLED"
+        | "CTOX_WORK_HOURS_START"
+        | "CTOX_WORK_HOURS_END" => "service",
+        "CTOX_API_PROVIDER"
+        | "CTOX_OPENAI_AUTH_MODE"
+        | "CTOX_WEB_SEARCH_OPENAI_MODE"
+        | "OPENAI_API_KEY"
+        | "ANTHROPIC_API_KEY"
+        | "OPENROUTER_API_KEY"
+        | "AZURE_FOUNDRY_API_KEY"
+        | "CTOX_AZURE_FOUNDRY_ENDPOINT"
+        | "CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID" => "provider & credentials",
+        "CTOX_LOCAL_RUNTIME"
+        | "CTOX_CHAT_MODEL_FAMILY"
+        | "CTOX_CHAT_MODEL"
+        | "CTOX_CHAT_LOCAL_PRESET"
+        | "CTOX_CHAT_MODEL_MAX_CONTEXT"
+        | "CTOX_CHAT_TURN_TIMEOUT_SECS"
+        | "CTOX_CHAT_SKILL_PRESET"
+        | "CTOX_REFRESH_OUTPUT_BUDGET_PCT"
+        | "CTOX_AUTONOMY_LEVEL"
+        | "CTOX_CTO_OPERATING_MODE_PROMPT" => "model & behavior",
+        "CTOX_CHAT_MODEL_BOOST" | "CTOX_BOOST_DEFAULT_MINUTES" => "boost",
+        "CTOX_EMBEDDING_MODEL" | "CTOX_STT_MODEL" | "CTOX_TTS_MODEL" => "voice & embeddings",
+        "CTOX_USE_DIRECT_SESSION"
+        | "CTOX_COMPACT_TRIGGER"
+        | "CTOX_COMPACT_MODE"
+        | "CTOX_COMPACT_FIXED_INTERVAL"
+        | "CTOX_COMPACT_ADAPTIVE_THRESHOLD" => "advanced",
+        "CTOX_OWNER_NAME"
+        | "CTOX_OWNER_EMAIL_ADDRESS"
+        | "CTOX_FOUNDER_EMAIL_ADDRESSES"
+        | "CTOX_FOUNDER_EMAIL_ROLES"
+        | "CTOX_ALLOWED_EMAIL_DOMAIN"
+        | "CTOX_EMAIL_ADMIN_POLICIES"
+        | "CTOX_OWNER_PREFERRED_CHANNEL" => "identity & routing",
+        "CTOX_REMOTE_BRIDGE_MODE"
+        | "CTOX_WEBRTC_SIGNALING_URL"
+        | "CTOX_WEBRTC_ROOM"
+        | "CTOX_WEBRTC_PASSWORD" => "remote bridge",
+        key if key.starts_with("CTO_EMAIL_") => "email",
+        key if key.starts_with("CTO_JAMI_") => "jami",
+        key if key.starts_with("CTO_WHATSAPP_") => "whatsapp",
+        key if key.starts_with("CTO_TEAMS_") => "teams",
+        key if key.ends_with("_ROOT") || key == "CTOX_BIN_DIR" => "paths",
+        _ => "other",
+    }
+}
+
+fn count_setting_sections(app: &App, window_indices: &[usize]) -> usize {
+    let mut sections: Vec<&'static str> = Vec::new();
+    for idx in window_indices {
+        if let Some(item) = app.settings_items.get(*idx) {
+            let section = setting_section(item.key);
+            if sections.last() != Some(&section) {
+                sections.push(section);
+            }
+        }
+    }
+    sections.len()
 }
 
 fn settings_window_indices(app: &App, visible_indices: &[usize], max_rows: usize) -> Vec<usize> {

@@ -824,6 +824,9 @@ struct App {
     /// Marker of the last materialized chat window; the message reload is
     /// skipped while the stored marker matches.
     chat_refresh_marker: Option<(i64, i64, i64, i64)>,
+    /// Transcript scrollback offset in lines from the bottom; 0 follows the
+    /// newest messages. Render clamps it against the actual line count.
+    chat_scroll: usize,
     harness_flow_text: String,
     /// First-run wizard overlay; `Some` while the guided checklist is on
     /// screen. Only `run_tui` arms it (never tests/smoke), and only while
@@ -954,6 +957,17 @@ pub fn run_tui(root: &Path) -> Result<()> {
                         had_event = true;
                         app.handle_paste(&text);
                     }
+                    TerminalEvent::Mouse(mouse) => match mouse.kind {
+                        event::MouseEventKind::ScrollUp => {
+                            had_event = true;
+                            app.handle_scroll(true);
+                        }
+                        event::MouseEventKind::ScrollDown => {
+                            had_event = true;
+                            app.handle_scroll(false);
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
                 if !event::poll(Duration::ZERO)
@@ -1201,6 +1215,7 @@ impl App {
             worker: None,
             lcm_engine: None,
             chat_refresh_marker: None,
+            chat_scroll: 0,
             harness_flow_text: String::new(),
             setup_wizard: None,
             work_view: WorkView::Flow,
@@ -1475,12 +1490,49 @@ impl App {
             KeyCode::Backspace => {
                 self.chat_input.pop();
             }
+            KeyCode::PageUp => self.scroll_chat(3),
+            KeyCode::PageDown => self.scroll_chat_back(3),
+            KeyCode::End => self.chat_scroll = 0,
             KeyCode::Char(ch) if !key_event.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.chat_input.push(ch);
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn scroll_chat(&mut self, lines: usize) {
+        // Upper bound is enforced at render time against the actual line
+        // count; clamp loosely here so the offset cannot run away.
+        self.chat_scroll = (self.chat_scroll + lines).min(4096);
+    }
+
+    fn scroll_chat_back(&mut self, lines: usize) {
+        self.chat_scroll = self.chat_scroll.saturating_sub(lines);
+    }
+
+    /// Mouse-wheel routing per page: transcript scrollback on Chat, flow
+    /// scroll on Work, list selection on Skills and Settings.
+    fn handle_scroll(&mut self, up: bool) {
+        match self.page {
+            Page::Chat => {
+                if up {
+                    self.scroll_chat(3);
+                } else {
+                    self.scroll_chat_back(3);
+                }
+            }
+            Page::Work => {
+                if up {
+                    self.harness_flow_scroll = self.harness_flow_scroll.saturating_sub(3);
+                } else {
+                    self.harness_flow_scroll = self.harness_flow_scroll.saturating_add(3);
+                }
+            }
+            Page::Skills => self.move_skills_selection(if up { -1 } else { 1 }),
+            Page::Costs => {}
+            Page::Settings => self.move_settings_selection(if up { -1 } else { 1 }),
+        }
     }
 
     fn handle_settings_key(&mut self, key_event: KeyEvent) -> Result<()> {
@@ -1936,6 +1988,8 @@ impl App {
             prompt.push_str(&raw);
         }
         let attachment_count = self.pending_images.len();
+        // A submit always jumps back to the live tail of the transcript.
+        self.chat_scroll = 0;
 
         if self.request_in_flight {
             // Drafts hold the raw composed prompt; preparation happens at
@@ -5899,7 +5953,8 @@ impl TerminalGuard {
             stdout,
             EnterAlternateScreen,
             terminal::Clear(ClearType::All),
-            cursor::Hide
+            cursor::Hide,
+            event::EnableMouseCapture
         )?;
         Ok(Self)
     }
@@ -5909,7 +5964,12 @@ impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let mut stdout = io::stdout();
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(stdout, cursor::Show, LeaveAlternateScreen);
+        let _ = execute!(
+            stdout,
+            event::DisableMouseCapture,
+            cursor::Show,
+            LeaveAlternateScreen
+        );
     }
 }
 
