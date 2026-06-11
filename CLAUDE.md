@@ -90,11 +90,14 @@ The repository root is intentionally small. Keep source under `src/`, docs under
 
 ## TUI Surface (orientation only)
 
-- `src/core/ui/tui/mod.rs` — App state, event loop, key handling
-- `src/core/ui/tui/render.rs` — ratatui rendering
-- Three pages: `Chat`, `Skills`, `Settings` (enum at `mod.rs:365`)
-- Settings sub-views: `Model`, `Communication`, `Secrets`, `Update`
-- Layout: Header (7 lines) + Tabs (1 line) + Page content + Status bar
+- `src/core/ui/tui/mod.rs` — App state, event loop, key handling, refresh scheduling
+- `src/core/ui/tui/worker.rs` — background data plane: a poll thread (status IPC, LCM chat window, feed, skills, harness flow, GPU sampling, telemetry, Jami) and an action thread (update subprocesses, prompt submit, service toggle). The render thread must never do IO — schedule a job and apply the typed payload instead. Tests construct `App` without a worker and exercise the same collectors inline.
+- `src/core/ui/tui/render.rs` — ratatui rendering; `gpu.rs`, `images.rs`, `jami.rs`, `skills_catalog.rs` hold the moved free-function blocks
+- Five pages (`Page` enum): `Chat`, `Work`, `Skills`, `Costs`, `Settings`
+- Work sub-views (`WorkView`): `Flow` (native structured harness-flow rendering + queue sidebar), `Harness` (mining health), `BusinessOs` (live data-plane panel from `ServiceStatus.business_os`)
+- Settings sub-views (`SettingsView`): `Model`, `Communication`, `Secrets`, `Paths`, `Update` — rendered under presentational section headers; single-choice rows render dimmed as `(fixed)`
+- First-run wizard: `run_tui` arms a checklist overlay while no chat backend is configured; dismissal persists as `CTOX_SETUP_WIZARD_STATE` in the runtime store
+- Layout: Header (7 lines) + Tabs (1 line) + Page content + Status bar; mouse wheel scrolls transcript/flow/lists
 
 When the user asks for a TUI layout or rendering change, they are the ones who run the local snapshot/smoke tools if they want to preview it — you propose code edits, they verify on their machine or via CI.
 
