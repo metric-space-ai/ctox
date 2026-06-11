@@ -125,6 +125,21 @@ const PROXY_REFRESH_INTERVAL_SETTINGS: Duration = Duration::from_millis(1200);
 /// owns the writes; if a refresh tick hits a write lock the UI keeps the
 /// previous data instead of stalling the render loop for the 30s default.
 const TUI_LCM_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
+/// Status-IPC wait budget for the UI poll. A healthy local daemon answers
+/// in single-digit milliseconds; when it is busy the poll degrades to the
+/// pid-file fallback instead of holding the render loop for the 750ms
+/// default budget.
+const TUI_STATUS_IPC_TIMEOUT: Duration = Duration::from_millis(250);
+/// Reuse window for the systemd unit probe (three systemctl spawns on
+/// Linux) during UI polling.
+const TUI_SYSTEMD_CACHE_TTL: Duration = Duration::from_secs(30);
+/// Lifecycle alerts spawn a full `ps` process scan; recompute them on this
+/// cadence instead of every status poll.
+const LIFECYCLE_ALERT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// Heartbeat for header recomputation on the settings page while no
+/// settings value changes (keeps the boost countdown and telemetry drift
+/// visible without re-running the planner every tick).
+const HEADER_REFRESH_INTERVAL_SETTINGS: Duration = Duration::from_secs(2);
 
 fn default_bin_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -868,6 +883,10 @@ struct App {
     last_chat_refresh_at: Option<Instant>,
     last_communication_refresh_at: Option<Instant>,
     last_skill_catalog_refresh_at: Option<Instant>,
+    last_lifecycle_alert_refresh_at: Option<Instant>,
+    last_choice_inputs_fingerprint: Option<u64>,
+    last_header_inputs_fingerprint: Option<u64>,
+    last_header_refresh_at: Option<Instant>,
     /// Long-lived read connection to the LCM store. Opened lazily, kept for
     /// the lifetime of the TUI, dropped and reopened after a failed read.
     lcm_engine: Option<lcm::LcmEngine>,
@@ -946,6 +965,9 @@ impl SkillState {
 }
 
 pub fn run_tui(root: &Path) -> Result<()> {
+    // Recover any dangling runtime-switch transaction once at startup; the
+    // per-tick status poll deliberately skips this write path.
+    let _ = runtime_control::reconcile_runtime_switch_transaction(root);
     let db_path = crate::persistence::sqlite_path(root);
     let mut app = App::new(root.to_path_buf(), db_path);
     let mut stdout = io::stdout();
@@ -1220,6 +1242,10 @@ impl App {
             last_chat_refresh_at: None,
             last_communication_refresh_at: None,
             last_skill_catalog_refresh_at: None,
+            last_lifecycle_alert_refresh_at: None,
+            last_choice_inputs_fingerprint: None,
+            last_header_inputs_fingerprint: None,
+            last_header_refresh_at: None,
             lcm_engine: None,
             chat_refresh_marker: None,
             harness_flow_text: String::new(),
@@ -1769,6 +1795,9 @@ impl App {
                     self.runtime_switch_rx = None;
                     self.pending_runtime_transition_cards = None;
                     self.status_line = format!("Settings saved, but runtime switch failed: {err}");
+                    // The failed switch may have left a dangling transaction;
+                    // the status poll no longer reconciles, so do it here.
+                    let _ = runtime_control::reconcile_runtime_switch_transaction(&self.root);
                     self.invalidate_runtime_observations();
                     self.refresh()?;
                 }
@@ -1779,6 +1808,7 @@ impl App {
                     self.pending_runtime_transition_cards = None;
                     self.status_line =
                         "Settings saved, but runtime switch worker disappeared.".to_string();
+                    let _ = runtime_control::reconcile_runtime_switch_transaction(&self.root);
                     self.invalidate_runtime_observations();
                 }
             }
@@ -1790,12 +1820,31 @@ impl App {
         self.last_gpu_refresh_at = None;
         self.last_runtime_refresh_at = None;
         self.runtime_telemetry = None;
+        self.last_choice_inputs_fingerprint = None;
+        self.last_header_inputs_fingerprint = None;
+        self.last_header_refresh_at = None;
         invalidate_local_gpu_probe_cache();
     }
 
     fn refresh_service_status(&mut self) {
         let previous = self.service_status.clone();
-        self.service_status = service::service_status_snapshot(&self.root).unwrap_or_else(|_| {
+        // UI-cadence probe: the reconcile write path ran once at TUI start
+        // (and after runtime switches); systemd state and lifecycle alerts
+        // do not change between sub-second ticks; a healthy local daemon
+        // answers the status IPC in single-digit milliseconds, so a short
+        // budget only sheds load while the daemon is busy.
+        let lifecycle_due = refresh_due(
+            &mut self.last_lifecycle_alert_refresh_at,
+            LIFECYCLE_ALERT_REFRESH_INTERVAL,
+        );
+        let probe = service::StatusProbeOptions {
+            reconcile_runtime_switch: false,
+            systemd_cache_ttl: Some(TUI_SYSTEMD_CACHE_TTL),
+            status_ipc_timeout: Some(TUI_STATUS_IPC_TIMEOUT),
+            lifecycle_alerts: lifecycle_due,
+        };
+        self.service_status = service::service_status_snapshot_with(&self.root, &probe)
+            .unwrap_or_else(|_| {
             service::ServiceStatus {
                 running: false,
                 busy: false,
@@ -1823,6 +1872,11 @@ impl App {
                 work_hours: service::working_hours::snapshot(&self.root),
             }
         });
+        if !lifecycle_due {
+            // Alerts were not recomputed this tick; keep the last observed
+            // set instead of flickering to empty.
+            self.service_status.monitor_alerts = previous.monitor_alerts.clone();
+        }
         self.request_in_flight = self.service_status.running && self.service_status.busy;
         if previous.busy && !self.service_status.busy {
             self.status_line = match self.service_status.last_error.as_deref() {
@@ -2583,7 +2637,16 @@ impl App {
     fn refresh(&mut self) -> Result<()> {
         if self.page == Page::Settings {
             self.ensure_settings_items_loaded();
-            self.refresh_dynamic_setting_choices();
+            // Choice rebuilding consults the GPU probe and the runtime
+            // planner; only rerun it when a settings value actually moved
+            // (key handlers additionally trigger it directly on edits).
+            let fingerprint = self.settings_values_fingerprint();
+            if self.last_choice_inputs_fingerprint != Some(fingerprint) {
+                self.refresh_dynamic_setting_choices();
+                // The rebuild may coerce values, so re-fingerprint after.
+                self.last_choice_inputs_fingerprint =
+                    Some(self.settings_values_fingerprint());
+            }
         }
         let visible = self.visible_setting_indices();
         if let Some(first) = visible.first().copied() {
@@ -2626,10 +2689,41 @@ impl App {
         if self.page == Page::Settings {
             self.refresh_gpu_cards();
             self.refresh_runtime_telemetry_if_due();
-            self.refresh_header();
+            // refresh_header loads runtime state from disk and runs the
+            // preset planner; recompute immediately when a settings value
+            // changes and otherwise on a slow heartbeat (boost countdown,
+            // telemetry drift).
+            let fingerprint = self.settings_values_fingerprint();
+            let inputs_changed = self.last_header_inputs_fingerprint != Some(fingerprint);
+            if inputs_changed
+                || refresh_due(
+                    &mut self.last_header_refresh_at,
+                    HEADER_REFRESH_INTERVAL_SETTINGS,
+                )
+            {
+                self.refresh_header();
+                self.last_header_inputs_fingerprint = Some(fingerprint);
+                if inputs_changed {
+                    self.last_header_refresh_at = Some(Instant::now());
+                }
+            }
             self.refresh_jami_qr();
         }
         Ok(())
+    }
+
+    /// Order-stable hash over the current settings values; used to skip
+    /// choice and header recomputation while nothing changed.
+    fn settings_values_fingerprint(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::Hash;
+        use std::hash::Hasher;
+        let mut hasher = DefaultHasher::new();
+        for item in &self.settings_items {
+            item.key.hash(&mut hasher);
+            item.value.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     fn refresh_service_status_if_due(&mut self) {

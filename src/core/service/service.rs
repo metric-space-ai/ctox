@@ -52,8 +52,10 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::Once;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 #[cfg(not(unix))]
@@ -1792,10 +1794,60 @@ pub fn submit_chat_prompt_with_intent(
     }
 }
 
+/// Probe knobs for status polling. The CLI default runs the full probe;
+/// UI-cadence pollers (the TUI refreshes every 500–1200ms) skip the
+/// runtime-switch reconcile write path, reuse a recent systemd probe,
+/// bound the status IPC wait, and throttle the process-scanning lifecycle
+/// alerts — none of those inputs change at sub-second cadence.
+#[derive(Debug, Clone)]
+pub struct StatusProbeOptions {
+    /// Run `reconcile_runtime_switch_transaction` before probing. Needed at
+    /// most once per process start and after a runtime switch, not per poll.
+    pub reconcile_runtime_switch: bool,
+    /// Reuse a cached systemd unit probe younger than this TTL. `None`
+    /// probes fresh (three systemctl spawns on Linux).
+    pub systemd_cache_ttl: Option<Duration>,
+    /// Override the status IPC wait budget. `None` keeps the default.
+    pub status_ipc_timeout: Option<Duration>,
+    /// Compute lifecycle alerts (spawns `ps` for a duplicate-process scan).
+    /// Callers that skip this keep their previously observed alerts.
+    pub lifecycle_alerts: bool,
+}
+
+impl Default for StatusProbeOptions {
+    fn default() -> Self {
+        Self {
+            reconcile_runtime_switch: true,
+            systemd_cache_ttl: None,
+            status_ipc_timeout: None,
+            lifecycle_alerts: true,
+        }
+    }
+}
+
 pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
-    let _ = runtime_control::reconcile_runtime_switch_transaction(root);
-    let systemd = systemd_unit_status(root)?;
-    if let Some(mut status) = live_service_status_snapshot(root)? {
+    service_status_snapshot_with(root, &StatusProbeOptions::default())
+}
+
+pub fn service_status_snapshot_with(
+    root: &Path,
+    probe: &StatusProbeOptions,
+) -> Result<ServiceStatus> {
+    if probe.reconcile_runtime_switch {
+        let _ = runtime_control::reconcile_runtime_switch_transaction(root);
+    }
+    let systemd = match probe.systemd_cache_ttl {
+        Some(ttl) => systemd_unit_status_cached(root, ttl)?,
+        None => systemd_unit_status(root)?,
+    };
+    let lifecycle_alerts = |pid: Option<u32>, running: bool| -> Result<Vec<String>> {
+        if probe.lifecycle_alerts {
+            runtime_lifecycle_alerts(root, pid, running)
+        } else {
+            Ok(Vec::new())
+        }
+    };
+    if let Some(mut status) = live_service_status_snapshot(root, probe.status_ipc_timeout)? {
         status.business_os = Some(business_os_health_snapshot(root));
         if let Some(systemd) = systemd {
             status.autostart_enabled = systemd.enabled;
@@ -1810,7 +1862,7 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
             status.manager = "process".to_string();
         }
         status.running = true;
-        status.monitor_alerts = runtime_lifecycle_alerts(root, status.pid, true)?;
+        status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
         return Ok(status);
     }
     if let Some(systemd) = systemd {
@@ -1822,7 +1874,7 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
         }
         status.autostart_enabled = systemd.enabled;
         status.manager = "systemd-user".to_string();
-        status.monitor_alerts = runtime_lifecycle_alerts(root, status.pid, status.running)?;
+        status.monitor_alerts = lifecycle_alerts(status.pid, status.running)?;
         return Ok(status);
     }
     #[cfg(unix)]
@@ -1830,7 +1882,7 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
         let mut status = ServiceStatus::stopped(root);
         if status.pid.is_some_and(process_is_running) {
             status.running = true;
-            status.monitor_alerts = runtime_lifecycle_alerts(root, status.pid, true)?;
+            status.monitor_alerts = lifecycle_alerts(status.pid, true)?;
         }
         return Ok(status);
     }
@@ -1840,16 +1892,22 @@ pub fn service_status_snapshot(root: &Path) -> Result<ServiceStatus> {
     }
 }
 
-fn live_service_status_snapshot(root: &Path) -> Result<Option<ServiceStatus>> {
+fn live_service_status_snapshot(
+    root: &Path,
+    timeout_override: Option<Duration>,
+) -> Result<Option<ServiceStatus>> {
     #[cfg(unix)]
     {
-        match send_service_ipc_request(root, ServiceIpcRequest::Status) {
+        let timeout =
+            timeout_override.unwrap_or_else(|| service_ipc_timeout(&ServiceIpcRequest::Status));
+        match send_service_ipc_request_with_timeout(root, ServiceIpcRequest::Status, timeout) {
             Ok(ServiceIpcResponse::Status(status)) => Ok(Some(status)),
             Ok(_) | Err(_) => Ok(None),
         }
     }
     #[cfg(not(unix))]
     {
+        let _ = timeout_override;
         let status_agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_millis(100))
             .timeout_read(Duration::from_millis(150))
@@ -2654,6 +2712,14 @@ fn service_listen_addr(root: &Path) -> String {
 #[cfg(unix)]
 fn send_service_ipc_request(root: &Path, request: ServiceIpcRequest) -> Result<ServiceIpcResponse> {
     let timeout = service_ipc_timeout(&request);
+    send_service_ipc_request_with_timeout(root, request, timeout)
+}
+
+fn send_service_ipc_request_with_timeout(
+    root: &Path,
+    request: ServiceIpcRequest,
+    timeout: Duration,
+) -> Result<ServiceIpcResponse> {
     let socket_path = service_socket_path(root);
     let mut stream = UnixStream::connect(&socket_path).with_context(|| {
         format!(
@@ -14228,6 +14294,28 @@ struct SystemdUnitStatus {
     active: bool,
     enabled: bool,
     pid: Option<u32>,
+}
+
+/// TTL-cached variant of `systemd_unit_status` for UI-cadence polling. The
+/// unit's enabled/active state changes on operator action, not between
+/// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
+fn systemd_unit_status_cached(root: &Path, ttl: Duration) -> Result<Option<SystemdUnitStatus>> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
+        OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Some((probed_at, cached_root, cached)) = cache
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_ref()
+    {
+        if cached_root.as_path() == root && probed_at.elapsed() < ttl {
+            return Ok(cached.clone());
+        }
+    }
+    let fresh = systemd_unit_status(root)?;
+    *cache.lock().unwrap_or_else(|err| err.into_inner()) =
+        Some((Instant::now(), root.to_path_buf(), fresh.clone()));
+    Ok(fresh)
 }
 
 fn systemd_unit_status(root: &Path) -> Result<Option<SystemdUnitStatus>> {
