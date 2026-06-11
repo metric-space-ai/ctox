@@ -13,8 +13,19 @@ export function collectionTopic(syncRoom, collection) {
 }
 
 export function batchSizeFor(collection) {
-  if (collection === 'desktop_file_chunks') return 2;
-  return collection.includes('attachment') || collection.includes('chunk') ? 4 : 10;
+  // desktop_file_chunks docs serialize to ~22 KB each (16 KiB base64 data +
+  // metadata). The native master caps each masterChangesSince answer at
+  // 96 KiB anyway (checkpoint-correct truncation), so asking for more per
+  // round-trip lets the server fill that cap: a 1.26 MB file drops from
+  // ~52 pull round-trips (batchSize 2) to ~26. Safe because the browser
+  // pull drain is truncation-aware (loops until an EMPTY answer — see
+  // pullFromPeer in the rxdb runtime).
+  if (collection === 'desktop_file_chunks') return 6;
+  if (collection.includes('attachment') || collection.includes('chunk')) return 8;
+  // Regular business docs are small (≤ ~2 KB); 20 per round-trip halves the
+  // initial catch-up round-trips without approaching frame limits (the
+  // frame protocol chunks large answers transparently).
+  return 20;
 }
 
 export function nativeRxdbPeerReady(config, db) {

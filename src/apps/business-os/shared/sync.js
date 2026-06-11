@@ -252,7 +252,14 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
           scheduleRestart: scheduleRestartOfUnhealthyCollections,
         });
       });
-      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(500));
+      // 50 ms spacing between collection starts. The original 500 ms guarded
+      // the pre-multiplex world where every start dialled its own
+      // RTCPeerConnection through signaling; since phase 3 all collections
+      // share ONE room peer and a "start" is just a registration + catch-up
+      // pull on the existing channel. 500 ms turned an 18-collection shell
+      // start into 9 s of pure queue delay. A small gap is kept so start
+      // bursts stay ordered and the first connection wins the race cleanly.
+      collectionStartQueue = bridgePromise.catch(() => {}).then(() => delay(50));
       bridges.set(collection, bridgePromise);
       try {
         const bridge = await bridgePromise;
@@ -518,7 +525,7 @@ async function startWebRtcReplication({ db, config, collection, recordCollection
     recordCollection?.(collection, { status: 'pending', reason: 'collection-not-registered' });
     return { mode: 'pending', collection, reason: 'collection-not-registered' };
   }
-  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260610-rxdb-lww-origin');
+  const rxdb = db?.rxdb || await import('../rxdb/dist/ctox-rxdb-js.mjs?v=20260611-rxdb-transport-perf');
   if (typeof rxdb?.replicateWebRTC !== 'function' || typeof rxdb?.getConnectionHandlerSimplePeer !== 'function') {
     throw new Error('RxDB WebRTC bundle is missing replicateWebRTC/getConnectionHandlerSimplePeer');
   }

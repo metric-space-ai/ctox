@@ -5153,7 +5153,7 @@ var CtoxWebRtcReplicationState = class {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
-      if (documents.length < batchSize) break;
+      if (!documents.length) break;
     }
   }
   async requestMasterChangesSince(peerId, checkpoint, batchSize) {

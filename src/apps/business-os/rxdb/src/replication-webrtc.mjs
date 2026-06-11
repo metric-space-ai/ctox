@@ -932,7 +932,13 @@ class CtoxWebRtcReplicationState {
       }
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
-      if (documents.length < batchSize) break;
+      // Drain until an EMPTY answer, not until a partial batch: the master
+      // legitimately returns fewer documents than asked for (the
+      // desktop_file_chunks response limiter caps answers at 96 KiB with a
+      // checkpoint pointing at the last KEPT doc). Treating a short batch as
+      // "drained" would strand the remainder until the next master-change
+      // event. The final empty round-trip is the price of correctness.
+      if (!documents.length) break;
     }
   }
 
