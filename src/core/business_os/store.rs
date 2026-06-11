@@ -63,6 +63,9 @@ const BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS: usize = 96_000;
 const BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS: usize = 18_000;
 const BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS: usize = 8_000;
 const BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS: i64 = 10 * 60 * 1_000;
+const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE: usize = 16 * 1024;
+const BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME: &str = "sha256-bytes-v1";
+const BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME: &str = "sha256-base64-chunk-v1";
 
 #[derive(Debug, Clone, Default)]
 struct ChatgptSubscriptionAuthStatus {
@@ -163,6 +166,20 @@ pub struct BusinessCommand {
     pub payload: Value,
     #[serde(default)]
     pub client_context: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct MaterializedBusinessChatAttachment {
+    attachment_id: String,
+    file_id: String,
+    generation_id: String,
+    name: String,
+    mime_type: String,
+    size_bytes: u64,
+    content_hash: String,
+    content_hash_scheme: String,
+    virtual_path: String,
+    local_path: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3171,6 +3188,35 @@ fn rxdb_desktop_file_document(root: &Path, file_id: &str) -> anyhow::Result<Valu
         .optional()?
         .with_context(|| format!("desktop file `{file_id}` is not indexed"))?;
     serde_json::from_str(&data).context("invalid desktop file RxDB document")
+}
+
+fn rxdb_desktop_file_chunks(
+    root: &Path,
+    file_id: &str,
+    generation_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let database_path = rxdb_store_path(root);
+    let conn = Connection::open(&database_path)
+        .with_context(|| format!("failed to open {}", database_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 10000;")?;
+    let mut stmt = conn
+        .prepare("SELECT data FROM ctox_business_os__desktop_file_chunks__v0")
+        .context("desktop file chunk collection is not available")?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let mut chunks = Vec::new();
+    for row in rows {
+        let raw = row?;
+        let value: Value =
+            serde_json::from_str(&raw).context("invalid desktop file chunk RxDB document")?;
+        if value.get("file_id").and_then(Value::as_str) == Some(file_id)
+            && value.get("generation_id").and_then(Value::as_str) == Some(generation_id)
+            && !is_rxdb_deleted_document(&value)
+        {
+            chunks.push(value);
+        }
+    }
+    Ok(chunks)
 }
 
 fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
@@ -15395,6 +15441,400 @@ fn session_user_label(session: &BusinessOsSession) -> String {
         .unwrap_or_else(|| "unknown user".to_string())
 }
 
+fn materialize_business_chat_attachments(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Vec<MaterializedBusinessChatAttachment>> {
+    let refs = business_chat_attachment_refs(command);
+    if refs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut attachments = Vec::with_capacity(refs.len());
+    let mut seen = HashSet::new();
+    for attachment_ref in refs {
+        let file_id = attachment_ref_string(&attachment_ref, &["file_id", "fileId"])
+            .with_context(|| "Business OS attachment reference is missing file_id")?;
+        let generation_id =
+            attachment_ref_string(&attachment_ref, &["generation_id", "generationId"]);
+        let key = format!("{}:{}", file_id, generation_id.clone().unwrap_or_default());
+        if !seen.insert(key) {
+            continue;
+        }
+        attachments.push(materialize_business_chat_attachment(
+            root,
+            command_id,
+            &attachment_ref,
+            &file_id,
+            generation_id.as_deref(),
+        )?);
+    }
+    Ok(attachments)
+}
+
+fn business_chat_attachment_refs(command: &BusinessCommand) -> Vec<Value> {
+    let mut refs = Vec::new();
+    for container in [&command.payload, &command.client_context] {
+        for key in ["attachment_refs", "attachments"] {
+            if let Some(items) = container.get(key).and_then(Value::as_array) {
+                refs.extend(items.iter().filter_map(|item| {
+                    if !item.is_object() {
+                        return None;
+                    }
+                    let file_id = attachment_ref_string(item, &["file_id", "fileId"])?;
+                    let kind = attachment_ref_string(item, &["kind"])
+                        .unwrap_or_else(|| "desktop_file".to_string());
+                    (kind == "desktop_file" || kind == "file" || !file_id.is_empty())
+                        .then(|| item.clone())
+                }));
+            }
+        }
+    }
+    refs
+}
+
+fn materialize_business_chat_attachment(
+    root: &Path,
+    command_id: &str,
+    attachment_ref: &Value,
+    file_id: &str,
+    requested_generation_id: Option<&str>,
+) -> anyhow::Result<MaterializedBusinessChatAttachment> {
+    let file_doc = rxdb_desktop_file_document(root, file_id)?;
+    anyhow::ensure!(
+        !is_rxdb_deleted_document(&file_doc),
+        "Business OS attachment `{file_id}` is deleted"
+    );
+    anyhow::ensure!(
+        file_doc
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("file")
+            == "file",
+        "Business OS attachment `{file_id}` is not a regular file"
+    );
+    let content_state = file_doc
+        .get("content_state")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    anyhow::ensure!(
+        content_state == "available",
+        "Business OS attachment `{file_id}` content is not available"
+    );
+    let generation_id = requested_generation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            file_doc
+                .get("content_generation_id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .with_context(|| format!("Business OS attachment `{file_id}` has no content generation"))?;
+    let file_generation_id = file_doc
+        .get("content_generation_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !file_generation_id.is_empty() {
+        anyhow::ensure!(
+            file_generation_id == generation_id,
+            "Business OS attachment `{file_id}` generation mismatch"
+        );
+    }
+    let file_hash = file_doc
+        .get("content_hash")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let ref_hash = attachment_ref_string(attachment_ref, &["content_hash", "contentHash"]);
+    if let Some(ref_hash) = ref_hash.as_deref().filter(|value| !value.is_empty()) {
+        anyhow::ensure!(
+            file_hash.is_empty() || file_hash == ref_hash,
+            "Business OS attachment `{file_id}` content hash mismatch"
+        );
+    }
+    let content_hash = if file_hash.is_empty() {
+        ref_hash.unwrap_or_default()
+    } else {
+        file_hash
+    };
+    anyhow::ensure!(
+        !content_hash.is_empty(),
+        "Business OS attachment `{file_id}` has no content hash"
+    );
+    let content_hash_scheme = file_doc
+        .get("content_hash_scheme")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            attachment_ref
+                .get("content_hash_scheme")
+                .and_then(Value::as_str)
+        })
+        .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME);
+    anyhow::ensure!(
+        content_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+        "Business OS attachment `{file_id}` uses unsupported content hash scheme `{content_hash_scheme}`"
+    );
+    let size_bytes = file_doc
+        .get("size_bytes")
+        .and_then(Value::as_u64)
+        .or_else(|| attachment_ref.get("size_bytes").and_then(Value::as_u64))
+        .unwrap_or(0);
+    if let Some(ref_size) = attachment_ref.get("size_bytes").and_then(Value::as_u64) {
+        anyhow::ensure!(
+            ref_size == size_bytes,
+            "Business OS attachment `{file_id}` size mismatch"
+        );
+    }
+    let chunks = rxdb_desktop_file_chunks(root, file_id, &generation_id)?;
+    let decoded = decode_verified_desktop_file_chunks(
+        file_id,
+        &generation_id,
+        size_bytes,
+        &content_hash,
+        chunks,
+    )?;
+    let name = attachment_ref_string(attachment_ref, &["name"])
+        .or_else(|| {
+            file_doc
+                .get("name")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| file_id.to_string());
+    let mime_type = attachment_ref_string(attachment_ref, &["mime_type", "mimeType"])
+        .or_else(|| {
+            file_doc
+                .get("mime_type")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| "application/octet-stream".to_string());
+    let virtual_path = attachment_ref_string(attachment_ref, &["virtual_path", "virtualPath"])
+        .or_else(|| {
+            file_doc
+                .get("virtual_path")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .or_else(|| {
+            file_doc
+                .get("path")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_default();
+    let dir = root
+        .join("runtime")
+        .join("business-os")
+        .join("chat-attachments")
+        .join(sanitize_filename(command_id));
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create chat attachment dir {}", dir.display()))?;
+    let file_name = materialized_attachment_filename(file_id, &name);
+    let local_path = dir.join(file_name);
+    fs::write(&local_path, &decoded).with_context(|| {
+        format!(
+            "failed to write materialized Business OS attachment {}",
+            local_path.display()
+        )
+    })?;
+    Ok(MaterializedBusinessChatAttachment {
+        attachment_id: attachment_ref_string(attachment_ref, &["attachment_id", "attachmentId"])
+            .unwrap_or_default(),
+        file_id: file_id.to_string(),
+        generation_id,
+        name,
+        mime_type,
+        size_bytes,
+        content_hash,
+        content_hash_scheme: BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME.to_string(),
+        virtual_path,
+        local_path: local_path.to_string_lossy().into_owned(),
+    })
+}
+
+fn attachment_ref_string(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+            .map(ToOwned::to_owned)
+    })
+}
+
+fn decode_verified_desktop_file_chunks(
+    file_id: &str,
+    generation_id: &str,
+    size_bytes: u64,
+    content_hash: &str,
+    chunks: Vec<Value>,
+) -> anyhow::Result<Vec<u8>> {
+    anyhow::ensure!(
+        !chunks.is_empty(),
+        "Business OS attachment `{file_id}` has no chunks for generation `{generation_id}`"
+    );
+    let total = chunks
+        .first()
+        .and_then(|chunk| chunk.get("total"))
+        .and_then(Value::as_u64)
+        .with_context(|| format!("Business OS attachment `{file_id}` chunk total is missing"))?;
+    anyhow::ensure!(
+        total > 0,
+        "Business OS attachment `{file_id}` chunk total is zero"
+    );
+    let expected_total = expected_desktop_file_chunk_total(size_bytes);
+    anyhow::ensure!(
+        total == expected_total,
+        "Business OS attachment `{file_id}` chunk total mismatch"
+    );
+    let mut by_index = BTreeMap::new();
+    for chunk in chunks {
+        anyhow::ensure!(
+            !is_rxdb_deleted_document(&chunk),
+            "Business OS attachment `{file_id}` contains a deleted chunk"
+        );
+        anyhow::ensure!(
+            chunk.get("file_id").and_then(Value::as_str) == Some(file_id),
+            "Business OS attachment `{file_id}` chunk file_id mismatch"
+        );
+        anyhow::ensure!(
+            chunk.get("generation_id").and_then(Value::as_str) == Some(generation_id),
+            "Business OS attachment `{file_id}` chunk generation mismatch"
+        );
+        anyhow::ensure!(
+            chunk.get("total").and_then(Value::as_u64) == Some(total),
+            "Business OS attachment `{file_id}` chunk total mismatch"
+        );
+        anyhow::ensure!(
+            chunk
+                .get("encoding")
+                .and_then(Value::as_str)
+                .unwrap_or("base64")
+                == "base64",
+            "Business OS attachment `{file_id}` chunk encoding is unsupported"
+        );
+        anyhow::ensure!(
+            chunk
+                .get("content_hash")
+                .and_then(Value::as_str)
+                .map(|hash| hash == content_hash)
+                .unwrap_or(true),
+            "Business OS attachment `{file_id}` chunk content hash mismatch"
+        );
+        let idx = chunk
+            .get("idx")
+            .and_then(Value::as_u64)
+            .with_context(|| format!("Business OS attachment `{file_id}` chunk idx is missing"))?;
+        anyhow::ensure!(
+            idx < total,
+            "Business OS attachment `{file_id}` chunk idx is out of range"
+        );
+        let data = chunk
+            .get("data")
+            .and_then(Value::as_str)
+            .with_context(|| format!("Business OS attachment `{file_id}` chunk data is missing"))?;
+        if let Some(size) = chunk.get("size_bytes").and_then(Value::as_u64) {
+            anyhow::ensure!(
+                size == data.len() as u64,
+                "Business OS attachment `{file_id}` chunk size mismatch"
+            );
+        }
+        let chunk_hash_scheme = chunk
+            .get("chunk_hash_scheme")
+            .and_then(Value::as_str)
+            .unwrap_or(BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME);
+        anyhow::ensure!(
+            chunk_hash_scheme == BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME,
+            "Business OS attachment `{file_id}` uses unsupported chunk hash scheme `{chunk_hash_scheme}`"
+        );
+        if let Some(chunk_hash) = chunk.get("chunk_hash").and_then(Value::as_str) {
+            anyhow::ensure!(
+                hex_sha256(data.as_bytes()) == chunk_hash,
+                "Business OS attachment `{file_id}` chunk hash mismatch"
+            );
+        }
+        anyhow::ensure!(
+            by_index.insert(idx, data.to_string()).is_none(),
+            "Business OS attachment `{file_id}` has duplicate chunk idx {idx}"
+        );
+    }
+    anyhow::ensure!(
+        by_index.len() as u64 == total,
+        "Business OS attachment `{file_id}` is missing chunks"
+    );
+    let mut encoded = String::new();
+    for idx in 0..total {
+        let chunk = by_index.get(&idx).with_context(|| {
+            format!("Business OS attachment `{file_id}` is missing chunk {idx}")
+        })?;
+        encoded.push_str(chunk);
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded.as_bytes())
+        .with_context(|| format!("Business OS attachment `{file_id}` base64 decode failed"))?;
+    anyhow::ensure!(
+        decoded.len() as u64 == size_bytes,
+        "Business OS attachment `{file_id}` decoded size mismatch"
+    );
+    anyhow::ensure!(
+        hex_sha256(&decoded) == content_hash,
+        "Business OS attachment `{file_id}` decoded content hash mismatch"
+    );
+    Ok(decoded)
+}
+
+fn expected_desktop_file_chunk_total(size_bytes: u64) -> u64 {
+    let base64_len = size_bytes.div_ceil(3) * 4;
+    std::cmp::max(
+        1,
+        base64_len.div_ceil(BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE as u64),
+    )
+}
+
+fn is_rxdb_deleted_document(value: &Value) -> bool {
+    ["_deleted", "deleted", "is_deleted"]
+        .iter()
+        .any(|key| value.get(*key).and_then(Value::as_bool).unwrap_or(false))
+}
+
+fn materialized_attachment_filename(file_id: &str, name: &str) -> String {
+    let safe_name = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '.') {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(140)
+        .collect::<String>();
+    let safe_name = if safe_name.is_empty() {
+        "attachment".to_string()
+    } else {
+        safe_name
+    };
+    let id = file_id
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(64)
+        .collect::<String>();
+    format!(
+        "{}_{}",
+        if id.is_empty() { "attachment" } else { &id },
+        safe_name
+    )
+}
+
 fn create_ctox_queue_task(
     root: &Path,
     command_id: &str,
@@ -15405,8 +15845,9 @@ fn create_ctox_queue_task(
             return Ok(Some(existing));
         }
     }
+    let attachments = materialize_business_chat_attachments(root, command_id, command)?;
     let title = command_title(command);
-    let prompt = command_prompt(command_id, command);
+    let prompt = command_prompt(command_id, command, &attachments);
     let priority = command
         .payload
         .get("priority")
@@ -15442,6 +15883,7 @@ fn create_ctox_queue_task(
                 "business_os_inbound_channel": command_inbound_channel(command),
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
+                "business_os_attachments": attachments,
                 "client_context": command.client_context
             })),
         },
@@ -15499,7 +15941,11 @@ fn command_title(command: &BusinessCommand) -> String {
         })
 }
 
-fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
+fn command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+) -> String {
     let instruction = command
         .payload
         .get("instruction")
@@ -15532,13 +15978,39 @@ fn command_prompt(command_id: &str, command: &BusinessCommand) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(|value| format!("\nRequired CTOX skills: {value}\n"))
         .unwrap_or_default();
+    let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
     let prompt = format!(
-        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
     truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+}
+
+fn business_chat_attachment_prompt_manifest(
+    attachments: &[MaterializedBusinessChatAttachment],
+) -> String {
+    if attachments.is_empty() {
+        return String::new();
+    }
+    let mut output = String::from(
+        "\n\nBusiness OS attachments:\nThe files below were uploaded in the Business OS chat, reconstructed from RxDB desktop_file_chunks, and verified before this task was queued. Inspect relevant images/PDFs via the available local file/image tools before relying on their visual contents.\n",
+    );
+    for (idx, attachment) in attachments.iter().enumerate() {
+        output.push_str(&format!(
+            "- attachment_{}: {}\n  mime_type: {}\n  size_bytes: {}\n  local_path: {}\n  sha256: {}\n  source: desktop_files/{} generation {}\n",
+            idx + 1,
+            attachment.name,
+            attachment.mime_type,
+            attachment.size_bytes,
+            attachment.local_path,
+            attachment.content_hash,
+            attachment.file_id,
+            attachment.generation_id
+        ));
+    }
+    output
 }
 
 fn prompt_json_preview(value: &Value, max_chars: usize) -> String {
@@ -16659,6 +17131,224 @@ mod tests {
         assert!(task.prompt.contains("Client context JSON"));
         assert!(task.prompt.contains("truncated"));
         Ok(())
+    }
+
+    #[test]
+    fn business_chat_queue_materializes_verified_desktop_file_attachment() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = b"\x89PNG\r\n\x1a\nctox-chat-image";
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "chatfile_verified",
+            "upload.png",
+            "image/png",
+            bytes,
+            false,
+        )?;
+
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_chat_image_attachment",
+                "command_id": "cmd_chat_image_attachment",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Bild pruefen",
+                    "instruction": "Was ist auf dem Bild?",
+                    "prompt": "Was ist auf dem Bild?",
+                    "attachment_refs": [{
+                        "kind": "desktop_file",
+                        "attachment_id": "chatatt_verified",
+                        "file_id": "chatfile_verified",
+                        "generation_id": generation_id.clone(),
+                        "name": "upload.png",
+                        "mime_type": "image/png",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash.clone(),
+                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+                    }]
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("queue task exists")?;
+        let materialized_path = root
+            .join("runtime")
+            .join("business-os")
+            .join("chat-attachments")
+            .join("cmd_chat_image_attachment")
+            .join("chatfile_verified_upload.png");
+
+        assert!(materialized_path.is_file());
+        assert_eq!(fs::read(&materialized_path)?, bytes);
+        assert!(task.prompt.contains("Business OS attachments"));
+        assert!(task
+            .prompt
+            .contains(materialized_path.to_string_lossy().as_ref()));
+        assert!(task.prompt.contains("desktop_files/chatfile_verified"));
+        assert!(task.prompt.contains(&content_hash));
+        assert!(
+            !task
+                .prompt
+                .contains(&base64::engine::general_purpose::STANDARD.encode(bytes)),
+            "prompt must not inline attachment bytes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn business_chat_queue_rejects_corrupt_desktop_file_attachment_chunk() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let bytes = b"corrupt image bytes";
+        let (content_hash, generation_id) = seed_rxdb_chat_attachment(
+            root,
+            "chatfile_corrupt",
+            "broken.png",
+            "image/png",
+            bytes,
+            true,
+        )?;
+
+        let error = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_chat_corrupt_attachment",
+                "command_id": "cmd_chat_corrupt_attachment",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Bild pruefen",
+                    "instruction": "Was ist auf dem Bild?",
+                    "prompt": "Was ist auf dem Bild?",
+                    "attachment_refs": [{
+                        "kind": "desktop_file",
+                        "file_id": "chatfile_corrupt",
+                        "generation_id": generation_id.clone(),
+                        "name": "broken.png",
+                        "mime_type": "image/png",
+                        "size_bytes": bytes.len(),
+                        "content_hash": content_hash.clone(),
+                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME
+                    }]
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )
+        .expect_err("corrupt attachment chunk should reject the command");
+        assert!(
+            error.to_string().contains("chunk hash mismatch"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    fn seed_rxdb_chat_attachment(
+        root: &Path,
+        file_id: &str,
+        name: &str,
+        mime_type: &str,
+        bytes: &[u8],
+        corrupt_chunk_hash: bool,
+    ) -> anyhow::Result<(String, String)> {
+        fs::create_dir_all(root.join("runtime"))?;
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__desktop_files__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE TABLE ctox_business_os__desktop_file_chunks__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL)",
+            [],
+        )?;
+        let now = now_ms() as i64;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let content_hash = hex_sha256(bytes);
+        let generation_id = format!("gen_{now}_{}", &content_hash[..12]);
+        let total = std::cmp::max(
+            1,
+            (encoded.len() as u64).div_ceil(BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE as u64),
+        ) as usize;
+        conn.execute(
+            "INSERT INTO ctox_business_os__desktop_files__v0 (id, data) VALUES (?1, ?2)",
+            params![
+                file_id,
+                serde_json::json!({
+                    "id": file_id,
+                    "parent_id": "fs_business_os_chat_attachments",
+                    "path": format!("/Business OS Chat/test/{name}"),
+                    "virtual_path": format!("/Business OS Chat/test/{name}"),
+                    "name": name,
+                    "kind": "file",
+                    "mime_type": mime_type,
+                    "extension": name.rsplit('.').next().unwrap_or(""),
+                    "size_bytes": bytes.len(),
+                    "source": "business-os-chat",
+                    "content_ref": file_id,
+                    "content_state": "available",
+                    "content_hash": content_hash.clone(),
+                    "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                    "content_generation_id": generation_id.clone(),
+                    "content_synced_at_ms": now,
+                    "is_deleted": false,
+                    "created_at_ms": now,
+                    "updated_at_ms": now
+                })
+                .to_string()
+            ],
+        )?;
+        for idx in 0..total {
+            let start = idx * BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE;
+            let end = std::cmp::min(
+                encoded.len(),
+                start + BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_SIZE,
+            );
+            let data = encoded[start..end].to_string();
+            let chunk_hash = if corrupt_chunk_hash && idx == 0 {
+                "bad_chunk_hash".to_string()
+            } else {
+                hex_sha256(data.as_bytes())
+            };
+            conn.execute(
+                "INSERT INTO ctox_business_os__desktop_file_chunks__v0 (id, data) VALUES (?1, ?2)",
+                params![
+                    format!("{file_id}_{generation_id}_{idx}"),
+                    serde_json::json!({
+                        "id": format!("{file_id}_{generation_id}_{idx}"),
+                        "file_id": file_id,
+                        "generation_id": generation_id.clone(),
+                        "content_hash": content_hash.clone(),
+                        "content_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CONTENT_HASH_SCHEME,
+                        "idx": idx,
+                        "total": total,
+                        "encoding": "base64",
+                        "data": data,
+                        "chunk_hash": chunk_hash,
+                        "chunk_hash_scheme": BUSINESS_OS_CHAT_ATTACHMENT_CHUNK_HASH_SCHEME,
+                        "size_bytes": data.len(),
+                        "created_at_ms": now
+                    })
+                    .to_string()
+                ],
+            )?;
+        }
+        Ok((content_hash, generation_id))
     }
 
     #[test]

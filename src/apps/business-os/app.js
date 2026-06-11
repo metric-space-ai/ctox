@@ -5099,6 +5099,7 @@ function scheduleBusinessCompanions() {
         session: state.session,
         commandBus: createLiveCommandBusFacade(),
         db: createLiveDbFacade(),
+        sync: createLiveSyncFacade(),
         getActiveModule: () => state.activeModule,
       });
     })

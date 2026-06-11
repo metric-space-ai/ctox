@@ -1,4 +1,10 @@
 import { showBusinessConfirm } from './dialogs.js';
+import {
+  FILE_CHUNK_HASH_SCHEME,
+  FILE_CONTENT_HASH_SCHEME,
+  base64ToBytes,
+  sha256Hex,
+} from './file-integrity.js?v=20260605-rxdb-cancel1';
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
@@ -9,11 +15,16 @@ const MANY_CHAT_THRESHOLD = 12;
 const MAX_RENDERED_CHAT_TABS = 12;
 const MAX_BUSY_LIST_ITEMS = 80;
 const MAX_BUSY_GROUPS = 24;
+const CHAT_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const CHAT_ATTACHMENT_CHUNK_SIZE = 16 * 1024;
+const CHAT_ATTACHMENT_ROOT_ID = 'fs_business_os_chat_attachments';
+const CHAT_ATTACHMENT_ROOT_PATH = '/Business OS Chat';
 
 export function initBusinessChat({
   session,
   commandBus,
   db,
+  sync: syncFacade,
   getActiveModule,
 }) {
   if (!session?.authenticated || document.querySelector('[data-ctox-chat-root]')) return;
@@ -22,6 +33,7 @@ export function initBusinessChat({
   const root = document.createElement('div');
   root.className = 'ctox-chat-root';
   root.dataset.ctoxChatRoot = 'true';
+  root.__ctoxChatSync = syncFacade || null;
   document.body.append(root);
 
   const handleRootClick = (event) => {
@@ -52,7 +64,7 @@ export function initBusinessChat({
       const node = sendButton.closest('[data-chat-id]');
       const chat = state.chats.find((item) => item.id === node?.dataset.chatId);
       if (!node || !chat) return;
-      submitChatForm({ root, state, chat, node, commandBus, db, getActiveModule }).catch((error) => {
+      submitChatForm({ root, state, chat, node, commandBus, db, sync: syncFacade, getActiveModule }).catch((error) => {
         console.warn('[business-chat] chat send failed', error);
       });
       return;
@@ -101,6 +113,8 @@ export function initBusinessChat({
       chat,
       text,
       commandBus,
+      db,
+      sync: syncFacade,
       getActiveModule,
       meta: detail,
       onPending: async () => {
@@ -427,7 +441,8 @@ function setWindowInteractiveState(win, isActive) {
 }
 
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
-  initSchedulerLoop({ root, state, commandBus, db, getActiveModule });
+  const syncFacade = root.__ctoxChatSync || null;
+  initSchedulerLoop({ root, state, commandBus, db, sync: syncFacade, getActiveModule });
 
   const selectedDate = state.selectedDate || getLocalDateString(Date.now());
   const chatsOfSelectedDate = state.chats.filter((chat) => getLocalDateString(chat.createdAt) === selectedDate);
@@ -462,8 +477,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
   const visibleChatIds = visibleChats.map(c => c.id);
+  const attachmentsUnchanged = existingWindows.every((win, idx) => (
+    win.dataset.chatAttachmentSignature === attachmentSignature(visibleChats[idx])
+  ));
   const canUpdateInPlace = existingWindows.length === visibleChats.length &&
                            currentWindowIds.every((id, idx) => id === visibleChatIds[idx]) &&
+                           attachmentsUnchanged &&
                            root.querySelector('[data-chat-dock]') &&
                            wasCollapsed === dockCollapsed &&
                            matchesCurrentDate &&
@@ -902,7 +921,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
     const submitFromForm = async (event) => {
       event.preventDefault();
       event.stopPropagation();
-      await submitChatForm({ root, state, chat, node, commandBus, db, getActiveModule });
+      await submitChatForm({ root, state, chat, node, commandBus, db, sync: syncFacade, getActiveModule });
     };
     form?.addEventListener('submit', submitFromForm);
     form?.querySelector('button[type="submit"]')?.addEventListener('click', submitFromForm);
@@ -929,19 +948,19 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   });
 }
 
-async function submitChatForm({ root, state, chat, node, commandBus, db, getActiveModule }) {
+async function submitChatForm({ root, state, chat, node, commandBus, db, sync, getActiveModule }) {
   if (chat.__submitting) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
   if (!text) return;
+  const attachments = Array.isArray(chat.attachments) ? chat.attachments.slice() : [];
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
     chat.__submitting = true;
     chat.draft = '';
     chat.showFollowUp = false;
-    chat.attachments = [];
     if (input) input.value = '';
     try {
       const now = Date.now();
@@ -953,12 +972,16 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, getActi
         role: 'user',
         text,
         createdAt: now,
+        attachments: attachments.map(chatMessageAttachmentSummary),
       });
       
       chat.messages.push({
         id: `status_${commandId}`,
         role: 'ctox',
         text: 'Ausführung verzögert/geplant.',
+        promptText: text,
+        userMessageId: messageId,
+        attachments: attachments.map(chatMessageAttachmentSummary),
         commandId,
         taskId: '',
         status: 'scheduled',
@@ -966,6 +989,11 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, getActi
       });
       
       chat.lastTrackingId = commandId;
+      chat.scheduledAttachmentsByCommand = {
+        ...(chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object' ? chat.scheduledAttachmentsByCommand : {}),
+        [commandId]: attachments,
+      };
+      chat.attachments = [];
       touchChats(state, [chat]);
       
       await persistChatState({ state, db });
@@ -979,21 +1007,24 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, getActi
   chat.__submitting = true;
   chat.draft = '';
   chat.showFollowUp = false; // Reset follow-up container state
-  chat.attachments = [];
   if (input) input.value = '';
   try {
-    await submitChatMessage({
+    const delivered = await submitChatMessage({
       state,
       chat,
       text,
       commandBus,
+      db,
+      sync,
       getActiveModule,
       meta: chat.contextMeta || {},
+      attachments,
       onPending: async () => {
         await persistChatState({ state, db });
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
       },
     });
+    if (delivered) chat.attachments = [];
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     syncTrackedMessages({ state, db }).then((changed) => {
@@ -1105,6 +1136,15 @@ function expandChatOnly(state, activeChat) {
   activeChat.minimized = false;
 }
 
+function attachmentSignature(chat) {
+  return (Array.isArray(chat.attachments) ? chat.attachments : [])
+    .map((att) => [
+      att.attachmentId || att.fileId || att.name || '',
+      att.contentHash || '',
+      att.size || att.size_bytes || 0,
+    ].join(':'))
+    .join('|');
+}
 
 function chatWindow(chat, activeId, relation = 'center') {
   const moduleName = chat.contextMeta?.module || 'ctox';
@@ -1116,7 +1156,7 @@ function chatWindow(chat, activeId, relation = 'center') {
     <div class="ctox-chat-attachments-preview">
       ${stagedAttachments.map((att, idx) => `
         <div class="ctox-attachment-item" data-att-idx="${idx}">
-          ${att.mimeType.startsWith('image/') 
+          ${String(att.mimeType || att.mime_type || '').startsWith('image/')
             ? `<img class="ctox-attachment-thumbnail" src="${escapeAttr(att.base64Data)}" alt="${escapeAttr(att.name)}" />`
             : `<span class="ctox-attachment-icon">📄</span>`
           }
@@ -1279,7 +1319,7 @@ function chatWindow(chat, activeId, relation = 'center') {
   }
 
   return `
-    <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-chat-rel="${escapeAttr(relation)}">
+    <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-chat-rel="${escapeAttr(relation)}" data-chat-attachment-signature="${escapeAttr(attachmentSignature(chat))}">
       <header>
         <button class="ctox-chat-title" type="button" data-chat-title="${escapeAttr(chat.id)}">
           <div style="display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0;">
@@ -1850,7 +1890,18 @@ function messageMarkup(message) {
   `;
 }
 
-async function submitChatMessage({ state, chat, text, commandBus, getActiveModule, meta = {}, onPending = null }) {
+async function submitChatMessage({
+  state,
+  chat,
+  text,
+  commandBus,
+  db,
+  sync,
+  getActiveModule,
+  meta = {},
+  attachments = [],
+  onPending = null,
+}) {
   const activeModule = getActiveModule?.() || { id: 'ctox', title: 'CTOX' };
   const sourceModule = meta.module || meta.source_module || meta.sourceModule || activeModule.id || 'ctox';
   const sourceTitle = meta.source_title || meta.sourceTitle || activeModule.title || activeModule.name || sourceModule || 'CTOX';
@@ -1875,6 +1926,7 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
     role: 'user',
     text,
     createdAt: now,
+    attachments: attachments.map(chatMessageAttachmentSummary),
   });
   chat.title = chat.title === 'CTOX' ? titleFromText(text) : chat.title;
   const pendingMessage = {
@@ -1892,45 +1944,57 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
   if (typeof onPending === 'function') {
     await onPending();
   }
-  const command = {
-    id: commandId,
-    module: sourceModule,
-    type: commandType,
-    record_id: meta.record_id || chat.id,
-    inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
-    payload: {
-      ...extraPayload,
-      title: meta.title || extraPayload.title || titleFromText(text),
-      instruction: meta.instruction || extraPayload.instruction || text,
-      prompt: meta.prompt || extraPayload.prompt || text,
-      chat_id: chat.id,
-      message_id: messageId,
-      conversation: compactConversation(chat.messages),
-      attachments: chat.attachments || [],
-      inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
-      outbound_channel: 'business_os_chat',
-      response_channel: 'business_os_chat',
-      reply_to: chat.id,
-      thread_key: threadKey,
-      priority: meta.priority || extraPayload.priority || 'normal',
-      source_module: sourceModule,
-    },
-    client_context: {
-      ...extraClientContext,
-      source: 'business-os-chat',
-      module: sourceModule,
-      source_module: sourceModule,
-      source_title: sourceTitle,
-      inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
-      outbound_channel: 'business_os_chat',
-      chat_id: chat.id,
-      message_id: messageId,
-      url: location.href,
-      language: document.documentElement.lang || 'de',
-      created_at: new Date(now).toISOString(),
-    },
-  };
+  let delivered = false;
   try {
+    const attachmentRefs = await stageChatAttachments({
+      db,
+      sync,
+      chat,
+      commandId,
+      messageId,
+      attachments,
+    });
+    const command = {
+      id: commandId,
+      module: sourceModule,
+      type: commandType,
+      record_id: meta.record_id || chat.id,
+      inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
+      payload: {
+        ...extraPayload,
+        title: meta.title || extraPayload.title || titleFromText(text),
+        instruction: meta.instruction || extraPayload.instruction || text,
+        prompt: meta.prompt || extraPayload.prompt || text,
+        chat_id: chat.id,
+        message_id: messageId,
+        conversation: compactConversation(chat.messages),
+        attachments: attachmentRefs,
+        attachment_refs: attachmentRefs,
+        inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
+        outbound_channel: 'business_os_chat',
+        response_channel: 'business_os_chat',
+        reply_to: chat.id,
+        thread_key: threadKey,
+        priority: meta.priority || extraPayload.priority || 'normal',
+        source_module: sourceModule,
+      },
+      client_context: {
+        ...extraClientContext,
+        source: 'business-os-chat',
+        module: sourceModule,
+        source_module: sourceModule,
+        source_title: sourceTitle,
+        inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
+        outbound_channel: 'business_os_chat',
+        chat_id: chat.id,
+        message_id: messageId,
+        attachment_count: attachmentRefs.length,
+        attachment_storage: attachmentRefs.length ? 'desktop_files' : '',
+        url: location.href,
+        language: document.documentElement.lang || 'de',
+        created_at: new Date(now).toISOString(),
+      },
+    };
     const result = await commandBus.dispatch(command);
     const taskId = result.task_id || '';
     const acceptedCommandId = result.command_id || commandId;
@@ -1943,6 +2007,7 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
     pendingMessage.taskId = taskId;
     pendingMessage.status = result.task_status || result.status || 'queued';
     pendingMessage.createdAt = Date.now();
+    delivered = true;
   } catch (error) {
     const failedCommandId = error?.command_id || error?.commandId || commandId;
     pendingMessage.text = `Command konnte nicht an CTOX übergeben werden: ${error?.message || String(error)}`;
@@ -1960,9 +2025,11 @@ async function submitChatMessage({ state, chat, text, commandBus, getActiveModul
       pendingMessage.status = 'queued';
       pendingMessage.trackable = true;
       pendingMessage.detail = 'wartet auf queue';
+      delivered = true;
     }
   }
   touchChats(state, [chat]);
+  return delivered;
 }
 
 async function syncTrackedMessages({ state, db }) {
@@ -2283,6 +2350,9 @@ function readChatState(session) {
           updated_at_ms: chat.updated_at_ms || Date.now(),
           showFollowUp: Boolean(chat.showFollowUp),
           attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
+          scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
+            ? chat.scheduledAttachmentsByCommand
+            : {},
         })),
     };
   } catch {
@@ -2307,6 +2377,9 @@ function writeChatState(state) {
       updated_at_ms: chat.updated_at_ms || Date.now(),
       showFollowUp: Boolean(chat.showFollowUp),
       attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
+      scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
+        ? chat.scheduledAttachmentsByCommand
+        : {},
     })),
   }));
 }
@@ -2330,6 +2403,9 @@ async function persistChatState({ state, db }) {
       updated_at_ms: chat.updated_at_ms,
       showFollowUp: Boolean(chat.showFollowUp),
       attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
+      scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
+        ? chat.scheduledAttachmentsByCommand
+        : {},
     };
     try {
       const existing = await collection.findOne(chat.id).exec();
@@ -2427,6 +2503,10 @@ function mergeChatPair(localChat, remoteChat, owner) {
     draft: local.draft || '',
     contextMeta: { ...(remote.contextMeta || {}), ...(local.contextMeta || {}) },
     attachments: Array.isArray(local.attachments) ? local.attachments : [],
+    scheduledAttachmentsByCommand: {
+      ...(remote.scheduledAttachmentsByCommand && typeof remote.scheduledAttachmentsByCommand === 'object' ? remote.scheduledAttachmentsByCommand : {}),
+      ...(local.scheduledAttachmentsByCommand && typeof local.scheduledAttachmentsByCommand === 'object' ? local.scheduledAttachmentsByCommand : {}),
+    },
     showFollowUp: Boolean(local.showFollowUp),
     updated_at_ms: Math.max(local.updated_at_ms || 0, remote.updated_at_ms || 0),
   };
@@ -2490,6 +2570,9 @@ function normalizeChat(chat) {
     updated_at_ms: chat.updated_at_ms || Date.now(),
     showFollowUp: Boolean(chat.showFollowUp),
     attachments: Array.isArray(chat.attachments) ? chat.attachments : [],
+    scheduledAttachmentsByCommand: chat.scheduledAttachmentsByCommand && typeof chat.scheduledAttachmentsByCommand === 'object'
+      ? chat.scheduledAttachmentsByCommand
+      : {},
   };
 }
 
@@ -2511,6 +2594,7 @@ function compactConversation(messages) {
     text: message.text || '',
     command_id: message.commandId || '',
     task_id: message.taskId || '',
+    attachments: Array.isArray(message.attachments) ? message.attachments.map(chatMessageAttachmentSummary) : [],
   }));
 }
 
@@ -4463,8 +4547,59 @@ function fileToBase64(file) {
   });
 }
 
+function dataUrlBase64(dataUrl) {
+  return String(dataUrl || '').split(',')[1] || '';
+}
+
+function newClientId(prefix) {
+  const random = globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  return `${prefix}_${String(random).replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+}
+
+function extensionForAttachment(name) {
+  const extension = String(name || '').split('.').pop()?.toLowerCase() || '';
+  return extension === String(name || '').toLowerCase() ? '' : extension;
+}
+
+function safeAttachmentName(name) {
+  const cleaned = String(name || 'attachment')
+    .replace(/[\/\\:\0-\x1f]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (cleaned || 'attachment').slice(0, 120);
+}
+
+function chatMessageAttachmentSummary(attachment = {}) {
+  return {
+    name: attachment.name || 'attachment',
+    mime_type: attachment.mimeType || attachment.mime_type || 'application/octet-stream',
+    size_bytes: Number(attachment.size || attachment.size_bytes || 0),
+  };
+}
+
+async function prepareChatAttachment(file) {
+  const now = Date.now();
+  const name = safeAttachmentName(file.name || 'attachment');
+  const base64Data = await fileToBase64(file);
+  const base64 = dataUrlBase64(base64Data);
+  const contentHash = await sha256Hex(base64ToBytes(base64));
+  return {
+    attachmentId: newClientId('chatatt'),
+    fileId: newClientId('chatfile'),
+    generationId: `gen_${now}_${contentHash.slice(0, 12)}`,
+    name,
+    mimeType: file.type || 'application/octet-stream',
+    size: file.size || 0,
+    extension: extensionForAttachment(name),
+    base64Data,
+    contentHash,
+    contentHashScheme: FILE_CONTENT_HASH_SCHEME,
+    createdAt: now,
+  };
+}
+
 async function addAttachmentToChatState(chat, file) {
-  if (file.size > 8 * 1024 * 1024) {
+  if (file.size > CHAT_ATTACHMENT_MAX_BYTES) {
     alert("Datei ist zu groß. Maximale Dateigröße beträgt 8MB.");
     return;
   }
@@ -4475,16 +4610,196 @@ async function addAttachmentToChatState(chat, file) {
     return;
   }
   try {
-    const base64Data = await fileToBase64(file);
-    chat.attachments.push({
-      name: file.name,
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-      base64Data,
-    });
+    chat.attachments.push(await prepareChatAttachment(file));
   } catch (err) {
     console.error("Fehler beim Konvertieren der Datei zu Base64", err);
   }
+}
+
+async function stageChatAttachments({ db, sync, chat, commandId, messageId, attachments }) {
+  const staged = Array.isArray(attachments) ? attachments.filter(Boolean) : [];
+  if (!staged.length) return [];
+  await prepareAttachmentSync(sync);
+  const files = db?.collection?.('desktop_files') || db?.raw?.desktop_files;
+  const chunks = db?.collection?.('desktop_file_chunks') || db?.raw?.desktop_file_chunks;
+  if (!files || !chunks) {
+    throw new Error('Business-OS Dateiablage ist nicht verfügbar.');
+  }
+  await ensureChatAttachmentRoot(files);
+  const refs = [];
+  for (const attachment of staged) {
+    refs.push(await stageChatAttachment({
+      files,
+      chunks,
+      chat,
+      commandId,
+      messageId,
+      attachment,
+    }));
+  }
+  await flushAttachmentSync(sync);
+  return refs;
+}
+
+async function prepareAttachmentSync(sync) {
+  if (!sync?.startCollection) return;
+  await Promise.all([
+    sync.startCollection('desktop_files').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+    sync.startCollection('desktop_file_chunks').then((bridge) => waitForSyncBridgeReady(bridge, 10000)).catch(() => null),
+  ]);
+}
+
+async function flushAttachmentSync(sync) {
+  if (!sync?.startCollection) return;
+  await Promise.all([
+    sync.startCollection('desktop_file_chunks').then((bridge) => waitForSyncBridgeReady(bridge, 15000)).catch(() => null),
+    sync.startCollection('desktop_files').then((bridge) => waitForSyncBridgeReady(bridge, 15000)).catch(() => null),
+  ]);
+}
+
+async function waitForSyncBridgeReady(bridge, timeoutMs = 10000) {
+  const state = bridge?.state;
+  if (!state) return;
+  await Promise.race([
+    Promise.resolve()
+      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
+      .catch(() => {}),
+    new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+  ]);
+}
+
+async function ensureChatAttachmentRoot(files) {
+  const now = Date.now();
+  await upsertRxDocument(files, {
+    id: CHAT_ATTACHMENT_ROOT_ID,
+    parent_id: '',
+    path: CHAT_ATTACHMENT_ROOT_PATH,
+    virtual_path: CHAT_ATTACHMENT_ROOT_PATH,
+    name: 'Business OS Chat',
+    kind: 'folder',
+    mime_type: '',
+    extension: '',
+    size_bytes: 0,
+    source: 'business-os-chat',
+    content_state: 'directory',
+    sort_index: 90,
+    is_deleted: false,
+    created_at_ms: now,
+    updated_at_ms: now,
+  });
+}
+
+async function stageChatAttachment({ files, chunks, chat, commandId, messageId, attachment }) {
+  const now = Date.now();
+  const prepared = attachment.contentHash && attachment.base64Data
+    ? attachment
+    : await prepareStoredChatAttachment(attachment);
+  const base64 = dataUrlBase64(prepared.base64Data);
+  const total = Math.max(1, Math.ceil(base64.length / CHAT_ATTACHMENT_CHUNK_SIZE));
+  const name = safeAttachmentName(prepared.name);
+  const fileId = prepared.fileId || newClientId('chatfile');
+  const contentHash = prepared.contentHash || await sha256Hex(base64ToBytes(base64));
+  const generationId = prepared.generationId || `gen_${now}_${contentHash.slice(0, 12)}`;
+  for (let idx = 0; idx < total; idx += 1) {
+    const data = base64.slice(idx * CHAT_ATTACHMENT_CHUNK_SIZE, (idx + 1) * CHAT_ATTACHMENT_CHUNK_SIZE);
+    await upsertRxDocument(chunks, {
+      id: `${fileId}_${generationId}_${idx}`,
+      file_id: fileId,
+      generation_id: generationId,
+      content_hash: contentHash,
+      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+      idx,
+      total,
+      encoding: 'base64',
+      data,
+      chunk_hash: await sha256Hex(data),
+      chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
+      size_bytes: data.length,
+      created_at_ms: now,
+    });
+  }
+  const virtualPath = `${CHAT_ATTACHMENT_ROOT_PATH}/${chat.id}/${name}`.replace(/\/+/g, '/');
+  await upsertRxDocument(files, {
+    id: fileId,
+    parent_id: CHAT_ATTACHMENT_ROOT_ID,
+    path: virtualPath,
+    local_path: '',
+    virtual_path: virtualPath,
+    name,
+    kind: 'file',
+    mime_type: prepared.mimeType || prepared.mime_type || 'application/octet-stream',
+    extension: prepared.extension || extensionForAttachment(name),
+    size_bytes: Number(prepared.size || prepared.size_bytes || 0),
+    owner_id: chat.owner_user_id || '',
+    source: 'business-os-chat',
+    linked_collection: 'business_chats',
+    linked_record_id: chat.id,
+    content_ref: fileId,
+    content_state: 'available',
+    content_hash: contentHash,
+    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+    content_generation_id: generationId,
+    content_synced_at_ms: now,
+    sort_index: now,
+    is_deleted: false,
+    created_at_ms: prepared.createdAt || now,
+    updated_at_ms: now,
+  });
+  return {
+    kind: 'desktop_file',
+    storage_collection: 'desktop_files',
+    chunk_collection: 'desktop_file_chunks',
+    attachment_id: prepared.attachmentId || newClientId('chatatt'),
+    file_id: fileId,
+    generation_id: generationId,
+    name,
+    mime_type: prepared.mimeType || prepared.mime_type || 'application/octet-stream',
+    size_bytes: Number(prepared.size || prepared.size_bytes || 0),
+    content_hash: contentHash,
+    content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
+    virtual_path: virtualPath,
+    chat_id: chat.id,
+    message_id: messageId,
+    command_id: commandId,
+    content_state: 'available',
+  };
+}
+
+async function prepareStoredChatAttachment(attachment) {
+  if (attachment?.base64Data) {
+    const base64 = dataUrlBase64(attachment.base64Data);
+    return {
+      ...attachment,
+      name: safeAttachmentName(attachment.name),
+      mimeType: attachment.mimeType || attachment.mime_type || 'application/octet-stream',
+      size: Number(attachment.size || attachment.size_bytes || base64ToBytes(base64).length),
+      contentHash: attachment.contentHash || await sha256Hex(base64ToBytes(base64)),
+      contentHashScheme: FILE_CONTENT_HASH_SCHEME,
+    };
+  }
+  throw new Error(`Anhang ${attachment?.name || ''} hat keine lokalen Inhaltsdaten.`);
+}
+
+async function upsertRxDocument(collection, doc) {
+  if (typeof collection.upsert === 'function') {
+    try {
+      await collection.upsert(doc);
+      return;
+    } catch (error) {
+      if (!isRxDbConflictError(error)) throw error;
+    }
+  }
+  const existing = await collection.findOne(doc.id).exec();
+  if (existing) await existing.incrementalPatch(doc);
+  else await collection.insert(doc);
+}
+
+function isRxDbConflictError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('RxDB Error-Code: CONFLICT')
+    || message.includes('conflict')
+    || message.includes('document already exists')
+    || message.includes('Document update conflict');
 }
 
 // ----------------------------------------------------
@@ -4518,7 +4833,7 @@ function getCountdownText(timestamp) {
   return `${hh}:${mm}:${ss}`;
 }
 
-function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
+function initSchedulerLoop({ root, state, commandBus, db, sync, getActiveModule }) {
   if (window._ctoxChatSchedulerInterval) return;
   
   window._ctoxChatSchedulerInterval = setInterval(async () => {
@@ -4552,8 +4867,14 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
         
         stateChanged = true;
         
-        const text = scheduledMsg.text || '';
+        const originalUserMessage = scheduledMsg.userMessageId
+          ? chat.messages.find((message) => message.id === scheduledMsg.userMessageId)
+          : null;
+        const text = scheduledMsg.promptText || scheduledMsg.prompt_text || originalUserMessage?.text || scheduledMsg.text || '';
+        const userMessageId = scheduledMsg.userMessageId || originalUserMessage?.id || scheduledMsg.id;
         const now = Date.now();
+        const scheduledAttachments = chat.scheduledAttachmentsByCommand?.[commandId] || [];
+        let attachmentRefs = [];
         const command = {
           id: commandId,
           module: chat.contextMeta?.module || 'ctox',
@@ -4565,8 +4886,10 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
             instruction: text,
             prompt: text,
             chat_id: chat.id,
-            message_id: scheduledMsg.id,
+            message_id: userMessageId,
             conversation: compactConversation(chat.messages),
+            attachments: attachmentRefs,
+            attachment_refs: attachmentRefs,
             inbound_channel: CHAT_CHANNEL,
             outbound_channel: 'business_os_chat',
             response_channel: 'business_os_chat',
@@ -4583,7 +4906,9 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
             inbound_channel: CHAT_CHANNEL,
             outbound_channel: 'business_os_chat',
             chat_id: chat.id,
-            message_id: scheduledMsg.id,
+            message_id: userMessageId,
+            attachment_count: attachmentRefs.length,
+            attachment_storage: attachmentRefs.length ? 'desktop_files' : '',
             url: location.href,
             language: document.documentElement.lang || 'de',
             created_at: new Date(now).toISOString(),
@@ -4592,6 +4917,18 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
         
         (async () => {
           try {
+            attachmentRefs = await stageChatAttachments({
+              db,
+              sync,
+              chat,
+              commandId,
+              messageId: userMessageId,
+              attachments: scheduledAttachments,
+            });
+            command.payload.attachments = attachmentRefs;
+            command.payload.attachment_refs = attachmentRefs;
+            command.client_context.attachment_count = attachmentRefs.length;
+            command.client_context.attachment_storage = attachmentRefs.length ? 'desktop_files' : '';
             const result = await commandBus.dispatch(command);
             const taskId = result.task_id || '';
             const acceptedCommandId = result.command_id || commandId;
@@ -4606,6 +4943,9 @@ function initSchedulerLoop({ root, state, commandBus, db, getActiveModule }) {
               statusMsg.commandId = acceptedCommandId;
               statusMsg.taskId = taskId;
               statusMsg.status = result.task_status || result.status || 'queued';
+            }
+            if (chat.scheduledAttachmentsByCommand) {
+              delete chat.scheduledAttachmentsByCommand[commandId];
             }
           } catch (error) {
             const failedCommandId = error?.command_id || error?.commandId || commandId;
