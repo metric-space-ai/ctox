@@ -3437,63 +3437,74 @@ function createQueryDemandLoader({
         }
       }
       const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
-      if (inflightByFingerprint.has(dedupKey)) {
-        bumpStatus(status, "queryFetchDedupHitCount");
-        return inflightByFingerprint.get(dedupKey);
-      }
-      bumpStatus(status, "queryFetchInFlight", 1);
-      v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-      const job = (async () => {
-        const startedAt = clock();
-        try {
-          const result = await requestQueryFetch({
-            requestId: `${dedupKey}|${startedAt}`,
-            databaseName: storageCollection?.databaseName ?? null,
-            collectionName,
-            schemaVersion: schemaVersion ?? 0,
-            queryFingerprint: fingerprint,
-            query: {
-              selector: query?.selector ?? {},
-              sort: normalizeSort(query?.sort),
-              limit: query?.limit,
-              skip: query?.skip
-            },
-            window: normalizedWindow
-          });
-          await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
-          const documentIds = (result.documents || []).map(extractId).filter(Boolean);
-          await sidecar.upsertQueryWindow({
-            collection: collectionName,
-            queryFingerprint: fingerprint,
-            offset: normalizedWindow.offset,
-            limit: normalizedWindow.limit,
-            documentIds,
-            complete: true,
-            authoritativeRevision: result.authoritativeRevision ?? null
-          });
-          await sidecar.touchDocuments(collectionName, documentIds, {
-            estimatedBytes: estimateBytes(result.documents || [])
-          });
-          bumpStatus(status, "queryFetchSuccessCount");
-          if (status) status.lastQueryFetchMs = clock() - startedAt;
-          v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
-          return readLocalDocuments(storageCollection, query, normalizedWindow);
-        } catch (error) {
-          if (isQueryCancelledError(error)) {
-            bumpStatus(status, "queryFetchCancelCount");
-            v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
-            return readLocalDocuments(storageCollection, query, normalizedWindow);
-          }
-          bumpStatus(status, "queryFetchErrorCount");
-          v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
-          throw error;
-        } finally {
-          bumpStatus(status, "queryFetchInFlight", -1);
-          inflightByFingerprint.delete(dedupKey);
+      const startFetchJob = () => {
+        if (inflightByFingerprint.has(dedupKey)) {
+          bumpStatus(status, "queryFetchDedupHitCount");
+          return inflightByFingerprint.get(dedupKey);
         }
-      })();
-      inflightByFingerprint.set(dedupKey, job);
-      return job;
+        bumpStatus(status, "queryFetchInFlight", 1);
+        v15Log("fetch:start", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        const job = (async () => {
+          const startedAt = clock();
+          try {
+            const result = await requestQueryFetch({
+              requestId: `${dedupKey}|${startedAt}`,
+              databaseName: storageCollection?.databaseName ?? null,
+              collectionName,
+              schemaVersion: schemaVersion ?? 0,
+              queryFingerprint: fingerprint,
+              query: {
+                selector: query?.selector ?? {},
+                sort: normalizeSort(query?.sort),
+                limit: query?.limit,
+                skip: query?.skip
+              },
+              window: normalizedWindow
+            });
+            await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+            const documentIds = (result.documents || []).map(extractId).filter(Boolean);
+            await sidecar.upsertQueryWindow({
+              collection: collectionName,
+              queryFingerprint: fingerprint,
+              offset: normalizedWindow.offset,
+              limit: normalizedWindow.limit,
+              documentIds,
+              complete: true,
+              authoritativeRevision: result.authoritativeRevision ?? null
+            });
+            await sidecar.touchDocuments(collectionName, documentIds, {
+              estimatedBytes: estimateBytes(result.documents || [])
+            });
+            bumpStatus(status, "queryFetchSuccessCount");
+            if (status) status.lastQueryFetchMs = clock() - startedAt;
+            v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
+            return readLocalDocuments(storageCollection, query, normalizedWindow);
+          } catch (error) {
+            if (isQueryCancelledError(error)) {
+              bumpStatus(status, "queryFetchCancelCount");
+              v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
+              return readLocalDocuments(storageCollection, query, normalizedWindow);
+            }
+            bumpStatus(status, "queryFetchErrorCount");
+            v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
+            throw error;
+          } finally {
+            bumpStatus(status, "queryFetchInFlight", -1);
+            inflightByFingerprint.delete(dedupKey);
+          }
+        })();
+        inflightByFingerprint.set(dedupKey, job);
+        return job;
+      };
+      if (cached?.everCompleted && !query?.requireRevision) {
+        startFetchJob().catch(() => {
+        });
+        bumpStatus(status, "queryFetchStaleServedCount");
+        v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
+        return readLocalDocuments(storageCollection, query, normalizedWindow);
+      }
+      return startFetchJob();
     },
     inflightSize() {
       return inflightByFingerprint.size;
@@ -3546,7 +3557,10 @@ function createQueryDemandLoader({
         const allWindows = await sidecar.backend.scanQueryWindows();
         for (const { fingerprint } of cancelled) {
           const partial = allWindows.filter(
-            (w) => w.queryFingerprint === fingerprint && !w.complete
+            // Ever-complete windows hold replicated (validated) documents;
+            // an aborted background revalidation must not tombstone them.
+            // Only never-completed windows can reference partial orphans.
+            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted
           );
           for (const window2 of partial) {
             const ids = window2.documentIds || [];
@@ -3922,6 +3936,12 @@ var QueryMetaStorage = class {
       limit,
       documentIds: [...documentIds],
       complete: Boolean(complete),
+      // Sticky marker: once a window has been complete, its member documents
+      // exist in the primary store (and replication keeps them fresh). The
+      // demand loader serves such windows local-first while it revalidates
+      // in the background, and the reconnect-abort path must NOT tombstone
+      // their members as partial orphans.
+      everCompleted: Boolean(complete) || Boolean(existing?.everCompleted),
       authoritativeRevision: authoritativeRevision ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -3934,6 +3954,7 @@ var QueryMetaStorage = class {
     const stringified = stringKey2(key);
     const existing = await this.backend.getQueryWindow(stringified);
     if (!existing) return;
+    existing.everCompleted = Boolean(existing.everCompleted) || Boolean(existing.complete);
     existing.complete = false;
     existing.updatedAt = this.clock();
     await this.backend.putQueryWindow(existing);

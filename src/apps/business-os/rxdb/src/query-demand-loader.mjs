@@ -77,14 +77,14 @@ export function createQueryDemandLoader({
       }
 
       const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
-      if (inflightByFingerprint.has(dedupKey)) {
-        bumpStatus(status, 'queryFetchDedupHitCount');
-        return inflightByFingerprint.get(dedupKey);
-      }
-
-      bumpStatus(status, 'queryFetchInFlight', 1);
-      v15Log('fetch:start', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
-      const job = (async () => {
+      const startFetchJob = () => {
+        if (inflightByFingerprint.has(dedupKey)) {
+          bumpStatus(status, 'queryFetchDedupHitCount');
+          return inflightByFingerprint.get(dedupKey);
+        }
+        bumpStatus(status, 'queryFetchInFlight', 1);
+        v15Log('fetch:start', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        const job = (async () => {
         const startedAt = clock();
         try {
           const result = await requestQueryFetch({
@@ -132,9 +132,30 @@ export function createQueryDemandLoader({
           bumpStatus(status, 'queryFetchInFlight', -1);
           inflightByFingerprint.delete(dedupKey);
         }
-      })();
-      inflightByFingerprint.set(dedupKey, job);
-      return job;
+        })();
+        inflightByFingerprint.set(dedupKey, job);
+        return job;
+      };
+
+      // Stale-while-revalidate: a window that was EVER complete has its
+      // member documents in the primary store, and replication keeps those
+      // documents fresh — an invalidation only means the window MEMBERSHIP
+      // may have changed. Serve local results immediately and revalidate in
+      // the background; the materialised refresh emits a storage change
+      // event, so reactive queries re-render on arrival. This turns repeat
+      // module loads from a WebRTC round-trip into an IndexedDB read.
+      // An explicit requireRevision keeps strict await semantics.
+      if (cached?.everCompleted && !query?.requireRevision) {
+        startFetchJob().catch(() => {
+          // Surfaced via queryFetchErrorCount; the next exec retries.
+        });
+        bumpStatus(status, 'queryFetchStaleServedCount');
+        v15Log('fetch:stale-served', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
+        await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
+        return readLocalDocuments(storageCollection, query, normalizedWindow);
+      }
+
+      return startFetchJob();
     },
     inflightSize() {
       return inflightByFingerprint.size;
@@ -195,7 +216,10 @@ export function createQueryDemandLoader({
           // Any window with this fingerprint that is NOT complete — its
           // referenced IDs are partial, untrusted.
           const partial = allWindows.filter(
-            (w) => w.queryFingerprint === fingerprint && !w.complete,
+            // Ever-complete windows hold replicated (validated) documents;
+            // an aborted background revalidation must not tombstone them.
+            // Only never-completed windows can reference partial orphans.
+            (w) => w.queryFingerprint === fingerprint && !w.complete && !w.everCompleted,
           );
           for (const window of partial) {
             const ids = window.documentIds || [];

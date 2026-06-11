@@ -175,11 +175,14 @@ const fingerprintHere = await queryFingerprint({
 });
 assert(typeof fingerprintHere === 'string' && fingerprintHere.length === 64, 'fingerprint is SHA-256 hex');
 
-// ROUND 3: invalidate via remote change → next exec re-fetches
+// ROUND 3: invalidate via remote change → next exec serves local results
+// immediately and revalidates in the BACKGROUND (stale-while-revalidate,
+// see stale-while-revalidate-smoke.mjs). The refetch still MUST happen.
 await loader.invalidateDocumentChange(['rec-0000']);
 const third = await loader.resolveQuery({ selector: { status: 'open' } });
 assert(third.length === 200, 'invalidated round returns same shape');
-assert(status.queryFetchSuccessCount === 2, 'invalidation forces a second remote fetch');
+await new Promise((resolve) => setTimeout(resolve, 25));
+assert(status.queryFetchSuccessCount === 2, 'invalidation forces a second remote fetch (background revalidation)');
 
 // ROUND 4: error path — peer offline
 const offlineLoader = createQueryDemandLoader({

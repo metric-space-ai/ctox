@@ -58,7 +58,12 @@ function makeStorageCollection() {
   assert(invalidated === 1, `invalidate should mark 1 window incomplete (got ${invalidated})`);
 
   await loaderWithRefresh.resolveQuery({ selector: { status: 'open' } });
-  assert(fetchedAgain === 1, 'invalidated window must trigger a fresh remote fetch');
+  // Contract evolution (stale-while-revalidate, see
+  // stale-while-revalidate-smoke.mjs): an invalidated EVER-complete window
+  // serves local results immediately and revalidates in the BACKGROUND. The
+  // fetch still MUST happen — give the async job a beat to run.
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert(fetchedAgain === 1, 'invalidated window must trigger a fresh remote fetch (background revalidation)');
 }
 
 // === Reconnect-abort test ===

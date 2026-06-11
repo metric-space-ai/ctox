@@ -49,6 +49,12 @@ export class QueryMetaStorage {
       limit,
       documentIds: [...documentIds],
       complete: Boolean(complete),
+      // Sticky marker: once a window has been complete, its member documents
+      // exist in the primary store (and replication keeps them fresh). The
+      // demand loader serves such windows local-first while it revalidates
+      // in the background, and the reconnect-abort path must NOT tombstone
+      // their members as partial orphans.
+      everCompleted: Boolean(complete) || Boolean(existing?.everCompleted),
       authoritativeRevision: authoritativeRevision ?? null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -62,6 +68,7 @@ export class QueryMetaStorage {
     const stringified = stringKey(key);
     const existing = await this.backend.getQueryWindow(stringified);
     if (!existing) return;
+    existing.everCompleted = Boolean(existing.everCompleted) || Boolean(existing.complete);
     existing.complete = false;
     existing.updatedAt = this.clock();
     await this.backend.putQueryWindow(existing);
