@@ -2755,7 +2755,8 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     }
     let mut bytes = fs::read(&target)?;
     let mime = mime_for(&target);
-    if target == app_root.join("index.html") {
+    let is_index = target == app_root.join("index.html");
+    if is_index {
         let session = request_session(&request);
         store::remember_authenticated_session_user(root, &session)?;
         let sync_config = if session.authenticated {
@@ -2768,7 +2769,24 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     }
     let mut response = Response::from_data(bytes);
     response.add_header(Header::from_bytes("Content-Type", mime.as_bytes()).unwrap());
-    response.add_header(Header::from_bytes("Cache-Control", "no-store").unwrap());
+    // Cache policy. index.html carries per-session injected launch context
+    // and must never be cached. Every other static asset is immutable per
+    // URL: the shell imports JS/CSS through `?v=` cache-busters and bumps
+    // them on change, so versioned URLs can be cached forever. Blanket
+    // `no-store` here forced the browser to re-download the entire module
+    // import graph on every app/module switch — behind a managed edge with
+    // ~2s TTFB per request that turned every switch into multiple seconds.
+    let cache_control = if is_index {
+        "no-store"
+    } else if request.url().contains("?v=") || request.url().contains("&v=") {
+        "public, max-age=31536000, immutable"
+    } else {
+        // Unversioned asset fetches (locale JSON, favicons, direct GETs):
+        // short-lived cache with background revalidation keeps switches
+        // local while hot-deploys still land within minutes.
+        "public, max-age=300, stale-while-revalidate=86400"
+    };
+    response.add_header(Header::from_bytes("Cache-Control", cache_control.as_bytes()).unwrap());
     add_common_response_headers(&mut response);
     request.respond(response)?;
     Ok(())
@@ -2864,8 +2882,14 @@ fn add_cors_headers<R: io::Read>(response: &mut Response<R>) {
     response.add_header(Header::from_bytes("Vary", "Origin").unwrap());
 }
 
-fn add_common_response_headers<R: io::Read>(response: &mut Response<R>) {
-    response.add_header(Header::from_bytes("Connection", "close").unwrap());
+fn add_common_response_headers<R: io::Read>(_response: &mut Response<R>) {
+    // HTTP keep-alive stays ENABLED (tiny_http's HTTP/1.1 default). The
+    // previous blanket `Connection: close` forced every asset request to pay
+    // a fresh TCP connect — behind the managed edge that meant ~2s TTFB per
+    // file, which multiplied across the module import graph into 5-7s
+    // app-switch times. tiny_http parks idle keep-alive connections on its
+    // own connection threads; the server only listens on loopback (the edge
+    // forwarder), so the idle-connection count stays bounded.
 }
 
 fn mime_for(path: &PathBuf) -> &'static str {
