@@ -2520,7 +2520,7 @@ body[data-auth-state="locked"] .topbar {
 
 .runtime-status-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 8px;
   min-width: 0;
 }
@@ -3589,6 +3589,11 @@ body[data-auth-state="locked"] .topbar {
 }
 .shell-notifications > * {
   pointer-events: auto;
+}
+
+.drawer:not([hidden]) ~ .shell-notifications {
+  z-index: 19;
+  pointer-events: none;
 }
 
 /* Shell style: macOS variant. Windows is the default. */
@@ -4813,7 +4818,7 @@ body[data-auth-state="locked"] .topbar {
   background: color-mix(in srgb, var(--surface) 25%, transparent) !important;
 }
 
-/* Startup Loader Premium Styles */
+/* Startup loader follows the active shell theme. */
 .workspace-startup-loader {
   display: flex;
   flex-direction: column;
@@ -4821,8 +4826,14 @@ body[data-auth-state="locked"] .topbar {
   justify-content: center;
   min-height: 100%;
   padding: 40px 24px;
-  background: radial-gradient(circle at center, #0f171c 0%, #080c0e 100%);
-  color: var(--text, #eef3f5);
+  background:
+    radial-gradient(
+      circle at 50% 42%,
+      color-mix(in srgb, var(--accent) 14%, transparent) 0%,
+      transparent 44%
+    ),
+    var(--shell-app-bg, var(--bg));
+  color: var(--text);
   font-family: var(--font-sans);
   text-align: center;
   position: relative;
@@ -4846,7 +4857,12 @@ body[data-auth-state="locked"] .topbar {
   left: 10%;
   width: 80%;
   height: 80%;
-  background: radial-gradient(circle, rgba(16, 185, 129, 0.4) 0%, rgba(6, 182, 212, 0.1) 60%, transparent 100%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 34%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 10%, transparent) 60%,
+    transparent 100%
+  );
   border-radius: 50%;
   filter: blur(20px);
   animation: startup-glow-pulse 3s infinite ease-in-out;
@@ -4857,50 +4873,52 @@ body[data-auth-state="locked"] .topbar {
   width: 100px;
   height: 100px;
   z-index: 2;
-  filter: drop-shadow(0 8px 16px rgba(16, 185, 129, 0.2));
+  filter: drop-shadow(0 8px 16px color-mix(in srgb, var(--accent) 26%, transparent));
   animation: startup-logo-float 4s infinite ease-in-out;
 }
 
 .startup-title {
   font-size: 26px;
   font-weight: 700;
-  letter-spacing: -0.5px;
+  letter-spacing: 0;
   margin: 0 0 28px 0;
-  background: linear-gradient(135deg, #eef3f5 30%, #a5b5bd 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--text-strong);
 }
 
 .startup-progress-container {
   width: 100%;
   max-width: 320px;
   height: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  background: color-mix(in srgb, var(--surface-2) 74%, transparent);
+  border: 1px solid var(--hairline);
   border-radius: 10px;
   overflow: hidden;
   margin-bottom: 16px;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 1px 3px color-mix(in srgb, var(--text-strong) 10%, transparent);
 }
 
 .startup-progress-bar {
   width: 5%;
   height: 100%;
-  background: linear-gradient(90deg, #10b981 0%, #06b6d4 100%);
+  background: linear-gradient(
+    90deg,
+    var(--accent) 0%,
+    color-mix(in srgb, var(--accent) 70%, oklch(0.72 0.12 190)) 100%
+  );
   border-radius: 10px;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.6);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
   transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1), background 0.3s ease;
 }
 
 .startup-progress-bar.is-error {
   width: 100% !important;
-  background: linear-gradient(90deg, #ef4444 0%, #f87171 100%) !important;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.8) !important;
+  background: linear-gradient(90deg, var(--danger) 0%, color-mix(in srgb, var(--danger) 74%, var(--text-strong)) 100%) !important;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--danger) 60%, transparent) !important;
 }
 
 .startup-status-text {
   font-size: 13px;
-  color: var(--muted, #8a9ea8);
+  color: var(--muted);
   font-weight: 500;
   letter-spacing: 0.2px;
   min-height: 18px;
@@ -4908,21 +4926,20 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .startup-status-text.is-error {
-  color: #f87171 !important;
+  color: var(--danger) !important;
 }
 
-/* Glassmorphic Error Card */
 .startup-error-card {
   margin-top: 32px;
   width: 100%;
   max-width: 480px;
-  background: rgba(20, 26, 30, 0.65);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(239, 68, 68, 0.25);
+  border: 1px solid color-mix(in srgb, var(--danger) 34%, var(--line));
   border-radius: 16px;
   padding: 24px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.02);
+  box-shadow: var(--shadow);
   text-align: left;
   box-sizing: border-box;
   animation: startup-shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
@@ -4937,21 +4954,21 @@ body[data-auth-state="locked"] .topbar {
   align-items: center;
   gap: 12px;
   margin-bottom: 16px;
-  border-bottom: 1px solid rgba(239, 68, 68, 0.15);
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
   padding-bottom: 12px;
 }
 
 .error-warning-icon {
   width: 28px;
   height: 28px;
-  color: #f87171;
-  filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.4));
+  color: var(--danger);
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--danger) 34%, transparent));
 }
 
 .error-header h3 {
   font-size: 18px;
   font-weight: 600;
-  color: #fca5a5;
+  color: var(--danger);
   margin: 0;
 }
 
@@ -4962,7 +4979,7 @@ body[data-auth-state="locked"] .topbar {
 .error-body p {
   font-size: 14px;
   line-height: 1.5;
-  color: #d1d5db;
+  color: var(--text);
   margin: 0 0 12px 0;
 }
 
@@ -4970,16 +4987,16 @@ body[data-auth-state="locked"] .topbar {
   display: block;
   font-family: var(--font-mono);
   font-size: 12px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid rgba(239, 68, 68, 0.15);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, var(--line));
   border-radius: 8px;
   padding: 12px 16px;
-  color: #fca5a5;
+  color: var(--text-strong);
   overflow-x: auto;
   white-space: pre-wrap;
   word-break: break-all;
   max-height: 150px;
-  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 0 2px 8px color-mix(in srgb, var(--text-strong) 10%, transparent);
 }
 
 .error-footer {
@@ -4991,27 +5008,27 @@ body[data-auth-state="locked"] .topbar {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  color: #ffffff;
+  background: linear-gradient(135deg, var(--danger) 0%, color-mix(in srgb, var(--danger) 80%, var(--text-strong)) 100%);
+  color: var(--surface);
   border: none;
   border-radius: 8px;
   padding: 10px 18px;
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--danger) 34%, transparent);
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .error-retry-btn:hover {
   transform: translateY(-1.5px);
-  box-shadow: 0 6px 20px rgba(239, 68, 68, 0.6);
-  background: linear-gradient(135deg, #f87171 0%, #ef4444 100%);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--danger) 48%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--danger) 74%, var(--text-strong)) 0%, var(--danger) 100%);
 }
 
 .error-retry-btn:active {
   transform: translateY(0);
-  box-shadow: 0 2px 10px rgba(239, 68, 68, 0.4);
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
 .error-retry-btn svg {

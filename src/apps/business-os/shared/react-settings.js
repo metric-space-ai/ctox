@@ -582,6 +582,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
           ${runtimePill('Modelle', 'Status wird gelesen.', false)}
           ${runtimePill('Autorisierung', 'Status wird gelesen.', false)}
           ${runtimePill('CTOX Service', 'Status wird gelesen.', false)}
+          ${runtimePill('Route', 'Status wird gelesen.', false)}
         </div>
       </section>
       <section class="settings-section">
@@ -610,6 +611,7 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
         ${runtimePill('Modelle', `${runtimeProviderLabel(provider)}${runtime.chat_model ? ` · ${runtime.chat_model}` : ''}`, false)}
         ${runtimePill('Autorisierung', runtimeAuthSummary(provider, authMode, auth), authNeedsAttention)}
         ${runtimePill('CTOX Service', diagnostics.service_message || 'Status unbekannt', serviceNeedsAttention)}
+        ${runtimePill('Route', runtimeRouteSummary(runtime, provider, auth), false)}
       </div>
       <div class="settings-grid">
         <label><span>Provider</span><select data-runtime-provider ${canManage ? '' : 'disabled'}>
@@ -631,7 +633,6 @@ function runtimePanel(isAdmin, runtimeSettings, runtimeLoading, subscriptionAuth
           ${option('Performance', 'Performance', runtimePresetValue(runtime.preset))}
         </select></label>
         <label><span>Context</span><select data-runtime-context ${canManage ? '' : 'disabled'}>
-          ${option('128k', '128k', runtimeContextValue(runtime.context))}
           ${option('256k', '256k', runtimeContextValue(runtime.context))}
         </select></label>
         <label><span>Max Run</span><input data-runtime-timeout inputmode="numeric" value="${escapeAttr(runtime.max_run_secs || 1800)}" ${canManage ? '' : 'disabled'} /></label>
@@ -926,6 +927,32 @@ function runtimeAuthSummary(provider, authMode, auth) {
     : `${auth.api_key_name || 'API Key'} fehlt`;
 }
 
+function runtimeRouteSummary(runtime, provider, auth = {}) {
+  const normalizedProvider = String(provider || '').toLowerCase();
+  const source = String(runtime?.source || '').toLowerCase();
+  const upstream = String(runtime?.upstream_base_url || '').trim();
+  const keyName = String(auth?.api_key_name || '').trim();
+  if (normalizedProvider === 'local' || source === 'local') return 'Lokal';
+  if (isCtoxProxyUpstream(upstream) || keyName === 'CTOX_LLM_PROXY_API_KEY') {
+    return 'ctox.dev Proxy';
+  }
+  if (upstream) return hostLabel(upstream);
+  return normalizedProvider === 'minimax' ? 'MiniMax API' : 'API';
+}
+
+function isCtoxProxyUpstream(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized.includes('llm.ctox.dev') || normalized.includes('/api/fallback-llm');
+}
+
+function hostLabel(value) {
+  try {
+    return new URL(value).host || value;
+  } catch {
+    return String(value || '').replace(/^https?:\/\//i, '').replace(/\/.*$/, '') || value;
+  }
+}
+
 function runtimeModelControl(provider, model, canManage) {
   const value = String(model || '');
   if (String(provider || '').toLowerCase() === 'local') {
@@ -952,7 +979,7 @@ function runtimeModelOptions(provider, current) {
       ['claude-opus-4-6', 'claude-opus-4-6'],
     ],
     minimax: [
-      ['openrouter/minimax/m2.7', 'openrouter/minimax/m2.7'],
+      ['MiniMax-M3', 'MiniMax-M3'],
     ],
   };
   const options = byProvider[String(provider || '').toLowerCase()] || [];
@@ -1321,9 +1348,10 @@ function runtimePresetValue(value) {
 
 function runtimeContextValue(value) {
   const normalized = String(value || '').trim().toLowerCase();
-  if (['128k', '131072', '128000'].includes(normalized)) return '128k';
-  if (['256k', '262144', '256000'].includes(normalized)) return '256k';
-  return normalized || '256k';
+  if (['256k', '262144', '256000', '128k', '131072', '128000'].includes(normalized)) {
+    return '256k';
+  }
+  return '256k';
 }
 
 function writeSubscriptionAuthWindow(authWindow, title, message, danger = false) {

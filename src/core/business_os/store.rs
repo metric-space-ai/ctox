@@ -1319,6 +1319,16 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
                 })
             },
         ));
+    let upstream_base_url = runtime_state
+        .as_ref()
+        .filter(|state| !state.source.is_local())
+        .map(|state| state.upstream_base_url.clone())
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            (!source.eq_ignore_ascii_case("local"))
+                .then(|| runtime_settings_api_upstream_base_url(&provider, &env_map))
+        })
+        .unwrap_or_default();
     let key_name = crate::inference::runtime_state::api_key_env_var_for_provider_with_env_map(
         &provider, &env_map,
     );
@@ -1412,10 +1422,7 @@ pub fn runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
             "max_run_secs": env_map.get("CTOX_CHAT_TURN_TIMEOUT_SECS")
                 .and_then(|value| value.parse::<u64>().ok())
                 .unwrap_or(1800),
-            "upstream_base_url": runtime_state.as_ref()
-                .filter(|state| !state.source.is_local())
-                .map(|state| state.upstream_base_url.clone())
-                .unwrap_or_default()
+            "upstream_base_url": upstream_base_url
         },
         "auth": {
             "mode": auth_mode,
@@ -1972,7 +1979,10 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         .unwrap_or_else(|_| BTreeMap::new());
     let chat_model = request.chat_model.trim();
     let preset = request.preset.trim();
-    let context = request.context.trim();
+    let requested_context = request.context.trim();
+    let context = runtime_settings_context(
+        (!requested_context.is_empty()).then(|| requested_context.to_owned()),
+    );
     if provider.eq_ignore_ascii_case("local") {
         env_map.insert("CTOX_CHAT_SOURCE".to_owned(), "local".to_owned());
         env_map.remove("CTOX_API_PROVIDER");
@@ -1984,8 +1994,7 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
         env_map.insert("CTOX_API_PROVIDER".to_owned(), provider.to_owned());
         env_map.insert(
             "CTOX_UPSTREAM_BASE_URL".to_owned(),
-            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
-                .to_owned(),
+            runtime_settings_api_upstream_base_url(provider, &env_map),
         );
     }
     if !chat_model.is_empty() {
@@ -1995,7 +2004,7 @@ fn save_runtime_settings(root: &Path, request: RuntimeSettingsRequest) -> anyhow
     if let Some(preset) = normalize_runtime_preset(preset) {
         env_map.insert("CTOX_CHAT_LOCAL_PRESET".to_owned(), preset.to_owned());
     }
-    if !context.is_empty() {
+    if !requested_context.is_empty() {
         env_map.insert("CTOX_CHAT_MODEL_MAX_CONTEXT".to_owned(), context.to_owned());
     }
     if let Some(max_run_secs) = request.max_run_secs.filter(|value| *value > 0) {
@@ -2051,14 +2060,42 @@ fn normalize_runtime_preset(value: &str) -> Option<&'static str> {
     }
 }
 
+fn runtime_settings_api_upstream_base_url(
+    provider: &str,
+    env_map: &BTreeMap<String, String>,
+) -> String {
+    let provider = crate::inference::runtime_state::normalize_api_provider(provider);
+    if provider.eq_ignore_ascii_case("minimax")
+        && crate::inference::runtime_state::use_ctox_llm_proxy_credentials(env_map)
+    {
+        return env_map
+            .get(crate::inference::runtime_state::CTOX_LLM_PROXY_BASE_URL_ENV)
+            .or_else(|| env_map.get("CTOX_UPSTREAM_BASE_URL"))
+            .filter(|value| crate::inference::runtime_state::is_ctox_llm_proxy_base_url(value))
+            .cloned()
+            .unwrap_or_else(|| "https://llm.ctox.dev".to_owned());
+    }
+    env_map
+        .get("CTOX_UPSTREAM_BASE_URL")
+        .filter(|value| !value.trim().is_empty())
+        .filter(|value| {
+            crate::inference::runtime_state::api_provider_for_upstream_base_url(value)
+                .eq_ignore_ascii_case(provider)
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            crate::inference::runtime_state::default_api_upstream_base_url_for_provider(provider)
+                .to_owned()
+        })
+}
+
 fn runtime_settings_context(value: Option<String>) -> String {
     let Some(value) = value else {
         return "256k".to_owned();
     };
     match value.trim().to_ascii_lowercase().as_str() {
-        "131072" | "128000" | "128k" => "128k".to_owned(),
-        "262144" | "256000" | "256k" => "256k".to_owned(),
-        _ => value,
+        "131072" | "128000" | "128k" | "262144" | "256000" | "256k" | "" => "256k".to_owned(),
+        _ => "256k".to_owned(),
     }
 }
 
@@ -16284,11 +16321,7 @@ mod tests {
     #[test]
     fn app_store_install_source_path_matches_exact_path_segments() -> anyhow::Result<()> {
         let temp = tempdir()?;
-        let app_root = temp
-            .path()
-            .join("src")
-            .join("apps")
-            .join("business-os");
+        let app_root = temp.path().join("src").join("apps").join("business-os");
         let installed = app_root.join("installed-modules").join("matching");
         write_test_manifest(&installed, "matching")?;
 
@@ -16339,6 +16372,36 @@ mod tests {
             "browser capture script bodies must stay out of the RxDB projection"
         );
         Ok(())
+    }
+
+    #[test]
+    fn runtime_settings_normalizes_retired_context_values_to_256k() {
+        assert_eq!(runtime_settings_context(Some("128k".to_owned())), "256k");
+        assert_eq!(runtime_settings_context(Some("131072".to_owned())), "256k");
+        assert_eq!(runtime_settings_context(Some("512k".to_owned())), "256k");
+        assert_eq!(runtime_settings_context(None), "256k");
+    }
+
+    #[test]
+    fn runtime_settings_uses_ctox_proxy_for_minimax_when_configured() {
+        let mut env_map = BTreeMap::new();
+        env_map.insert(
+            crate::inference::runtime_state::CTOX_LLM_PROXY_API_KEY_ENV.to_owned(),
+            "configured".to_owned(),
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://llm.ctox.dev"
+        );
+
+        env_map.insert(
+            crate::inference::runtime_state::CTOX_LLM_PROXY_BASE_URL_ENV.to_owned(),
+            "https://kunstmen.ctox.dev/api/fallback-llm".to_owned(),
+        );
+        assert_eq!(
+            runtime_settings_api_upstream_base_url("minimax", &env_map),
+            "https://kunstmen.ctox.dev/api/fallback-llm"
+        );
     }
 
     #[test]

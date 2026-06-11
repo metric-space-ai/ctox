@@ -10553,7 +10553,7 @@ mod tests {
                         "provider": "local",
                         "auth_mode": "local",
                         "chat_model": "local-test",
-                        "context": "128k",
+                        "context": "256k",
                         "max_run_secs": 120
                     },
                     "client_context": {
