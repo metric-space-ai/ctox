@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260610-shell-i18n-theme1';
+const APP_BUILD = '20260611-snappy-loader1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -463,6 +463,10 @@ const shellMessages = {
     shellStyleAria: 'Stil',
     languageAria: 'Sprache',
     themeAria: 'Design Theme',
+    appearanceSettings: 'Darstellung und Sprache',
+    shellStyleLabel: 'Fenster',
+    languageLabel: 'Sprache',
+    themeLabel: 'Schema',
     loginOpen: 'Login öffnen',
     appMenuOpen: 'App-Menü öffnen',
     notificationsAria: 'Benachrichtigungen',
@@ -569,6 +573,10 @@ const shellMessages = {
     shellStyleAria: 'Style',
     languageAria: 'Language',
     themeAria: 'Theme',
+    appearanceSettings: 'Appearance and language',
+    shellStyleLabel: 'Window',
+    languageLabel: 'Language',
+    themeLabel: 'Scheme',
     loginOpen: 'Open login',
     appMenuOpen: 'Open app menu',
     notificationsAria: 'Notifications',
@@ -633,9 +641,6 @@ const els = {
   rightDrawer: document.querySelector('[data-drawer-right]'),
   bottomDrawer: document.querySelector('[data-drawer-bottom]'),
   accountButton: document.querySelector('[data-open-account]'),
-  languageSelect: document.querySelector('[data-language-select]'),
-  themeSelect: document.querySelector('[data-theme-select]'),
-  shellStyleSelect: document.querySelector('[data-shell-style-select]'),
   shellWindowLayer: document.querySelector('[data-shell-window-layer]'),
   shellNotifications: document.querySelector('[data-shell-notifications]'),
   shellTaskbar: document.querySelector('[data-shell-taskbar]'),
@@ -1363,21 +1368,23 @@ function wireShellActions() {
     openSettingsDrawer({ initialTab: 'runtime' });
   });
   els.accountButton?.addEventListener('click', openAccountDrawer);
-  els.languageSelect?.addEventListener('change', () => {
-    applyShellLanguage(els.languageSelect.value);
-    syncHeaderControls();
-    renderShellCtoxWarning(state.ctoxHealth);
-    postCurrentPreferencesToModule();
-  });
-  els.themeSelect?.addEventListener('change', () => {
-    applyShellTheme(els.themeSelect.value);
-    syncHeaderControls();
-    postCurrentPreferencesToModule();
-  });
-  els.shellStyleSelect?.addEventListener('change', () => {
-    applyShellStyle(els.shellStyleSelect.value);
-    syncHeaderControls();
-    postCurrentPreferencesToModule();
+  document.addEventListener('change', (event) => {
+    const control = event.target;
+    if (!control?.matches) return;
+    if (control.matches('[data-language-select]')) {
+      applyShellLanguage(control.value);
+      syncHeaderControls();
+      renderShellCtoxWarning(state.ctoxHealth);
+      postCurrentPreferencesToModule();
+    } else if (control.matches('[data-theme-select]')) {
+      applyShellTheme(control.value);
+      syncHeaderControls();
+      postCurrentPreferencesToModule();
+    } else if (control.matches('[data-shell-style-select]')) {
+      applyShellStyle(control.value);
+      syncHeaderControls();
+      postCurrentPreferencesToModule();
+    }
   });
   els.backdrop?.addEventListener('click', closeDrawers);
   els.tabs.addEventListener('dragover', (event) => {
@@ -1593,6 +1600,41 @@ function openModuleSourceEditor(moduleId) {
 }
 window.openModuleSourceEditor = openModuleSourceEditor;
 
+function shellPreferenceControlsTemplate() {
+  const shellStyle = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+  const language = shellLang();
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  return `
+    <div class="settings-preferences" aria-label="${escapeHtml(shellText('appearanceSettings') || 'Appearance and language')}" data-shell-t-aria="appearanceSettings">
+      <label class="settings-preference-control">
+        <span data-shell-t="shellStyleLabel">${escapeHtml(shellText('shellStyleLabel') || 'Window')}</span>
+        <select class="header-select" data-shell-style-select aria-label="${escapeHtml(shellText('shellStyleAria') || 'Style')}" data-shell-t-aria="shellStyleAria">
+          ${preferenceOption('windows', 'Windows', shellStyle)}
+          ${preferenceOption('macos', 'macOS', shellStyle)}
+        </select>
+      </label>
+      <label class="settings-preference-control">
+        <span data-shell-t="languageLabel">${escapeHtml(shellText('languageLabel') || 'Language')}</span>
+        <select class="header-select" data-language-select aria-label="${escapeHtml(shellText('languageAria') || 'Language')}" data-shell-t-aria="languageAria">
+          ${preferenceOption('de', 'DE', language)}
+          ${preferenceOption('en', 'EN', language)}
+        </select>
+      </label>
+      <label class="settings-preference-control">
+        <span data-shell-t="themeLabel">${escapeHtml(shellText('themeLabel') || 'Scheme')}</span>
+        <select class="header-select" data-theme-select aria-label="${escapeHtml(shellText('themeAria') || 'Theme')}" data-shell-t-aria="themeAria">
+          ${preferenceOption('dark', 'Dark', theme)}
+          ${preferenceOption('light', 'Light', theme)}
+        </select>
+      </label>
+    </div>
+  `;
+}
+
+function preferenceOption(value, label, selected) {
+  return `<option value="${escapeHtml(value)}" ${selected === value ? 'selected' : ''}>${escapeHtml(label)}</option>`;
+}
+
 
 async function openSettingsDrawer(options = {}) {
   els.rightDrawer.classList.remove('account-popover');
@@ -1603,9 +1645,13 @@ async function openSettingsDrawer(options = {}) {
     const loading = document.createElement('div');
     loading.className = 'drawer-body settings-drawer';
     loading.innerHTML = `
-      <h2>CTOX Settings</h2>
-      <p>Datenspeicher wird vorbereitet...</p>
-      <button type="button" class="ghost" data-close-settings>Schließen</button>
+      <header class="drawer-header-row settings-head">
+        ${shellPreferenceControlsTemplate()}
+        <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
+      </header>
+      <section class="settings-section">
+        <header><h3>Datenspeicher</h3><span>Wird vorbereitet.</span></header>
+      </section>
     `;
     loading.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
     els.rightDrawer.append(loading);
@@ -1617,10 +1663,14 @@ async function openSettingsDrawer(options = {}) {
     const failed = document.createElement('div');
     failed.className = 'drawer-body settings-drawer';
     failed.innerHTML = `
-      <h2>CTOX Settings</h2>
-      <p>Datenspeicher ist noch nicht bereit.</p>
-      <p class="muted">${escapeHtml(String(error?.message || error || 'Unbekannter Fehler'))}</p>
-      <button type="button" class="ghost" data-close-settings>Schließen</button>
+      <header class="drawer-header-row settings-head">
+        ${shellPreferenceControlsTemplate()}
+        <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
+      </header>
+      <section class="settings-section">
+        <header><h3>Datenspeicher</h3><span>Nicht bereit.</span></header>
+        <p class="muted">${escapeHtml(String(error?.message || error || 'Unbekannter Fehler'))}</p>
+      </section>
     `;
     failed.querySelector('[data-close-settings]')?.addEventListener('click', closeDrawers);
     els.rightDrawer.append(failed);
@@ -3025,15 +3075,15 @@ function applyShellStyle(style, options = {}) {
 }
 
 function syncHeaderControls() {
-  if (els.languageSelect) {
-    els.languageSelect.value = shellLang();
-  }
-  if (els.themeSelect) {
-    els.themeSelect.value = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
-  }
-  if (els.shellStyleSelect) {
-    els.shellStyleSelect.value = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
-  }
+  document.querySelectorAll('[data-language-select]').forEach((select) => {
+    select.value = shellLang();
+  });
+  document.querySelectorAll('[data-theme-select]').forEach((select) => {
+    select.value = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  });
+  document.querySelectorAll('[data-shell-style-select]').forEach((select) => {
+    select.value = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+  });
 }
 
 function localizeShellChrome() {
@@ -3590,6 +3640,13 @@ async function openModule(moduleId, options = {}) {
   applyLoadingShadow(mod, loadToken);
   els.leftContent.replaceChildren(renderLeftContext(mod));
   els.rightContent.replaceChildren(renderRightContext(mod));
+  // Fetch the module script while the schemas register — the two are
+  // independent until mount() runs (mount needs the collections, the import
+  // only needs the network/module cache).
+  const moduleScriptPromise = importBusinessOsModule(
+    `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
+    `${mod.id} module`,
+  );
   let moduleSyncStart = null;
   try {
     await registerModuleSchemas(mod);
@@ -3599,10 +3656,7 @@ async function openModule(moduleId, options = {}) {
     setStatus(`Schema warning: ${error.message || error}`);
   }
   try {
-    const moduleScript = await importBusinessOsModule(
-      `./${moduleBasePath(mod)}/index.js?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
-      `${mod.id} module`,
-    );
+    const moduleScript = await moduleScriptPromise;
     if (typeof moduleScript.mount === 'function') {
       state.activeUnmount = await moduleScript.mount(createModuleContext(mod));
     }
@@ -3961,7 +4015,7 @@ function renderModuleFrame(mod) {
     ${renderModuleAppBar(mod)}
     <div class="module-content" data-module-content>
       <div class="module-loading-shadow is-pending" data-loading-shadow aria-busy="true" aria-hidden="true">
-        ${renderLoadingShadowFallback()}
+        ${renderLoadingShadowFallback(mod)}
       </div>
       <div class="module-loading-note" aria-hidden="true">
         <strong>${escapeHtml(moduleDisplayTitle(mod))}</strong>
@@ -4088,10 +4142,15 @@ function taskbarMarkForModule(mod) {
 }
 
 // Generic instant placeholder shown the moment a module opens, before its real
-// markup has been fetched. Also the fallback when the markup fetch fails. It is
-// intentionally layout-agnostic — the real shadow (derived from the module's own
-// index.html) replaces it as soon as the fetch resolves.
-function renderLoadingShadowFallback() {
+// markup has been fetched. Also the fallback when the markup fetch fails.
+// Column-shaped for workbench modules; the desktop is an icon surface and gets
+// an icon grid instead (a 2-pane skeleton would promise columns that never
+// appear). With the CSS reveal delay this is only ever seen on cold/slow loads.
+function renderLoadingShadowFallback(mod) {
+  if (mod?.id === 'desktop') {
+    const tile = '<div class="module-loading-shadow-icon-tile"><b class="mls-icon"></b><b class="mls-icon-label"></b></div>';
+    return `<div class="module-loading-shadow-icons">${tile.repeat(8)}</div>`;
+  }
   return `
     <div class="module-loading-shadow-frame">
       <div class="module-loading-shadow-pane">${loadingFillRows(1, 4)}</div>
@@ -4113,13 +4172,17 @@ function loadingFillRows(head, rows) {
 // against races when the user switches modules quickly: a stale fetch must not
 // paint over a freshly mounted (or different) module.
 async function applyLoadingShadow(mod, token) {
+  // The desktop's derived shadow would be an empty JS-filled stub; its icon
+  // grid fallback already shows the right shape.
+  if (mod?.id === 'desktop') return;
   const base = moduleBasePath(mod);
   ensureModuleStylesheet(base);
   let markup = '';
   try {
     const res = await fetch(
       `./${base}/index.html?v=${APP_BUILD}${moduleRevisionQuery(mod.id)}`,
-      { cache: 'no-store' },
+      // Versioned URL: the server marks it immutable; revisits must not refetch.
+      { cache: 'force-cache' },
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     markup = await res.text();
@@ -6122,7 +6185,7 @@ function getOfflineFallbackCatalog() {
 
 async function loadPackagedModuleCatalog() {
   try {
-    const response = await fetch(`modules/registry.json?v=${APP_BUILD}`, { cache: 'no-store' });
+    const response = await fetch(`modules/registry.json?v=${APP_BUILD}`, { cache: 'force-cache' });
     if (response.ok) {
       const catalog = await response.json();
       if (Array.isArray(catalog?.modules) && catalog.modules.length) {

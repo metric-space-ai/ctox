@@ -564,26 +564,6 @@ button {
   stroke-linejoin: round;
 }
 
-.topbar-tray-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 32px;
-  padding: 2px;
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--surface) 52%, var(--bg));
-}
-
-.topbar-tray-separator {
-  display: inline-block;
-  width: 1px;
-  height: 20px;
-  margin: 0 2px;
-  background: var(--hairline, var(--line));
-  vertical-align: middle;
-}
-
 .text-button,
 .icon-button,
 .account-button {
@@ -2290,12 +2270,49 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .settings-head {
+  align-items: center;
   margin: 0;
   min-width: 0;
 }
 
 .settings-head p {
   margin: 0;
+  font-size: 12px;
+}
+
+.settings-preferences {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.settings-preference-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-preference-control span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 820;
+  line-height: 1;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.settings-preference-control .header-select {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--hairline, var(--line));
+  padding: 0 24px 0 9px;
+  background: var(--shell-control-bg);
   font-size: 12px;
 }
 
@@ -3612,14 +3629,16 @@ body[data-auth-state="locked"] .topbar {
 :root[data-shell-style="macos"] .module-tab[aria-current="page"]::after {
   display: none;
 }
-:root[data-shell-style="macos"] .topbar-tray-separator {
-  display: none;
-}
 :root[data-shell-style="macos"] .header-select,
 :root[data-shell-style="macos"] .icon-button,
 :root[data-shell-style="macos"] .account-button {
   height: 28px;
   border-radius: 8px;
+}
+
+:root[data-shell-style="macos"] .settings-preference-control .header-select {
+  height: 32px;
+  border-radius: 9px;
 }
 
 /* Shell-level windows, context menus, toasts.
@@ -5353,14 +5372,14 @@ body[data-shell-taskbar-open] .drawer-bottom {
   outline: none !important;
 }
 .module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
-  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row) {
+  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row, .mls-icon, .mls-icon-label) {
   background-color: color-mix(in srgb, var(--surface-2, #20282c) 78%, var(--text, #eef4f6) 7%) !important;
   border-radius: 6px !important;
   position: relative;
   overflow: hidden;
 }
 .module-loading-shadow :is(h1, h2, h3, h4, h5, p, span, a, b, strong, li, button,
-  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row)::after {
+  label, td, th, input, textarea, select, img, svg, .mls-head, .mls-row, .mls-icon, .mls-icon-label)::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -5393,6 +5412,37 @@ body[data-shell-taskbar-open] .drawer-bottom {
 .mls-row { height: 12px; width: 100%; }
 .mls-row:nth-child(4n) { width: 70%; }
 
+/* Desktop fallback: the desktop is an icon surface, not a column layout —
+   its instant placeholder is an icon grid instead of the 2-pane skeleton. */
+.module-loading-shadow-icons {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 96px);
+  gap: 28px 20px;
+  align-content: start;
+  padding: 28px;
+  height: 100%;
+}
+.module-loading-shadow-icon-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.mls-icon { width: 60px; height: 60px; border-radius: 16px !important; }
+.mls-icon-label { width: 68px; height: 10px; }
+
+/* OS-snappy rule: loaders must be invisible in normal operation. The shadow
+   and note only become visible if a module switch takes longer than the
+   reveal delay (cold first load, slow network) — fast mounts never flash a
+   skeleton. CSS animations beat normal declarations, hence the !important on
+   the note-fade rule below. */
+.module-loading-shadow,
+.module-loading-note {
+  opacity: 0;
+  animation: ctox-loader-reveal 1ms linear 280ms both;
+}
+@keyframes ctox-loader-reveal { to { opacity: 1; } }
+
 /* "<App> wird geladen" note, centered over the shadow; fades once the real
    markup shadow has been injected (is-pending removed). */
 .module-loading-note {
@@ -5410,7 +5460,7 @@ body[data-shell-taskbar-open] .drawer-bottom {
 }
 .module-loading-note strong { color: var(--text, #eef4f6); font-size: 14px; }
 .module-loading-note span { font-size: 12px; }
-.module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0; }
+.module-loading-shadow:not(.is-pending) ~ .module-loading-note { opacity: 0 !important; animation: none !important; }
 
 /* Declarative column resizer handle. Modules put a
    `.ctox-column-resizer[data-resizer-var]` inside a `[data-resize-frame]` grid
