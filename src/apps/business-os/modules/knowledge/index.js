@@ -2,9 +2,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { CtoxResizer } from '../../shared/resizer.js';
 
 const KNOWLEDGE_RENDER_DEBOUNCE_MS = 80;
-const KNOWLEDGE_INITIAL_SYNC_WAIT_MS = 9000;
 const KNOWLEDGE_SYNC_START_WAIT_MS = 1500;
-const KNOWLEDGE_SYNC_POLL_MS = 350;
 const KNOWLEDGE_OPEN_TARGET_KEY = 'ctox.businessOs.knowledge.openId';
 const KNOWLEDGE_DATA_COLLECTIONS = Object.freeze([
   'knowledge_items',
@@ -266,13 +264,18 @@ async function loadKnowledgeFromLocal(options = {}) {
   state.refreshInFlight = true;
   state.loadError = '';
   state.missingCollections = [];
-  if (options.initial) renderKnowledgeLoading();
   try {
-    await ensureKnowledgeDataSyncStarted();
-    let snapshot = await readLocalKnowledgeSnapshot();
-    if (options.initial && !knowledgeSnapshotHasRecords(snapshot) && shouldWaitForKnowledgeSync(snapshot)) {
-      snapshot = await waitForKnowledgeSnapshot(snapshot, KNOWLEDGE_INITIAL_SYNC_WAIT_MS);
+    // Local-first: render whatever is in IndexedDB RIGHT NOW. Never block the
+    // first paint on a sync round trip — `wireLocalRealtime()` subscribes to
+    // the knowledge collections and re-renders the moment replicated records
+    // land, and the sync toast surfaces "data still loading". The old initial
+    // path awaited a sync warm-up AND polled up to 9s for records before
+    // showing anything, which made every Knowledge open feel frozen.
+    if (options.initial) {
+      // Kick sync off in the background; do NOT await it.
+      ensureKnowledgeDataSyncStarted().catch(() => {});
     }
+    const snapshot = await readLocalKnowledgeSnapshot();
     state.loadError = snapshot.error || '';
     state.missingCollections = snapshot.missingCollections || [];
     applyKnowledgeRecords(snapshot);
@@ -383,43 +386,6 @@ async function ensureKnowledgeDataSyncStarted() {
     });
   }
   await promiseWithTimeout(state.syncWarmupPromise, KNOWLEDGE_SYNC_START_WAIT_MS).catch(() => {});
-}
-
-async function waitForKnowledgeSnapshot(initialSnapshot, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let snapshot = initialSnapshot;
-  while (Date.now() < deadline) {
-    if (knowledgeSnapshotHasRecords(snapshot) || !shouldWaitForKnowledgeSync(snapshot)) return snapshot;
-    await delay(KNOWLEDGE_SYNC_POLL_MS);
-    snapshot = await readLocalKnowledgeSnapshot();
-  }
-  return snapshot;
-}
-
-function knowledgeSnapshotHasRecords(snapshot) {
-  return Boolean((snapshot?.items?.length || 0) || (snapshot?.runbooks?.length || 0) || (snapshot?.tables?.length || 0));
-}
-
-function shouldWaitForKnowledgeSync(snapshot) {
-  if (snapshot?.error || snapshot?.missingCollections?.length) return false;
-  if (knowledgeSnapshotHasRecords(snapshot)) return false;
-  if (!state.ctx?.sync?.startCollection) return false;
-  const diagnostics = state.ctx.sync?.diagnostics?.collections || {};
-  return KNOWLEDGE_DATA_COLLECTIONS.some((collectionName) => {
-    const info = diagnostics[collectionName];
-    if (!info) return true;
-    const status = String(info.connectionStatus || info.status || '');
-    const initialState = String(info.initialReplicationState || '');
-    return ['starting', 'connecting', 'pending', 'reconnecting'].includes(status)
-      || ['pending', 'waiting-for-peer'].includes(initialState);
-  });
-}
-
-function renderKnowledgeLoading() {
-  const copy = state.messages || labels[state.lang];
-  if (els.list) {
-    els.list.innerHTML = `<div class="empty-state"><strong>${escapeHtml(copy.loading)}</strong></div>`;
-  }
 }
 
 function promiseWithTimeout(promise, timeoutMs) {

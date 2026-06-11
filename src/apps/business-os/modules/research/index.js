@@ -316,10 +316,17 @@ export async function mount(ctx) {
     showPromptViewer(filename);
   };
   
-  await startResearchCollections();
+  // Local-first: subscribe BEFORE starting sync so any replicated write
+  // re-renders, then start the WebRTC bridges in the BACKGROUND. Awaiting the
+  // 6-collection bridge handshake here used to freeze the Research open for
+  // 1-2s before anything appeared; the sync toast covers "still loading" and
+  // `schedulePostSyncRefresh` + `wireRealtime` refresh once data lands.
   wireRealtime();
   wireSyncDiagnosticsRefresh();
   state.cleanup.push(initResearchContextMenu());
+  startResearchCollections().catch((error) => {
+    console.warn('[research] background sync start failed', error);
+  });
   await refreshAll({ seed: true });
   schedulePostSyncRefresh(1200);
   return () => {

@@ -66,8 +66,15 @@ export async function mount(ctx) {
   ctx.left.replaceChildren();
   ctx.right.replaceChildren();
   wireUi();
-  await refreshReports();
+  // Local-first: subscribe first, then load in the background. The shell HTML
+  // is already in the DOM; awaiting the (local, but potentially large)
+  // multi-collection read before returning made the open feel laggy. The
+  // realtime subscription re-renders as soon as the read resolves and on every
+  // later change.
   state.cleanup = wireRealtime();
+  refreshReports().catch((error) => {
+    console.warn('[reports] initial load failed', error);
+  });
 
   const resizeCleanup = setupResizers(ctx.host);
 
