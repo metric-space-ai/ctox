@@ -486,10 +486,7 @@ function settingsTemplate({
 }) {
   return `
     <header class="drawer-header-row settings-head">
-      <div>
-        <h2>CTOX Settings</h2>
-        <p>${escapeHtml(session?.authenticated ? 'Verbunden mit dieser CTOX Instanz.' : 'Keine aktive CTOX Sitzung.')}</p>
-      </div>
+      ${settingsPreferenceControls()}
       <button class="icon-button" type="button" data-close-settings aria-label="Schließen">×</button>
     </header>
 
@@ -523,6 +520,56 @@ function settingsTemplate({
       <button class="text-button" type="button" data-logout-settings>Logout</button>
       ${commandStatus ? `<span class="settings-status">${escapeHtml(commandStatus)}</span>` : ''}
     </footer>
+  `;
+}
+
+function settingsPreferenceControls() {
+  const lang = document.documentElement.lang === 'en' ? 'en' : 'de';
+  const shellStyle = document.documentElement.dataset.shellStyle === 'macos' ? 'macos' : 'windows';
+  const theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
+  const copy = lang === 'en'
+    ? {
+        group: 'Appearance and language',
+        shellStyle: 'Window',
+        shellStyleAria: 'Style',
+        language: 'Language',
+        languageAria: 'Language',
+        theme: 'Scheme',
+        themeAria: 'Theme',
+      }
+    : {
+        group: 'Darstellung und Sprache',
+        shellStyle: 'Fenster',
+        shellStyleAria: 'Stil',
+        language: 'Sprache',
+        languageAria: 'Sprache',
+        theme: 'Schema',
+        themeAria: 'Design Theme',
+      };
+  return `
+    <div class="settings-preferences" aria-label="${escapeAttr(copy.group)}" data-shell-t-aria="appearanceSettings">
+      <label class="settings-preference-control">
+        <span data-shell-t="shellStyleLabel">${escapeHtml(copy.shellStyle)}</span>
+        <select class="header-select" data-shell-style-select aria-label="${escapeAttr(copy.shellStyleAria)}" data-shell-t-aria="shellStyleAria">
+          ${option('windows', 'Windows', shellStyle)}
+          ${option('macos', 'macOS', shellStyle)}
+        </select>
+      </label>
+      <label class="settings-preference-control">
+        <span data-shell-t="languageLabel">${escapeHtml(copy.language)}</span>
+        <select class="header-select" data-language-select aria-label="${escapeAttr(copy.languageAria)}" data-shell-t-aria="languageAria">
+          ${option('de', 'DE', lang)}
+          ${option('en', 'EN', lang)}
+        </select>
+      </label>
+      <label class="settings-preference-control">
+        <span data-shell-t="themeLabel">${escapeHtml(copy.theme)}</span>
+        <select class="header-select" data-theme-select aria-label="${escapeAttr(copy.themeAria)}" data-shell-t-aria="themeAria">
+          ${option('dark', 'Dark', theme)}
+          ${option('light', 'Light', theme)}
+        </select>
+      </label>
+    </div>
   `;
 }
 
