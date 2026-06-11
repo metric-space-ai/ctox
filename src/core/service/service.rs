@@ -14303,8 +14303,8 @@ struct SystemdUnitStatus {
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
 /// `start_background`/`stop_background` drop the cache on every exit path
 /// so an in-process toggle is visible on the next poll.
-fn systemd_unit_status_cache() -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>
-{
+fn systemd_unit_status_cache(
+) -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
     static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -14329,10 +14329,8 @@ impl Drop for SystemdCacheInvalidator {
 
 fn systemd_unit_status_cached(root: &Path, ttl: Duration) -> Result<Option<SystemdUnitStatus>> {
     let cache = systemd_unit_status_cache();
-    if let Some((probed_at, cached_root, cached)) = cache
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .as_ref()
+    if let Some((probed_at, cached_root, cached)) =
+        cache.lock().unwrap_or_else(|err| err.into_inner()).as_ref()
     {
         if cached_root.as_path() == root && probed_at.elapsed() < ttl {
             return Ok(cached.clone());
