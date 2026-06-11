@@ -30,6 +30,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
@@ -157,7 +159,44 @@ fn refresh_due(last_refresh_at: &mut Option<Instant>, interval: Duration) -> boo
     }
 }
 
+/// The uncached probe costs a `runtime_env` SQLite lookup plus an
+/// `nvidia-smi` spawn. The settings refresh path consults it several times
+/// per tick, but the hardware does not change between key strokes — so the
+/// result is cached per root with the same 5s TTL as `runtime_plan`'s
+/// hardware-profile cache. `invalidate_runtime_observations` drops the cache
+/// after saves and runtime switches.
+const LOCAL_GPU_PROBE_CACHE_TTL: Duration = Duration::from_secs(5);
+
+fn local_gpu_probe_cache() -> &'static Mutex<Option<(Instant, PathBuf, bool)>> {
+    static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, bool)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(None))
+}
+
+fn invalidate_local_gpu_probe_cache() {
+    *local_gpu_probe_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = None;
+}
+
 fn local_gpu_available(root: &Path) -> bool {
+    if let Some((probed_at, cached_root, available)) = local_gpu_probe_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .as_ref()
+    {
+        if cached_root.as_path() == root && probed_at.elapsed() < LOCAL_GPU_PROBE_CACHE_TTL {
+            return *available;
+        }
+    }
+    let available = local_gpu_available_uncached(root);
+    *local_gpu_probe_cache()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) =
+        Some((Instant::now(), root.to_path_buf(), available));
+    available
+}
+
+fn local_gpu_available_uncached(root: &Path) -> bool {
     if let Some(spec) = runtime_env::env_or_config(root, "CTOX_TEST_GPU_TOTALS_MB") {
         return spec
             .split(';')
@@ -1739,6 +1778,7 @@ impl App {
         self.last_gpu_refresh_at = None;
         self.last_runtime_refresh_at = None;
         self.runtime_telemetry = None;
+        invalidate_local_gpu_probe_cache();
     }
 
     fn refresh_service_status(&mut self) {
