@@ -3857,8 +3857,8 @@ fn apply_runtime_model_selection(
 }
 
 fn load_settings_items(root: &Path) -> Vec<SettingItem> {
-    let env_map = BTreeMap::new();
-    let current_runtime_state: Option<runtime_state::InferenceRuntimeState> = None;
+    let env_map = runtime_env::effective_runtime_env_map(root).unwrap_or_default();
+    let current_runtime_state = runtime_state::load_or_resolve_runtime_state(root).ok();
     let inferred_chat_source = current_runtime_state
         .as_ref()
         .map(|state| state.source.as_env_value().to_string())
@@ -6878,6 +6878,7 @@ mod tests {
 
         let root = temp_root("composer-badge");
         let db_path = crate::persistence::sqlite_path(&root);
+        fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).unwrap();
 
         let mut app = App::new(root.clone(), db_path);
@@ -6932,6 +6933,7 @@ mod tests {
     fn image_slash_command_resolves_existing_file_and_rejects_non_image() {
         let root = temp_root("image-slash");
         let db_path = crate::persistence::sqlite_path(&root);
+        fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let _ = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).unwrap();
         let mut app = App::new(root.clone(), db_path);
 
@@ -7036,7 +7038,8 @@ mod tests {
         env_map.insert("CTOX_API_PROVIDER".to_string(), "local".to_string());
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let app = App::new(root.clone(), db_path);
+        let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
         assert_eq!(app.settings_view, SettingsView::Model);
 
         let openai_key_row = app
@@ -7063,6 +7066,7 @@ mod tests {
         assert!(!app.setting_visible(&openai_web_search_row));
 
         let mut app = App::new(root.clone(), root.join("runtime/test-subscription.sqlite3"));
+        app.ensure_settings_items_loaded();
         let provider_idx = app
             .settings_items
             .iter()
@@ -7093,15 +7097,14 @@ mod tests {
     }
 
     #[test]
-    fn no_gpu_local_family_choices_only_include_small_qwen_and_gemma() {
+    fn no_gpu_hosts_offer_no_local_chat_families() {
         let root = temp_root("no-gpu-families");
         let choices = supported_local_chat_family_choices_with_gpu(&root, &BTreeMap::new(), false);
 
-        assert!(choices.contains(&"Qwen 3.5"));
-        assert!(choices.contains(&"Gemma 4"));
-        assert!(!choices.contains(&"GPT-OSS"));
-        assert!(!choices.contains(&"Nemotron Cascade 2"));
-        assert!(!choices.contains(&"GLM 4.7 Flash"));
+        assert!(
+            choices.is_empty(),
+            "no local chat families are offered without a GPU: {choices:?}"
+        );
     }
 
     #[test]
@@ -7211,6 +7214,7 @@ mod tests {
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
         let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
         let local_keys = app
             .visible_setting_indices()
             .into_iter()
@@ -7365,6 +7369,8 @@ mod tests {
         let root = temp_root("cto-contract-editor");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
+        app.page = Page::Settings;
         let idx = app
             .settings_items
             .iter()
@@ -7421,7 +7427,8 @@ mod tests {
     fn model_settings_show_preset_immediately_after_base_model() {
         let root = temp_root("preset-order");
         let db_path = root.join("runtime/test.sqlite3");
-        let app = App::new(root, db_path);
+        let mut app = App::new(root, db_path);
+        app.ensure_settings_items_loaded();
         let visible = app.visible_setting_indices();
         let model_pos = visible
             .iter()
@@ -7432,11 +7439,16 @@ mod tests {
             .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_LOCAL_PRESET")
             .unwrap();
         assert_eq!(preset_pos, model_pos + 1);
+        let context_pos = visible
+            .iter()
+            .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_MODEL_MAX_CONTEXT")
+            .unwrap();
+        assert_eq!(context_pos, preset_pos + 1);
         let skill_preset_pos = visible
             .iter()
             .position(|idx| app.settings_items[*idx].key == "CTOX_CHAT_SKILL_PRESET")
             .unwrap();
-        assert_eq!(skill_preset_pos, preset_pos + 1);
+        assert_eq!(skill_preset_pos, preset_pos + 2);
     }
 
     #[test]
@@ -7478,6 +7490,7 @@ mod tests {
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
         let mut app = App::new(root, db_path);
+        app.ensure_settings_items_loaded();
         app.gpu_cards = vec![
             GpuCardState {
                 index: 0,
@@ -7622,6 +7635,7 @@ mod tests {
         let root = temp_root("comm-visibility");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root, db_path);
+        app.ensure_settings_items_loaded();
 
         let owner_row = app
             .settings_items
@@ -7657,7 +7671,9 @@ mod tests {
         assert!(app.setting_visible(&owner_row));
         assert!(!app.setting_visible(&email_protocol_row));
         assert!(!app.setting_visible(&email_password_row));
-        assert!(!app.setting_visible(&jami_row));
+        // Jami rows stay visible regardless of the preferred channel so the
+        // QR code can be used to add the agent as a contact (f2ffa6d8).
+        assert!(app.setting_visible(&jami_row));
 
         app.settings_items
             .iter_mut()
@@ -7666,7 +7682,7 @@ mod tests {
             .value = "email".to_string();
         assert!(app.setting_visible(&email_protocol_row));
         assert!(app.setting_visible(&email_password_row));
-        assert!(!app.setting_visible(&jami_row));
+        assert!(app.setting_visible(&jami_row));
 
         app.settings_items
             .iter_mut()
@@ -7702,6 +7718,7 @@ mod tests {
         runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
         let mut app = App::new(root, db_path);
+        app.ensure_settings_items_loaded();
         app.refresh_header();
 
         assert_eq!(app.header.chat_source, "api");
@@ -7712,7 +7729,7 @@ mod tests {
     #[test]
     fn load_skill_catalog_discovers_skill_scripts_and_resources() {
         let root = temp_root("skills-catalog");
-        let skill_dir = root.join("skills/.system/demo-skill");
+        let skill_dir = root.join("skills/packs/demo-skill");
         fs::create_dir_all(skill_dir.join("scripts")).unwrap();
         fs::create_dir_all(skill_dir.join("references")).unwrap();
         fs::write(
@@ -7732,7 +7749,7 @@ mod tests {
             entry.description,
             "Use this skill when the operator wants a demo workflow."
         );
-        assert_eq!(entry.class, SkillClass::CtoxCore);
+        assert_eq!(entry.class, SkillClass::InstalledPacks);
         assert_eq!(entry.state, SkillState::Stable);
         assert!(entry.helper_tools.iter().any(|tool| tool == "demo_tool.py"));
         assert!(entry
@@ -7744,7 +7761,7 @@ mod tests {
     #[test]
     fn load_skill_catalog_classifies_curated_codex_and_personal_skills() {
         let root = temp_root("skills-classes");
-        let curated_dir = root.join("skills/.curated/demo-pack");
+        let curated_dir = root.join("skills/packs/demo-pack");
         fs::create_dir_all(&curated_dir).unwrap();
         fs::write(
             curated_dir.join("SKILL.md"),
@@ -7959,6 +7976,7 @@ mod tests {
         let root = temp_root("boost-save");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
         let provider_idx = app
             .settings_items
             .iter()
@@ -7991,6 +8009,7 @@ mod tests {
         let root = temp_root("settings-openai-secret");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
         let token_idx = app
             .settings_items
             .iter()
@@ -8003,30 +8022,13 @@ mod tests {
             secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
             Some("sk-secret-store")
         );
-        let conn = rusqlite::Connection::open(crate::persistence::sqlite_path(&root)).unwrap();
-        let persisted = match conn.query_row(
-            "SELECT env_value FROM runtime_env_kv WHERE env_key = 'OPENAI_API_KEY'",
-            [],
-            |row| row.get::<_, String>(0),
-        ) {
-            Ok(value) => Some(value),
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(err) => panic!("unexpected sqlite error: {err}"),
-        };
-        let all_rows = {
-            let mut stmt = conn
-                .prepare("SELECT env_key, env_value FROM runtime_env_kv ORDER BY env_key ASC")
-                .unwrap();
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .unwrap();
-            rows.map(|row| row.unwrap()).collect::<Vec<_>>()
-        };
+        // The raw persisted kv table must stay clean; the merged view from
+        // load_runtime_env_map intentionally overlays the secret store.
+        let persisted_env =
+            runtime_env::load_persisted_runtime_env_map(&root).unwrap_or_default();
         assert!(
-            persisted.is_none(),
-            "persisted={persisted:?} rows={all_rows:?}"
+            !persisted_env.contains_key("OPENAI_API_KEY"),
+            "token leaked into the runtime env store: {persisted_env:?}"
         );
     }
 
@@ -8035,6 +8037,7 @@ mod tests {
         let root = temp_root("settings-azure-foundry");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root.clone(), db_path);
+        app.ensure_settings_items_loaded();
 
         for (key, value) in [
             ("CTOX_API_PROVIDER", "azure_foundry"),

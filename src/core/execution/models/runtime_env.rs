@@ -183,7 +183,7 @@ pub fn auxiliary_backend_enabled(root: &Path, role_prefix: &str) -> bool {
     true
 }
 
-fn load_persisted_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
+pub(crate) fn load_persisted_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
     let conn = open_runtime_persistence_db(root)?;
     let env_map = load_runtime_env_map_from_db(&conn)?;
     Ok(env_map)
