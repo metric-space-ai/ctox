@@ -59,6 +59,87 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
         Page::Settings => render_settings(frame, app, layout[2]),
     }
     render_status(frame, app, layout[3]);
+    if app.setup_wizard.is_some() {
+        render_setup_wizard(frame, app, area);
+    }
+}
+
+/// Centered first-run checklist overlay. Rows derive from live app state,
+/// so a configured credential or a started service flips to ✓ on the next
+/// frame.
+fn render_setup_wizard(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let Some(wizard) = app.setup_wizard.as_ref() else {
+        return;
+    };
+    let steps = app.setup_steps();
+    let box_width = area.width.clamp(40, 86);
+    let box_height = (steps.len() as u16 + 9)
+        .min(area.height.saturating_sub(2))
+        .max(10);
+    let popup = ratatui::layout::Rect {
+        x: area.x + (area.width.saturating_sub(box_width)) / 2,
+        y: area.y + (area.height.saturating_sub(box_height)) / 2,
+        width: box_width,
+        height: box_height,
+    };
+    frame.render_widget(Clear, popup);
+
+    let inner_width = box_width.saturating_sub(4) as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        "CTOX is not configured yet. Walk through these steps:",
+        Style::default().fg(Color::White),
+    )));
+    lines.push(Line::from(String::new()));
+    for (index, step) in steps.iter().enumerate() {
+        let (icon, icon_color) = match step.status {
+            super::SetupStepStatus::Done => ("✓", Color::Green),
+            super::SetupStepStatus::Open => ("○", Color::Yellow),
+        };
+        let selected = index == wizard.selected;
+        let label_style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(format!(" {icon} "), Style::default().fg(icon_color)),
+            Span::styled(format!(" {:<14}", step.label), label_style),
+            Span::raw(" "),
+            Span::styled(
+                truncate_line(&step.detail, inner_width.saturating_sub(20)),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
+    }
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        "↑/↓ select · Enter run step · f finish · Esc skip (won't ask again)",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let widget = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::LightCyan))
+                .style(Style::default().bg(Color::Rgb(16, 16, 16)))
+                .title(Span::styled(
+                    " first run setup ",
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        )
+        .wrap(Wrap { trim: false });
+    frame.render_widget(widget, popup);
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {

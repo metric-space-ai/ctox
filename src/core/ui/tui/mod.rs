@@ -457,6 +457,38 @@ enum Page {
     Settings,
 }
 
+/// Persisted dismissal/completion marker for the first-run wizard, stored
+/// in the SQLite runtime store (no process-env toggle).
+const SETUP_WIZARD_STATE_KEY: &str = "CTOX_SETUP_WIZARD_STATE";
+
+#[derive(Debug, Clone, Default)]
+struct SetupWizardState {
+    selected: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupStepStatus {
+    Done,
+    Open,
+}
+
+#[derive(Debug, Clone)]
+struct SetupStep {
+    label: &'static str,
+    status: SetupStepStatus,
+    detail: String,
+    /// Settings row this step deep-links to on Enter (view + item key).
+    target: Option<(SettingsView, &'static str)>,
+    action: SetupStepAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupStepAction {
+    JumpToSetting,
+    StartService,
+    SubmitTestTurn,
+}
+
 /// Sub-views of the Work page: the live harness flow, harness-mining
 /// health, and the Business OS data plane. These are operational status
 /// surfaces, not configuration — they used to hide at the end of the
@@ -793,6 +825,11 @@ struct App {
     /// skipped while the stored marker matches.
     chat_refresh_marker: Option<(i64, i64, i64, i64)>,
     harness_flow_text: String,
+    /// First-run wizard overlay; `Some` while the guided checklist is on
+    /// screen. Only `run_tui` arms it (never tests/smoke), and only while
+    /// no usable chat backend is configured and the operator has not
+    /// dismissed it.
+    setup_wizard: Option<SetupWizardState>,
     work_view: WorkView,
     /// Structured harness flow for native rendering; `harness_flow_text`
     /// holds the error fallback when loading fails.
@@ -875,6 +912,9 @@ pub fn run_tui(root: &Path) -> Result<()> {
     let db_path = crate::persistence::sqlite_path(root);
     let mut app = App::new(root.to_path_buf(), db_path.clone());
     app.worker = Some(TuiWorker::spawn(root.to_path_buf(), db_path));
+    if app.setup_wizard_needed() {
+        app.setup_wizard = Some(SetupWizardState::default());
+    }
     let mut stdout = io::stdout();
     let _guard = TerminalGuard::enter(&mut stdout)?;
     let backend = CrosstermBackend::new(stdout);
@@ -1162,6 +1202,7 @@ impl App {
             lcm_engine: None,
             chat_refresh_marker: None,
             harness_flow_text: String::new(),
+            setup_wizard: None,
             work_view: WorkView::Flow,
             harness_flow: None,
             business_os_reveal_secrets: false,
@@ -1277,6 +1318,15 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Result<bool> {
+        if self.setup_wizard.is_some() {
+            if key_event.modifiers.contains(KeyModifiers::CONTROL)
+                && matches!(key_event.code, KeyCode::Char('c') | KeyCode::Char('q'))
+            {
+                return Ok(true);
+            }
+            self.handle_setup_wizard_key(key_event)?;
+            return Ok(false);
+        }
         if self.page == Page::Settings && self.settings_text_editor.is_some() {
             self.handle_settings_text_editor_key(key_event)?;
             return Ok(false);
@@ -1649,6 +1699,202 @@ impl App {
         self.push_local_activity(self.status_line.clone());
         self.last_service_refresh_at = None;
         self.refresh()?;
+        Ok(())
+    }
+
+    /// True while no usable chat backend is configured and the operator
+    /// has not finished or dismissed the wizard. README sends first-time
+    /// users into the TUI to configure model source, credentials and the
+    /// service — this is the guided path for exactly that.
+    fn setup_wizard_needed(&mut self) -> bool {
+        if matches!(
+            runtime_env::env_or_config(&self.root, SETUP_WIZARD_STATE_KEY).as_deref(),
+            Some("done") | Some("skipped")
+        ) {
+            return false;
+        }
+        self.ensure_settings_items_loaded();
+        !self.setup_chat_backend_ready()
+    }
+
+    fn setup_chat_backend_ready(&self) -> bool {
+        let env_map = self.settings_env_map();
+        let source = infer_chat_source(&env_map);
+        if source.eq_ignore_ascii_case("api") {
+            let provider = infer_api_provider(&env_map);
+            provider_auth_configured(&env_map, &provider)
+        } else {
+            !supported_local_chat_model_choices(&self.root, &env_map).is_empty()
+        }
+    }
+
+    /// Derive the wizard checklist from live app state. Recomputed per
+    /// render so the rows update as the operator configures things.
+    fn setup_steps(&self) -> Vec<SetupStep> {
+        let env_map = self.settings_env_map();
+        let source = infer_chat_source(&env_map);
+        let provider = infer_api_provider(&env_map);
+        let source_is_api = source.eq_ignore_ascii_case("api");
+        let mut steps = Vec::new();
+
+        steps.push(SetupStep {
+            label: "Model source",
+            status: SetupStepStatus::Done,
+            detail: if source_is_api {
+                format!("api via {provider}")
+            } else {
+                "local inference".to_string()
+            },
+            target: Some((SettingsView::Model, "CTOX_API_PROVIDER")),
+            action: SetupStepAction::JumpToSetting,
+        });
+
+        if source_is_api {
+            let (credential_key, hint): (&'static str, &str) =
+                if provider.eq_ignore_ascii_case("azure_foundry") {
+                    (
+                        AZURE_FOUNDRY_ENDPOINT_KEY,
+                        "endpoint, deployment id and token",
+                    )
+                } else if provider.eq_ignore_ascii_case("anthropic") {
+                    ("ANTHROPIC_API_KEY", "API key")
+                } else if provider.eq_ignore_ascii_case("openrouter") {
+                    ("OPENROUTER_API_KEY", "API key")
+                } else {
+                    ("OPENAI_API_KEY", "API key or chatgpt_subscription auth")
+                };
+            let configured = provider_auth_configured(&env_map, &provider);
+            steps.push(SetupStep {
+                label: "Credentials",
+                status: if configured {
+                    SetupStepStatus::Done
+                } else {
+                    SetupStepStatus::Open
+                },
+                detail: if configured {
+                    "configured".to_string()
+                } else {
+                    format!("enter the {provider} {hint}")
+                },
+                target: Some((SettingsView::Model, credential_key)),
+                action: SetupStepAction::JumpToSetting,
+            });
+        } else {
+            let choices = supported_local_chat_model_choices(&self.root, &env_map);
+            steps.push(SetupStep {
+                label: "Local model",
+                status: if choices.is_empty() {
+                    SetupStepStatus::Open
+                } else {
+                    SetupStepStatus::Done
+                },
+                detail: if let Some(model) = choices.first() {
+                    (*model).to_string()
+                } else {
+                    "no supported local model on this host — pick an API provider".to_string()
+                },
+                target: Some((SettingsView::Model, "CTOX_CHAT_MODEL")),
+                action: SetupStepAction::JumpToSetting,
+            });
+        }
+
+        steps.push(SetupStep {
+            label: "CTOX loop",
+            status: if self.service_status.running {
+                SetupStepStatus::Done
+            } else {
+                SetupStepStatus::Open
+            },
+            detail: if self.service_status.running {
+                "running".to_string()
+            } else {
+                "press Enter to start the service".to_string()
+            },
+            target: None,
+            action: SetupStepAction::StartService,
+        });
+
+        steps.push(SetupStep {
+            label: "First check",
+            status: SetupStepStatus::Open,
+            detail: "press Enter to submit an installation check".to_string(),
+            target: None,
+            action: SetupStepAction::SubmitTestTurn,
+        });
+
+        steps
+    }
+
+    fn persist_setup_wizard_state(&mut self, state: &str) {
+        let mut map = runtime_env::load_persisted_runtime_env_map(&self.root).unwrap_or_default();
+        map.insert(SETUP_WIZARD_STATE_KEY.to_string(), state.to_string());
+        if let Err(err) = runtime_env::save_runtime_env_map(&self.root, &map) {
+            self.status_line = format!("Could not persist wizard state: {err}");
+        }
+    }
+
+    fn handle_setup_wizard_key(&mut self, key_event: KeyEvent) -> Result<()> {
+        let steps = self.setup_steps();
+        let Some(wizard) = self.setup_wizard.as_mut() else {
+            return Ok(());
+        };
+        match key_event.code {
+            KeyCode::Up => wizard.selected = wizard.selected.saturating_sub(1),
+            KeyCode::Down => {
+                wizard.selected = (wizard.selected + 1).min(steps.len().saturating_sub(1));
+            }
+            KeyCode::Esc => {
+                self.setup_wizard = None;
+                self.persist_setup_wizard_state("skipped");
+                self.status_line =
+                    "Setup wizard skipped — settings stay available under the Settings tab."
+                        .to_string();
+            }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                self.setup_wizard = None;
+                self.persist_setup_wizard_state("done");
+                self.status_line = "Setup finished.".to_string();
+            }
+            KeyCode::Enter => {
+                let Some(step) = steps.get(wizard.selected).cloned() else {
+                    return Ok(());
+                };
+                match step.action {
+                    SetupStepAction::JumpToSetting => {
+                        // Close (without persisting) and deep-link into the
+                        // settings row; the wizard re-arms on next start
+                        // until configured or dismissed.
+                        self.setup_wizard = None;
+                        if let Some((view, key)) = step.target {
+                            self.page = Page::Settings;
+                            self.switch_settings_view(view);
+                            if let Some(index) =
+                                self.settings_items.iter().position(|item| item.key == key)
+                            {
+                                self.settings_selected = index;
+                            }
+                            self.status_line = format!(
+                                "Configure {} — Ctrl-S saves; the wizard returns on next start until setup is complete.",
+                                step.label
+                            );
+                        }
+                    }
+                    SetupStepAction::StartService => {
+                        if !self.service_status.running {
+                            self.toggle_service()?;
+                        }
+                    }
+                    SetupStepAction::SubmitTestTurn => {
+                        self.setup_wizard = None;
+                        self.persist_setup_wizard_state("done");
+                        self.page = Page::Chat;
+                        self.chat_input = "Check this CTOX installation, summarize what is configured, and list the next setup steps before taking on real work.".to_string();
+                        self.submit_chat_request()?;
+                    }
+                }
+            }
+            _ => {}
+        }
         Ok(())
     }
 
@@ -6721,6 +6967,67 @@ mod tests {
             .unwrap();
         assert_eq!(personal.class, SkillClass::Personal);
         assert_eq!(personal.state, SkillState::Generated);
+    }
+
+    #[test]
+    fn setup_wizard_arms_only_while_no_chat_backend_is_usable() {
+        let root = temp_root("wizard-need");
+        let db_path = root.join("runtime/test.sqlite3");
+        let mut app = App::new(root.clone(), db_path);
+        // Fresh root, no GPU, no credentials: the wizard is needed.
+        // (local_gpu_available is probed per root; a host with CUDA would
+        // flip this, so force the api source for determinism.)
+        let mut env_map = BTreeMap::new();
+        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        assert!(app.setup_wizard_needed());
+
+        // A configured credential satisfies the backend check.
+        secrets::set_credential(&root, "OPENAI_API_KEY", "sk-wizard").unwrap();
+        app.settings_items.clear();
+        assert!(!app.setup_wizard_needed());
+    }
+
+    #[test]
+    fn setup_wizard_skip_is_persisted() {
+        let root = temp_root("wizard-skip");
+        let db_path = root.join("runtime/test.sqlite3");
+        let mut app = App::new(root.clone(), db_path);
+        let mut env_map = BTreeMap::new();
+        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        assert!(app.setup_wizard_needed());
+
+        app.setup_wizard = Some(SetupWizardState::default());
+        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.setup_wizard.is_none());
+        assert!(!app.setup_wizard_needed());
+    }
+
+    #[test]
+    fn setup_wizard_enter_deep_links_into_the_credential_row() {
+        let root = temp_root("wizard-jump");
+        let db_path = root.join("runtime/test.sqlite3");
+        let mut env_map = BTreeMap::new();
+        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        let mut app = App::new(root, db_path);
+        app.ensure_settings_items_loaded();
+        app.setup_wizard = Some(SetupWizardState { selected: 1 });
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.setup_wizard.is_none());
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.settings_view, SettingsView::Model);
+        assert_eq!(
+            app.settings_items[app.settings_selected].key,
+            "OPENAI_API_KEY"
+        );
     }
 
     #[test]
