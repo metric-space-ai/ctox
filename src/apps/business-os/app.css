@@ -290,21 +290,40 @@ button {
   display: grid;
   min-width: 0;
   justify-self: center;
-  width: min(100%, 640px);
+  /* Use the available centre column up to a generous cap so a normal set of
+     pinned apps fits without scrolling; the row still clamps to the column
+     (min-width:0 on the grid track) and scrolls past the cap. */
+  width: min(100%, 920px);
 }
 
 .module-tabs {
   display: flex;
   align-items: center;
-  justify-content: center;
+  /* `safe center` centres the row while it fits but falls back to
+     flex-start on overflow, so the start is never clipped behind the left
+     edge (plain `center` would hide it and break scrolling). Combined with
+     width:100% (NOT fit-content) the row is a real scroll container: its
+     min-content is 0, so the 1fr grid track can shrink and the row scrolls
+     internally instead of propagating its full width up and overrunning the
+     left group / right-hand account actions. The flex-start line is the
+     fallback for engines without `safe` support (they drop the whole
+     declaration). */
+  justify-content: flex-start;
+  justify-content: safe center;
   gap: 2px;
+  width: 100%;
   min-width: 0;
-  overflow: auto;
-  width: fit-content;
-  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   min-height: 32px;
   padding: 0;
   scrollbar-width: none;
+}
+
+.module-tabs.is-scrollable {
+  /* Fade the trailing edge so overflow is discoverable without a scrollbar. */
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 18px), transparent);
 }
 
 .module-tabs:empty {
@@ -331,8 +350,15 @@ button {
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
-  max-width: 116px;
-  min-width: 34px;
+  max-width: 140px;
+  min-width: 0;
+  /* Pinned-app tabs must NOT shrink to unreadable icon stubs when many are
+     pinned. flex-shrink:0 keeps each tab at its natural (icon + ellipsised
+     label) width; the row scrolls horizontally instead (see .module-tabs).
+     Previously flex-shrink:1 + min-width:34px crushed every label to ~6px
+     and, when even the stubs didn't fit, the centered row overran the
+     account button on the right. */
+  flex-shrink: 0;
   padding: 0 9px;
   overflow: hidden;
   color: var(--muted);

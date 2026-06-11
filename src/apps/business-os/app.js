@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260611-snappy-modules1';
+const APP_BUILD = '20260611-snappy-shell2';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -3180,6 +3180,13 @@ function renderTabs() {
     els.tabs.append(renderModuleTab(target, { temporary: true, running: true }));
     rendered.add(target.id);
   }
+  // Toggle the trailing-edge fade only when the pinned-app row actually
+  // overflows, so a row that fits shows no faded last tab. Measured after
+  // layout settles.
+  requestAnimationFrame(() => {
+    if (!els.tabs) return;
+    els.tabs.classList.toggle('is-scrollable', els.tabs.scrollWidth > els.tabs.clientWidth + 1);
+  });
 }
 
 function renderModuleTab(target, options = {}) {
