@@ -1813,8 +1813,23 @@ write_runtime_sqlite_config() {
   [[ -n "$AZURE_FOUNDRY_DEPLOYMENT_ID_FLAG" ]] && deployment_explicit=1
   local chat_source_explicit=0
   [[ -n "${CTOX_CHAT_SOURCE:-}" ]] && chat_source_explicit=1
+  # The azure sub-flags promote chat-model/upstream to the override tier only
+  # inside the azure branch below, where their values are actually derived —
+  # a deployment-id-only re-run must not OR-REPLACE the chat model with the
+  # local default.
   local chat_model_explicit=0
-  [[ "$model_explicit" -eq 1 || "$deployment_explicit" -eq 1 ]] && chat_model_explicit=1
+  [[ "$model_explicit" -eq 1 ]] && chat_model_explicit=1
+  local upstream_explicit=0
+  [[ "$model_explicit" -eq 1 ]] && upstream_explicit=1
+  # A bare --model means "chat runs locally on this model": promote the
+  # coupled source/provider so the OR-REPLACE cohort stays coherent instead
+  # of mixing a local chat model into a preserved api/azure configuration.
+  if [[ "$model_explicit" -eq 1 && "$provider_explicit" -eq 0 && -z "${CTOX_CHAT_SOURCE:-}" ]]; then
+    api_provider="local"
+    chat_source="local"
+    provider_explicit=1
+    chat_source_explicit=1
+  fi
 
   # Model-specific defaults. The CTOX chat context default is 256k; max_seq
   # is seeded to each model's manifest context cap (contracts/models/
@@ -1848,13 +1863,13 @@ write_runtime_sqlite_config() {
     if [[ -n "$azure_deployment_id" ]]; then
       chat_model="$azure_deployment_id"
       active_model="$azure_deployment_id"
+      [[ "$deployment_explicit" -eq 1 ]] && chat_model_explicit=1
     fi
     if [[ -n "$azure_endpoint" && -z "${CTOX_UPSTREAM_BASE_URL:-}" ]]; then
       upstream_base_url="$(azure_foundry_responses_base_url "$azure_endpoint")"
+      [[ "$endpoint_explicit" -eq 1 ]] && upstream_explicit=1
     fi
   fi
-  local upstream_explicit=0
-  [[ "$model_explicit" -eq 1 || "$endpoint_explicit" -eq 1 ]] && upstream_explicit=1
 
   # Auxiliary models require a local inference runtime.  On hosts without a
   # GPU (detected_gpu=none) leave them empty so CTOX does not attempt to
