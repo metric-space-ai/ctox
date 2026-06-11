@@ -113,7 +113,10 @@ pub(super) enum WorkerPayload {
     },
     CommunicationFeed(Vec<channels::CommunicationFeedItem>),
     SkillCatalog(Vec<SkillCatalogEntry>),
-    HarnessFlow(String),
+    HarnessFlow {
+        flow: Option<service::harness_flow::HarnessFlow>,
+        fallback: String,
+    },
     GpuCards(Option<Vec<GpuCardState>>),
     RuntimeTelemetry(Option<RuntimeTelemetry>),
     JamiResolve {
@@ -143,7 +146,7 @@ impl WorkerPayload {
             WorkerPayload::ChatMessages { .. } => Some(PollKind::ChatMessages),
             WorkerPayload::CommunicationFeed(_) => Some(PollKind::CommunicationFeed),
             WorkerPayload::SkillCatalog(_) => Some(PollKind::SkillCatalog),
-            WorkerPayload::HarnessFlow(_) => Some(PollKind::HarnessFlow),
+            WorkerPayload::HarnessFlow { .. } => Some(PollKind::HarnessFlow),
             WorkerPayload::GpuCards(_) => Some(PollKind::GpuCards),
             WorkerPayload::RuntimeTelemetry(_) => Some(PollKind::RuntimeTelemetry),
             WorkerPayload::JamiResolve { .. } => Some(PollKind::JamiResolve),
@@ -302,7 +305,10 @@ fn run_poll_job(root: &Path, chat: &mut ChatWindowSource, job: PollJob) -> Worke
             channels::load_recent_communication_feed(root, 10).unwrap_or_default(),
         ),
         PollJob::SkillCatalog => WorkerPayload::SkillCatalog(load_skill_catalog(root)),
-        PollJob::HarnessFlow => WorkerPayload::HarnessFlow(collect_harness_flow_text(root)),
+        PollJob::HarnessFlow => {
+            let (flow, fallback) = collect_harness_flow(root);
+            WorkerPayload::HarnessFlow { flow, fallback }
+        }
         PollJob::GpuCards => WorkerPayload::GpuCards(sample_gpu_cards().ok()),
         PollJob::RuntimeTelemetry => {
             WorkerPayload::RuntimeTelemetry(load_runtime_telemetry(root).ok().flatten())
@@ -355,12 +361,17 @@ fn run_action_job(root: &Path, job: ActionJob) -> WorkerPayload {
     }
 }
 
-pub(super) fn collect_harness_flow_text(root: &Path) -> String {
-    match service::harness_flow::render_latest_ascii(root, 132) {
-        Ok(text) => text,
-        Err(err) => format!(
-            "Harness flow unavailable.\n\n{}",
-            summarize_inline(&err.to_string(), 140)
+pub(super) fn collect_harness_flow(
+    root: &Path,
+) -> (Option<service::harness_flow::HarnessFlow>, String) {
+    match service::harness_flow::load_latest_flow(root) {
+        Ok(flow) => (Some(flow), String::new()),
+        Err(err) => (
+            None,
+            format!(
+                "Harness flow unavailable.\n\n{}",
+                summarize_inline(&err.to_string(), 140)
+            ),
         ),
     }
 }

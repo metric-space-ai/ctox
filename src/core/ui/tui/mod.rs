@@ -451,9 +451,37 @@ fn default_compaction_min_tokens(context_tokens: usize) -> usize {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Page {
     Chat,
+    Work,
     Skills,
     Costs,
     Settings,
+}
+
+/// Sub-views of the Work page: the live harness flow, harness-mining
+/// health, and the Business OS data plane. These are operational status
+/// surfaces, not configuration — they used to hide at the end of the
+/// settings sub-views.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkView {
+    Flow,
+    Harness,
+    BusinessOs,
+}
+
+fn next_work_view(view: WorkView) -> WorkView {
+    match view {
+        WorkView::Flow => WorkView::Harness,
+        WorkView::Harness => WorkView::BusinessOs,
+        WorkView::BusinessOs => WorkView::Flow,
+    }
+}
+
+fn previous_work_view(view: WorkView) -> WorkView {
+    match view {
+        WorkView::Flow => WorkView::BusinessOs,
+        WorkView::Harness => WorkView::Flow,
+        WorkView::BusinessOs => WorkView::Harness,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -463,9 +491,6 @@ enum SettingsView {
     Secrets,
     Paths,
     Update,
-    BusinessOs,
-    HarnessMining,
-    HarnessFlow,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -768,6 +793,11 @@ struct App {
     /// skipped while the stored marker matches.
     chat_refresh_marker: Option<(i64, i64, i64, i64)>,
     harness_flow_text: String,
+    work_view: WorkView,
+    /// Structured harness flow for native rendering; `harness_flow_text`
+    /// holds the error fallback when loading fails.
+    harness_flow: Option<service::harness_flow::HarnessFlow>,
+    business_os_reveal_secrets: bool,
     harness_flow_scroll: u16,
     last_harness_flow_refresh_at: Option<Instant>,
     /// Images the user has attached to the next chat submission. Populated
@@ -950,20 +980,26 @@ pub fn run_tui_smoke(root: &Path, page_name: &str, width: u16, height: u16) -> R
             skip_initial_refresh = true;
         }
         "settings" => app.page = Page::Settings,
-        "business-os" | "settings-business-os" => {
-            app.page = Page::Settings;
-            app.switch_settings_view(SettingsView::BusinessOs);
+        "work" => {
+            app.page = Page::Work;
+            app.switch_work_view(WorkView::Flow);
+            app.refresh_harness_flow();
             skip_initial_refresh = true;
         }
-        "harness-flow" | "settings-harness-flow" => {
-            app.page = Page::Settings;
-            app.switch_settings_view(SettingsView::HarnessFlow);
+        "business-os" | "work-business-os" => {
+            app.page = Page::Work;
+            app.switch_work_view(WorkView::BusinessOs);
+            skip_initial_refresh = true;
+        }
+        "harness-flow" | "work-harness-flow" => {
+            app.page = Page::Work;
+            app.switch_work_view(WorkView::Flow);
             app.refresh_harness_flow();
             skip_initial_refresh = true;
         }
         other => {
             anyhow::bail!(
-                "unknown page: {other} (expected chat, skills, costs, settings, business-os, harness-flow)"
+                "unknown page: {other} (expected chat, work, skills, costs, settings, business-os, harness-flow)"
             )
         }
     }
@@ -1126,6 +1162,9 @@ impl App {
             lcm_engine: None,
             chat_refresh_marker: None,
             harness_flow_text: String::new(),
+            work_view: WorkView::Flow,
+            harness_flow: None,
+            business_os_reveal_secrets: false,
             harness_flow_scroll: 0,
             last_harness_flow_refresh_at: None,
             pending_images: Vec::new(),
@@ -1172,6 +1211,7 @@ impl App {
                     self.chat_input.push_str(text);
                 }
             }
+            Page::Work => {}
             Page::Skills => {}
             Page::Costs => {}
             Page::Settings => {
@@ -1309,14 +1349,24 @@ impl App {
             KeyCode::Tab => {
                 self.settings_menu_open = false;
                 match self.page {
-                    Page::Chat => self.page = Page::Skills,
+                    Page::Chat => {
+                        self.page = Page::Work;
+                        self.switch_work_view(WorkView::Flow);
+                    }
+                    Page::Work => {
+                        if self.work_view == WorkView::BusinessOs {
+                            self.page = Page::Skills;
+                        } else {
+                            self.switch_work_view(next_work_view(self.work_view));
+                        }
+                    }
                     Page::Skills => self.page = Page::Costs,
                     Page::Costs => {
                         self.page = Page::Settings;
                         self.switch_settings_view(SettingsView::Model);
                     }
                     Page::Settings => {
-                        if self.settings_view == SettingsView::HarnessFlow {
+                        if self.settings_view == SettingsView::Update {
                             self.page = Page::Chat;
                             self.switch_settings_view(SettingsView::Model);
                         } else {
@@ -1331,9 +1381,19 @@ impl App {
                 match self.page {
                     Page::Chat => {
                         self.page = Page::Settings;
-                        self.switch_settings_view(SettingsView::HarnessFlow);
+                        self.switch_settings_view(SettingsView::Update);
                     }
-                    Page::Skills => self.page = Page::Chat,
+                    Page::Work => {
+                        if self.work_view == WorkView::Flow {
+                            self.page = Page::Chat;
+                        } else {
+                            self.switch_work_view(previous_work_view(self.work_view));
+                        }
+                    }
+                    Page::Skills => {
+                        self.page = Page::Work;
+                        self.switch_work_view(WorkView::BusinessOs);
+                    }
                     Page::Costs => self.page = Page::Skills,
                     Page::Settings => {
                         if self.settings_view == SettingsView::Model {
@@ -1350,6 +1410,7 @@ impl App {
 
         match self.page {
             Page::Chat => self.handle_chat_key(key_event)?,
+            Page::Work => self.handle_work_key(key_event)?,
             Page::Skills => self.handle_skills_key(key_event),
             Page::Costs => {}
             Page::Settings => self.handle_settings_key(key_event)?,
@@ -1378,9 +1439,6 @@ impl App {
         }
         if self.settings_view == SettingsView::Secrets {
             return self.handle_secrets_key(key_event);
-        }
-        if self.settings_view == SettingsView::HarnessFlow {
-            return self.handle_harness_flow_key(key_event);
         }
         if self.settings_menu_open {
             match key_event.code {
@@ -1745,8 +1803,9 @@ impl App {
                 self.communication_feed = feed;
             }
             WorkerPayload::SkillCatalog(catalog) => self.apply_skill_catalog(catalog),
-            WorkerPayload::HarnessFlow(text) => {
-                self.harness_flow_text = text;
+            WorkerPayload::HarnessFlow { flow, fallback } => {
+                self.harness_flow = flow;
+                self.harness_flow_text = fallback;
             }
             WorkerPayload::GpuCards(cards) => {
                 if let Some(cards) = cards {
@@ -2138,9 +2197,6 @@ impl App {
                     | "CTOX_DEPENDENCIES_ROOT"
             ),
             SettingsView::Update => false,
-            SettingsView::BusinessOs => false,
-            SettingsView::HarnessMining => false,
-            SettingsView::HarnessFlow => false,
         }
     }
 
@@ -2352,9 +2408,6 @@ impl App {
         }
         if view == SettingsView::Update {
             self.refresh_update_view_info();
-        } else if view == SettingsView::HarnessFlow {
-            self.harness_flow_scroll = 0;
-            self.refresh_harness_flow();
         }
     }
 
@@ -2773,7 +2826,7 @@ impl App {
     }
 
     fn refresh_harness_flow_if_due(&mut self) {
-        if self.page != Page::Settings || self.settings_view != SettingsView::HarnessFlow {
+        if self.page != Page::Work || self.work_view != WorkView::Flow {
             return;
         }
         if !refresh_due(
@@ -2792,7 +2845,9 @@ impl App {
             }
             return;
         }
-        self.harness_flow_text = collect_harness_flow_text(&self.root);
+        let (flow, fallback) = collect_harness_flow(&self.root);
+        self.harness_flow = flow;
+        self.harness_flow_text = fallback;
     }
 
     fn move_skills_selection(&mut self, delta: isize) {
@@ -2808,7 +2863,7 @@ impl App {
         self.skills_selected = next;
     }
 
-    fn handle_harness_flow_key(&mut self, key_event: KeyEvent) -> Result<()> {
+    fn handle_work_key(&mut self, key_event: KeyEvent) -> Result<()> {
         match key_event.code {
             KeyCode::Up => self.harness_flow_scroll = self.harness_flow_scroll.saturating_sub(1),
             KeyCode::Down => self.harness_flow_scroll = self.harness_flow_scroll.saturating_add(1),
@@ -2823,19 +2878,33 @@ impl App {
                 self.last_harness_flow_refresh_at = None;
                 self.refresh_harness_flow();
             }
-            KeyCode::Char('[') => {
-                self.switch_settings_view(previous_settings_view(self.settings_view))
+            KeyCode::Char('p') | KeyCode::Char('P') => {
+                if self.work_view == WorkView::BusinessOs {
+                    self.business_os_reveal_secrets = !self.business_os_reveal_secrets;
+                }
             }
-            KeyCode::Char(']') => self.switch_settings_view(next_settings_view(self.settings_view)),
+            KeyCode::Char('[') => self.switch_work_view(previous_work_view(self.work_view)),
+            KeyCode::Char(']') => self.switch_work_view(next_work_view(self.work_view)),
             KeyCode::Left if key_event.modifiers.contains(KeyModifiers::ALT) => {
-                self.switch_settings_view(previous_settings_view(self.settings_view));
+                self.switch_work_view(previous_work_view(self.work_view));
             }
             KeyCode::Right if key_event.modifiers.contains(KeyModifiers::ALT) => {
-                self.switch_settings_view(next_settings_view(self.settings_view));
+                self.switch_work_view(next_work_view(self.work_view));
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn switch_work_view(&mut self, view: WorkView) {
+        self.work_view = view;
+        if view == WorkView::Flow {
+            self.harness_flow_scroll = 0;
+            self.last_harness_flow_refresh_at = None;
+        }
+        if view != WorkView::BusinessOs {
+            self.business_os_reveal_secrets = false;
+        }
     }
 
     fn refresh_gpu_cards(&mut self) {
@@ -5518,14 +5587,11 @@ fn normalize_runtime_model_settings(env_map: &mut BTreeMap<String, String>) {
 
 fn previous_settings_view(view: SettingsView) -> SettingsView {
     match view {
-        SettingsView::Model => SettingsView::HarnessFlow,
+        SettingsView::Model => SettingsView::Update,
         SettingsView::Communication => SettingsView::Model,
         SettingsView::Secrets => SettingsView::Communication,
         SettingsView::Paths => SettingsView::Secrets,
         SettingsView::Update => SettingsView::Paths,
-        SettingsView::BusinessOs => SettingsView::Update,
-        SettingsView::HarnessMining => SettingsView::BusinessOs,
-        SettingsView::HarnessFlow => SettingsView::HarnessMining,
     }
 }
 
@@ -5535,10 +5601,7 @@ fn next_settings_view(view: SettingsView) -> SettingsView {
         SettingsView::Communication => SettingsView::Secrets,
         SettingsView::Secrets => SettingsView::Paths,
         SettingsView::Paths => SettingsView::Update,
-        SettingsView::Update => SettingsView::BusinessOs,
-        SettingsView::BusinessOs => SettingsView::HarnessMining,
-        SettingsView::HarnessMining => SettingsView::HarnessFlow,
-        SettingsView::HarnessFlow => SettingsView::Model,
+        SettingsView::Update => SettingsView::Model,
     }
 }
 
@@ -5975,10 +6038,25 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_through_settings_communication_before_leaving_page() {
+    fn tab_cycles_through_work_views_and_settings_before_leaving_page() {
         let root = temp_root("settings-tab-cycle");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root, db_path);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Work);
+        assert_eq!(app.work_view, WorkView::Flow);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Work);
+        assert_eq!(app.work_view, WorkView::Harness);
+
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Work);
+        assert_eq!(app.work_view, WorkView::BusinessOs);
 
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
@@ -6015,38 +6093,18 @@ mod tests {
 
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::BusinessOs);
-
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessMining);
-
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessFlow);
-
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
         assert_eq!(app.page, Page::Chat);
         assert_eq!(app.settings_view, SettingsView::Model);
 
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
             .unwrap();
         assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessFlow);
+        assert_eq!(app.settings_view, SettingsView::Update);
 
         app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
             .unwrap();
         assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessMining);
-
-        app.handle_key_event(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::BusinessOs);
+        assert_eq!(app.settings_view, SettingsView::Paths);
     }
 
     #[test]
@@ -6666,11 +6724,21 @@ mod tests {
     }
 
     #[test]
-    fn tab_cycles_chat_skills_settings() {
+    fn tab_cycles_chat_work_skills_settings() {
         let root = temp_root("page-cycle");
         let db_path = root.join("runtime/test.sqlite3");
         let mut app = App::new(root, db_path);
         assert_eq!(app.page, Page::Chat);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.page, Page::Work);
+        assert_eq!(app.work_view, WorkView::Flow);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.work_view, WorkView::Harness);
+        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.work_view, WorkView::BusinessOs);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(app.page, Page::Skills);
@@ -6697,18 +6765,6 @@ mod tests {
             .unwrap();
         assert_eq!(app.page, Page::Settings);
         assert_eq!(app.settings_view, SettingsView::Update);
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::BusinessOs);
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessMining);
-        app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
-            .unwrap();
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::HarnessFlow);
         app.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
             .unwrap();
         assert_eq!(app.page, Page::Chat);

@@ -26,6 +26,10 @@ use super::mask_secret;
 use super::App;
 use super::Page;
 use super::SettingsView;
+use super::WorkView;
+use crate::service::harness_flow::FlowBlockKind;
+use crate::service::harness_flow::FlowBranchKind;
+use crate::service::harness_flow::HarnessFlow;
 
 const CONTEXT_BAR_REFERENCE_TOKENS: usize = 262_144;
 
@@ -49,6 +53,7 @@ pub(super) fn draw(frame: &mut Frame, app: &App) {
     render_tabs(frame, app, layout[1]);
     match app.page {
         Page::Chat => render_chat(frame, app, layout[2]),
+        Page::Work => render_work(frame, app, layout[2]),
         Page::Skills => render_skills(frame, app, layout[2]),
         Page::Costs => render_costs(frame, app, layout[2]),
         Page::Settings => render_settings(frame, app, layout[2]),
@@ -82,11 +87,12 @@ fn render_header(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 fn render_tabs(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let selected = match app.page {
         Page::Chat => 0,
-        Page::Skills => 1,
-        Page::Costs => 2,
-        Page::Settings => 3,
+        Page::Work => 1,
+        Page::Skills => 2,
+        Page::Costs => 3,
+        Page::Settings => 4,
     };
-    let titles = ["Chat", "Skills", "Costs", "Settings"]
+    let titles = ["Chat", "Work", "Skills", "Costs", "Settings"]
         .into_iter()
         .map(Line::from)
         .collect::<Vec<_>>();
@@ -716,18 +722,6 @@ fn render_settings(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         render_settings_update(frame, app, outer[1]);
         return;
     }
-    if app.settings_view == SettingsView::BusinessOs {
-        render_settings_business_os(frame, app, outer[1]);
-        return;
-    }
-    if app.settings_view == SettingsView::HarnessMining {
-        render_settings_harness_mining(frame, app, outer[1]);
-        return;
-    }
-    if app.settings_view == SettingsView::HarnessFlow {
-        render_settings_harness_flow(frame, app, outer[1]);
-        return;
-    }
     if app.settings_view == SettingsView::Secrets {
         render_secrets(frame, app, outer[1]);
         return;
@@ -907,18 +901,311 @@ fn render_settings_update(frame: &mut Frame, app: &App, area: ratatui::layout::R
     );
 }
 
-fn render_settings_business_os(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+fn render_work(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(8)])
+        .split(area);
+    render_work_view_tabs(frame, app, outer[0]);
+    match app.work_view {
+        WorkView::Flow => render_work_flow(frame, app, outer[1]),
+        WorkView::Harness => render_work_harness(frame, app, outer[1]),
+        WorkView::BusinessOs => render_work_business_os(frame, app, outer[1]),
+    }
+}
+
+fn render_work_view_tabs(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let selected = match app.work_view {
+        WorkView::Flow => 0,
+        WorkView::Harness => 1,
+        WorkView::BusinessOs => 2,
+    };
+    let titles = ["Flow", "Harness", "Business OS"]
+        .into_iter()
+        .map(Line::from)
+        .collect::<Vec<_>>();
+    let widget = Tabs::new(titles)
+        .select(selected)
+        .divider(" ")
+        .padding("", "")
+        .style(Style::default().fg(Color::DarkGray).bg(Color::Rgb(8, 8, 8)))
+        .highlight_style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightCyan)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(widget, area);
+}
+
+fn render_work_flow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let flow_area = if area.width >= 96 {
+        let body = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(64), Constraint::Percentage(36)])
+            .split(area);
+        let queue = Paragraph::new(work_queue_lines(
+            app,
+            body[1].width.saturating_sub(4) as usize,
+            body[1].height.saturating_sub(2) as usize,
+        ))
+        .block(
+            sidebar_block().borders(Borders::TOP).title(Span::styled(
+                " queue & attempts ",
+                Style::default()
+                    .fg(Color::LightYellow)
+                    .add_modifier(Modifier::BOLD),
+            )),
+        )
+        .style(Style::default().fg(Color::Gray))
+        .wrap(Wrap { trim: false });
+        frame.render_widget(queue, body[1]);
+        body[0]
+    } else {
+        area
+    };
+
+    let width = flow_area.width.saturating_sub(4) as usize;
+    let lines = match &app.harness_flow {
+        Some(flow) => work_flow_lines(flow, width),
+        None if !app.harness_flow_text.trim().is_empty() => app
+            .harness_flow_text
+            .lines()
+            .map(|line| Line::from(line.to_string()))
+            .collect(),
+        None => vec![Line::from("Loading harness flow...")],
+    };
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                pane_block().borders(Borders::TOP).title(Span::styled(
+                    " work flow ",
+                    Style::default()
+                        .fg(Color::LightCyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
+            )
+            .style(Style::default().fg(Color::White))
+            .scroll((app.harness_flow_scroll, 0))
+            .wrap(Wrap { trim: false }),
+        flow_area,
+    );
+}
+
+fn flow_block_badge(kind: &FlowBlockKind) -> (&'static str, Color) {
+    match kind {
+        FlowBlockKind::Task => (" TASK ", Color::LightCyan),
+        FlowBlockKind::Attempt => (" ATTEMPT ", Color::Yellow),
+        FlowBlockKind::Finish => (" FINISH ", Color::LightGreen),
+        FlowBlockKind::Empty => ("  —  ", Color::DarkGray),
+    }
+}
+
+fn flow_branch_color(kind: &FlowBranchKind) -> Color {
+    match kind {
+        FlowBranchKind::QueuePickup | FlowBranchKind::QueueReload => Color::LightYellow,
+        FlowBranchKind::Context => Color::LightBlue,
+        FlowBranchKind::Knowledge => Color::Cyan,
+        FlowBranchKind::Review => Color::LightMagenta,
+        FlowBranchKind::TicketBacklog | FlowBranchKind::TicketSource => Color::Yellow,
+        FlowBranchKind::Guard => Color::LightRed,
+        FlowBranchKind::StateMachine => Color::LightCyan,
+        FlowBranchKind::Verification => Color::LightGreen,
+        FlowBranchKind::ProcessMining => Color::Gray,
+        FlowBranchKind::HarnessLedger => Color::DarkGray,
+    }
+}
+
+/// Native rendering of the structured harness flow at the current terminal
+/// width — the pre-rendered fixed-width ASCII variant wrapped to garbage on
+/// narrow terminals and wasted wide ones.
+fn work_flow_lines(flow: &HarnessFlow, width: usize) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let source_ref = flow
+        .source
+        .message_key
+        .clone()
+        .or_else(|| flow.source.work_id.clone())
+        .unwrap_or_default();
+    lines.push(Line::from(Span::styled(
+        truncate_line(
+            &format!("source {} {}", flow.source.source_kind, source_ref),
+            width,
+        ),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(String::new()));
+
+    for block in &flow.blocks {
+        let (badge, badge_color) = flow_block_badge(&block.kind);
+        lines.push(Line::from(vec![
+            Span::styled(
+                badge.to_string(),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(badge_color)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                truncate_line(&block.title, width.saturating_sub(badge.len() + 1)),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        for line in &block.lines {
+            lines.push(Line::from(Span::styled(
+                truncate_line(&format!("  {line}"), width),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        for branch in &block.branches {
+            let color = flow_branch_color(&branch.kind);
+            let marker = if branch.returns_to_spine {
+                "↳"
+            } else {
+                "→"
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {marker} "), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    truncate_line(&branch.title, width.saturating_sub(4)),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            for line in &branch.lines {
+                lines.push(Line::from(Span::styled(
+                    truncate_line(&format!("     {line}"), width),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+        }
+        lines.push(Line::from(String::new()));
+    }
+
+    if !flow.ledger_events.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "ledger",
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for event in flow.ledger_events.iter().rev().take(12) {
+            let time = event
+                .created_at
+                .get(11..19)
+                .unwrap_or(&event.created_at)
+                .to_string();
+            let attempt = event
+                .attempt_index
+                .map(|index| format!("a{index} "))
+                .unwrap_or_default();
+            lines.push(Line::from(Span::styled(
+                truncate_line(&format!("  {time} {attempt}{}", event.title), width),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+    lines
+}
+
+fn work_queue_lines(app: &App, width: usize, height: usize) -> Vec<Line<'static>> {
+    let status = &app.service_status;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let state = if !status.running {
+        ("loop down", Color::Red)
+    } else if status.busy {
+        ("loop working", Color::Yellow)
+    } else {
+        ("loop idle", Color::Green)
+    };
+    lines.push(Line::from(Span::styled(
+        state.0.to_string(),
+        Style::default().fg(state.1).add_modifier(Modifier::BOLD),
+    )));
+    if let Some(phase) = status.worker_phase.as_deref() {
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("phase   {phase}"), width),
+            Style::default().fg(Color::White),
+        )));
+    }
+    if status.worker_active_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("workers {}", status.worker_active_count),
+            Style::default().fg(Color::White),
+        )));
+    }
+    if let Some(goal) = status.current_goal_preview.as_deref() {
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("goal    {goal}"), width),
+            Style::default().fg(Color::White),
+        )));
+    }
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        format!("pending {}", status.pending_count),
+        Style::default()
+            .fg(Color::LightYellow)
+            .add_modifier(Modifier::BOLD),
+    )));
+    for preview in status.pending_previews.iter().take(4) {
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("  • {preview}"), width),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+    if status.blocked_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!("blocked {}", status.blocked_count),
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for preview in status.blocked_previews.iter().take(3) {
+            lines.push(Line::from(Span::styled(
+                truncate_line(&format!("  • {preview}"), width),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+    if let Some(outcome) = status.last_agent_outcome.as_deref() {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("last outcome {outcome}"), width),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    if !status.recent_events.is_empty() {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            "recent",
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for event in status.recent_events.iter().rev().take(6) {
+            lines.push(Line::from(Span::styled(
+                truncate_line(&format!("  • {event}"), width),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+    lines.into_iter().take(height.max(1)).collect()
+}
+
+fn render_work_business_os(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let body = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(area);
 
-    let status = crate::service::business_os::business_os_status_text(&app.root);
+    let lines = business_os_status_lines(app, body[0].width.saturating_sub(4) as usize);
     frame.render_widget(
-        Paragraph::new(status)
+        Paragraph::new(lines)
             .block(
                 pane_block().borders(Borders::TOP).title(Span::styled(
-                    " business os installer ",
+                    " business os data plane ",
                     Style::default()
                         .fg(Color::LightCyan)
                         .add_modifier(Modifier::BOLD),
@@ -928,21 +1215,12 @@ fn render_settings_business_os(frame: &mut Frame, app: &App, area: ratatui::layo
         body[0],
     );
 
-    let contract = "What CTOX knows here:\n\n\
-      - CTOX Business OS is a skill-owned product template, not generic app code.\n\
-      - Installation creates a separate customer-owned repository.\n\
-      - The generated repo can be operated, deployed, modified, and upgraded by CTOX through normal code changes.\n\
-      - Public website code stays independent; deployments decide whether website login can open Business OS.\n\n\
-      Typical flow:\n\
-        1. Run the dry-run command.\n\
-        2. Install into an empty target directory.\n\
-        3. Configure Postgres and deployment env.\n\
-        4. Let CTOX customize modules through the business-stack skill.\n";
+    let status = crate::service::business_os::business_os_status_text(&app.root);
     frame.render_widget(
-        Paragraph::new(contract)
+        Paragraph::new(status)
             .block(
                 sidebar_block().borders(Borders::TOP).title(Span::styled(
-                    " contract ",
+                    " installer ",
                     Style::default()
                         .fg(Color::LightBlue)
                         .add_modifier(Modifier::BOLD),
@@ -954,7 +1232,181 @@ fn render_settings_business_os(frame: &mut Frame, app: &App, area: ratatui::layo
     );
 }
 
-fn render_settings_harness_mining(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+/// Live data-plane panel from the daemon's Business OS health snapshot.
+/// The snapshot rides every status poll (ServiceStatus.business_os) and was
+/// previously fetched but never rendered anywhere in the TUI.
+fn business_os_status_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    let Some(value) = app.service_status.business_os.as_ref() else {
+        return vec![
+            Line::from("No Business OS status received yet."),
+            Line::from(String::new()),
+            Line::from(Span::styled(
+                "The daemon reports the data plane with every status poll; start the CTOX loop to populate this panel.",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+    };
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let ok = value
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    lines.push(Line::from(Span::styled(
+        if ok {
+            "status healthy"
+        } else {
+            "status degraded"
+        }
+        .to_string(),
+        Style::default()
+            .fg(if ok { Color::Green } else { Color::LightRed })
+            .add_modifier(Modifier::BOLD),
+    )));
+    if let Some(err) = json_str(value, "error") {
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("error  {err}"), width),
+            Style::default().fg(Color::LightRed),
+        )));
+        return lines;
+    }
+    lines.push(Line::from(String::new()));
+
+    let sync = value
+        .get("sync")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut push_kv = |lines: &mut Vec<Line<'static>>, label: &str, text: String, color: Color| {
+        lines.push(Line::from(Span::styled(
+            truncate_line(&format!("{label:<10} {text}"), width),
+            Style::default().fg(color),
+        )));
+    };
+    push_kv(
+        &mut lines,
+        "mode",
+        json_str(&sync, "sync_mode").unwrap_or("—").to_string(),
+        Color::White,
+    );
+    push_kv(
+        &mut lines,
+        "instance",
+        json_str(&sync, "instance_id").unwrap_or("—").to_string(),
+        Color::White,
+    );
+    push_kv(
+        &mut lines,
+        "peer",
+        format!(
+            "{} ({})",
+            json_str(&sync, "peer_id").unwrap_or("—"),
+            json_str(&sync, "peer_role").unwrap_or("—")
+        ),
+        Color::White,
+    );
+    push_kv(
+        &mut lines,
+        "room",
+        json_str(&sync, "sync_room").unwrap_or("—").to_string(),
+        Color::White,
+    );
+    let password = json_str(&sync, "signaling_room_password").unwrap_or("");
+    push_kv(
+        &mut lines,
+        "password",
+        if password.is_empty() {
+            "—".to_string()
+        } else if app.business_os_reveal_secrets {
+            password.to_string()
+        } else {
+            format!("{} ([p] reveals)", mask_secret(password))
+        },
+        Color::White,
+    );
+    if let Some(urls) = sync
+        .get("signaling_urls")
+        .and_then(serde_json::Value::as_array)
+    {
+        let joined = urls
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect::<Vec<_>>()
+            .join(" ");
+        push_kv(&mut lines, "signaling", joined, Color::White);
+    }
+    let native_peer = sync
+        .get("native_rxdb_peer_available")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    lines.push(Line::from(Span::styled(
+        truncate_line(
+            &format!(
+                "{:<10} {}",
+                "rxdb peer",
+                if native_peer {
+                    "available".to_string()
+                } else {
+                    format!(
+                        "unavailable — {}",
+                        json_str(&sync, "native_rxdb_peer_reason").unwrap_or("unknown")
+                    )
+                }
+            ),
+            width,
+        ),
+        Style::default()
+            .fg(if native_peer {
+                Color::Green
+            } else {
+                Color::LightRed
+            })
+            .add_modifier(Modifier::BOLD),
+    )));
+    let http_bridge = sync
+        .get("http_bridge_available")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if http_bridge {
+        // The data plane is WebRTC-only by hard rule; an advertised HTTP
+        // bridge is a regression worth shouting about.
+        lines.push(Line::from(Span::styled(
+            "⚠ http bridge advertised — data plane must be WebRTC-only",
+            Style::default()
+                .fg(Color::LightRed)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    if let Some(data_plane) = value
+        .get("data_plane")
+        .and_then(serde_json::Value::as_object)
+    {
+        lines.push(Line::from(String::new()));
+        lines.push(Line::from(Span::styled(
+            "data plane",
+            Style::default()
+                .fg(Color::LightBlue)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for (key, entry) in data_plane.iter().take(10) {
+            let rendered = match entry {
+                serde_json::Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            lines.push(Line::from(Span::styled(
+                truncate_line(&format!("  {key} {rendered}"), width),
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        "Pairing values for private installs come from `ctox business-os peer status`.",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+fn render_work_harness(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     use crate::service::harness_mining;
     let snap = harness_mining::ui_snapshot(&app.root);
 
@@ -1081,29 +1533,6 @@ fn render_settings_harness_mining(frame: &mut Frame, app: &App, area: ratatui::l
             .style(Style::default().fg(Color::Gray))
             .wrap(Wrap { trim: false }),
         body[1],
-    );
-}
-
-fn render_settings_harness_flow(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let text = if app.harness_flow_text.trim().is_empty() {
-        "Loading harness flow...".to_string()
-    } else {
-        app.harness_flow_text.clone()
-    };
-    frame.render_widget(
-        Paragraph::new(text)
-            .block(
-                pane_block().borders(Borders::TOP).title(Span::styled(
-                    " harness flow ",
-                    Style::default()
-                        .fg(Color::LightCyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
-            )
-            .style(Style::default().fg(Color::White))
-            .scroll((app.harness_flow_scroll, 0))
-            .wrap(Wrap { trim: false }),
-        area,
     );
 }
 
@@ -1399,18 +1828,6 @@ fn render_settings_narrow(frame: &mut Frame, app: &App, area: ratatui::layout::R
     render_settings_view_tabs(frame, app, outer[0]);
     if app.settings_view == SettingsView::Update {
         render_settings_update(frame, app, outer[1]);
-        return;
-    }
-    if app.settings_view == SettingsView::BusinessOs {
-        render_settings_business_os(frame, app, outer[1]);
-        return;
-    }
-    if app.settings_view == SettingsView::HarnessMining {
-        render_settings_harness_mining(frame, app, outer[1]);
-        return;
-    }
-    if app.settings_view == SettingsView::HarnessFlow {
-        render_settings_harness_flow(frame, app, outer[1]);
         return;
     }
     if app.settings_view == SettingsView::Secrets {
@@ -3270,23 +3687,11 @@ fn render_settings_view_tabs(frame: &mut Frame, app: &App, area: ratatui::layout
         SettingsView::Secrets => 2,
         SettingsView::Paths => 3,
         SettingsView::Update => 4,
-        SettingsView::BusinessOs => 5,
-        SettingsView::HarnessMining => 6,
-        SettingsView::HarnessFlow => 7,
     };
-    let titles = [
-        "Model",
-        "Communication",
-        "Secrets",
-        "Paths",
-        "Update",
-        "Business OS",
-        "Harness",
-        "Flow",
-    ]
-    .into_iter()
-    .map(Line::from)
-    .collect::<Vec<_>>();
+    let titles = ["Model", "Communication", "Secrets", "Paths", "Update"]
+        .into_iter()
+        .map(Line::from)
+        .collect::<Vec<_>>();
     let widget = Tabs::new(titles)
         .select(selected)
         .divider(" ")
@@ -4775,6 +5180,110 @@ mod tests {
         let text = settings_snapshot_text(&app, 80, 40);
 
         assert!(text.contains("cache     off"), "{text}");
+    }
+
+    #[test]
+    fn work_flow_view_renders_structured_blocks_natively() {
+        use crate::service::harness_flow as hf;
+        let backend = TestBackend::new(140, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.page = Page::Work;
+        app.work_view = WorkView::Flow;
+        app.service_status.pending_count = 2;
+        app.service_status.pending_previews = vec![
+            "Install Redis cleanly".to_string(),
+            "Rotate certs".to_string(),
+        ];
+        app.harness_flow = Some(hf::HarnessFlow {
+            schema_version: 1,
+            source: hf::FlowSource {
+                message_key: Some("msg-42".to_string()),
+                work_id: None,
+                source_kind: "queue".to_string(),
+            },
+            ledger_events: vec![hf::HarnessFlowEvent {
+                event_id: "ev1".to_string(),
+                chain_key: "c1".to_string(),
+                event_kind: "review_approved".to_string(),
+                title: "Review approved".to_string(),
+                body_text: String::new(),
+                message_key: Some("msg-42".to_string()),
+                work_id: None,
+                ticket_key: None,
+                attempt_index: Some(1),
+                metadata_json: "{}".to_string(),
+                created_at: "2026-06-11T10:00:00Z".to_string(),
+            }],
+            blocks: vec![
+                hf::MainBlock {
+                    kind: hf::FlowBlockKind::Task,
+                    title: "Install Redis cleanly".to_string(),
+                    lines: vec!["queued by owner".to_string()],
+                    branches: vec![hf::SupportBranch {
+                        kind: hf::FlowBranchKind::Knowledge,
+                        title: "knowledge load".to_string(),
+                        lines: vec!["3 claims".to_string()],
+                        returns_to_spine: true,
+                    }],
+                },
+                hf::MainBlock {
+                    kind: hf::FlowBlockKind::Attempt,
+                    title: "Attempt 1".to_string(),
+                    lines: vec![],
+                    branches: vec![hf::SupportBranch {
+                        kind: hf::FlowBranchKind::Review,
+                        title: "completion review".to_string(),
+                        lines: vec!["approved".to_string()],
+                        returns_to_spine: true,
+                    }],
+                },
+            ],
+        });
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("work flow"), "{text}");
+        assert!(text.contains("TASK"), "{text}");
+        assert!(text.contains("Install Redis cleanly"), "{text}");
+        assert!(text.contains("ATTEMPT"), "{text}");
+        assert!(text.contains("completion review"), "{text}");
+        assert!(text.contains("queue & attempts"), "{text}");
+        assert!(text.contains("pending 2"), "{text}");
+        assert!(text.contains("Review approved"), "{text}");
+    }
+
+    #[test]
+    fn work_business_os_view_renders_data_plane_health() {
+        let backend = TestBackend::new(140, 36);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut app = test_app();
+        app.page = Page::Work;
+        app.work_view = WorkView::BusinessOs;
+        app.service_status.business_os = Some(serde_json::json!({
+            "ok": true,
+            "sync": {
+                "sync_mode": "rxdb-webrtc",
+                "instance_id": "cto1.example.com",
+                "peer_id": "peer-abc",
+                "peer_role": "native",
+                "sync_room": "ctox-business-os:cto1.example.com",
+                "signaling_room_password": "super-secret",
+                "signaling_urls": ["wss://signaling.ctox.dev"],
+                "native_rxdb_peer_available": true,
+                "http_bridge_available": false,
+            },
+            "data_plane": { "collections": 12 },
+        }));
+        terminal.draw(|frame| draw(frame, &app)).unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+        assert!(text.contains("business os data plane"), "{text}");
+        assert!(text.contains("status healthy"), "{text}");
+        assert!(text.contains("ctox-business-os:cto1.example.com"), "{text}");
+        assert!(text.contains("rxdb peer"), "{text}");
+        assert!(text.contains("available"), "{text}");
+        // The room password stays masked until [p] reveals it.
+        assert!(!text.contains("super-secret"), "{text}");
+        assert!(text.contains("collections 12"), "{text}");
     }
 
     #[test]
