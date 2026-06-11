@@ -121,6 +121,10 @@ const GPU_REFRESH_INTERVAL_ACTIVE: Duration = Duration::from_secs(2);
 const GPU_REFRESH_INTERVAL_SETTINGS: Duration = Duration::from_secs(4);
 const PROXY_REFRESH_INTERVAL_ACTIVE: Duration = Duration::from_millis(700);
 const PROXY_REFRESH_INTERVAL_SETTINGS: Duration = Duration::from_millis(1200);
+/// Busy timeout for the TUI's read connection to the LCM store. The daemon
+/// owns the writes; if a refresh tick hits a write lock the UI keeps the
+/// previous data instead of stalling the render loop for the 30s default.
+const TUI_LCM_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 
 fn default_bin_dir() -> PathBuf {
     std::env::var_os("HOME")
@@ -864,6 +868,12 @@ struct App {
     last_chat_refresh_at: Option<Instant>,
     last_communication_refresh_at: Option<Instant>,
     last_skill_catalog_refresh_at: Option<Instant>,
+    /// Long-lived read connection to the LCM store. Opened lazily, kept for
+    /// the lifetime of the TUI, dropped and reopened after a failed read.
+    lcm_engine: Option<lcm::LcmEngine>,
+    /// Marker of the last materialized chat window; the message reload is
+    /// skipped while the stored marker matches.
+    chat_refresh_marker: Option<(i64, i64, i64)>,
     harness_flow_text: String,
     harness_flow_scroll: u16,
     last_harness_flow_refresh_at: Option<Instant>,
@@ -1210,6 +1220,8 @@ impl App {
             last_chat_refresh_at: None,
             last_communication_refresh_at: None,
             last_skill_catalog_refresh_at: None,
+            lcm_engine: None,
+            chat_refresh_marker: None,
             harness_flow_text: String::new(),
             harness_flow_scroll: 0,
             last_harness_flow_refresh_at: None,
@@ -2732,16 +2744,57 @@ impl App {
         }
     }
 
+    /// Lazily open (and then reuse) the TUI's read connection to the LCM
+    /// store. Re-opening per refresh tick paid connection setup every 500ms,
+    /// and the default 30s busy timeout let a daemon-held write lock stall
+    /// the render loop — the UI connection waits at most
+    /// `TUI_LCM_BUSY_TIMEOUT` and shows stale data instead.
+    fn lcm_engine(&mut self) -> Result<&lcm::LcmEngine> {
+        if self.lcm_engine.is_none() {
+            let engine = lcm::LcmEngine::open(&self.db_path, lcm::LcmConfig::default())?;
+            engine.set_busy_timeout(TUI_LCM_BUSY_TIMEOUT)?;
+            self.lcm_engine = Some(engine);
+        }
+        Ok(self
+            .lcm_engine
+            .as_ref()
+            .expect("lcm_engine initialized above"))
+    }
+
     fn refresh_chat_messages(&mut self) -> Result<()> {
-        let engine = lcm::LcmEngine::open(&self.db_path, lcm::LcmConfig::default())?;
-        let messages =
-            engine.recent_messages_for_conversation(turn_loop::CHAT_CONVERSATION_ID, 80)?;
-        let mission_state = engine.stored_mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
-        self.prompt_context_breakdown = None;
-        self.context_health = None;
-        self.chat_messages = messages;
-        self.mission_state = mission_state;
-        Ok(())
+        let previous_marker = self.chat_refresh_marker;
+        let loaded = self.lcm_engine().and_then(|engine| {
+            let marker =
+                engine.conversation_refresh_marker(turn_loop::CHAT_CONVERSATION_ID, 80)?;
+            // Mission state mutates independently of the transcript (the
+            // worker updates it mid-turn), so it refreshes every tick; the
+            // 80-message window only rematerializes when the marker moved.
+            let mission_state = engine.stored_mission_state(turn_loop::CHAT_CONVERSATION_ID)?;
+            if previous_marker == Some(marker) {
+                return Ok((marker, None, mission_state));
+            }
+            let messages =
+                engine.recent_messages_for_conversation(turn_loop::CHAT_CONVERSATION_ID, 80)?;
+            Ok((marker, Some(messages), mission_state))
+        });
+        match loaded {
+            Ok((marker, messages, mission_state)) => {
+                if let Some(messages) = messages {
+                    self.prompt_context_breakdown = None;
+                    self.context_health = None;
+                    self.chat_messages = messages;
+                    self.chat_refresh_marker = Some(marker);
+                }
+                self.mission_state = mission_state;
+                Ok(())
+            }
+            Err(err) => {
+                // Keep the previous transcript on screen and reopen the
+                // connection on the next tick.
+                self.lcm_engine = None;
+                Err(err)
+            }
+        }
     }
 
     fn refresh_communication_feed(&mut self) {
@@ -3036,7 +3089,11 @@ impl App {
         };
         let compact_at =
             compute_compaction_threshold(effective_context, compact_percent, compact_min_tokens);
-        let current_tokens = current_context_tokens(&self.db_path, effective_context).unwrap_or(0);
+        let current_tokens = self
+            .lcm_engine()
+            .ok()
+            .and_then(|engine| current_context_tokens(engine, effective_context).ok())
+            .unwrap_or(0);
         self.record_runtime_model_sample(runtime_telemetry.as_ref());
         let today_api_cost =
             crate::api_costs::summary_for_day(&self.root, &crate::api_costs::today_day()).ok();
@@ -5181,8 +5238,7 @@ fn is_secret_backed_runtime_setting(key: &str) -> bool {
     )
 }
 
-fn current_context_tokens(db_path: &Path, max_context: usize) -> Result<usize> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+fn current_context_tokens(engine: &lcm::LcmEngine, max_context: usize) -> Result<usize> {
     let decision =
         engine.evaluate_compaction(turn_loop::CHAT_CONVERSATION_ID, max_context as i64)?;
     Ok(decision.current_tokens.max(0) as usize)

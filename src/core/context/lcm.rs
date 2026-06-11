@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 use std::sync::OnceLock;
+use std::time::Duration;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -773,6 +774,16 @@ impl LcmEngine {
             .unwrap_or_else(|err| err.into_inner())
             .insert(canonical);
         Ok(engine)
+    }
+
+    /// Override the connection-level busy timeout. Read-mostly UI consumers
+    /// use a short timeout so a daemon-held write lock degrades into stale
+    /// data on screen instead of stalling their render loop for the full
+    /// default 30s window.
+    pub fn set_busy_timeout(&self, timeout: Duration) -> Result<()> {
+        self.conn
+            .busy_timeout(timeout)
+            .context("failed to override SQLite busy_timeout for LCM")
     }
 
     fn init_schema(&self, journal_mode: JournalMode) -> Result<()> {
@@ -3169,6 +3180,30 @@ impl LcmEngine {
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Cheap change-detection marker for UI polling over the most recent
+    /// `limit` messages: (max seq, row count, agent-outcome count). UI
+    /// consumers compare markers between ticks and skip materializing the
+    /// full message window when nothing changed. The outcome count is part
+    /// of the marker because worker failures update `agent_outcome` on
+    /// existing rows without inserting new ones.
+    pub fn conversation_refresh_marker(
+        &self,
+        conversation_id: i64,
+        limit: usize,
+    ) -> Result<(i64, i64, i64)> {
+        let limit = limit.max(1).min(500) as i64;
+        self.conn
+            .query_row(
+                "SELECT COALESCE(MAX(seq), 0), COUNT(*),
+                        COALESCE(SUM(CASE WHEN agent_outcome IS NOT NULL THEN 1 ELSE 0 END), 0)
+                 FROM (SELECT seq, agent_outcome FROM messages
+                       WHERE conversation_id = ?1 ORDER BY seq DESC LIMIT ?2)",
+                (conversation_id, limit),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(Into::into)
     }
 
     pub fn recent_messages_for_conversation(
