@@ -2295,7 +2295,7 @@ fn ensure_runtime_symlink(release_root: &Path, state_root: &Path) -> Result<()> 
 }
 
 const SQLITE_DATABASE_EXTENSIONS: &[&str] = &["db", "sqlite", "sqlite3"];
-const SQLITE_SIDECAR_SUFFIXES: &[&str] = &["-wal", "-shm"];
+const SQLITE_SIDECAR_SUFFIXES: &[&str] = &["-wal", "-shm", "-journal"];
 
 fn is_sqlite_database_file(path: &Path) -> bool {
     path.extension()
@@ -2409,10 +2409,27 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
         };
         let destination = backup_root.join(relative);
         if let Err(err) = backup_sqlite_database(&database, &destination) {
-            // Not a readable database (corrupt file, foreign format) — keep a
-            // plain copy so the backup still carries what was on disk.
+            if !database.exists() {
+                // Vanished between collect and snapshot — a transient artifact,
+                // matching copy_filtered's NotFound tolerance.
+                continue;
+            }
+            if !sqlite_error_is_not_a_database(&err) {
+                // Any other failure (unreadable WAL, busy past the timeout,
+                // disk full, ...) means a consistent snapshot could NOT be
+                // taken. A plain copy here would silently drop every
+                // committed-but-uncheckpointed transaction living in the WAL —
+                // the upgrade must abort instead; nothing has been switched yet.
+                return Err(err.context(format!(
+                    "state backup aborted: could not take a consistent snapshot of {}",
+                    database.display()
+                )));
+            }
+            // SQLITE_NOTADB: the file merely wears a database extension but is
+            // not SQLite — keep a plain copy so the backup still carries what
+            // was on disk.
             progress_info(format!(
-                "sqlite snapshot failed for {} ({err:#}); falling back to a plain file copy",
+                "{} is not a SQLite database ({err:#}); keeping a plain file copy",
                 database.display()
             ));
             let _ = fs::remove_file(&destination);
@@ -2438,10 +2455,23 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     let manifest = json!({
         "created_at": now_rfc3339(),
         "source_root": state_root,
+        // Databases in this backup are self-contained VACUUM INTO snapshots
+        // without sidecars; pre-v2 backups carried plain copies plus -wal/-shm.
+        "format": "sqlite-snapshot-v2",
     });
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
     Ok(backup_root)
+}
+
+/// `true` only for SQLITE_NOTADB — the file exists but is not SQLite. That is
+/// the sole error for which a plain-copy backup fallback is safe.
+fn sqlite_error_is_not_a_database(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<rusqlite::Error>(),
+        Some(rusqlite::Error::SqliteFailure(failure, _))
+            if failure.code == rusqlite::ErrorCode::NotADatabase
+    )
 }
 
 fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
@@ -2453,9 +2483,12 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
             .and_then(OsStr::to_str)
             .is_some_and(|name| name == "backup_manifest.json")
     })?;
-    // The restored databases are self-contained snapshots. WAL/SHM sidecars
-    // still on disk belong to the release being rolled away; SQLite must not
-    // recover that mismatched WAL over the snapshot.
+    // Databases restored from a v2 backup are self-contained snapshots:
+    // WAL/SHM/journal sidecars still on disk belong to the release being
+    // rolled away, and SQLite must not recover that mismatched WAL or hot
+    // journal over the snapshot. Backups written by a pre-v2 binary instead
+    // ship the sidecars themselves — those were just restored deliberately
+    // and carry committed transactions; they must be kept.
     for database in collect_sqlite_database_files(backup_root) {
         let Ok(relative) = database.strip_prefix(backup_root) else {
             continue;
@@ -2465,7 +2498,11 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
             continue;
         };
         for suffix in SQLITE_SIDECAR_SUFFIXES {
-            let _ = fs::remove_file(restored.with_file_name(format!("{name}{suffix}")));
+            let sidecar_name = format!("{name}{suffix}");
+            if database.with_file_name(&sidecar_name).exists() {
+                continue;
+            }
+            let _ = fs::remove_file(restored.with_file_name(sidecar_name));
         }
     }
     Ok(())
@@ -3284,16 +3321,98 @@ mod tests {
         // Simulate the failed new release leaving live sidecars behind.
         fs::write(state_root.join("ctox.sqlite3-wal"), "stale").unwrap();
         fs::write(state_root.join("ctox.sqlite3-shm"), "stale").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-journal"), "stale").unwrap();
 
         restore_state_backup(&backup, &state_root).unwrap();
 
         assert!(!state_root.join("ctox.sqlite3-wal").exists());
         assert!(!state_root.join("ctox.sqlite3-shm").exists());
+        assert!(!state_root.join("ctox.sqlite3-journal").exists());
         let restored = rusqlite::Connection::open(&db_path).unwrap();
         let value: String = restored
             .query_row("SELECT value FROM runtime_probe", [], |row| row.get(0))
             .unwrap();
         assert_eq!(value, "before");
+    }
+
+    #[test]
+    fn restore_state_backup_keeps_sidecars_shipped_in_old_format_backups() {
+        // Backups written by a pre-v2 binary plain-copied the database plus
+        // its live -wal/-shm; the WAL carries committed transactions and must
+        // survive the restore instead of being deleted as "stale".
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        let backup_root = state_root.join("backups").join("update-old-format");
+        ensure_dir(&backup_root).unwrap();
+        fs::write(backup_root.join("ctox.sqlite3"), "backup-main").unwrap();
+        fs::write(backup_root.join("ctox.sqlite3-wal"), "backup-wal").unwrap();
+        fs::write(
+            backup_root.join("backup_manifest.json"),
+            r#"{"created_at":"2026-06-10T00:00:00Z","source_root":"/old"}"#,
+        )
+        .unwrap();
+        // Live state from the release being rolled away.
+        fs::write(state_root.join("ctox.sqlite3"), "live-main").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-wal"), "live-wal").unwrap();
+        fs::write(state_root.join("ctox.sqlite3-shm"), "live-shm").unwrap();
+
+        restore_state_backup(&backup_root, &state_root).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(state_root.join("ctox.sqlite3")).unwrap(),
+            "backup-main"
+        );
+        // The backup ships its own WAL — it was restored and must be kept.
+        assert_eq!(
+            fs::read_to_string(state_root.join("ctox.sqlite3-wal")).unwrap(),
+            "backup-wal"
+        );
+        // The backup carries no SHM — the live leftover is stale and goes.
+        assert!(!state_root.join("ctox.sqlite3-shm").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_backup_aborts_when_wal_snapshot_is_inconsistent() {
+        use std::os::unix::fs::PermissionsExt;
+        if unsafe { libc::geteuid() } == 0 {
+            // Root bypasses file permissions; the unreadable-WAL setup cannot
+            // be staged.
+            return;
+        }
+        let temp = tempdir().unwrap();
+        let state_root = temp.path().join("state");
+        ensure_dir(&state_root).unwrap();
+        let db_path = state_root.join("ctox.sqlite3");
+        let connection = rusqlite::Connection::open(&db_path).unwrap();
+        connection
+            .pragma_update(None, "journal_mode", "wal")
+            .unwrap();
+        connection
+            .execute("CREATE TABLE runtime_probe (value TEXT NOT NULL)", [])
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO runtime_probe (value) VALUES ('wal-resident')",
+                [],
+            )
+            .unwrap();
+        let wal_path = state_root.join("ctox.sqlite3-wal");
+        assert!(wal_path.exists());
+        // Permission skew: the WAL holds committed rows but cannot be read.
+        // A plain copy of the main file would silently drop them — the backup
+        // must abort instead of degrading.
+        fs::set_permissions(&wal_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let err = backup_state_root(&state_root).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("could not take a consistent snapshot"),
+            "unexpected error: {err:#}"
+        );
+        fs::set_permissions(&wal_path, fs::Permissions::from_mode(0o644)).unwrap();
+        drop(connection);
     }
 
     #[test]
