@@ -10452,7 +10452,14 @@ fn migrate_ticket_self_work_items_schema(conn: &Connection) -> Result<()> {
         return Ok(());
     }
     // ctox-allow-direct-state-write: schema migration copies existing states 1:1.
-    conn.execute_batch(
+    // Wrap rename + recreate + copy + drop in one transaction so a crash mid-migration
+    // cannot leave an empty live table while the rows sit orphaned in the legacy table
+    // (the early-return guard above would then skip recovery forever). The legacy table is
+    // only dropped after an in-transaction row-count match.
+    let tx = conn
+        .unchecked_transaction()
+        .context("failed to begin ticket_self_work_items migration")?;
+    tx.execute_batch(
         r#"
         ALTER TABLE ticket_self_work_items RENAME TO ticket_self_work_items_legacy_unique;
 
@@ -10478,13 +10485,32 @@ fn migrate_ticket_self_work_items_schema(conn: &Connection) -> Result<()> {
             work_id, source_system, kind, title, body_text, state, metadata_json,
             remote_ticket_id, remote_locator, created_at, updated_at
         FROM ticket_self_work_items_legacy_unique;
-
+        "#,
+    )?;
+    let legacy_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM ticket_self_work_items_legacy_unique",
+        [],
+        |row| row.get(0),
+    )?;
+    let migrated_count: i64 =
+        tx.query_row("SELECT COUNT(*) FROM ticket_self_work_items", [], |row| {
+            row.get(0)
+        })?;
+    if migrated_count != legacy_count {
+        anyhow::bail!(
+            "ticket_self_work_items migration copied {migrated_count} of {legacy_count} rows; rolling back"
+        );
+    }
+    tx.execute_batch(
+        r#"
         DROP TABLE ticket_self_work_items_legacy_unique;
 
         CREATE INDEX IF NOT EXISTS idx_ticket_self_work_scope
             ON ticket_self_work_items(source_system, state, updated_at DESC);
         "#,
     )?;
+    tx.commit()
+        .context("failed to commit ticket_self_work_items migration")?;
     Ok(())
 }
 
@@ -11175,6 +11201,116 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn ticket_self_work_migration_preserves_rows_and_drops_unique() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ticket_self_work_items (
+                work_id TEXT PRIMARY KEY,
+                source_system TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT NOT NULL,
+                body_text TEXT NOT NULL,
+                state TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                remote_ticket_id TEXT,
+                remote_locator TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(source_system, kind)
+            );
+            INSERT INTO ticket_self_work_items
+                (work_id, source_system, kind, title, body_text, state, metadata_json, created_at, updated_at)
+            VALUES
+                ('w1', 'local', 'triage', 't', 'b', 'open', '{}', 'now', 'now'),
+                ('w2', 'local', 'review', 't', 'b', 'open', '{}', 'now', 'now');
+            "#,
+        )?;
+
+        migrate_ticket_self_work_items_schema(&conn)?;
+
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM ticket_self_work_items", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(count, 2, "all rows must survive the migration");
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ticket_self_work_items'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            !sql.contains("UNIQUE(source_system, kind)"),
+            "the UNIQUE(source_system, kind) constraint must be gone after migration"
+        );
+        let legacy: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ticket_self_work_items_legacy_unique'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            legacy, 0,
+            "the legacy table must be dropped after a successful migration"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_self_work_migration_rolls_back_without_data_loss() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        // Fixture old schema with a NULLABLE title so the copy into the NOT NULL new column
+        // fails after the rename, exercising the rollback path.
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ticket_self_work_items (
+                work_id TEXT PRIMARY KEY,
+                source_system TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                title TEXT,
+                body_text TEXT NOT NULL,
+                state TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                remote_ticket_id TEXT,
+                remote_locator TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(source_system, kind)
+            );
+            INSERT INTO ticket_self_work_items
+                (work_id, source_system, kind, body_text, state, metadata_json, created_at, updated_at)
+            VALUES
+                ('w1', 'local', 'triage', 'b', 'open', '{}', 'now', 'now');
+            "#,
+        )?;
+
+        let result = migrate_ticket_self_work_items_schema(&conn);
+        assert!(
+            result.is_err(),
+            "migration must fail when a row cannot be copied into the new NOT NULL schema"
+        );
+
+        // The original table and its row must be intact: the failed migration rolled back.
+        let count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM ticket_self_work_items", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(
+            count, 1,
+            "the original row must survive a rolled-back migration"
+        );
+        let sql: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ticket_self_work_items'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(
+            sql.contains("UNIQUE(source_system, kind)"),
+            "the original schema must be restored after rollback"
+        );
+        Ok(())
     }
 
     fn is_terminology_firewall_text_file(path: &std::path::Path) -> bool {
