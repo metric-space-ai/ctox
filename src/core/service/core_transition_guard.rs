@@ -437,13 +437,20 @@ pub fn evaluate_core_spawn(
 
     let request_json = serde_json::to_string(request)?;
     let edge_id = deterministic_spawn_edge_id(&request_json);
-    let violation_codes = validate_core_spawn(conn, request, &edge_id)?;
+    // Budget read + edge insert run inside one BEGIN IMMEDIATE write transaction
+    // so two concurrent spawners sharing a budget_key cannot both pass the
+    // accepted_spawn_budget_count gate: the second writer blocks on the write lock
+    // (WAL + busy_timeout), then re-reads the already-inserted edge and is rejected
+    // with spawn_budget_exhausted. Mirrors
+    // business_os::store::outbound_reserve_account_send_slot.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+    let violation_codes = validate_core_spawn(&tx, request, &edge_id)?;
     let accepted = violation_codes.is_empty();
     let message = core_spawn_message(&violation_codes);
     let violation_codes_json = serde_json::to_string(&violation_codes)?;
     let now = Utc::now().to_rfc3339();
 
-    conn.execute(
+    tx.execute(
         r#"
         INSERT INTO ctox_core_spawn_edges (
             edge_id, parent_entity_type, parent_entity_id, child_entity_type,
@@ -476,6 +483,7 @@ pub fn evaluate_core_spawn(
             now,
         ],
     )?;
+    tx.commit()?;
 
     Ok(CoreSpawnProof {
         edge_id,
@@ -1425,6 +1433,58 @@ mod tests {
         assert!(proof
             .violation_codes
             .contains(&"spawn_budget_exhausted".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn core_spawn_budget_is_atomic_under_concurrent_spawners() -> Result<()> {
+        use std::sync::{Arc, Barrier};
+
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("spawn-race.sqlite3");
+        let open = |p: &std::path::Path| -> Result<Connection> {
+            let conn = Connection::open(p)?;
+            conn.busy_timeout(std::time::Duration::from_secs(5))?;
+            conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+            Ok(conn)
+        };
+
+        // Create the schema once so the racing threads only contend on the write lock.
+        ensure_core_transition_guard_schema(&open(&path)?)?;
+
+        const K: usize = 4;
+        let barrier = Arc::new(Barrier::new(K));
+        let mut handles = Vec::with_capacity(K);
+        for i in 0..K {
+            let path = path.clone();
+            let barrier = Arc::clone(&barrier);
+            handles.push(std::thread::spawn(move || {
+                let conn = Connection::open(&path).expect("open");
+                conn.busy_timeout(std::time::Duration::from_secs(5))
+                    .expect("busy_timeout");
+                conn.execute_batch("PRAGMA journal_mode=WAL;").expect("wal");
+                let mut request = self_work_spawn_request("b", &format!("child{i}"));
+                request.budget_key = Some("race-budget".to_string());
+                request.max_attempts = Some(1);
+                barrier.wait();
+                // Over-budget losers return Err; the aggregate is what matters.
+                let _ = enforce_core_spawn(&conn, &request);
+            }));
+        }
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        let conn = open(&path)?;
+        let accepted: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ctox_core_spawn_edges WHERE accepted = 1 AND budget_key = ?1",
+            params!["race-budget"],
+            |row| row.get(0),
+        )?;
+        assert!(
+            accepted <= 1,
+            "spawn budget (max_attempts=1) must admit at most one accepted edge under concurrency, got {accepted}"
+        );
         Ok(())
     }
 
