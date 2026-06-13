@@ -7808,6 +7808,16 @@ pub(crate) fn enforce_queue_route_status_transition(
     Ok(())
 }
 
+/// Root-based wrapper: does this queue item already carry an accepted
+/// terminal-success Completed proof? Queue repair uses it to pre-classify a
+/// `complete` action before it reaches the Completed gate, so an unproven
+/// complete is refused-and-skipped instead of aborting the whole repair pass.
+pub fn queue_complete_action_has_terminal_proof(root: &Path, message_key: &str) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    queue_completed_has_terminal_success_proof(&conn, message_key)
+}
+
 fn queue_completed_has_terminal_success_proof(
     conn: &Connection,
     message_key: &str,

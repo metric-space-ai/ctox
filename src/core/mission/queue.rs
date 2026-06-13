@@ -1121,7 +1121,7 @@ fn run_agentic_queue_repair(root: &Path, dry_run: bool) -> Result<AgenticQueueRe
     let applied_actions = if dry_run {
         Vec::new()
     } else {
-        apply_queue_repair_actions(root, &parsed.repair_actions)?
+        apply_queue_repair_actions(root, &parsed.repair_actions, &parsed.canonical_hot_path)?
     };
     let verification = if dry_run {
         None
@@ -1410,10 +1410,43 @@ fn parse_queue_repair_action_line(value: &str) -> Option<QueueRepairActionView> 
 fn apply_queue_repair_actions(
     root: &Path,
     actions: &[QueueRepairActionView],
+    canonical_hot_path: &[String],
 ) -> Result<Vec<QueueRepairActionView>> {
+    // Best-effort hot-path keys: the leading whitespace token of each canonical
+    // hot-path entry. message_keys carry no whitespace, so a hot-path queue item
+    // listed by key yields its key here; thread/prose entries match nothing
+    // (fail-safe). Used ONLY to REFUSE a mutation, never to authorize one.
+    let hot_path_keys: std::collections::HashSet<&str> = canonical_hot_path
+        .iter()
+        .filter_map(|entry| entry.split_whitespace().next())
+        .collect();
     let mut applied = Vec::new();
     for action in actions {
         if channels::load_queue_task(root, &action.message_key)?.is_none() {
+            continue;
+        }
+        if hot_path_keys.contains(action.message_key.as_str()) {
+            record_queue_repair_event(
+                root,
+                action,
+                "queue.repair_rejected",
+                "hot-path queue item refused",
+            );
+            continue;
+        }
+        if action.action.as_str() == "complete"
+            && !channels::queue_complete_action_has_terminal_proof(root, &action.message_key)?
+        {
+            // A `complete` with no accepted terminal-success proof would be
+            // rejected by the Completed gate and abort the whole repair+verify
+            // pass via `?`. Pre-classify deterministically and skip it instead,
+            // so valid actions in the batch still commit and the verify pass runs.
+            record_queue_repair_event(
+                root,
+                action,
+                "queue.repair_rejected",
+                "complete without terminal-success proof refused",
+            );
             continue;
         }
         match action.action.as_str() {
@@ -1477,9 +1510,34 @@ fn apply_queue_repair_actions(
             }
             _ => continue,
         }
+        record_queue_repair_event(root, action, "queue.repair_applied", &action.reason);
         applied.push(action.clone());
     }
     Ok(applied)
+}
+
+fn record_queue_repair_event(
+    root: &Path,
+    action: &QueueRepairActionView,
+    event_kind: &'static str,
+    note: &str,
+) {
+    record_harness_flow_event_lossy(
+        root,
+        RecordHarnessFlowEventRequest {
+            event_kind,
+            title: "Queue repair action",
+            body_text: note,
+            message_key: Some(&action.message_key),
+            work_id: None,
+            ticket_key: None,
+            attempt_index: None,
+            metadata: json!({
+                "action": action.action.clone(),
+                "message_key": action.message_key.clone(),
+            }),
+        },
+    );
 }
 
 fn parse_prefixed_line(report: &str, prefix: &str) -> Option<String> {
@@ -2547,7 +2605,7 @@ mod tests {
             priority: None,
             reason: "superseded by canonical supervisor task".to_string(),
         }];
-        let applied = apply_queue_repair_actions(&root, &actions)?;
+        let applied = apply_queue_repair_actions(&root, &actions, &[])?;
         assert_eq!(applied.len(), 1);
         let updated =
             channels::load_queue_task(&root, &task.message_key)?.expect("updated task missing");
@@ -2555,6 +2613,86 @@ mod tests {
         assert_eq!(
             updated.status_note.as_deref(),
             Some("superseded by canonical supervisor task")
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn apply_queue_repair_actions_refuses_hot_path_and_unproven_complete() -> Result<()> {
+        let root = temp_root("queue-repair-refusals");
+        std::fs::create_dir_all(&root)?;
+
+        let make = |title: &str| -> Result<String> {
+            Ok(channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: title.to_string(),
+                    prompt: "work".to_string(),
+                    thread_key: format!("thread-{title}"),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )?
+            .message_key)
+        };
+        let hot_key = make("hot-path-item")?;
+        let cancel_key = make("cancel-target")?;
+        let complete_key = make("complete-target")?;
+
+        let actions = vec![
+            QueueRepairActionView {
+                action: "cancel".to_string(),
+                message_key: hot_key.clone(),
+                priority: None,
+                reason: "should be refused".to_string(),
+            },
+            QueueRepairActionView {
+                action: "complete".to_string(),
+                message_key: complete_key.clone(),
+                priority: None,
+                reason: "unproven complete".to_string(),
+            },
+            QueueRepairActionView {
+                action: "cancel".to_string(),
+                message_key: cancel_key.clone(),
+                priority: None,
+                reason: "valid cancel".to_string(),
+            },
+        ];
+        let hot_path = vec![format!("{hot_key} :: canonical supervisor")];
+
+        let applied = apply_queue_repair_actions(&root, &actions, &hot_path)?;
+
+        // Only the valid cancel committed; the hot-path and unproven-complete
+        // actions were refused WITHOUT aborting the loop (the valid cancel sits
+        // after both refusals and still committed).
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].message_key, cancel_key);
+        assert_eq!(
+            channels::load_queue_task(&root, &hot_key)?
+                .unwrap()
+                .route_status,
+            "pending",
+            "hot-path queue item must not be mutated"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &complete_key)?
+                .unwrap()
+                .route_status,
+            "pending",
+            "a complete without terminal-success proof must be refused, not applied"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &cancel_key)?
+                .unwrap()
+                .route_status,
+            "cancelled",
+            "the valid cancel after both refusals must still commit"
         );
 
         let _ = std::fs::remove_dir_all(&root);
