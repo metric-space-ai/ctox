@@ -830,6 +830,28 @@ fn ensure_rendered_prompt_is_invocable(
             "context_selection_empty_critical: refusing model invocation because context health is critical and no context evidence rendered"
         );
     }
+    // Deterministic doomed-retry gate: when the EXACT same user turn is being
+    // re-issued (recent_user_turn_repeated, exact-normalized match, repetition>1)
+    // into an N-deep structured-failure loop (blocked_status_loop, >=3 blocked
+    // assistant rows) and both have already reached Critical, the harness would
+    // otherwise burn a full local-inference turn on a retry the deterministic
+    // signal already condemned. Refuse on the conjunction of these two hard-key
+    // facts (never a similarity judgement) so the existing classify/cooldown
+    // path handles it instead of re-firing the identical prompt.
+    let exact_duplicate_user_turn = health.warnings.iter().any(|warning| {
+        warning.code.as_str() == "recent_user_turn_repeated"
+            && warning.severity == context_health::WarningSeverity::Critical
+    });
+    let structured_failure_loop = health.warnings.iter().any(|warning| {
+        warning.code.as_str() == "blocked_status_loop"
+            && warning.severity == context_health::WarningSeverity::Critical
+    });
+    if exact_duplicate_user_turn && structured_failure_loop {
+        emit("context-selection context_loop_short_circuit critical_duplicate_user_turn critical_blocked_status_loop");
+        anyhow::bail!(
+            "context_loop_short_circuit: exact-duplicate user turn re-entering an N-deep structured-failure loop with no new evidence"
+        );
+    }
     Ok(())
 }
 
@@ -1203,6 +1225,7 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("context_selection_empty")
         || lower.contains("context selection is empty")
         || lower.contains("no context evidence rendered")
+        || lower.contains("context_loop_short_circuit")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
     {
@@ -1577,6 +1600,84 @@ mod tests {
         assert_eq!(
             rendered.prompt, before,
             "guard must not prepend the raw prompt when the clipped echo is present"
+        );
+    }
+
+    #[test]
+    fn invocable_guard_bails_on_conjunctive_critical_loop() {
+        let prompt = "retry the same blocked task";
+        let rendered_echo = live_context::sanitize_latest_prompt(prompt);
+        let make_rendered = || live_context::RenderedRuntimePrompt {
+            prompt: format!("CURRENT REQUEST\n- User asked: {rendered_echo}\n"),
+            latest_user_prompt: prompt.to_string(),
+            rendered_context_items: 1,
+            omitted_context_items: 0,
+        };
+        let snapshot = lcm::LcmSnapshot {
+            conversation_id: 9,
+            messages: Vec::new(),
+            summaries: Vec::new(),
+            context_items: Vec::new(),
+            summary_edges: Vec::new(),
+            summary_messages: Vec::new(),
+        };
+        let warning = |code: &str, severity: context_health::WarningSeverity| {
+            context_health::ContextHealthWarning {
+                code: code.to_string(),
+                severity,
+                summary: String::new(),
+                evidence: String::new(),
+                recommended_action: String::new(),
+            }
+        };
+        let make_health = |warnings: Vec<context_health::ContextHealthWarning>| {
+            context_health::ContextHealthSnapshot {
+                conversation_id: 9,
+                overall_score: 10,
+                status: context_health::ContextHealthStatus::Critical,
+                summary: "critical".to_string(),
+                repair_recommended: true,
+                dimensions: Vec::new(),
+                warnings,
+            }
+        };
+        let run = |warnings: Vec<context_health::ContextHealthWarning>| {
+            let mut rendered = make_rendered();
+            ensure_rendered_prompt_is_invocable(
+                &snapshot,
+                &mut rendered,
+                prompt,
+                &make_health(warnings),
+                &mut |_event| {},
+            )
+        };
+
+        use context_health::WarningSeverity::{Critical, Warning};
+
+        // POSITIVE: both Critical loop facts present -> deterministic short-circuit.
+        let err = run(vec![
+            warning("recent_user_turn_repeated", Critical),
+            warning("blocked_status_loop", Critical),
+        ])
+        .unwrap_err();
+        assert!(err.to_string().contains("context_loop_short_circuit"));
+
+        // NEGATIVE: only one of the two facts -> still invocable.
+        assert!(run(vec![warning("recent_user_turn_repeated", Critical)]).is_ok());
+        assert!(run(vec![warning("blocked_status_loop", Critical)]).is_ok());
+        // NEGATIVE: both present but only Warning severity -> still invocable.
+        assert!(run(vec![
+            warning("recent_user_turn_repeated", Warning),
+            warning("blocked_status_loop", Warning),
+        ])
+        .is_ok());
+
+        // The marker cools down like the other context bails (60s).
+        assert_eq!(
+            hard_runtime_blocker_retry_cooldown_secs(
+                "context_loop_short_circuit: exact-duplicate user turn re-entering an N-deep structured-failure loop with no new evidence"
+            ),
+            Some(60)
         );
     }
 
