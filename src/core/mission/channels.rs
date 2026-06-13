@@ -2660,30 +2660,52 @@ pub fn lease_queue_task(
     let current =
         load_queue_message_from_conn(&conn, message_key)?.context("queue task not found")?;
     let now = now_iso_string();
-    let previous_route_status = current_queue_route_status(&conn, message_key)?;
-    enforce_queue_route_status_transition(
-        &conn,
-        message_key,
-        &previous_route_status,
-        "leased",
-        "ctox-queue-lease",
-        "lease_queue_task",
-    )?;
-    conn.execute(
-        r#"
-        INSERT INTO communication_routing_state (
-            message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
-        )
-        VALUES (?1, 'leased', ?2, ?3, NULL, NULL, ?3)
-        ON CONFLICT(message_key) DO UPDATE SET
-            route_status='leased',
-            lease_owner=excluded.lease_owner,
-            leased_at=excluded.leased_at,
-            acked_at=NULL,
-            updated_at=excluded.updated_at
-        "#,
-        params![message_key, normalized_owner, now],
-    )?;
+    // Hold a write lock across the read-modify-write so a concurrent leaser on
+    // a separate connection cannot overwrite our lease_owner (lost-update).
+    {
+        let tx =
+            rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let previous_route_status = current_queue_route_status(&tx, message_key)?;
+        // Check-and-set: only lease a row that is free, ours already, or
+        // pending. A losing racer flips 0 rows and must NOT load a task it
+        // does not own.
+        let updated = tx.execute(
+            r#"
+            INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            )
+            VALUES (?1, 'leased', ?2, ?3, NULL, NULL, ?3)
+            ON CONFLICT(message_key) DO UPDATE SET
+                route_status='leased',
+                lease_owner=excluded.lease_owner,
+                leased_at=excluded.leased_at,
+                acked_at=NULL,
+                updated_at=excluded.updated_at
+            WHERE communication_routing_state.lease_owner IS NULL
+               OR communication_routing_state.lease_owner = ''
+               OR communication_routing_state.lease_owner = ?2
+               OR communication_routing_state.route_status = 'pending'
+            "#,
+            params![message_key, normalized_owner, now],
+        )?;
+        if updated == 0 {
+            anyhow::bail!(
+                "queue task {} lease lost: already leased by another owner",
+                message_key
+            );
+        }
+        // Record the core-transition proof only after the CAS actually flipped
+        // the row, so a losing racer never writes a phantom proof.
+        enforce_queue_route_status_transition(
+            &tx,
+            message_key,
+            &previous_route_status,
+            "leased",
+            "ctox-queue-lease",
+            "lease_queue_task",
+        )?;
+        tx.commit()?;
+    }
     refresh_thread(&mut conn, &current.thread_key)?;
     load_queue_task_from_conn(&conn, message_key)?.context("failed to load leased queue task")
 }
@@ -6759,30 +6781,30 @@ fn take_messages(
         "#
     };
 
-    let mut statement = conn.prepare(sql)?;
-    let mapped = if let Some(channel) = channel {
-        statement.query_map(
-            params![channel, lease_owner, limit as i64],
-            map_channel_message_row,
-        )?
-    } else {
-        statement.query_map(params![lease_owner, limit as i64], map_channel_message_row)?
+    // Hold a write lock for the whole check-then-act window so a concurrent
+    // leaser on a different connection cannot steal a lease between our
+    // eligibility SELECT and our UPDATE (lost-update). The lease UPDATE is a
+    // check-and-set: its WHERE mirrors the eligibility predicate above, so a
+    // losing racer flips 0 rows and we record neither the row nor a
+    // core-transition proof for it.
+    let tx =
+        rusqlite::Transaction::new_unchecked(&*conn, rusqlite::TransactionBehavior::Immediate)?;
+    let rows = {
+        let mut statement = tx.prepare(sql)?;
+        let mapped = if let Some(channel) = channel {
+            statement.query_map(
+                params![channel, lease_owner, limit as i64],
+                map_channel_message_row,
+            )?
+        } else {
+            statement.query_map(params![lease_owner, limit as i64], map_channel_message_row)?
+        };
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let rows = mapped.collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(statement);
-    let tx = conn.unchecked_transaction()?;
     let leased_at = now_iso_string();
     let mut taken = Vec::new();
     for mut item in rows {
-        enforce_queue_route_status_transition(
-            &tx,
-            &item.message_key,
-            &item.routing.route_status,
-            "leased",
-            lease_owner,
-            "lease_messages",
-        )?;
-        tx.execute(
+        let updated = tx.execute(
             r#"
             INSERT INTO communication_routing_state (
                 message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
@@ -6794,8 +6816,26 @@ fn take_messages(
                 leased_at=excluded.leased_at,
                 acked_at=NULL,
                 updated_at=excluded.updated_at
+            WHERE communication_routing_state.lease_owner IS NULL
+               OR communication_routing_state.lease_owner = ''
+               OR communication_routing_state.lease_owner = ?2
+               OR communication_routing_state.route_status = 'pending'
             "#,
             params![item.message_key, lease_owner, leased_at],
+        )?;
+        if updated == 0 {
+            // Lost the race: another owner leased this key between our SELECT
+            // and UPDATE. Skip the core-transition proof and the push so we
+            // never return a message we did not actually lease.
+            continue;
+        }
+        enforce_queue_route_status_transition(
+            &tx,
+            &item.message_key,
+            &item.routing.route_status,
+            "leased",
+            lease_owner,
+            "lease_messages",
         )?;
         item.routing.route_status = "leased".to_string();
         item.routing.lease_owner = Some(lease_owner.to_string());
@@ -10325,6 +10365,101 @@ mod tests {
             .expect("take messages should succeed");
         assert_eq!(taken.len(), 1);
         assert_eq!(taken[0].message_key, "pending-stale-owner-1");
+
+        let _ = fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn take_messages_cas_rejects_concurrent_lease_steal() {
+        let db_path = unique_test_db_path("ctox-channel-lease-cas-steal");
+        let mut conn_a = open_channel_db(&db_path).expect("failed to open db a");
+        upsert_communication_message(
+            &mut conn_a,
+            UpsertMessage {
+                message_key: "lease-cas-1",
+                channel: "email",
+                account_key: "email:cto1@metric-space.ai",
+                thread_key: "<lease-cas@example.com>",
+                remote_id: "remote-lease-cas-1",
+                direction: "inbound",
+                folder_hint: "INBOX",
+                sender_display: "Michael Welsch",
+                sender_address: "michael.welsch@metric-space.ai",
+                recipient_addresses_json: "[\"cto1@metric-space.ai\"]",
+                cc_addresses_json: "[]",
+                bcc_addresses_json: "[]",
+                subject: "Re: Lease race",
+                preview: "race",
+                body_text: "race body",
+                body_html: "",
+                raw_payload_ref: "",
+                trust_level: "trusted",
+                status: "received",
+                seen: false,
+                has_attachments: false,
+                external_created_at: "2026-04-24T18:41:06Z",
+                observed_at: "2026-04-24T18:41:06Z",
+                metadata_json: "{}",
+            },
+        )
+        .expect("message upsert");
+        ensure_routing_rows_for_inbound(&conn_a).expect("routing rows");
+        conn_a
+            .execute(
+                "UPDATE communication_routing_state SET route_status='pending', lease_owner=NULL, leased_at=NULL WHERE message_key=?1",
+                params!["lease-cas-1"],
+            )
+            .expect("failed to seed pending row");
+
+        // Owner A leases the pending row through the public path.
+        let a = take_messages(&mut conn_a, Some("email"), 10, "owner-A").expect("A lease");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].message_key, "lease-cas-1");
+
+        // Owner B observed the row while it was still pending and now issues the
+        // same guarded CAS UPDATE on a second connection. The CAS WHERE must
+        // reject it (0 rows) because A already owns the lease.
+        let mut conn_b = open_channel_db(&db_path).expect("failed to open db b");
+        let now = now_iso_string();
+        let updated = conn_b
+            .execute(
+                r#"
+                INSERT INTO communication_routing_state (
+                    message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+                )
+                VALUES (?1, 'leased', ?2, ?3, NULL, NULL, ?3)
+                ON CONFLICT(message_key) DO UPDATE SET
+                    route_status='leased',
+                    lease_owner=excluded.lease_owner,
+                    leased_at=excluded.leased_at,
+                    acked_at=NULL,
+                    updated_at=excluded.updated_at
+                WHERE communication_routing_state.lease_owner IS NULL
+                   OR communication_routing_state.lease_owner = ''
+                   OR communication_routing_state.lease_owner = ?2
+                   OR communication_routing_state.route_status = 'pending'
+                "#,
+                params!["lease-cas-1", "owner-B", now],
+            )
+            .expect("B cas update");
+        assert_eq!(
+            updated, 0,
+            "the CAS guard must reject a steal of an already-leased row"
+        );
+
+        // The lease still belongs to A.
+        let owner: Option<String> = conn_b
+            .query_row(
+                "SELECT lease_owner FROM communication_routing_state WHERE message_key=?1",
+                params!["lease-cas-1"],
+                |row| row.get(0),
+            )
+            .expect("read owner");
+        assert_eq!(owner.as_deref(), Some("owner-A"));
+
+        // And B cannot lease it through the public path either.
+        let b = take_messages(&mut conn_b, Some("email"), 10, "owner-B").expect("B lease attempt");
+        assert_eq!(b.len(), 0, "B must not be able to lease A's row");
 
         let _ = fs::remove_file(&db_path);
     }
