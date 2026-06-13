@@ -4227,6 +4227,19 @@ fn send_email_message(
         .and_then(Value::as_str)
         .unwrap_or("accepted");
     mark_outbound_send_accepted(conn, &pending_message_key, status, &adapter_json)?;
+    if let Some(context) = reviewed_context {
+        // The kernel must witness send SUCCESS too, symmetric to the failure
+        // twin above, so a reviewed founder send reaches terminal Sent instead
+        // of being stranded in non-terminal Sending. Best-effort: an
+        // already-delivered mail must not be failed by a witness hiccup.
+        let _ = enforce_reviewed_founder_send_succeeded_core_transition(
+            conn,
+            context.entity_id,
+            context.approval_key,
+            request,
+            &pending_message_key,
+        );
+    }
     Ok(json!({
         "ok": true,
         "channel": "email",
@@ -5673,6 +5686,69 @@ fn emit_reviewed_founder_send_failed_transition(
             from_state: CoreState::Sending,
             to_state: CoreState::SendFailed,
             event: CoreEvent::Fail,
+            actor: "ctox-reviewed-founder-send".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(approval_key.to_string()),
+                approved_body_sha256: Some(body_sha256.clone()),
+                outgoing_body_sha256: Some(body_sha256),
+                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
+                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(())
+}
+
+fn enforce_reviewed_founder_send_succeeded_core_transition(
+    conn: &Connection,
+    entity_id: &str,
+    approval_key: &str,
+    request: &ChannelSendRequest,
+    pending_message_key: &str,
+) -> Result<()> {
+    emit_reviewed_founder_send_succeeded_transition(
+        conn,
+        entity_id,
+        approval_key,
+        request,
+        pending_message_key,
+    )
+}
+
+/// Emit the `Sending -> Sent` core transition after a successful provider
+/// send. RFC 0001 Phase 1: the kernel must witness every founder-send outcome,
+/// success symmetric to the failure twin, so the entity reaches a terminal
+/// Sent state instead of being stranded in non-terminal Sending.
+fn emit_reviewed_founder_send_succeeded_transition(
+    conn: &Connection,
+    entity_id: &str,
+    approval_key: &str,
+    request: &ChannelSendRequest,
+    pending_message_key: &str,
+) -> Result<()> {
+    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("protected_party".to_string(), "founder".to_string());
+    metadata.insert("thread_key".to_string(), request.thread_key.clone());
+    metadata.insert("subject".to_string(), request.subject.clone());
+    metadata.insert("account_key".to_string(), request.account_key.clone());
+    metadata.insert(
+        "pending_message_key".to_string(),
+        pending_message_key.to_string(),
+    );
+
+    enforce_core_transition(
+        conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::FounderCommunication,
+            entity_id: entity_id.to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Sending,
+            to_state: CoreState::Sent,
+            event: CoreEvent::ConfirmDelivery,
             actor: "ctox-reviewed-founder-send".to_string(),
             evidence: CoreEvidenceRefs {
                 review_audit_key: Some(approval_key.to_string()),
@@ -10255,6 +10331,62 @@ mod tests {
             )
             .expect("failed to count proofs");
         assert_eq!(accepted, 1);
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn reviewed_founder_send_success_reaches_terminal_sent() {
+        let db_path = unique_test_db_path("ctox-founder-core-sent");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "mail-thread".to_string(),
+            body: "Hi Michael,\n\nDer Status ist belegt.".to_string(),
+            subject: "Re: Status".to_string(),
+            to: vec!["michael.welsch@metric-space.ai".to_string()],
+            cc: vec!["o.schaefers@gmx.net".to_string()],
+            attachments: Vec::new(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        };
+        let entity_id = "founder-reply:email:cto1@metric-space.ai::INBOX::sent";
+        let approval_key = "founder-review:sent";
+
+        // Drive Approved -> Sending exactly as the production review path does.
+        enforce_reviewed_founder_send_core_transition(&conn, entity_id, approval_key, &request)
+            .expect("Approved -> Sending should be accepted");
+
+        // The success twin must now witness Sending -> Sent so the entity is no
+        // longer stranded in non-terminal Sending.
+        emit_reviewed_founder_send_succeeded_transition(
+            &conn,
+            entity_id,
+            approval_key,
+            &request,
+            "pending-sent-1",
+        )
+        .expect("Sending -> Sent should be accepted");
+
+        let accepted: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_core_transition_proofs
+                 WHERE entity_type = 'FounderCommunication'
+                   AND lane = 'P0FounderCommunication'
+                   AND from_state = 'Sending'
+                   AND to_state = 'Sent'
+                   AND accepted = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("failed to count proofs");
+        assert_eq!(
+            accepted, 1,
+            "a successful reviewed founder send must reach terminal Sent"
+        );
 
         let _ = std::fs::remove_file(&db_path);
     }
