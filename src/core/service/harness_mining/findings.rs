@@ -162,21 +162,41 @@ pub fn record_or_confirm(
     })
 }
 
-/// At end of an audit tick: any finding with status in (detected, confirmed)
-/// whose `last_seen_at` is older than this tick's start is marked `stale`.
-/// Returns the number of rows transitioned. Non-confirmed findings going
-/// stale is *expected* — that is the point of the 2-tick gate.
-pub fn mark_unseen_stale(conn: &Connection, tick_started_at: &str) -> Result<i64> {
-    let n = conn.execute(
+/// At end of an audit tick: a `detected` finding not re-observed at this tick
+/// is marked `stale` (the 2-tick promotion gate already covers it). A
+/// `confirmed` finding is durable operator signal, so it is only marked
+/// `stale` after TWO consecutive unseen ticks — symmetric with the 2-tick
+/// promotion gate — by also requiring its `last_seen_at` to predate the
+/// *previous* tick's start. When no prior tick exists (`prev_tick_started_at`
+/// is None) a confirmed finding is never staled, the safe direction.
+/// Returns the number of rows transitioned.
+pub fn mark_unseen_stale(
+    conn: &Connection,
+    tick_started_at: &str,
+    prev_tick_started_at: Option<&str>,
+) -> Result<i64> {
+    let mut n = conn.execute(
         r#"
         UPDATE ctox_hm_findings
         SET status = 'stale',
             resolved_by = COALESCE(resolved_by, 'audit-tick:no-longer-observed')
-        WHERE status IN ('detected','confirmed')
+        WHERE status = 'detected'
           AND last_seen_at < ?1
         "#,
         params![tick_started_at],
     )?;
+    if let Some(prev) = prev_tick_started_at {
+        n += conn.execute(
+            r#"
+            UPDATE ctox_hm_findings
+            SET status = 'stale',
+                resolved_by = COALESCE(resolved_by, 'audit-tick:no-longer-observed')
+            WHERE status = 'confirmed'
+              AND last_seen_at < ?1
+            "#,
+            params![prev],
+        )?;
+    }
     Ok(n as i64)
 }
 
@@ -380,7 +400,19 @@ pub fn run_audit_tick(
 
     match outcome {
         Ok((brief, recorded, confirmed)) => {
-            let stale = mark_unseen_stale(conn, &started_at)?;
+            // The current run was inserted as 'running' above, so OFFSET 1
+            // skips it and yields the previous tick's start (None on first run).
+            let prev_started_at: Option<String> = conn
+                .query_row(
+                    r#"
+                    SELECT started_at FROM ctox_hm_audit_runs
+                    ORDER BY started_at DESC LIMIT 1 OFFSET 1
+                    "#,
+                    [],
+                    |row| row.get(0),
+                )
+                .ok();
+            let stale = mark_unseen_stale(conn, &started_at, prev_started_at.as_deref())?;
             conn.execute(
                 r#"
                 UPDATE ctox_hm_audit_runs
@@ -608,11 +640,52 @@ mod tests {
             "2026-04-27T00:01:00Z",
         )
         .unwrap();
-        let n = mark_unseen_stale(&conn, "2026-04-27T00:00:30Z").unwrap();
+        let n = mark_unseen_stale(&conn, "2026-04-27T00:00:30Z", None).unwrap();
         assert_eq!(n, 1);
         let stale = list(&conn, Some("stale"), None, 100).unwrap();
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0]["kind"], "stuck_cases");
+    }
+
+    #[test]
+    fn confirmed_finding_stales_only_after_two_unseen_ticks() {
+        let conn = setup();
+        // Promote stuck_cases to 'confirmed' via the 2-tick gate; last_seen_at = 00:05:00.
+        record_or_confirm(
+            &conn,
+            "stuck_cases",
+            "warning",
+            Some("X"),
+            Some("e1"),
+            None,
+            &json!({}),
+            "2026-04-27T00:00:00Z",
+        )
+        .unwrap();
+        record_or_confirm(
+            &conn,
+            "stuck_cases",
+            "warning",
+            Some("X"),
+            Some("e1"),
+            None,
+            &json!({}),
+            "2026-04-27T00:05:00Z",
+        )
+        .unwrap();
+        assert_eq!(list(&conn, Some("confirmed"), None, 100).unwrap().len(), 1);
+
+        // First unseen tick: last_seen_at (00:05:00) is NOT < prev (00:05:00) -> survives.
+        mark_unseen_stale(&conn, "2026-04-27T00:10:00Z", Some("2026-04-27T00:05:00Z")).unwrap();
+        assert_eq!(list(&conn, Some("confirmed"), None, 100).unwrap().len(), 1);
+        assert!(list(&conn, Some("stale"), None, 100).unwrap().is_empty());
+
+        // Second consecutive unseen tick: last_seen_at (00:05:00) < prev (00:10:00) -> stales.
+        mark_unseen_stale(&conn, "2026-04-27T00:15:00Z", Some("2026-04-27T00:10:00Z")).unwrap();
+        assert!(list(&conn, Some("confirmed"), None, 100)
+            .unwrap()
+            .is_empty());
+        assert_eq!(list(&conn, Some("stale"), None, 100).unwrap().len(), 1);
     }
 
     #[test]
