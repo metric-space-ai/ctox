@@ -2007,15 +2007,34 @@ fn handle_service_ipc_stream(
     let mut writer = BufWriter::new(stream);
     let payload =
         serde_json::to_vec(&response).context("failed to encode service socket response")?;
-    writer
-        .write_all(&payload)
-        .context("failed to write service socket response")?;
-    writer
-        .write_all(b"\n")
-        .context("failed to terminate service socket response")?;
-    writer
-        .flush()
-        .context("failed to flush service socket response")
+    // A client that hit its IPC read timeout (e.g. a `--wait` status poll racing
+    // a slow disk-backed queue read) closes its end before we finish writing.
+    // That is a benign client disconnect, not a service fault: surfacing it as an
+    // error spammed the journal with "failed to flush service socket response"
+    // (ctox#21) and buried real failures. Treat the disconnect as a no-op.
+    let write_result = (|| {
+        writer.write_all(&payload)?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    })();
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(err) if is_benign_client_disconnect(&err) => Ok(()),
+        Err(err) => Err(err).context("failed to flush service socket response"),
+    }
+}
+
+/// A response write that fails because the peer already went away (it hit its
+/// own IPC read timeout and closed the socket) is expected, not an error.
+#[cfg(unix)]
+fn is_benign_client_disconnect(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+    )
 }
 
 #[cfg(unix)]
@@ -2822,7 +2841,14 @@ fn send_service_ipc_request_with_timeout(
 #[cfg(unix)]
 fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
     match request {
-        ServiceIpcRequest::Status => Duration::from_millis(750),
+        // `status_from_shared_state` drops the SharedState mutex quickly but then
+        // reads the durable queue (Polars + Parquet) for the pending/blocked
+        // previews. While a prompt worker is busy on a modest host those reads
+        // routinely exceed the old 750ms budget, so every `--wait` status poll
+        // timed out: the client gave up before the (valid) response arrived and
+        // the server's write then hit EPIPE ("failed to flush service socket
+        // response", ctox#21). 5s comfortably covers the bounded queue reads.
+        ServiceIpcRequest::Status => Duration::from_secs(5),
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),
