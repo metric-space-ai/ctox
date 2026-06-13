@@ -21,7 +21,7 @@ Done when:
 
 Required actions:
 - inspect source knowledge
-- inspect open CTOX self-work
+- inspect open CTOX internal work
 - confirm the source is still in observe-only behavior until a real active source skill exists
 
 Done when:
@@ -43,7 +43,7 @@ Done when:
 
 Required actions:
 - check whether confirmed knowledge-validation events already exist
-- if not, create exactly one justified self-work item for the first execution supplement or runbook enrichment
+- if not, create exactly one justified internal work item for the first execution supplement or runbook enrichment
 - assign it to CTOX when supported
 - note the next concrete source or system evidence needed
 - refresh the onboarding guide

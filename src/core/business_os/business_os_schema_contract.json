@@ -1,4 +1,388 @@
 {
+  "accounting_accounts": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "code": {
+        "type": "string"
+      },
+      "name": {
+        "type": "string"
+      },
+      "root_type": {
+        "type": "string"
+      },
+      "account_type": {
+        "type": "string"
+      },
+      "parent_id": {
+        "type": "string"
+      },
+      "is_group": {
+        "type": "boolean"
+      },
+      "tax_rate_id": {
+        "type": "string"
+      },
+      "skr": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "code",
+      "name",
+      "root_type",
+      "account_type",
+      "is_group",
+      "skr",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_bank_statement_lines": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "statement_id": {
+        "type": "string"
+      },
+      "value_date": {
+        "type": "string"
+      },
+      "narration": {
+        "type": "string"
+      },
+      "amount": {
+        "type": "number"
+      },
+      "counterparty_name": {
+        "type": "string"
+      },
+      "counterparty_iban": {
+        "type": "string"
+      },
+      "reconciled_entry_id": {
+        "type": "string"
+      },
+      "match_status": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "statement_id",
+      "value_date",
+      "amount",
+      "narration",
+      "match_status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_bank_statements": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "account_number": {
+        "type": "string"
+      },
+      "bank_code": {
+        "type": "string"
+      },
+      "statement_number": {
+        "type": "string"
+      },
+      "start_date": {
+        "type": "string"
+      },
+      "end_date": {
+        "type": "string"
+      },
+      "start_balance": {
+        "type": "number"
+      },
+      "end_balance": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "account_number",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_journal_entries": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "posting_date": {
+        "type": "string"
+      },
+      "type": {
+        "type": "string"
+      },
+      "ref_type": {
+        "type": "string"
+      },
+      "ref_id": {
+        "type": "string"
+      },
+      "number": {
+        "type": "string"
+      },
+      "narration": {
+        "type": "string"
+      },
+      "posted_at": {
+        "type": "number"
+      },
+      "reversed_by_id": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "posting_date",
+      "type",
+      "number",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_journal_entry_lines": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "journal_entry_id": {
+        "type": "string"
+      },
+      "account_id": {
+        "type": "string"
+      },
+      "debit": {
+        "type": "number"
+      },
+      "credit": {
+        "type": "number"
+      },
+      "party_id": {
+        "type": "string"
+      },
+      "tax_rate_id": {
+        "type": "string"
+      },
+      "line_no": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "journal_entry_id",
+      "account_id",
+      "debit",
+      "credit",
+      "line_no",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_ledger_entries": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "journal_entry_line_id": {
+        "type": "string"
+      },
+      "journal_entry_id": {
+        "type": "string"
+      },
+      "posting_date": {
+        "type": "string"
+      },
+      "account_id": {
+        "type": "string"
+      },
+      "debit": {
+        "type": "number"
+      },
+      "credit": {
+        "type": "number"
+      },
+      "narration": {
+        "type": "string"
+      },
+      "posted_at": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "journal_entry_line_id",
+      "journal_entry_id",
+      "posting_date",
+      "account_id",
+      "debit",
+      "credit",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_number_series": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "series_key": {
+        "type": "string"
+      },
+      "fiscal_year": {
+        "type": "number"
+      },
+      "prefix": {
+        "type": "string"
+      },
+      "next_value": {
+        "type": "number"
+      },
+      "last_issued_number": {
+        "type": "string"
+      },
+      "gap_policy": {
+        "type": "string"
+      },
+      "updated_by_command_id": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "required": [
+      "id",
+      "series_key",
+      "fiscal_year",
+      "next_value",
+      "gap_policy",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "accounting_receipts": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "file_storage_url": {
+        "type": "string"
+      },
+      "filename": {
+        "type": "string"
+      },
+      "supplier_name": {
+        "type": "string"
+      },
+      "invoice_date": {
+        "type": "string"
+      },
+      "invoice_number": {
+        "type": "string"
+      },
+      "vat_id": {
+        "type": "string"
+      },
+      "net_amount": {
+        "type": "number"
+      },
+      "tax_amount": {
+        "type": "number"
+      },
+      "gross_amount": {
+        "type": "number"
+      },
+      "suggested_account_id": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "ocr_raw": {
+        "type": "string"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "file_storage_url",
+      "filename",
+      "status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "browser_frames": {
     "version": 0,
     "primaryKey": "id",
@@ -713,6 +1097,425 @@
     ],
     "additionalProperties": true
   },
+  "calendar_availability_rules": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "booking_page_id": {
+        "type": "string"
+      },
+      "weekday": {
+        "type": "number"
+      },
+      "start_minute": {
+        "type": "number"
+      },
+      "end_minute": {
+        "type": "number"
+      },
+      "timezone": {
+        "type": "string"
+      },
+      "valid_from": {
+        "type": "number"
+      },
+      "valid_until": {
+        "type": "number"
+      },
+      "capacity": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "booking_page_id",
+      "weekday",
+      "start_minute",
+      "end_minute",
+      "status"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_booking_holds": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "booking_page_id": {
+        "type": "string"
+      },
+      "slot_start_ms": {
+        "type": "number"
+      },
+      "slot_end_ms": {
+        "type": "number"
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "hold_token_hash": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "booking_page_id",
+      "slot_start_ms",
+      "slot_end_ms",
+      "expires_at_ms",
+      "status"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_booking_pages": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "slug": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "duration_minutes": {
+        "type": "number"
+      },
+      "buffer_before_minutes": {
+        "type": "number"
+      },
+      "buffer_after_minutes": {
+        "type": "number"
+      },
+      "min_notice_minutes": {
+        "type": "number"
+      },
+      "max_days_ahead": {
+        "type": "number"
+      },
+      "calendar_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "host_user_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "location_mode": {
+        "type": "string"
+      },
+      "public_token_hash": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "slug",
+      "title",
+      "duration_minutes",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_bookings": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "booking_page_id": {
+        "type": "string"
+      },
+      "event_id": {
+        "type": "string"
+      },
+      "attendee_name": {
+        "type": "string"
+      },
+      "attendee_email": {
+        "type": "string"
+      },
+      "attendee_phone": {
+        "type": "string"
+      },
+      "answers": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "slot_start_ms": {
+        "type": "number"
+      },
+      "slot_end_ms": {
+        "type": "number"
+      },
+      "timezone": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "booking_page_id",
+      "attendee_name",
+      "attendee_email",
+      "slot_start_ms",
+      "slot_end_ms",
+      "status",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_calendars": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "source_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "color": {
+        "type": "string"
+      },
+      "visibility": {
+        "type": "boolean"
+      },
+      "owner_user_id": {
+        "type": "string"
+      },
+      "timezone": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "source_id",
+      "title",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_event_instances": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "event_id": {
+        "type": "string"
+      },
+      "start_time": {
+        "type": "number"
+      },
+      "end_time": {
+        "type": "number"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "event_id",
+      "start_time",
+      "end_time",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "calendar_id": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "description": {
+        "type": "string"
+      },
+      "location": {
+        "type": "string"
+      },
+      "start_time": {
+        "type": "number"
+      },
+      "end_time": {
+        "type": "number"
+      },
+      "timezone": {
+        "type": "string"
+      },
+      "all_day": {
+        "type": "boolean"
+      },
+      "recurrence_rule": {
+        "type": "string"
+      },
+      "recurrence_exdates": {
+        "type": "array",
+        "items": {
+          "type": "number"
+        }
+      },
+      "status": {
+        "type": "string"
+      },
+      "attendees": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "meeting_url": {
+        "type": "string"
+      },
+      "booking_id": {
+        "type": "string"
+      },
+      "source_ref": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "calendar_id",
+      "title",
+      "start_time",
+      "end_time",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "calendar_sources": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "kind": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "color": {
+        "type": "string"
+      },
+      "sync_status": {
+        "type": "string"
+      },
+      "payload": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "kind",
+      "title",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
   "channel_pairing_state": {
     "version": 0,
     "primaryKey": "channel",
@@ -747,6 +1550,162 @@
     "required": [
       "channel",
       "status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "coding_agent_events": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "event_id": {
+        "type": "string"
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "provider": {
+        "type": "string"
+      },
+      "role": {
+        "type": "string"
+      },
+      "text": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "event_id",
+      "session_id",
+      "provider",
+      "role",
+      "text",
+      "status",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "session_id",
+      "provider",
+      "created_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "coding_agent_sessions": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "session_id": {
+        "type": "string"
+      },
+      "provider": {
+        "type": "string"
+      },
+      "workspace_root": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "last_prompt": {
+        "type": "string"
+      },
+      "external_session_id": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "session_id",
+      "provider",
+      "workspace_root",
+      "status",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "provider",
+      "workspace_root",
+      "status",
+      "updated_at_ms"
+    ],
+    "additionalProperties": true
+  },
+  "coding_agent_workspace_grants": {
+    "version": 0,
+    "primaryKey": "id",
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "provider": {
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "status": {
+        "type": "string"
+      },
+      "active": {
+        "type": "boolean"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "is_deleted": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "id",
+      "provider",
+      "path",
+      "status",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "provider",
+      "path",
       "updated_at_ms"
     ],
     "additionalProperties": true

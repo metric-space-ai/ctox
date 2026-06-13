@@ -32,7 +32,7 @@ This is a proposal, not an automatic enqueue action.
 If the caller decides the follow-up should really run later, the caller should persist it durably:
 
 - queue-only for tiny atomic work
-- ticket self-work first for multi-turn, review, approval, blocker, or recovery work
+- ticket internal work first for multi-turn, review, approval, blocker, or recovery work
 - then create or edit the queue or plan entry that will execute it
 
 ## Communication Contract
@@ -51,4 +51,4 @@ If the caller decides the follow-up should really run later, the caller should p
 - Return `done` only if the active scope is actually closed.
 - If there is a real next work step, prefer `needs_followup`.
 - If the next work step is unclear, prefer `needs_replan` or an explicit blocker over guessing.
-- If the next work step will require durable tracking across turns, do not leave it only as a plain queue item. Persist ticket self-work as the system of record.
+- If the next work step will require durable tracking across turns, do not leave it only as a plain queue item. Persist ticket internal work as the system of record.

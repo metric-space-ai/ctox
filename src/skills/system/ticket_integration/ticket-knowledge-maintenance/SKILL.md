@@ -2,7 +2,7 @@
 name: ticket-knowledge-maintenance
 description: Use when CTOX must keep the ticket knowledge plane current from a live desk and turn observed gaps into visible, operator-meaningful internal work rather than hidden background assumptions.
 metadata:
-  short-description: Maintain ticket knowledge through visible self-work
+  short-description: Maintain ticket knowledge through visible internal work
 cluster: ticket_integration
 ---
 
@@ -12,10 +12,10 @@ cluster: ticket_integration
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 Use this skill when CTOX already has a ticket system attached and needs to continue building or repairing the knowledge plane from live evidence.
@@ -36,7 +36,7 @@ Only CTOX ticket fact/context entries, source bindings, ticket state, verificati
 
 When work needs to be visible to operators, create durable internal CTOX work, assign it to CTOX, and maintain a human note trail until the work is done or blocked.
 
-Do not bypass the generic ticket primitives with direct remote API calls. If work should exist in the ticket system, create it through `ctox ticket self-work-put`, `self-work-publish`, `self-work-assign`, `self-work-note`, and `self-work-transition`.
+Do not bypass the generic ticket primitives with direct remote API calls. If work should exist in the ticket system, create it through `ctox ticket internal-work-put`, `internal-work-publish`, `internal-work-assign`, `internal-work-note`, and `internal-work-transition`.
 
 ## Commands
 
@@ -56,10 +56,10 @@ ctox ticket knowledge-show --system "<system>" --domain "<domain>" --key "<key>"
 Create visible maintenance work:
 
 ```sh
-ctox ticket self-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<plain human task description>" --skill "ticket-knowledge-maintenance" --publish
-ctox ticket self-work-assign --work-id "<work_id>" --assignee "self" --assigned-by "ctox"
-ctox ticket self-work-note --work-id "<work_id>" --body "<plain human progress note>" --authored-by "ctox" --visibility internal
-ctox ticket self-work-transition --work-id "<work_id>" --state "<open|blocked|closed>" --transitioned-by "ctox" --note "<plain human note>" --visibility internal
+ctox ticket internal-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<plain human task description>" --skill "ticket-knowledge-maintenance" --publish
+ctox ticket internal-work-assign --work-id "<work_id>" --assignee "self" --assigned-by "ctox"
+ctox ticket internal-work-note --work-id "<work_id>" --body "<plain human progress note>" --authored-by "ctox" --visibility internal
+ctox ticket internal-work-transition --work-id "<work_id>" --state "<open|blocked|closed>" --transitioned-by "ctox" --note "<plain human note>" --visibility internal
 ```
 
 Escalate missing access or secrets:

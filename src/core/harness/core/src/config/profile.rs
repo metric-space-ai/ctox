@@ -21,6 +21,10 @@ use ctox_protocol::openai_models::ReasoningEffort;
 #[schemars(deny_unknown_fields)]
 pub struct ConfigProfile {
     pub model: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::config::types::deserialize_optional_service_tier"
+    )]
     pub service_tier: Option<ServiceTier>,
     /// The key in the `model_providers` map identifying the
     /// [`ModelProviderInfo`] to use.

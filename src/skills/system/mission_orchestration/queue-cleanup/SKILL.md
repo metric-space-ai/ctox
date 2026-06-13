@@ -10,10 +10,10 @@ cluster: mission_orchestration
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 ## Core Spawn Intervention Contract
 
@@ -21,12 +21,12 @@ When this skill is invoked because the Core Spawn Gate rejected a spawn or detec
 
 Allowed intervention effects:
 
-- block or cancel the rejected child queue/self-work item
+- block or cancel the rejected child queue item or internal work item
 - consolidate useful child evidence into the existing parent work item
 - release or requeue the existing parent item
 - mark redundant work terminal with a clear reason
 
-Do not run commands that create new queue tasks, ticket self-work, schedules, plans, or published spills while handling a Core Spawn Gate intervention. In particular, do not use `ctox queue spill --publish`, `ctox ticket self-work-put`, `ctox schedule ensure`, or `ctox plan ingest` for the intervention path. If new work seems necessary, block the current item with the reason and let the parent work item or operator decide.
+Do not run commands that create new queue tasks, ticket internal work, schedules, plans, or published spills while handling a Core Spawn Gate intervention. In particular, do not use `ctox queue spill --publish`, `ctox ticket internal-work-put`, `ctox schedule ensure`, or `ctox plan ingest` for the intervention path. If new work seems necessary, block the current item with the reason and let the parent work item or operator decide.
 
 
 Use this skill when CTOX is at risk of self-blocking because too much work is piling up in the queue or inbound routing path.
@@ -66,7 +66,7 @@ Use these tools directly:
 - `ctox queue release --message-key <key> --note <text>`
 - `ctox queue spill --message-key <key> [--ticket-system <name>] [--reason <text>] [--publish]`
 - `ctox queue restore --message-key <key> [--priority <urgent|high|normal|low>] [--note <text>]`
-- `ctox ticket self-work-show --work-id <id>`
+- `ctox ticket internal-work-show --work-id <id>`
 
 Harness signals to consult before acting:
 

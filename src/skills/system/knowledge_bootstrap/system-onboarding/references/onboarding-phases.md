@@ -13,7 +13,7 @@ Use when:
 CTOX behavior:
 - sync and inspect
 - build internal desk candidates
-- create only justified CTOX self-work
+- create only justified CTOX internal work
 - do not treat real ticket handling as autonomous work
 
 Visible guide meaning:

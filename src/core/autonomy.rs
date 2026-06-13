@@ -7,7 +7,7 @@
 //
 //  - `progressive` — execute aggressively; only stop for actions that
 //    would be genuinely irreversible outside the current run. Any
-//    approval-gate self-work item that does get created is auto-closed
+//    approval-gate internal work item that does get created is auto-closed
 //    so plans keep moving. Unattended service runs and on-the-fly
 //    smoke tests often use this level.
 //
@@ -68,7 +68,7 @@ impl AutonomyLevel {
         }
     }
 
-    /// Should any `approval-gate` self-work item that reaches `open`
+    /// Should any `approval-gate` internal work item that reaches `open`
     /// be auto-closed by the mission watcher? True only for the
     /// progressive level — balanced and defensive let the gate stand
     /// and rely on the reminder/approval handshake.
@@ -104,7 +104,7 @@ impl AutonomyLevel {
     pub fn runtime_policy_block(&self) -> &'static str {
         match self {
             Self::Progressive => {
-                "Autonomy policy: progressive. Execute directly. Do not create approval-gate self-work items as a way to defer a decision — the owner is not watching this run in real time and has accepted the risk profile. Escalate only for actions that would be genuinely irreversible outside this run (production data deletion, public broadcast, destructive external API calls)."
+                "Autonomy policy: progressive. Execute directly. Do not create approval-gate internal work items as a way to defer a decision — the owner is not watching this run in real time and has accepted the risk profile. Escalate only for actions that would be genuinely irreversible outside this run (production data deletion, public broadcast, destructive external API calls)."
             }
             Self::Balanced => {
                 "Autonomy policy: balanced. Routine work (code changes in development branches, local runs, analysis, internal artefacts) executes directly. Use approval-gate only for genuinely high-impact moves: production cutovers, destructive migrations, public-facing communication, irreversible external changes. A gate that turns out not to be high-impact is waste; an uncreated gate on something truly destructive is harm."
@@ -116,7 +116,7 @@ impl AutonomyLevel {
     }
 
     /// Short clause inserted into `render_step_prompt` to tune how
-    /// eagerly the agent creates approval-gate self-work items during
+    /// eagerly the agent creates approval-gate internal work items during
     /// the current plan step.
     pub fn step_prompt_clause(&self) -> &'static str {
         match self {

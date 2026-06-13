@@ -1366,6 +1366,10 @@ pub struct ConfigToml {
     pub personality: Option<Personality>,
 
     /// Optional explicit service tier preference for new turns (`fast` or `flex`).
+    #[serde(
+        default,
+        deserialize_with = "crate::config::types::deserialize_optional_service_tier"
+    )]
     pub service_tier: Option<ServiceTier>,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).

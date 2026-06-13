@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 use anyhow::Context;
+use base64::Engine;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -316,6 +317,7 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("repair") => handle_business_os_repair(root, &args[1..]),
         Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
+        Some("desktop") => handle_business_os_desktop(root, &args[1..]),
         Some("web-stack") => handle_business_os_web_stack(root, &args[1..]),
         Some("files") => handle_business_os_files(root, &args[1..]),
         Some("mcp") => handle_business_os_mcp(root, &args[1..]),
@@ -330,6 +332,100 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
             business_os_usage()
         ),
     }
+}
+
+fn handle_business_os_desktop(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("invite") => {
+            let invite = build_desktop_invite(root, args)?;
+            match flag_value(args, "--format").unwrap_or("json") {
+                "json" => {
+                    if let Some(output) =
+                        flag_value(args, "--output").or_else(|| flag_value(args, "-o"))
+                    {
+                        fs::write(output, serde_json::to_string_pretty(&invite)?).with_context(
+                            || format!("failed to write desktop invite to `{output}`"),
+                        )?;
+                        print_json(&serde_json::json!({
+                            "ok": true,
+                            "path": output,
+                            "type": "ctox-business-os-invite",
+                            "version": 1,
+                            "secret_value_in_payload": true,
+                        }))
+                    } else {
+                        print_json(&invite)
+                    }
+                }
+                "link" | "deep-link" => {
+                    let link = invite
+                        .get("desktop_link")
+                        .and_then(serde_json::Value::as_str)
+                        .context("desktop invite link is missing")?;
+                    if let Some(output) =
+                        flag_value(args, "--output").or_else(|| flag_value(args, "-o"))
+                    {
+                        fs::write(output, link).with_context(|| {
+                            format!("failed to write desktop invite link to `{output}`")
+                        })?;
+                        print_json(&serde_json::json!({
+                            "ok": true,
+                            "path": output,
+                            "format": "link",
+                            "secret_value_in_payload": true,
+                        }))
+                    } else {
+                        println!("{link}");
+                        Ok(())
+                    }
+                }
+                other => anyhow::bail!("unsupported desktop invite format `{other}`"),
+            }
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os desktop command `{other}`"),
+    }
+}
+
+fn build_desktop_invite(root: &Path, args: &[String]) -> anyhow::Result<serde_json::Value> {
+    let config = crate::business_os::store::sync_config(root)?;
+    let display_name = flag_value(args, "--display-name")
+        .or_else(|| flag_value(args, "--name"))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(config.instance_id.as_str());
+    let expires_at = flag_value(args, "--expires-at")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let ttl_hours = flag_value(args, "--ttl-hours")
+                .and_then(|value| value.parse::<i64>().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(168);
+            (chrono::Utc::now() + chrono::Duration::hours(ttl_hours))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        });
+    let mut invite = serde_json::json!({
+        "type": "ctox-business-os-invite",
+        "version": 1,
+        "display_name": display_name,
+        "instance_id": config.instance_id,
+        "sync_room": config.sync_room,
+        "signaling_urls": config.signaling_urls,
+        "signaling_room_password": config.signaling_room_password,
+        "transport": "webrtc",
+        "expires_at": expires_at,
+        "data_plane": "rxdb-webrtc",
+        "http_bridge_available": false,
+        "secret_value_in_payload": true,
+    });
+    let encoded =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&invite)?);
+    invite["desktop_link"] =
+        serde_json::Value::String(format!("ctox-business-os-desktop://pair?payload={encoded}"));
+    Ok(invite)
 }
 
 fn handle_business_os_repair(root: &Path, args: &[String]) -> anyhow::Result<()> {
@@ -1278,7 +1374,7 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -2041,6 +2137,83 @@ mod tests {
             Some("customers")
         );
         assert!(projection.get("OPENAI_API_KEY").is_none());
+    }
+
+    #[test]
+    fn desktop_invite_contract_matches_electron_pairing_schema() {
+        let root = tempfile::tempdir().expect("temp root");
+        let args = vec![
+            "invite".to_string(),
+            "--display-name".to_string(),
+            "Lab Instance".to_string(),
+            "--expires-at".to_string(),
+            "2099-01-01T00:00:00.000Z".to_string(),
+        ];
+        let invite = build_desktop_invite(root.path(), &args).expect("invite");
+
+        assert_eq!(
+            invite.get("type").and_then(serde_json::Value::as_str),
+            Some("ctox-business-os-invite")
+        );
+        assert_eq!(
+            invite.get("version").and_then(serde_json::Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(
+            invite
+                .get("display_name")
+                .and_then(serde_json::Value::as_str),
+            Some("Lab Instance")
+        );
+        assert_eq!(
+            invite.get("transport").and_then(serde_json::Value::as_str),
+            Some("webrtc")
+        );
+        assert_eq!(
+            invite.get("data_plane").and_then(serde_json::Value::as_str),
+            Some("rxdb-webrtc")
+        );
+        assert_eq!(
+            invite
+                .get("http_bridge_available")
+                .and_then(serde_json::Value::as_bool),
+            Some(false)
+        );
+        assert!(invite
+            .get("sync_room")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .starts_with("ctox-business-os:"));
+        assert!(invite
+            .get("signaling_urls")
+            .and_then(serde_json::Value::as_array)
+            .map(|urls| !urls.is_empty())
+            .unwrap_or(false));
+        assert!(!invite
+            .get("signaling_room_password")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .is_empty());
+
+        let desktop_link = invite
+            .get("desktop_link")
+            .and_then(serde_json::Value::as_str)
+            .expect("desktop link");
+        let payload = desktop_link
+            .strip_prefix("ctox-business-os-desktop://pair?payload=")
+            .expect("desktop invite link prefix");
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("decode payload");
+        let decoded_invite: serde_json::Value =
+            serde_json::from_slice(&decoded).expect("decoded invite json");
+        assert_eq!(
+            decoded_invite
+                .get("type")
+                .and_then(serde_json::Value::as_str),
+            Some("ctox-business-os-invite")
+        );
+        assert_eq!(decoded_invite.get("desktop_link"), None);
     }
 }
 

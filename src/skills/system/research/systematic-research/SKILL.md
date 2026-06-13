@@ -22,10 +22,10 @@ durable research — those vanish after the turn.
 - The Review Gate is a quality checkpoint, not a control loop. After review
   feedback, continue the same main work item whenever possible and
   incorporate the feedback there.
-- Every durable follow-up, queue item, plan emission, or self-work item
+- Every durable follow-up, queue item, plan emission, or internal work item
   must have a clear parent/anchor: message key, work id, thread key,
   ticket/case id, or plan step.
-- Before adding follow-up work, check existing self-work, queue, plan, and
+- Before adding follow-up work, check existing internal work, queue, plan, and
   ticket state and consolidate instead of duplicating.
 - Knowledge lookup is mandatory before every durable research output:
   run `ctox knowledge search --query "<task/topic>"` first. If the lookup
@@ -223,7 +223,7 @@ a serial sweep, not a single call:
    or by regime/region. Each facet is its own `ctox web deep-research`
    call. Run them **one after another in the same turn** — CTOX has no
    parallel sub-agents; decomposition is serial. If the sweep needs to
-   span turns, persist a self-work item and resume. Vary the query string
+   span turns, persist a internal work item and resume. Vary the query string
    between calls; re-issuing the same query just returns the same top hits.
 
 2. **Exclude what you already hold.** The source-catalog table you are
@@ -449,11 +449,11 @@ or both:
 If at the end of the turn the library still has known gaps (columns that
 should be filled but the source set did not cover them, sources that were
 identified but not yet read, derived rows that need replacement with
-measurements), persist exactly one self-work item in CTOX state pointing
+measurements), persist exactly one internal work item in CTOX state pointing
 at the table by `domain/table_key`. The next turn picks it up.
 
 Likewise, if a decision-report run was started but is not yet at
-publish-ready quality, persist a self-work item anchored on the
+publish-ready quality, persist a internal work item anchored on the
 `run_id`. Workspace-only notes about open work do not count.
 
 ## Scope reminder

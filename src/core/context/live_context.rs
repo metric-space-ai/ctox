@@ -463,7 +463,7 @@ pub(crate) fn render_chat_prompt(
 }
 
 /// Runtime block injected into every chat turn to tell the model how
-/// eagerly it should escalate decisions via approval-gate self-work
+/// eagerly it should escalate decisions via approval-gate internal work
 /// items. The text varies with `CTOX_AUTONOMY_LEVEL` (progressive /
 /// balanced / defensive); the service propagates that variable from
 /// the persisted runtime config at boot.
@@ -656,7 +656,7 @@ fn render_execution_contract_block(
         );
     } else {
         lines.push(
-            "- If work remains, create exactly one open CTOX plan, queue item, self-work item, follow-up, or schedule before you finish."
+            "- If work remains, create exactly one open CTOX plan, queue item, internal work item, follow-up, or schedule before you finish."
                 .to_string(),
         );
     }
@@ -1406,6 +1406,10 @@ fn render_workflow_state_block(root: &Path, context: &MissionContext) -> Result<
         unavailable_sources.push("tickets");
         Vec::new()
     });
+    let ticket_workflows = tickets::workflow_prompt_block(root, 5).unwrap_or_else(|_| {
+        unavailable_sources.push("ticket_workflows");
+        Some("ticket_workflows: unavailable".to_string())
+    });
     if !unavailable_sources.is_empty() {
         lines.push(format!(
             "workflow_state_unavailable: {} (treat open work as unknown for these sources; do not create new work items to compensate)",
@@ -1562,6 +1566,9 @@ fn render_workflow_state_block(root: &Path, context: &MissionContext) -> Result<
             lines.push(format!("  autonomy: {}", case.autonomy_level));
             lines.push(format!("  risk: {}", case.risk_level));
         }
+    }
+    if let Some(block) = ticket_workflows {
+        lines.push(block);
     }
     if matched_schedules.is_empty() {
         lines.push("schedule_items: []".to_string());

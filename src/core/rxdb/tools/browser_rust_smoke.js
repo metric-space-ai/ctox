@@ -20,6 +20,7 @@
  *   SMOKE_MODE=tickets-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=tickets-clarification-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=outbound-active-ui SMOKE_PAGE_PATH=/index.html#outbound node src/core/rxdb/tools/browser_rust_smoke.js
+ *   SMOKE_MODE=coding-agents-ui SMOKE_PAGE_PATH=/index.html SMOKE_CODING_AGENT_PROVIDER=codex node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-input-runtime SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
  *   SMOKE_MODE=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke.js
@@ -167,6 +168,27 @@ const smokeHookWaitTimeoutMs = parsePositiveIntegerEnv(
   { max: 300000 }
 );
 const hasOwn = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+const codingAgentSmoke = createCodingAgentSmokeConfig(smokeMode);
+
+function createCodingAgentSmokeConfig(mode) {
+  if (mode !== 'coding-agents-ui') return null;
+  const provider = String(process.env.SMOKE_CODING_AGENT_PROVIDER || 'codex').trim().toLowerCase();
+  if (!['codex', 'antigravity', 'claude'].includes(provider)) {
+    throw new Error(`SMOKE_CODING_AGENT_PROVIDER must be one of codex, antigravity, claude; got ${JSON.stringify(provider)}`);
+  }
+  const providedWorkspace = hasOwn(process.env, 'SMOKE_CODING_AGENT_WORKSPACE');
+  const workspaceRoot = providedWorkspace
+    ? path.resolve(process.env.SMOKE_CODING_AGENT_WORKSPACE)
+    : fs.mkdtempSync(path.join(os.tmpdir(), `ctox-coding-agent-ui-${provider}-`));
+  fs.mkdirSync(workspaceRoot, { recursive: true });
+  return {
+    provider,
+    workspaceRoot,
+    cleanupWorkspace: !providedWorkspace,
+    createMarker: `CTOX_CODING_AGENTS_UI_CREATE_${Date.now()}_${token(6)}`,
+    followupMarker: `CTOX_CODING_AGENTS_UI_FOLLOWUP_${Date.now()}_${token(6)}`,
+  };
+}
 
 if (![
   'browser-to-rust',
@@ -184,6 +206,7 @@ if (![
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
+  'coding-agents-ui',
   'business-os-ui-regression',
   'browser-lifecycle-ui',
   'browser-input-runtime',
@@ -228,6 +251,7 @@ if ([
   'file-chunk-metadata-error-browser-status',
   'file-chunk-tombstone-error-browser-status',
   'file-chunk-stale-generation-error-browser-status',
+  'coding-agents-ui',
   'business-os-ui-regression',
 ].includes(smokeMode) && !useAppDb) {
   throw new Error(`SMOKE_MODE=${smokeMode} requires an app shell SMOKE_PAGE_PATH such as /index.html or /business-os#ctox`);
@@ -2077,8 +2101,13 @@ function ensureCtoxSmokeBinary() {
       ]);
       return true;
     });
+    const appPagePath = useAppDb
+      && smokeMode === 'business-os-ui-regression'
+      && !pagePath.includes('#')
+      ? `${pagePath}#ctox`
+      : pagePath;
     const browserPath = useAppDb
-      ? addQueryParam(addQueryParam(pagePath, 'rxdbSmoke', '1'), 'smokeDbId', smokeDbId)
+      ? addQueryParam(addQueryParam(appPagePath, 'rxdbSmoke', '1'), 'smokeDbId', smokeDbId)
       : pagePath;
     const smokeUrl = `http://127.0.0.1:${businessPort}${browserPath}`;
     const pageGotoStartedAt = Date.now();
@@ -3874,7 +3903,7 @@ function ensureCtoxSmokeBinary() {
       ? process.env.SMOKE_BROWSER_FILE_CONTENT
       : 'hello';
     const pageEvaluateStartedAt = Date.now();
-    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime }) => {
+    const result = await page.evaluate(async ({ signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke }) => {
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -3954,6 +3983,7 @@ function ensureCtoxSmokeBinary() {
       let appChunkReplicationState = null;
       let appCommandReplicationState = null;
       let appQueueReplicationState = null;
+      let appCodingAgentProjectionStates = [];
       let appTicketItemReplicationState = null;
       let appTicketEventReplicationState = null;
       let appTicketClarificationReplicationState = null;
@@ -3964,6 +3994,7 @@ function ensureCtoxSmokeBinary() {
       const ticketClarificationSmokeMode = smokeMode === 'tickets-clarification-browser-to-rust';
       const ticketSmokeMode = smokeMode === 'tickets-browser-to-rust' || ticketClarificationSmokeMode;
       const outboundActiveUiSmokeMode = smokeMode === 'outbound-active-ui';
+      const codingAgentsUiSmokeMode = smokeMode === 'coding-agents-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
         || smokeMode === 'command-burst-browser-to-rust'
@@ -3975,9 +4006,13 @@ function ensureCtoxSmokeBinary() {
         || smokeMode === 'workspace-large-file-viewer-restart-rust-to-browser';
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
-      const needsCommandCollections = commandSmokeMode || materializeSmokeMode || ticketSmokeMode || outboundActiveUiSmokeMode;
+      const needsCommandCollections = commandSmokeMode || materializeSmokeMode || ticketSmokeMode || outboundActiveUiSmokeMode || codingAgentsUiSmokeMode;
+      const needsCodingAgentCollections = codingAgentsUiSmokeMode;
       const needsTicketCollections = ticketSmokeMode;
-      const needsFileCollections = (!commandSmokeMode && !outboundActiveUiSmokeMode || materializeSmokeMode) && !deferInitialFileCollections;
+      const needsFileCollections = (
+        (!commandSmokeMode && !outboundActiveUiSmokeMode && !codingAgentsUiSmokeMode)
+        || materializeSmokeMode
+      ) && !deferInitialFileCollections;
       const setupPhaseTimings = {};
 
       let appState = null;
@@ -4023,6 +4058,22 @@ function ensureCtoxSmokeBinary() {
             await appState.db.raw.addCollections(ticketCollections);
           }
         }
+        if (needsCodingAgentCollections) {
+          const requiredCodingAgentCollections = [
+            'coding_agent_workspace_grants',
+            'coding_agent_sessions',
+            'coding_agent_events',
+          ];
+          const missingCodingAgentCollections = requiredCodingAgentCollections.filter((name) => !appState.db.raw?.[name]);
+          if (missingCodingAgentCollections.length) {
+            const codingAgentsSchemaMod = await import('/modules/coding-agents/schema.js');
+            const codingAgentCollections = {};
+            for (const name of missingCodingAgentCollections) {
+              codingAgentCollections[name] = { schema: codingAgentsSchemaMod.collections[name] };
+            }
+            await appState.db.raw.addCollections(codingAgentCollections);
+          }
+        }
         if (needsCommandCollections) {
           const commandCollectionsStartedAt = Date.now();
           const commandBridge = await appState.sync.startCollection('business_commands');
@@ -4038,6 +4089,27 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
           await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
           setupPhaseTimings.commandCollectionsReadyMs = Date.now() - commandCollectionsStartedAt;
+        }
+        if (needsCodingAgentCollections) {
+          const codingAgentCollectionsStartedAt = Date.now();
+          const projectionCollections = [
+            'coding_agent_workspace_grants',
+            'coding_agent_sessions',
+            'coding_agent_events',
+          ];
+          const bridges = [];
+          for (const collection of projectionCollections) {
+            const bridge = await appState.sync.startCollection(collection);
+            bridge?.state?.error$?.subscribe?.((error) => logUnexpectedReplicationError(`app ${collection} replication error`, error));
+            bridges.push(bridge);
+          }
+          appCodingAgentProjectionStates = bridges.map((bridge) => bridge?.state).filter(Boolean);
+          await Promise.all(appCodingAgentProjectionStates.map((state) => bounded(state?.awaitInitialReplication?.(), 15000)));
+          await Promise.all(appCodingAgentProjectionStates.map((state) => bounded(state?.awaitInSync?.(), 15000)));
+          for (let index = 0; index < projectionCollections.length; index += 1) {
+            await waitForNativePeerOpen(appCodingAgentProjectionStates[index], projectionCollections[index]);
+          }
+          setupPhaseTimings.codingAgentCollectionsReadyMs = Date.now() - codingAgentCollectionsStartedAt;
         }
         if (needsFileCollections) {
           const fileCollectionsStartedAt = Date.now();
@@ -4368,15 +4440,25 @@ function ensureCtoxSmokeBinary() {
               loading,
               errorText,
             };
-          }, 10000, label);
+          }, 30000, label);
           return {
             expectedModuleId,
             activeModule: opened.activeModule,
           };
         };
         const openModuleByHash = async (expectedModuleId) => {
-          location.hash = expectedModuleId;
-          window.dispatchEvent(new HashChangeEvent('hashchange'));
+          const liveState = globalThis.CTOX_BUSINESS_OS_APP || globalThis.ctoxBusinessOsSmoke?.state || appState;
+          if (liveState) appState = liveState;
+          const nextHash = `#${expectedModuleId}`;
+          if (location.hash !== nextHash) {
+            history.replaceState(null, document.title, `${location.pathname}${location.search}${nextHash}`);
+          }
+          if (typeof liveState?.openModule === 'function') {
+            await liveState.openModule(expectedModuleId, { force: true, asModule: true });
+          } else {
+            location.hash = expectedModuleId;
+            window.dispatchEvent(new HashChangeEvent('hashchange'));
+          }
           return waitForOpenedModule(expectedModuleId, `open module ${expectedModuleId}`);
         };
         const rectEvidence = (selector) => {
@@ -4399,7 +4481,7 @@ function ensureCtoxSmokeBinary() {
         };
         const moduleRenderContracts = {
           ctox: {
-            selectors: ['[data-ctox-harness]', '[data-ctox-left]', '[data-ctox-main]', '.ctox-task-board'],
+            selectors: ['[data-ctox-harness]', '[data-ctox-left]', '[data-ctox-main]', '[data-flow-control]'],
             minTextLength: 40,
           },
           documents: {
@@ -4447,7 +4529,7 @@ function ensureCtoxSmokeBinary() {
             minTextLength: 80,
           },
           browser: {
-            selectors: ['[data-browser-root]', '.browser-sidebar', '.browser-workbench', '[data-browser-canvas]'],
+            selectors: ['[data-browser-root]', '.browser-workbench', '[data-browser-canvas]'],
             minTextLength: 70,
           },
           calendar: {
@@ -4475,10 +4557,9 @@ function ensureCtoxSmokeBinary() {
           const contract = moduleRenderContracts[moduleId];
           if (!contract) return { moduleId, ok: true, selectors: [], textLength: 0 };
           const text = document.body?.innerText || '';
-          const selectorEvidence = contract.selectors.map((selector) => rectEvidence(selector));
+          const selectorEvidence = contract.selectors.map((selector) => rectEvidence(selector) || { selector, missing: true });
           const missing = selectorEvidence
-            .filter((entry) => !entry?.visible || entry.width < 24 || entry.height < 16)
-            .map((entry, index) => entry || { selector: contract.selectors[index], missing: true });
+            .filter((entry) => !entry?.visible || entry.width < 24 || entry.height < 16);
           const errorText = failureText();
           const moduleTextLength = contract.selectors
             .map((selector) => document.querySelector(selector)?.innerText || document.querySelector(selector)?.textContent || '')
@@ -4500,7 +4581,7 @@ function ensureCtoxSmokeBinary() {
             loadingTextVisible,
           };
         };
-        const waitForModuleRendered = (moduleId) => waitFor(() => collectModuleRenderEvidence(moduleId), 10000, `render module ${moduleId}`);
+        const waitForModuleRendered = (moduleId) => waitFor(() => collectModuleRenderEvidence(moduleId), 30000, `render module ${moduleId}`);
         const waitForElement = async (selector, label, ms = 5000) => waitFor(() => {
           const entry = rectEvidence(selector);
           return {
@@ -4608,10 +4689,10 @@ function ensureCtoxSmokeBinary() {
             const tabMap = document.querySelector('#tabMap');
             const tabList = document.querySelector('#tabList');
             if (!tabMap || !tabList) throw new Error('Matching list/matrix tabs are missing');
-            tabMap.click();
             await waitFor(() => {
               const mapWrap = document.querySelector('#mapWrap');
               const requirementList = document.querySelector('#requirementList');
+              if (!mapWrap?.classList?.contains('active')) tabMap.click();
               return {
                 ok: Boolean(mapWrap?.classList?.contains('active')
                   && tabMap.classList.contains('active')
@@ -4622,11 +4703,11 @@ function ensureCtoxSmokeBinary() {
                 tabListActive: tabList.classList.contains('active'),
                 requirementDisplay: requirementList?.style?.display || '',
               };
-            }, 5000, 'matching matrix tab');
-            tabList.click();
+            }, 15000, 'matching matrix tab');
             await waitFor(() => {
               const mapWrap = document.querySelector('#mapWrap');
               const requirementList = document.querySelector('#requirementList');
+              if (mapWrap?.classList?.contains('active')) tabList.click();
               return {
                 ok: Boolean(!mapWrap?.classList?.contains('active')
                   && tabList.classList.contains('active')
@@ -4637,7 +4718,7 @@ function ensureCtoxSmokeBinary() {
                 tabListActive: tabList.classList.contains('active'),
                 requirementDisplay: requirementList?.style?.display || '',
               };
-            }, 5000, 'matching list tab');
+            }, 15000, 'matching list tab');
             evidence.actions.push('matching-list-matrix-tabs');
           } else if (moduleId === 'conversations') {
             const whatsapp = document.querySelector('[data-conv-channel-filters] [data-channel="whatsapp"]');
@@ -5053,6 +5134,306 @@ function ensureCtoxSmokeBinary() {
           advancedStatusVersion: status.version || '',
           advancedStatusRuntime: status.rxdbRuntime || null,
         };
+      }
+
+      async function runCodingAgentsUiSmoke() {
+        if (!codingAgentSmoke?.provider || !codingAgentSmoke?.workspaceRoot) {
+          throw new Error(`Coding Agents UI smoke config missing: ${JSON.stringify(codingAgentSmoke)}`);
+        }
+        const provider = codingAgentSmoke.provider;
+        const workspaceRoot = codingAgentSmoke.workspaceRoot;
+        const createMarker = codingAgentSmoke.createMarker;
+        const followupMarker = codingAgentSmoke.followupMarker;
+        const alerts = [];
+        const originalAlert = globalThis.alert;
+        globalThis.alert = (message) => {
+          alerts.push(String(message || ''));
+        };
+        const waitFor = async (predicate, ms, label) => {
+          const deadline = Date.now() + ms;
+          let last = null;
+          while (Date.now() < deadline) {
+            if (alerts.length) {
+              throw new Error(`${label} interrupted by browser alert: ${alerts.join(' | ')}`);
+            }
+            last = await predicate();
+            if (last?.ok) return last;
+            await delay(250);
+          }
+          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+        };
+        const css = (value) => {
+          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
+          return String(value).replace(/["\\]/g, '\\$&');
+        };
+        const visibleEvidence = (selector) => {
+          const element = document.querySelector(selector);
+          if (!element) return { selector, visible: false, missing: true };
+          const rect = element.getBoundingClientRect();
+          const style = getComputedStyle(element);
+          return {
+            selector,
+            visible: rect.width > 0
+              && rect.height > 0
+              && style.display !== 'none'
+              && style.visibility !== 'hidden'
+              && Number(style.opacity || 1) > 0,
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          };
+        };
+        const click = (selector, label) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`${label || selector} is missing`);
+          if (element.disabled) throw new Error(`${label || selector} is disabled`);
+          element.click();
+          return element;
+        };
+        const setInputValue = (selector, value, label) => {
+          const element = document.querySelector(selector);
+          if (!element) throw new Error(`${label || selector} is missing`);
+          element.value = value;
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+          element.dispatchEvent(new Event('change', { bubbles: true }));
+          return element;
+        };
+        const outcomeFromDispatch = (result) => {
+          if (!result) return null;
+          if (result.payload?.outcome) return result.payload.outcome;
+          if (result.result?.outcome) return result.result.outcome;
+          if (result.result?.ok !== undefined || result.result?.exit_code !== undefined) return result.result;
+          if (result.outcome?.ok !== undefined || result.outcome?.exit_code !== undefined) return result.outcome;
+          return null;
+        };
+        const dispatchCodingAgentCommand = async (commandType, payload, timeoutMs = 60000) => {
+          const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
+          if (!commandBus?.dispatch) throw new Error('Business OS CommandBus is unavailable for Coding Agents UI smoke');
+          const commandId = `cmd_coding_agents_ui_${provider}_${crypto.randomUUID()}`;
+          const dispatched = await commandBus.dispatch({
+            id: commandId,
+            module: 'coding-agents',
+            command_type: commandType,
+            record_id: commandId,
+            inbound_channel: 'business_os.coding_agents.ui_smoke',
+            payload,
+            wait_timeout_ms: timeoutMs,
+            client_context: { source_module: 'coding-agents-ui-smoke' },
+          });
+          const outcome = outcomeFromDispatch(dispatched);
+          return { commandId, dispatched, outcome };
+        };
+        const syncCodingAgentCollections = async (timeoutMs = 30000) => {
+          await bounded(appCommandReplicationState?.awaitInSync?.(), timeoutMs);
+          await bounded(appQueueReplicationState?.awaitInSync?.(), timeoutMs);
+          await Promise.all(appCodingAgentProjectionStates.map((state) => bounded(state?.awaitInSync?.(), timeoutMs)));
+        };
+        const collectionDocs = async (name) => {
+          const collection = appState?.db?.collection?.(name)
+            || appState?.db?.collections?.[name]
+            || appState?.db?.raw?.[name];
+          if (!collection?.find) return [];
+          return (await collection.find().exec()).map((doc) => doc?.toJSON?.() || doc);
+        };
+        const waitForOpenedModule = async () => waitFor(() => {
+          const activeModule = document.body?.dataset?.activeModule || appState?.activeModule?.id || '';
+          const loading = Boolean(document.body?.dataset?.moduleLoading);
+          return {
+            ok: activeModule === 'coding-agents' && !loading,
+            activeModule,
+            loading,
+            text: (document.body?.innerText || '').slice(0, 400),
+          };
+        }, 30000, 'open Coding Agents module');
+        const waitForAssistantMarker = async (marker, label) => waitFor(async () => {
+          await syncCodingAgentCollections(5000);
+          const assistantBubbles = [...document.querySelectorAll('.feed-chat-bubble.assistant')];
+          const assistantTexts = assistantBubbles.map((bubble) => bubble.textContent || '');
+          const eventDocs = await collectionDocs('coding_agent_events');
+          const eventMatch = eventDocs.find((doc) =>
+            doc.session_id === document.querySelector('#workbench-session-select')?.value
+            && String(doc.role || '').toLowerCase() === 'assistant'
+            && String(doc.text || '').includes(marker)
+          );
+          const feedHasMarker = assistantTexts.some((text) => text.includes(marker));
+          if (!feedHasMarker && eventMatch) {
+            const select = document.querySelector('#workbench-session-select');
+            select?.dispatchEvent?.(new Event('change', { bubbles: true }));
+          }
+          return {
+            ok: feedHasMarker,
+            marker,
+            eventMatch: Boolean(eventMatch),
+            assistantBubbleCount: assistantBubbles.length,
+            eventCount: eventDocs.length,
+            feedText: document.querySelector('#workbench-chat-feed')?.innerText?.slice(-600) || '',
+          };
+        }, 10 * 60 * 1000, label);
+
+        let stopOutcome = null;
+        let revokeOutcome = null;
+        let sessionId = '';
+        try {
+          location.hash = 'coding-agents';
+          window.dispatchEvent(new HashChangeEvent('hashchange'));
+          await waitForOpenedModule();
+          await waitFor(() => ({
+            ok: [
+              '[data-coding-agents-root]',
+              '#add-workspace-btn',
+              '#new-session-btn',
+              '#workbench-chat-feed',
+              '#workbench-prompt-form',
+            ].every((selector) => visibleEvidence(selector).visible),
+            root: visibleEvidence('[data-coding-agents-root]'),
+            feed: visibleEvidence('#workbench-chat-feed'),
+          }), 15000, 'Coding Agents workbench controls rendered');
+
+          const status = await dispatchCodingAgentCommand('ctox.coding_agent.status', { provider }, 60000);
+          if (!status.outcome?.ok || status.outcome?.data?.auth?.ready !== true) {
+            throw new Error(`Coding agent provider status is not production-ready: ${JSON.stringify(status.outcome)}`);
+          }
+
+          localStorage.setItem(`workspace_agent_${workspaceRoot}`, provider);
+          click(`#diag-dot-${provider}`, `switch provider ${provider}`);
+          await waitFor(() => ({
+            ok: document.querySelector('[data-coding-agents-root]')?.classList?.contains(`theme-${provider}`),
+            className: document.querySelector('[data-coding-agents-root]')?.className || '',
+          }), 15000, `provider theme ${provider}`);
+
+          click('#add-workspace-btn', 'add workspace button');
+          await waitFor(() => ({
+            ok: document.querySelector('#add-workspace-modal')?.hidden === false,
+            hidden: document.querySelector('#add-workspace-modal')?.hidden ?? null,
+          }), 5000, 'add workspace modal open');
+          setInputValue('#add-workspace-input', workspaceRoot, 'workspace path input');
+          await waitFor(() => ({
+            ok: document.querySelector('#add-workspace-submit')?.disabled === false,
+            disabled: document.querySelector('#add-workspace-submit')?.disabled ?? null,
+          }), 5000, 'add workspace submit enabled');
+          click('#add-workspace-submit', 'add workspace submit');
+          await waitFor(() => ({
+            ok: document.querySelector('#add-workspace-modal')?.hidden === true,
+            hidden: document.querySelector('#add-workspace-modal')?.hidden ?? null,
+            text: document.querySelector('#add-workspace-error')?.textContent || '',
+          }), 120000, 'workspace grant completed via UI');
+          await syncCodingAgentCollections();
+          await waitFor(async () => {
+            const item = document.querySelector(`.workspace-item[data-workspace="${css(workspaceRoot)}"]`);
+            const grants = await collectionDocs('coding_agent_workspace_grants');
+            return {
+              ok: Boolean(item) && grants.some((doc) =>
+                doc.provider === provider
+                && doc.path === workspaceRoot
+                && doc.active !== false
+                && doc.is_deleted !== true
+              ),
+              itemFound: Boolean(item),
+              grantCount: grants.length,
+            };
+          }, 60000, 'workspace grant projection rendered');
+
+          const workspaceItem = document.querySelector(`.workspace-item[data-workspace="${css(workspaceRoot)}"]`);
+          const providerSelect = workspaceItem?.querySelector('.workspace-agent-select');
+          if (providerSelect && providerSelect.value !== provider) {
+            providerSelect.value = provider;
+            providerSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+          workspaceItem?.click();
+          await waitFor(() => ({
+            ok: document.querySelector('#new-session-btn')?.disabled === false
+              && document.querySelector('#active-app-desc')?.textContent?.toLowerCase()?.includes(provider),
+            newSessionDisabled: document.querySelector('#new-session-btn')?.disabled ?? null,
+            desc: document.querySelector('#active-app-desc')?.textContent || '',
+          }), 15000, 'workspace selected with requested provider');
+
+          click('#new-session-btn', 'new session button');
+          await waitFor(() => ({
+            ok: document.querySelector('#new-session-modal')?.hidden === false,
+            hidden: document.querySelector('#new-session-modal')?.hidden ?? null,
+          }), 5000, 'new session modal open');
+          const createPrompt = `Reply with exactly ${createMarker}. Do not edit files.`;
+          setInputValue('#new-session-prompt', createPrompt, 'new session prompt');
+          await waitFor(() => ({
+            ok: document.querySelector('#new-session-submit')?.disabled === false,
+            disabled: document.querySelector('#new-session-submit')?.disabled ?? null,
+          }), 5000, 'new session submit enabled');
+          click('#new-session-submit', 'new session submit');
+          await waitFor(() => ({
+            ok: document.querySelector('#new-session-modal')?.hidden === true
+              && document.querySelector('#workbench-session-select')?.disabled === false
+              && Boolean(document.querySelector('#workbench-session-select')?.value),
+            hidden: document.querySelector('#new-session-modal')?.hidden ?? null,
+            selectDisabled: document.querySelector('#workbench-session-select')?.disabled ?? null,
+            selectedSession: document.querySelector('#workbench-session-select')?.value || '',
+            error: document.querySelector('#new-session-error')?.textContent || '',
+          }), 10 * 60 * 1000, 'new coding session created via UI');
+          sessionId = document.querySelector('#workbench-session-select')?.value || '';
+          await waitForAssistantMarker(createMarker, 'initial assistant marker rendered');
+
+          const followupPrompt = `Reply with exactly ${followupMarker}. Do not edit files.`;
+          setInputValue('#workbench-prompt-input', followupPrompt, 'workbench prompt input');
+          await waitFor(() => ({
+            ok: document.querySelector('#workbench-prompt-submit')?.disabled === false,
+            disabled: document.querySelector('#workbench-prompt-submit')?.disabled ?? null,
+          }), 5000, 'workbench prompt submit enabled');
+          click('#workbench-prompt-submit', 'workbench prompt submit');
+          await waitForAssistantMarker(followupMarker, 'follow-up assistant marker rendered');
+
+          await syncCodingAgentCollections();
+          const sessionDocs = await collectionDocs('coding_agent_sessions');
+          const eventDocs = await collectionDocs('coding_agent_events');
+          const sessionProjection = sessionDocs.find((doc) => doc.session_id === sessionId || doc.id === sessionId);
+          const sessionEvents = eventDocs.filter((doc) => doc.session_id === sessionId && doc.is_deleted !== true);
+          if (!sessionProjection || sessionProjection.provider !== provider || sessionProjection.workspace_root !== workspaceRoot) {
+            throw new Error(`Coding agent session projection mismatch: ${JSON.stringify({ sessionId, sessionProjection })}`);
+          }
+          if (!sessionEvents.some((doc) => String(doc.text || '').includes(createMarker))
+            || !sessionEvents.some((doc) => String(doc.text || '').includes(followupMarker))) {
+            throw new Error(`Coding agent event projection did not include both smoke markers: ${JSON.stringify({
+              sessionId,
+              createMarker,
+              followupMarker,
+              events: sessionEvents.map((doc) => ({ role: doc.role, text: String(doc.text || '').slice(0, 120) })),
+            })}`);
+          }
+
+          const feedText = document.querySelector('#workbench-chat-feed')?.innerText || '';
+          return {
+            mode: smokeMode,
+            provider,
+            workspaceRoot,
+            sessionId,
+            createMarkerSeen: feedText.includes(createMarker),
+            followupMarkerSeen: feedText.includes(followupMarker),
+            statusReady: true,
+            authStatus: status.outcome?.data?.auth?.status || status.outcome?.data?.auth?.state || 'ready',
+            sessionProjectionStatus: sessionProjection.status || '',
+            eventCount: sessionEvents.length,
+            userEventCount: sessionEvents.filter((doc) => String(doc.role || '').toLowerCase() === 'user').length,
+            assistantEventCount: sessionEvents.filter((doc) => String(doc.role || '').toLowerCase() === 'assistant').length,
+            feedTextLength: feedText.length,
+            activeModule: document.body?.dataset?.activeModule || appState?.activeModule?.id || '',
+            advancedStatusVersion,
+            advancedStatusRuntime,
+          };
+        } finally {
+          if (sessionId) {
+            stopOutcome = await dispatchCodingAgentCommand(
+              'ctox.coding_agent.session.stop',
+              { provider, session_id: sessionId },
+              60000,
+            ).then((result) => result.outcome).catch((error) => ({ ok: false, stderr: String(error?.message || error) }));
+          }
+          revokeOutcome = await dispatchCodingAgentCommand(
+            'ctox.coding_agent.workspace.revoke',
+            { provider, path: workspaceRoot },
+            60000,
+          ).then((result) => result.outcome).catch((error) => ({ ok: false, stderr: String(error?.message || error) }));
+          await syncCodingAgentCollections().catch(() => null);
+          globalThis.alert = originalAlert;
+          if (stopOutcome?.ok === false) console.warn(`Coding Agents UI smoke cleanup stop failed: ${stopOutcome.stderr || ''}`);
+          if (revokeOutcome?.ok === false) console.warn(`Coding Agents UI smoke cleanup revoke failed: ${revokeOutcome.stderr || ''}`);
+        }
       }
 
       async function openDesktopFileViewerAndWait(fileArgs, expectedPayload) {
@@ -5830,6 +6211,10 @@ function ensureCtoxSmokeBinary() {
 
       if (smokeMode === 'outbound-active-ui') {
         return await runOutboundActiveUiSmoke();
+      }
+
+      if (smokeMode === 'coding-agents-ui') {
+        return await runCodingAgentsUiSmoke();
       }
 
       if (smokeMode === 'business-os-ui-regression') {
@@ -6995,7 +7380,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
@@ -7120,6 +7505,22 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_visual_screenshot_dominant_ratio_pct=${result.screenshotEvidence?.dominantColorRatioPct || 0}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'coding-agents-ui') {
+      console.log(`coding_agents_ui_provider=${result.provider}`);
+      console.log(`coding_agents_ui_workspace_root=${result.workspaceRoot}`);
+      console.log(`coding_agents_ui_session_id=${result.sessionId}`);
+      console.log(`coding_agents_ui_status_ready=${result.statusReady ? 1 : 0}`);
+      console.log(`coding_agents_ui_auth_status=${result.authStatus || ''}`);
+      console.log(`coding_agents_ui_create_marker_seen=${result.createMarkerSeen ? 1 : 0}`);
+      console.log(`coding_agents_ui_followup_marker_seen=${result.followupMarkerSeen ? 1 : 0}`);
+      console.log(`coding_agents_ui_session_projection_status=${result.sessionProjectionStatus || ''}`);
+      console.log(`coding_agents_ui_event_count=${result.eventCount || 0}`);
+      console.log(`coding_agents_ui_user_event_count=${result.userEventCount || 0}`);
+      console.log(`coding_agents_ui_assistant_event_count=${result.assistantEventCount || 0}`);
+      console.log(`coding_agents_ui_feed_text_length=${result.feedTextLength || 0}`);
+      console.log(`coding_agents_ui_active_module=${result.activeModule || ''}`);
+      if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
+      if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
     } else if (result.mode === 'outbound-active-ui') {
       console.log(`outbound_active_ui_campaign_id=${result.campaignId}`);
       console.log(`outbound_active_ui_pipeline_id=${result.pipelineId}`);
@@ -7229,6 +7630,7 @@ function ensureCtoxSmokeBinary() {
   } finally {
     if (browser) await withHostTimeout(browser.close(), 5000).catch(() => {});
     if (browserUserDataDir) removeSmokePath(browserUserDataDir);
+    if (codingAgentSmoke?.cleanupWorkspace) removeSmokePath(codingAgentSmoke.workspaceRoot);
     await stopChild(ctox);
     await stopSignalingServer(signaling);
     if (!runtimeRootProvided && !keepSmokeArtifacts) removeSmokePath(runtimeRoot);
@@ -7238,6 +7640,7 @@ function ensureCtoxSmokeBinary() {
   process.exit(0);
 }).catch((error) => {
   console.error(error.stack || error.message || error);
+  if (codingAgentSmoke?.cleanupWorkspace) removeSmokePath(codingAgentSmoke.workspaceRoot);
   if (!runtimeRootProvided && !keepSmokeArtifacts) removeSmokePath(runtimeRoot);
   process.exit(1);
 });

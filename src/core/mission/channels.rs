@@ -842,7 +842,7 @@ pub struct PipelineStatusReport {
     /// underlying schema.
     pub rework_iteration_count: i64,
     /// Most recent disposition the dispatcher chose. One of `Approved`,
-    /// `RewriteOnly`, `RequeueSelfWork`, `None`. Computed from the latest
+    /// `RewriteOnly`, `RequeueInternalWork`, `None`. Computed from the latest
     /// review run / mission status, so it stays accurate without an
     /// extra column.
     pub current_disposition: String,
@@ -1059,7 +1059,7 @@ pub(crate) fn pipeline_status(
     } else if rewrite_iteration_count > 0 {
         "RewriteOnly".to_string()
     } else if rework_iteration_count > 0 {
-        "RequeueSelfWork".to_string()
+        "RequeueInternalWork".to_string()
     } else {
         "None".to_string()
     };
@@ -3533,7 +3533,7 @@ fn enforce_external_work_ack_has_pipeline_backing(
         );
     }
     anyhow::bail!(
-        "outbound {} acknowledgement promises follow-up work but no durable queue, plan, or self-work item exists for thread `{}`. Create the pipeline item first, then send the acknowledgement.",
+        "outbound {} acknowledgement promises follow-up work but no durable queue item, plan, or internal work item exists for thread `{}`. Create the pipeline item first, then send the acknowledgement.",
         request.channel,
         request.thread_key
     )
@@ -10910,7 +10910,7 @@ mod tests {
         assert!(!report.founder_outbound_intent);
         assert_eq!(report.rewrite_iteration_count, 0);
         assert_eq!(report.rework_iteration_count, 1);
-        assert_eq!(report.current_disposition, "RequeueSelfWork");
+        assert_eq!(report.current_disposition, "RequeueInternalWork");
         assert!(
             report.strategic_directive_authority_events.is_empty(),
             "no strategic-directive authority events seeded → field must be empty"

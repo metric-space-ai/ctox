@@ -207,6 +207,108 @@ jobs:
           name: ctox-desktop-windows-x64
           path: ctox-desktop-windows-x64.msi
 
+  build-business-os-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            builderPlatform: mac
+            arch: arm64
+            artifact: ctox-business-os-desktop-macos-arm64
+          - os: macos-15-intel
+            builderPlatform: mac
+            arch: x64
+            artifact: ctox-business-os-desktop-macos-x64
+          - os: ubuntu-22.04
+            builderPlatform: linux
+            arch: x64
+            artifact: ctox-business-os-desktop-linux-x64
+          - os: windows-latest
+            builderPlatform: win
+            arch: x64
+            artifact: ctox-business-os-desktop-windows-x64
+
+    runs-on: ${{ matrix.os }}
+    name: Business OS Desktop — ${{ matrix.artifact }}
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/apps/business-os-desktop/package-lock.json
+
+      - name: Install Linux Electron dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 \
+            libnotify4 libxtst6 xdg-utils xvfb fakeroot rpm \
+            dbus-x11 gnome-keyring libsecret-tools
+
+      - name: Install dependencies
+        working-directory: src/apps/business-os-desktop
+        run: npm ci
+
+      - name: Unit and syntax checks
+        working-directory: src/apps/business-os-desktop
+        run: |
+          npm test
+          npm run check
+          npm run release:check
+
+      - name: Electron smokes
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run test:electron-smoke
+
+      - name: Electron smokes (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: xvfb-run -a npm run test:electron-smoke
+
+      - name: Platform keychain runtime smoke
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run smoke:keychain-runtime
+
+      - name: Platform keychain runtime smoke (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: |
+          dbus-run-session -- bash -lc '
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+            npm run smoke:keychain-runtime
+          '
+
+      - name: Build packaged app
+        working-directory: src/apps/business-os-desktop
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
+
+      - name: Signed macOS artifact smoke
+        if: runner.os == 'macOS'
+        working-directory: src/apps/business-os-desktop
+        run: npm run smoke:signed-artifacts -- --platform mac
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: src/apps/business-os-desktop/release/*
+          if-no-files-found: error
+
   build-ctox:
     strategy:
       fail-fast: false
@@ -319,7 +421,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build-desktop-macos, build-desktop-linux, build-desktop-windows, build-ctox]
+    needs: [build-desktop-macos, build-desktop-linux, build-desktop-windows, build-business-os-desktop, build-ctox]
     runs-on: ubuntu-latest
     name: Create GitHub Release
 

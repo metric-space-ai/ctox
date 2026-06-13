@@ -56,7 +56,7 @@ def close_legacy_guide(
         ctox_bin,
         [
             "ticket",
-            "self-work-transition",
+            "internal-work-transition",
             "--work-id",
             legacy_work_id,
             "--state",
@@ -127,12 +127,12 @@ def main() -> None:
     active_binding = next((b for b in bindings if b.get("status") == "active"), None)
     active_skill = active_binding.get("skill_name") if isinstance(active_binding, dict) else None
 
-    self_work = run_ctox(
+    internal_work = run_ctox(
         args.ctox_bin,
-        ["ticket", "self-work-list", "--system", args.system, "--limit", "200"],
+        ["ticket", "internal-work-list", "--system", args.system, "--limit", "200"],
         env_overrides,
     )
-    items = self_work.get("items", []) if isinstance(self_work, dict) else []
+    items = internal_work.get("items", []) if isinstance(internal_work, dict) else []
     onboarding_item = next(
         (
             item for item in items
@@ -194,7 +194,7 @@ def main() -> None:
             args.ctox_bin,
             [
                 "ticket",
-                "self-work-put",
+                "internal-work-put",
                 "--system",
                 args.system,
                 "--kind",
@@ -223,7 +223,7 @@ def main() -> None:
             try:
                 run_ctox(
                     args.ctox_bin,
-                    ["ticket", "self-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"],
+                    ["ticket", "internal-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"],
                     env_overrides,
                 )
             except subprocess.CalledProcessError:
@@ -232,7 +232,7 @@ def main() -> None:
             args.ctox_bin,
             [
                 "ticket",
-                "self-work-note",
+                "internal-work-note",
                 "--work-id",
                 work_id,
                 "--body",
@@ -257,7 +257,7 @@ def main() -> None:
                 work_id,
                 env_overrides,
             )
-    guide_state = run_ctox(args.ctox_bin, ["ticket", "self-work-show", "--work-id", work_id], env_overrides)
+    guide_state = run_ctox(args.ctox_bin, ["ticket", "internal-work-show", "--work-id", work_id], env_overrides)
     notes = guide_state.get("notes", []) if isinstance(guide_state, dict) else []
     previous_phase = (
         onboarding_item.get("metadata", {}).get("phase")
@@ -281,7 +281,7 @@ def main() -> None:
         args.ctox_bin,
         [
             "ticket",
-            "self-work-put",
+            "internal-work-put",
             "--system",
             args.system,
             "--kind",
@@ -301,7 +301,7 @@ def main() -> None:
         args.ctox_bin,
         [
             "ticket",
-            "self-work-note",
+            "internal-work-note",
             "--work-id",
             work_id,
             "--body",
@@ -318,7 +318,7 @@ def main() -> None:
             args.ctox_bin,
             [
                 "ticket",
-                "self-work-transition",
+                "internal-work-transition",
                 "--work-id",
                 work_id,
                 "--state",

@@ -140,6 +140,26 @@ const bankStatementLineSchema = {
   additionalProperties: true
 };
 
+const numberSeriesSchema = {
+  version: 0,
+  primaryKey: 'id',
+  type: 'object',
+  properties: {
+    id: { type: 'string', maxLength: 128 },
+    series_key: { type: 'string' },
+    fiscal_year: { type: 'number' },
+    prefix: { type: 'string' },
+    next_value: { type: 'number' },
+    last_issued_number: { type: 'string' },
+    gap_policy: { type: 'string' },
+    updated_by_command_id: { type: 'string' },
+    updated_at_ms: { type: 'number' },
+    payload: { type: 'object', additionalProperties: true }
+  },
+  required: ['id', 'series_key', 'fiscal_year', 'next_value', 'gap_policy', 'updated_at_ms'],
+  additionalProperties: true
+};
+
 export const collections = {
   accounting_accounts: accountSchema,
   accounting_journal_entries: journalEntrySchema,
@@ -147,7 +167,8 @@ export const collections = {
   accounting_ledger_entries: ledgerEntrySchema,
   accounting_receipts: receiptSchema,
   accounting_bank_statements: bankStatementSchema,
-  accounting_bank_statement_lines: bankStatementLineSchema
+  accounting_bank_statement_lines: bankStatementLineSchema,
+  accounting_number_series: numberSeriesSchema
 };
 
 export const migrationStrategies = {};

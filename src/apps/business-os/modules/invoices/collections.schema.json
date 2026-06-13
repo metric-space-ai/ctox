@@ -1,0 +1,1465 @@
+{
+  "collections": {
+    "accounting_accounts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_type": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_group": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "root_type": {
+          "type": "string"
+        },
+        "skr": {
+          "type": "string"
+        },
+        "tax_rate_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "name",
+        "root_type",
+        "account_type",
+        "is_group",
+        "skr",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_bank_statement_lines": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "counterparty_iban": {
+          "type": "string"
+        },
+        "counterparty_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "match_status": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "reconciled_entry_id": {
+          "type": "string"
+        },
+        "statement_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "value_date": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement_id",
+        "value_date",
+        "amount",
+        "narration",
+        "match_status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_credit_notes": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "corrective_invoice_number": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credit_note_invoice_id": {
+          "type": "string"
+        },
+        "delta_gross_cents": {
+          "type": "number"
+        },
+        "delta_net_cents": {
+          "type": "number"
+        },
+        "delta_tax_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reason_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "credit_note_invoice_id",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_dunning_letters": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id",
+        "dunning_run_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "dunning_run_id": {
+          "type": "string"
+        },
+        "fee_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "interest_cents": {
+          "type": "number"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "letter_date_ms": {
+          "type": "number"
+        },
+        "level": {
+          "type": "number"
+        },
+        "pdf_attachment_id": {
+          "type": "string"
+        },
+        "sent_at_ms": {
+          "type": "number"
+        },
+        "sent_via": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "total_cents": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "dunning_run_id",
+        "invoice_id",
+        "level",
+        "letter_date_ms",
+        "total_cents",
+        "status",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_dunning_runs": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoices_total": {
+          "type": "number"
+        },
+        "letters_sent": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "run_by": {
+          "type": "string"
+        },
+        "run_date_ms": {
+          "type": "number"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "run_date_ms",
+        "invoices_total",
+        "state",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoice_approvals": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "actor_user_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "revision_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "decision",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoice_attachments": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "desktop_file_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "kind",
+        "desktop_file_id",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoice_lines": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_code": {
+          "type": "string"
+        },
+        "article_number": {
+          "type": "string"
+        },
+        "cost_center_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "discount_percent": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "line_gross_cents": {
+          "type": "number"
+        },
+        "line_net_cents": {
+          "type": "number"
+        },
+        "line_tax_cents": {
+          "type": "number"
+        },
+        "position": {
+          "type": "number"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "service_period_end_ms": {
+          "type": "number"
+        },
+        "service_period_start_ms": {
+          "type": "number"
+        },
+        "tax_rate": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "unit_price_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "position",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoices": {
+      "additionalProperties": true,
+      "indexes": [
+        "party_id",
+        "state",
+        "invoice_date_ms",
+        "due_date_ms",
+        "invoice_number",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "approval_status": {
+          "type": "string"
+        },
+        "cancel_journal_entry_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credit_note_for_id": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "draft_status": {
+          "type": "string"
+        },
+        "due_date_ms": {
+          "type": "number"
+        },
+        "dunning_level": {
+          "type": "number"
+        },
+        "eu_ic_supply": {
+          "type": "boolean"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_date_ms": {
+          "type": "number"
+        },
+        "invoice_number": {
+          "type": "string"
+        },
+        "invoice_type": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_dunning_run_id": {
+          "type": "string"
+        },
+        "linked_invoice_id": {
+          "type": "string"
+        },
+        "open_cents": {
+          "type": "number"
+        },
+        "paid_cents": {
+          "type": "number"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "party_snapshot": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payment_terms_id": {
+          "type": "string"
+        },
+        "pdf_attachment_id": {
+          "type": "string"
+        },
+        "post_journal_entry_id": {
+          "type": "string"
+        },
+        "proposal_status": {
+          "type": "string"
+        },
+        "reverse_charge": {
+          "type": "boolean"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "service_period_end_ms": {
+          "type": "number"
+        },
+        "service_period_start_ms": {
+          "type": "number"
+        },
+        "skonto_days": {
+          "type": "number"
+        },
+        "skonto_percent": {
+          "type": "number"
+        },
+        "small_business": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "state_changed_at_ms": {
+          "type": "number"
+        },
+        "state_changed_by_command_id": {
+          "type": "string"
+        },
+        "subtotal_cents": {
+          "type": "number"
+        },
+        "tax_breakdown": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tax_cents": {
+          "type": "number"
+        },
+        "total_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "xrechnung_xml": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_type",
+        "state",
+        "currency",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_journal_entries": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "number": {
+          "type": "string"
+        },
+        "posted_at": {
+          "type": "number"
+        },
+        "posting_date": {
+          "type": "string"
+        },
+        "ref_id": {
+          "type": "string"
+        },
+        "ref_type": {
+          "type": "string"
+        },
+        "reversed_by_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "posting_date",
+        "type",
+        "number",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_journal_entry_lines": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credit": {
+          "type": "number"
+        },
+        "debit": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "journal_entry_id": {
+          "type": "string"
+        },
+        "line_no": {
+          "type": "number"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "tax_rate_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "journal_entry_id",
+        "account_id",
+        "debit",
+        "credit",
+        "line_no",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_ledger_entries": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credit": {
+          "type": "number"
+        },
+        "debit": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "journal_entry_id": {
+          "type": "string"
+        },
+        "journal_entry_line_id": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "posted_at": {
+          "type": "number"
+        },
+        "posting_date": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "journal_entry_line_id",
+        "journal_entry_id",
+        "posting_date",
+        "account_id",
+        "debit",
+        "credit",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_number_series": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "fiscal_year": {
+          "type": "number"
+        },
+        "gap_policy": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "last_issued_number": {
+          "type": "string"
+        },
+        "next_value": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "series_key": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "updated_by_command_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "series_key",
+        "fiscal_year",
+        "next_value",
+        "gap_policy",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_payment_allocations": {
+      "additionalProperties": true,
+      "indexes": [
+        "payment_id",
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "allocated_at_ms": {
+          "type": "number"
+        },
+        "allocated_by_command_id": {
+          "type": "string"
+        },
+        "allocated_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "payment_id": {
+          "type": "string"
+        },
+        "skonto_cents": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "payment_id",
+        "invoice_id",
+        "allocated_cents",
+        "allocated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_payment_terms": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_default": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "net_days": {
+          "type": "number"
+        },
+        "skonto_days": {
+          "type": "number"
+        },
+        "skonto_percent": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "net_days",
+        "is_default",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_payments": {
+      "additionalProperties": true,
+      "indexes": [
+        "party_id",
+        "payment_date_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "amount_cents": {
+          "type": "number"
+        },
+        "bank_statement_line_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payment_date_ms": {
+          "type": "number"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "payment_date_ms",
+        "amount_cents",
+        "currency",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_receipts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "file_storage_url": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "gross_amount": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "invoice_date": {
+          "type": "string"
+        },
+        "invoice_number": {
+          "type": "string"
+        },
+        "net_amount": {
+          "type": "number"
+        },
+        "ocr_raw": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "suggested_account_id": {
+          "type": "string"
+        },
+        "supplier_name": {
+          "type": "string"
+        },
+        "tax_amount": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vat_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "file_storage_url",
+        "filename",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_recurring_invoices": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "auto_send": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "end_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "interval_count": {
+          "type": "number"
+        },
+        "last_run_at_ms": {
+          "type": "number"
+        },
+        "next_run_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "start_at_ms": {
+          "type": "number"
+        },
+        "template_invoice_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "template_invoice_id",
+        "interval",
+        "interval_count",
+        "start_at_ms",
+        "auto_send",
+        "active",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_commands": {
+      "additionalProperties": true,
+      "indexes": [
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "client_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "inbound_channel": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "command_id",
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "customer_accounts": {
+      "additionalProperties": true,
+      "indexes": [
+        "domain",
+        "account_owner_id",
+        "account_status",
+        "customer_stage",
+        "health_status",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "account_owner_id",
+          "updated_at_ms"
+        ],
+        [
+          "customer_stage",
+          "updated_at_ms"
+        ],
+        [
+          "health_status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_owner_id": {
+          "type": "string"
+        },
+        "account_status": {
+          "type": "string"
+        },
+        "address": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "annual_recurring_revenue_cents": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "customer_stage": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "employee_count": {
+          "type": "number"
+        },
+        "health_status": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "ideal_customer_profile": {
+          "type": "boolean"
+        },
+        "industry": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_activity_at_ms": {
+          "type": "number"
+        },
+        "linkedin_url": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_action_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "website_url": {
+          "type": "string"
+        },
+        "x_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "account_status",
+        "customer_stage",
+        "health_status",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_activities": {
+      "additionalProperties": true,
+      "indexes": [
+        "activity_type",
+        "account_id",
+        "contact_id",
+        "opportunity_id",
+        "communication_message_key",
+        "happens_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "is_deleted",
+          "happens_at_ms"
+        ],
+        [
+          "account_id",
+          "happens_at_ms"
+        ],
+        [
+          "opportunity_id",
+          "happens_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "activity_type": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        },
+        "communication_message_key": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "happens_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "linked_record_id": {
+          "type": "string"
+        },
+        "linked_record_name": {
+          "type": "string"
+        },
+        "linked_record_type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "opportunity_id": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "happens_at_ms",
+        "activity_type",
+        "name",
+        "properties",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "desktop_file_chunks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "chunk_hash": {
+          "type": "string"
+        },
+        "chunk_hash_scheme": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "content_hash_scheme": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "generation_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "idx": {
+          "type": "number"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "file_id",
+        "idx",
+        "total",
+        "encoding",
+        "data",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "desktop_files": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "content_generation_id": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "content_hash_scheme": {
+          "type": "string"
+        },
+        "content_ref": {
+          "type": "string"
+        },
+        "content_state": {
+          "type": "string"
+        },
+        "content_synced_at_ms": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "extension": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "linked_collection": {
+          "type": "string"
+        },
+        "linked_record_id": {
+          "type": "string"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "mtime_ms": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "sort_index": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "virtual_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migration_strategies": {
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "module_id": "invoices",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

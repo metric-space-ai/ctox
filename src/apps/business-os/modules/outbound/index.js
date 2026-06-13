@@ -893,7 +893,9 @@ async function knowledgeCommand(args) {
       command_path: 'knowledge',
     },
   });
-  if (dispatched?.status && dispatched.status !== 'pending_sync') return dispatched;
+  if (dispatched?.status && dispatched.status !== 'pending_sync') {
+    return normalizeKnowledgeCommandResult(dispatched, commandId);
+  }
   const projection = await waitForBusinessCommandProjection(commandId, startedAtMs);
   if (!projection) {
     throw new Error(`Knowledge command ${commandId} was not acknowledged by the native RxDB peer`);
@@ -901,15 +903,26 @@ async function knowledgeCommand(args) {
   if (projection.status === 'failed') {
     throw new Error(projection.error || projection.result?.error || `Knowledge command ${commandId} failed`);
   }
-  return projection.result || projection;
+  return normalizeKnowledgeCommandResult(projection, commandId);
+}
+
+function normalizeKnowledgeCommandResult(value, commandId) {
+  const result = value?.result && typeof value.result === 'object' ? value.result : value;
+  if (result?.ok === false) {
+    throw new Error(result.error || `Knowledge command ${commandId} failed`);
+  }
+  return result || value;
 }
 
 async function ensureKnowledgeDataTable(refs, key, title, description) {
-  const describeArgs = ['data', 'describe', '--domain', refs.domain, '--key', key];
+  const listed = await knowledgeCommand(['data', 'list', '--domain', refs.domain, '--include-archived']);
+  const existing = (listed.tables || []).find((table) => table.table_key === key || table.key === key);
+  if (existing?.archived_at) {
+    return knowledgeCommand(['data', 'restore', '--domain', refs.domain, '--key', key]);
+  }
+  if (existing) return existing;
   try {
-    return await knowledgeCommand(describeArgs);
-  } catch (_) {
-    return knowledgeCommand([
+    return await knowledgeCommand([
       'data', 'create',
       '--domain', refs.domain,
       '--key', key,
@@ -917,6 +930,11 @@ async function ensureKnowledgeDataTable(refs, key, title, description) {
       '--title', title,
       '--description', description,
     ]);
+  } catch (error) {
+    if (String(error?.message || error).includes('already exists')) {
+      return knowledgeCommand(['data', 'describe', '--domain', refs.domain, '--key', key]);
+    }
+    throw error;
   }
 }
 

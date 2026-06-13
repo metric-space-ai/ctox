@@ -760,7 +760,10 @@
       "description": "Unified dashboard to manage, configure, license, and remotely run Antigravity, Claude, and Codex agents.",
       "entry": "modules/coding-agents/index.html",
       "collections": [
-        "business_commands"
+        "business_commands",
+        "coding_agent_workspace_grants",
+        "coding_agent_sessions",
+        "coding_agent_events"
       ],
       "source": "local",
       "core": false,
@@ -784,7 +787,7 @@
         "editable_after_install": true,
         "distribution": "catalog-module"
       },
-      "install_scope": "local",
+      "install_scope": "store",
       "default_installed": true
     },
     {

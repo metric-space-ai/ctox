@@ -789,7 +789,7 @@ fn validate_ticket_closure(
     {
         violations.push(violation(
             "closure_requires_verification",
-            "ticket/self-work closure requires durable verification evidence",
+            "ticket/internal-work closure requires durable verification evidence",
         ));
     }
 }

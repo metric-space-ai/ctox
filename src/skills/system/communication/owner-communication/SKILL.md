@@ -12,12 +12,12 @@ cluster: communication
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - If the task is supposed to produce a durable artifact, completion requires that artifact to exist in CTOX runtime state in its expected final state. For outbound email, that means an outbound email row exists with status `accepted`; prose claiming that a mail was sent is not evidence.
 - Do not report a communication task as finished until the communication store shows the required message state. If the send failed or no outbound row exists, keep the task open and report the blocker.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 Use this skill whenever CTOX needs to interpret, continue, or initiate communication with the owner.
@@ -211,7 +211,7 @@ Agent responsibilities for such a job:
 CTOX core does **not** scan the outbound body for "internal vocabulary" — body cleanliness is your responsibility. Treat the following categories as forbidden in any text that goes to a founder, owner, or admin recipient. The list is illustrative, not exhaustive: any term that exposes CTOX-internal mechanics belongs in the same bucket.
 
 - **Storage and runtime layout**: `sqlite`, `runtime/ctox.sqlite3`, `/home/...`, `runtime_env_kv`, host paths, VPS paths.
-- **Queue and orchestration internals**: `queue`, `queue:`, `self-work`, `mission-follow-up`, `lease_owner`, `route_status`, `thread_key`, `conversation_id`, `dedupe_key`, `claim_key`.
+- **Queue and orchestration internals**: `queue`, `queue:`, `internal work`, `mission-follow-up`, `lease_owner`, `route_status`, `thread_key`, `conversation_id`, `dedupe_key`, `claim_key`.
 - **Mission machinery and review pipeline names**: internal mission/review labels, runtime field names, approval keys, or queue labels.
 - **Tool / technical scaffolding**: `ctox channel send`, `ctox lcm-grep`, `governance::record_event`, table names, column names.
 - **Generic infrastructure naming that the recipient did not ask about**: "public server", "öffentlicher Link", QR-server URLs (`api.qrserver.com`), JSON shapes, headers, env keys.
@@ -224,7 +224,7 @@ If you cannot describe something to the founder without leaking internal vocabul
 
 - "über die TUI" / "via TUI" / "in der TUI"   → say "in einem Folge-Gespräch" or omit
 - "reviewed founder send Pfad" / "reviewed-founder-send" → say "über den freigegebenen, nachvollziehbaren Versandweg" or just omit
-- "queue", "pending", "leased", "self-work"   → these are runtime mechanics, not for mandantengerechtes Briefing
+- "queue", "pending", "leased", "internal work"   → these are runtime mechanics, not for mandantengerechtes Briefing
 - "runtime/ctox.sqlite3", "host-pfade", "VPS-Pfade", "conversation_id", "thread_key"  → never. Use "in unseren Unterlagen" / "im Vorgangs-Sicht-Stand"
 - "process-mining", "harness-mining", "review_disposition", "approval_key" → operator vocabulary; do not surface to recipients
 

@@ -53,7 +53,7 @@ const QUEUE_REPAIR_SYSTEM_PROMPT: &str = r#"You are CTOX Queue Repair.
 
 You run a dedicated external queue-repair pass.
 This is not normal execution. Gather facts yourself from the runtime SQLite store, queue state,
-self-work and ticket state, active strategic directives, founder or owner communication state,
+internal work and ticket state, active strategic directives, founder or owner communication state,
 review state, and service status.
 
 Use the queue-cleanup skill first and follow it.
@@ -1187,7 +1187,7 @@ Dry run: {}\n\
 {}\
 Open the queue cleanup skill first and follow it.\n\
 \n\
-Gather the queue-repair facts yourself from the runtime SQLite store, queue state, ticket/self-work state, active strategic directives, founder or owner communication threads, review findings, and service status.\n\
+Gather the queue-repair facts yourself from the runtime SQLite store, queue state, ticket/internal-work state, active strategic directives, founder or owner communication threads, review findings, and service status.\n\
 \n\
 Required work:\n\
 1. identify the canonical hot path that should survive\n\
@@ -1579,7 +1579,7 @@ fn spill_queue_task_to_ticket(
     let existing = load_queue_ticket_bridge(root, message_key)?;
     if let Some(existing) = existing.filter(|bridge| bridge.bridge_state == "spilled") {
         let ticket = tickets::load_ticket_self_work_item(root, &existing.work_id)?
-            .context("bridged ticket self-work item missing")?;
+            .context("bridged ticket internal work item missing")?;
         return Ok(QueueTicketBridgeView {
             message_key: existing.message_key,
             work_id: existing.work_id,
@@ -1785,11 +1785,11 @@ fn render_spill_restore_follow_up_prompt(
     reason: Option<&str>,
 ) -> String {
     let mut lines = vec![
-        "Restore the spilled queue task from internal ticket self-work when the queue is ready."
+        "Restore the spilled queue task from its internal ticket work item when the queue is ready."
             .to_string(),
         format!("Original queue task: {}", task.title.trim()),
         format!("Queue message key: {}", task.message_key),
-        format!("Ticket self-work id: {work_id}"),
+        format!("Ticket internal work id: {work_id}"),
         "Required actions:".to_string(),
         "- confirm the spill is still the right choice".to_string(),
         "- restore the original queue task with `ctox queue restore --message-key <key>`"

@@ -864,6 +864,7 @@ async function openBusinessDataPlane(syncConfig) {
     state.commandBus = createCommandBus({
       db: () => state.db,
       sync: () => state.sync,
+      session: () => state.session,
       config: syncConfig,
     });
     startShellCtoxHealthMonitor();

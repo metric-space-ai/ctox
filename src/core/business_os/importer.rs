@@ -322,6 +322,14 @@ fn outbound_company_research(
         !refs.domain.is_empty() && !refs.companies_key.is_empty(),
         "outbound company research requires Knowledge companies table"
     );
+    ensure_outbound_knowledge_contract(
+        root,
+        command,
+        &refs.domain,
+        &refs.companies_key,
+        &refs.campaign_id,
+        &refs.campaign_name,
+    )?;
     let company = command.payload.get("company").unwrap_or(&Value::Null);
     let company_id = first_nonempty(&[
         str_path(&command.payload, &["writeback_contract", "stable_id_value"]),
@@ -437,6 +445,14 @@ fn outbound_contact_research(
         !refs.domain.is_empty() && !refs.contacts_key.is_empty(),
         "outbound contact research requires Knowledge contacts table"
     );
+    ensure_outbound_knowledge_contract(
+        root,
+        command,
+        &refs.domain,
+        &refs.companies_key,
+        &refs.campaign_id,
+        &refs.campaign_name,
+    )?;
     let pipeline_id = first_nonempty(&[
         str_path(&command.payload, &["pipeline_id"]),
         str_path(&command.client_context, &["pipeline_id"]),
@@ -527,6 +543,18 @@ fn outbound_lead_qualification(
     command: &BusinessCommand,
 ) -> anyhow::Result<ImportOutcome> {
     let refs = outbound_refs(command);
+    anyhow::ensure!(
+        !refs.domain.is_empty() && !refs.contacts_key.is_empty(),
+        "outbound lead qualification requires Knowledge contacts table"
+    );
+    ensure_outbound_knowledge_contract(
+        root,
+        command,
+        &refs.domain,
+        &refs.companies_key,
+        &refs.campaign_id,
+        &refs.campaign_name,
+    )?;
     let pipeline_id = first_nonempty(&[
         str_path(&command.payload, &["pipeline_id"]),
         str_path(&command.client_context, &["pipeline_id"]),

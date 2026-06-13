@@ -45,8 +45,8 @@ def current_state(ctox_bin: str, system: str, env: dict[str, str]) -> dict[str, 
     bindings = source_skills.get("source_skills", []) if isinstance(source_skills, dict) else []
     active_binding = next((b for b in bindings if b.get("status") == "active"), None)
 
-    self_work = run_json([ctox_bin, "ticket", "self-work-list", "--system", system, "--limit", "200"], env)
-    items = self_work.get("items", []) if isinstance(self_work, dict) else []
+    internal_work = run_json([ctox_bin, "ticket", "internal-work-list", "--system", system, "--limit", "200"], env)
+    items = internal_work.get("items", []) if isinstance(internal_work, dict) else []
     onboarding_item = next(
         (
             item
@@ -134,7 +134,7 @@ def ensure_validation_expansion_work(
         [
             ctox_bin,
             "ticket",
-            "self-work-put",
+            "internal-work-put",
             "--system",
             system,
             "--kind",
@@ -158,7 +158,7 @@ def ensure_validation_expansion_work(
     if work_id:
         try:
             run_json(
-                [ctox_bin, "ticket", "self-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"],
+                [ctox_bin, "ticket", "internal-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"],
                 env,
             )
         except subprocess.CalledProcessError:
@@ -167,7 +167,7 @@ def ensure_validation_expansion_work(
             [
                 ctox_bin,
                 "ticket",
-                "self-work-note",
+                "internal-work-note",
                 "--work-id",
                 work_id,
                 "--body",
@@ -192,7 +192,7 @@ def ensure_execution_gap_work(ctox_bin: str, system: str, env: dict[str, str], p
     command = [
         ctox_bin,
         "ticket",
-        "self-work-put",
+        "internal-work-put",
         "--system",
         system,
         "--kind",
@@ -215,14 +215,14 @@ def ensure_execution_gap_work(ctox_bin: str, system: str, env: dict[str, str], p
     work_id = result.get("item", {}).get("work_id")
     if work_id:
         try:
-            run_json([ctox_bin, "ticket", "self-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"], env)
+            run_json([ctox_bin, "ticket", "internal-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"], env)
         except subprocess.CalledProcessError:
             pass
         run_json(
             [
                 ctox_bin,
                 "ticket",
-                "self-work-note",
+                "internal-work-note",
                 "--work-id",
                 work_id,
                 "--body",
@@ -253,7 +253,7 @@ def ensure_desk_skill_refinement_work(
         [
             ctox_bin,
             "ticket",
-            "self-work-put",
+            "internal-work-put",
             "--system",
             system,
             "--kind",
@@ -276,14 +276,14 @@ def ensure_desk_skill_refinement_work(
     work_id = result.get("item", {}).get("work_id")
     if work_id:
         try:
-            run_json([ctox_bin, "ticket", "self-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"], env)
+            run_json([ctox_bin, "ticket", "internal-work-assign", "--work-id", work_id, "--assignee", "self", "--assigned-by", "ctox"], env)
         except subprocess.CalledProcessError:
             pass
         run_json(
             [
                 ctox_bin,
                 "ticket",
-                "self-work-note",
+                "internal-work-note",
                 "--work-id",
                 work_id,
                 "--body",
@@ -308,7 +308,7 @@ def close_work_item(
         [
             ctox_bin,
             "ticket",
-            "self-work-transition",
+            "internal-work-transition",
             "--work-id",
             work_id,
             "--state",
@@ -358,7 +358,7 @@ def main() -> None:
         return
 
     run_json([args.ctox_bin, "ticket", "knowledge-list", "--system", args.system, "--limit", "20"], env)
-    run_json([args.ctox_bin, "ticket", "self-work-list", "--system", args.system, "--limit", "50"], env)
+    run_json([args.ctox_bin, "ticket", "internal-work-list", "--system", args.system, "--limit", "50"], env)
     completed_stages.append(2)
     if args.stop_after_stage == 2:
         print(json.dumps({"ok": True, "completed_stages": completed_stages}, ensure_ascii=False, indent=2))
@@ -399,7 +399,7 @@ def main() -> None:
                     [
                         args.ctox_bin,
                         "ticket",
-                        "self-work-note",
+                        "internal-work-note",
                         "--work-id",
                         onboarding_item["work_id"],
                         "--body",
@@ -441,7 +441,7 @@ def main() -> None:
                     [
                         args.ctox_bin,
                         "ticket",
-                        "self-work-note",
+                        "internal-work-note",
                         "--work-id",
                         onboarding_item["work_id"],
                         "--body",

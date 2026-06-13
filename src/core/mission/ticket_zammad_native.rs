@@ -519,11 +519,11 @@ fn create_internal_ticket(
     let group = config
         .self_work_group
         .as_deref()
-        .context("missing CTO_ZAMMAD_SELF_WORK_GROUP for self-work publishing")?;
+        .context("missing CTO_ZAMMAD_SELF_WORK_GROUP for internal-work publishing")?;
     let customer = config
         .self_work_customer
         .as_deref()
-        .context("missing CTO_ZAMMAD_SELF_WORK_CUSTOMER for self-work publishing")?;
+        .context("missing CTO_ZAMMAD_SELF_WORK_CUSTOMER for internal-work publishing")?;
     let mut payload = json!({
         "title": title.trim(),
         "group": group,
@@ -774,9 +774,9 @@ mod tests {
                 } else if first_line.starts_with("POST /api/v1/ticket_articles") {
                     r#"{"id":99,"ticket_id":1,"subject":"CTOX update","body":"handled","internal":true,"sender":"Agent","type":"note","created_at":"2026-04-09T12:30:00Z"}"#.to_string()
                 } else if first_line.starts_with("POST /api/v1/tickets") {
-                    r#"{"id":55,"number":"30055","title":"CTOX self work","created_at":"2026-04-09T12:20:00Z","updated_at":"2026-04-09T12:20:00Z"}"#.to_string()
+                    r#"{"id":55,"number":"30055","title":"CTOX internal work","created_at":"2026-04-09T12:20:00Z","updated_at":"2026-04-09T12:20:00Z"}"#.to_string()
                 } else if first_line.starts_with("PUT /api/v1/tickets/55") {
-                    r#"{"id":55,"title":"CTOX self work","state":"open","updated_at":"2026-04-09T12:45:00Z","created_at":"2026-04-09T12:20:00Z"}"#.to_string()
+                    r#"{"id":55,"title":"CTOX internal work","state":"open","updated_at":"2026-04-09T12:45:00Z","created_at":"2026-04-09T12:20:00Z"}"#.to_string()
                 } else if first_line.starts_with("PUT /api/v1/tickets/1") {
                     r#"{"id":1,"title":"VPN issue","state":"closed","updated_at":"2026-04-09T12:40:00Z","created_at":"2026-04-09T12:00:00Z"}"#.to_string()
                 } else {
@@ -876,7 +876,7 @@ mod tests {
             &root,
             &settings,
             &TicketSelfWorkPublishRequest {
-                title: "CTOX self work",
+                title: "CTOX internal work",
                 body: "review the observed source profile",
             },
         )?;

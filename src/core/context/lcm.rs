@@ -1893,7 +1893,7 @@ impl LcmEngine {
     /// F2: defer a mission because the agent-failure threshold was hit.
     /// Sets `mission_status = 'deferred'`, stores a structured reason, and
     /// flips `is_open=false` / `allow_idle=true` so the watchdog stops
-    /// spawning continuation self-work for this mission.
+    /// spawning continuation internal work for this mission.
     pub fn defer_mission_for_reason(
         &self,
         conversation_id: i64,

@@ -27,9 +27,9 @@ struct RefreshState {
     /// Turns since the last refresh (used only by the optional legacy
     /// interval trigger when the operator explicitly sets one).
     turns_since_refresh: u64,
-    /// RFC3339 start of the window in which durable self-work/knowledge
+    /// RFC3339 start of the window in which durable internal-work/knowledge
     /// transitions count as unprocessed task boundaries. The service closes
-    /// self-work items AFTER the turn (post completion review), outside the
+    /// internal work items AFTER the turn (post completion review), outside the
     /// turn's own bracket — so this window spans from the last refresh, not
     /// from the current turn start. In-memory: a daemon restart starts a
     /// fresh window (conservative; at worst one boundary refresh is missed).
@@ -46,7 +46,7 @@ fn turn_counters() -> &'static Mutex<HashMap<i64, RefreshState>> {
 /// New adaptive model — two passive triggers plus one hard safety net:
 ///
 /// 1. `force_task_boundary` — durable state transition (plan step closed,
-///    self-work closed, focus replace). Refreshes immediately and resets
+///    internal work closed, focus replace). Refreshes immediately and resets
 ///    all counters. This is the state-transition trigger.
 ///
 /// 2. Legacy interval trigger (`legacy_every_n_turns`) — optional,
@@ -110,7 +110,7 @@ pub fn refresh_budget_snapshot(conversation_id: i64) -> RefreshBudgetSnapshot {
 
 /// Start of the boundary-detection window for this conversation: the moment
 /// of the last continuity refresh, or this turn's start on first contact.
-/// Service-side self-work closures land between turns; a turn-local bracket
+/// Service-side internal work closures land between turns; a turn-local bracket
 /// never sees them.
 fn boundary_window_start(conversation_id: i64, turn_start_ts: &str) -> String {
     let mut counters = turn_counters().lock().expect("turn_counters poisoned");
@@ -133,7 +133,7 @@ fn mark_boundary_window_consumed(conversation_id: i64, now_ts: &str) {
 /// between `turn_start_ts` and now. Returns `true` if any of the following
 /// happened during the turn:
 ///
-/// - a self-work item transitioned to `state = 'closed'`
+/// - an internal work item transitioned to `state = 'closed'`
 /// - a new ticket-knowledge entry was inserted
 /// - a focus continuity commit was written
 ///
@@ -152,7 +152,7 @@ fn detect_durable_state_transition(
 
     // Mission-side tables live in the unified CTOX runtime database. These
     // use the boundary WINDOW (since the last refresh), not the turn
-    // bracket: the service closes self-work items after the turn, post
+    // bracket: the service closes internal work items after the turn, post
     // completion review, and a turn-local bracket never sees those.
     let mission_db = crate::persistence::sqlite_path(root);
     if mission_db.exists() {
@@ -646,7 +646,7 @@ where
     };
     emit("persist-assistant-turn");
     persist_lcm_message_with_retry(db_path, conversation_id, "assistant", &reply, &mut emit)?;
-    // Detect durable state transitions since the last refresh (self-work
+    // Detect durable state transitions since the last refresh (internal work
     // closed — including service-side closures between turns — knowledge
     // entry added, focus document replaced this turn). These count as task
     // boundaries and force a continuity refresh even if the output budget
@@ -1618,7 +1618,7 @@ mod tests {
 
     #[test]
     fn boundary_window_spans_turns_until_a_refresh_consumes_it() {
-        // Service-side self-work closures land BETWEEN turns; the detection
+        // Service-side internal work closures land BETWEEN turns; the detection
         // window must start at the last refresh, not at the current turn.
         let conversation_id = 991_001;
         let first_turn = "2026-06-10T10:00:00+00:00";

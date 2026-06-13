@@ -12,10 +12,10 @@ cluster: ticket_integration
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 Use this skill before ticket classification, dry run, execution, or writeback whenever ticket understanding depends on the CTOX knowledge plane.
@@ -49,10 +49,10 @@ ctox ticket knowledge-show --system "<system>" --domain "<domain>" --key "<key>"
 ctox ticket knowledge-load --ticket-key "<ticket_key>" [--domains "source_profile,label_catalog,glossary,service_catalog,infrastructure_assets,team_model,access_model,monitoring_landscape"]
 ```
 
-### Inspect CTOX self-work around source understanding
+### Inspect CTOX internal work around source understanding
 
 ```sh
-ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<n>"]
+ctox ticket internal-work-list [--system "<system>"] [--state "<state>"] [--limit "<n>"]
 ```
 
 ## Operating Pattern
@@ -61,8 +61,8 @@ ctox ticket self-work-list [--system "<system>"] [--state "<state>"] [--limit "<
 2. Load the ticket-specific knowledge context.
 3. If access or secret context is missing, stop operational handling and inspect the secret store or create an explicit access request through the onboarding or access skill.
 4. If monitoring context is missing for infra/process questions, ingest or request monitoring evidence instead of guessing.
-5. If domains are missing, stop operational handling, inspect existing self-work, and if needed create or continue a justified onboarding or maintenance work item instead of proceeding blindly.
-6. If you continue an existing self-work item, assign it to CTOX if needed and leave a plain internal note about what knowledge gap you are resolving.
+5. If domains are missing, stop operational handling, inspect existing internal work, and if needed create or continue a justified onboarding or maintenance work item instead of proceeding blindly.
+6. If you continue an existing internal work item, assign it to CTOX if needed and leave a plain internal note about what knowledge gap you are resolving.
 7. Only continue into dry run or execution once the knowledge load is ready.
 8. Verify that the source is actually operationalized when that matters:
    - `ctox ticket sources`
@@ -88,8 +88,8 @@ Inbound ticket comments after a published clarification are linked back to the o
 ## Important Boundaries
 
 - Do not treat remote ticket fields as durable truth when CTOX knowledge already contradicts them.
-- Do not hide knowledge gaps in prose; surface them explicitly through the ticket knowledge commands or self-work items.
+- Do not hide knowledge gaps in prose; surface them explicitly through the ticket knowledge commands or internal work items.
 - Do not skip knowledge load just because the ticket looks familiar.
-- Do not leak raw secrets into ticket knowledge or ticket self-work metadata.
+- Do not leak raw secrets into ticket knowledge or ticket internal work metadata.
 - Do not write internal storage or tool mechanics into remote ticket notes.
 - Do not call a markdown file or workspace artifact "knowledge". If it is not in CTOX runtime state, it is not durable ticket context; if it is not in the Skillbook/Runbook hierarchy, it is not reusable operational knowledge.

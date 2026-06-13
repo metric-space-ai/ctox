@@ -12,13 +12,13 @@ cluster: mission_orchestration
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - If the task is supposed to produce a durable artifact, completion requires that artifact to exist in CTOX runtime state in its expected final state. Examples: an outbound email must have an outbound message row with status `accepted`; a ticket closure must have the ticket state closed; a knowledge task must have the knowledge entry recorded and active.
 - Do not claim that an artifact was delivered based only on prose in your reply. If the artifact is missing or still failed/pending, report the blocker and keep the work open.
 - For owner/founder/admin email, the Review Gate approves or rejects the draft but does not send it. After approval, the active agent run must execute the reviewed send command itself and then verify the accepted outbound row.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 Use this skill near the end of a non-trivial turn when you need an explicit completion judgment instead of quietly stopping.
@@ -68,9 +68,9 @@ while leaving a hot retry-loop downstream is misclassified by definition.
 7. If the task promised a durable artifact, verify the artifact in CTOX runtime state before returning `done`. A text summary saying "sent", "closed", or "created" is not enough.
 8. If the result is `needs_followup`, choose the durable runtime primitive before you end the turn:
    - queue-only for tiny atomic follow-up
-   - ticket self-work plus queue or plan for multi-turn, review, approval, blocker, or recovery work
-9. If the work is high-impact, externally visible, owner-facing, or likely to span multiple turns, do not merely promise a "next step". Create the explicit self-work or review task before you end the turn.
-10. If execution started but did not reach a safe verified end state, record a review or recovery work step immediately. Prefer ticket self-work over queue-only when the recovery may need tracking, approval, or repeated follow-up.
+   - ticket internal work plus queue or plan for multi-turn, review, approval, blocker, or recovery work
+9. If the work is high-impact, externally visible, owner-facing, or likely to span multiple turns, do not merely promise a "next step". Create the explicit internal work or review task before you end the turn.
+10. If execution started but did not reach a safe verified end state, record a review or recovery work step immediately. Prefer ticket internal work over queue-only when the recovery may need tracking, approval, or repeated follow-up.
 11. If the blocker depends on owner input, enumerate the exact missing values, credentials, approvals, or decisions in the owner-facing status. Do not send vague blocker summaries.
 12. For owner-visible blocked work, prefer a durable review schedule over waiting in the active turn.
 13. Do not create repeat owner-facing blocker communication unless there is a material delta since the last owner update. If nothing changed, keep the next review internal and durable.
@@ -78,7 +78,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
    - `ctox ticket sources`
    - `ctox ticket source-skills`
    - `ctox ticket knowledge-list --system "<system>" --limit 20`
-   - `ctox ticket self-work-list --system "<system>" --limit 20`
+   - `ctox ticket internal-work-list --system "<system>" --limit 20`
    If the full ticket+knowledge pipeline is not active, state that plainly in the follow-up instead of pretending durable ticket context or Skillbook/Runbook knowledge already exists.
 15. If the only persisted artifact is a workspace note or markdown file, treat the knowledge task as still open. Persist the mission understanding into the CTOX runtime store before calling the work durable.
 
@@ -90,7 +90,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
 - It does not reorder the queue for you.
 - After the evaluation, you may:
   - create the next explicit queue task with `ctox queue add`
-  - create ticket-backed durable follow-up with `ctox ticket self-work-put ... --publish` and `ctox ticket self-work-assign ...`
+  - create ticket-backed durable follow-up with `ctox ticket internal-work-put ... --publish` and `ctox ticket internal-work-assign ...`
   - reprioritize or update existing queued work with `ctox queue edit` or `ctox queue reprioritize`
   - send an owner update with the communication tools
   - draft a new plan with `ctox plan draft`
@@ -102,7 +102,7 @@ while leaving a hot retry-loop downstream is misclassified by definition.
 - Do not invent speculative future work just because more work could exist in theory.
 - Do not use it to bypass owner approval.
 - Do not persist evaluation reasoning beyond the compact structured result.
-- Do not tell the owner that CTOX is actively doing a next step unless the corresponding durable self-work, queue, or plan state exists.
+- Do not tell the owner that CTOX is actively doing a next step unless the corresponding durable internal work, queue, or plan state exists.
 
 ## Contracts
 

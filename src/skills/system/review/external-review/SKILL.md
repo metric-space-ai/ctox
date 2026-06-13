@@ -10,10 +10,10 @@ cluster: review
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 Use this skill for a standalone review run.
@@ -44,7 +44,7 @@ The review run:
 1. Runtime store: `runtime/ctox.sqlite3`
 2. Workspace under review
 3. Live public/runtime URLs
-4. Ticket/self-work state
+4. Ticket/internal work state
 5. Relevant communication facts
 6. Service/runtime/log state
 7. Active strategic directives (Vision and Mission) stored in CTOX runtime state
@@ -60,7 +60,7 @@ The review run:
    - latest claimed task result
    - current blockers
    - active/open related work
-4. Inspect related ticket/self-work state.
+4. Inspect related ticket/internal work state.
 5. Inspect recent relevant meeting outcomes, especially before owner/founder communication or artifact-readiness verdicts.
 6. Inspect relevant communication facts if the work is owner-visible.
 7. Inspect the live surface and critical routes.
@@ -105,11 +105,11 @@ LIMIT 12;
 "
 ```
 
-### Queue and self-work
+### Queue and internal work
 
 ```bash
 ctox queue list
-ctox ticket self-work-list --limit 20
+ctox ticket internal-work-list --limit 20
 ctox ticket cases --limit 20
 ```
 
@@ -251,9 +251,9 @@ Default classification for these findings is `rework`, not `rewrite`.
 
 Return FAIL when the reviewed task result touches an external system and any of these are true:
 
-- (a) A new `ticket_source_control` row (a Kanban source) exists without an active `source-skill-binding` and without an open `system-onboarding` self-work item.
+- (a) A new `ticket_source_control` row (a Kanban source) exists without an active `source-skill-binding` and without an open `system-onboarding` internal work item.
 - (b) A non-Kanban system (CRM, API, platform, codebase, database) is referenced in the mission and live-touched, but `ctox ticket knowledge-list --system "<s>"` returns 0 entries.
-- (c) Live work against the system happened (outbound to external contacts, data mutation, connected-app or permission setup) without an open onboarding self-work item.
+- (c) Live work against the system happened (outbound to external contacts, data mutation, connected-app or permission setup) without an open onboarding internal work item.
 - (d) The reviewed task result operationally touched a new system but produced no `ticket_knowledge_loads` and no new `ticket_knowledge_entries`.
 - (e) The reviewed task claims CTOX learned a reusable procedure, but no source skill, skillbook, runbook, or runbook item was created or updated.
 
@@ -263,7 +263,7 @@ Reviewer checks for these conditions:
 ctox ticket sources
 ctox ticket source-skills
 ctox ticket knowledge-list --system "<system>"
-ctox ticket self-work-list --system "<system>" --state open
+ctox ticket internal-work-list --system "<system>" --state open
 ```
 
 ## Review Handoff Rule

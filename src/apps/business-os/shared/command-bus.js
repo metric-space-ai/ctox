@@ -1,17 +1,17 @@
 const COMMAND_ACCEPT_TIMEOUT_MS = 45000;
 const COMMAND_SYNC_READY_TIMEOUT_MS = 15000;
 
-export function createCommandBus({ db, sync = null } = {}) {
+export function createCommandBus({ db, sync = null, session = null } = {}) {
   return {
     async dispatch(command) {
-      return dispatchRxdbCommand({ db, sync, command });
+      return dispatchRxdbCommand({ db, sync, session, command });
     },
   };
 }
 
-async function dispatchRxdbCommand({ db, sync, command }) {
+async function dispatchRxdbCommand({ db, sync, session, command }) {
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
-  const doc = commandDocument(command, commandId);
+  const doc = commandDocument(command, commandId, resolveActorContext(command, session));
   const currentDb = await resolveCommandDb(db);
   const collection = currentDb?.raw?.business_commands;
   if (!collection) throw commandError(commandId, 'business_commands collection is required.');
@@ -22,12 +22,20 @@ async function dispatchRxdbCommand({ db, sync, command }) {
   return waitForAuthoritativeQueueProjection(currentDb, commandId, commandWaitTimeoutMs(command));
 }
 
-function commandDocument(command, commandId) {
+function commandDocument(command, commandId, actor) {
   const now = Date.now();
   const moduleId = String(command.module || command.client_context?.module || 'ctox').trim() || 'ctox';
   const commandType = String(command.type || command.command_type || 'business_os.chat.task').trim();
   const inboundChannel = String(command.inbound_channel || command.client_context?.inbound_channel || moduleId).trim();
   if (!commandType) throw commandError(commandId, 'command_type is required.');
+  const clientContext = {
+    ...(command.client_context || {}),
+    inbound_channel: inboundChannel,
+    dispatch_transport: 'rxdb-command-bus',
+  };
+  if (actor && !clientContext.actor) {
+    clientContext.actor = actor;
+  }
   return {
     id: commandId,
     command_id: commandId,
@@ -40,13 +48,23 @@ function commandDocument(command, commandId) {
       ...(command.payload || {}),
       inbound_channel: inboundChannel,
     },
-    client_context: {
-      ...(command.client_context || {}),
-      inbound_channel: inboundChannel,
-      dispatch_transport: 'rxdb-command-bus',
-    },
+    client_context: clientContext,
     created_at_ms: now,
     updated_at_ms: now,
+  };
+}
+
+function resolveActorContext(command, session) {
+  if (command?.client_context?.actor) return null;
+  const currentSession = typeof session === 'function' ? session() : session;
+  const user = currentSession?.user || {};
+  const id = String(user.id || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    display_name: user.display_name || user.name || id,
+    role: user.role || (user.is_admin ? 'admin' : 'user'),
+    is_admin: Boolean(user.is_admin),
   };
 }
 
@@ -110,7 +128,30 @@ async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = CO
     const taskId = String(lastCommand?.task_id || '').trim();
     const task = taskId ? await findDoc(queue, taskId) : null;
     if (lastCommand?.status === 'failed') {
-      throw commandError(commandId, lastCommand.error || 'CTOX command failed.');
+      const outcome = lastCommand.result?.outcome || lastCommand.payload?.outcome || null;
+      throw commandError(
+        commandId,
+        lastCommand.error || outcome?.stderr || outcome?.error || 'CTOX command failed.',
+      );
+    }
+    const directOutcome = lastCommand?.result?.outcome || lastCommand?.payload?.outcome || null;
+    if (!taskId && directOutcome && (directOutcome.ok !== undefined || directOutcome.exit_code !== undefined)) {
+      if (directOutcome.ok === false || Number(directOutcome.exit_code || 0) !== 0) {
+        throw commandError(
+          commandId,
+          lastCommand.error || directOutcome.stderr || directOutcome.error || 'CTOX command failed.',
+        );
+      }
+      return {
+        ok: true,
+        command_id: commandId,
+        status: String(lastCommand?.status || 'completed'),
+        task_id: '',
+        task_status: String(lastCommand?.task_status || lastCommand?.status || 'completed'),
+        payload: lastCommand?.payload || null,
+        result: lastCommand?.result || null,
+        transport: 'rxdb-command-bus',
+      };
     }
     if (taskId && task) {
       return {
@@ -119,6 +160,8 @@ async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = CO
         status: String(lastCommand?.status || 'accepted'),
         task_id: taskId,
         task_status: String(task.status || lastCommand?.task_status || 'queued'),
+        payload: lastCommand?.payload || null,
+        result: lastCommand?.result || null,
         transport: 'rxdb-command-bus',
       };
     }
@@ -136,6 +179,8 @@ async function waitForAuthoritativeQueueProjection(db, commandId, timeoutMs = CO
         status: 'completed',
         task_id: '',
         task_status: String(lastCommand?.task_status || 'completed'),
+        payload: lastCommand?.payload || null,
+        result: lastCommand?.result || null,
         transport: 'rxdb-command-bus',
       };
     }

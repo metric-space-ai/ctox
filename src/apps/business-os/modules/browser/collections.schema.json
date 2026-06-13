@@ -1,0 +1,346 @@
+{
+  "collections": {
+    "browser_frames": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        [
+          "session_id",
+          "seq"
+        ],
+        [
+          "session_id",
+          "expires_at_ms"
+        ],
+        [
+          "tab_id",
+          "seq"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "captured_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "expires_at_ms": {
+          "type": "number"
+        },
+        "frame_hash": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "quality": {
+          "type": "number"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "tab_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "viewport_h": {
+          "type": "number"
+        },
+        "viewport_w": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "tab_id",
+        "seq",
+        "mime_type",
+        "encoding",
+        "data",
+        "width",
+        "height",
+        "captured_at_ms",
+        "expires_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "browser_input_events": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        [
+          "session_id",
+          "seq"
+        ],
+        [
+          "status",
+          "created_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "button": {
+          "type": "string"
+        },
+        "buttons": {
+          "type": "number"
+        },
+        "code": {
+          "type": "string"
+        },
+        "consumed_at_ms": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "dx": {
+          "type": "number"
+        },
+        "dy": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "modifiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "tab_id": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "seq",
+        "type",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "browser_sessions": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms",
+        [
+          "status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active_frame_id": {
+          "type": "string"
+        },
+        "controller_user_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "current_tab_id": {
+          "type": "string"
+        },
+        "current_url": {
+          "type": "string"
+        },
+        "device_scale_factor": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "frame_rate_target": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "last_frame_seq": {
+          "type": "number"
+        },
+        "last_input_seq": {
+          "type": "number"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pending_input_count": {
+          "type": "number"
+        },
+        "runtime_status": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "viewport_h": {
+          "type": "number"
+        },
+        "viewport_w": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "browser_tabs": {
+      "additionalProperties": true,
+      "indexes": [
+        "session_id",
+        [
+          "session_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "can_go_back": {
+          "type": "boolean"
+        },
+        "can_go_forward": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "frame_seq": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "last_frame_at_ms": {
+          "type": "number"
+        },
+        "last_frame_id": {
+          "type": "string"
+        },
+        "loading": {
+          "type": "boolean"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "browser",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

@@ -17,7 +17,8 @@ const state = {
   workspaceLoadState: 'loading',
   workspaceLoadError: '',
   isAutomating: false,
-  isRefreshing: false
+  isRefreshing: false,
+  projectionTimers: {}
 };
 
 const labels = {
@@ -69,10 +70,12 @@ export async function mount(ctx) {
   // Set up center content markup
   ctx.host.innerHTML = await loadModuleMarkup();
   ctx.left.replaceChildren();
+  // Persistent third pane: session/history inspection stays visible while the active provider prompt remains in the center workbench.
   ctx.right.replaceChildren();
 
   bindElements(ctx.host);
   wireEvents();
+  const projectionSubscriptions = subscribeProjectionUpdates();
 
   // Initialize resizable layout columns
   const resizers = [];
@@ -109,6 +112,10 @@ export async function mount(ctx) {
   return () => {
     clearInterval(intervalId);
     if (state.initialLoadTimer) clearTimeout(state.initialLoadTimer);
+    clearProjectionTimers();
+    projectionSubscriptions.forEach((subscription) => {
+      try { subscription?.unsubscribe?.(); } catch (err) { console.warn('[coding-agents] projection unsubscribe failed', err); }
+    });
     resizers.forEach(r => r.destroy());
     styleLink.remove();
   };
@@ -190,8 +197,6 @@ function bindElements(root) {
   // Subscriptions (inside settings modal)
   els.authStatus = root.querySelector('#auth-status');
   els.subLoginForm = root.querySelector('#sub-login-form');
-  els.subEmail = root.querySelector('#sub-email');
-  els.subPassword = root.querySelector('#sub-password');
   els.btnTriggerSignup = root.querySelector('#btn-trigger-signup');
   els.browserLogBox = root.querySelector('#browser-log-box');
 
@@ -323,7 +328,13 @@ function wireEvents() {
       appendTerminalOutput(`Granting permissions for workspace: ${folderPath}...`);
       if (els.addWorkspaceSubmit) els.addWorkspaceSubmit.disabled = true;
 
-      const res = await dispatchAgyCommand(['config', 'grant', folderPath]);
+      let res = null;
+      state.isAutomating = true;
+      try {
+        res = await dispatchAgyCommand(['config', 'grant', folderPath]);
+      } finally {
+        state.isAutomating = false;
+      }
       if (res && res.ok) {
         appendTerminalOutput(`Path successfully authorized.`);
         els.addWorkspaceInput.value = '';
@@ -368,11 +379,18 @@ function wireEvents() {
       feedBox.scrollTop = feedBox.scrollHeight;
 
       // Dispatch prompt CLI command (automatically uses activeApp & workspace context via agy)
-      const res = await dispatchAgyCommand(['session', 'prompt', state.activeSession, promptText]);
+      const expectedCount = await sessionEventCount(state.activeSession) + 2;
+      let res = null;
+      state.isAutomating = true;
+      try {
+        res = await dispatchAgyCommand(['session', 'prompt', state.activeSession, promptText]);
+      } finally {
+        state.isAutomating = false;
+      }
       if (res && res.ok) {
-        setTimeout(async () => {
-          await loadSessionDetails(state.activeSession, state.activeApp);
-        }, 1500);
+        await waitForSessionEvents(state.activeSession, expectedCount, 120000)
+          .catch((err) => appendTerminalOutput(`Session event projection is still catching up: ${err.message || err}`));
+        await loadSessionDetails(state.activeSession, state.activeApp);
       } else {
         const errBubble = document.createElement('div');
         errBubble.className = 'feed-chat-bubble assistant';
@@ -412,12 +430,30 @@ function wireEvents() {
       appendTerminalOutput(`Spawning new ${state.activeApp.toUpperCase()} workspace session...`);
       if (els.newSessionSubmit) els.newSessionSubmit.disabled = true;
 
-      const res = await dispatchAgyCommand(['session', 'create', '-p', state.activeWorkspace, prompt]);
+      let res = null;
+      state.isAutomating = true;
+      try {
+        res = await dispatchAgyCommand(['session', 'create', '-p', state.activeWorkspace, prompt]);
+      } finally {
+        state.isAutomating = false;
+      }
       if (res && res.ok) {
         appendTerminalOutput(`Session created successfully.`);
         if (els.newSessionPrompt) els.newSessionPrompt.value = '';
         closeDialog(els.newSessionModal, els.newSessionBtn);
+        const createdSessionId = String(res?.data?.session_id || res?.session_id || '').trim();
+        if (createdSessionId) state.activeSession = createdSessionId;
+        await waitForSessionRecord(createdSessionId, state.activeApp, state.activeWorkspace, 60000)
+          .then((session) => {
+            if (session?.id) state.activeSession = session.id;
+          })
+          .catch((err) => appendTerminalOutput(`Session projection is still catching up: ${err.message || err}`));
         await refreshSessions();
+        if (state.activeSession) {
+          await waitForSessionEvents(state.activeSession, 2, 120000)
+            .catch((err) => appendTerminalOutput(`Session event projection is still catching up: ${err.message || err}`));
+          await loadSessionDetails(state.activeSession, state.activeApp);
+        }
       } else {
         syncNewSessionForm();
         appendTerminalOutput(`Failed to create session:\n${res?.stderr || ''}`);
@@ -484,6 +520,18 @@ function wireEvents() {
       appendTerminalOutput(`✔ Synchronized successfully.`);
     }
 
+    if (action === 'install-provider') {
+      appendTerminalPrompt(`install --apply`);
+      appendTerminalOutput(`Installing or repairing ${state.activeApp.toUpperCase()} CLI on this machine...`);
+      const res = await dispatchAgyCommand(['install', '--apply']);
+      if (res && res.ok) {
+        appendTerminalOutput(res.stdout || `Provider CLI is discoverable.`);
+      } else {
+        appendTerminalOutput(`❌ Install action failed:\n${res?.stderr || 'Unknown error'}`);
+      }
+      await refreshAllData();
+    }
+
     if (action === 'start-app') {
       appendTerminalPrompt(`start app`);
       appendTerminalOutput(`🚀 Dispatching start command for ${state.activeApp.toUpperCase()}...`);
@@ -527,29 +575,27 @@ function wireEvents() {
     els.bypassToggle.addEventListener('change', async () => {
       const isChecked = els.bypassToggle.checked;
       appendTerminalPrompt(`bypass permissions = ${isChecked}`);
+      if (!state.activeWorkspace) {
+        appendTerminalOutput(`Select a workspace before changing provider permissions.`);
+        els.bypassToggle.checked = false;
+        return;
+      }
+      const workspacePath = state.activeWorkspace;
 
       if (isChecked) {
-        appendTerminalOutput(`🛡 Enabling global bypass modes...`);
-        let grantArg = 'command(*)';
-        if (state.activeApp === 'claude') grantArg = '/tmp';
-        else if (state.activeApp === 'codex') grantArg = '/Users/michaelwelsch/Documents/ctox';
-
-        const res = await dispatchAgyCommand(['config', 'grant', grantArg]);
+        appendTerminalOutput(`Granting ${state.activeApp.toUpperCase()} access to ${workspacePath}...`);
+        const res = await dispatchAgyCommand(['config', 'grant', workspacePath]);
         if (res && res.ok) {
-          appendTerminalOutput(`✔ Permission bypass granted on host: ${grantArg}`);
+          appendTerminalOutput(`Workspace permission granted on host: ${workspacePath}`);
         } else {
           appendTerminalOutput(`❌ Grant failed: ${res?.stderr || ''}`);
           els.bypassToggle.checked = false;
         }
       } else {
-        appendTerminalOutput(`🛡 Disabling bypass modes...`);
-        let revokeArg = 'command(*)';
-        if (state.activeApp === 'claude') revokeArg = '/tmp';
-        else if (state.activeApp === 'codex') revokeArg = '/Users/michaelwelsch/Documents/ctox';
-
-        const res = await dispatchAgyCommand(['config', 'revoke', revokeArg]);
+        appendTerminalOutput(`Revoking ${state.activeApp.toUpperCase()} access to ${workspacePath}...`);
+        const res = await dispatchAgyCommand(['config', 'revoke', workspacePath]);
         if (res && res.ok) {
-          appendTerminalOutput(`✔ Revoked permission bypass: ${revokeArg}`);
+          appendTerminalOutput(`Revoked workspace permission: ${workspacePath}`);
         } else {
           appendTerminalOutput(`❌ Revoke failed: ${res?.stderr || ''}`);
           els.bypassToggle.checked = true;
@@ -563,56 +609,79 @@ function wireEvents() {
   if (els.subLoginForm) {
     els.subLoginForm.addEventListener('submit', async (e) => {
       e.preventDefault();
-      const email = els.subEmail.value.trim();
-      const password = els.subPassword.value.trim();
-      if (!email || !password) return;
 
       state.isAutomating = true;
       els.btnTriggerSignup.disabled = true;
       els.authStatus.textContent = t('automating', 'AUTOMATING...');
       els.authStatus.className = 'card-status-indicator active';
 
-      // Clear and start logger
       els.browserLogBox.innerHTML = '';
-      appendBrowserLog(`🚀 Initializing Google Subscription registration for ${state.activeApp.toUpperCase()}...`);
-      appendBrowserLog(`👉 Credentials locked. Launching Playwright Chromium reference...`);
+      appendBrowserLog(`Starting ${state.activeApp.toUpperCase()} provider authentication on the host...`);
 
-      setTimeout(() => {
-        appendBrowserLog(`👉 Stealth browser warmup started at OAuth Google Login.`);
-        appendBrowserLog(`👉 Automating Gmail credentials entry...`);
-      }, 1500);
-
-      setTimeout(() => {
-        appendBrowserLog(`👉 Gmail: "${email}" entered. Processing password...`);
-      }, 3000);
-
-      // Call actual CLI in background
-      const args = ['signup', '--email', email, '--password', password];
-
-      const res = await dispatchAgyCommand(args);
+      const res = await dispatchAgyCommand(['auth', 'start']);
 
       state.isAutomating = false;
       els.btnTriggerSignup.disabled = false;
-      els.subPassword.value = '';
 
       if (res && res.ok) {
-        appendBrowserLog(`✔ Playwright OAuth flow finished successfully!`);
-        appendBrowserLog(res.stdout);
-        els.authStatus.textContent = t('authorized', 'ACTIVE');
-        els.authStatus.className = 'card-status-indicator active';
+        appendBrowserLog(res.stdout || 'Provider authentication flow started.');
+        const diag = diagnosticsFromOutcome(res);
+        state.diagnostics[state.activeApp] = { ...state.diagnostics[state.activeApp], ...diag };
         showBusinessAlert(t('authSuccessful', 'Successfully Authenticated!'));
       } else {
-        appendBrowserLog(`❌ Playwright login flow halted. See stderr.`, 'text-red');
+        appendBrowserLog(`Provider authentication could not be started.`, 'text-red');
         if (res?.stdout) appendBrowserLog(res.stdout);
         if (res?.stderr) appendBrowserLog(res.stderr, 'text-red');
-
-        els.authStatus.textContent = t('unauthorized', 'UNAUTHORIZED');
-        els.authStatus.className = 'card-status-indicator';
-        showBusinessAlert(`Authentication failed or timed out. Please verify credentials.`);
+        showBusinessAlert(`Authentication failed or timed out. Please verify provider setup.`);
       }
       await refreshAllData();
     });
   }
+}
+
+function subscribeProjectionUpdates() {
+  const subscriptions = [];
+  const subscribe = (collectionName, handler) => {
+    const collection = getCollection(collectionName);
+    const subscription = collection?.$?.subscribe?.(() => {
+      scheduleProjectionRefresh(collectionName, handler);
+    });
+    if (subscription) subscriptions.push(subscription);
+  };
+
+  subscribe('coding_agent_workspace_grants', () => refreshBypassData());
+  subscribe('coding_agent_sessions', () => {
+    if (state.activeWorkspace) return refreshSessions();
+    return undefined;
+  });
+  subscribe('coding_agent_events', () => {
+    if (state.activeSession) return loadSessionDetails(state.activeSession, state.activeApp);
+    return undefined;
+  });
+  return subscriptions;
+}
+
+function getCollection(collectionName) {
+  return state.ctx?.db?.collection?.(collectionName)
+    || state.ctx?.db?.collections?.[collectionName]
+    || null;
+}
+
+function scheduleProjectionRefresh(key, fn) {
+  if (state.projectionTimers[key]) clearTimeout(state.projectionTimers[key]);
+  state.projectionTimers[key] = setTimeout(async () => {
+    delete state.projectionTimers[key];
+    try {
+      await fn();
+    } catch (err) {
+      console.warn(`[coding-agents] projection refresh failed for ${key}`, err);
+    }
+  }, 150);
+}
+
+function clearProjectionTimers() {
+  Object.values(state.projectionTimers || {}).forEach((timer) => clearTimeout(timer));
+  state.projectionTimers = {};
 }
 
 function openModal(modal, focusTarget) {
@@ -772,7 +841,7 @@ function updateUI() {
   }
 
   // Auth Status indicator
-  const hasAuth = diag.online && diag.port !== 'N/A';
+  const hasAuth = Boolean(diag.authorized || diag.authReady);
   if (els.authStatus) {
     els.authStatus.textContent = hasAuth ? t('authorized') : t('unauthorized');
     els.authStatus.className = `card-status-indicator ${hasAuth ? 'active' : ''}`;
@@ -799,9 +868,8 @@ async function refreshDiagnosticsSilently() {
   const apps = ['antigravity', 'claude', 'codex'];
   for (const app of apps) {
     const res = await dispatchAgyCommand(['status'], { app });
-    if (res && res.ok && res.stdout) {
-      const diag = parseDiagnosticsStdout(res.stdout);
-      state.diagnostics[app] = { ...diag, installed: true, online: diag.electronPid !== 'N/A' || diag.lsPid !== 'N/A' };
+    if (res && res.ok) {
+      state.diagnostics[app] = diagnosticsFromOutcome(res);
     } else {
       state.diagnostics[app] = { installed: false, electronPid: 'N/A', lsPid: 'N/A', port: 'N/A', resources: 'N/A', uptime: 'N/A', online: false };
     }
@@ -842,21 +910,45 @@ function parseDiagnosticsStdout(stdout) {
   return result;
 }
 
-async function refreshBypassData() {
-  const res = await dispatchAgyCommand(['config', 'get-grants']);
+function diagnosticsFromOutcome(outcome) {
+  const data = outcome?.data || {};
+  const auth = data.auth || {};
+  const legacy = parseDiagnosticsStdout(outcome?.stdout || '');
+  const installed = Boolean(data.installed ?? outcome?.ok ?? legacy.electronPid !== 'N/A' ?? false);
+  const controllable = Boolean(data.controllable);
+  const authReady = Boolean(auth.ready);
+  const mode = data.mode || data.binary || legacy.port || 'N/A';
+  return {
+    installed,
+    controllable,
+    authorized: authReady,
+    authReady,
+    authStatus: auth.status || auth.state || (authReady ? 'ready' : 'unknown'),
+    electronPid: data.app_installed ? 'installed' : legacy.electronPid,
+    lsPid: data.binary ? 'available' : legacy.lsPid,
+    port: mode || 'N/A',
+    resources: data.label || data.provider || legacy.resources,
+    uptime: data.version || legacy.uptime,
+    online: controllable || authReady,
+    mode,
+    binary: data.binary || '',
+  };
+}
 
-  if (res && res.ok) {
-    const grants = parseGrantsStdout(res.stdout || '');
+async function refreshBypassData() {
+  let grants = await workspaceGrantsFromProjection(state.activeApp);
+  let res = null;
+  if (grants === null) {
+    res = await dispatchAgyCommand(['config', 'get-grants']);
+    grants = res && res.ok ? grantsFromOutcome(res) : null;
+  }
+
+  if (Array.isArray(grants)) {
     state.trustedPaths = grants;
     state.workspaceLoadState = 'ready';
     state.workspaceLoadError = '';
 
-    // Update bypass toggle check state
-    let isBypassed = false;
-    if (state.activeApp === 'antigravity') isBypassed = grants.includes('command(*)');
-    else if (state.activeApp === 'claude') isBypassed = grants.includes('/tmp');
-    else if (state.activeApp === 'codex') isBypassed = grants.length > 0;
-
+    const isBypassed = Boolean(state.activeWorkspace && grants.includes(state.activeWorkspace));
     if (els.bypassToggle) els.bypassToggle.checked = isBypassed;
     renderWorkspaces();
   } else {
@@ -872,15 +964,50 @@ function parseGrantsStdout(stdout) {
   const lines = stdout.split('\n');
   const grants = [];
   lines.forEach(line => {
-    if (line.includes('•')) {
+    if (line.includes('•') || line.includes('*')) {
       const clean = line
         .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
-        .replace(/^.*?•\s*/, '')
+        .replace(/^.*?[•*]\s*/, '')
         .trim();
       if (clean) grants.push(clean);
     }
   });
   return grants;
+}
+
+function grantsFromOutcome(outcome) {
+  const grants = outcome?.data?.grants;
+  if (Array.isArray(grants)) return grants.filter(Boolean).map(String);
+  return parseGrantsStdout(outcome?.stdout || '');
+}
+
+async function workspaceGrantsFromProjection(provider) {
+  const docs = await readCollectionDocs('coding_agent_workspace_grants');
+  if (docs === null) return null;
+  return docs
+    .filter((doc) => doc.provider === provider && doc.is_deleted !== true && doc.status !== 'revoked' && doc.active !== false)
+    .map((doc) => String(doc.path || '').trim())
+    .filter(Boolean);
+}
+
+async function readCollectionDocs(collectionName) {
+  const collection = state.ctx?.db?.collection?.(collectionName)
+    || state.ctx?.db?.collections?.[collectionName];
+  if (!collection) return null;
+  if (typeof collection.find === 'function') {
+    const query = collection.find();
+    const docs = await query?.exec?.();
+    if (Array.isArray(docs)) return docs.map(toPlainDoc);
+  }
+  if (typeof collection.toArray === 'function') {
+    return (await collection.toArray()).map(toPlainDoc);
+  }
+  if (Array.isArray(collection.items)) return collection.items.map(toPlainDoc);
+  return null;
+}
+
+function toPlainDoc(doc) {
+  return typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
 }
 
 function renderWorkspaces() {
@@ -1041,12 +1168,12 @@ async function refreshSessions() {
     return;
   }
   const app = state.activeApp;
-  // Get session list specifically for this app engine
-  const res = await dispatchAgyCommand(['session', 'list']);
-  if (res && res.ok && res.stdout) {
-    state.sessions = parseSessionsStdout(res.stdout, app);
+  const projected = await sessionsFromProjection(app, state.activeWorkspace);
+  if (projected !== null) {
+    state.sessions = projected;
   } else {
-    state.sessions = [];
+    const res = await dispatchAgyCommand(['session', 'list']);
+    state.sessions = res && res.ok ? sessionsFromOutcome(res, app) : [];
   }
   renderSessions();
 }
@@ -1069,6 +1196,44 @@ function parseSessionsStdout(stdout, app) {
     }
   });
   return list;
+}
+
+function sessionsFromOutcome(outcome, app) {
+  const records = outcome?.data?.sessions;
+  if (Array.isArray(records)) return records.map((record) => sessionFromRecord(record, app));
+  return parseSessionsStdout(outcome?.stdout || '', app);
+}
+
+async function sessionsFromProjection(provider, workspaceRoot) {
+  const docs = await readCollectionDocs('coding_agent_sessions');
+  if (docs === null) return null;
+  return docs
+    .filter((doc) =>
+      doc.provider === provider
+      && doc.is_deleted !== true
+      && String(doc.workspace_root || '') === String(workspaceRoot || '')
+      && doc.status !== 'stopped'
+    )
+    .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0))
+    .map((record) => sessionFromRecord(record, provider));
+}
+
+function sessionFromRecord(record, app) {
+  const id = String(record.session_id || record.id || '').trim();
+  return {
+    shortId: shortSessionId(id),
+    id,
+    updatedAt: formatRecordTime(record.updated_at_ms),
+    prompt: record.last_prompt || record.title || '',
+    app: record.provider || app,
+    workspaceRoot: record.workspace_root || '',
+    status: record.status || '',
+  };
+}
+
+function shortSessionId(sessionId) {
+  const compact = String(sessionId || '').replace(/^ca_[a-z]+_/, '');
+  return compact.slice(0, 8) || String(sessionId || '').slice(0, 8);
 }
 
 function renderSessions() {
@@ -1153,11 +1318,15 @@ async function loadSessionDetails(sessionId, app) {
 
   feedBox.innerHTML = `<div class="empty-list-placeholder" style="animation: pulse-glow 1s infinite alternate;">Retrieving session records from SQLite database...</div>`;
 
-  const res = await dispatchAgyCommand(['session', 'get', sessionId]);
+  let elements = await sessionEventsFromProjection(sessionId);
+  let res = null;
+  if (elements === null) {
+    res = await dispatchAgyCommand(['session', 'get', sessionId]);
+    elements = res && res.ok ? sessionEventsFromOutcome(res) : null;
+  }
   feedBox.innerHTML = '';
 
-  if (res && res.ok && res.stdout) {
-    const elements = parseSessionGetStdout(res.stdout);
+  if (Array.isArray(elements)) {
     if (elements.length === 0) {
       feedBox.innerHTML = `<div class="empty-list-placeholder">No conversation history recorded in this session.</div>`;
       return;
@@ -1233,9 +1402,172 @@ function parseSessionGetStdout(stdout) {
   return items;
 }
 
+function sessionEventsFromOutcome(outcome) {
+  const records = outcome?.data?.events;
+  if (Array.isArray(records)) return records.map(eventFromRecord);
+  return parseSessionGetStdout(outcome?.stdout || '');
+}
+
+async function sessionEventsFromProjection(sessionId) {
+  const docs = await readCollectionDocs('coding_agent_events');
+  if (docs === null) return null;
+  return docs
+    .filter((doc) => doc.session_id === sessionId && doc.is_deleted !== true)
+    .sort((a, b) => Number(a.created_at_ms || 0) - Number(b.created_at_ms || 0))
+    .map(eventFromRecord);
+}
+
+async function sessionEventCount(sessionId) {
+  const docs = await readCollectionDocs('coding_agent_events');
+  if (!Array.isArray(docs)) return 0;
+  return docs.filter((doc) => doc.session_id === sessionId && doc.is_deleted !== true).length;
+}
+
+async function waitForSessionRecord(sessionId, provider, workspaceRoot, timeoutMs) {
+  return waitForProjection(async () => {
+    const sessions = await sessionsFromProjection(provider, workspaceRoot);
+    if (!Array.isArray(sessions)) return { ok: false, sessions: null };
+    const match = sessionId
+      ? sessions.find((session) => session.id === sessionId)
+      : sessions[0];
+    return { ok: Boolean(match), value: match, count: sessions.length };
+  }, timeoutMs, 'session projection');
+}
+
+async function waitForSessionEvents(sessionId, minCount, timeoutMs) {
+  return waitForProjection(async () => {
+    const docs = await readCollectionDocs('coding_agent_events');
+    const events = Array.isArray(docs)
+      ? docs.filter((doc) => doc.session_id === sessionId && doc.is_deleted !== true)
+      : [];
+    const assistantCount = events.filter((doc) => String(doc.role || '').toLowerCase() === 'assistant').length;
+    return {
+      ok: events.length >= minCount && assistantCount >= 1,
+      value: events,
+      count: events.length,
+      assistantCount,
+    };
+  }, timeoutMs, 'session event projection');
+}
+
+async function waitForProjection(predicate, timeoutMs, label) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await predicate();
+    if (last?.ok) return last.value;
+    await delay(250);
+  }
+  throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function eventFromRecord(record) {
+  const role = String(record.role || 'assistant').toLowerCase();
+  if (role === 'tool') {
+    return {
+      type: 'tool',
+      status: record.status === 'completed' || record.status === 'success' ? 'success' : 'fail',
+      name: record.text || 'tool',
+      time: formatRecordTime(record.created_at_ms),
+    };
+  }
+  return {
+    type: role === 'assistant' ? 'assistant' : 'user',
+    text: record.text || '',
+    status: record.status || '',
+    time: formatRecordTime(record.created_at_ms),
+  };
+}
+
+function formatRecordTime(value) {
+  const ms = Number(value || 0);
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  return new Date(ms).toLocaleString();
+}
+
 /* Dispatch command through RxDB sync */
 function buildAgyCommandArgs(args, app = state.activeApp) {
   return ['--app', app].concat(args);
+}
+
+function buildCodingAgentCommand(args, app = state.activeApp, context = {}) {
+  const provider = app;
+  const [command, subcommand] = args;
+  const payload = { provider };
+
+  if (command === 'status') return { commandType: 'ctox.coding_agent.status', payload };
+  if (command === 'install') {
+    return {
+      commandType: 'ctox.coding_agent.install',
+      payload: {
+        ...payload,
+        apply: args.includes('--apply') || args.includes('--yes') || args.includes('--confirm')
+      }
+    };
+  }
+  if (command === 'start' || command === 'stop' || command === 'headless') {
+    return { commandType: `ctox.coding_agent.lifecycle.${command}`, payload: { ...payload, args: args.slice(1) } };
+  }
+  if (command === 'signup' || command === 'login') return { commandType: 'ctox.coding_agent.auth.start', payload };
+  if (command === 'auth') {
+    const authAction = subcommand === 'status' ? 'status' : 'start';
+    return { commandType: `ctox.coding_agent.auth.${authAction}`, payload };
+  }
+  if (command === 'config' || command === 'workspace') {
+    if (subcommand === 'get-grants' || subcommand === 'list') {
+      return { commandType: 'ctox.coding_agent.workspace.list', payload };
+    }
+    if (subcommand === 'grant' || subcommand === 'revoke') {
+      const path = parseWorkspaceCommandPath(args.slice(2));
+      return { commandType: `ctox.coding_agent.workspace.${subcommand}`, payload: { ...payload, path } };
+    }
+  }
+  if (command === 'session') {
+    if (subcommand === 'list') {
+      return { commandType: 'ctox.coding_agent.session.list', payload: { ...payload, workspace_root: context.workspace || state.activeWorkspace || '' } };
+    }
+    if (subcommand === 'get') {
+      return { commandType: 'ctox.coding_agent.session.get', payload: { ...payload, session_id: args[2] || '' } };
+    }
+    if (subcommand === 'stop') {
+      return { commandType: 'ctox.coding_agent.session.stop', payload: { ...payload, session_id: args[2] || '' } };
+    }
+    if (subcommand === 'prompt') {
+      return { commandType: 'ctox.coding_agent.session.prompt', payload: { ...payload, session_id: args[2] || '', prompt: args.slice(3).join(' ').trim() } };
+    }
+    if (subcommand === 'create') {
+      const parsed = parseSessionCreateCommand(args.slice(2), context.workspace || state.activeWorkspace || '');
+      return { commandType: 'ctox.coding_agent.session.create', payload: { ...payload, workspace_root: parsed.workspace, prompt: parsed.prompt } };
+    }
+  }
+  return null;
+}
+
+function parseWorkspaceCommandPath(args) {
+  if (args[0] === '--path' || args[0] === '-p') return args[1] || '';
+  return args[0] || '';
+}
+
+function parseSessionCreateCommand(args, defaultWorkspace) {
+  let workspace = defaultWorkspace;
+  const prompt = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const value = args[index];
+    if (value === '-p' || value === '--project' || value === '--workspace') {
+      workspace = args[index + 1] || workspace;
+      index += 1;
+    } else if (value === '--prompt' || value === '--message') {
+      prompt.push(args[index + 1] || '');
+      index += 1;
+    } else {
+      prompt.push(value);
+    }
+  }
+  return { workspace, prompt: prompt.join(' ').trim() };
 }
 
 async function dispatchAgyCommand(args, options = {}) {
@@ -1245,65 +1577,52 @@ async function dispatchAgyCommand(args, options = {}) {
   }
 
   const app = options.app || state.activeApp;
-  const commandId = `cmd_agy_${app}_${crypto.randomUUID()}`;
-  const startedAtMs = Date.now();
+  const commandId = `cmd_coding_agent_${app}_${crypto.randomUUID()}`;
+  const command = buildCodingAgentCommand(args, app, { workspace: options.workspace || state.activeWorkspace });
+  if (!command) {
+    return { ok: false, exit_code: -1, stdout: '', stderr: `Unsupported coding-agent command: ${args.join(' ')}` };
+  }
 
   try {
-    const fullArgs = buildAgyCommandArgs(args, app);
+    const waitTimeoutMs = codingAgentCommandWaitTimeoutMs(command.commandType);
     const dispatched = await state.ctx.commandBus.dispatch({
       id: commandId,
       module: 'coding-agents',
-      command_type: 'ctox.coding_agent.execute',
+      command_type: command.commandType,
       record_id: commandId,
       inbound_channel: 'business_os.coding_agents',
-      payload: {
-        args: fullArgs
-      },
+      payload: command.payload,
+      wait_timeout_ms: waitTimeoutMs,
       client_context: { source_module: 'coding-agents' }
     });
 
-    let result = dispatched;
-    if (!dispatched?.status || dispatched.status === 'pending_sync') {
-      result = await waitForBusinessCommandProjection(commandId, startedAtMs);
-    }
-
-    if (result && result.status === 'completed' && result.payload?.outcome) {
-      return result.payload.outcome;
-    }
-    return result;
+    return commandOutcome(dispatched) || dispatched;
   } catch (err) {
-    console.error('[coding-agents] Command dispatch error: ', err);
+    console.warn('[coding-agents] Command dispatch failed: ', err);
     return { ok: false, exit_code: -1, stdout: '', stderr: String(err.message || err) };
   }
 }
 
-async function waitForBusinessCommandProjection(commandId, startedAtMs) {
-  const collection = state.ctx?.db?.raw?.business_commands;
-  if (!collection) return null;
-  const earliestUpdatedAt = Math.max(0, Number(startedAtMs || Date.now()) - 1000);
+function codingAgentCommandWaitTimeoutMs(commandType) {
+  return commandType === 'ctox.coding_agent.session.create'
+    || commandType === 'ctox.coding_agent.session.prompt'
+    ? 10 * 60 * 1000
+    : undefined;
+}
 
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    try {
-      const doc = await collection.findOne(commandId).exec();
-      const match = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
-      if (
-        match
-        && Number(match.updated_at_ms || 0) >= earliestUpdatedAt
-        && match.status
-        && match.status !== 'pending_sync'
-      ) {
-        return match;
-      }
-    } catch (_) {}
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
-  }
+function commandOutcome(result) {
+  if (!result) return null;
+  if (result.payload?.outcome) return result.payload.outcome;
+  if (result.result?.outcome) return result.result.outcome;
+  if (result.result?.ok !== undefined || result.result?.exit_code !== undefined) return result.result;
+  if (result.outcome?.ok !== undefined || result.outcome?.exit_code !== undefined) return result.outcome;
   return null;
 }
 
 /* Terminal Helpers */
 function appendTerminalPrompt(cmd) {
   // Backwards compatibility if terminal logs are tailed to mock logs
-  console.log('agy$', cmd);
+  console.log(`${state.activeApp}$`, cmd);
 }
 
 function appendTerminalOutput(text, cssClass = '') {
@@ -1333,5 +1652,12 @@ export const __codingAgentsTestHooks = {
   validateNewSessionPrompt,
   workspaceLoadErrorFromResult,
   buildAgyCommandArgs,
+  buildCodingAgentCommand,
+  codingAgentCommandWaitTimeoutMs,
+  diagnosticsFromOutcome,
+  grantsFromOutcome,
+  sessionsFromOutcome,
+  sessionEventsFromOutcome,
+  shortSessionId,
   escapeHtml
 };

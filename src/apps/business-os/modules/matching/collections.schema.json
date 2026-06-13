@@ -1,0 +1,219 @@
+{
+  "collections": {
+    "matching_objects": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "parsed_object": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt_key": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "data",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "matching_requirements": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "parsed_requirement": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt_key": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "data",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "matching_results": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "object_id": {
+          "type": "string"
+        },
+        "parsed_match": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "requirement_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "data",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    }
+  },
+  "migration_strategies": {
+    "matching_objects": {
+      "1": {
+        "operations": []
+      }
+    },
+    "matching_requirements": {
+      "1": {
+        "operations": []
+      }
+    },
+    "matching_results": {
+      "1": {
+        "operations": []
+      }
+    }
+  },
+  "module_id": "matching",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

@@ -65,7 +65,7 @@ Workers are derived from durable sources such as:
 
 The channel router does not lease new external work while a worker is active.
 It first reconciles ticket state, runs dispatch preflights, emits due schedules,
-syncs configured ticket sources, routes assigned self-work, and only then leases
+syncs configured ticket sources, routes assigned internal work, and only then leases
 bounded inbound work into `QueuedPrompt` slices.
 
 ## Worker Slice Flow
@@ -76,7 +76,7 @@ execution:
 
 1. Suppress known fatal harness-loop prompts.
 2. Hold work outside configured working hours.
-3. Skip superseded self-work prompts.
+3. Skip superseded internal work prompts.
 4. Redirect owner-visible work that needs strategic setup.
 5. Redirect platform work that needs expertise passes.
 6. Build the execution prompt, root, workspace, and conversation id.
@@ -126,7 +126,7 @@ The default context window is 262144 tokens (256k) when no runtime/model value
 overrides it. 256k is the only supported chat-context choice; the retired 128k
 option is gone, and legacy persisted 128k values fall back to the 256k default.
 The installer seeds `max_seq` per model from the manifest context caps in
-`contracts/models/` (262144 for `Qwen/Qwen3.5-35B-A3B`, 131072 for the other
+`contracts/models/` (262144 for `Qwen/Qwen3.6-35B-A3B`, 131072 for the other
 local profiles); the 256k chat-context default is independent of those engine
 caps.
 
@@ -162,7 +162,7 @@ typed disposition:
 - `Approved`
 - `Hold`
 - `NoSend`
-- `RequeueSelfWork`
+- `RequeueInternalWork`
 - `FeedbackRetry`
 - `TerminalQueueFailure`
 - `None`
@@ -173,8 +173,8 @@ artifacts exist. The service then enforces reviewed terminal success through
 the core state machine. If that proof is missing or rejected, the slice is not
 closed merely because the assistant said it was done.
 
-Rejected or incomplete work is fed back into the same durable queue/self-work
-item where possible. The review path has finite retry budgets and eventually
+Rejected or incomplete work is fed back into the same durable queue item or
+internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
 
 ## Core State Machine
@@ -259,8 +259,8 @@ ctox harness-flow events [--message-key <key>] [--work-id <id>] [--ticket-key <k
 ```
 
 The renderer opens `runtime/ctox.sqlite3` read-only for normal rendering. It
-selects a seed message or self-work item, loads related queue routing,
-self-work, review approvals, core proofs, process-mining violations, continuity
+selects a seed message or internal work item, loads related queue routing,
+internal work state, review approvals, core proofs, process-mining violations, continuity
 counts, knowledge counts, verification counts, and recent harness-flow ledger
 events. It also reads the latest token usage event from
 `runtime/context-log.jsonl`.
@@ -290,7 +290,7 @@ The flow ledger table is `ctox_harness_flow_events`. It is written from queue,
 ticket, knowledge, and communication review paths through
 `record_harness_flow_event_lossy(...)`. Current event families include review
 approval/no-send, queue cleanup, queue spill/restore, knowledge load,
-self-work create/publish/transition/state-set. The renderer also appends a
+internal work create/publish/transition/state-set. The renderer also appends a
 synthetic token-usage event from the context log when one is available.
 
 Desktop reads the flow by executing the local `ctox harness-flow` CLI and falls

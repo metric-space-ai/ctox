@@ -31,6 +31,26 @@ pub const DEFAULT_MEMORIES_MIN_ROLLOUT_IDLE_HOURS: i64 = 6;
 pub const DEFAULT_MEMORIES_MAX_RAW_MEMORIES_FOR_CONSOLIDATION: usize = 256;
 pub const DEFAULT_MEMORIES_MAX_UNUSED_DAYS: i64 = 30;
 
+pub fn deserialize_optional_service_tier<'de, D>(
+    deserializer: D,
+) -> Result<Option<ServiceTier>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    let Some(value) = value.map(|value| value.trim().to_ascii_lowercase()) else {
+        return Ok(None);
+    };
+    match value.as_str() {
+        "" | "default" => Ok(None),
+        "fast" => Ok(Some(ServiceTier::Fast)),
+        "flex" => Ok(Some(ServiceTier::Flex)),
+        other => Err(SerdeError::custom(format!(
+            "unknown service_tier `{other}`, expected fast, flex, or default"
+        ))),
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSandboxModeToml {

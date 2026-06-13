@@ -182,3 +182,251 @@ fn exec_command_args_resolve_relative_additional_permissions_against_workdir() -
     );
     Ok(())
 }
+
+#[test]
+fn business_os_guard_blocks_root_module_json_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cd . && cat > module.json <<'EOF'\n{}\nEOF",
+        root.path(),
+    )
+    .expect("root module write should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `module.json`"));
+    assert!(err.contains("installed-modules/<module_id>/"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_collections_schema_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "printf '{}' > collections.schema.json",
+        root.path(),
+    )
+    .expect("root collections schema write should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `collections.schema.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_python_root_artifact_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "python3 -c \"import pathlib; root=pathlib.Path('/tmp/app'); (root/'module.json').write_text('{}')\"",
+        root.path(),
+    )
+    .expect("python root module write should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `module.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_manifest_alias_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cp src/apps/business-os/installed-modules/subscriptions/module.json harness-module.json",
+        root.path(),
+    )
+    .expect("root manifest alias write should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `harness-module.json`"));
+    assert!(err.contains("harness aliases"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_schema_alias_move() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "echo '{}' > /tmp/probe.json && mv /tmp/probe.json harness-collections.schema.json",
+        root.path(),
+    )
+    .expect("root schema alias move should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `harness-collections.schema.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_artifact_status_note() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > harness-artifact-status.md <<'EOF'\nblocked\nEOF",
+        root.path(),
+    )
+    .expect("root artifact status note should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `harness-artifact-status.md`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_probe_file() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > _test_guard.txt <<'EOF'\nprobe\nEOF",
+        root.path(),
+    )
+    .expect("root probe file should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `_test_guard.txt`"));
+    assert!(err.contains("probe files"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_generic_root_test_probe_file() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "echo '{\"test\":1}' > test-file.json",
+        root.path(),
+    )
+    .expect("generic root test probe should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `test-file.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_variable_root_manifest_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "MODROOT=/tmp/app && cat > \"$MODROOT/module.json\" <<'JSON'\n{}\nJSON",
+        root.path(),
+    )
+    .expect("variable root module write should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `module.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_root_manifest_symlink() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let target = root.path().join("module.json");
+    let command = format!(
+        "ln -sf src/apps/business-os/installed-modules/inventory/module.json {}",
+        target.display()
+    );
+
+    let err = business_os_app_root_artifact_write_guard(&command, root.path())
+        .expect("root module symlink should be blocked");
+
+    assert!(err.contains("root-level app artifact write to `module.json`"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_package_json_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > src/apps/business-os/installed-modules/inventory/package.json <<'EOF'\n{\"type\":\"module\"}\nEOF",
+        root.path(),
+    )
+    .expect("module package.json write should be blocked");
+
+    assert!(err.contains("forbidden generated-module side effect"));
+    assert!(err.contains("package.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_module_package_json_write_from_module_cwd() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    let module_dir = root
+        .path()
+        .join("src/apps/business-os/installed-modules/inventory");
+    fs::create_dir_all(&module_dir)?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "cat > package.json <<'EOF'\n{\"type\":\"module\"}\nEOF",
+        &module_dir,
+    )
+    .expect("module package.json write from module cwd should be blocked");
+
+    assert!(err.contains("forbidden generated-module side effect"));
+    assert!(err.contains("package.json"));
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_installed_module_write_and_reads() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(business_os_app_root_artifact_write_guard(
+        "cat module.json && cat > src/apps/business-os/installed-modules/contracts/module.json <<'EOF'\n{}\nEOF",
+        root.path(),
+    )
+    .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_allows_module_dir_manifest_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    assert!(
+        business_os_app_root_artifact_write_guard(
+            "MODULE_DIR=src/apps/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
+            root.path(),
+        )
+        .is_none()
+    );
+    Ok(())
+}
+
+#[test]
+fn business_os_cleanup_removes_new_root_artifacts_after_exec() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+    let snapshot = business_os_app_root_artifact_snapshot(root.path())
+        .expect("expected Business OS workspace snapshot");
+
+    fs::write(root.path().join("module.json"), "{}\n")?;
+    fs::write(root.path().join("collections.schema.json"), "{}\n")?;
+    fs::write(root.path().join("harness-module.json"), "{}\n")?;
+    fs::write(root.path().join("harness-collections.schema.json"), "{}\n")?;
+    fs::write(root.path().join("harness-artifact-status.md"), "blocked\n")?;
+    fs::write(root.path().join("_test_guard.txt"), "probe\n")?;
+
+    let message = cleanup_new_business_os_app_root_artifacts(Some(&snapshot))
+        .expect("cleanup should report removed root artifacts");
+    assert!(
+        message.contains(
+            "Removed forbidden root file(s): _test_guard.txt, collections.schema.json, harness-artifact-status.md, harness-collections.schema.json, harness-module.json, module.json"
+        )
+    );
+    assert!(!root.path().join("module.json").exists());
+    assert!(!root.path().join("collections.schema.json").exists());
+    assert!(!root.path().join("harness-module.json").exists());
+    assert!(!root.path().join("harness-collections.schema.json").exists());
+    assert!(!root.path().join("harness-artifact-status.md").exists());
+    assert!(!root.path().join("_test_guard.txt").exists());
+    Ok(())
+}

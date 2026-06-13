@@ -1,0 +1,117 @@
+/* invoices/index.css — minimal 3-pane layout. */
+
+.invoices-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bo-bg, #0f172a);
+  color: var(--bo-fg, #e2e8f0);
+}
+
+.invoices-loading {
+  padding: 24px;
+  font-size: 14px;
+  color: var(--bo-muted, #94a3b8);
+}
+
+.invoices-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr 320px;
+  gap: 1px;
+  background: var(--bo-divider, #1e293b);
+  flex: 1;
+  min-height: 0;
+}
+
+.invoices-pane {
+  background: var(--bo-pane, #111827);
+  padding: 16px;
+  overflow: auto;
+}
+
+.invoices-list header {
+  font-size: 12px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--bo-muted, #94a3b8);
+  margin-bottom: 8px;
+}
+
+.invoices-list-items {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+}
+
+.invoices-list-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.invoices-list-item:hover {
+  background: var(--bo-hover, #1f2937);
+}
+
+.invoices-list-item.selected {
+  background: var(--bo-accent, #0f766e);
+  color: #fff;
+}
+
+.invoices-create-button {
+  width: 100%;
+  background: var(--bo-accent, #0f766e);
+  color: #fff;
+  border: 0;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.invoices-center h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.invoices-state-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: var(--bo-chip, #1e293b);
+  margin-bottom: 12px;
+}
+
+.invoices-line-items {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  font-size: 13px;
+}
+
+.invoices-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.invoices-actions button {
+  background: var(--bo-button, #1f2937);
+  color: var(--bo-fg, #e2e8f0);
+  border: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.invoices-empty {
+  color: var(--bo-muted, #94a3b8);
+  font-size: 13px;
+}
+
+.invoices-inspector {
+  color: var(--bo-muted, #94a3b8);
+  font-size: 12px;
+}

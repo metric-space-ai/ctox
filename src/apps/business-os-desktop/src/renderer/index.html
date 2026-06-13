@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://ctox.dev wss://signaling.ctox.dev;"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>CTOX Business OS Desktop</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">CTOX</div>
+      <div class="actions">
+        <button id="login-ctox-dev" type="button">ctox.dev</button>
+        <button id="logout-ctox-dev" type="button">Abmelden</button>
+        <button id="manual-pairing" type="button">Pairing</button>
+      </div>
+      <input id="search" type="search" placeholder="Instanz suchen" aria-label="Instanz suchen">
+      <div id="instances" class="instances"></div>
+    </aside>
+    <main class="content">
+      <div id="empty-state" class="empty">
+        <h1>Instanz auswählen</h1>
+        <p>Managed, lokale und gekoppelte Instanzen erscheinen gemeinsam in der Sidebar.</p>
+      </div>
+      <section id="instance-settings" class="settings-panel" hidden>
+        <div class="settings-header">
+          <div>
+            <h1 id="settings-name"></h1>
+            <div id="settings-meta" class="settings-meta"></div>
+          </div>
+          <div id="settings-actions" class="settings-actions"></div>
+        </div>
+        <div id="settings-badges" class="settings-badges"></div>
+        <dl id="settings-fields" class="settings-fields"></dl>
+      </section>
+    </main>
+    <dialog id="password-dialog" class="password-dialog">
+      <form id="password-form" method="dialog">
+        <h2 id="password-dialog-title">Sudo-Passwort</h2>
+        <label>
+          Passwort
+          <input id="password-dialog-input" type="password" autocomplete="current-password">
+        </label>
+        <div class="dialog-actions">
+          <button id="password-dialog-cancel" type="button">Abbrechen</button>
+          <button id="password-dialog-submit" type="submit">Speichern</button>
+        </div>
+      </form>
+    </dialog>
+    <script src="../common/instance-badges.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

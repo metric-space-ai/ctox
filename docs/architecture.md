@@ -122,7 +122,7 @@ subtree.
 
 The promoted local chat support surface is one Qwen model at a time. The
 currently supported local chat model exposed by the runtime registry is
-`Qwen/Qwen3.5-27B` for CUDA/NVIDIA. Additional Qwen Metal/CUDA crates in the
+`Qwen/Qwen3.6-27B` for CUDA/NVIDIA. Additional Qwen Metal/CUDA crates in the
 tree are development or transitional ports unless `model_registry` promotes the
 model and `local_model` wires it to a verified server backend.
 

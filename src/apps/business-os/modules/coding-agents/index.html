@@ -97,6 +97,7 @@
           <p class="section-desc">Manage the local background Electron GUI and headless daemon service.</p>
           <div class="lifecycle-controls-row" style="display:flex; flex-wrap:wrap; gap: 12px; align-items:center; justify-content:space-between; margin-top:8px;">
             <div style="display:flex; gap:8px;">
+              <button type="button" class="fibu-btn fibu-btn-secondary" data-action="install-provider">Install / Repair CLI</button>
               <button type="button" class="fibu-btn fibu-btn-primary" data-action="start-app">Launch GUI App</button>
               <button type="button" class="fibu-btn fibu-btn-secondary" data-action="start-headless">Spawn Headless</button>
               <button type="button" class="fibu-btn fibu-btn-danger" data-action="stop-app">Terminate App</button>
@@ -135,23 +136,15 @@
             <h4>Account Subscription Registration</h4>
             <span class="card-status-indicator" id="auth-status">UNAUTHORIZED</span>
           </div>
-          <p class="section-desc">Verify your subscription license via automated headful browser login.</p>
+          <p class="section-desc">Use the provider-owned CLI authentication flow on this machine.</p>
           <form class="subscription-auth-form" id="sub-login-form" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;">
-            <div class="form-group">
-              <label for="sub-email">Google/Gmail Account Email:</label>
-              <input type="email" id="sub-email" class="fibu-input" placeholder="user@gmail.com" required>
-            </div>
-            <div class="form-group">
-              <label for="sub-password">Google Password:</label>
-              <input type="password" id="sub-password" class="fibu-input" placeholder="••••••••••••" required>
-            </div>
             <button type="submit" class="fibu-btn fibu-btn-primary btn-glow" id="btn-trigger-signup" style="justify-content:center; margin-top:4px;">
-              Trigger Headful Google Signup Verification
+              Start Provider Authentication
             </button>
           </form>
 
           <div class="browser-log-card" style="margin-top: 14px;">
-            <div class="browser-log-title" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Stealth Browser Automation Output Logs</div>
+            <div class="browser-log-title" style="font-size:11px; font-weight:700; text-transform:uppercase; color:var(--text-muted); margin-bottom:6px;">Provider Authentication Logs</div>
             <div class="terminal-container small-terminal">
               <div class="terminal-body" id="browser-log-box" style="height:120px; overflow-y:auto; padding:10px; background:#000; border-radius:6px; font-family:monospace; font-size:10.5px; color:#fff; display:flex; flex-direction:column;">
                 <span class="terminal-line dim">Awaiting subscription login trigger...</span>
@@ -208,6 +201,7 @@
     <span id="diag-badge-antigravity">OFFLINE</span>
     <span id="diag-badge-claude">OFFLINE</span>
     <span id="diag-badge-codex">OFFLINE</span>
+    <!-- Persistent third pane justification: session/history inspection must stay reachable while workspace selection and active prompting remain visible. -->
     <button type="button" class="right-tab-btn" data-right-tab="subscription" style="position: absolute; left: 6px; top: 0px; width: 1px; height: 1px; border: none; background: transparent; padding: 0;"></button>
     <div id="diag-ls-pid">N/A</div>
     <div id="diag-active-port">8083</div>

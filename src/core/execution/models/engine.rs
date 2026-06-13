@@ -1479,8 +1479,8 @@ mod tests {
 
     #[test]
     fn model_supports_vision_recognises_local_vision_families() {
-        // Qwen 3.5 chat family is marked vision-capable in the registry.
-        assert!(model_supports_vision("Qwen/Qwen3.5-35B-A3B"));
+        // Qwen 3.6 chat family is marked vision-capable in the registry.
+        assert!(model_supports_vision("Qwen/Qwen3.6-35B-A3B"));
         // Gemma 4 variant likewise.
         assert!(model_supports_vision("google/gemma-4-31B-it"));
         // Qwen3-VL-2B auxiliary itself is vision-capable.
@@ -1591,7 +1591,7 @@ mod tests {
         assert_eq!(command[1], "serve");
         assert_eq!(command[2], "-p");
         assert_eq!(command[4], "vision");
-        assert!(command.iter().any(|part| part == "Qwen/Qwen3.5-27B"));
+        assert!(command.iter().any(|part| part == "Qwen/Qwen3.6-27B"));
     }
 
     #[test]
@@ -1739,7 +1739,7 @@ mod tests {
 
     #[test]
     fn family_profiles_drive_nccl_policy() {
-        let qwen = runtime_profile_for_model("Qwen/Qwen3.5-27B").unwrap();
+        let qwen = runtime_profile_for_model("Qwen/Qwen3.6-27B").unwrap();
         let embedding = runtime_profile_for_model("Qwen/Qwen3-Embedding-0.6B").unwrap();
         let stt = runtime_profile_for_model("engineai/Voxtral-Mini-4B-Realtime-2602").unwrap();
         let tts = runtime_profile_for_model("Qwen/Qwen3-TTS-12Hz-0.6B-Base").unwrap();
@@ -1780,10 +1780,10 @@ mod tests {
         assert_eq!(qwen_small.preferred_gpu_count, Some(1));
         assert_eq!(qwen_small.max_seq_len, 262_144);
 
-        let qwen_large = runtime_profile_for_model("Qwen/Qwen3.5-35B-A3B").unwrap();
+        let qwen_large = runtime_profile_for_model("Qwen/Qwen3.6-35B-A3B").unwrap();
         assert!(qwen_large.disable_nccl);
         assert_eq!(qwen_large.target_world_size, None);
-        assert_eq!(qwen_large.preferred_gpu_count, Some(3));
+        assert_eq!(qwen_large.preferred_gpu_count, Some(4));
         assert_eq!(qwen_large.paged_attn, "auto");
         assert_eq!(qwen_large.pa_cache_type.as_deref(), Some("turboquant3"));
 
@@ -1821,7 +1821,7 @@ mod tests {
             TURBOQUANT3_CACHE_TYPE.to_string(),
         );
         assert_eq!(
-            resolve_model_pa_cache_type("Qwen/Qwen3.5-27B", Some("f8e4m3"), &env_map),
+            resolve_model_pa_cache_type("Qwen/Qwen3.6-27B", Some("f8e4m3"), &env_map),
             Some("f8e4m3".to_string())
         );
     }
@@ -1834,7 +1834,7 @@ mod tests {
             "f8e4m3".to_string(),
         );
         assert_eq!(
-            resolve_model_pa_cache_type("Qwen/Qwen3.5-27B", Some("turboquant3"), &env_map),
+            resolve_model_pa_cache_type("Qwen/Qwen3.6-27B", Some("turboquant3"), &env_map),
             Some(TURBOQUANT3_CACHE_TYPE.to_string())
         );
     }
@@ -1871,7 +1871,7 @@ mod tests {
     #[test]
     fn supported_cache_override_promotes_paged_attention_from_off() {
         assert_eq!(
-            resolve_model_paged_attn("Qwen/Qwen3.5-35B-A3B", "off", Some("turboquant3")),
+            resolve_model_paged_attn("Qwen/Qwen3.6-35B-A3B", "off", Some("turboquant3")),
             "auto"
         );
     }
@@ -1978,8 +1978,8 @@ mod tests {
         assert!(!uses_ctox_responses_adapter_model("gpt-5.4-nano"));
         assert!(!uses_ctox_responses_adapter_model("openai/gpt-oss-120b"));
         assert!(!uses_ctox_responses_adapter_model("Qwen/Qwen3.5-4B"));
-        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.5-27B"));
-        assert!(!uses_ctox_responses_adapter_model("Qwen/Qwen3.6-35B-A3B"));
+        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.6-27B"));
+        assert!(uses_ctox_responses_adapter_model("Qwen/Qwen3.6-35B-A3B"));
         assert!(!uses_ctox_responses_adapter_model("not-a-real-model"));
     }
 

@@ -84,7 +84,7 @@ ctox update rollback
 Switch the active chat model and runtime profile preset:
 
 ```sh
-ctox runtime switch Qwen/Qwen3.5-27B quality --context 128k
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k
 ctox runtime switch openai/gpt-5.4 quality --context 128k --timeout 1800
 ```
 
@@ -92,7 +92,7 @@ Inspect or start a temporary chat runtime model boost lease:
 
 ```sh
 ctox boost status
-ctox boost start --minutes 60 --model Qwen/Qwen3.5-27B --reason "complex code migration"
+ctox boost start --minutes 60 --model Qwen/Qwen3.6-27B --reason "complex code migration"
 ctox boost stop
 ```
 

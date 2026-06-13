@@ -1,0 +1,331 @@
+{
+  "collections": {
+    "business_chats": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "createdAt": {
+          "type": "number"
+        },
+        "draft": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "lastTrackingId": {
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "minimized": {
+          "type": "boolean"
+        },
+        "open": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "desktop_file_chunks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "chunk_hash": {
+          "type": "string"
+        },
+        "chunk_hash_scheme": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "content_hash_scheme": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "file_id": {
+          "type": "string"
+        },
+        "generation_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "idx": {
+          "type": "number"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "file_id",
+        "idx",
+        "total",
+        "encoding",
+        "data",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "desktop_files": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "content_generation_id": {
+          "type": "string"
+        },
+        "content_hash": {
+          "type": "string"
+        },
+        "content_hash_scheme": {
+          "type": "string"
+        },
+        "content_ref": {
+          "type": "string"
+        },
+        "content_state": {
+          "type": "string"
+        },
+        "content_synced_at_ms": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "extension": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "linked_collection": {
+          "type": "string"
+        },
+        "linked_record_id": {
+          "type": "string"
+        },
+        "local_path": {
+          "type": "string"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "mtime_ms": {
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "sort_index": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "virtual_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "kind",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "document_versions": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "blob_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "diagnostics": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "model_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "version": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "document_id",
+        "version",
+        "source_kind",
+        "blob_id",
+        "model_json",
+        "diagnostics",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "documents": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "current_version_id": {
+          "type": "string"
+        },
+        "diagnostics_count": {
+          "type": "number"
+        },
+        "display_cache": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "document_type": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "index_text": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "linked_records": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "page_count": {
+          "type": "number"
+        },
+        "source_sha256": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "filename",
+        "mime_type",
+        "status",
+        "current_version_id",
+        "index_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "cv-print-builder",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

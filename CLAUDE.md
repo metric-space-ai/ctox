@@ -19,7 +19,7 @@ Do **not** rely on grep/memory/assumptions about what a given subsystem is suppo
 
 - `src/core/harness/` is the integrated in-process agent harness built around the hard-forked OpenAI Codex runtime (`ctox-core`). Executed **in-process** via `InProcessAppServerClient`, not as an external `codex-exec` subprocess.
 - `src/core/inference/` holds per-model inference crates. Every curated model is intended to be **self-contained** — no code is shared across model crates. Each model should own its kernels, loader, and adapter code. CTOX reaches local inference through managed runtime control and IPC-backed local transports.
-- The promoted local chat surface is deliberately one Qwen model at a time. At the moment, the root runtime registry promotes `Qwen/Qwen3.5-27B` for CUDA/NVIDIA. Metal Qwen crates in the tree are bring-up/transitional work until `model_registry` and `local_model` wire the same model to a verified backend.
+- The promoted local chat surface is deliberately one Qwen model at a time. At the moment, the root runtime registry promotes `Qwen/Qwen3.6-27B` for CUDA/NVIDIA. Metal Qwen crates in the tree are bring-up/transitional work until `model_registry` and `local_model` wire the same model to a verified backend.
 
 Any `codex-exec` references and any remnants of the retired external `tools/model-runtime/` engine subtree in CTOX production code are leftover to be cleaned up, not the intended architecture. The current local runtime setting is still named `candle` in the TUI/config surface.
 

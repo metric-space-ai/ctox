@@ -1568,7 +1568,7 @@ pub fn list_module_actions(
                 "tickets.create_followup",
                 &module.id,
                 "Create ticket follow-up",
-                "Prepare a CTOX follow-up for a ticket or self-work item.",
+                "Prepare a CTOX follow-up for a ticket or internal work item.",
                 "write",
                 false,
                 false,

@@ -922,17 +922,17 @@ ctox chat "Check this CTOX installation and confirm that the API model is reacha
           </p>
           <h3>CUDA 27B local example</h3>
           <pre><code>curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh \
-  | bash -s -- --backend=cuda --model=Qwen/Qwen3.5-27B
+  | bash -s -- --backend=cuda --model=Qwen/Qwen3.6-27B
 
 ctox
 
 # In TUI Settings:
 # Chat Source: local
 # Local Runtime: candle
-# Chat Model: Qwen/Qwen3.5-27B
+# Chat Model: Qwen/Qwen3.6-27B
 
 ctox doctor
-ctox runtime switch Qwen/Qwen3.5-27B quality --context 128k</code></pre>
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 128k</code></pre>
           <p>
             The 27B local example is for a Linux host with NVIDIA CUDA and the
             required local model artifacts. If CUDA, weights, or runtime files

@@ -1,0 +1,1154 @@
+{
+  "collections": {
+    "business_commands": {
+      "additionalProperties": true,
+      "indexes": [
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "client_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "inbound_channel": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "command_id",
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "customer_accounts": {
+      "additionalProperties": true,
+      "indexes": [
+        "domain",
+        "account_owner_id",
+        "account_status",
+        "customer_stage",
+        "health_status",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "account_owner_id",
+          "updated_at_ms"
+        ],
+        [
+          "customer_stage",
+          "updated_at_ms"
+        ],
+        [
+          "health_status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_owner_id": {
+          "type": "string"
+        },
+        "account_status": {
+          "type": "string"
+        },
+        "address": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "annual_recurring_revenue_cents": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "customer_stage": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "employee_count": {
+          "type": "number"
+        },
+        "health_status": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "ideal_customer_profile": {
+          "type": "boolean"
+        },
+        "industry": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_activity_at_ms": {
+          "type": "number"
+        },
+        "linkedin_url": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_action_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "website_url": {
+          "type": "string"
+        },
+        "x_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "account_status",
+        "customer_stage",
+        "health_status",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_activities": {
+      "additionalProperties": true,
+      "indexes": [
+        "activity_type",
+        "account_id",
+        "contact_id",
+        "opportunity_id",
+        "communication_message_key",
+        "happens_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "is_deleted",
+          "happens_at_ms"
+        ],
+        [
+          "account_id",
+          "happens_at_ms"
+        ],
+        [
+          "opportunity_id",
+          "happens_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "activity_type": {
+          "type": "string"
+        },
+        "actor_id": {
+          "type": "string"
+        },
+        "communication_message_key": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "happens_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "linked_record_id": {
+          "type": "string"
+        },
+        "linked_record_name": {
+          "type": "string"
+        },
+        "linked_record_type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "opportunity_id": {
+          "type": "string"
+        },
+        "properties": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "happens_at_ms",
+        "activity_type",
+        "name",
+        "properties",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_contacts": {
+      "additionalProperties": true,
+      "indexes": [
+        "account_id",
+        "email",
+        "contact_owner_id",
+        "is_primary_contact",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "account_id",
+          "updated_at_ms"
+        ],
+        [
+          "contact_owner_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "contact_owner_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "email": {
+          "type": "string"
+        },
+        "first_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "is_primary_contact": {
+          "type": "boolean"
+        },
+        "job_title": {
+          "type": "string"
+        },
+        "last_activity_at_ms": {
+          "type": "number"
+        },
+        "last_name": {
+          "type": "string"
+        },
+        "linkedin_url": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "x_url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "account_id",
+        "first_name",
+        "last_name",
+        "email",
+        "is_primary_contact",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_dedupe_candidates": {
+      "additionalProperties": true,
+      "indexes": [
+        "object_type",
+        "match_key",
+        "match_type",
+        "status",
+        "import_batch_id",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "object_type",
+          "match_key"
+        ],
+        [
+          "status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "confidence": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "decided_at_ms": {
+          "type": "number"
+        },
+        "decided_by_id": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "existing_record_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 220,
+          "type": "string"
+        },
+        "import_batch_id": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "match_key": {
+          "type": "string"
+        },
+        "match_type": {
+          "type": "string"
+        },
+        "object_type": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "object_type",
+        "match_key",
+        "match_type",
+        "status",
+        "confidence",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_files": {
+      "additionalProperties": true,
+      "indexes": [
+        "account_id",
+        "contact_id",
+        "opportunity_id",
+        "document_id",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "file_url": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "opportunity_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "filename",
+        "mime_type",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_import_batches": {
+      "additionalProperties": true,
+      "indexes": [
+        "source",
+        "source_record_id",
+        "status",
+        "object_type",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "dedupe_count": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "failed_count": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "imported_count": {
+          "type": "number"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "object_type": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "skipped_count": {
+          "type": "number"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_filename": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "status",
+        "object_type",
+        "imported_count",
+        "skipped_count",
+        "failed_count",
+        "dedupe_count",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_notes": {
+      "additionalProperties": true,
+      "indexes": [
+        "author_id",
+        "account_id",
+        "contact_id",
+        "opportunity_id",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "account_id",
+          "updated_at_ms"
+        ],
+        [
+          "opportunity_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "author_id": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "body_format": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "linked_note_id": {
+          "type": "string"
+        },
+        "opportunity_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "body",
+        "body_format",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_opportunities": {
+      "additionalProperties": true,
+      "indexes": [
+        "account_id",
+        "primary_contact_id",
+        "owner_id",
+        "stage",
+        "opportunity_type",
+        "close_date_ms",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "stage",
+          "position"
+        ],
+        [
+          "owner_id",
+          "updated_at_ms"
+        ],
+        [
+          "account_id",
+          "updated_at_ms"
+        ],
+        [
+          "opportunity_type",
+          "close_date_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "amount_cents": {
+          "type": "number"
+        },
+        "close_date_ms": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_stage_changed_at_ms": {
+          "type": "number"
+        },
+        "lost_reason": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "opportunity_type": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "position": {
+          "type": "number"
+        },
+        "primary_contact_id": {
+          "type": "string"
+        },
+        "probability": {
+          "type": "number"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_record_id": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "account_id",
+        "stage",
+        "opportunity_type",
+        "amount_cents",
+        "currency",
+        "position",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_tasks": {
+      "additionalProperties": true,
+      "indexes": [
+        "status",
+        "assignee_id",
+        "account_id",
+        "contact_id",
+        "opportunity_id",
+        "due_at_ms",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "assignee_id",
+          "due_at_ms"
+        ],
+        [
+          "account_id",
+          "updated_at_ms"
+        ],
+        [
+          "opportunity_id",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "assignee_id": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "due_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "opportunity_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "position": {
+          "type": "number"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_view_filters": {
+      "additionalProperties": true,
+      "indexes": [
+        "view_id",
+        "field_name",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "view_id",
+          "position"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "field_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "operator": {
+          "type": "string"
+        },
+        "position": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "value": {
+          "type": "string"
+        },
+        "value_json": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "view_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "view_id",
+        "field_name",
+        "operator",
+        "position",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_view_sorts": {
+      "additionalProperties": true,
+      "indexes": [
+        "view_id",
+        "field_name",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "view_id",
+          "position"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "direction": {
+          "type": "string"
+        },
+        "field_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "position": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "view_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "view_id",
+        "field_name",
+        "direction",
+        "position",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "customer_views": {
+      "additionalProperties": true,
+      "indexes": [
+        "object_type",
+        "view_type",
+        "visibility",
+        "owner_id",
+        "updated_at_ms",
+        [
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        [
+          "object_type",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "aggregate_field": {
+          "type": "string"
+        },
+        "column_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "group_by_field": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "object_type": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "view_type": {
+          "type": "string"
+        },
+        "visibility": {
+          "type": "string"
+        },
+        "visible_columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "object_type",
+        "view_type",
+        "visibility",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migration_strategies": {
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "module_id": "customers",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

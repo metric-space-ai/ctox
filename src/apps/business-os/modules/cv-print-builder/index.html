@@ -1,0 +1,25 @@
+<div class="cv-print-builder" data-cv-print-builder>
+  <input class="cv-hidden-input" type="file" accept="application/pdf,.pdf" data-cv-upload />
+  <input class="cv-hidden-input" type="file" accept="image/*" data-cv-logo-upload />
+
+  <aside class="cv-sidebar" aria-label="Kandidaten">
+    <div class="cv-sidebar-head">
+      <div>
+        <strong>CV Print Builder</strong>
+        <span data-cv-count>0 CVs</span>
+      </div>
+    </div>
+    <div class="cv-candidate-list" data-cv-list></div>
+    <button class="cv-new-card" type="button" data-cv-new>
+      <span class="cv-new-icon" aria-hidden="true">+</span>
+      <span>
+        <strong>Neuer CV</strong>
+        <small>PDF als Kandidat anlegen</small>
+      </span>
+    </button>
+  </aside>
+
+  <main class="cv-workbench" aria-label="CV Arbeitsbereich">
+    <div class="cv-stage" data-cv-stage></div>
+  </main>
+</div>

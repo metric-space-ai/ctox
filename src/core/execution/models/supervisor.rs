@@ -1577,6 +1577,14 @@ fn resolve_managed_engine_binary(
     root: &Path,
     launch_spec: &ManagedBackendLaunchSpec,
 ) -> Result<PathBuf> {
+    if let Some(ref binary_path) = launch_spec.engine_config.binary_path {
+        let path = PathBuf::from(binary_path);
+        if path.exists() {
+            super::runtime_engine_guard::ensure_engine_binary_matches_host(root, &path, false)?;
+            return Ok(path);
+        }
+    }
+
     // New architecture: route request models that have a local
     // per-model server binary under src/core/inference/models/<model>/ to
     // that binary directly. See `local_model::resolve_local_model_backend`
@@ -3965,7 +3973,7 @@ mod tests {
         assert!(rendered.contains("arch = \"gpt-oss\""));
         assert!(rendered.contains("in_situ_quant = \"Q4K\""));
         assert!(rendered.contains("device_layers = [\"0:20\", \"1:16\"]"));
-        assert!(rendered.contains("cache_type = \"turboquant3\""));
+        assert!(rendered.contains("cache_type = \"TurboQuant3\""));
         assert!(!rendered.contains("run_engine.sh"));
         let config_path = persist_managed_engine_runtime_config(
             &root,

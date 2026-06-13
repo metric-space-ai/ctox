@@ -1,0 +1,37 @@
+{
+  "title": "Invoices",
+  "scope": "invoices.scope.label",
+  "create_button": "+ New Invoice",
+  "empty_hint": "Select an invoice from the list or create a new draft.",
+  "state": {
+    "draft": "Draft",
+    "posted": "Posted",
+    "partially_paid": "Partially paid",
+    "paid": "Paid",
+    "overdue": "Overdue",
+    "cancelled": "Cancelled",
+    "credited": "Credited"
+  },
+  "type": {
+    "sale_out": "Outgoing sales invoice",
+    "sale_in": "Incoming purchase invoice",
+    "credit_note_out": "Outgoing credit note",
+    "credit_note_in": "Incoming credit note",
+    "recurring_template": "Recurring template"
+  },
+  "actions": {
+    "update": "Update",
+    "delete": "Delete",
+    "post": "Post",
+    "cancel": "Cancel",
+    "credit_note": "Create credit note",
+    "allocate_payment": "Allocate payment",
+    "run_dunning": "Run dunning"
+  },
+  "errors": {
+    "missing_invoice_id": "Invoice id is required.",
+    "update_on_posted": "Posted invoices are GoBD-immutable and cannot be edited.",
+    "delete_on_posted": "Posted invoices cannot be deleted, only cancelled.",
+    "over_allocation": "Payment exceeds the open invoice balance."
+  }
+}

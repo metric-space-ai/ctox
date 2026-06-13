@@ -39,14 +39,14 @@ bounded finding set:
 - stale: the world or queue changed and the artifact must be refreshed,
   obsoleted, or consolidated before continuing
 
-The reviewer must not be modeled as a producer of unbounded self-work. A review
+The reviewer must not be modeled as a producer of unbounded internal work. A review
 failure can require the main agent to revise the artifact, but the revision path
 must remain tied to the same parent entity and must be bounded by the state
 machine.
 
 ### Spawners
 
-A spawner is any runtime path that creates durable child work: self-work,
+A spawner is any runtime path that creates durable child work: internal work,
 queue tasks, plan-step messages, schedule messages, or similar child entities.
 
 Every spawner must have a core contract:
@@ -118,7 +118,7 @@ Reviewing
 
 The important property is that the reviewer does not own a new durable cascade.
 It may cause a bounded revision, but it cannot recursively create review-owned
-self-work that then creates further review-owned self-work.
+internal work that then creates further review-owned internal work.
 
 ## Witness Of Progress
 

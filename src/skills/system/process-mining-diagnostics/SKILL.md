@@ -2,10 +2,10 @@
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 - Terminal work is valid only when the durable outcome exists in runtime state. Text like "sent", "done", or "closed" is not evidence. For outbound email, the required witness is an outbound email artifact with terminal state `accepted`.
 - Outcome failures must stay agent-owned. The harness and reviewer explain the missing durable artifact; they do not send email, close tickets, or complete the work for the agent.
 
@@ -65,7 +65,7 @@ Use this skill when CTOX needs to audit its own harness behavior, runtime state 
 
 7. Report only evidence-backed conclusions. Include model id, conformance run id, deadlock suspects, violation ids, proof ids, and spawn edge ids. If a communication reached `sent`, `done`, `completed`, or `delivered` without prior review evidence or without the required outcome witness, treat it as a critical harness violation and repair the queue before any further outbound communication.
 
-8. For subsystem forensics, use `self-diagnose` first. It must cover at least process-mining coverage, core graph liveness, spawn liveness, outcome-witness health, knowledge growth/load, LCM continuity commits, queue throughput and slowest/fastest tasks, founder review gates, ticket/self-work backlog, and schedule/deadline backing.
+8. For subsystem forensics, use `self-diagnose` first. It must cover at least process-mining coverage, core graph liveness, spawn liveness, outcome-witness health, knowledge growth/load, LCM continuity commits, queue throughput and slowest/fastest tasks, founder review gates, ticket/internal-work backlog, and schedule/deadline backing.
 
 ## Guardrails
 

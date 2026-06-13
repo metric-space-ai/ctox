@@ -1345,7 +1345,7 @@ mod tests {
         assert!(instructions.contains("do not run reviewed-send before review feedback"));
         assert!(instructions.contains("Do not create review rows or approval digests manually"));
         assert!(instructions.contains("accepted outbound row"));
-        assert!(instructions.contains("Do not create review-driven self-work"));
+        assert!(instructions.contains("Do not create review-driven internal work"));
     }
 
     #[test]

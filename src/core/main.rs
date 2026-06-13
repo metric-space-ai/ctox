@@ -7,6 +7,7 @@ mod api_costs;
 mod autonomy;
 mod business_os;
 mod capabilities;
+mod coding_agents;
 mod communication;
 mod context;
 mod doc_stack;
@@ -130,12 +131,16 @@ INSTALL / UPGRADE
                                  serve the native no-build Business OS app
   ctox business-os install --target <empty-dir> [--init-git]
                                  create a separate customer-owned Business OS repo
+  ctox business-os desktop invite [--display-name <name>] [--format json|link]
+                                 emit a Desktop pairing invite for this instance
   ctox business-os modules list|enable|disable
                                  manage optional Business OS skill-app modules
   ctox business-os skills list|enable|disable
                                  manage optional packed skills for Business OS
   ctox business-os repair queue-projections --dry-run|--apply
                                  reconcile durable CTOX queue state into Business OS projections
+  ctox coding-agent status|providers|install|auth|workspace|session
+                                 control desktop coding agents through a unified CLI
 
 ENGINE / GPU
   ctox doctor                    health check — update available? hints
@@ -581,6 +586,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("business-os") | Some("business") => {
             service::business_os::handle_business_os_command(root, &args[1..])
         }
+        Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("turn") => service::turn_ledger::handle_turn_command(root, &args[1..]),
         Some("harness-flow") => service::harness_flow::handle_harness_flow_command(root, &args[1..]),
         Some("process-mining") => {

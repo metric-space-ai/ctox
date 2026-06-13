@@ -1,0 +1,306 @@
+{
+  "collections": {
+    "ctox_ticket_approvals": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_cases": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_clarification_requests": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_control_bundles": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_event_routing_state": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_events": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_items": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_label_assignments": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_self_work_items": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_self_work_notes": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_verifications": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_writebacks": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "tickets",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

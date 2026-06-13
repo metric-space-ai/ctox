@@ -184,7 +184,8 @@ fn command_output_with_timeout(
             let reap_deadline = Instant::now() + Duration::from_secs(2);
             while Instant::now() < reap_deadline {
                 if child.try_wait()?.is_some() {
-                    return child.wait_with_output();
+                    let _ = child.wait_with_output();
+                    break;
                 }
                 thread::sleep(Duration::from_millis(50));
             }

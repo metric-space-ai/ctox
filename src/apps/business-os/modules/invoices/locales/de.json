@@ -1,0 +1,37 @@
+{
+  "title": "Rechnungen",
+  "scope": "invoices.scope.label",
+  "create_button": "+ Neue Rechnung",
+  "empty_hint": "Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.",
+  "state": {
+    "draft": "Entwurf",
+    "posted": "Gebucht",
+    "partially_paid": "Teilweise bezahlt",
+    "paid": "Bezahlt",
+    "overdue": "Überfällig",
+    "cancelled": "Storniert",
+    "credited": "Gutgeschrieben"
+  },
+  "type": {
+    "sale_out": "Ausgangsrechnung",
+    "sale_in": "Eingangsrechnung",
+    "credit_note_out": "Gutschrift (ausgehend)",
+    "credit_note_in": "Gutschrift (eingehend)",
+    "recurring_template": "Abo-Vorlage"
+  },
+  "actions": {
+    "update": "Aktualisieren",
+    "delete": "Löschen",
+    "post": "Buchen",
+    "cancel": "Stornieren",
+    "credit_note": "Gutschrift erstellen",
+    "allocate_payment": "Zahlung zuordnen",
+    "run_dunning": "Mahnlauf starten"
+  },
+  "errors": {
+    "missing_invoice_id": "Rechnungs-ID fehlt.",
+    "update_on_posted": "Gebuchte Rechnungen sind GoBD-immutable und können nicht mehr geändert werden.",
+    "delete_on_posted": "Gebuchte Rechnungen können nicht gelöscht, nur storniert werden.",
+    "over_allocation": "Zahlung übersteigt den offenen Rechnungsbetrag."
+  }
+}

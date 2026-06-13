@@ -27,7 +27,9 @@ use crate::unified_exec::WriteStdinRequest;
 use async_trait::async_trait;
 use ctox_protocol::models::PermissionProfile;
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct UnifiedExecHandler;
@@ -145,6 +147,7 @@ impl ToolHandler for UnifiedExecHandler {
                 let cwd = resolve_workdir_base_path(&arguments, context.turn.cwd.as_path())?;
                 let args: ExecCommandArgs =
                     parse_arguments_with_base_path(&arguments, cwd.as_path())?;
+                let raw_cmd_for_guard = args.cmd.clone();
                 maybe_emit_implicit_skill_invocation(
                     session.as_ref(),
                     turn.as_ref(),
@@ -161,6 +164,12 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .map_err(FunctionCallError::RespondToModel)?;
                 let command_for_display = ctox_shell_command::parse_command::shlex_join(&command);
+                if let Some(message) =
+                    business_os_app_root_artifact_write_guard(&raw_cmd_for_guard, &cwd)
+                {
+                    manager.release_process_id(process_id).await;
+                    return Err(FunctionCallError::RespondToModel(message));
+                }
 
                 let ExecCommandArgs {
                     workdir,
@@ -209,6 +218,7 @@ impl ToolHandler for UnifiedExecHandler {
 
                 let workdir = workdir.map(|dir| context.turn.resolve_path(Some(dir)));
                 let cwd = workdir.clone().unwrap_or(cwd);
+                let root_artifact_snapshot = business_os_app_root_artifact_snapshot(&cwd);
                 let normalized_additional_permissions = match implicit_granted_permissions(
                     sandbox_permissions,
                     requested_additional_permissions.as_ref(),
@@ -246,7 +256,12 @@ impl ToolHandler for UnifiedExecHandler {
                 )
                 .await?
                 {
+                    let cleanup_message =
+                        cleanup_new_business_os_app_root_artifacts(root_artifact_snapshot.as_ref());
                     manager.release_process_id(process_id).await;
+                    if let Some(message) = cleanup_message {
+                        return Err(FunctionCallError::RespondToModel(message));
+                    }
                     return Ok(ExecCommandToolOutput {
                         event_call_id: String::new(),
                         chunk_id: String::new(),
@@ -260,7 +275,7 @@ impl ToolHandler for UnifiedExecHandler {
                     });
                 }
 
-                manager
+                let exec_result = manager
                     .exec_command(
                         ExecCommandRequest {
                             command,
@@ -280,12 +295,17 @@ impl ToolHandler for UnifiedExecHandler {
                         },
                         &context,
                     )
-                    .await
-                    .map_err(|err| {
-                        FunctionCallError::RespondToModel(format!(
-                            "exec_command failed for `{command_for_display}`: {err:?}"
-                        ))
-                    })?
+                    .await;
+                if let Some(message) =
+                    cleanup_new_business_os_app_root_artifacts(root_artifact_snapshot.as_ref())
+                {
+                    return Err(FunctionCallError::RespondToModel(message));
+                }
+                exec_result.map_err(|err| {
+                    FunctionCallError::RespondToModel(format!(
+                        "exec_command failed for `{command_for_display}`: {err:?}"
+                    ))
+                })?
             }
             "write_stdin" => {
                 let args: WriteStdinArgs = parse_arguments(&arguments)?;
@@ -321,6 +341,378 @@ impl ToolHandler for UnifiedExecHandler {
 
         Ok(response)
     }
+}
+
+pub(crate) fn business_os_app_root_artifact_write_guard(
+    command: &str,
+    cwd: &Path,
+) -> Option<String> {
+    let workspace_root = business_os_workspace_root(cwd)?;
+    for artifact in ["module.json", "collections.schema.json"] {
+        let absolute = workspace_root.join(artifact);
+        if command_writes_path(command, artifact)
+            || command_writes_path(command, &absolute.to_string_lossy())
+        {
+            return Some(root_artifact_guard_message(artifact));
+        }
+    }
+    if let Some(artifact) = command_writes_forbidden_root_app_artifact(command) {
+        return Some(root_artifact_guard_message(&artifact));
+    }
+    if let Some(artifact) =
+        command_writes_forbidden_business_os_module_side_effect(command, &workspace_root, cwd)
+    {
+        return Some(module_side_effect_guard_message(&artifact));
+    }
+    None
+}
+
+fn root_artifact_guard_message(artifact: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a root-level app artifact write to `{artifact}`. \
+Write app artifacts only under `src/apps/business-os/installed-modules/<module_id>/` or \
+`src/apps/business-os/modules/<module_id>/` using MODULE_DIR. Do not create workspace-root \
+manifests, schema aliases, blocker/status notes, harness aliases, or probe files for app deliverables."
+    )
+}
+
+fn module_side_effect_guard_message(artifact: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a forbidden generated-module side effect `{artifact}`. \
+Business OS apps are no-build browser ESM modules. Do not create package.json, lockfiles, \
+node_modules, bundle files, or probe/repair artifacts. Use .mjs tests and local browser-safe ESM \
+helpers instead."
+    )
+}
+
+#[derive(Debug)]
+struct BusinessOsAppRootArtifactSnapshot {
+    workspace_root: PathBuf,
+    existing_root_entries: BTreeSet<String>,
+}
+
+fn business_os_app_root_artifact_snapshot(cwd: &Path) -> Option<BusinessOsAppRootArtifactSnapshot> {
+    let workspace_root = business_os_workspace_root(cwd)?;
+    let existing_root_entries = fs::read_dir(&workspace_root)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect::<BTreeSet<_>>();
+    Some(BusinessOsAppRootArtifactSnapshot {
+        workspace_root,
+        existing_root_entries,
+    })
+}
+
+fn cleanup_new_business_os_app_root_artifacts(
+    snapshot: Option<&BusinessOsAppRootArtifactSnapshot>,
+) -> Option<String> {
+    let snapshot = snapshot?;
+    let mut removed = Vec::new();
+    let mut remove_errors = Vec::new();
+    let Ok(entries) = fs::read_dir(&snapshot.workspace_root) else {
+        return None;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if snapshot.existing_root_entries.contains(&name)
+            || !forbidden_business_os_root_app_artifact_name(&name)
+        {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed.push(name),
+            Err(err) => remove_errors.push(format!("{name}: {err}")),
+        }
+    }
+    if removed.is_empty() && remove_errors.is_empty() {
+        return None;
+    }
+    removed.sort();
+    remove_errors.sort();
+    let mut message = String::from(
+        "Business OS app module guard removed newly created root-level app artifact(s). \
+Generated app files must live only under \
+`src/apps/business-os/installed-modules/<module_id>/` or \
+`src/apps/business-os/modules/<module_id>/` as specified by the task. ",
+    );
+    if !removed.is_empty() {
+        message.push_str("Removed forbidden root file(s): ");
+        message.push_str(&removed.join(", "));
+        message.push_str(". ");
+    }
+    if !remove_errors.is_empty() {
+        message.push_str("Removal errors: ");
+        message.push_str(&remove_errors.join("; "));
+        message.push_str(". ");
+    }
+    message.push_str(
+        "Re-run the write using MODULE_DIR and do not create workspace-root manifests, schema aliases, blocker/status notes, harness aliases, or probe files.",
+    );
+    Some(message)
+}
+
+fn business_os_workspace_root(cwd: &Path) -> Option<PathBuf> {
+    cwd.ancestors()
+        .find(|candidate| candidate.join("src/apps/business-os").is_dir())
+        .map(Path::to_path_buf)
+}
+
+fn command_writes_path(command: &str, path: &str) -> bool {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let path = path.trim();
+    if path.is_empty() {
+        return false;
+    }
+    let dot_path = format!("./{path}");
+    [
+        format!("> {path}"),
+        format!(">{path}"),
+        format!("> \"{path}\""),
+        format!(">\"{path}\""),
+        format!("> '{path}'"),
+        format!(">'{path}'"),
+        format!("> {dot_path}"),
+        format!(">{dot_path}"),
+        format!("> \"{dot_path}\""),
+        format!(">\"{dot_path}\""),
+        format!("> '{dot_path}'"),
+        format!(">'{dot_path}'"),
+        format!("tee {path}"),
+        format!("tee \"{path}\""),
+        format!("tee '{path}'"),
+        format!("tee {dot_path}"),
+        format!("tee \"{dot_path}\""),
+        format!("tee '{dot_path}'"),
+    ]
+    .iter()
+    .any(|needle| compact.contains(needle))
+        || command_programmatically_writes_path(&compact, path)
+}
+
+fn command_writes_forbidden_root_app_artifact(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let tokens = shellish_tokens(&compact);
+    for (idx, token) in tokens.iter().enumerate() {
+        let Some(name) = root_artifact_token_name(token) else {
+            continue;
+        };
+        if !forbidden_business_os_root_app_artifact_name(&name) {
+            continue;
+        }
+        if command_writes_path(&compact, token)
+            || command_writes_path(&compact, &name)
+            || command_programmatically_writes_path(&compact, &name)
+            || token_is_target_of_write_verb(&tokens, idx)
+        {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn shellish_tokens(command: &str) -> Vec<String> {
+    command
+        .split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, ';' | '&' | '|' | '(' | ')' | '{' | '}')
+        })
+        .map(|token| {
+            token
+                .trim_matches(|ch: char| {
+                    matches!(ch, '\'' | '"' | '`' | ',' | ':' | '[' | ']' | '<' | '>')
+                })
+                .to_string()
+        })
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn root_artifact_token_name(token: &str) -> Option<String> {
+    let trimmed = token
+        .trim()
+        .trim_start_matches("./")
+        .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'));
+    let lower_trimmed = trimmed.to_ascii_lowercase();
+    let basename = lower_trimmed
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(lower_trimmed.as_str())
+        .to_string();
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        let is_module_dir_target = lower_trimmed.contains("module_dir")
+            || lower_trimmed.contains("src/apps/business-os/modules/")
+            || lower_trimmed.contains("src/apps/business-os/installed-modules/");
+        if !is_module_dir_target
+            && (trimmed.contains('$') || Path::new(trimmed).is_absolute())
+            && forbidden_business_os_root_app_artifact_name(&basename)
+        {
+            return Some(basename);
+        }
+    }
+    if trimmed.is_empty()
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed == "."
+        || trimmed == ".."
+    {
+        return None;
+    }
+    Some(trimmed.to_ascii_lowercase())
+}
+
+fn token_is_target_of_write_verb(tokens: &[String], idx: usize) -> bool {
+    let start = idx.saturating_sub(6);
+    tokens[start..idx].iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "mv" | "cp" | "ln" | "install" | "tee" | "touch" | "write" | "printf"
+        )
+    })
+}
+
+fn forbidden_business_os_root_app_artifact_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "module.json"
+        || lower == "collections.schema.json"
+        || lower.starts_with("_test_")
+        || lower.starts_with("_probe_")
+        || lower.starts_with("test-")
+        || lower.starts_with("probe-")
+        || lower.contains("-test.")
+        || lower.contains("_test.")
+        || lower.contains("-probe.")
+        || lower.contains("_probe.")
+        || lower.ends_with("-module.json")
+        || lower.ends_with("_module.json")
+        || lower.ends_with(".module.json")
+        || lower.ends_with("-collections.schema.json")
+        || lower.ends_with("_collections.schema.json")
+        || lower.ends_with(".collections.schema.json")
+        || lower == "artifact-status.md"
+        || lower.ends_with("-artifact-status.md")
+        || lower.ends_with("_artifact_status.md")
+        || lower.ends_with("-blocker.md")
+        || lower.ends_with("_blocker.md")
+}
+
+fn command_writes_forbidden_business_os_module_side_effect(
+    command: &str,
+    workspace_root: &Path,
+    cwd: &Path,
+) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let tokens = shellish_tokens(&compact);
+    let cwd_is_module_dir = is_business_os_module_dir(workspace_root, cwd);
+    for (idx, token) in tokens.iter().enumerate() {
+        let normalized = token
+            .trim()
+            .trim_start_matches("./")
+            .trim_matches(|ch: char| matches!(ch, '\'' | '"' | '`'))
+            .to_string();
+        let lower = normalized.to_ascii_lowercase();
+        let basename = lower
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(lower.as_str())
+            .to_string();
+        let path_is_under_business_os_module = lower.contains("src/apps/business-os/modules/")
+            || lower.contains("src/apps/business-os/installed-modules/");
+        let forbidden = forbidden_business_os_module_side_effect_name(&basename)
+            || lower.contains("/node_modules/")
+            || lower.ends_with("/node_modules");
+        if !forbidden {
+            continue;
+        }
+        let explicitly_targets_module = path_is_under_business_os_module
+            && (command_writes_path(&compact, &normalized)
+                || command_programmatically_writes_path(&compact, &normalized)
+                || token_is_target_of_write_verb(&tokens, idx));
+        let targets_module_cwd = cwd_is_module_dir
+            && (command_writes_path(&compact, &basename)
+                || command_programmatically_writes_path(&compact, &basename)
+                || token_is_target_of_write_verb(&tokens, idx));
+        let variable_module_target = normalized.contains("MODULE_DIR")
+            && (command_writes_path(&compact, &normalized)
+                || token_is_target_of_write_verb(&tokens, idx));
+        if explicitly_targets_module || targets_module_cwd || variable_module_target {
+            return Some(normalized);
+        }
+    }
+    None
+}
+
+fn forbidden_business_os_module_side_effect_name(name: &str) -> bool {
+    matches!(
+        name,
+        "package.json"
+            | "package-lock.json"
+            | "yarn.lock"
+            | "pnpm-lock.yaml"
+            | "bun.lockb"
+            | "node_modules"
+    ) || name.starts_with("_probe_")
+        || name.starts_with("_test_")
+        || name.ends_with(".bundle.js")
+        || name.ends_with(".bundle.mjs")
+        || name.ends_with(".bundle.css")
+        || name.ends_with(".bak")
+        || name.ends_with(".orig")
+        || name.ends_with(".rej")
+        || name.ends_with(".tmp")
+}
+
+fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
+    let Ok(relative) = cwd.strip_prefix(workspace_root) else {
+        return false;
+    };
+    let segments = relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>();
+    segments.len() >= 5
+        && segments[0] == "src"
+        && segments[1] == "apps"
+        && segments[2] == "business-os"
+        && (segments[3] == "modules" || segments[3] == "installed-modules")
+}
+
+fn command_programmatically_writes_path(command: &str, path: &str) -> bool {
+    let single = format!("'{path}'");
+    let double = format!("\"{path}\"");
+    let root_single = format!("root/'{path}'");
+    let root_single_spaced = format!("root / '{path}'");
+    let root_double = format!("root/\"{path}\"");
+    let root_double_spaced = format!("root / \"{path}\"");
+    let write_marker = command.contains(".write_text(")
+        || command.contains(".write_bytes(")
+        || command.contains("writeFileSync(")
+        || command.contains("writeFile(")
+        || command.contains("fs.writeFile")
+        || command.contains("open(");
+    if !write_marker {
+        return false;
+    }
+    if path.contains('/') {
+        return command.contains(&single) || command.contains(&double);
+    }
+    command.contains(&root_single)
+        || command.contains(&root_single_spaced)
+        || command.contains(&root_double)
+        || command.contains(&root_double_spaced)
+        || command.contains(&format!("/'{path}'"))
+        || command.contains(&format!("/\"{path}\""))
+        || command.contains(&format!("open({single}"))
+        || command.contains(&format!("open({double}"))
+        || command.contains(&format!("writeFileSync({single}"))
+        || command.contains(&format!("writeFileSync({double}"))
+        || command.contains(&format!("writeFile({single}"))
+        || command.contains(&format!("writeFile({double}"))
 }
 
 pub(crate) fn get_command(

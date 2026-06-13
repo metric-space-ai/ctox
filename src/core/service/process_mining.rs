@@ -58,7 +58,7 @@ const SQLITE_ACCESS_RETENTION_WINDOW: i64 = 200_000;
 const SQLITE_ACCESS_RETENTION_INTERVAL_FLUSHES: u64 = 128;
 // Safety ceiling on the full process-mining event log across all case_ids. The
 // per-source sqlite-access window above only caps recorder noise; this bounds
-// total audit volume so a runaway producer (e.g. a stuck self-work spawn
+// total audit volume so a runaway producer (e.g. a stuck internal-work spawn
 // cascade) cannot grow the table without bound and degrade the runtime DB.
 // Generous enough to retain real audit history, low enough to stay serviceable.
 const PROCESS_EVENTS_GLOBAL_RETENTION_WINDOW: i64 = 500_000;
@@ -3071,21 +3071,21 @@ fn diagnose_tickets(conn: &Connection) -> Result<Value> {
         findings.push(json!({
             "severity": "warning",
             "code": "self_work_without_canonical_tickets",
-            "message": "Self-work dominates while canonical local tickets remain empty."
+            "message": "Internal work dominates while canonical local tickets remain empty."
         }));
     }
     if active_self_work > 25 {
         findings.push(json!({
             "severity": "warning",
             "code": "large_active_self_work_backlog",
-            "message": "The active self-work backlog is high."
+            "message": "The active internal-work backlog is high."
         }));
     }
     let status = status_from_findings(&findings);
     Ok(subsystem_json(
         "tickets_and_self_work",
         status,
-        "Ticket/self-work forensics must expose backlog, closure rate, and task duration extremes.",
+        "Ticket/internal-work forensics must expose backlog, closure rate, and task duration extremes.",
         json!({
             "local_tickets": local_tickets,
             "ticket_self_work_items": self_work,

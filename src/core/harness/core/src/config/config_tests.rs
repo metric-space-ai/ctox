@@ -176,6 +176,27 @@ fn harness_override_sets_model_context_window() {
 }
 
 #[test]
+fn legacy_default_service_tier_loads_as_no_explicit_tier() {
+    let cfg: ConfigToml = toml::from_str(
+        r#"
+service_tier = "default"
+
+[profiles.legacy]
+service_tier = "default"
+"#,
+    )
+    .expect("legacy service_tier default should deserialize");
+
+    assert_eq!(cfg.service_tier, None);
+    assert_eq!(
+        cfg.profiles
+            .get("legacy")
+            .and_then(|profile| profile.service_tier),
+        None
+    );
+}
+
+#[test]
 fn parses_bundled_skills_config() {
     let cfg: ConfigToml = toml::from_str(
         r#"

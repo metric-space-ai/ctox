@@ -841,7 +841,8 @@ fn has_non_spawning_intervention_contract(text: &str) -> bool {
     text.contains("## Core Spawn Intervention Contract")
         && text.contains("must not create new durable work")
         && text.contains("Do not run commands that create new queue tasks")
-        && text.contains("ctox ticket self-work-put")
+        && (text.contains("ctox ticket internal-work-put")
+            || text.contains("ctox ticket self-work-put"))
         && text.contains("ctox schedule ensure")
         && text.contains("ctox plan ingest")
 }

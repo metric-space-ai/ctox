@@ -1,0 +1,1047 @@
+{
+  "collections": {
+    "business_commands": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "client_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "command_type": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "inbound_channel": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "record_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "command_id",
+        "module",
+        "command_type",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "outbound_account_limits": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "daily_limit": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reset_at_ms": {
+          "type": "number"
+        },
+        "send_window": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "sender_account_id": {
+          "type": "string"
+        },
+        "sent_today": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "sender_account_id",
+        "daily_limit",
+        "sent_today",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_approvals": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "actor_user_id": {
+          "type": "string"
+        },
+        "comment": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "engagement_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "revision_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "message_id",
+        "engagement_id",
+        "decision",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_campaigns": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "company_count": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "market": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "objective": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pipeline_count": {
+          "type": "number"
+        },
+        "qualified_count": {
+          "type": "number"
+        },
+        "source_count": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_companies": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "company_data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "country": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "domain": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "fit_score": {
+          "type": "number"
+        },
+        "fit_status": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pipeline_status": {
+          "type": "string"
+        },
+        "qualification_status": {
+          "type": "string"
+        },
+        "research_status": {
+          "type": "string"
+        },
+        "row_index": {
+          "type": "number"
+        },
+        "source_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "website": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "name",
+        "qualification_status",
+        "research_status",
+        "pipeline_status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_engagements": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "closed_reason": {
+          "type": "string"
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "next_action_at_ms": {
+          "type": "number"
+        },
+        "paused_reason": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "pipeline_id": {
+          "type": "string"
+        },
+        "sender_account_id": {
+          "type": "string"
+        },
+        "sequence_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_letter_templates": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "body_template": {
+          "type": "string"
+        },
+        "campaign_id": {
+          "maxLength": 100,
+          "type": "string"
+        },
+        "closing": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 100,
+          "type": "string"
+        },
+        "salutation": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "version_number": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "title": "outbound_letter_templates",
+      "type": "object",
+      "version": 0
+    },
+    "outbound_meeting_requests": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "calendar_account_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "duration_minutes": {
+          "type": "number"
+        },
+        "engagement_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "meeting_url": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "proposed_slots": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "slot_strategy": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "engagement_id",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_messages": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "approval_status": {
+          "type": "string"
+        },
+        "body_html": {
+          "type": "string"
+        },
+        "body_text": {
+          "type": "string"
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "channel": {
+          "type": "string"
+        },
+        "communication_account_key": {
+          "type": "string"
+        },
+        "communication_message_key": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "direction": {
+          "type": "string"
+        },
+        "document_id": {
+          "type": "string"
+        },
+        "document_pdf_url": {
+          "type": "string"
+        },
+        "document_version_id": {
+          "type": "string"
+        },
+        "draft_status": {
+          "type": "string"
+        },
+        "engagement_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "message_type": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "physical_sent_at_ms": {
+          "type": "number"
+        },
+        "provider_message_id": {
+          "type": "string"
+        },
+        "recipient_address_text": {
+          "type": "string"
+        },
+        "recipient_email": {
+          "type": "string"
+        },
+        "reply_to_message_id": {
+          "type": "string"
+        },
+        "revision_id": {
+          "type": "string"
+        },
+        "scheduled_send_at_ms": {
+          "type": "number"
+        },
+        "send_status": {
+          "type": "string"
+        },
+        "sender_account_id": {
+          "type": "string"
+        },
+        "sent_at_ms": {
+          "type": "number"
+        },
+        "subject": {
+          "type": "string"
+        },
+        "thread_key": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "engagement_id",
+        "campaign_id",
+        "message_type",
+        "direction",
+        "draft_status",
+        "approval_status",
+        "send_status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "outbound_pipeline_items": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "company_name": {
+          "type": "string"
+        },
+        "contact_research_status": {
+          "type": "string"
+        },
+        "contacts": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "outreach_status": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "priority": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "company_id",
+        "company_name",
+        "stage",
+        "contact_research_status",
+        "outreach_status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_research_runs": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "error": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "pipeline_id": {
+          "type": "string"
+        },
+        "request": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "result": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "run_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "run_type",
+        "status",
+        "request",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_sender_assignments": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "assignment_reason": {
+          "type": "string"
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "company_id": {
+          "type": "string"
+        },
+        "contact_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "engagement_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "sender_account_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "sender_account_id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_sequences": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "approval_policy": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "campaign_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "send_window": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "sequence_policy_text": {
+          "type": "string"
+        },
+        "stop_rules": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "strategy_text": {
+          "type": "string"
+        },
+        "touchpoints": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "name",
+        "strategy_text",
+        "sequence_policy_text",
+        "approval_policy",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_skillbooks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 100,
+          "type": "string"
+        },
+        "mission": {
+          "type": "string"
+        },
+        "non_negotiable_rules": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "routing_taxonomy": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skillbook_id": {
+          "maxLength": 100,
+          "type": "string"
+        },
+        "stop_rules": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "version": {
+          "type": "string"
+        },
+        "version_number": {
+          "type": "number"
+        },
+        "workflow_backbone": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "skillbook_id",
+        "title",
+        "version",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "title": "outbound_skillbooks",
+      "type": "object",
+      "version": 0
+    },
+    "outbound_sources": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "campaign_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "file_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "imported_count": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "row_count": {
+          "type": "number"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "campaign_id",
+        "title",
+        "source_type",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "outbound_suppression_entries": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "scope",
+        "value",
+        "reason",
+        "active",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migration_strategies": {
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      }
+    },
+    "outbound_messages": {
+      "1": {
+        "operations": [
+          {
+            "default": "email",
+            "field": "channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "channel",
+              "payload.channel",
+              "payload.default_channel"
+            ]
+          },
+          {
+            "default": "",
+            "field": "recipient_address_text",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "recipient_address_text",
+              "payload.recipient_address_text"
+            ]
+          },
+          {
+            "default": "",
+            "field": "document_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "document_id"
+            ]
+          },
+          {
+            "default": "",
+            "field": "document_version_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "document_version_id"
+            ]
+          },
+          {
+            "default": "",
+            "field": "document_pdf_url",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "document_pdf_url"
+            ]
+          },
+          {
+            "default": 0,
+            "field": "physical_sent_at_ms",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "physical_sent_at_ms"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "module_id": "outbound",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

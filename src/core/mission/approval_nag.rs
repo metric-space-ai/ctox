@@ -1,11 +1,11 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 //
-// Proactive reminder / approval-chase for open approval-gate self-work
+// Proactive reminder / approval-chase for open approval-gate internal work
 // items.
 //
 // Normal runs leave `CTOX_AUTO_APPROVE_GATES` unset,
-// which means CTOX creates approval-gate self-work items and then
+// which means CTOX creates approval-gate internal work items and then
 // stops. Without this module the owner would never be pinged and the
 // gate would sit forever. This module:
 //
@@ -424,10 +424,10 @@ fn compose_body(
             out.push_str(
                 "Security policy: this action is high-impact enough that an email reply is not accepted as approval.\n\
                  To approve or reject, please open the local CTOX TUI on the host and act on this gate there, or run on the host:\n\
-                   ctox ticket self-work-set-state --work-id ");
+                   ctox ticket internal-work-transition --work-id ");
             out.push_str(&item.work_id);
             out.push_str(
-                " --state closed     # to approve\n   ctox ticket self-work-set-state --work-id ",
+                " --state closed     # to approve\n   ctox ticket internal-work-transition --work-id ",
             );
             out.push_str(&item.work_id);
             out.push_str(" --state failed     # to reject\n\n\
@@ -590,7 +590,7 @@ fn parse_inbound_approval_replies(root: &Path) -> Result<usize> {
                 root,
                 &work_id,
                 new_state,
-                Some("approval reply rejected the self-work item"),
+                Some("approval reply rejected the internal work item"),
             )
         } else {
             tickets::set_ticket_self_work_state(root, &work_id, new_state)
@@ -640,7 +640,7 @@ fn classify_reply_action(body: &str) -> Option<ReplyAction> {
 }
 
 fn extract_work_id(subject: &str) -> Option<String> {
-    // Matches `[ctox-approve:<id>]` with <id> being a self-work work_id
+    // Matches `[ctox-approve:<id>]` with <id> being a legacy internal-work id
     // such as `self-work:i-hate-ai:abc123`.
     let start = subject.find("[ctox-approve:")?;
     let rest = &subject[start + "[ctox-approve:".len()..];

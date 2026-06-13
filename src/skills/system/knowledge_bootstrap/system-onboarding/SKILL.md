@@ -12,17 +12,17 @@ cluster: knowledge_bootstrap
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 
 The typical CTOX work pattern is: there is a system to onboard. Codebases, CRM platforms, API integrations, ticket systems, databases, infrastructure — integration is the default mode of work, and this is the central onboarding skill that drives it.
 
 Use this skill whenever CTOX is operating against an external system and needs to build operational understanding from scratch — whether triggered automatically by a Kanban source sync or started manually for a non-Kanban system (CRM, API, database, codebase, platform).
 
-The kernel provides storage, references, self-work CRUD, publishing, and audit. This skill owns the onboarding behavior.
+The kernel provides storage, references, internal work CRUD, publishing, and audit. This skill owns the onboarding behavior.
 
 The CTOX runtime store is the only durable state plane. Ticket knowledge entries are fact/context records. Continuity commits, ticket/source bindings, verifications, communication records, and other runtime DB rows are durable mission evidence. Reusable operational knowledge requires the higher hierarchy: source skills, skillbooks, runbooks, and runbook items. Markdown files or workspace artifacts do not count as durable state by themselves.
 
@@ -45,7 +45,7 @@ No fixed onboarding choreography belongs in the ticket kernel.
 
 Do not expect prebuilt onboarding tickets from `ctox ticket sync`.
 
-Create only the self-work items that are justified by the observed source knowledge and current gaps.
+Create only the internal work items that are justified by the observed source knowledge and current gaps.
 
 The remote ticket system is only a communication and review surface. CTOX runtime knowledge remains the source of truth.
 
@@ -61,7 +61,7 @@ Visible operator work is mandatory. If you create internal CTOX work in the remo
 
 Do not leave remote work items hanging without ownership, notes, or an end state.
 
-When you need remote ticket work, you must go through the `ctox ticket self-work-*` and `ctox ticket access-request-put` primitives.
+When you need remote ticket work, you must go through the `ctox ticket internal-work-*` and `ctox ticket access-request-put` primitives.
 
 Do not use raw HTTP calls, `curl`, ad hoc browser actions, or direct remote API writes to create or update ticket work during onboarding. If the generic ticket primitives are insufficient, stop and state the missing primitive instead of bypassing CTOX truth.
 
@@ -82,7 +82,7 @@ Onboarding is incomplete unless CTOX has both the needed fact/context registry a
   ```
 
 - Skillbooks (`knowledge_skillbooks`), runbooks (`knowledge_runbooks`), and runbook items (`knowledge_runbook_items`) are mandatory outputs when onboarding discovers reusable operating procedure, not optional polish. A nonzero `ticket_knowledge_entries` count is not enough to claim that CTOX learned a skill.
-- Learning is real work: produce a self-work item and a fact/context entry for each meaningful verified fact; when the fact changes how future work should be performed, promote it into the Skillbook/Runbook hierarchy. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
+- Learning is real work: produce an internal work item and a fact/context entry for each meaningful verified fact; when the fact changes how future work should be performed, promote it into the Skillbook/Runbook hierarchy. Knowledge that lives only in chat history, plan steps, or workspace files does not count.
 - Sync-driven onboarding triggers (`ctox ticket sync` / `ticket_source_controls`) only fire for genuine Kanban ticket systems. For CRMs, APIs, platforms, codebases, and other non-Kanban software, you start onboarding yourself — but the knowledge-population requirements above are identical.
 - Once a source-specific operating skill is justified, bind it on the source so live work routes to it:
 
@@ -100,10 +100,10 @@ ctox ticket knowledge-list --system "<system>" --limit 20
 ctox ticket knowledge-show --system "<system>" --domain "source_profile" --key "observed"
 ```
 
-Inspect any already-open CTOX self-work:
+Inspect any already-open CTOX internal work:
 
 ```sh
-ctox ticket self-work-list --system "<system>" --limit 20
+ctox ticket internal-work-list --system "<system>" --limit 20
 ```
 
 Inspect the secure local secret inventory only through explicit local commands:
@@ -115,41 +115,41 @@ ctox secret show --scope "<scope>" --name "<name>"
 
 ## Primitive Used For New Work
 
-Create a self-work item in CTOX runtime state:
+Create an internal work item in CTOX runtime state:
 
 ```sh
-ctox ticket self-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<text>" --metadata-json '<json>'
+ctox ticket internal-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<text>" --metadata-json '<json>'
 ```
 
-Publish a self-work item into the remote ticket system when the operator-facing surface is useful:
+Publish an internal work item into the remote ticket system when the operator-facing surface is useful:
 
 ```sh
-ctox ticket self-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<text>" --metadata-json '<json>' --publish
+ctox ticket internal-work-put --system "<system>" --kind "<kind>" --title "<title>" --body "<text>" --metadata-json '<json>' --publish
 ```
 
 Or publish an already-created item later:
 
 ```sh
-ctox ticket self-work-publish --work-id "<work_id>"
+ctox ticket internal-work-publish --work-id "<work_id>"
 ```
 
-Assign published self-work to the remote CTOX identity:
+Assign published internal work to the remote CTOX identity:
 
 ```sh
-ctox ticket self-work-assign --work-id "<work_id>" --assignee "self" --assigned-by "ctox"
+ctox ticket internal-work-assign --work-id "<work_id>" --assignee "self" --assigned-by "ctox"
 ```
 
 Append an internal operator-facing progress note:
 
 ```sh
-ctox ticket self-work-note --work-id "<work_id>" --body "<plain human note>" --authored-by "ctox" --visibility internal
+ctox ticket internal-work-note --work-id "<work_id>" --body "<plain human note>" --authored-by "ctox" --visibility internal
 ```
 
 Block or finish the work visibly:
 
 ```sh
-ctox ticket self-work-transition --work-id "<work_id>" --state blocked --transitioned-by "ctox" --note "<plain human block note>" --visibility internal
-ctox ticket self-work-transition --work-id "<work_id>" --state closed --transitioned-by "ctox" --note "<plain human completion note>" --visibility internal
+ctox ticket internal-work-transition --work-id "<work_id>" --state blocked --transitioned-by "ctox" --note "<plain human block note>" --visibility internal
+ctox ticket internal-work-transition --work-id "<work_id>" --state closed --transitioned-by "ctox" --note "<plain human completion note>" --visibility internal
 ```
 
 Create an access request when onboarding cannot continue without rights or secrets:
@@ -204,11 +204,11 @@ Create only the items that are supported by observed evidence.
 
 ## Operating Pattern
 
-The default execution path is the native CTOX ticket and self-work CLI:
+The default execution path is the native CTOX ticket and internal work CLI:
 
 ```sh
 ctox ticket knowledge-bootstrap --system "<system>"
-ctox ticket self-work-list --system "<system>" --state open
+ctox ticket internal-work-list --system "<system>" --state open
 ctox ticket source-skills --system "<system>"
 ```
 
@@ -218,7 +218,7 @@ Manual building blocks remain available when the operator asks for an adjustment
 
 1. Sync and inspect the observed source knowledge.
 2. Create or advance exactly one visible onboarding guide for the source.
-3. Create only justified onboarding work items through `self-work-put`.
+3. Create only justified onboarding work items through `internal-work-put`.
 4. Publish them only when the remote review surface is useful.
 5. When published, immediately assign the work to CTOX if supported and leave an initial internal note with the concrete next step or blocker.
 6. Work the item through notes and transitions instead of spawning more tickets than necessary.
@@ -298,7 +298,7 @@ Do not copy structured metadata into the ticket body. Remote ticket text must be
 - Do not assume every ticket system needs the same first tickets.
 - Do not encode onboarding behavior in the ticket kernel.
 - Do not treat the remote ticket text as canonical source truth after publication.
-- Do not create self-work spam; prefer fewer, durable review items over many one-off tickets.
+- Do not create internal work spam; prefer fewer, durable review items over many one-off tickets.
 - Do not store raw secret values in ticket work or ticket knowledge. Only the encrypted local secret store may hold real secret material.
 - Do not leave machine-authored meta commentary in remote tickets.
 - Do not bypass the generic ticket primitives with direct remote API calls.

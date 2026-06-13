@@ -77,6 +77,7 @@ export async function mount(ctx) {
     lastPointerMoveAt: 0,
     lastViewerHeartbeatAt: 0,
     lastFrameSyncRecoveryAt: 0,
+    addressDirty: false,
   };
 
   const cleanups = [];
@@ -101,9 +102,11 @@ export async function mount(ctx) {
   }
 
   refs.refresh?.addEventListener('click', safeLoadAndRender);
-  refs.start?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.start', {
-    url: refs.address?.value || 'https://example.com',
-  }).then(safeLoadAndRender));
+  refs.start?.addEventListener('click', () => {
+    const url = refs.address?.value || 'https://example.com';
+    state.addressDirty = false;
+    dispatchBrowserCommand(ctx, state, 'browser.session.start', { url }).then(safeLoadAndRender);
+  });
   refs.stop?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.session.stop').then(safeLoadAndRender));
   refs.reset?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reset', {
     url: refs.address?.value || 'https://example.com',
@@ -111,6 +114,9 @@ export async function mount(ctx) {
   refs.back?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.back').then(safeLoadAndRender));
   refs.forward?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.forward').then(safeLoadAndRender));
   refs.reload?.addEventListener('click', () => dispatchBrowserCommand(ctx, state, 'browser.reload').then(safeLoadAndRender));
+  refs.address?.addEventListener('input', () => {
+    state.addressDirty = true;
+  });
   refs.sendToCtox?.addEventListener('click', () => sendBrowserContextToCtox(ctx, state).then(safeLoadAndRender));
   refs.authAssist?.addEventListener('click', (event) => {
     const fillButton = event.target?.closest?.('[data-browser-credential-fill]');
@@ -139,8 +145,10 @@ export async function mount(ctx) {
   refs.form?.addEventListener('submit', (event) => {
     event.preventDefault();
     const commandType = state.latestSession?.id ? 'browser.navigate' : 'browser.session.start';
+    const url = refs.address?.value || 'https://example.com';
+    state.addressDirty = false;
     dispatchBrowserCommand(ctx, state, commandType, {
-      url: refs.address?.value || 'https://example.com',
+      url,
     }).then(safeLoadAndRender);
   });
   installInputHandlers(ctx, refs, state, scheduleRefresh);
@@ -193,7 +201,7 @@ export async function mount(ctx) {
       ...inputs.map((event) => Number(event.seq || 0)).filter(Number.isFinite),
     );
     renderSessionList(refs, sessions, tabs, state.latestSession);
-    renderSession(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand);
+    renderSession(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand, state);
     renderAuthAssist(refs, state.latestSession);
     renderStatus(refs, state.latestSession, state.latestTab, state.latestFrame, state.latestCommand);
     renderDiagnostics(refs, state.latestFrame, inputs, state.latestCommand, state.browserCommands, state.handoffTasks);
@@ -236,7 +244,9 @@ async function dispatchBrowserCommand(ctx, state, commandType, payloadPatch = {}
   };
   if (payload.url) payload.url = normalizeUrl(payload.url);
   await startBrowserRuntimeSync(ctx);
-  await writeOptimisticBrowserSession(ctx, state, commandType, payload);
+  if (commandType === 'browser.session.stop') {
+    await writeOptimisticBrowserSession(ctx, state, commandType, payload);
+  }
   await upsertDoc(ctx.db?.raw?.business_commands, {
     id: commandId,
     command_id: commandId,
@@ -759,13 +769,24 @@ async function writeInputEvent(ctx, state, type, patch) {
   };
   await upsertDoc(ctx.db?.raw?.browser_input_events, event);
   if (session) {
+    const pendingInputCount = await countPendingInputEvents(ctx, session.id);
     await patchDoc(ctx.db?.raw?.browser_sessions, session.id, {
-      last_input_seq: seq,
-      pending_input_count: Number(session.pending_input_count || 0) + 1,
+      last_input_seq: Math.max(seq, Number(session.last_input_seq || 0)),
+      pending_input_count: pendingInputCount,
       updated_at_ms: now,
     });
     await writeViewerActivity(ctx, state, { force: true, atMs: now });
   }
+}
+
+async function countPendingInputEvents(ctx, sessionId) {
+  const collection = ctx.db?.raw?.browser_input_events;
+  if (!collection?.find || !sessionId) return 0;
+  const docs = await collection.find().exec();
+  return (docs || [])
+    .map((doc) => doc?.toJSON?.() || doc)
+    .filter((event) => event?.session_id === sessionId && event?.status === 'pending')
+    .length;
 }
 
 async function writeViewerActivity(ctx, state, options = {}) {
@@ -901,7 +922,7 @@ function renderSessionList(refs, sessions, tabs, activeSession) {
   }).join('');
 }
 
-function renderSession(refs, session, tab, frame, command) {
+function renderSession(refs, session, tab, frame, command, state) {
   if (!session) {
     refs.sessionCard.innerHTML = '<span class="browser-muted">Kein Browserfenster</span>';
     return;
@@ -916,7 +937,7 @@ function renderSession(refs, session, tab, frame, command) {
   const owner = session.owner_user_id || policy.owner_user_id || '-';
   const controller = session.controller_user_id || policy.controller_user_id || '-';
   const status = browserStatusLabel(session);
-  if (refs.address && url) refs.address.value = url;
+  if (refs.address && url && !state?.addressDirty && document.activeElement !== refs.address) refs.address.value = url;
   refs.sessionCard.innerHTML = `
     <strong>${escapeHtml(browserDisplayTitle(tab, session, url))}</strong>
     <div class="browser-muted">${escapeHtml(url || 'about:blank')}</div>

@@ -53,6 +53,15 @@ const DEFAULT_AUTONOMY_LEVEL: &str = "A0";
 const DEFAULT_SUPPORT_MODE: &str = "support_case";
 const DEFAULT_RISK_LEVEL: &str = "unknown";
 const DEFAULT_TICKET_SKILL_EMBEDDING_MODEL: &str = "Qwen/Qwen3-Embedding-0.6B";
+pub(crate) const WORKFLOW_CASE_KIND: &str = "workflow-case";
+pub(crate) const WORKFLOW_STEP_KIND: &str = "workflow-step";
+pub(crate) const WORKFLOW_ORCHESTRATOR_SKILL: &str = "ticket-workflow-orchestrator";
+const WORKFLOW_ROLE_CASE: &str = "case";
+const WORKFLOW_ROLE_LEAF: &str = "leaf";
+const WORKFLOW_ROLE_REDUCER: &str = "reducer";
+const WORKFLOW_STEP_STATUS_READY: &str = "ready";
+const WORKFLOW_STEP_STATUS_WAITING: &str = "waiting";
+const WORKFLOW_MATERIALIZE_DEFAULT_LIMIT: usize = 16;
 const REQUIRED_KNOWLEDGE_DOMAINS: &[&str] = &[
     "source_profile",
     "label_catalog",
@@ -506,6 +515,134 @@ pub struct TicketSelfWorkNoteView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TicketWorkflowStepView {
+    pub work_id: String,
+    pub step_id: String,
+    pub role: String,
+    pub phase: String,
+    pub title: String,
+    pub state: String,
+    pub status: String,
+    pub predecessor_work_ids: Vec<String>,
+    pub predecessor_step_ids: Vec<String>,
+    pub ready: bool,
+    pub suggested_skill: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TicketWorkflowView {
+    pub workflow_id: String,
+    pub title: String,
+    pub goal: Option<String>,
+    pub state: String,
+    pub case_work_id: Option<String>,
+    pub steps: Vec<TicketWorkflowStepView>,
+    pub ready_steps: Vec<String>,
+    pub waiting_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TicketWorkflowMaterializeResult {
+    pub workflow_id: Option<String>,
+    pub materialized_count: usize,
+    pub materialized: Vec<TicketSelfWorkItemView>,
+    pub skipped_count: usize,
+}
+
+#[derive(Debug, Clone)]
+struct TicketWorkflowStartInput {
+    source_system: String,
+    title: String,
+    goal: String,
+    thread_key: Option<String>,
+    workspace_root: Option<String>,
+    skill: Option<String>,
+    priority: Option<String>,
+    first_phase: String,
+    first_phase_goal: Option<String>,
+    first_exit_gate: Option<String>,
+    first_step_title: Option<String>,
+    first_step_prompt: Option<String>,
+    queue_now: bool,
+}
+
+#[derive(Debug, Clone)]
+struct TicketWorkflowStepInput {
+    workflow_id: String,
+    role: String,
+    phase: String,
+    step_id: Option<String>,
+    title: String,
+    body_text: String,
+    phase_goal: Option<String>,
+    exit_gate: Option<String>,
+    predecessor_work_ids: Vec<String>,
+    predecessor_step_ids: Vec<String>,
+    skill: Option<String>,
+    priority: Option<String>,
+    metadata: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkflowDelta {
+    #[serde(default)]
+    phase_decision: Option<String>,
+    #[serde(default)]
+    create_steps: Vec<WorkflowDeltaCreateStep>,
+    #[serde(default)]
+    update_steps: Vec<WorkflowDeltaUpdateStep>,
+    #[serde(default)]
+    queue_now: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkflowDeltaCreateStep {
+    #[serde(default)]
+    step_id: Option<String>,
+    #[serde(default)]
+    role: Option<String>,
+    phase: String,
+    title: String,
+    #[serde(default, alias = "body")]
+    prompt: String,
+    #[serde(default)]
+    phase_goal: Option<String>,
+    #[serde(default)]
+    exit_gate: Option<String>,
+    #[serde(default)]
+    predecessors: Vec<String>,
+    #[serde(default)]
+    predecessor_work_ids: Vec<String>,
+    #[serde(default)]
+    predecessor_steps: Vec<String>,
+    #[serde(default)]
+    predecessor_step_ids: Vec<String>,
+    #[serde(default, alias = "suggested_skill")]
+    skill: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    metadata: Value,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WorkflowDeltaUpdateStep {
+    #[serde(default)]
+    work_id: Option<String>,
+    #[serde(default)]
+    step_id: Option<String>,
+    #[serde(default, alias = "status")]
+    workflow_step_status: Option<String>,
+    #[serde(default)]
+    evidence: Value,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    metadata: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TicketAuditRecord {
     pub audit_id: String,
     pub ticket_key: String,
@@ -838,36 +975,36 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "item": item}))
         }
-        "self-work-list" => {
+        "self-work-list" | "internal-work-list" => {
             let system = find_flag_value(args, "--system");
             let state = find_flag_value(args, "--state");
             let limit = parse_limit(args, DEFAULT_LIST_LIMIT);
             let items = list_ticket_self_work_items(root, system, state, limit)?;
             print_json(&json!({"ok": true, "count": items.len(), "items": items}))
         }
-        "self-work-show" => {
+        "self-work-show" | "internal-work-show" => {
             let work_id = required_flag_value(args, "--work-id")
-                .context("usage: ctox ticket self-work-show --work-id <id>")?;
+                .context("usage: ctox ticket internal-work-show --work-id <id>")?;
             let item = load_ticket_self_work_item(root, work_id)?
-                .context("ticket self-work item not found")?;
+                .context("ticket internal work item not found")?;
             let assignments = list_ticket_self_work_assignments(root, work_id, DEFAULT_LIST_LIMIT)?;
             let notes = list_ticket_self_work_notes(root, work_id, DEFAULT_LIST_LIMIT)?;
             print_json(
                 &json!({"ok": true, "item": item, "assignments": assignments, "notes": notes}),
             )
         }
-        "self-work-put" => {
+        "self-work-put" | "internal-work-put" => {
             let system = required_flag_value(args, "--system").context(
-                "usage: ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
+                "usage: ctox ticket internal-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
             )?;
             let kind = required_flag_value(args, "--kind").context(
-                "usage: ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
+                "usage: ctox ticket internal-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
             )?;
             let title = required_flag_value(args, "--title").context(
-                "usage: ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
+                "usage: ctox ticket internal-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
             )?;
             let body = required_flag_value(args, "--body").context(
-                "usage: ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
+                "usage: ctox ticket internal-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]",
             )?;
             let explicit_skill = find_flag_value(args, "--skill")
                 .map(str::trim)
@@ -896,18 +1033,18 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "item": item}))
         }
-        "self-work-publish" => {
+        "self-work-publish" | "internal-work-publish" => {
             let work_id = required_flag_value(args, "--work-id")
-                .context("usage: ctox ticket self-work-publish --work-id <id>")?;
+                .context("usage: ctox ticket internal-work-publish --work-id <id>")?;
             let item = publish_ticket_self_work_item(root, work_id)?;
             print_json(&json!({"ok": true, "item": item}))
         }
-        "self-work-assign" => {
+        "self-work-assign" | "internal-work-assign" => {
             let work_id = required_flag_value(args, "--work-id").context(
-                "usage: ctox ticket self-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]",
+                "usage: ctox ticket internal-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]",
             )?;
             let assignee = required_flag_value(args, "--assignee").context(
-                "usage: ctox ticket self-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]",
+                "usage: ctox ticket internal-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]",
             )?;
             let item = assign_ticket_self_work_item(
                 root,
@@ -918,12 +1055,12 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "item": item}))
         }
-        "self-work-note" => {
+        "self-work-note" | "internal-work-note" => {
             let work_id = required_flag_value(args, "--work-id").context(
-                "usage: ctox ticket self-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]",
+                "usage: ctox ticket internal-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]",
             )?;
             let body = required_flag_value(args, "--body").context(
-                "usage: ctox ticket self-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]",
+                "usage: ctox ticket internal-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]",
             )?;
             let note = append_ticket_self_work_note(
                 root,
@@ -934,12 +1071,12 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "note": note}))
         }
-        "self-work-transition" => {
+        "self-work-transition" | "internal-work-transition" => {
             let work_id = required_flag_value(args, "--work-id").context(
-                "usage: ctox ticket self-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]",
+                "usage: ctox ticket internal-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]",
             )?;
             let state = required_flag_value(args, "--state").context(
-                "usage: ctox ticket self-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]",
+                "usage: ctox ticket internal-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]",
             )?;
             let item = transition_ticket_self_work_item(
                 root,
@@ -950,6 +1087,117 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
                 find_flag_value(args, "--visibility").unwrap_or("internal"),
             )?;
             print_json(&json!({"ok": true, "item": item}))
+        }
+        "workflow-start" => {
+            let title = required_flag_value(args, "--title").context(
+                "usage: ctox ticket workflow-start --title <title> --goal <text> [--system <name>] [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--phase <name>] [--phase-goal <text>] [--exit-gate <text>] [--first-step-title <title>] [--first-step-prompt <text>] [--queue-now]",
+            )?;
+            let goal = required_flag_value(args, "--goal").context(
+                "usage: ctox ticket workflow-start --title <title> --goal <text> [--system <name>] [--thread-key <key>] [--workspace-root <path>] [--skill <name>] [--priority <urgent|high|normal|low>] [--phase <name>] [--phase-goal <text>] [--exit-gate <text>] [--first-step-title <title>] [--first-step-prompt <text>] [--queue-now]",
+            )?;
+            let workflow = start_ticket_workflow(
+                root,
+                TicketWorkflowStartInput {
+                    source_system: find_flag_value(args, "--system")
+                        .unwrap_or("internal")
+                        .to_string(),
+                    title: title.to_string(),
+                    goal: goal.to_string(),
+                    thread_key: find_flag_value(args, "--thread-key").map(ToOwned::to_owned),
+                    workspace_root: find_flag_value(args, "--workspace-root")
+                        .map(ToOwned::to_owned),
+                    skill: find_flag_value(args, "--skill").map(ToOwned::to_owned),
+                    priority: find_flag_value(args, "--priority").map(ToOwned::to_owned),
+                    first_phase: find_flag_value(args, "--phase")
+                        .unwrap_or("plan")
+                        .to_string(),
+                    first_phase_goal: find_flag_value(args, "--phase-goal").map(ToOwned::to_owned),
+                    first_exit_gate: find_flag_value(args, "--exit-gate").map(ToOwned::to_owned),
+                    first_step_title: find_flag_value(args, "--first-step-title")
+                        .map(ToOwned::to_owned),
+                    first_step_prompt: find_flag_value(args, "--first-step-prompt")
+                        .map(ToOwned::to_owned),
+                    queue_now: flag_present(args, "--queue-now"),
+                },
+            )?;
+            print_json(&json!({"ok": true, "workflow": workflow}))
+        }
+        "workflow-step-put" => {
+            let workflow_id = required_flag_value(args, "--workflow-id").context(
+                "usage: ctox ticket workflow-step-put --workflow-id <id> --phase <phase> --title <title> --body <text> [--step-id <id>] [--role <leaf|reducer>] [--predecessors <csv>] [--predecessor-steps <csv>] [--phase-goal <text>] [--exit-gate <text>] [--skill <name>] [--priority <urgent|high|normal|low>] [--metadata-json <json>] [--queue-now]",
+            )?;
+            let phase = required_flag_value(args, "--phase").context(
+                "usage: ctox ticket workflow-step-put --workflow-id <id> --phase <phase> --title <title> --body <text> [--step-id <id>] [--role <leaf|reducer>] [--predecessors <csv>] [--predecessor-steps <csv>] [--phase-goal <text>] [--exit-gate <text>] [--skill <name>] [--priority <urgent|high|normal|low>] [--metadata-json <json>] [--queue-now]",
+            )?;
+            let title = required_flag_value(args, "--title").context(
+                "usage: ctox ticket workflow-step-put --workflow-id <id> --phase <phase> --title <title> --body <text> [--step-id <id>] [--role <leaf|reducer>] [--predecessors <csv>] [--predecessor-steps <csv>] [--phase-goal <text>] [--exit-gate <text>] [--skill <name>] [--priority <urgent|high|normal|low>] [--metadata-json <json>] [--queue-now]",
+            )?;
+            let body = required_flag_value(args, "--body").context(
+                "usage: ctox ticket workflow-step-put --workflow-id <id> --phase <phase> --title <title> --body <text> [--step-id <id>] [--role <leaf|reducer>] [--predecessors <csv>] [--predecessor-steps <csv>] [--phase-goal <text>] [--exit-gate <text>] [--skill <name>] [--priority <urgent|high|normal|low>] [--metadata-json <json>] [--queue-now]",
+            )?;
+            let metadata = find_flag_value(args, "--metadata-json")
+                .map(parse_json_value)
+                .transpose()?
+                .unwrap_or_else(|| json!({}));
+            let item = put_ticket_workflow_step(
+                root,
+                TicketWorkflowStepInput {
+                    workflow_id: workflow_id.to_string(),
+                    role: find_flag_value(args, "--role")
+                        .unwrap_or(WORKFLOW_ROLE_LEAF)
+                        .to_string(),
+                    phase: phase.to_string(),
+                    step_id: find_flag_value(args, "--step-id").map(ToOwned::to_owned),
+                    title: title.to_string(),
+                    body_text: body.to_string(),
+                    phase_goal: find_flag_value(args, "--phase-goal").map(ToOwned::to_owned),
+                    exit_gate: find_flag_value(args, "--exit-gate").map(ToOwned::to_owned),
+                    predecessor_work_ids: find_flag_value(args, "--predecessors")
+                        .map(parse_domain_csv)
+                        .unwrap_or_default(),
+                    predecessor_step_ids: find_flag_value(args, "--predecessor-steps")
+                        .map(parse_domain_csv)
+                        .unwrap_or_default(),
+                    skill: find_flag_value(args, "--skill").map(ToOwned::to_owned),
+                    priority: find_flag_value(args, "--priority").map(ToOwned::to_owned),
+                    metadata,
+                },
+            )?;
+            let queued = if flag_present(args, "--queue-now") {
+                Some(workflow_mark_step_queue_ready(root, &item.work_id)?)
+            } else {
+                None
+            };
+            print_json(&json!({"ok": true, "item": item, "queued": queued}))
+        }
+        "workflow-apply-delta" => {
+            let workflow_id = required_flag_value(args, "--workflow-id").context(
+                "usage: ctox ticket workflow-apply-delta --workflow-id <id> --delta-json <json> [--queue-now]",
+            )?;
+            let delta_json = required_flag_value(args, "--delta-json").context(
+                "usage: ctox ticket workflow-apply-delta --workflow-id <id> --delta-json <json> [--queue-now]",
+            )?;
+            let delta_value = parse_json_value(delta_json)?;
+            let result = apply_ticket_workflow_delta(
+                root,
+                workflow_id,
+                delta_value,
+                flag_present(args, "--queue-now"),
+            )?;
+            print_json(&json!({"ok": true, "result": result}))
+        }
+        "workflow-materialize" => {
+            let workflow_id = find_flag_value(args, "--workflow-id");
+            let limit = parse_limit(args, WORKFLOW_MATERIALIZE_DEFAULT_LIMIT);
+            let result = materialize_ready_workflow_steps_for_workflow(root, workflow_id, limit)?;
+            print_json(&json!({"ok": true, "result": result}))
+        }
+        "workflow-show" => {
+            let workflow_id = required_flag_value(args, "--workflow-id")
+                .context("usage: ctox ticket workflow-show --workflow-id <id>")?;
+            let workflow = load_ticket_workflow(root, workflow_id)?
+                .context("ticket workflow not found")?;
+            print_json(&json!({"ok": true, "workflow": workflow}))
         }
         "take" => {
             let limit = parse_limit(args, DEFAULT_LIST_LIMIT);
@@ -1311,7 +1559,7 @@ pub fn handle_ticket_command(root: &Path, args: &[String]) -> Result<()> {
         }
         "local" => crate::mission::ticket_local_native::handle_local_command(root, &args[1..]),
         _ => anyhow::bail!(
-            "usage:\n  ctox ticket init\n  ctox ticket sync --system <local|zammad>\n  ctox ticket test --system <local|zammad>\n  ctox ticket capabilities --system <name>\n  ctox ticket sources\n  ctox ticket source-skills [--system <name>]\n  ctox ticket source-skill-set --system <name> --skill <name> [--archetype <value>] [--status <active|inactive>] [--origin <value>] [--artifact-path <path>] [--notes <text>]\n  ctox ticket source-skill-show --system <name>\n  ctox ticket source-skill-query --system <name> --query <text> [--top-k <n>]\n  ctox ticket source-skill-import-bundle --system <name> --bundle-dir <path> [--embedding-model <model>] [--skip-embeddings]\n  ctox ticket source-skill-resolve (--ticket-key <key> | --case-id <id>) [--top-k <n>]\n  ctox ticket source-skill-compose-reply (--ticket-key <key> | --case-id <id>) [--send-policy <suggestion|draft|send>] [--subject <text>] [--body-only]\n  ctox ticket source-skill-review-note (--ticket-key <key> | --case-id <id>) --body <text> [--top-k <n>]\n  ctox ticket history-export --system <name> --output <path>\n  ctox ticket knowledge-bootstrap --system <name>\n  ctox ticket knowledge-list [--system <name>] [--domain <name>] [--status <value>] [--limit <n>]\n  ctox ticket knowledge-show --system <name> --domain <name> --key <value>\n  ctox ticket knowledge-load --ticket-key <key> [--domains <csv>]\n  ctox ticket monitoring-ingest --system <name> --snapshot-json <json> [--key <value>] [--title <text>] [--summary <text>] [--status <value>]\n  ctox ticket access-request-put --system <name> --title <title> --body <text> [--required-scopes <csv>] [--secret-refs <csv>] [--channels <csv>] [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket self-work-show --work-id <id>\n  ctox ticket self-work-publish --work-id <id>\n  ctox ticket self-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]\n  ctox ticket self-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]\n  ctox ticket self-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]\n  ctox ticket self-work-list [--system <name>] [--state <value>] [--limit <n>]\n  ctox ticket take [--lease-owner <owner>] [--limit <n>]\n  ctox ticket ack --status <handled|failed|duplicate|blocked> <event-key>...\n  ctox ticket list [--system <name>] [--limit <n>]\n  ctox ticket show --ticket-key <key>\n  ctox ticket history --ticket-key <key> [--limit <n>]\n  ctox ticket label-set --ticket-key <key> --label <label> [--assigned-by <actor>] [--rationale <text>] [--evidence-json <json>]\n  ctox ticket label-show --ticket-key <key>\n  ctox ticket bundle-put --label <label> --runbook-id <id> --policy-id <id> [--runbook-version <v>] [--policy-version <v>] [--approval-mode <mode>] [--autonomy-level <level>] [--verification-profile-id <id>] [--writeback-profile-id <id>] [--support-mode <mode>] [--risk-level <level>] [--actions <json-array>] [--notes <text>]\n  ctox ticket bundle-list\n  ctox ticket autonomy-grant-set --label <label> --approval-mode <mode> --autonomy-level <level> [--bundle-version <n>] [--approved-by <actor>] [--candidate-id <id>] [--rationale <text>]\n  ctox ticket autonomy-grant-list\n  ctox ticket dry-run --ticket-key <key> [--understanding <text>] [--risk-level <level>]\n  ctox ticket cases [--ticket-key <key>] [--limit <n>]\n  ctox ticket case-show --case-id <id>\n  ctox ticket approve --case-id <id> --status <approved|rejected> [--decided-by <actor>] [--rationale <text>]\n  ctox ticket execute --case-id <id> --summary <text>\n  ctox ticket verify --case-id <id> --status <passed|failed> [--summary <text>]\n  ctox ticket clarification-request --case-id <id> --question <text> [--target-type requester|owner|internal] [--target-channel ticket|email|jami|tui] [--missing-inputs <csv>] [--publish-reviewed]\n  ctox ticket clarification-resolve --clarification-id <id> --response-key <key> [--body <text>]\n  ctox ticket learn-candidate-create --case-id <id> --summary <text> [--actions <json-array>] [--evidence-json <json>]\n  ctox ticket learn-candidate-list [--label <label>] [--status <value>] [--limit <n>]\n  ctox ticket learn-candidate-decide --candidate-id <id> --status <approved|rejected> [--decided-by <actor>] [--notes <text>] [--promote-autonomy-level <level>]\n  ctox ticket writeback-comment --case-id <id> --body <text> [--internal]\n  ctox ticket writeback-transition --case-id <id> --state <value> [--body <text>] [--internal]\n  ctox ticket close --case-id <id> [--summary <text>]\n  ctox ticket audit [--ticket-key <key>] [--limit <n>]\n  ctox ticket local <subcommand> ..."
+            "usage:\n  ctox ticket init\n  ctox ticket sync --system <local|zammad>\n  ctox ticket test --system <local|zammad>\n  ctox ticket capabilities --system <name>\n  ctox ticket sources\n  ctox ticket source-skills [--system <name>]\n  ctox ticket source-skill-set --system <name> --skill <name> [--archetype <value>] [--status <active|inactive>] [--origin <value>] [--artifact-path <path>] [--notes <text>]\n  ctox ticket source-skill-show --system <name>\n  ctox ticket source-skill-query --system <name> --query <text> [--top-k <n>]\n  ctox ticket source-skill-import-bundle --system <name> --bundle-dir <path> [--embedding-model <model>] [--skip-embeddings]\n  ctox ticket source-skill-resolve (--ticket-key <key> | --case-id <id>) [--top-k <n>]\n  ctox ticket source-skill-compose-reply (--ticket-key <key> | --case-id <id>) [--send-policy <suggestion|draft|send>] [--subject <text>] [--body-only]\n  ctox ticket source-skill-review-note (--ticket-key <key> | --case-id <id>) --body <text> [--top-k <n>]\n  ctox ticket history-export --system <name> --output <path>\n  ctox ticket knowledge-bootstrap --system <name>\n  ctox ticket knowledge-list [--system <name>] [--domain <name>] [--status <value>] [--limit <n>]\n  ctox ticket knowledge-show --system <name> --domain <name> --key <value>\n  ctox ticket knowledge-load --ticket-key <key> [--domains <csv>]\n  ctox ticket monitoring-ingest --system <name> --snapshot-json <json> [--key <value>] [--title <text>] [--summary <text>] [--status <value>]\n  ctox ticket access-request-put --system <name> --title <title> --body <text> [--required-scopes <csv>] [--secret-refs <csv>] [--channels <csv>] [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket internal-work-put --system <name> --kind <kind> --title <title> --body <text> [--skill <name>] [--metadata-json <json>] [--publish]\n  ctox ticket internal-work-show --work-id <id>\n  ctox ticket internal-work-publish --work-id <id>\n  ctox ticket internal-work-assign --work-id <id> --assignee <name> [--assigned-by <actor>] [--rationale <text>]\n  ctox ticket internal-work-note --work-id <id> --body <text> [--authored-by <actor>] [--visibility <internal|public>]\n  ctox ticket internal-work-transition --work-id <id> --state <value> [--transitioned-by <actor>] [--note <text>] [--visibility <internal|public>]\n  ctox ticket internal-work-list [--system <name>] [--state <value>] [--limit <n>]\n  ctox ticket take [--lease-owner <owner>] [--limit <n>]\n  ctox ticket ack --status <handled|failed|duplicate|blocked> <event-key>...\n  ctox ticket list [--system <name>] [--limit <n>]\n  ctox ticket show --ticket-key <key>\n  ctox ticket history --ticket-key <key> [--limit <n>]\n  ctox ticket label-set --ticket-key <key> --label <label> [--assigned-by <actor>] [--rationale <text>] [--evidence-json <json>]\n  ctox ticket label-show --ticket-key <key>\n  ctox ticket bundle-put --label <label> --runbook-id <id> --policy-id <id> [--runbook-version <v>] [--policy-version <v>] [--approval-mode <mode>] [--autonomy-level <level>] [--verification-profile-id <id>] [--writeback-profile-id <id>] [--support-mode <mode>] [--risk-level <level>] [--actions <json-array>] [--notes <text>]\n  ctox ticket bundle-list\n  ctox ticket autonomy-grant-set --label <label> --approval-mode <mode> --autonomy-level <level> [--bundle-version <n>] [--approved-by <actor>] [--candidate-id <id>] [--rationale <text>]\n  ctox ticket autonomy-grant-list\n  ctox ticket dry-run --ticket-key <key> [--understanding <text>] [--risk-level <level>]\n  ctox ticket cases [--ticket-key <key>] [--limit <n>]\n  ctox ticket case-show --case-id <id>\n  ctox ticket approve --case-id <id> --status <approved|rejected> [--decided-by <actor>] [--rationale <text>]\n  ctox ticket execute --case-id <id> --summary <text>\n  ctox ticket verify --case-id <id> --status <passed|failed> [--summary <text>]\n  ctox ticket clarification-request --case-id <id> --question <text> [--target-type requester|owner|internal] [--target-channel ticket|email|jami|tui] [--missing-inputs <csv>] [--publish-reviewed]\n  ctox ticket clarification-resolve --clarification-id <id> --response-key <key> [--body <text>]\n  ctox ticket learn-candidate-create --case-id <id> --summary <text> [--actions <json-array>] [--evidence-json <json>]\n  ctox ticket learn-candidate-list [--label <label>] [--status <value>] [--limit <n>]\n  ctox ticket learn-candidate-decide --candidate-id <id> --status <approved|rejected> [--decided-by <actor>] [--notes <text>] [--promote-autonomy-level <level>]\n  ctox ticket writeback-comment --case-id <id> --body <text> [--internal]\n  ctox ticket writeback-transition --case-id <id> --state <value> [--body <text>] [--internal]\n  ctox ticket close --case-id <id> [--summary <text>]\n  ctox ticket audit [--ticket-key <key>] [--limit <n>]\n  ctox ticket local <subcommand> ..."
         ),
     }
 }
@@ -2537,7 +2785,7 @@ pub(crate) fn put_ticket_self_work_item(
         root,
         RecordHarnessFlowEventRequest {
             event_kind: "ticket.self_work_created",
-            title: "Ticket self-work item created",
+            title: "Ticket internal work item created",
             body_text: &item.title,
             message_key: self_work_message_key(&item),
             work_id: Some(&item.work_id),
@@ -2579,7 +2827,7 @@ pub(crate) fn put_ticket_self_work_item(
         );
         if let Err(transition_err) = transition_result {
             anyhow::bail!(
-                "core spawn gate rejected ticket self-work `{}` ({}), and core state guard rejected fallback `{}` transition: {}; original spawn rejection: {}",
+                "core spawn gate rejected ticket internal work `{}` ({}), and core state guard rejected fallback `{}` transition: {}; original spawn rejection: {}",
                 item.work_id,
                 item.kind,
                 fallback_state,
@@ -2596,7 +2844,7 @@ pub(crate) fn put_ticket_self_work_item(
             params![&item.work_id, fallback_state, now],
         );
         anyhow::bail!(
-            "core spawn gate rejected ticket self-work `{}` ({}): {}",
+            "core spawn gate rejected ticket internal work `{}` ({}): {}",
             item.work_id,
             item.kind,
             err
@@ -2726,12 +2974,12 @@ pub(crate) fn publish_ticket_self_work_item(
             map_ticket_self_work_row,
         )
         .optional()?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     let adapter = ticket_adapters::adapter_for_system(&item.source_system)
-        .context("no adapter available to publish ticket self-work item")?;
+        .context("no adapter available to publish ticket internal work item")?;
     if !adapter.capabilities().can_create_self_work_items {
         anyhow::bail!(
-            "ticket adapter {} cannot publish self-work items",
+            "ticket adapter {} cannot publish internal work items",
             item.source_system
         );
     }
@@ -2773,7 +3021,7 @@ pub(crate) fn publish_ticket_self_work_item(
         root,
         RecordHarnessFlowEventRequest {
             event_kind: "ticket.self_work_published",
-            title: "Ticket self-work item published",
+            title: "Ticket internal work item published",
             body_text: &published_item.title,
             message_key: self_work_message_key(&published_item),
             work_id: Some(&published_item.work_id),
@@ -2811,14 +3059,14 @@ pub(crate) fn assign_ticket_self_work_item(
             map_ticket_self_work_row,
         )
         .optional()?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     let mut remote_event_ids = Vec::new();
     if let Some(remote_ticket_id) = item.remote_ticket_id.as_deref() {
         let adapter = ticket_adapters::adapter_for_system(&item.source_system)
-            .context("no adapter available to assign ticket self-work item")?;
+            .context("no adapter available to assign ticket internal work item")?;
         if !adapter.capabilities().can_assign_self_work_items {
             anyhow::bail!(
-                "ticket adapter {} cannot assign self-work items",
+                "ticket adapter {} cannot assign internal work items",
                 item.source_system
             );
         }
@@ -2841,7 +3089,7 @@ pub(crate) fn assign_ticket_self_work_item(
     )?;
     touch_ticket_self_work_item(&mut conn, work_id)?;
     let item = load_ticket_self_work_item_raw(&conn, work_id)?
-        .context("ticket self-work item not found after assignment")?;
+        .context("ticket internal work item not found after assignment")?;
     let item = hydrate_ticket_self_work_item(&conn, item)?;
     record_audit(
         &mut conn,
@@ -2873,14 +3121,14 @@ pub(crate) fn append_ticket_self_work_note(
 ) -> Result<TicketSelfWorkNoteView> {
     let mut conn = open_ticket_db(root)?;
     let item = load_ticket_self_work_item_raw(&conn, work_id)?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     let mut remote_event_ids = Vec::new();
     if let Some(remote_ticket_id) = item.remote_ticket_id.as_deref() {
         let adapter = ticket_adapters::adapter_for_system(&item.source_system)
-            .context("no adapter available to note ticket self-work item")?;
+            .context("no adapter available to note ticket internal work item")?;
         if !adapter.capabilities().can_append_self_work_notes {
             anyhow::bail!(
-                "ticket adapter {} cannot append self-work notes",
+                "ticket adapter {} cannot append internal work notes",
                 item.source_system
             );
         }
@@ -2933,14 +3181,14 @@ pub(crate) fn transition_ticket_self_work_item(
 ) -> Result<TicketSelfWorkItemView> {
     let mut conn = open_ticket_db(root)?;
     let item = load_ticket_self_work_item_raw(&conn, work_id)?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     let mut remote_event_ids = Vec::new();
     if let Some(remote_ticket_id) = item.remote_ticket_id.as_deref() {
         let adapter = ticket_adapters::adapter_for_system(&item.source_system)
-            .context("no adapter available to transition ticket self-work item")?;
+            .context("no adapter available to transition ticket internal work item")?;
         if !adapter.capabilities().can_transition_self_work_items {
             anyhow::bail!(
-                "ticket adapter {} cannot transition self-work items",
+                "ticket adapter {} cannot transition internal work items",
                 item.source_system
             );
         }
@@ -2988,7 +3236,7 @@ pub(crate) fn transition_ticket_self_work_item(
         root,
         RecordHarnessFlowEventRequest {
             event_kind: "ticket.self_work_transitioned",
-            title: "Ticket self-work state changed",
+            title: "Ticket internal work state changed",
             body_text: note.unwrap_or(state),
             message_key: self_work_message_key(&item),
             work_id: Some(&item.work_id),
@@ -3057,6 +3305,819 @@ pub(crate) fn load_ticket_self_work_item(
         .transpose()
 }
 
+fn start_ticket_workflow(
+    root: &Path,
+    input: TicketWorkflowStartInput,
+) -> Result<TicketWorkflowView> {
+    let title = input.title.trim();
+    let goal = input.goal.trim();
+    if title.is_empty() || goal.is_empty() {
+        anyhow::bail!("workflow title and goal must be non-empty");
+    }
+    let scope = input
+        .thread_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(input.source_system.trim());
+    let normalized_scope = normalize_token(scope);
+    let workflow_scope = if normalized_scope.is_empty() {
+        "ctox".to_string()
+    } else {
+        normalized_scope
+    };
+    let workflow_id = format!(
+        "workflow:{}:{}",
+        workflow_scope,
+        stable_digest(&format!("{}:{}:{}", input.source_system, title, goal))
+    );
+    let mut metadata = json!({"workflow_id": workflow_id, "workflow_role": WORKFLOW_ROLE_CASE, "workflow_status": "active", "workflow_goal": goal, "dedupe_key": format!("ticket-workflow-case:{}", workflow_id), "source_label": "ticket-workflow", "skill": WORKFLOW_ORCHESTRATOR_SKILL});
+    if let Some(object) = metadata.as_object_mut() {
+        if let Some(thread_key) = input
+            .thread_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("thread_key".to_string(), json!(thread_key));
+        }
+        if let Some(workspace_root) = input
+            .workspace_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("workspace_root".to_string(), json!(workspace_root));
+        }
+        if let Some(priority) = input
+            .priority
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("priority".to_string(), json!(priority));
+        }
+    }
+    let case = put_ticket_self_work_item(
+        root,
+        TicketSelfWorkUpsertInput {
+            source_system: input.source_system.clone(),
+            kind: WORKFLOW_CASE_KIND.to_string(),
+            title: title.to_string(),
+            body_text: goal.to_string(),
+            state: "open".to_string(),
+            metadata,
+        },
+        false,
+    )?;
+    let first_step_title = input
+        .first_step_title
+        .unwrap_or_else(|| format!("Plan workflow phase: {}", input.first_phase.trim()));
+    let first_step_prompt = input.first_step_prompt.unwrap_or_else(|| format!("Create the first executable CTOX workflow delta for this long-running goal.\n\nGoal:\n{}\n\nReturn or apply a workflow delta with bounded follow-up tickets. Do not execute the whole goal in one turn.", goal));
+    let first_step = put_ticket_workflow_step(
+        root,
+        TicketWorkflowStepInput {
+            workflow_id: workflow_id.clone(),
+            role: WORKFLOW_ROLE_REDUCER.to_string(),
+            phase: input.first_phase,
+            step_id: Some("phase-0-reducer".to_string()),
+            title: first_step_title,
+            body_text: first_step_prompt,
+            phase_goal: input.first_phase_goal,
+            exit_gate: input.first_exit_gate,
+            predecessor_work_ids: Vec::new(),
+            predecessor_step_ids: Vec::new(),
+            skill: input
+                .skill
+                .or_else(|| Some(WORKFLOW_ORCHESTRATOR_SKILL.to_string())),
+            priority: input.priority,
+            metadata: json!({ "workflow_created_by": case.work_id }),
+        },
+    )?;
+    if input.queue_now {
+        let _ = workflow_mark_step_queue_ready(root, &first_step.work_id)?;
+    }
+    load_ticket_workflow(root, &workflow_id)?.context("ticket workflow not found after creation")
+}
+
+fn put_ticket_workflow_step(
+    root: &Path,
+    input: TicketWorkflowStepInput,
+) -> Result<TicketSelfWorkItemView> {
+    let conn = open_ticket_db(root)?;
+    let case = load_ticket_workflow_case_internal(&conn, &input.workflow_id)?
+        .context("workflow case not found")?;
+    drop(conn);
+    let role = normalize_workflow_role(&input.role)?;
+    let phase = input.phase.trim();
+    let title = input.title.trim();
+    let body_text = input.body_text.trim();
+    if phase.is_empty() || title.is_empty() || body_text.is_empty() {
+        anyhow::bail!("workflow step phase, title, and body must be non-empty");
+    }
+    let (mut predecessor_work_ids, inferred_step_ids) =
+        split_workflow_predecessor_refs(input.predecessor_work_ids);
+    let mut predecessor_step_ids = input.predecessor_step_ids;
+    predecessor_step_ids.extend(inferred_step_ids);
+    dedupe_strings(&mut predecessor_work_ids);
+    dedupe_strings(&mut predecessor_step_ids);
+    let step_id = input.step_id.unwrap_or_else(|| {
+        format!(
+            "{}:{}",
+            normalize_token(phase),
+            stable_digest(&format!("{}:{}", phase, title))
+        )
+    });
+    let workflow_id = input.workflow_id;
+    let case_priority = metadata_string_value(&case.metadata, "priority");
+    let status = if predecessor_work_ids.is_empty() && predecessor_step_ids.is_empty() {
+        WORKFLOW_STEP_STATUS_READY
+    } else {
+        WORKFLOW_STEP_STATUS_WAITING
+    };
+    let mut metadata = if input.metadata.is_object() {
+        input.metadata
+    } else {
+        json!({})
+    };
+    if let Some(object) = metadata.as_object_mut() {
+        object.insert("workflow_id".to_string(), json!(workflow_id.clone()));
+        object.insert("workflow_role".to_string(), json!(role.clone()));
+        object.insert("workflow_step_id".to_string(), json!(step_id.clone()));
+        object.insert("workflow_phase".to_string(), json!(phase));
+        object.insert("workflow_step_status".to_string(), json!(status));
+        object.insert(
+            "workflow_predecessor_work_ids".to_string(),
+            json!(predecessor_work_ids),
+        );
+        object.insert(
+            "workflow_predecessor_step_ids".to_string(),
+            json!(predecessor_step_ids),
+        );
+        object.insert("parent_work_id".to_string(), json!(case.work_id));
+        object.insert("source_label".to_string(), json!("ticket-workflow"));
+        object.insert(
+            "dedupe_key".to_string(),
+            json!(format!("ticket-workflow-step:{}:{}", workflow_id, step_id)),
+        );
+        if let Some(thread_key) = metadata_string_value(&case.metadata, "thread_key") {
+            object.insert("thread_key".to_string(), json!(thread_key));
+        }
+        if let Some(workspace_root) = metadata_string_value(&case.metadata, "workspace_root") {
+            object.insert("workspace_root".to_string(), json!(workspace_root));
+        }
+        if let Some(priority) = input
+            .priority
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .or_else(|| case_priority.as_deref().map(str::trim))
+        {
+            object.insert("priority".to_string(), json!(priority));
+        }
+        if let Some(phase_goal) = input
+            .phase_goal
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("workflow_phase_goal".to_string(), json!(phase_goal));
+        }
+        if let Some(exit_gate) = input
+            .exit_gate
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("workflow_exit_gate".to_string(), json!(exit_gate));
+        }
+        let skill = input.skill.or_else(|| {
+            if role == WORKFLOW_ROLE_REDUCER {
+                Some(WORKFLOW_ORCHESTRATOR_SKILL.to_string())
+            } else {
+                None
+            }
+        });
+        if let Some(skill) = skill
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            object.insert("skill".to_string(), json!(skill));
+        }
+    }
+    put_ticket_self_work_item(
+        root,
+        TicketSelfWorkUpsertInput {
+            source_system: case.source_system,
+            kind: WORKFLOW_STEP_KIND.to_string(),
+            title: title.to_string(),
+            body_text: body_text.to_string(),
+            state: "open".to_string(),
+            metadata,
+        },
+        false,
+    )
+}
+
+fn apply_ticket_workflow_delta(
+    root: &Path,
+    workflow_id: &str,
+    delta_value: Value,
+    queue_now: bool,
+) -> Result<Value> {
+    let delta: WorkflowDelta = serde_json::from_value(delta_value)
+        .context("workflow delta must match the CTOX workflow delta schema")?;
+    if delta.create_steps.len() > WORKFLOW_MATERIALIZE_DEFAULT_LIMIT {
+        anyhow::bail!(
+            "workflow delta creates too many steps at once ({} > {})",
+            delta.create_steps.len(),
+            WORKFLOW_MATERIALIZE_DEFAULT_LIMIT
+        );
+    }
+    let mut updated = Vec::new();
+    for update in delta.update_steps {
+        let item = locate_workflow_step(
+            root,
+            workflow_id,
+            update.work_id.as_deref(),
+            update.step_id.as_deref(),
+        )?
+        .context("workflow delta update references an unknown step")?;
+        let mut metadata_update = json!({});
+        if let Some(object) = metadata_update.as_object_mut() {
+            if let Some(status) = update
+                .workflow_step_status
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                object.insert("workflow_step_status".to_string(), json!(status));
+            }
+            if !update.evidence.is_null() {
+                object.insert("workflow_step_evidence".to_string(), update.evidence);
+            }
+            if let Some(extra) = update.metadata.as_object() {
+                for (key, value) in extra {
+                    object.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        let merged = merge_ticket_self_work_metadata(root, &item.work_id, metadata_update)?;
+        if let Some(note) = update
+            .notes
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let _ = append_ticket_self_work_note(
+                root,
+                &item.work_id,
+                note,
+                WORKFLOW_ORCHESTRATOR_SKILL,
+                "internal",
+            );
+        }
+        updated.push(merged.work_id);
+    }
+    let queue_now_refs = delta.queue_now.clone();
+    let mut created_items = Vec::new();
+    for create in delta.create_steps {
+        if create.prompt.trim().is_empty() {
+            anyhow::bail!(
+                "workflow delta create_steps entry `{}` has an empty prompt",
+                create.title
+            );
+        }
+        let mut predecessor_refs = create.predecessors;
+        predecessor_refs.extend(create.predecessor_work_ids);
+        let (predecessor_work_ids, inferred_step_ids) =
+            split_workflow_predecessor_refs(predecessor_refs);
+        let mut predecessor_step_ids = create.predecessor_steps;
+        predecessor_step_ids.extend(create.predecessor_step_ids);
+        predecessor_step_ids.extend(inferred_step_ids);
+        dedupe_strings(&mut predecessor_step_ids);
+        let item = put_ticket_workflow_step(
+            root,
+            TicketWorkflowStepInput {
+                workflow_id: workflow_id.to_string(),
+                role: create
+                    .role
+                    .unwrap_or_else(|| WORKFLOW_ROLE_LEAF.to_string()),
+                phase: create.phase,
+                step_id: create.step_id,
+                title: create.title,
+                body_text: create.prompt,
+                phase_goal: create.phase_goal,
+                exit_gate: create.exit_gate,
+                predecessor_work_ids,
+                predecessor_step_ids,
+                skill: create.skill,
+                priority: create.priority,
+                metadata: create.metadata,
+            },
+        )?;
+        created_items.push(item);
+    }
+    let mut explicitly_queued = Vec::new();
+    for reference in queue_now_refs {
+        if let Some(item) =
+            locate_workflow_step(root, workflow_id, Some(&reference), Some(&reference))?
+        {
+            if workflow_step_ready_for_queue(root, &item.work_id)? {
+                explicitly_queued.push(workflow_mark_step_queue_ready(root, &item.work_id)?);
+            }
+        }
+    }
+    let materialized = if queue_now || !explicitly_queued.is_empty() {
+        materialize_ready_workflow_steps_for_workflow(
+            root,
+            Some(workflow_id),
+            WORKFLOW_MATERIALIZE_DEFAULT_LIMIT,
+        )?
+    } else {
+        TicketWorkflowMaterializeResult {
+            workflow_id: Some(workflow_id.to_string()),
+            materialized_count: 0,
+            materialized: Vec::new(),
+            skipped_count: 0,
+        }
+    };
+    Ok(
+        json!({ "workflow_id": workflow_id, "phase_decision": delta.phase_decision, "updated_work_ids": updated, "created_work_ids": created_items.iter().map(|item| item.work_id.clone()).collect::<Vec<_>>(), "explicitly_queued_work_ids": explicitly_queued.iter().map(|item| item.work_id.clone()).collect::<Vec<_>>(), "materialized": materialized }),
+    )
+}
+
+pub(crate) fn materialize_ready_workflow_steps(
+    root: &Path,
+    limit: usize,
+) -> Result<TicketWorkflowMaterializeResult> {
+    materialize_ready_workflow_steps_for_workflow(root, None, limit)
+}
+
+pub(crate) fn materialize_ready_workflow_steps_for_workflow(
+    root: &Path,
+    workflow_id: Option<&str>,
+    limit: usize,
+) -> Result<TicketWorkflowMaterializeResult> {
+    if limit == 0 {
+        return Ok(TicketWorkflowMaterializeResult {
+            workflow_id: workflow_id.map(ToOwned::to_owned),
+            materialized_count: 0,
+            materialized: Vec::new(),
+            skipped_count: 0,
+        });
+    }
+    let conn = open_ticket_db(root)?;
+    let mut statement = conn.prepare(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND (?2 IS NULL OR json_extract(metadata_json, '$.workflow_id') = ?2) ORDER BY created_at ASC LIMIT 512"#)?;
+    let rows = statement.query_map(
+        params![WORKFLOW_STEP_KIND, workflow_id],
+        map_ticket_self_work_row,
+    )?;
+    let candidates = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)?;
+    drop(statement);
+    let mut ready_work_ids = Vec::new();
+    let mut skipped_count = 0usize;
+    for candidate in candidates {
+        let item = hydrate_ticket_self_work_item(&conn, candidate)?;
+        if workflow_step_is_runnable_state(&item.state)
+            && workflow_step_ready_internal(&conn, &item)?
+        {
+            ready_work_ids.push(item.work_id.clone());
+            if ready_work_ids.len() >= limit {
+                break;
+            }
+        } else {
+            skipped_count += 1;
+        }
+    }
+    drop(conn);
+    let mut materialized = Vec::new();
+    for work_id in ready_work_ids {
+        materialized.push(workflow_mark_step_queue_ready(root, &work_id)?);
+    }
+    Ok(TicketWorkflowMaterializeResult {
+        workflow_id: workflow_id.map(ToOwned::to_owned),
+        materialized_count: materialized.len(),
+        materialized,
+        skipped_count,
+    })
+}
+
+pub(crate) fn workflow_prompt_block(root: &Path, limit: usize) -> Result<Option<String>> {
+    let conn = open_ticket_db(root)?;
+    let mut statement = conn.prepare(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND state NOT IN ('closed', 'done', 'completed', 'handled', 'cancelled', 'superseded', 'failed') ORDER BY updated_at DESC LIMIT ?2"#)?;
+    let rows = statement.query_map(
+        params![WORKFLOW_CASE_KIND, limit.max(1) as i64],
+        map_ticket_self_work_row,
+    )?;
+    let cases = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)?;
+    drop(statement);
+    if cases.is_empty() {
+        return Ok(None);
+    }
+    let mut lines = vec!["ticket_workflows:".to_string()];
+    for case in cases {
+        let case = hydrate_ticket_self_work_item(&conn, case)?;
+        let Some(workflow_id) = metadata_string_value(&case.metadata, "workflow_id") else {
+            continue;
+        };
+        let steps = list_ticket_workflow_steps_internal(&conn, &workflow_id, 64)?;
+        let mut ready = Vec::new();
+        let mut waiting = Vec::new();
+        let mut running = Vec::new();
+        for step in &steps {
+            if matches!(
+                normalize_token(&step.state).as_str(),
+                "queued" | "published" | "running" | "executing" | "in_progress"
+            ) {
+                running.push(step);
+            } else if workflow_step_is_runnable_state(&step.state)
+                && workflow_step_ready_internal(&conn, step).unwrap_or(false)
+            {
+                ready.push(step);
+            } else if !workflow_step_satisfied(step) {
+                waiting.push(step);
+            }
+        }
+        lines.push(format!(
+            "- {} [{}] state={} ready={} running={} waiting={} goal={}",
+            workflow_id,
+            workflow_clip(&case.title, 80),
+            case.state,
+            ready.len(),
+            running.len(),
+            waiting.len(),
+            workflow_clip(
+                &metadata_string_value(&case.metadata, "workflow_goal")
+                    .unwrap_or_else(|| case.body_text.clone()),
+                120
+            )
+        ));
+        for step in ready.iter().take(3) {
+            lines.push(format!(
+                "  ready: {} phase={} work_id={} title={}",
+                workflow_step_id(step),
+                workflow_step_phase(step),
+                step.work_id,
+                workflow_clip(&step.title, 90)
+            ));
+        }
+        for step in running.iter().take(3) {
+            lines.push(format!(
+                "  active: {} phase={} state={} work_id={} title={}",
+                workflow_step_id(step),
+                workflow_step_phase(step),
+                step.state,
+                step.work_id,
+                workflow_clip(&step.title, 90)
+            ));
+        }
+    }
+    if lines.len() == 1 {
+        Ok(None)
+    } else {
+        Ok(Some(lines.join("\n")))
+    }
+}
+
+fn load_ticket_workflow(root: &Path, workflow_id: &str) -> Result<Option<TicketWorkflowView>> {
+    let conn = open_ticket_db(root)?;
+    let case = load_ticket_workflow_case_internal(&conn, workflow_id)?;
+    let steps = list_ticket_workflow_steps_internal(&conn, workflow_id, 512)?;
+    if case.is_none() && steps.is_empty() {
+        return Ok(None);
+    }
+    let mut step_views = Vec::new();
+    let mut ready_steps = Vec::new();
+    let mut waiting_steps = Vec::new();
+    for step in steps {
+        let ready = workflow_step_is_runnable_state(&step.state)
+            && workflow_step_ready_internal(&conn, &step)?;
+        let step_id = workflow_step_id(&step);
+        if ready {
+            ready_steps.push(step_id.clone());
+        } else if !workflow_step_satisfied(&step) {
+            waiting_steps.push(step_id.clone());
+        }
+        step_views.push(TicketWorkflowStepView {
+            work_id: step.work_id.clone(),
+            step_id,
+            role: workflow_step_role(&step),
+            phase: workflow_step_phase(&step),
+            title: step.title.clone(),
+            state: step.state.clone(),
+            status: workflow_step_status(&step),
+            predecessor_work_ids: workflow_predecessor_work_ids(&step.metadata),
+            predecessor_step_ids: workflow_predecessor_step_ids(&step.metadata),
+            ready,
+            suggested_skill: step.suggested_skill.clone(),
+            updated_at: step.updated_at.clone(),
+        });
+    }
+    let (title, goal, state, case_work_id) = if let Some(case) = case {
+        (
+            case.title,
+            metadata_string_value(&case.metadata, "workflow_goal").or(Some(case.body_text)),
+            case.state,
+            Some(case.work_id),
+        )
+    } else {
+        (
+            workflow_id.to_string(),
+            None,
+            "missing-case".to_string(),
+            None,
+        )
+    };
+    Ok(Some(TicketWorkflowView {
+        workflow_id: workflow_id.to_string(),
+        title,
+        goal,
+        state,
+        case_work_id,
+        steps: step_views,
+        ready_steps,
+        waiting_steps,
+    }))
+}
+
+fn load_ticket_workflow_case_internal(
+    conn: &Connection,
+    workflow_id: &str,
+) -> Result<Option<TicketSelfWorkItemView>> {
+    let item = conn.query_row(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND json_extract(metadata_json, '$.workflow_id') = ?2 ORDER BY created_at ASC LIMIT 1"#, params![WORKFLOW_CASE_KIND, workflow_id], map_ticket_self_work_row).optional().map_err(anyhow::Error::from)?;
+    item.map(|item| hydrate_ticket_self_work_item(conn, item))
+        .transpose()
+}
+fn list_ticket_workflow_steps_internal(
+    conn: &Connection,
+    workflow_id: &str,
+    limit: usize,
+) -> Result<Vec<TicketSelfWorkItemView>> {
+    let mut statement = conn.prepare(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND json_extract(metadata_json, '$.workflow_id') = ?2 ORDER BY created_at ASC LIMIT ?3"#)?;
+    let rows = statement.query_map(
+        params![WORKFLOW_STEP_KIND, workflow_id, limit as i64],
+        map_ticket_self_work_row,
+    )?;
+    let steps = rows
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)?;
+    steps
+        .into_iter()
+        .map(|item| hydrate_ticket_self_work_item(conn, item))
+        .collect()
+}
+fn locate_workflow_step(
+    root: &Path,
+    workflow_id: &str,
+    work_id: Option<&str>,
+    step_id: Option<&str>,
+) -> Result<Option<TicketSelfWorkItemView>> {
+    let conn = open_ticket_db(root)?;
+    if let Some(work_id) = work_id.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Some(item) = load_ticket_self_work_item_raw(&conn, work_id)? {
+            if item.kind == WORKFLOW_STEP_KIND
+                && metadata_string_value(&item.metadata, "workflow_id").as_deref()
+                    == Some(workflow_id)
+            {
+                return hydrate_ticket_self_work_item(&conn, item).map(Some);
+            }
+        }
+    }
+    let Some(step_id) = step_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let item = conn.query_row(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND json_extract(metadata_json, '$.workflow_id') = ?2 AND json_extract(metadata_json, '$.workflow_step_id') = ?3 ORDER BY created_at DESC LIMIT 1"#, params![WORKFLOW_STEP_KIND, workflow_id, step_id], map_ticket_self_work_row).optional().map_err(anyhow::Error::from)?;
+    item.map(|item| hydrate_ticket_self_work_item(&conn, item))
+        .transpose()
+}
+fn workflow_mark_step_queue_ready(root: &Path, work_id: &str) -> Result<TicketSelfWorkItemView> {
+    if !workflow_step_ready_for_queue(root, work_id)? {
+        anyhow::bail!("workflow step `{work_id}` is not ready for queue materialization");
+    }
+    let mut item = merge_ticket_self_work_metadata(
+        root,
+        work_id,
+        json!({"workflow_step_status": WORKFLOW_STEP_STATUS_READY}),
+    )?;
+    if item.assigned_to.as_deref() != Some("self") {
+        item = assign_ticket_self_work_item(
+            root,
+            work_id,
+            "self",
+            WORKFLOW_ORCHESTRATOR_SKILL,
+            Some("workflow predecessor conditions are satisfied"),
+        )?;
+    }
+    match normalize_token(&item.state).as_str() {
+        "queued" | "published" | "running" | "executing" | "in_progress" => Ok(item),
+        _ => transition_ticket_self_work_item(
+            root,
+            work_id,
+            "queued",
+            WORKFLOW_ORCHESTRATOR_SKILL,
+            Some("Workflow predecessor conditions are satisfied; queued as the next bounded step."),
+            "internal",
+        ),
+    }
+}
+fn workflow_step_ready_for_queue(root: &Path, work_id: &str) -> Result<bool> {
+    let conn = open_ticket_db(root)?;
+    let Some(item) = load_ticket_self_work_item_raw(&conn, work_id)? else {
+        return Ok(false);
+    };
+    Ok(workflow_step_is_runnable_state(&item.state) && workflow_step_ready_internal(&conn, &item)?)
+}
+fn workflow_step_ready_internal(conn: &Connection, item: &TicketSelfWorkItemView) -> Result<bool> {
+    if item.kind != WORKFLOW_STEP_KIND || workflow_step_satisfied(item) {
+        return Ok(false);
+    }
+    for work_id in workflow_predecessor_work_ids(&item.metadata) {
+        let Some(predecessor) = load_ticket_self_work_item_raw(conn, &work_id)? else {
+            return Ok(false);
+        };
+        if !workflow_step_satisfied(&predecessor) {
+            return Ok(false);
+        }
+    }
+    let workflow_id = metadata_string_value(&item.metadata, "workflow_id").unwrap_or_default();
+    for step_id in workflow_predecessor_step_ids(&item.metadata) {
+        let Some(predecessor) = locate_workflow_step_in_conn(conn, &workflow_id, &step_id)? else {
+            return Ok(false);
+        };
+        if !workflow_step_satisfied(&predecessor) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+fn locate_workflow_step_in_conn(
+    conn: &Connection,
+    workflow_id: &str,
+    step_id: &str,
+) -> Result<Option<TicketSelfWorkItemView>> {
+    let item = conn.query_row(r#"SELECT work_id, source_system, kind, title, body_text, state, metadata_json, remote_ticket_id, remote_locator, created_at, updated_at FROM ticket_self_work_items WHERE kind = ?1 AND json_extract(metadata_json, '$.workflow_id') = ?2 AND json_extract(metadata_json, '$.workflow_step_id') = ?3 ORDER BY created_at DESC LIMIT 1"#, params![WORKFLOW_STEP_KIND, workflow_id, step_id], map_ticket_self_work_row).optional().map_err(anyhow::Error::from)?;
+    item.map(|item| hydrate_ticket_self_work_item(conn, item))
+        .transpose()
+}
+fn merge_ticket_self_work_metadata(
+    root: &Path,
+    work_id: &str,
+    update: Value,
+) -> Result<TicketSelfWorkItemView> {
+    let mut conn = open_ticket_db(root)?;
+    let item = load_ticket_self_work_item_raw(&conn, work_id)?
+        .context("ticket internal work item not found")?;
+    let mut metadata = if item.metadata.is_object() {
+        item.metadata
+    } else {
+        json!({})
+    };
+    let updated_keys = update
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    merge_json_object_values(&mut metadata, &update);
+    conn.execute(r#"UPDATE ticket_self_work_items SET metadata_json = ?2, updated_at = ?3 WHERE work_id = ?1"#, params![work_id, serde_json::to_string(&metadata)?, now_iso_string()])?;
+    let item = load_ticket_self_work_item_raw(&conn, work_id)?
+        .context("ticket internal work item not found after metadata update")?;
+    let item = hydrate_ticket_self_work_item(&conn, item)?;
+    record_audit(
+        &mut conn,
+        AuditRequest {
+            ticket_key: &format!("*self-work:{}*", item.source_system),
+            case_id: None,
+            actor_type: "control_plane",
+            action_type: "self_work_metadata_updated",
+            label: None,
+            bundle_label: None,
+            bundle_version: None,
+            details: json!({
+                "work_id": item.work_id,
+                "kind": item.kind,
+                "updated_keys": updated_keys,
+                "workflow_id": metadata_string_value(&item.metadata, "workflow_id"),
+                "workflow_step_id": metadata_string_value(&item.metadata, "workflow_step_id"),
+            }),
+        },
+    )?;
+    Ok(item)
+}
+fn merge_json_object_values(target: &mut Value, update: &Value) {
+    let (Some(target), Some(update)) = (target.as_object_mut(), update.as_object()) else {
+        return;
+    };
+    for (key, value) in update {
+        target.insert(key.clone(), value.clone());
+    }
+}
+fn workflow_step_satisfied(item: &TicketSelfWorkItemView) -> bool {
+    matches!(
+        normalize_token(&item.state).as_str(),
+        "closed" | "done" | "completed" | "handled" | "verified"
+    ) || matches!(
+        normalize_token(&workflow_step_status(item)).as_str(),
+        "verified" | "passed" | "satisfied" | "closed" | "done" | "completed"
+    )
+}
+fn workflow_step_is_runnable_state(state: &str) -> bool {
+    matches!(
+        normalize_token(state).as_str(),
+        "" | "created" | "open" | "blocked" | "restored"
+    )
+}
+fn workflow_step_id(item: &TicketSelfWorkItemView) -> String {
+    metadata_string_value(&item.metadata, "workflow_step_id")
+        .unwrap_or_else(|| item.work_id.clone())
+}
+fn workflow_step_role(item: &TicketSelfWorkItemView) -> String {
+    metadata_string_value(&item.metadata, "workflow_role")
+        .unwrap_or_else(|| WORKFLOW_ROLE_LEAF.to_string())
+}
+fn workflow_step_phase(item: &TicketSelfWorkItemView) -> String {
+    metadata_string_value(&item.metadata, "workflow_phase")
+        .unwrap_or_else(|| "unspecified".to_string())
+}
+fn workflow_step_status(item: &TicketSelfWorkItemView) -> String {
+    metadata_string_value(&item.metadata, "workflow_step_status")
+        .unwrap_or_else(|| item.state.clone())
+}
+fn workflow_predecessor_work_ids(metadata: &Value) -> Vec<String> {
+    workflow_metadata_strings(metadata, "workflow_predecessor_work_ids")
+}
+fn workflow_predecessor_step_ids(metadata: &Value) -> Vec<String> {
+    workflow_metadata_strings(metadata, "workflow_predecessor_step_ids")
+}
+fn workflow_metadata_strings(metadata: &Value, key: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    match metadata.get(key) {
+        Some(Value::Array(items)) => {
+            for item in items {
+                if let Some(text) = item
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    values.push(text.to_string());
+                }
+            }
+        }
+        Some(Value::String(text)) => values.extend(parse_domain_csv(text)),
+        _ => {}
+    }
+    dedupe_strings(&mut values);
+    values
+}
+fn normalize_workflow_role(role: &str) -> Result<String> {
+    match normalize_token(role).as_str() {
+        "" | "leaf" => Ok(WORKFLOW_ROLE_LEAF.to_string()),
+        "reducer" | "planner" | "orchestrator" => Ok(WORKFLOW_ROLE_REDUCER.to_string()),
+        other => anyhow::bail!("unsupported workflow role `{other}`"),
+    }
+}
+fn split_workflow_predecessor_refs(values: Vec<String>) -> (Vec<String>, Vec<String>) {
+    let mut work_ids = Vec::new();
+    let mut step_ids = Vec::new();
+    for value in values {
+        let value = value.trim();
+        if value.is_empty() {
+            continue;
+        }
+        if value.starts_with("self-work:") {
+            work_ids.push(value.to_string());
+        } else {
+            step_ids.push(value.to_string());
+        }
+    }
+    dedupe_strings(&mut work_ids);
+    dedupe_strings(&mut step_ids);
+    (work_ids, step_ids)
+}
+fn dedupe_strings(values: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+    values.retain(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || seen.contains(trimmed) {
+            return false;
+        }
+        seen.insert(trimmed.to_string());
+        true
+    });
+}
+fn workflow_clip(text: &str, max_chars: usize) -> String {
+    let trimmed = text.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_string();
+    }
+    let clipped: String = trimmed.chars().take(max_chars.saturating_sub(3)).collect();
+    format!("{clipped}...")
+}
+
 pub(crate) fn set_ticket_self_work_state(
     root: &Path,
     work_id: &str,
@@ -3094,7 +4155,7 @@ pub(crate) fn set_ticket_self_work_state_with_failure_reason(
         root,
         RecordHarnessFlowEventRequest {
             event_kind: "ticket.self_work_state_set",
-            title: "Ticket self-work state set",
+            title: "Ticket internal work state set",
             body_text: state,
             message_key: self_work_message_key(&item),
             work_id: Some(&item.work_id),
@@ -3242,7 +4303,9 @@ fn enforce_ticket_self_work_state_transition(
         let failure_reason = failure_reason
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .context("ticket self-work failed transition requires a non-empty failure reason")?;
+            .context(
+                "ticket internal work failed transition requires a non-empty failure reason",
+            )?;
         metadata.insert("failure_reason".to_string(), failure_reason.to_string());
         metadata.insert(
             "failure_class".to_string(),
@@ -3329,7 +4392,7 @@ fn ticket_self_work_core_state(raw: &str) -> Result<CoreState> {
         "closed" | "done" | "completed" | "handled" => Ok(CoreState::Closed),
         "cancelled" | "superseded" => Ok(CoreState::Superseded),
         other => {
-            anyhow::bail!("ticket self-work state is not mapped to core state machine: {other}")
+            anyhow::bail!("ticket internal work state is not mapped to core state machine: {other}")
         }
     }
 }
@@ -3357,7 +4420,7 @@ fn set_ticket_self_work_state_internal(
     failure_reason: Option<&str>,
 ) -> Result<TicketSelfWorkItemView> {
     let existing = load_ticket_self_work_item_raw(conn, work_id)?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     enforce_ticket_self_work_state_transition(
         conn,
         work_id,
@@ -3378,7 +4441,7 @@ fn set_ticket_self_work_state_internal(
         params![work_id, state, now],
     )?;
     let item = load_ticket_self_work_item_raw(conn, work_id)?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     hydrate_ticket_self_work_item(conn, item)
 }
 
@@ -3610,7 +4673,7 @@ fn mark_ticket_self_work_published(
     remote_locator: Option<&str>,
 ) -> Result<TicketSelfWorkItemView> {
     let existing = load_ticket_self_work_item_raw(conn, work_id)?
-        .context("ticket self-work item not found")?;
+        .context("ticket internal work item not found")?;
     enforce_ticket_self_work_state_transition(
         conn,
         work_id,
@@ -4072,7 +5135,7 @@ fn synthetic_bundle_for_self_work(
             "draft_communication".to_string(),
         ],
         notes: Some(format!(
-            "Synthetic control bundle for published self-work kind {}",
+            "Synthetic control bundle for published internal work kind {}",
             item.kind.trim()
         )),
         updated_at: item.updated_at.clone(),
@@ -5698,6 +6761,7 @@ fn default_skill_for_self_work_kind(kind: &str) -> Option<String> {
         "mission-follow-up" | "timeout-continuation" | "review-rework" => {
             Some("follow-up-orchestrator".to_string())
         }
+        WORKFLOW_CASE_KIND | WORKFLOW_STEP_KIND => Some(WORKFLOW_ORCHESTRATOR_SKILL.to_string()),
         _ => None,
     }
 }
@@ -10113,6 +11177,147 @@ mod tests {
         ))
     }
 
+    fn is_terminology_firewall_text_file(path: &std::path::Path) -> bool {
+        matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("md" | "py" | "rs" | "sh" | "js" | "mjs" | "ts" | "tsx")
+        )
+    }
+
+    fn strict_internal_work_legacy_term(line: &str) -> bool {
+        let lower = line.to_ascii_lowercase();
+        [
+            "self-work",
+            "self_work",
+            "self work",
+            "ticketselfwork",
+            "requeueselfwork",
+            "requeue-self-work",
+        ]
+        .iter()
+        .any(|term| lower.contains(term))
+    }
+
+    fn user_visible_internal_work_legacy_phrase(line: &str) -> bool {
+        let lower = line.to_ascii_lowercase();
+        [
+            "self-work item",
+            "self-work items",
+            "self-work backlog",
+            "self-work closure",
+            "ticket/self-work",
+            "ctox self work",
+            "self work",
+            "self_work_open",
+            "requeueselfwork",
+            "requeue-self-work",
+        ]
+        .iter()
+        .any(|term| lower.contains(term))
+    }
+
+    fn internal_work_firewall_legacy_line_allowed(relative: &str, line: &str) -> bool {
+        matches!(relative, "HARNESS.md" | "docs/harness-operating-model.md")
+            && (line.contains("`ticket_self_work_items`")
+                || line.contains("`self-work:*`")
+                || line.contains("`self-work-queue-task`"))
+    }
+
+    fn scan_internal_work_firewall_file(
+        path: &std::path::Path,
+        relative: &str,
+        strict: bool,
+        violations: &mut Vec<String>,
+    ) -> Result<()> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read terminology firewall file {relative}"))?;
+        for (index, line) in content.lines().enumerate() {
+            let has_violation = if strict {
+                strict_internal_work_legacy_term(line)
+            } else {
+                user_visible_internal_work_legacy_phrase(line)
+            };
+            if has_violation && !internal_work_firewall_legacy_line_allowed(relative, line) {
+                violations.push(format!("{relative}:{}: {}", index + 1, line.trim()));
+            }
+        }
+        Ok(())
+    }
+
+    fn scan_internal_work_firewall_dir(
+        root: &std::path::Path,
+        relative_dir: &str,
+        strict: bool,
+        violations: &mut Vec<String>,
+    ) -> Result<()> {
+        let dir = root.join(relative_dir);
+        for entry in std::fs::read_dir(&dir)
+            .with_context(|| format!("failed to read terminology firewall dir {relative_dir}"))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path.is_dir() {
+                scan_internal_work_firewall_dir(root, &relative, strict, violations)?;
+            } else if is_terminology_firewall_text_file(&path) {
+                scan_internal_work_firewall_file(&path, &relative, strict, violations)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn internal_work_terminology_firewall_keeps_self_work_legacy_only() -> Result<()> {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let mut violations = Vec::new();
+
+        scan_internal_work_firewall_dir(&root, "src/skills/system", true, &mut violations)?;
+        for relative in [
+            "HARNESS.md",
+            "docs/harness-operating-model.md",
+            "src/core/context/live_context.rs",
+            "src/core/harness/core/templates/collab/experimental_prompt.md",
+            "src/core/mission/review.rs",
+            "src/core/mission/plan.rs",
+            "src/core/autonomy.rs",
+            "src/core/business_os/mcp_channel.rs",
+        ] {
+            scan_internal_work_firewall_file(
+                &root.join(relative),
+                relative,
+                true,
+                &mut violations,
+            )?;
+        }
+        for relative in [
+            "src/core/service/service.rs",
+            "src/core/service/core_state_machine.rs",
+            "src/core/service/harness_flow.rs",
+            "src/core/service/process_mining.rs",
+            "src/core/mission/channels.rs",
+            "src/core/mission/ticket_zammad_native.rs",
+        ] {
+            scan_internal_work_firewall_file(
+                &root.join(relative),
+                relative,
+                false,
+                &mut violations,
+            )?;
+        }
+
+        if !violations.is_empty() {
+            anyhow::bail!(
+                "legacy self-work terminology leaked across the internal-work firewall:\n{}",
+                violations.join("\n")
+            );
+        }
+        Ok(())
+    }
+
     #[test]
     fn ticket_preflight_reports_missing_zammad_runtime() {
         let root = temp_root("preflight-zammad-missing");
@@ -11172,6 +12377,89 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, "secret-hygiene");
         assert_eq!(items[0].suggested_skill.as_deref(), Some("secret-hygiene"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn internal_work_put_alias_accepts_explicit_skill_hint() -> Result<()> {
+        let root = temp_root("internal-work-skill");
+        std::fs::create_dir_all(&root)?;
+
+        handle_ticket_command(
+            &root,
+            &[
+                "internal-work-put".to_string(),
+                "--system".to_string(),
+                "local".to_string(),
+                "--kind".to_string(),
+                "secret-hygiene".to_string(),
+                "--title".to_string(),
+                "Protect leaked API token".to_string(),
+                "--body".to_string(),
+                "Move the pasted API token into the encrypted store and rewrite memory."
+                    .to_string(),
+                "--skill".to_string(),
+                "secret-hygiene".to_string(),
+            ],
+        )?;
+
+        let items = list_ticket_self_work_items(&root, Some("local"), None, 10)?;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].kind, "secret-hygiene");
+        assert_eq!(items[0].suggested_skill.as_deref(), Some("secret-hygiene"));
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn ticket_workflow_delta_materializes_successor_after_verified_predecessor() -> Result<()> {
+        let root = temp_root("ticket-workflow-delta");
+        std::fs::create_dir_all(&root)?;
+
+        let workflow = start_ticket_workflow(
+            &root,
+            TicketWorkflowStartInput {
+                source_system: "internal".to_string(),
+                title: "Stabilize long task handling".to_string(),
+                goal: "Break a hard implementation into verifiable CTOX ticket phases.".to_string(),
+                thread_key: Some("workflow/test".to_string()),
+                workspace_root: None,
+                skill: None,
+                priority: Some("normal".to_string()),
+                first_phase: "plan".to_string(),
+                first_phase_goal: Some("Create the first executable phase".to_string()),
+                first_exit_gate: Some("Reducer produces a bounded implementation step".to_string()),
+                first_step_title: None,
+                first_step_prompt: None,
+                queue_now: false,
+            },
+        )?;
+        assert_eq!(workflow.steps.len(), 1);
+        assert_eq!(workflow.ready_steps, vec!["phase-0-reducer".to_string()]);
+
+        let delta = json!({
+            "phase_decision": "advance",
+            "update_steps": [{"step_id": "phase-0-reducer", "workflow_step_status": "verified", "evidence": {"summary": "planning complete"}}],
+            "create_steps": [{"step_id": "implement-one-slice", "phase": "implementation", "role": "leaf", "title": "Implement one bounded slice", "prompt": "Make one scoped code change and report evidence.", "predecessor_steps": ["phase-0-reducer"], "exit_gate": "Focused check passes or blocker is recorded", "priority": "normal"}]
+        });
+        let _ = apply_ticket_workflow_delta(&root, &workflow.workflow_id, delta, false)?;
+        let view =
+            load_ticket_workflow(&root, &workflow.workflow_id)?.context("workflow missing")?;
+        assert!(view
+            .ready_steps
+            .contains(&"implement-one-slice".to_string()));
+
+        let materialized =
+            materialize_ready_workflow_steps_for_workflow(&root, Some(&workflow.workflow_id), 8)?;
+        assert_eq!(materialized.materialized_count, 1);
+        assert_eq!(
+            materialized.materialized[0].assigned_to.as_deref(),
+            Some("self")
+        );
+        assert_eq!(materialized.materialized[0].state, "queued");
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
@@ -12463,7 +13751,7 @@ mod tests {
         assert_eq!(item.state, "blocked");
 
         let shown = load_ticket_self_work_item(&root, &item.work_id)?
-            .context("self-work item missing after lifecycle")?;
+            .context("internal work item missing after lifecycle")?;
         assert_eq!(shown.assigned_to.as_deref(), Some("ctox-agent"));
 
         let assignments = list_ticket_self_work_assignments(&root, &item.work_id, 10)?;

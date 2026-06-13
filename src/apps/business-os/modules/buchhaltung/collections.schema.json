@@ -1,0 +1,390 @@
+{
+  "collections": {
+    "accounting_accounts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_type": {
+          "type": "string"
+        },
+        "code": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_group": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "root_type": {
+          "type": "string"
+        },
+        "skr": {
+          "type": "string"
+        },
+        "tax_rate_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "code",
+        "name",
+        "root_type",
+        "account_type",
+        "is_group",
+        "skr",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_bank_statement_lines": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "counterparty_iban": {
+          "type": "string"
+        },
+        "counterparty_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "match_status": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "reconciled_entry_id": {
+          "type": "string"
+        },
+        "statement_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "value_date": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "statement_id",
+        "value_date",
+        "amount",
+        "narration",
+        "match_status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_bank_statements": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_number": {
+          "type": "string"
+        },
+        "bank_code": {
+          "type": "string"
+        },
+        "end_balance": {
+          "type": "number"
+        },
+        "end_date": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "start_balance": {
+          "type": "number"
+        },
+        "start_date": {
+          "type": "string"
+        },
+        "statement_number": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "account_number",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_journal_entries": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "number": {
+          "type": "string"
+        },
+        "posted_at": {
+          "type": "number"
+        },
+        "posting_date": {
+          "type": "string"
+        },
+        "ref_id": {
+          "type": "string"
+        },
+        "ref_type": {
+          "type": "string"
+        },
+        "reversed_by_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "posting_date",
+        "type",
+        "number",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_journal_entry_lines": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credit": {
+          "type": "number"
+        },
+        "debit": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "journal_entry_id": {
+          "type": "string"
+        },
+        "line_no": {
+          "type": "number"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "tax_rate_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "journal_entry_id",
+        "account_id",
+        "debit",
+        "credit",
+        "line_no",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_ledger_entries": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "account_id": {
+          "type": "string"
+        },
+        "credit": {
+          "type": "number"
+        },
+        "debit": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "journal_entry_id": {
+          "type": "string"
+        },
+        "journal_entry_line_id": {
+          "type": "string"
+        },
+        "narration": {
+          "type": "string"
+        },
+        "posted_at": {
+          "type": "number"
+        },
+        "posting_date": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "journal_entry_line_id",
+        "journal_entry_id",
+        "posting_date",
+        "account_id",
+        "debit",
+        "credit",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_number_series": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "fiscal_year": {
+          "type": "number"
+        },
+        "gap_policy": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "last_issued_number": {
+          "type": "string"
+        },
+        "next_value": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prefix": {
+          "type": "string"
+        },
+        "series_key": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "updated_by_command_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "series_key",
+        "fiscal_year",
+        "next_value",
+        "gap_policy",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_receipts": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "file_storage_url": {
+          "type": "string"
+        },
+        "filename": {
+          "type": "string"
+        },
+        "gross_amount": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "invoice_date": {
+          "type": "string"
+        },
+        "invoice_number": {
+          "type": "string"
+        },
+        "net_amount": {
+          "type": "number"
+        },
+        "ocr_raw": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "suggested_account_id": {
+          "type": "string"
+        },
+        "supplier_name": {
+          "type": "string"
+        },
+        "tax_amount": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "vat_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "file_storage_url",
+        "filename",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "module_id": "buchhaltung",
+  "schema_format": "ctox-business-os-module-collections-v1"
+}

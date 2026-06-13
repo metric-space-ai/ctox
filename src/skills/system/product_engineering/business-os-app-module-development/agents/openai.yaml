@@ -1,0 +1,4 @@
+interfaces:
+  - display_name: Business OS App Module Development
+    short_description: Build runnable CTOX Business OS app modules with native ESM, CTOX DB/WebRTC persistence, command-bus automation, and guard validation.
+    default_prompt: Build or modify this CTOX Business OS app module. Inspect at least three existing Business OS modules first, follow the CTOX DB/WebRTC data contract, use no dependency manager, include a real automation command, run the module tests and guards, and report exact validation results.

@@ -72,19 +72,45 @@ const assert = (condition, message) => {
 // --- 2. control command: terminal completed WITHOUT task_id is success -----
 {
   const db = makeDb({
-    commandAck: { status: 'completed', task_id: '', task_status: 'completed' },
+    commandAck: {
+      status: 'completed',
+      task_id: '',
+      task_status: 'completed',
+      result: { outcome: { ok: true, data: { grants: ['/tmp/project'] } } },
+    },
   });
   const bus = createCommandBus({ db });
   const result = await bus.dispatch({ type: 'ctox.file.materialize', module: 'desktop' });
   assert(result.ok === true, 'control command: completed ack is success');
   assert(result.status === 'completed', 'control command: status completed');
   assert(result.task_id === '', 'control command: no task id');
+  assert(result.result.outcome.data.grants[0] === '/tmp/project', 'control command: structured result preserved');
 }
 
 // --- 3. failed command rejects with the command error ----------------------
 {
   const db = makeDb({
-    commandAck: { status: 'failed', error: 'native rejection' },
+    commandAck: {
+      status: 'accepted',
+      task_id: '',
+      task_status: '',
+      result: { outcome: { ok: true, data: { provider: 'codex', auth: { ready: true } } } },
+    },
+  });
+  const bus = createCommandBus({ db });
+  const result = await bus.dispatch({ type: 'ctox.coding_agent.status', module: 'coding-agents' });
+  assert(result.ok === true, 'coding-agent direct outcome: ok');
+  assert(result.task_id === '', 'coding-agent direct outcome: no task id');
+  assert(result.result.outcome.data.provider === 'codex', 'coding-agent direct outcome: structured data preserved');
+}
+
+// --- 4. failed command rejects with the command error ----------------------
+{
+  const db = makeDb({
+    commandAck: {
+      status: 'failed',
+      result: { outcome: { ok: false, stderr: 'provider rejected workspace' } },
+    },
   });
   const bus = createCommandBus({ db });
   let thrown = null;
@@ -95,7 +121,7 @@ const assert = (condition, message) => {
   }
   assert(thrown, 'failed command: dispatch rejects');
   assert(
-    String(thrown.message).includes('native rejection'),
+    String(thrown.message).includes('provider rejected workspace'),
     `failed command: error message propagated (got: ${thrown.message})`,
   );
 }

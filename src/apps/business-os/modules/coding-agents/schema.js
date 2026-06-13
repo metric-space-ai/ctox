@@ -1,32 +1,63 @@
-const commandSchema = {
-  version: 1,
-  primaryKey: 'id',
-  type: 'object',
-  properties: {
-    id: { type: 'string', maxLength: 128 },
-    command_id: { type: 'string' },
-    module: { type: 'string' },
-    command_type: { type: 'string' },
-    record_id: { type: 'string' },
-    status: { type: 'string' },
-    inbound_channel: { type: 'string' },
-    payload: { type: 'object', additionalProperties: true },
-    client_context: { type: 'object', additionalProperties: true },
-    updated_at_ms: { type: 'number' }
-  },
-  required: ['id', 'command_id', 'module', 'command_type', 'status', 'updated_at_ms'],
-  additionalProperties: true
-};
-
 export const collections = {
-  business_commands: commandSchema
-};
-
-export const migrationStrategies = {
-  business_commands: {
-    1: (oldDoc) => ({
-      ...oldDoc,
-      inbound_channel: oldDoc.inbound_channel || oldDoc.module || ''
-    })
+  coding_agent_workspace_grants: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      provider: { type: 'string' },
+      path: { type: 'string' },
+      status: { type: 'string' },
+      active: { type: 'boolean' },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'provider', 'path', 'status', 'updated_at_ms'],
+    indexes: ['provider', 'path', 'updated_at_ms'],
+    additionalProperties: true
+  },
+  coding_agent_sessions: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      session_id: { type: 'string' },
+      provider: { type: 'string' },
+      workspace_root: { type: 'string' },
+      status: { type: 'string' },
+      title: { type: 'string' },
+      last_prompt: { type: 'string' },
+      external_session_id: { type: 'string' },
+      metadata: { type: 'object', additionalProperties: true },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'session_id', 'provider', 'workspace_root', 'status', 'updated_at_ms'],
+    indexes: ['provider', 'workspace_root', 'status', 'updated_at_ms'],
+    additionalProperties: true
+  },
+  coding_agent_events: {
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 128 },
+      event_id: { type: 'string' },
+      session_id: { type: 'string' },
+      provider: { type: 'string' },
+      role: { type: 'string' },
+      text: { type: 'string' },
+      status: { type: 'string' },
+      created_at_ms: { type: 'number' },
+      updated_at_ms: { type: 'number' },
+      is_deleted: { type: 'boolean' }
+    },
+    required: ['id', 'event_id', 'session_id', 'provider', 'role', 'text', 'status', 'updated_at_ms'],
+    indexes: ['session_id', 'provider', 'created_at_ms'],
+    additionalProperties: true
   }
 };
+
+export const migrationStrategies = {};

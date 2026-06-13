@@ -48,7 +48,7 @@ fn production_runtime_plan_avoids_model_conditioned_planner_heuristics() {
         "if harness.model.contains(",
         "contains(\"gemma-4-\")",
         "== \"openai/gpt-oss-120b\"",
-        "Qwen/Qwen3.5-35B-A3B",
+        "Qwen/Qwen3.6-35B-A3B",
         "google/gemma-4-31B-it",
     ] {
         assert!(

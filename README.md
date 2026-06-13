@@ -286,11 +286,11 @@ exports for normal CTOX configuration.
 ### Example: supported 27B model on CUDA
 
 Use this on a Linux host with an NVIDIA GPU/CUDA setup and the required local
-model artifacts for `Qwen/Qwen3.5-27B`:
+model artifacts for `Qwen/Qwen3.6-27B`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh \
-  | bash -s -- --backend=cuda --model=Qwen/Qwen3.5-27B
+  | bash -s -- --backend=cuda --model=Qwen/Qwen3.6-27B
 ctox
 ```
 
@@ -298,14 +298,14 @@ In the TUI settings, select:
 
 ```text
 Chat Source: local
-Chat Model: Qwen/Qwen3.5-27B
+Chat Model: Qwen/Qwen3.6-27B
 ```
 
 Then verify and switch:
 
 ```sh
 ctox doctor
-ctox runtime switch Qwen/Qwen3.5-27B quality --context 256k
+ctox runtime switch Qwen/Qwen3.6-27B quality --context 256k
 ```
 
 If the CUDA backend, model weights, or runtime artifacts are missing,
@@ -378,7 +378,7 @@ depending on the configured runtime.
 
 The supported local chat surface is intentionally narrow: CTOX promotes one
 local Qwen chat model at a time. The current promoted local chat model is
-`Qwen/Qwen3.5-27B` on CUDA/NVIDIA hosts. Metal Qwen crates in
+`Qwen/Qwen3.6-27B` on CUDA/NVIDIA hosts. Metal Qwen crates in
 `src/core/inference/models/` are active bring-up work and must not be documented
 as production-supported local chat until the root runtime is wired to that exact
 backend and verified.

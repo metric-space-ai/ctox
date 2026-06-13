@@ -118,6 +118,7 @@ const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
 const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
+const BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS: usize = 3;
 const REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 const MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
@@ -518,7 +519,7 @@ enum CompletionReviewDisposition {
     NoSend {
         summary: String,
     },
-    RequeueSelfWork {
+    RequeueInternalWork {
         work_id: String,
         summary: String,
     },
@@ -653,7 +654,7 @@ fn completion_review_disposition_label(disposition: &CompletionReviewDisposition
         CompletionReviewDisposition::Approved { .. } => "approved",
         CompletionReviewDisposition::Hold { .. } => "hold",
         CompletionReviewDisposition::NoSend { .. } => "no-send",
-        CompletionReviewDisposition::RequeueSelfWork { .. } => "requeue-self-work",
+        CompletionReviewDisposition::RequeueInternalWork { .. } => "requeue-internal-work",
         CompletionReviewDisposition::FeedbackRetry { .. } => "feedback-retry",
         CompletionReviewDisposition::TerminalQueueFailure { .. } => "terminal-queue-failure",
     }
@@ -2007,15 +2008,34 @@ fn handle_service_ipc_stream(
     let mut writer = BufWriter::new(stream);
     let payload =
         serde_json::to_vec(&response).context("failed to encode service socket response")?;
-    writer
-        .write_all(&payload)
-        .context("failed to write service socket response")?;
-    writer
-        .write_all(b"\n")
-        .context("failed to terminate service socket response")?;
-    writer
-        .flush()
-        .context("failed to flush service socket response")
+    // A client that hit its IPC read timeout (e.g. a `--wait` status poll racing
+    // a slow disk-backed queue read) closes its end before we finish writing.
+    // That is a benign client disconnect, not a service fault: surfacing it as an
+    // error spammed the journal with "failed to flush service socket response"
+    // (ctox#21) and buried real failures. Treat the disconnect as a no-op.
+    let write_result = (|| {
+        writer.write_all(&payload)?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    })();
+    match write_result {
+        Ok(()) => Ok(()),
+        Err(err) if is_benign_client_disconnect(&err) => Ok(()),
+        Err(err) => Err(err).context("failed to flush service socket response"),
+    }
+}
+
+/// A response write that fails because the peer already went away (it hit its
+/// own IPC read timeout and closed the socket) is expected, not an error.
+#[cfg(unix)]
+fn is_benign_client_disconnect(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+    )
 }
 
 #[cfg(unix)]
@@ -2822,7 +2842,14 @@ fn send_service_ipc_request_with_timeout(
 #[cfg(unix)]
 fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
     match request {
-        ServiceIpcRequest::Status => Duration::from_millis(750),
+        // `status_from_shared_state` drops the SharedState mutex quickly but then
+        // reads the durable queue (Polars + Parquet) for the pending/blocked
+        // previews. While a prompt worker is busy on a modest host those reads
+        // routinely exceed the old 750ms budget, so every `--wait` status poll
+        // timed out: the client gave up before the (valid) response arrived and
+        // the server's write then hit EPIPE ("failed to flush service socket
+        // response", ctox#21). 5s comfortably covers the bounded queue reads.
+        ServiceIpcRequest::Status => Duration::from_secs(5),
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),
@@ -3268,7 +3295,7 @@ fn start_prompt_worker(
                 push_event(
                     &state,
                     format!(
-                        "Failed to evaluate self-work supersession for {}: {}",
+                        "Failed to evaluate internal work supersession for {}: {}",
                         job.source_label, err
                     ),
                 );
@@ -3328,7 +3355,7 @@ fn start_prompt_worker(
             let conversation_id =
                 turn_loop::conversation_id_for_thread_key(conversation_thread_key.as_deref());
             // Plan-step messages force a continuity refresh directly.
-            // Self-work closures (which the service performs after the
+            // Internal-work closures (which the service performs after the
             // turn, post completion review) are picked up by the turn
             // loop's boundary window, which spans from the last refresh.
             let force_continuity_refresh = job
@@ -3479,6 +3506,35 @@ fn start_prompt_worker(
                     mission_sync_outcome = Some(repaired);
                 }
             }
+            let app_validation_failed_before_review = if result.is_ok() {
+                match business_os_app_module_validation_feedback(&root, &job) {
+                    Ok(Some(feedback)) => {
+                        push_event(
+                            &state,
+                            format!(
+                                "Business OS app validation failed before completion review for {}; skipping generic review: {}",
+                                job.source_label,
+                                clip_text(&feedback, 220)
+                            ),
+                        );
+                        true
+                    }
+                    Ok(None) => false,
+                    Err(err) => {
+                        push_event(
+                            &state,
+                            format!(
+                                "Business OS app validator errored before completion review for {}; skipping generic review: {}",
+                                job.source_label,
+                                clip_text(&err.to_string(), 220)
+                            ),
+                        );
+                        true
+                    }
+                }
+            } else {
+                false
+            };
             // Completion review gate: when the executor's slice succeeded,
             // hand the slice to a separate, skeptical reviewer agent (a fresh
             // PersistentSession with its own clean context — no executor turn
@@ -3486,7 +3542,16 @@ fn start_prompt_worker(
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Reviewer errors/timeouts hold terminal completion; they
             // must not silently complete the worker slice.
-            let review_disposition = if completion_review_should_skip_feedback_turn(&root, &job) {
+            let review_disposition = if app_validation_failed_before_review {
+                push_event(
+                    &state,
+                    format!(
+                        "Completion review skipped for {} because Business OS app validation owns this rework turn",
+                        job.source_label
+                    ),
+                );
+                CompletionReviewDisposition::None
+            } else if completion_review_should_skip_feedback_turn(&root, &job) {
                 push_event(
                     &state,
                     format!(
@@ -3528,6 +3593,8 @@ fn start_prompt_worker(
             let mut review_requeue: Option<(String, String)> = None;
             let mut outcome_recovery_prompt: Option<QueuedPrompt> = None;
             let mut platform_pipeline_event: Option<String> = None;
+            let mut app_validation_rework = false;
+            let mut app_validation_terminal_failure = false;
             let next_prompt;
             worker_activity.set_phase(&job.source_label, "finalizing");
             {
@@ -3562,6 +3629,14 @@ fn start_prompt_worker(
                             &review_disposition,
                             CompletionReviewDisposition::NoSend { .. }
                         );
+                        let app_validation_should_run = !matches!(
+                            &review_disposition,
+                            CompletionReviewDisposition::NoSend { .. }
+                                | CompletionReviewDisposition::TerminalQueueFailure { .. }
+                        )
+                            && business_os_app_module_target_from_prompt(&job.prompt).is_some();
+                        app_validation_rework = false;
+                        app_validation_terminal_failure = false;
                         let expected_artifact_refs = expected_outcome_artifacts_for_job(&job);
                         let delivered_artifact_refs = match delivered_outcome_artifacts_for_job(
                             &root,
@@ -3594,6 +3669,157 @@ fn start_prompt_worker(
                             &delivered_artifact_refs,
                         );
                         sync_workspace_root_to_business_os(&root, &mut shared, &job);
+                        if app_validation_should_run {
+                            match business_os_app_module_validation_feedback(&root, &job) {
+                                Ok(Some(feedback)) => {
+                                    let repair_attempts =
+                                        business_os_app_validation_repair_attempt_count(
+                                            &job.prompt,
+                                        );
+                                    let summary = if business_os_app_validation_repair_exhausted(
+                                        &job.prompt,
+                                    ) {
+                                        format!(
+                                            "Business OS app artifact validation failed after {} repair attempt(s) for {}",
+                                            BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS,
+                                            job.source_label
+                                        )
+                                    } else {
+                                        format!(
+                                            "Business OS app artifact validation failed for {}",
+                                            job.source_label
+                                        )
+                                    };
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "{} (repair_attempts={}): {}",
+                                            summary,
+                                            repair_attempts,
+                                            clip_text(&feedback, 220)
+                                        ),
+                                    );
+                                    if business_os_app_validation_repair_exhausted(&job.prompt) {
+                                        founder_send_error = Some(format!(
+                                            "{}: {}",
+                                            summary,
+                                            clip_text(&feedback, 1200)
+                                        ));
+                                        should_handle_messages = false;
+                                        app_validation_terminal_failure = true;
+                                    } else {
+                                        match apply_review_feedback_to_leased_queue(
+                                            &root,
+                                            &job,
+                                            &feedback,
+                                            &summary,
+                                        ) {
+                                            Ok(updated) if updated > 0 => {
+                                                push_event_locked(
+                                                    &mut shared,
+                                                    format!(
+                                                        "Wrote Business OS app validation feedback back to {updated} leased queue task(s) for {}",
+                                                        job.source_label
+                                                    ),
+                                                );
+                                            }
+                                            Ok(_) => push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Business OS app validation feedback had no leased queue task to update for {}",
+                                                    job.source_label
+                                                ),
+                                            ),
+                                            Err(err) => push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Failed to persist Business OS app validation feedback for {}: {}",
+                                                    job.source_label,
+                                                    clip_text(&err.to_string(), 180)
+                                                ),
+                                            ),
+                                        }
+                                        let mut transition_errors = Vec::new();
+                                        for message_key in &job.leased_message_keys {
+                                            match enforce_business_os_app_validation_feedback_transition(
+                                                &root,
+                                                message_key,
+                                                &job,
+                                                &feedback,
+                                                repair_attempts.saturating_add(1),
+                                            ) {
+                                                Ok(proof_id) => push_event_locked(
+                                                    &mut shared,
+                                                    format!(
+                                                        "Recorded Business OS app validation rework proof {proof_id} for {message_key}"
+                                                    ),
+                                                ),
+                                                Err(err) => transition_errors.push(format!(
+                                                    "{message_key}: {}",
+                                                    clip_text(&err.to_string(), 180)
+                                                )),
+                                            }
+                                        }
+                                        should_handle_messages = false;
+                                        if transition_errors.is_empty() {
+                                            founder_send_error = Some(summary);
+                                            app_validation_rework = true;
+                                        } else {
+                                            founder_send_error = Some(format!(
+                                                "Business OS app validation feedback could not record required rework transition: {}",
+                                                transition_errors.join("; ")
+                                            ));
+                                            app_validation_terminal_failure = true;
+                                        }
+                                    }
+                                }
+                                Ok(None) => {}
+                                Err(err) => {
+                                    let summary = format!(
+                                        "Business OS app artifact validator errored for {}: {}",
+                                        job.source_label,
+                                        clip_text(&err.to_string(), 180)
+                                    );
+                                    push_event_locked(&mut shared, summary.clone());
+                                    let mut transition_errors = Vec::new();
+                                    for message_key in &job.leased_message_keys {
+                                        match enforce_business_os_app_validation_feedback_transition(
+                                            &root,
+                                            message_key,
+                                            &job,
+                                            &summary,
+                                            business_os_app_validation_repair_attempt_count(
+                                                &job.prompt,
+                                            )
+                                            .saturating_add(1),
+                                        ) {
+                                            Ok(proof_id) => push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Recorded Business OS app validator-error rework proof {proof_id} for {message_key}"
+                                                ),
+                                            ),
+                                            Err(proof_err) => transition_errors.push(format!(
+                                                "{message_key}: {}",
+                                                clip_text(&proof_err.to_string(), 180)
+                                            )),
+                                        }
+                                    }
+                                    founder_send_error = Some(summary.clone());
+                                    should_handle_messages = false;
+                                    if transition_errors.is_empty() {
+                                        app_validation_rework = true;
+                                    } else {
+                                        founder_send_error = Some(format!(
+                                            "{}; additionally could not record required rework transition: {}",
+                                            summary,
+                                            transition_errors.join("; ")
+                                        ));
+                                        app_validation_terminal_failure = true;
+                                    }
+                                }
+                            }
+                        }
                         let mut reviewed_terminal_proof_ids: Vec<String> = Vec::new();
                         let mut outcome_witness_error: Option<String> = None;
                         if let CompletionReviewDisposition::Approved { review_audit_key } =
@@ -3890,23 +4116,32 @@ fn start_prompt_worker(
                                 &review_disposition,
                                 CompletionReviewDisposition::Hold { .. }
                             );
-                            let retry_status = if terminal_queue_failure {
-                                "failed"
-                            } else if queue_feedback_retry {
-                                "review_rework"
-                            } else if outcome_witness_error.is_some() {
-                                outcome_witness_retry_route_status_for_job(&root, &job)
-                            } else if held_founder_review || held_completion_review {
-                                "pending"
-                            } else {
-                                "pending"
-                            };
+                            let retry_status =
+                                if terminal_queue_failure || app_validation_terminal_failure {
+                                    "failed"
+                                } else if app_validation_rework {
+                                    "review_rework"
+                                } else if queue_feedback_retry {
+                                    "review_rework"
+                                } else if outcome_witness_error.is_some() {
+                                    outcome_witness_retry_route_status_for_job(&root, &job)
+                                } else if held_founder_review || held_completion_review {
+                                    "pending"
+                                } else {
+                                    "pending"
+                                };
                             let ack_result = if retry_status == "failed" {
-                                let failure_reason = match &review_disposition {
-                                    CompletionReviewDisposition::TerminalQueueFailure {
-                                        summary,
-                                    } => summary.as_str(),
-                                    _ => "terminal queue failure",
+                                let failure_reason = if app_validation_terminal_failure {
+                                    founder_send_error.as_deref().unwrap_or(
+                                        "Business OS app validation repair attempts exhausted",
+                                    )
+                                } else {
+                                    match &review_disposition {
+                                        CompletionReviewDisposition::TerminalQueueFailure {
+                                            summary,
+                                        } => summary.as_str(),
+                                        _ => "terminal queue failure",
+                                    }
                                 };
                                 channels::ack_leased_messages_with_failure_reason(
                                     &root,
@@ -3961,7 +4196,7 @@ fn start_prompt_worker(
                         shared.last_reply_chars = Some(reply.chars().count());
                         if let Some(work_id) = job.ticket_self_work_id.as_deref() {
                             match &review_disposition {
-                                CompletionReviewDisposition::RequeueSelfWork {
+                                CompletionReviewDisposition::RequeueInternalWork {
                                     work_id: target_work_id,
                                     summary,
                                 } => {
@@ -3970,7 +4205,7 @@ fn start_prompt_worker(
                                     push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Review rejected the slice; preserving durable self-work {} instead of closing it",
+                                            "Review rejected the slice; preserving durable internal work {} instead of closing it",
                                             target_work_id
                                         ),
                                     );
@@ -4003,7 +4238,7 @@ fn start_prompt_worker(
                                         push_event_locked(
                                             &mut shared,
                                             format!(
-                                                "Outcome witness rejected closure for {}; preserving durable self-work {}",
+                                                "Outcome witness rejected closure for {}; preserving durable internal work {}",
                                                 job.source_label, work_id
                                             ),
                                         );
@@ -4013,7 +4248,7 @@ fn start_prompt_worker(
                                     push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Completion review produced no terminal verdict for {}; preserving durable self-work {}",
+                                            "Completion review produced no terminal verdict for {}; preserving durable internal work {}",
                                             job.source_label, work_id
                                         ),
                                     );
@@ -4229,14 +4464,14 @@ fn start_prompt_worker(
                                     Ok(Some(queued)) => push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Retryable worker error; requeued durable self-work {} via {}",
+                                            "Retryable worker error; requeued durable internal work {} via {}",
                                             work_id, queued.title
                                         ),
                                     ),
                                     Ok(None) => push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Retryable worker error; kept durable self-work {} queued/pending",
+                                            "Retryable worker error; kept durable internal work {} queued/pending",
                                             work_id
                                         ),
                                     ),
@@ -4244,7 +4479,7 @@ fn start_prompt_worker(
                                         push_event_locked(
                                             &mut shared,
                                             format!(
-                                                "Retryable worker error; failed to requeue durable self-work {}: {}",
+                                                "Retryable worker error; failed to requeue durable internal work {}: {}",
                                                 work_id, requeue_err
                                             ),
                                         );
@@ -4367,47 +4602,54 @@ fn start_prompt_worker(
                     persist_on_leased_queue,
                 } = &review_disposition
                 {
-                    let persisted = if *persist_on_leased_queue
-                        && !job.leased_message_keys.is_empty()
-                    {
-                        match apply_review_feedback_to_leased_queue(
-                            &root,
-                            &job,
-                            feedback_prompt,
-                            review_summary,
-                        ) {
-                            Ok(updated) if updated > 0 => {
-                                push_event_locked(
+                    if app_validation_rework || app_validation_terminal_failure {
+                        push_event_locked(
+                            &mut shared,
+                            format!(
+                                "Skipped generic review feedback persistence for {} because Business OS app validation owns this rework turn",
+                                job.source_label
+                            ),
+                        );
+                    } else {
+                        let persisted = if *persist_on_leased_queue
+                            && !job.leased_message_keys.is_empty()
+                        {
+                            match apply_review_feedback_to_leased_queue(
+                                &root,
+                                &job,
+                                feedback_prompt,
+                                review_summary,
+                            ) {
+                                Ok(updated) if updated > 0 => {
+                                    push_event_locked(
                                     &mut shared,
                                     format!(
                                         "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
                                         job.source_label
                                     ),
                                 );
-                                let mut released = 0usize;
-                                for message_key in &job.leased_message_keys {
-                                    let route_status =
-                                        channels::open_channel_db(&crate::paths::core_db(&root))
-                                            .and_then(|conn| {
-                                                channels::current_queue_route_status(
-                                                    &conn,
-                                                    message_key,
-                                                )
-                                            });
-                                    match route_status.as_deref() {
-                                        Ok("review_rework") => {}
-                                        Ok(other) => {
-                                            push_event_locked(
+                                    let mut released = 0usize;
+                                    for message_key in &job.leased_message_keys {
+                                        let route_status = channels::open_channel_db(
+                                            &crate::paths::core_db(&root),
+                                        )
+                                        .and_then(|conn| {
+                                            channels::current_queue_route_status(&conn, message_key)
+                                        });
+                                        match route_status.as_deref() {
+                                            Ok("review_rework") => {}
+                                            Ok(other) => {
+                                                push_event_locked(
                                                 &mut shared,
                                                 format!(
                                                     "Not releasing reviewed queue task {} to pending because its route status is {} instead of review_rework",
                                                     message_key, other
                                                 ),
                                             );
-                                            continue;
-                                        }
-                                        Err(err) => {
-                                            push_event_locked(
+                                                continue;
+                                            }
+                                            Err(err) => {
+                                                push_event_locked(
                                                 &mut shared,
                                                 format!(
                                                     "Not releasing reviewed queue task {} to pending because route status could not be verified: {}",
@@ -4415,27 +4657,27 @@ fn start_prompt_worker(
                                                     clip_text(&err.to_string(), 180)
                                                 ),
                                             );
-                                            continue;
+                                                continue;
+                                            }
                                         }
-                                    }
-                                    let attempt = match queue_review_budget_attempt_count(
-                                        &root,
-                                        &job,
-                                        message_key,
-                                    ) {
-                                        Ok(value) if value > 0 => value,
-                                        Ok(_) => {
-                                            push_event_locked(
+                                        let attempt = match queue_review_budget_attempt_count(
+                                            &root,
+                                            &job,
+                                            message_key,
+                                        ) {
+                                            Ok(value) if value > 0 => value,
+                                            Ok(_) => {
+                                                push_event_locked(
                                                     &mut shared,
                                                     format!(
                                                         "Not releasing reviewed queue task {} to pending because no accepted review checkpoint proof exists",
                                                         message_key
                                                     ),
                                                 );
-                                            continue;
-                                        }
-                                        Err(err) => {
-                                            push_event_locked(
+                                                continue;
+                                            }
+                                            Err(err) => {
+                                                push_event_locked(
                                                     &mut shared,
                                                     format!(
                                                         "Not releasing reviewed queue task {} to pending because review checkpoint proofs could not be counted: {}",
@@ -4443,17 +4685,17 @@ fn start_prompt_worker(
                                                         clip_text(&err.to_string(), 180)
                                                     ),
                                                 );
-                                            continue;
-                                        }
-                                    };
-                                    if let Err(err) =
-                                        enforce_queue_review_requeue_same_main_work_transition(
-                                            &root,
-                                            message_key,
-                                            attempt,
-                                        )
-                                    {
-                                        push_event_locked(
+                                                continue;
+                                            }
+                                        };
+                                        if let Err(err) =
+                                            enforce_queue_review_requeue_same_main_work_transition(
+                                                &root,
+                                                message_key,
+                                                attempt,
+                                            )
+                                        {
+                                            push_event_locked(
                                             &mut shared,
                                             format!(
                                                 "Failed to prove reviewed queue task {} can requeue same main work: {}",
@@ -4461,9 +4703,9 @@ fn start_prompt_worker(
                                                 clip_text(&err.to_string(), 180)
                                             ),
                                         );
-                                        continue;
-                                    }
-                                    match channels::set_queue_task_route_status(
+                                            continue;
+                                        }
+                                        match channels::set_queue_task_route_status(
                                         &root,
                                         message_key,
                                         "pending",
@@ -4479,20 +4721,20 @@ fn start_prompt_worker(
                                             ),
                                         ),
                                     }
-                                }
-                                if released > 0 {
-                                    push_event_locked(
+                                    }
+                                    if released > 0 {
+                                        push_event_locked(
                                         &mut shared,
                                         format!(
                                             "Released {released} reviewed queue task(s) from review_rework back to pending through the core requeue path"
                                         ),
                                     );
+                                    }
+                                    true
                                 }
-                                true
-                            }
-                            Ok(_) => false,
-                            Err(err) => {
-                                push_event_locked(
+                                Ok(_) => false,
+                                Err(err) => {
+                                    push_event_locked(
                                     &mut shared,
                                     format!(
                                         "Failed to persist review feedback onto leased queue task for {}: {}; keeping the item in review_rework instead of requeueing stale work",
@@ -4500,45 +4742,46 @@ fn start_prompt_worker(
                                         clip_text(&err.to_string(), 180)
                                     ),
                                 );
-                                false
+                                    false
+                                }
                             }
-                        }
-                    } else {
-                        false
-                    };
-                    if !persisted {
-                        if job.outbound_email.is_some()
-                            && outbound_in_process_review_retry_allowed(&job)
-                        {
-                            push_event_locked(
+                        } else {
+                            false
+                        };
+                        if !persisted {
+                            if job.outbound_email.is_some()
+                                && outbound_in_process_review_retry_allowed(&job)
+                            {
+                                push_event_locked(
                                 &mut shared,
                                 format!(
                                     "Queued bounded review-feedback retry for proactive outbound {}",
                                     job.source_label
                                 ),
                             );
-                            outcome_recovery_prompt = Some(QueuedPrompt {
-                                prompt: feedback_prompt.clone(),
-                                goal: format!("Review-feedback retry for {}", job.goal),
-                                preview: clip_text(feedback_prompt, 180),
-                                source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
-                                suggested_skill: job.suggested_skill.clone(),
-                                leased_message_keys: Vec::new(),
-                                leased_ticket_event_keys: Vec::new(),
-                                thread_key: job.thread_key.clone(),
-                                workspace_root: job.workspace_root.clone(),
-                                ticket_self_work_id: None,
-                                outbound_email: job.outbound_email.clone(),
-                                outbound_anchor: job.outbound_anchor.clone(),
-                            });
-                        } else {
-                            push_event_locked(
+                                outcome_recovery_prompt = Some(QueuedPrompt {
+                                    prompt: feedback_prompt.clone(),
+                                    goal: format!("Review-feedback retry for {}", job.goal),
+                                    preview: clip_text(feedback_prompt, 180),
+                                    source_label: REVIEW_FEEDBACK_SOURCE_LABEL.to_string(),
+                                    suggested_skill: job.suggested_skill.clone(),
+                                    leased_message_keys: Vec::new(),
+                                    leased_ticket_event_keys: Vec::new(),
+                                    thread_key: job.thread_key.clone(),
+                                    workspace_root: job.workspace_root.clone(),
+                                    ticket_self_work_id: None,
+                                    outbound_email: job.outbound_email.clone(),
+                                    outbound_anchor: job.outbound_anchor.clone(),
+                                });
+                            } else {
+                                push_event_locked(
                                 &mut shared,
                                 format!(
                                     "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
                                     job.source_label
                                 ),
                             );
+                            }
                         }
                     }
                 }
@@ -4553,21 +4796,21 @@ fn start_prompt_worker(
                     Ok(Some(task)) => push_event(
                         &state,
                         format!(
-                            "Review rejected the slice; re-queued durable self-work {} as {}",
+                            "Review rejected the slice; re-queued durable internal work {} as {}",
                             work_id, task.title
                         ),
                     ),
                     Ok(None) => push_event(
                         &state,
                         format!(
-                            "Review rejected the slice; durable self-work {} was kept queued without creating a duplicate runnable task",
+                            "Review rejected the slice; durable internal work {} was kept queued without creating a duplicate runnable task",
                             work_id
                         ),
                     ),
                     Err(err) => push_event(
                         &state,
                         format!(
-                            "Failed to re-queue durable self-work {} after review rejection: {}",
+                            "Failed to re-queue durable internal work {} after review rejection: {}",
                             work_id, err
                         ),
                     ),
@@ -5137,11 +5380,11 @@ fn run_completion_review(
                     push_event(
                         state,
                         format!(
-                            "Communication review fail for {} will resume durable self-work {} instead of sending",
+                            "Communication review fail for {} will resume durable internal work {} instead of sending",
                             job.source_label, work_id
                         ),
                     );
-                    CompletionReviewDisposition::RequeueSelfWork {
+                    CompletionReviewDisposition::RequeueInternalWork {
                         work_id,
                         summary: outcome.summary.clone(),
                     }
@@ -5456,6 +5699,273 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BusinessOsAppModuleTarget {
+    module_id: String,
+    install_target: String,
+    mode_flag: &'static str,
+    artifact_directory: String,
+}
+
+fn business_os_app_module_target_from_prompt(prompt: &str) -> Option<BusinessOsAppModuleTarget> {
+    if !prompt.contains("Business OS app build target:")
+        && !prompt.contains("ctox.business_os.app.modify")
+        && !prompt.contains("ctox.business_os.app.create")
+    {
+        return None;
+    }
+    let module_id = prompt_line_value(prompt, "- module_id:")?;
+    let install_target = prompt_line_value(prompt, "- install_target:")
+        .unwrap_or_else(|| "runtime-installed-module".to_string());
+    let mode_flag = if install_target == "runtime-installed-module" {
+        "--installed"
+    } else {
+        "--source"
+    };
+    let artifact_directory = prompt_line_value(prompt, "- only_allowed_app_artifact_directory:")
+        .unwrap_or_else(|| {
+            if mode_flag == "--installed" {
+                format!("src/apps/business-os/installed-modules/{module_id}")
+            } else {
+                format!("src/apps/business-os/modules/{module_id}")
+            }
+        });
+    Some(BusinessOsAppModuleTarget {
+        module_id,
+        install_target,
+        mode_flag,
+        artifact_directory,
+    })
+}
+
+fn prompt_line_value(prompt: &str, prefix: &str) -> Option<String> {
+    prompt.lines().find_map(|line| {
+        let value = line.trim().strip_prefix(prefix)?.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn business_os_app_validation_repair_attempt_count(prompt: &str) -> usize {
+    prompt
+        .match_indices("Business OS app artifact validation failed.")
+        .count()
+}
+
+fn business_os_app_validation_repair_exhausted(prompt: &str) -> bool {
+    business_os_app_validation_repair_attempt_count(prompt)
+        >= BUSINESS_OS_APP_VALIDATION_MAX_REPAIR_ATTEMPTS
+}
+
+fn business_os_app_validation_audit_key(
+    message_key: &str,
+    target: Option<&BusinessOsAppModuleTarget>,
+    attempt: usize,
+    feedback: &str,
+) -> String {
+    use sha2::Digest;
+
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"ctox-business-os-app-validation-rework-v1");
+    hasher.update(message_key.as_bytes());
+    if let Some(target) = target {
+        hasher.update(target.module_id.as_bytes());
+        hasher.update(target.mode_flag.as_bytes());
+    }
+    hasher.update(attempt.to_string().as_bytes());
+    hasher.update(feedback.as_bytes());
+    format!("business-os-app-validation-{:x}", hasher.finalize())
+}
+
+fn enforce_business_os_app_validation_feedback_transition(
+    root: &Path,
+    message_key: &str,
+    job: &QueuedPrompt,
+    feedback: &str,
+    attempt: usize,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "leased".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    let target = business_os_app_module_target_from_prompt(&job.prompt);
+    let mut metadata = BTreeMap::new();
+    metadata.insert("validator_rework".to_string(), "true".to_string());
+    metadata.insert(
+        "validator_id".to_string(),
+        "business_os_app_module_validator".to_string(),
+    );
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+    metadata.insert("validation_attempt".to_string(), attempt.to_string());
+    if let Some(target) = target.as_ref() {
+        metadata.insert("module_id".to_string(), target.module_id.clone());
+        metadata.insert("module_mode".to_string(), target.mode_flag.to_string());
+        metadata.insert(
+            "artifact_directory".to_string(),
+            target.artifact_directory.clone(),
+        );
+    }
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::ReworkRequired,
+            event: CoreEvent::RequireRework,
+            actor: "ctox-business-os-app-validator".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(business_os_app_validation_audit_key(
+                    message_key,
+                    target.as_ref(),
+                    attempt,
+                    feedback,
+                )),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn enforce_business_os_app_validation_requeue_transition(
+    root: &Path,
+    message_key: &str,
+) -> Result<String> {
+    let db_path = crate::paths::core_db(root);
+    let conn = channels::open_channel_db(&db_path)?;
+    let route_status = channels::current_queue_route_status(&conn, message_key)
+        .unwrap_or_else(|_| "review_rework".to_string());
+    let from_state = queue_core_state_for_service(&route_status);
+    if !matches!(from_state, CoreState::ReworkRequired) {
+        anyhow::bail!(
+            "queue item {message_key} is in route status {route_status}, not review_rework"
+        );
+    }
+
+    let mut metadata = BTreeMap::new();
+    metadata.insert("validator_rework".to_string(), "true".to_string());
+    metadata.insert("validator_requeue".to_string(), "true".to_string());
+    metadata.insert(
+        "validator_id".to_string(),
+        "business_os_app_module_validator".to_string(),
+    );
+    metadata.insert("feedback_owner".to_string(), "main_agent".to_string());
+    metadata.insert(
+        "feedback_target_entity_id".to_string(),
+        message_key.to_string(),
+    );
+    metadata.insert("spawns_review_owned_work".to_string(), "false".to_string());
+
+    let proof = enforce_core_transition(
+        &conn,
+        &CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: message_key.to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state,
+            to_state: CoreState::Pending,
+            event: CoreEvent::Retry,
+            actor: "ctox-business-os-app-validator".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some(format!("business-os-app-validation-requeue:{message_key}")),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata,
+        },
+    )?;
+    Ok(proof.proof_id)
+}
+
+fn business_os_app_module_validation_feedback(
+    root: &Path,
+    job: &QueuedPrompt,
+) -> Result<Option<String>> {
+    let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
+        return Ok(None);
+    };
+    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    if !script.exists() {
+        return Ok(Some(render_business_os_app_module_validation_feedback(
+            job,
+            &target,
+            &format!(
+                "Business OS app artifact validator is missing at {}. The app command cannot be marked complete until the release image includes this validator.",
+                script.display()
+            ),
+        )));
+    }
+
+    let mut command = Command::new("node");
+    command
+        .arg(&script)
+        .arg(&target.module_id)
+        .arg(target.mode_flag)
+        .arg("--workspace")
+        .arg(root);
+    let output = match command_output_with_timeout(
+        &mut command,
+        Duration::from_secs(90),
+        "Business OS app artifact validator",
+    ) {
+        Ok(output) => output,
+        Err(err) => {
+            return Ok(Some(render_business_os_app_module_validation_feedback(
+                job,
+                &target,
+                &format!("Business OS app artifact validator could not run: {err}"),
+            )));
+        }
+    };
+    if output.status.success() {
+        return Ok(None);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let report = if !stderr.is_empty() {
+        stderr
+    } else if !stdout.is_empty() {
+        stdout
+    } else {
+        format!(
+            "Business OS app artifact validator exited with status {} and no output.",
+            output.status
+        )
+    };
+    Ok(Some(render_business_os_app_module_validation_feedback(
+        job, &target, &report,
+    )))
+}
+
+fn render_business_os_app_module_validation_feedback(
+    job: &QueuedPrompt,
+    target: &BusinessOsAppModuleTarget,
+    report: &str,
+) -> String {
+    format!(
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  node src/apps/business-os/scripts/validate-app-module.mjs {} {}\n\nOriginal task remains active:\n{}",
+        job.source_label,
+        target.module_id,
+        target.install_target,
+        target.artifact_directory,
+        target.artifact_directory,
+        clip_text(report.trim(), 6000),
+        target.artifact_directory,
+        target.module_id,
+        target.module_id,
+        target.mode_flag,
+        clip_text(&job.prompt, 6000),
+    )
+}
+
 fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
     if job.prompt.contains("business_os.chat.task") {
         return true;
@@ -5531,10 +6041,10 @@ fn no_cascade_review_block(
                 });
             }
         };
-    Some(CompletionReviewDisposition::RequeueSelfWork {
+    Some(CompletionReviewDisposition::RequeueInternalWork {
         work_id: target_work_id,
         summary: format!(
-            "Review failed for durable self-work kind `{}`. Core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework: {}",
+            "Review failed for durable internal work kind `{}`. Core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework: {}",
             kind,
             checkpoint_proof,
             outcome.summary
@@ -5770,9 +6280,10 @@ fn review_external_work_backing_evidence_summaries(root: &Path, job: &QueuedProm
     } else {
         0
     };
-    let self_work_count = if sqlite_table_exists(&conn, "ticket_self_work_items").unwrap_or(false) {
-        conn.query_row(
-            r#"
+    let internal_work_count =
+        if sqlite_table_exists(&conn, "ticket_self_work_items").unwrap_or(false) {
+            conn.query_row(
+                r#"
             SELECT COUNT(*)
             FROM ticket_self_work_items
             WHERE state NOT IN ('closed', 'cancelled', 'failed', 'superseded', 'blocked')
@@ -5782,18 +6293,18 @@ fn review_external_work_backing_evidence_summaries(root: &Path, job: &QueuedProm
                 OR body_text LIKE '%' || ?1 || '%'
               )
             "#,
-            params![thread_key],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-    } else {
-        0
-    };
+                params![thread_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+        } else {
+            0
+        };
     let mut evidence = vec![format!(
-        "External chat work backing for thread `{thread_key}`: queue_open={queue_count}, plan_open={plan_count}, self_work_open={self_work_count}."
+        "External chat work backing for thread `{thread_key}`: queue_open={queue_count}, plan_open={plan_count}, internal_work_open={internal_work_count}."
     )];
     evidence.push(format!(
-        "External chat pipeline delta contract for thread `{thread_key}`: reviewer must classify the latest communication as new_task, update_existing, merge_duplicate, extend_scope, no_action_needed, or blocked_needs_clarification; every actionable request must be represented by a referenced queue, plan, ticket, or self-work item, merged into one explicitly named existing item, or explicitly blocked for clarification."
+        "External chat pipeline delta contract for thread `{thread_key}`: reviewer must classify the latest communication as new_task, update_existing, merge_duplicate, extend_scope, no_action_needed, or blocked_needs_clarification; every actionable request must be represented by a referenced queue, plan, ticket, or internal work item, merged into one explicitly named existing item, or explicitly blocked for clarification."
     ));
     evidence.extend(review_external_queue_backing_rows(&conn, thread_key));
     evidence.extend(review_external_plan_backing_rows(&conn, thread_key));
@@ -5918,13 +6429,13 @@ fn review_external_self_work_backing_rows(conn: &Connection, thread_key: &str) -
         Ok(stmt) => stmt,
         Err(err) => {
             return vec![format!(
-                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+                "External chat internal work backing rows unavailable for `{thread_key}`: {err}"
             )]
         }
     };
     let rows = match stmt.query_map(params![thread_key], |row| {
         Ok(format!(
-            "External chat self-work backing row: work_id={} state={} kind={} updated_at={} locator=`{}` title=`{}`",
+            "External chat internal work backing row: work_id={} state={} kind={} updated_at={} locator=`{}` title=`{}`",
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
@@ -5936,14 +6447,14 @@ fn review_external_self_work_backing_rows(conn: &Connection, thread_key: &str) -
         Ok(rows) => rows,
         Err(err) => {
             return vec![format!(
-                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+                "External chat internal work backing rows unavailable for `{thread_key}`: {err}"
             )]
         }
     };
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .unwrap_or_else(|err| {
             vec![format!(
-                "External chat self-work backing rows unavailable for `{thread_key}`: {err}"
+                "External chat internal work backing rows unavailable for `{thread_key}`: {err}"
             )]
         })
 }
@@ -6055,7 +6566,7 @@ fn review_ticket_evidence_summaries(job: &QueuedPrompt) -> Vec<String> {
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        evidence.push(format!("Queued self-work id: {work_id}"));
+        evidence.push(format!("Queued internal work id: {work_id}"));
     }
     if !job.leased_ticket_event_keys.is_empty() {
         evidence.push(format!(
@@ -6250,7 +6761,7 @@ fn communication_pipeline_resolution_guard_outcome(
         return Some(communication_pipeline_resolution_failure_outcome(
             outcome,
             "Communication review PASS claims a pipeline mutation but names no durable target item.",
-            "Create, update, merge, or extend a concrete queue/plan/ticket/self-work item, then re-run communication review with that target id.",
+            "Create, update, merge, or extend a concrete queue/plan/ticket/internal work item, then re-run communication review with that target id.",
         ));
     }
     None
@@ -8197,11 +8708,11 @@ fn handle_actionable_completion_review_rejection(
         push_event(
             state,
             format!(
-                "Review fail for {} will resume durable self-work {} instead of nesting review-rework",
+                "Review fail for {} will resume durable internal work {} instead of nesting review-rework",
                 job.source_label, work_id
             ),
         );
-        return CompletionReviewDisposition::RequeueSelfWork {
+        return CompletionReviewDisposition::RequeueInternalWork {
             work_id,
             summary: outcome.summary.clone(),
         };
@@ -8224,13 +8735,13 @@ fn handle_actionable_completion_review_rejection(
         push_event(
             state,
             format!(
-                "Review rejected {} but no durable queue/self-work target exists; holding instead of creating in-memory review retry",
+                "Review rejected {} but no durable queue/internal-work target exists; holding instead of creating in-memory review retry",
                 job.source_label
             ),
         );
         return CompletionReviewDisposition::Hold {
             summary: format!(
-                "{}\n\nReview rejected the worker result, but there is no durable queue item or self-work item to requeue. The harness held the result fail-closed instead of creating an in-memory retry outside the core flow.",
+                "{}\n\nReview rejected the worker result, but there is no durable queue item or internal work item to requeue. The harness held the result fail-closed instead of creating an in-memory retry outside the core flow.",
                 outcome.summary
             ),
         };
@@ -8455,7 +8966,7 @@ fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<Sha
                     Ok(count) if count > 0 => push_event(
                         &state,
                         format!(
-                            "Autonomy progressive: closed {count} pending approval-gate self-work item(s)"
+                            "Autonomy progressive: closed {count} pending approval-gate internal work item(s)"
                         ),
                     ),
                     Err(err) => {
@@ -8544,7 +9055,7 @@ fn harness_audit_tick_once(root: &Path) -> Result<HarnessAuditTickSummary> {
     })
 }
 
-/// Close every open `approval-gate` self-work item. Runs only when the
+/// Close every open `approval-gate` internal work item. Runs only when the
 /// active autonomy level is `progressive` for unattended continuous
 /// operation. Returns the count of items closed so callers can log it.
 fn auto_close_pending_approval_gates(root: &Path) -> Result<usize> {
@@ -8620,9 +9131,28 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         );
         return Ok(());
     }
+    match tickets::materialize_ready_workflow_steps(root, 8) {
+        Ok(result) if !result.materialized.is_empty() => {
+            push_event(
+                state,
+                format!(
+                    "Materialized {} ready ticket workflow step(s) into internal work routing",
+                    result.materialized.len()
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Ticket workflow materialization skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     if let Err(err) = route_assigned_ticket_self_work(root, state) {
         if !handle_channel_router_guard_block(root, state, "assigned-ticket-self-work", &err) {
-            return Err(err.context("failed to route assigned ticket self-work"));
+            return Err(err.context("failed to route assigned ticket internal work"));
         }
     }
     let settings = live_service_settings(root);
@@ -9039,6 +9569,9 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
             return Ok(None);
         }
     }
+    if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
+        return Ok(Some(prompt));
+    }
     let tasks = channels::list_queue_tasks(root, &["pending".to_string()], 16)?;
     for task in tasks {
         if inflight_leased_message_key(state, &task.message_key) {
@@ -9062,6 +9595,59 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
         }));
     }
     Ok(None)
+}
+
+fn maybe_lease_business_os_app_validation_rework(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+) -> Result<Option<QueuedPrompt>> {
+    let tasks = channels::list_queue_tasks(root, &["review_rework".to_string()], 16)?;
+    for task in tasks {
+        if inflight_leased_message_key(state, &task.message_key)
+            || !queue_task_is_business_os_app_validation_rework(&task)
+        {
+            continue;
+        }
+        release_business_os_app_validation_rework_to_pending(root, &task.message_key)?;
+        let leased =
+            channels::lease_queue_task(root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
+        return Ok(Some(queued_prompt_from_queue_task(leased)));
+    }
+    Ok(None)
+}
+
+fn release_business_os_app_validation_rework_to_pending(
+    root: &Path,
+    message_key: &str,
+) -> Result<()> {
+    enforce_business_os_app_validation_requeue_transition(root, message_key)?;
+    if !channels::set_queue_task_route_status(root, message_key, "pending")? {
+        anyhow::bail!("Business OS app validation rework queue task {message_key} disappeared");
+    }
+    Ok(())
+}
+
+fn queue_task_is_business_os_app_validation_rework(task: &channels::QueueTaskView) -> bool {
+    task.prompt
+        .contains("Business OS app artifact validation failed.")
+        && business_os_app_module_target_from_prompt(&task.prompt).is_some()
+}
+
+fn queued_prompt_from_queue_task(task: channels::QueueTaskView) -> QueuedPrompt {
+    QueuedPrompt {
+        preview: preview_text(&task.prompt),
+        source_label: "queue".to_string(),
+        goal: task.title.clone(),
+        prompt: task.prompt.clone(),
+        suggested_skill: task.suggested_skill.clone(),
+        leased_message_keys: vec![task.message_key],
+        leased_ticket_event_keys: Vec::new(),
+        thread_key: Some(task.thread_key.clone()),
+        workspace_root: task.workspace_root.clone(),
+        ticket_self_work_id: task.ticket_self_work_id.clone(),
+        outbound_email: None,
+        outbound_anchor: None,
+    }
 }
 
 fn run_ticket_dispatch_preflight(
@@ -9224,7 +9810,7 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
             push_event(
                 state,
                 format!(
-                    "Suppressed self-work {} [{}]: {}",
+                    "Suppressed internal work {} [{}]: {}",
                     item.work_id, item.kind, reason
                 ),
             );
@@ -9235,7 +9821,7 @@ fn route_assigned_ticket_self_work(root: &Path, state: &Arc<Mutex<SharedState>>)
                 state,
                 decorate_service_event_with_skill(
                     &format!(
-                        "Queued self-work {} for active handling [{}]",
+                        "Queued internal work {} for active handling [{}]",
                         item.work_id, item.kind
                     ),
                     created.suggested_skill.as_deref(),
@@ -9774,6 +10360,22 @@ fn metadata_string(metadata: &Value, key: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn metadata_string_list(metadata: &Value, key: &str) -> Vec<String> {
+    metadata
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default()
+}
+
 fn ticket_self_work_id_from_metadata(metadata: &Value) -> Option<String> {
     metadata_string(metadata, "ticket_self_work_id")
 }
@@ -9835,14 +10437,32 @@ fn ticket_self_work_queue_metadata(item: &tickets::TicketSelfWorkItemView) -> Va
         "runtime_retry_reason",
         "not_before",
         "outbound_anchor",
+        "workflow_id",
+        "workflow_parent_work_id",
+        "workflow_step_id",
+        "workflow_role",
+        "workflow_phase",
+        "workflow_phase_goal",
+        "workflow_exit_gate",
+        "workflow_step_status",
     ] {
         if let Some(value) = metadata_string(&item.metadata, key) {
             map.insert(key.to_string(), Value::String(value));
         }
     }
-    for key in ["runtime_retry", "outbound_email"] {
+    for key in ["runtime_retry", "outbound_email", "workflow_step_evidence"] {
         if let Some(value) = item.metadata.get(key) {
             map.insert(key.to_string(), value.clone());
+        }
+    }
+    for key in [
+        "workflow_predecessor_steps",
+        "workflow_predecessor_step_ids",
+        "workflow_predecessor_work_ids",
+    ] {
+        let values = metadata_string_list(&item.metadata, key);
+        if !values.is_empty() {
+            map.insert(key.to_string(), serde_json::json!(values));
         }
     }
     if item.kind == FOUNDER_COMMUNICATION_REWORK_KIND {
@@ -10456,7 +11076,7 @@ fn close_stale_founder_communication_self_work_after_reviewed_reply(root: &Path)
         close_ticket_self_work_item(
             root,
             &item.work_id,
-            "Founder communication already has a reviewed sent reply; closing stale self-work.",
+            "Founder communication already has a reviewed sent reply; closing stale internal work.",
         );
         closed += 1;
     }
@@ -10604,7 +11224,7 @@ fn find_founder_communication_rework_self_work(
     }))
 }
 
-/// Bug #4 helper: find a `blocked` founder-communication rework self-work
+/// Bug #4 helper: find a `blocked` founder-communication rework internal work
 /// item that lives on the same isolated thread-key as the incoming message.
 ///
 /// This complements `find_founder_communication_rework_self_work`, which is
@@ -12036,7 +12656,7 @@ fn merge_metadata_value(target: &mut Value, extra: Value) {
 
 fn render_ticket_self_work_prompt(root: &Path, item: &tickets::TicketSelfWorkItemView) -> String {
     let mut prompt_lines = vec![
-        "SELF-WORK TASK".to_string(),
+        "INTERNAL WORK ITEM".to_string(),
         format!("- Source system: {}", item.source_system),
         format!("- Title: {}", item.title.trim()),
         format!("- Work id: {}", item.work_id.trim()),
@@ -12045,10 +12665,60 @@ fn render_ticket_self_work_prompt(root: &Path, item: &tickets::TicketSelfWorkIte
         "CONTRACT".to_string(),
         "- Work on this parent task, not on a new unrelated task.".to_string(),
         "- If review notes are listed below, fix the underlying issue they describe.".to_string(),
-        "- If the work is not finished by the end of the turn, persist exactly one next runtime item.".to_string(),
+        "- If the work is not finished by the end of the turn, persist exactly one next internal work item or queue item.".to_string(),
         String::new(),
         item.body_text.trim().to_string(),
     ];
+    if item.kind == tickets::WORKFLOW_STEP_KIND {
+        prompt_lines.push(String::new());
+        prompt_lines.push("WORKFLOW PHASE CONTRACT".to_string());
+        if let Some(value) = metadata_string(&item.metadata, "workflow_id") {
+            prompt_lines.push(format!("- Workflow id: {value}"));
+        }
+        if let Some(value) = metadata_string(&item.metadata, "workflow_step_id") {
+            prompt_lines.push(format!("- Step id: {value}"));
+        }
+        let role =
+            metadata_string(&item.metadata, "workflow_role").unwrap_or_else(|| "leaf".to_string());
+        prompt_lines.push(format!("- Role: {role}"));
+        if let Some(value) = metadata_string(&item.metadata, "workflow_phase") {
+            prompt_lines.push(format!("- Phase: {value}"));
+        }
+        if let Some(value) = metadata_string(&item.metadata, "workflow_step_status") {
+            prompt_lines.push(format!("- Step status: {value}"));
+        }
+        if let Some(value) = metadata_string(&item.metadata, "workflow_phase_goal") {
+            prompt_lines.push(format!("- Phase goal: {value}"));
+        }
+        if let Some(value) = metadata_string(&item.metadata, "workflow_exit_gate") {
+            prompt_lines.push(format!("- Exit gate: {value}"));
+        }
+        let mut predecessor_steps =
+            metadata_string_list(&item.metadata, "workflow_predecessor_steps");
+        predecessor_steps.extend(metadata_string_list(
+            &item.metadata,
+            "workflow_predecessor_step_ids",
+        ));
+        if !predecessor_steps.is_empty() {
+            prompt_lines.push(format!(
+                "- Predecessor steps: {}",
+                predecessor_steps.join(", ")
+            ));
+        }
+        let predecessor_work_ids =
+            metadata_string_list(&item.metadata, "workflow_predecessor_work_ids");
+        if !predecessor_work_ids.is_empty() {
+            prompt_lines.push(format!(
+                "- Predecessor work ids: {}",
+                predecessor_work_ids.join(", ")
+            ));
+        }
+        if role == "reducer" {
+            prompt_lines.push("- Reducer duty: inspect phase evidence, decide the next bounded phase, and create/update workflow steps with `ctox ticket workflow-apply-delta` only after evidence supports the delta.".to_string());
+        } else {
+            prompt_lines.push("- Leaf duty: execute exactly this bounded step, report concrete evidence, and do not create sibling workflow tickets directly. If the workflow shape must change, return a `workflow_delta_candidate` JSON block for a reducer.".to_string());
+        }
+    }
     if let Ok(notes) = recent_ticket_self_work_notes_for_prompt(root, &item.work_id, 6) {
         if !notes.is_empty() {
             prompt_lines.push(String::new());
@@ -12294,7 +12964,7 @@ fn maybe_skip_superseded_self_work_prompt(
         push_event_locked(
             &mut shared,
             format!(
-                "Skipped superseded self-work {} [{}]: {}",
+                "Skipped superseded internal work {} [{}]: {}",
                 work_id, item.kind, reason
             ),
         );
@@ -12396,19 +13066,19 @@ fn transition_self_work_for_queue_execution(
         "published" | "running" | "executing" | "in_progress" => Ok(item.clone()),
         "awaiting_review" | "review" | "reviewing" => {
             anyhow::bail!(
-                "cannot queue ticket self-work item {} while it is awaiting review; wait for a review verdict",
+                "cannot queue ticket internal work item {} while it is awaiting review; wait for a review verdict",
                 item.work_id
             )
         }
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
             anyhow::bail!(
-                "cannot queue terminal ticket self-work item {} in state {}",
+                "cannot queue terminal ticket internal work item {} in state {}",
                 item.work_id,
                 item.state
             )
         }
         other => anyhow::bail!(
-            "cannot queue ticket self-work item {} because state `{}` is not mapped",
+            "cannot queue ticket internal work item {} because state `{}` is not mapped",
             item.work_id,
             other
         ),
@@ -12530,7 +13200,7 @@ fn transition_self_work_after_review_rejection(
     note: &str,
 ) -> Result<tickets::TicketSelfWorkItemView> {
     let item = tickets::load_ticket_self_work_item(root, work_id)?
-        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
+        .with_context(|| format!("ticket internal work item {work_id} not found"))?;
     match normalize_token(&item.state).as_str() {
         "" | "created" => {
             let planned = tickets::transition_ticket_self_work_item(
@@ -12552,7 +13222,7 @@ fn transition_self_work_after_review_rejection(
                 work_id,
                 "queued",
                 "ctox-review",
-                Some("Review rejection reopened blocked self-work for bounded rework."),
+                Some("Review rejection reopened blocked internal work for bounded rework."),
                 "internal",
             )?;
             transition_planned_self_work_after_review_rejection(root, &planned, note)
@@ -12581,12 +13251,12 @@ fn transition_self_work_after_review_rejection(
         ),
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
             anyhow::bail!(
-                "cannot requeue review-rejected terminal ticket self-work item {work_id} in state {}",
+                "cannot requeue review-rejected terminal ticket internal work item {work_id} in state {}",
                 item.state
             )
         }
         other => anyhow::bail!(
-            "cannot requeue review-rejected ticket self-work item {work_id} because state `{other}` is not mapped"
+            "cannot requeue review-rejected ticket internal work item {work_id} because state `{other}` is not mapped"
         ),
     }
 }
@@ -12818,7 +13488,7 @@ fn transition_self_work_after_runtime_retry(
     note: &str,
 ) -> Result<tickets::TicketSelfWorkItemView> {
     let item = tickets::load_ticket_self_work_item(root, work_id)?
-        .with_context(|| format!("ticket self-work item {work_id} not found"))?;
+        .with_context(|| format!("ticket internal work item {work_id} not found"))?;
     match normalize_token(&item.state).as_str() {
         "" | "created" => {
             let planned = tickets::transition_ticket_self_work_item(
@@ -12840,7 +13510,7 @@ fn transition_self_work_after_runtime_retry(
                 work_id,
                 "queued",
                 "ctox-runtime-retry",
-                Some("Runtime retry reopened blocked self-work for bounded retry."),
+                Some("Runtime retry reopened blocked internal work for bounded retry."),
                 "internal",
             )?;
             transition_planned_self_work_after_runtime_retry(root, &planned, note)
@@ -12850,18 +13520,18 @@ fn transition_self_work_after_runtime_retry(
         }
         "awaiting_review" | "review" | "reviewing" => {
             anyhow::bail!(
-                "cannot runtime-retry ticket self-work item {work_id} while it is awaiting review; wait for the review verdict"
+                "cannot runtime-retry ticket internal work item {work_id} while it is awaiting review; wait for the review verdict"
             )
         }
         "rework_required" | "review_rework" | "rework" => Ok(item),
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
             anyhow::bail!(
-                "cannot runtime-retry terminal ticket self-work item {work_id} in state {}",
+                "cannot runtime-retry terminal ticket internal work item {work_id} in state {}",
                 item.state
             )
         }
         other => anyhow::bail!(
-            "cannot runtime-retry ticket self-work item {work_id} because state `{other}` is not mapped"
+            "cannot runtime-retry ticket internal work item {work_id} because state `{other}` is not mapped"
         ),
     }
 }
@@ -13117,7 +13787,7 @@ fn create_self_work_backed_queue_task_ignoring(
         ticket_self_work_workspace_root(&item).as_deref(),
         ignored_message_keys,
     )?
-    .context("failed to queue durable self-work follow-up")
+    .context("failed to queue durable internal work follow-up")
 }
 
 fn close_ticket_self_work_item(root: &Path, work_id: &str, note: &str) {
@@ -13425,7 +14095,7 @@ fn render_ticket_prompt(root: &Path, event: &tickets::RoutedTicketEvent) -> Stri
         clip_text(&event.body_text.replace('"', "'").replace('\n', " "), 220)
     );
     format!(
-        "[Ticket-Ereignis]\nSystem: {system}\nTicket: {ticket_key}\nStatus: {status}\nTitel: {title}\nEvent: {event_type}\nLabel: {label}\nSupport-Modus: {support_mode}\nApproval-Modus: {approval_mode}\nAutonomie: {autonomy_level}\nCase: {case_id}\nDry-Run: {dry_run_id}\n\nZusammenfassung:\n{summary}\n\nEreignistext:\n{body}\n\nVerbindlicher Ablauf:\n- lade und beachte die Ticket-Referenzen, bevor du operative Entscheidungen triffst\n- beginne mit dem vorhandenen Dry-Run-Artefakt; fuehre keine ungebundenen Nebenaktionen aus\n- resolve zuerst den gebundenen Main-Skill fuer dieses Ticket, bevor du eine Antwort oder Aktion ableitest\n- wenn du eine interne Ticketnotiz schreibst, formuliere sie frisch in Desk-Sprache; kopiere keine Skill- oder Query-Ausgabe\n- wenn es ein antwortbarer Supportfall ist, compose zuerst eine Reply-Suggestion und schreibe erst danach bewusst zurueck\n- wenn weitere Aktion noetig ist, halte den Schritt klein, explizit und auditierbar\n- wenn Freigabe fehlt, nutze keinen verdeckten Bypass\n- wenn du schreiben willst, verwende die Ticket-CLI bewusst und nur passend zum Case-Status\n\nDry-Run-Artefakt:\n```json\n{dry_run}\n```\n\nNuetzliche Ticket-Befehle:\n- Desk-Skill ansehen: `{ctox} ticket source-skill-show --system {system}`\n- Desk-Skill abfragen: `{ctox} ticket source-skill-query --system {system} --query \\\"{source_skill_query}\\\" --top-k 1`\n- Main-Skill fuer diesen Case aufloesen: `{ctox} ticket source-skill-resolve --case-id {case_id} --top-k 3`\n- Reply-Suggestion erzeugen: `{ctox} ticket source-skill-compose-reply --case-id {case_id} --send-policy suggestion`\n- Notiz gegen Desk-Skill pruefen: `{ctox} ticket source-skill-review-note --case-id {case_id} --body \\\"<frische interne Notiz>\\\"`\n- Knowledge ansehen: `{ctox} ticket knowledge-list --system {system} --limit 12`\n- Einzelnes Knowledge ansehen: `{ctox} ticket knowledge-show --system {system} --domain <value> --key <value>`\n- Self-Work ansehen: `{ctox} ticket self-work-list --system {system} --limit 12`\n- Case anzeigen: `{ctox} ticket case-show --case-id {case_id}`\n- Freigeben: `{ctox} ticket approve --case-id {case_id} --status approved --decided-by owner`\n- Ablehnen: `{ctox} ticket approve --case-id {case_id} --status rejected --decided-by owner`\n- Ausfuehrung dokumentieren: `{ctox} ticket execute --case-id {case_id} --summary \\\"<kurzer Schritt>\\\"`\n- Verifikation erfassen: `{ctox} ticket verify --case-id {case_id} --status passed --summary \\\"<evidence>\\\"`\n- Oeffentliche Ticketantwort: `{ctox} ticket writeback-comment --case-id {case_id} --body \\\"<reply text>\\\"`\n- Interne Ticketnotiz: `{ctox} ticket writeback-comment --case-id {case_id} --body \\\"<frische interne Notiz>\\\" --internal`\n- Ticket-Status zurueckschreiben: `{ctox} ticket writeback-transition --case-id {case_id} --state \\\"<zielstatus>\\\" --body \\\"<optional text>\\\"`\n- Audit ansehen: `{ctox} ticket audit --ticket-key {ticket_key} --limit 12`\n",
+        "[Ticket-Ereignis]\nSystem: {system}\nTicket: {ticket_key}\nStatus: {status}\nTitel: {title}\nEvent: {event_type}\nLabel: {label}\nSupport-Modus: {support_mode}\nApproval-Modus: {approval_mode}\nAutonomie: {autonomy_level}\nCase: {case_id}\nDry-Run: {dry_run_id}\n\nZusammenfassung:\n{summary}\n\nEreignistext:\n{body}\n\nVerbindlicher Ablauf:\n- lade und beachte die Ticket-Referenzen, bevor du operative Entscheidungen triffst\n- beginne mit dem vorhandenen Dry-Run-Artefakt; fuehre keine ungebundenen Nebenaktionen aus\n- resolve zuerst den gebundenen Main-Skill fuer dieses Ticket, bevor du eine Antwort oder Aktion ableitest\n- wenn du eine interne Ticketnotiz schreibst, formuliere sie frisch in Desk-Sprache; kopiere keine Skill- oder Query-Ausgabe\n- wenn es ein antwortbarer Supportfall ist, compose zuerst eine Reply-Suggestion und schreibe erst danach bewusst zurueck\n- wenn weitere Aktion noetig ist, halte den Schritt klein, explizit und auditierbar\n- wenn Freigabe fehlt, nutze keinen verdeckten Bypass\n- wenn du schreiben willst, verwende die Ticket-CLI bewusst und nur passend zum Case-Status\n\nDry-Run-Artefakt:\n```json\n{dry_run}\n```\n\nNuetzliche Ticket-Befehle:\n- Desk-Skill ansehen: `{ctox} ticket source-skill-show --system {system}`\n- Desk-Skill abfragen: `{ctox} ticket source-skill-query --system {system} --query \\\"{source_skill_query}\\\" --top-k 1`\n- Main-Skill fuer diesen Case aufloesen: `{ctox} ticket source-skill-resolve --case-id {case_id} --top-k 3`\n- Reply-Suggestion erzeugen: `{ctox} ticket source-skill-compose-reply --case-id {case_id} --send-policy suggestion`\n- Notiz gegen Desk-Skill pruefen: `{ctox} ticket source-skill-review-note --case-id {case_id} --body \\\"<frische interne Notiz>\\\"`\n- Knowledge ansehen: `{ctox} ticket knowledge-list --system {system} --limit 12`\n- Einzelnes Knowledge ansehen: `{ctox} ticket knowledge-show --system {system} --domain <value> --key <value>`\n- Internal Work ansehen: `{ctox} ticket internal-work-list --system {system} --limit 12`\n- Case anzeigen: `{ctox} ticket case-show --case-id {case_id}`\n- Freigeben: `{ctox} ticket approve --case-id {case_id} --status approved --decided-by owner`\n- Ablehnen: `{ctox} ticket approve --case-id {case_id} --status rejected --decided-by owner`\n- Ausfuehrung dokumentieren: `{ctox} ticket execute --case-id {case_id} --summary \\\"<kurzer Schritt>\\\"`\n- Verifikation erfassen: `{ctox} ticket verify --case-id {case_id} --status passed --summary \\\"<evidence>\\\"`\n- Oeffentliche Ticketantwort: `{ctox} ticket writeback-comment --case-id {case_id} --body \\\"<reply text>\\\"`\n- Interne Ticketnotiz: `{ctox} ticket writeback-comment --case-id {case_id} --body \\\"<frische interne Notiz>\\\" --internal`\n- Ticket-Status zurueckschreiben: `{ctox} ticket writeback-transition --case-id {case_id} --state \\\"<zielstatus>\\\" --body \\\"<optional text>\\\"`\n- Audit ansehen: `{ctox} ticket audit --ticket-key {ticket_key} --limit 12`\n",
         system = event.source_system,
         ticket_key = event.ticket_key,
         status = event.remote_status,
@@ -14101,7 +14771,7 @@ fn render_timeout_continue_prompt(
 ) -> String {
     let summarized_goal = summarize_follow_up_goal(goal);
     let prompt = format!(
-        "HARNESS FEEDBACK\nProblem: The previous turn stopped before the task reached a verified finish.\n\nCURRENT TASK\n{}\n\nSTOP REASON\n{}\n\nREQUIRED ACTIONS\n- Re-check durable runtime state, queue state, progress artifacts, and repository/runtime state before continuing.\n- Preserve work that already exists; do not restart from scratch unless state proves it is necessary.\n- Continue with the next smallest concrete step.\n- If more than one turn is still needed, leave exactly one open CTOX plan, queue item, self-work item, follow-up, or schedule before this turn ends.\n- A sentence in the reply does not count as open work.\n- Ask the owner only if the real blocker is external.\n\nEXIT GATE\nFinish only after the real durable outcome exists, or after exact next work has been persisted in CTOX runtime state.",
+        "HARNESS FEEDBACK\nProblem: The previous turn stopped before the task reached a verified finish.\n\nCURRENT TASK\n{}\n\nSTOP REASON\n{}\n\nREQUIRED ACTIONS\n- Re-check durable runtime state, queue state, progress artifacts, and repository/runtime state before continuing.\n- Preserve work that already exists; do not restart from scratch unless state proves it is necessary.\n- Continue with the next smallest concrete step.\n- If more than one turn is still needed, leave exactly one open CTOX plan, queue item, internal work item, follow-up, or schedule before this turn ends.\n- A sentence in the reply does not count as open work.\n- Ask the owner only if the real blocker is external.\n\nEXIT GATE\nFinish only after the real durable outcome exists, or after exact next work has been persisted in CTOX runtime state.",
         summarized_goal,
         clip_text(blocker.trim(), 220)
     );
@@ -15772,7 +16442,7 @@ mod tests {
             },
             true,
         )
-        .expect("failed to create self-work item");
+        .expect("failed to create internal work item");
         let remote_ticket_id = item
             .remote_ticket_id
             .as_deref()
@@ -15859,7 +16529,7 @@ mod tests {
             },
             true,
         )
-        .expect("failed to create self-work item");
+        .expect("failed to create internal work item");
         let remote_ticket_id = item
             .remote_ticket_id
             .as_deref()
@@ -15920,7 +16590,7 @@ mod tests {
             },
             true,
         )
-        .expect("failed to create self-work item");
+        .expect("failed to create internal work item");
         tickets::assign_ticket_self_work_item(&root, &item.work_id, "self", "ctox", None)
             .expect("failed to assign self-work");
 
@@ -15957,7 +16627,7 @@ mod tests {
         assert!(shared
             .recent_events
             .iter()
-            .any(|event| event.contains("Queued self-work")));
+            .any(|event| event.contains("Queued internal work")));
     }
 
     #[test]
@@ -17434,7 +18104,7 @@ mod tests {
             .expect("failed to list queue tasks");
         assert!(tasks.is_empty());
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work items");
+            .expect("failed to list internal work items");
         assert!(self_work.is_empty());
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
@@ -17492,7 +18162,7 @@ mod tests {
         assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
         assert!(pending[0].prompt.contains(logbook.to_str().unwrap()));
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work items");
+            .expect("failed to list internal work items");
         assert!(self_work.is_empty());
     }
 
@@ -17532,7 +18202,7 @@ mod tests {
         assert!(tasks.is_empty());
 
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
-            .expect("failed to list self-work items");
+            .expect("failed to list internal work items");
         assert!(self_work.is_empty());
     }
 
@@ -17704,6 +18374,286 @@ mod tests {
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
         // Genuine non-retryable error.
         assert_eq!(failed_worker_route_status(false, false, false), "failed");
+    }
+
+    #[test]
+    fn business_os_app_module_target_parses_installed_prompt_contract() {
+        let prompt = "\
+Business OS app build target:
+- module_id: contracts
+- install_target: runtime-installed-module
+- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts
+Business OS command:
+- type: ctox.business_os.app.modify
+";
+
+        let target = business_os_app_module_target_from_prompt(prompt)
+            .expect("app target should parse from prompt");
+
+        assert_eq!(target.module_id, "contracts");
+        assert_eq!(target.install_target, "runtime-installed-module");
+        assert_eq!(target.mode_flag, "--installed");
+        assert_eq!(
+            target.artifact_directory,
+            "src/apps/business-os/installed-modules/contracts"
+        );
+    }
+
+    #[test]
+    fn business_os_app_validation_feedback_is_repair_oriented() {
+        let job = QueuedPrompt {
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\n".to_string(),
+            goal: "Build contracts app".to_string(),
+            preview: "Build contracts app".to_string(),
+            source_label: "business-os:contracts".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["cmd_contracts".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let target = BusinessOsAppModuleTarget {
+            module_id: "contracts".to_string(),
+            install_target: "runtime-installed-module".to_string(),
+            mode_flag: "--installed",
+            artifact_directory: "src/apps/business-os/installed-modules/contracts".to_string(),
+        };
+
+        let feedback = render_business_os_app_module_validation_feedback(
+            &job,
+            &target,
+            "module.json install_scope must be installed",
+        );
+
+        assert!(feedback.contains("Continue the same app-build task"));
+        assert!(feedback.contains(
+            "allowed artifact directory: src/apps/business-os/installed-modules/contracts"
+        ));
+        assert!(
+            feedback.contains("module.json.entry must be installed-modules/contracts/index.html")
+        );
+        assert!(feedback.contains(
+            "schema.js and collections.schema.json must export only module-owned collections"
+        ));
+        assert!(feedback.contains(
+            "node src/apps/business-os/scripts/validate-app-module.mjs contracts --installed"
+        ));
+    }
+
+    #[test]
+    fn business_os_app_validation_repair_attempt_count_caps_after_three() {
+        let marker = "Business OS app artifact validation failed.";
+        let prompt = format!(
+            "{marker}\nfirst\n\n{marker}\nsecond\n\n{marker}\nthird\n\nOriginal task remains active"
+        );
+
+        assert_eq!(business_os_app_validation_repair_attempt_count(&prompt), 3);
+        assert!(business_os_app_validation_repair_exhausted(&prompt));
+        assert!(!business_os_app_validation_repair_exhausted(
+            &prompt.replace("\n\nBusiness OS app artifact validation failed.\nthird", "")
+        ));
+    }
+
+    #[test]
+    fn business_os_app_validation_feedback_requeues_same_task() {
+        let root = temp_root("business-os-app-validation-same-queue");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('module.json install_scope must be installed'); process.exit(1);\n",
+        )
+        .expect("write validator script fixture");
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let feedback = business_os_app_module_validation_feedback(&root, &job)
+            .expect("validator hook failed")
+            .expect("expected validation feedback");
+        let updated = apply_review_feedback_to_leased_queue(
+            &root,
+            &job,
+            &feedback,
+            "Business OS app artifact validation failed for business-os:app-create",
+        )
+        .expect("failed to apply app validation feedback");
+        assert_eq!(updated, 1);
+        let proof_id = enforce_business_os_app_validation_feedback_transition(
+            &root,
+            &task.message_key,
+            &job,
+            &feedback,
+            1,
+        )
+        .expect("failed to record app validation rework proof");
+        assert!(proof_id.starts_with("ctp-"));
+        channels::ack_leased_messages(
+            &root,
+            std::slice::from_ref(&task.message_key),
+            "review_rework",
+        )
+        .expect("failed to ack validation rework");
+
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load failed")
+            .expect("missing queue task");
+        assert!(reloaded
+            .prompt
+            .contains("Business OS app artifact validation failed."));
+        assert!(reloaded
+            .prompt
+            .contains("module.json install_scope must be installed"));
+        assert!(reloaded.prompt.contains("Original task remains active"));
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        let proof_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                  AND request_json LIKE '%"validator_rework":"true"%'
+                  AND request_json LIKE '%"module_id":"contracts"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("count validator rework proofs");
+        assert_eq!(proof_count, 1);
+    }
+
+    #[test]
+    fn business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks() {
+        let root = temp_root("business-os-app-validation-rework-priority");
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let rework_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create contracts app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/contracts".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &rework_task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let mut job = QueuedPrompt {
+            prompt,
+            goal: rework_task.title.clone(),
+            preview: rework_task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: rework_task.suggested_skill.clone(),
+            leased_message_keys: vec![rework_task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(rework_task.thread_key.clone()),
+            workspace_root: rework_task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let target = business_os_app_module_target_from_prompt(&job.prompt)
+            .expect("expected app module target");
+        let feedback = render_business_os_app_module_validation_feedback(
+            &job,
+            &target,
+            "root-level app artifact is forbidden: module.json",
+        );
+        apply_review_feedback_to_leased_queue(
+            &root,
+            &job,
+            &feedback,
+            "Business OS app artifact validation failed for business-os:app-create",
+        )
+        .expect("failed to write validator feedback");
+        job.prompt = feedback.clone();
+        enforce_business_os_app_validation_feedback_transition(
+            &root,
+            &rework_task.message_key,
+            &job,
+            &feedback,
+            1,
+        )
+        .expect("failed to record validator rework proof");
+        channels::ack_leased_messages(
+            &root,
+            std::slice::from_ref(&rework_task.message_key),
+            "review_rework",
+        )
+        .expect("failed to mark queue task as review_rework");
+
+        let pending_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create inventory app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/inventory".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create pending app queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        let leased = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(&root, &state)
+            .expect("dispatcher should not fail")
+            .expect("expected a leased prompt");
+
+        assert_eq!(
+            leased.leased_message_keys,
+            vec![rework_task.message_key.clone()]
+        );
+        assert_eq!(route_status_for(&root, &rework_task.message_key), "leased");
+        assert_eq!(
+            route_status_for(&root, &pending_task.message_key),
+            "pending"
+        );
+        assert!(leased
+            .prompt
+            .contains("Business OS app artifact validation failed."));
     }
 
     #[test]
@@ -18442,7 +19392,7 @@ mod tests {
         let work_id = task
             .ticket_self_work_id
             .clone()
-            .expect("queue task should point at durable self-work");
+            .expect("queue task should point at durable internal work");
         let conn = channels::open_channel_db(&crate::paths::core_db(&root))
             .expect("failed to open runtime db");
 
@@ -21688,8 +22638,8 @@ Use shell tools to create or update these files."
             .expect("stale founder cleanup should succeed");
         assert_eq!(repaired, 1);
         let item = tickets::load_ticket_self_work_item(&root, &item.work_id)
-            .expect("failed to reload self work")
-            .expect("self work should exist");
+            .expect("failed to reload internal work")
+            .expect("internal work should exist");
         assert_eq!(item.state, "closed");
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
@@ -21717,7 +22667,7 @@ Use shell tools to create or update these files."
             },
             false,
         )
-        .expect("failed to seed self work");
+        .expect("failed to seed internal work");
         tickets::append_ticket_self_work_note(
             &root,
             &item.work_id,
@@ -24357,7 +25307,7 @@ Those are not durable artifact requirements."
 
         assert!(matches!(
             disposition,
-            CompletionReviewDisposition::RequeueSelfWork { .. }
+            CompletionReviewDisposition::RequeueInternalWork { .. }
         ));
 
         let conn = channels::open_channel_db(&crate::paths::core_db(&root))

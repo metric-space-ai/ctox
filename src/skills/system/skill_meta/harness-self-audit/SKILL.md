@@ -12,10 +12,10 @@ cluster: skill_meta
 
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
-- Do not create review-driven self-work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
-- Every durable follow-up, queue item, plan emission, or self-work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
+- Do not create review-driven internal work cascades. If more work is needed, reuse or requeue the existing parent work item; create a new task only when it is a distinct bounded work step with a stable parent pointer.
+- Every durable follow-up, queue item, plan emission, or internal work item must have a clear parent/anchor: message key, work id, thread key, ticket/case id, or plan step. Missing ancestry is a harness bug, not acceptable ambiguity.
 - Rewording-only feedback means revise wording on the same artifact. Substantive feedback means add new evidence or implementation progress. Stale feedback means refresh or consolidate current runtime state before drafting again.
-- Before adding follow-up work, check for existing matching self-work, queue, plan, or ticket state and consolidate rather than duplicating.
+- Before adding follow-up work, check for existing matching internal work, queue, plan, or ticket state and consolidate rather than duplicating.
 
 ## Core Spawn Intervention Contract
 
@@ -28,7 +28,7 @@ Allowed intervention effects:
 - consolidate evidence into the existing parent item
 - mark redundant work terminal with a clear reason
 
-Do not run commands that create new queue tasks, ticket self-work, schedules, plans, or published spills while handling a Core Spawn Gate intervention. In particular, do not use `ctox queue spill --publish`, `ctox ticket self-work-put`, `ctox schedule ensure`, or `ctox plan ingest` for the intervention path. If new work seems necessary, mark the current finding/action blocked and let the parent work item or operator decide.
+Do not run commands that create new queue tasks, ticket internal work, schedules, plans, or published spills while handling a Core Spawn Gate intervention. In particular, do not use `ctox queue spill --publish`, `ctox ticket internal-work-put`, `ctox schedule ensure`, or `ctox plan ingest` for the intervention path. If new work seems necessary, mark the current finding/action blocked and let the parent work item or operator decide.
 
 
 Use this skill to read CTOX's own harness-mining findings and decide what
@@ -101,7 +101,7 @@ the brief recommends (`stuck-cases`, `causal`, `alignment`, `drift`,
      stop), then:
      `ctox harness-mining finding-mitigate --finding-id <id> --by agent --note "<what was done>"`.
    - **Escalate**: the mitigation requires owner approval or spec change.
-     Acknowledge first, create a `ticket self-work` with the finding
+     Acknowledge first, create a `ticket internal work` with the finding
      evidence, and route the mission to `blocked` rather than continuing.
 
 4. After mitigating one or more findings, verify on the **next** audit
@@ -136,7 +136,7 @@ the brief recommends (`stuck-cases`, `causal`, `alignment`, `drift`,
 - Do not mitigate a finding by changing the spec without an owner-visible
   review trail. Spec changes in protected lanes
   (`P0FounderCommunication`, etc.) require `--by spec-change` and a
-  ticket self-work record.
+  ticket internal work record.
 - Do not verify a finding before a clean audit tick has actually passed.
   The 2-tick confirmation gate works in both directions: just as
   detection requires two ticks, verification requires the absence of

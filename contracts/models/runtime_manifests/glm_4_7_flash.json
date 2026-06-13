@@ -1,0 +1,107 @@
+{
+  "model": "zai-org/GLM-4.7-Flash",
+  "sizing": {
+    "non_repeating_weight_mb_q4": 3190,
+    "repeating_layer_weight_mb_q4": 400,
+    "load_peak_slack_mb_q4": 1800,
+    "kv_mb_per_1k_tokens_q4": 275,
+    "base_toks_per_sec_q4": 48.0,
+    "repeating_layers": 47,
+    "context_cap": 131072,
+    "measurement_components": {
+      "load_overheads_mb_q4": {
+        "plain_load_mb": 0,
+        "immediate_isq_mb": 0,
+        "nccl_init_mb": 0
+      },
+      "backend_runtime_overheads_mb_q4": {
+        "device_layers_mb": 0,
+        "nccl_mb": 0
+      },
+      "activation_overheads_mb_q4": {
+        "gpu0_anchor_runtime_mb": 0,
+        "prefill_anchor_mb_at_128k": 0,
+        "decode_per_seq_mb": 0
+      },
+      "kv_cache_mb_per_1k_tokens_by_cache_type_q4": {}
+    }
+  },
+  "runtime_defaults": {
+    "paged_attn": "auto",
+    "pa_cache_type": "turboquant3",
+    "pa_memory_fraction": "0.65",
+    "pa_context_len": null,
+    "force_no_mmap": true,
+    "force_language_model_only": false,
+    "require_prebuilt_uqff_for_chat_start": false,
+    "disable_flash_attn": true,
+    "isq_singlethread": true,
+    "isq_cpu_threads": null
+  },
+  "planner_hints": {
+    "moe_experts_backend": null,
+    "small_uniform_device_layers_scale": null
+  },
+  "placement": {
+    "primary_gpu_index": 0,
+    "primary_gpu_holds_non_repeating": true,
+    "primary_gpu_desktop_reserve_mb": 1024
+  },
+  "launch_contract": {
+    "required_context_tokens": 32768,
+    "require_primary_gpu_anchor": true,
+    "nccl_qualification": "unsupported",
+    "nccl_preserves_primary_gpu_anchor": false,
+    "allow_subset_anchored_nccl": false
+  },
+  "quality": {
+    "objective": "quality",
+    "candidates": [
+      {
+        "quantization": "q4k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 768
+      },
+      {
+        "quantization": "q6k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 768
+      }
+    ]
+  },
+  "performance": {
+    "objective": "performance",
+    "candidates": [
+      {
+        "quantization": "q4k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 768
+      },
+      {
+        "quantization": "q6k",
+        "backend": "device_layers",
+        "max_batch_size": 1,
+        "max_seqs": 1,
+        "context_fraction_milli": 1000,
+        "context_target_cap": 131072,
+        "min_context_required": 131072,
+        "per_gpu_headroom_mb": 768
+      }
+    ]
+  }
+}

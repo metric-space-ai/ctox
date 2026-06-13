@@ -347,7 +347,7 @@ fn build_flow_with_connection(
             kind: FlowBlockKind::Empty,
             title: "NO FLOW SOURCE FOUND".to_string(),
             lines: vec![
-                "No communication message or self-work item matched the request.".to_string(),
+                "No communication message or internal work item matched the request.".to_string(),
                 "Try --message-key <key> or --work-id <id>.".to_string(),
             ],
             branches: Vec::new(),
@@ -882,7 +882,7 @@ fn finish_lines(
         ));
     }
     if work.is_none() && approval.is_none() {
-        lines.push("No ticket/self-work close or review approval is linked yet.".to_string());
+        lines.push("No ticket/internal-work close or review approval is linked yet.".to_string());
     }
     lines
 }

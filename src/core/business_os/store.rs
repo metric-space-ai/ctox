@@ -6194,6 +6194,18 @@ fn upsert_rxdb_collection_record(
     Ok(())
 }
 
+pub fn upsert_projection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    let conn = open_store(root)?;
+    upsert_business_record(&conn, collection, record_id, updated_at_ms, payload.clone())?;
+    upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, payload)
+}
+
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
     let mut statement = conn.prepare(&format!("PRAGMA table_info({table})"))?;
     let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
@@ -6832,6 +6844,38 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             .unwrap_or(Value::Null),
     };
     match command.command_type.as_str() {
+        command_type if crate::coding_agents::is_coding_agent_command(command_type) => {
+            let outcome = match rxdb_command_session(root, &command)
+                .and_then(|_| crate::coding_agents::handle_business_command(root, &command))
+            {
+                Ok(outcome) => outcome,
+                Err(error) => serde_json::json!({
+                    "ok": false,
+                    "provider": command
+                        .payload
+                        .get("provider")
+                        .and_then(Value::as_str)
+                        .unwrap_or("unknown"),
+                    "operation": command.command_type,
+                    "stdout": "",
+                    "stderr": error.to_string(),
+                    "exit_code": 1
+                }),
+            };
+            let status = if outcome.get("ok").and_then(Value::as_bool) == Some(false) {
+                "failed"
+            } else {
+                "completed"
+            };
+            return write_rxdb_control_command_outcome(
+                root,
+                &command,
+                status,
+                None,
+                Some(status),
+                serde_json::json!({ "outcome": outcome }),
+            );
+        }
         "ctox.task.update" => {
             let mutation: CtoxTaskUpdateMutation = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.task.update payload")?;
@@ -11931,27 +11975,29 @@ fn write_rxdb_control_command_outcome(
             now
         ],
     )?;
+    let projection = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": status,
+        "inbound_channel": command_inbound_channel(command),
+        "task_id": task_id.unwrap_or_default(),
+        "task_status": task_status.unwrap_or(status),
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": result.clone(),
+        "updated_at_ms": now
+    });
     upsert_business_record(
         &conn,
         "business_commands",
         command_id,
         now,
-        serde_json::json!({
-            "id": command_id,
-            "command_id": command_id,
-            "module": command.module.clone(),
-            "command_type": command.command_type.clone(),
-            "record_id": command.record_id.clone().unwrap_or_default(),
-            "status": status,
-            "inbound_channel": command_inbound_channel(command),
-            "task_id": task_id.unwrap_or_default(),
-            "task_status": task_status.unwrap_or(status),
-            "payload": command.payload.clone(),
-            "client_context": command.client_context.clone(),
-            "result": result.clone(),
-            "updated_at_ms": now
-        }),
+        projection.clone(),
     )?;
+    upsert_rxdb_collection_record(root, "business_commands", command_id, now, projection)?;
     Ok(serde_json::json!({
         "ok": true,
         "id": command_id,
@@ -14221,19 +14267,41 @@ fn render_fallback_document_xml(title: &str, prompt: &str, runbook: &str, tags: 
         ),
         h1_summary = docx_paragraph("Executive Summary", Some("Heading1"), None),
         p_summary = docx_paragraph(
-            &format!("Dieses Word-Dokument wurde aus dem Documents-Modul erzeugt. Nutzerauftrag: {prompt}"),
+            &format!(
+                "Dieses Word-Dokument wurde aus dem Documents-Modul erzeugt. Nutzerauftrag: {prompt}"
+            ),
             None,
             None
         ),
-        bullet_1 = docx_paragraph("Der Auftrag wurde als DOCX-Artefakt verarbeitet, nicht als Markdown-Enddatei.", None, Some(0)),
-        bullet_2 = docx_paragraph("Die Datei enthaelt Word-Struktur mit Ueberschriften, Liste und Tabelle.", None, Some(0)),
-        bullet_3 = docx_paragraph("Der Business-OS-Writeback registriert Datei, Version und Blob-Chunks fuer SuperDoc.", None, Some(0)),
+        bullet_1 = docx_paragraph(
+            "Der Auftrag wurde als DOCX-Artefakt verarbeitet, nicht als Markdown-Enddatei.",
+            None,
+            Some(0)
+        ),
+        bullet_2 = docx_paragraph(
+            "Die Datei enthaelt Word-Struktur mit Ueberschriften, Liste und Tabelle.",
+            None,
+            Some(0)
+        ),
+        bullet_3 = docx_paragraph(
+            "Der Business-OS-Writeback registriert Datei, Version und Blob-Chunks fuer SuperDoc.",
+            None,
+            Some(0)
+        ),
         h1_table = docx_paragraph("Abnahmetabelle", Some("Heading1"), None),
         table = fallback_docx_table(),
         h1_figure = docx_paragraph("Abbildung", Some("Heading1"), None),
-        p_figure = docx_paragraph("Documents UI -> CTOX Report-Runbook -> DOCX-Erzeugung -> Business-OS Writeback -> SuperDoc Anzeige", None, None),
+        p_figure = docx_paragraph(
+            "Documents UI -> CTOX Report-Runbook -> DOCX-Erzeugung -> Business-OS Writeback -> SuperDoc Anzeige",
+            None,
+            None
+        ),
         h1_notes = docx_paragraph("Hinweise", Some("Heading1"), None),
-        p_notes = docx_paragraph("Diese serverseitige Mindestlieferung verhindert haengende Queue-Zustaende: Wenn der Agent-Reportpfad kein DOCX zurueckschreibt, erzeugt der Documents-Handler ein valides Word-Artefakt und schliesst den Command terminal ab.", None, None),
+        p_notes = docx_paragraph(
+            "Diese serverseitige Mindestlieferung verhindert haengende Queue-Zustaende: Wenn der Agent-Reportpfad kein DOCX zurueckschreibt, erzeugt der Documents-Handler ein valides Word-Artefakt und schliesst den Command terminal ab.",
+            None,
+            None
+        ),
     )
 }
 
@@ -15956,36 +16024,175 @@ fn command_prompt(
         .unwrap_or("Execute this Business OS automation through CTOX.");
     let instruction =
         truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
+    let required_skill_names = required_skill_names(command);
+    let mut payload_preview_value = command.payload.clone();
+    let mut context_preview_value = command.client_context.clone();
+    if is_business_os_app_module_command(command) {
+        rewrite_required_skills_preview(&mut payload_preview_value, &required_skill_names);
+        rewrite_required_skills_preview(&mut context_preview_value, &required_skill_names);
+    }
     let payload = prompt_json_preview(
-        &command.payload,
+        &payload_preview_value,
         BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
     );
     let context = prompt_json_preview(
-        &command.client_context,
+        &context_preview_value,
         BUSINESS_OS_QUEUE_PROMPT_JSON_PREVIEW_CHARS,
     );
-    let required_skills = command
-        .payload
-        .get("required_skills")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("\nRequired CTOX skills: {value}\n"))
-        .unwrap_or_default();
+    let required_skills = if required_skill_names.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nRequired CTOX skills: {}\n{}\n",
+            required_skill_names.join(", "),
+            business_os_required_skill_prompt_contract()
+        )
+    };
+    let app_target = business_os_app_command_target_prompt_block(command);
     let attachment_manifest = business_chat_attachment_prompt_manifest(attachments);
     let prompt = format!(
-        "{instruction}{required_skills}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
+        "{instruction}{required_skills}{app_target}\nBusiness OS command:\n- command_id: {command_id}\n- module: {}\n- type: {}\n- record_id: {}{attachment_manifest}\n\nFull payload and client context are stored on the Business OS command record. The JSON below is a bounded execution preview to keep the queue worker under its input limit.\n\nPayload JSON:\n{payload}\n\nClient context JSON:\n{context}",
         command.module,
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
     truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+}
+
+const BUSINESS_OS_APP_MODULE_SKILL_NAME: &str = "business-os-app-module-development";
+const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME: &str = "business-basic-module-development";
+const BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH: &str =
+    "product_engineering/business-basic-module-development";
+
+fn required_skill_names(command: &BusinessCommand) -> Vec<String> {
+    let mut names = Vec::new();
+    if is_business_os_app_module_command(command) {
+        push_required_skill(&mut names, BUSINESS_OS_APP_MODULE_SKILL_NAME);
+    }
+    if let Some(items) = command
+        .payload
+        .get("required_skills")
+        .and_then(Value::as_array)
+    {
+        for item in items.iter().filter_map(Value::as_str) {
+            push_required_skill(&mut names, item);
+        }
+    }
+    if let Some(items) = command
+        .client_context
+        .get("required_skills")
+        .and_then(Value::as_array)
+    {
+        for item in items.iter().filter_map(Value::as_str) {
+            push_required_skill(&mut names, item);
+        }
+    }
+    names
+}
+
+fn push_required_skill(names: &mut Vec<String>, raw: &str) {
+    let name = raw.trim();
+    if name.is_empty()
+        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_NAME
+        || name == BUSINESS_OS_LEGACY_BASIC_MODULE_SKILL_PATH
+    {
+        return;
+    }
+    if !names.iter().any(|existing| existing == name) {
+        names.push(name.to_owned());
+    }
+}
+
+fn is_business_os_app_module_command(command: &BusinessCommand) -> bool {
+    command.command_type == "ctox.business_os.app.modify"
+        || command.command_type == "ctox.business_os.app.create"
+        || command
+            .payload
+            .get("target")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+        || command
+            .payload
+            .get("mode")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+        || command
+            .client_context
+            .get("target")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+        || command
+            .client_context
+            .get("mode")
+            .and_then(Value::as_str)
+            .map(|value| value.eq_ignore_ascii_case("app"))
+            .unwrap_or(false)
+}
+
+fn business_os_required_skill_prompt_contract() -> &'static str {
+    "Skill handling contract: required skills are instruction context, not deliverables. Read and follow them through CTOX skill tooling only. Do not create, copy, mirror, export, or edit skill files or skill-named directories in the workspace unless the user explicitly asked to change a skill."
+}
+
+fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> String {
+    if !is_business_os_app_module_command(command) {
+        return String::new();
+    }
+    let module_id = first_non_empty_json_string(&[
+        command.payload.get("module_id"),
+        command.payload.get("app_id"),
+        command.client_context.get("module_id"),
+        command.client_context.get("app_id"),
+    ])
+    .or(command.record_id.as_deref())
+    .unwrap_or(&command.module);
+    let install_target = first_non_empty_json_string(&[
+        command.payload.get("install_target"),
+        command.client_context.get("install_target"),
+    ])
+    .unwrap_or("runtime-installed-module");
+    let module_dir = if install_target == "runtime-installed-module" {
+        format!("src/apps/business-os/installed-modules/{module_id}")
+    } else {
+        format!("src/apps/business-os/modules/{module_id}")
+    };
+    format!(
+        "\nBusiness OS app build target:\n- deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.\n- module_id: {module_id}\n- install_target: {install_target}\n- only_allowed_app_artifact_directory: {module_dir}\n- cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.\n- required shell write pattern: set MODULE_DIR=\"{module_dir}\" and write every file as \"$MODULE_DIR/<file>\"; create \"$MODULE_DIR/locales\" and \"$MODULE_DIR/tests\" before writing nested files.\n- path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.\n- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\n- installed manifest rule: for runtime-installed-module, module.json must use entry=\"installed-modules/{module_id}/index.html\" and install_scope=\"installed\"; parse module.json and collections.schema.json immediately after editing them.\n- schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.\n- repair order: fix target path, valid JSON, manifest mode, required files, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.\n- persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.\n- dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests.\n- UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.\n- repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.\n- automation: include at least one real business_commands dispatch that creates a normal CTOX chat/ticket/work item through the Business OS command flow.\n- stop condition: before claiming success, run module tests and the Business OS module/RxDB guards when available; a green custom test does not count while static validation is red.\n"
+    )
+}
+
+fn rewrite_required_skills_preview(value: &mut Value, required_skills: &[String]) {
+    if required_skills.is_empty() {
+        return;
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "required_skills".to_owned(),
+            Value::Array(
+                required_skills
+                    .iter()
+                    .map(|skill| Value::String(skill.clone()))
+                    .collect(),
+            ),
+        );
+        if object.contains_key("suggested_skill") {
+            object.insert(
+                "suggested_skill".to_owned(),
+                Value::String(BUSINESS_OS_APP_MODULE_SKILL_NAME.to_owned()),
+            );
+        }
+    }
+}
+
+fn first_non_empty_json_string<'a>(values: &[Option<&'a Value>]) -> Option<&'a str> {
+    values.iter().find_map(|value| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
 }
 
 fn business_chat_attachment_prompt_manifest(
@@ -16056,8 +16263,10 @@ fn suggested_skill_for_command(command: &BusinessCommand) -> Option<String> {
         || command.command_type.contains("skillbook")
     {
         Some("knowledge".to_string())
-    } else if command.command_type.contains("app.modify") {
-        Some("business-os-module-editor".to_string())
+    } else if command.command_type.contains("app.modify")
+        || command.command_type.contains("app.create")
+    {
+        Some(BUSINESS_OS_APP_MODULE_SKILL_NAME.to_string())
     } else {
         None
     }
@@ -16852,6 +17061,85 @@ mod tests {
         assert_eq!(runtime_settings_context(Some("131072".to_owned())), "256k");
         assert_eq!(runtime_settings_context(Some("512k".to_owned())), "256k");
         assert_eq!(runtime_settings_context(None), "256k");
+    }
+
+    #[test]
+    fn app_modify_queue_prompt_targets_app_module_not_skill_files() {
+        let command = BusinessCommand {
+            id: Some("cmd_app_bench".to_owned()),
+            module: "creator".to_owned(),
+            command_type: "ctox.business_os.app.modify".to_owned(),
+            record_id: Some("subscriptions".to_owned()),
+            payload: serde_json::json!({
+                "title": "Build Subscriptions",
+                "instruction": "Build a Business OS subscriptions app.",
+                "target": "app",
+                "mode": "app",
+                "module_id": "subscriptions",
+                "install_target": "runtime-installed-module",
+                "required_skills": ["business-basic-module-development"]
+            }),
+            client_context: serde_json::json!({
+                "source": "business-os-app-creator",
+                "suggested_skill": "business-basic-module-development",
+                "required_skills": ["product_engineering/business-basic-module-development"]
+            }),
+        };
+
+        let prompt = command_prompt("cmd_app_bench", &command, &[]);
+        assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
+        assert!(prompt.contains("Business OS app build target:"));
+        assert!(prompt.contains("- module_id: subscriptions"));
+        assert!(
+            prompt.contains(
+                "only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions"
+            )
+        );
+        assert!(prompt.contains("do not write root-level module.json"));
+        assert!(prompt.contains("cwd warning: shell tools run from the install root"));
+        assert!(prompt
+            .contains("set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""));
+        assert!(prompt.contains(
+            "schema.js and collections.schema.json must export only module-owned collections"
+        ));
+        assert!(prompt.contains("default to one/two panes plus modals/drawers"));
+        assert!(
+            prompt.contains("not documentation, plans, trace files, blocker notes, or skill files")
+        );
+        assert!(prompt.contains("\"suggested_skill\": \"business-os-app-module-development\""));
+        assert!(!prompt.contains("business-basic-module-development"));
+        assert!(!prompt.contains("product_engineering/business-basic-module-development"));
+    }
+
+    #[test]
+    fn app_create_queue_prompt_targets_app_module_skill() {
+        let command = BusinessCommand {
+            id: Some("cmd_app_create".to_owned()),
+            module: "creator".to_owned(),
+            command_type: "ctox.business_os.app.create".to_owned(),
+            record_id: Some("inventory".to_owned()),
+            payload: serde_json::json!({
+                "title": "Build Inventory",
+                "instruction": "Build a Business OS inventory app.",
+                "module_id": "inventory",
+                "install_target": "runtime-installed-module"
+            }),
+            client_context: serde_json::json!({
+                "source": "business-os-app-creator"
+            }),
+        };
+
+        let prompt = command_prompt("cmd_app_create", &command, &[]);
+        assert!(prompt.contains("Required CTOX skills: business-os-app-module-development"));
+        assert!(prompt.contains("- module_id: inventory"));
+        assert!(prompt.contains("- install_target: runtime-installed-module"));
+        assert!(prompt.contains(
+            "only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/inventory"
+        ));
+        assert_eq!(
+            suggested_skill_for_command(&command).as_deref(),
+            Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
+        );
     }
 
     #[test]

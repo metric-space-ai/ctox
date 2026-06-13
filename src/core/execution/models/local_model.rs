@@ -72,8 +72,8 @@ pub struct LocalModelRequest<'a> {
 /// this model as API-only.
 pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalModelBackend> {
     let model = req.request_model.trim();
-    if is_qwen35_27b(model) {
-        return Some(qwen35_27b_q4km_dflash_backend(
+    if is_qwen36_27b(model) {
+        return Some(qwen36_27b_q4km_dflash_backend(
             req.root,
             req.transport_endpoint,
         ));
@@ -99,19 +99,26 @@ pub fn resolve_local_model_backend(req: LocalModelRequest<'_>) -> Option<LocalMo
 /// Is `model` handled by the Qwen3.6-35B-A3B ggml/CUDA server?
 pub fn is_qwen36_35b_a3b(model: &str) -> bool {
     model == "Qwen/Qwen3.6-35B-A3B"
+        || model == "Qwen/Qwen3.5-35B-A3B"
         || model.eq_ignore_ascii_case("qwen3.6-35b-a3b")
+        || model.eq_ignore_ascii_case("qwen3.5-35b-a3b")
         || model.eq_ignore_ascii_case("qwen36-35b-a3b")
+        || model.eq_ignore_ascii_case("qwen35-35b-a3b")
         || model.eq_ignore_ascii_case("qwen36-35b-a3b-ggml")
 }
 
-/// Is `model` handled by the Qwen3.5-27B Q4_K_M + DFlash server?
+/// Is `model` handled by the Qwen3.6-27B Q4_K_M + DFlash server?
 /// Matches the canonical request-model IDs we expect CTOX to
 /// pipe in for local chat.
-pub fn is_qwen35_27b(model: &str) -> bool {
+pub fn is_qwen36_27b(model: &str) -> bool {
     // Request model aliases — keep in sync with the model registry.
-    model == "qwen35-27b-q4km-dflash"
+    model == "Qwen/Qwen3.6-27B"
         || model == "Qwen/Qwen3.5-27B"
+        || model == "qwen36-27b-q4km-dflash"
+        || model == "qwen35-27b-q4km-dflash"
+        || model.starts_with("Qwen/Qwen3.6-27B-")
         || model.starts_with("Qwen/Qwen3.5-27B-")
+        || model.starts_with("unsloth/Qwen3.6-27B")
         || model.starts_with("unsloth/Qwen3.5-27B")
 }
 
@@ -127,7 +134,7 @@ pub fn is_voxtral_mini_4b_realtime(model: &str) -> bool {
         || model.eq_ignore_ascii_case("voxtral-mini-4b-realtime-2602")
 }
 
-fn qwen35_27b_q4km_dflash_backend(
+fn qwen36_27b_q4km_dflash_backend(
     root: &Path,
     transport_endpoint: Option<&str>,
 ) -> LocalModelBackend {
@@ -135,15 +142,20 @@ fn qwen35_27b_q4km_dflash_backend(
         .join("src/core/inference/models/qwen35_27b_q4km_dflash/target/release")
         .join("qwen35-27b-q4km-dflash-server");
 
-    let target = config_path_or(root, "CTOX_QWEN35_TARGET_GGUF", default_qwen35_target(root));
-    let draft = config_path_or(
+    let target = config_path_or_fallback(
         root,
-        "CTOX_QWEN35_DRAFT_SAFETENSORS",
-        default_qwen35_draft(root),
+        "CTOX_QWEN36_27B_GGUF",
+        "CTOX_QWEN35_TARGET_GGUF",
+        default_qwen36_27b_target(root),
     );
-    let tokenizer = runtime_env::env_or_config(root, "CTOX_QWEN35_TOKENIZER")
-        .filter(|value| !value.trim().is_empty())
-        .map(PathBuf::from);
+    let draft = config_path_or_fallback(
+        root,
+        "CTOX_QWEN36_27B_DRAFT_SAFETENSORS",
+        "CTOX_QWEN35_DRAFT_SAFETENSORS",
+        default_qwen36_27b_draft(root),
+    );
+    let tokenizer =
+        config_path_optional_fallback(root, "CTOX_QWEN36_27B_TOKENIZER", "CTOX_QWEN35_TOKENIZER");
 
     // Socket path comes from the gateway's runtime_state resolution.
     // Fallback to the canonical runtime/sockets/ path under `root`
@@ -165,7 +177,7 @@ fn qwen35_27b_q4km_dflash_backend(
     args.push("--socket".into());
     args.push(socket.into());
     args.push("--model-id".into());
-    args.push("qwen35-27b-q4km-dflash".into());
+    args.push("qwen36-27b-q4km-dflash".into());
     args.push("--fast-rollback".into());
     args.push("--ddtree-budget".into());
     args.push("22".into());
@@ -176,18 +188,19 @@ fn qwen35_27b_q4km_dflash_backend(
     // (which does a literal `command.contains(spec.request_model)`
     // match against the `ps -o command=` output) succeeds against
     // the managed backend spec for Chat, whose request_model is
-    // "Qwen/Qwen3.5-27B". The server bin accepts the flag but does
+    // "Qwen/Qwen3.6-27B". The server bin accepts the flag but does
     // not need it for runtime behavior — it's a commandline marker.
     args.push("--request-model-alias".into());
-    args.push("Qwen/Qwen3.5-27B".into());
+    args.push("Qwen/Qwen3.6-27B".into());
 
     // The current hybrid binary still links ggml-cuda dynamically.
     // Keep the runtime linker path explicit so supervisor-spawned
     // CTOX processes work under the clean child environment.
-    let ggml_lib_dir = config_path_or(
+    let ggml_lib_dir = config_path_or_fallback(
         root,
+        "CTOX_QWEN36_27B_GGML_LIB_DIR",
         "CTOX_QWEN35_GGML_LIB_DIR",
-        default_qwen35_ggml_lib(root),
+        default_qwen36_27b_ggml_lib(root),
     );
     let ld_library_path = format!(
         "{}:{}",
@@ -201,7 +214,7 @@ fn qwen35_27b_q4km_dflash_backend(
         binary,
         args,
         env,
-        model_id: "qwen35-27b-q4km-dflash",
+        model_id: "qwen36-27b-q4km-dflash",
     }
 }
 
@@ -358,6 +371,28 @@ fn config_path_optional(root: &Path, key: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn config_path_or_fallback(
+    root: &Path,
+    key: &str,
+    fallback_key: &str,
+    fallback: PathBuf,
+) -> PathBuf {
+    runtime_env::env_or_config(root, key)
+        .or_else(|| runtime_env::env_or_config(root, fallback_key))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or(fallback)
+}
+
+fn config_path_optional_fallback(root: &Path, key: &str, fallback_key: &str) -> Option<PathBuf> {
+    runtime_env::env_or_config(root, key)
+        .or_else(|| runtime_env::env_or_config(root, fallback_key))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
 fn config_u32_or(root: &Path, keys: &[&str], fallback: u32) -> u32 {
     keys.iter()
         .find_map(|key| {
@@ -381,15 +416,15 @@ fn resolve_home_dir(_root: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-fn default_qwen35_target(root: &Path) -> PathBuf {
-    resolve_home_dir(root).join("dflash-ref/dflash/models/Qwen3.5-27B-Q4_K_M.gguf")
+fn default_qwen36_27b_target(root: &Path) -> PathBuf {
+    resolve_home_dir(root).join("dflash-ref/dflash/models/Qwen3.6-27B-Q4_K_M.gguf")
 }
 
-fn default_qwen35_draft(root: &Path) -> PathBuf {
+fn default_qwen36_27b_draft(root: &Path) -> PathBuf {
     resolve_home_dir(root).join("dflash-ref/dflash/models/draft/model.safetensors")
 }
 
-fn default_qwen35_ggml_lib(root: &Path) -> PathBuf {
+fn default_qwen36_27b_ggml_lib(root: &Path) -> PathBuf {
     resolve_home_dir(root).join("dflash-ref/dflash/build/deps/llama.cpp/ggml/src")
 }
 
@@ -407,13 +442,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn qwen35_aliases_resolve() {
-        assert!(is_qwen35_27b("qwen35-27b-q4km-dflash"));
-        assert!(is_qwen35_27b("Qwen/Qwen3.5-27B"));
-        assert!(is_qwen35_27b("Qwen/Qwen3.5-27B-Instruct"));
-        assert!(is_qwen35_27b("unsloth/Qwen3.5-27B-GGUF"));
-        assert!(!is_qwen35_27b("Qwen/Qwen3-4B"));
-        assert!(!is_qwen35_27b("anthropic/claude-sonnet-4.7"));
+    fn qwen36_27b_aliases_resolve() {
+        assert!(is_qwen36_27b("qwen36-27b-q4km-dflash"));
+        assert!(is_qwen36_27b("Qwen/Qwen3.6-27B"));
+        assert!(is_qwen36_27b("Qwen/Qwen3.6-27B-Instruct"));
+        assert!(is_qwen36_27b("unsloth/Qwen3.6-27B-GGUF"));
+        assert!(is_qwen36_27b("qwen35-27b-q4km-dflash"));
+        assert!(is_qwen36_27b("Qwen/Qwen3.5-27B"));
+        assert!(is_qwen36_27b("Qwen/Qwen3.5-27B-Instruct"));
+        assert!(is_qwen36_27b("unsloth/Qwen3.5-27B-GGUF"));
+        assert!(!is_qwen36_27b("Qwen/Qwen3-4B"));
+        assert!(!is_qwen36_27b("anthropic/claude-sonnet-4.7"));
     }
 
     #[test]
@@ -421,7 +460,9 @@ mod tests {
         assert!(is_qwen36_35b_a3b("Qwen/Qwen3.6-35B-A3B"));
         assert!(is_qwen36_35b_a3b("qwen3.6-35b-a3b"));
         assert!(is_qwen36_35b_a3b("qwen36-35b-a3b-ggml"));
-        assert!(!is_qwen36_35b_a3b("Qwen/Qwen3.5-35B-A3B"));
+        assert!(is_qwen36_35b_a3b("Qwen/Qwen3.5-35B-A3B"));
+        assert!(is_qwen36_35b_a3b("qwen3.5-35b-a3b"));
+        assert!(is_qwen36_35b_a3b("qwen35-35b-a3b"));
     }
 
     #[test]
@@ -489,14 +530,14 @@ mod tests {
     }
 
     #[test]
-    fn qwen35_backend_assembles_expected_cli() {
+    fn qwen36_27b_backend_assembles_expected_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {
-            request_model: "Qwen/Qwen3.5-27B-Instruct",
+            request_model: "Qwen/Qwen3.6-27B-Instruct",
             transport_endpoint: Some("/tmp/ctoxroot/runtime/sockets/primary_generation.sock"),
             root,
         })
-        .expect("qwen35 backend must resolve");
+        .expect("qwen36 backend must resolve");
         let joined: String = backend
             .args
             .iter()
@@ -507,7 +548,7 @@ mod tests {
         assert!(joined.contains("--draft"));
         assert!(joined.contains("--socket"));
         assert!(joined.contains("primary_generation.sock"));
-        assert!(joined.contains("--model-id qwen35-27b-q4km-dflash"));
+        assert!(joined.contains("--model-id qwen36-27b-q4km-dflash"));
         assert!(joined.contains("--fast-rollback"));
         assert!(joined.contains("--ddtree-budget 22"));
         assert!(joined.contains("--ddtree-temp 0.6"));
@@ -516,10 +557,22 @@ mod tests {
             .iter()
             .any(|(key, value)| *key == "LD_LIBRARY_PATH"
                 && value.to_string_lossy().contains("ggml-cuda")));
-        assert_eq!(backend.model_id, "qwen35-27b-q4km-dflash");
+        assert_eq!(backend.model_id, "qwen36-27b-q4km-dflash");
         assert!(backend
             .binary
             .ends_with("src/core/inference/models/qwen35_27b_q4km_dflash/target/release/qwen35-27b-q4km-dflash-server"));
+    }
+
+    #[test]
+    fn qwen35_legacy_backend_assembles_expected_cli() {
+        let root = Path::new("/tmp/ctoxroot");
+        let backend = resolve_local_model_backend(LocalModelRequest {
+            request_model: "Qwen/Qwen3.5-27B-Instruct",
+            transport_endpoint: Some("/tmp/ctoxroot/runtime/sockets/primary_generation.sock"),
+            root,
+        })
+        .expect("qwen35 legacy backend must resolve");
+        assert_eq!(backend.model_id, "qwen36-27b-q4km-dflash");
     }
 
     #[test]
@@ -543,7 +596,7 @@ mod tests {
         assert!(joined.contains("--socket"));
         assert!(joined.contains("primary_generation.sock"));
         assert!(joined.contains("--model-id Qwen/Qwen3.6-35B-A3B"));
-        assert!(joined.contains("--ctx 131072"));
+        assert!(joined.contains("--ctx 262144"));
         assert!(joined.contains("--tensor-split 1,1,1,1"));
         assert_eq!(backend.model_id, "Qwen/Qwen3.6-35B-A3B");
         assert!(backend.binary.ends_with(

@@ -29,7 +29,7 @@ AZURE_FOUNDRY_ENDPOINT_FLAG="${CTOX_AZURE_FOUNDRY_ENDPOINT:-}"
 AZURE_FOUNDRY_DEPLOYMENT_ID_FLAG="${CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID:-}"
 
 # Default local model
-DEFAULT_MODEL="Qwen/Qwen3.5-27B"
+DEFAULT_MODEL="Qwen/Qwen3.6-27B"
 
 # ── Internal state ───────────────────────────────────────────────────────────
 SCRIPT_DIR=""
@@ -443,11 +443,11 @@ tui_select_model() {
       SELECTED_MODEL="${CTOX_CHAT_MODEL:-$DEFAULT_MODEL}"
       return
     fi
-    tui_fatal "Qwen/Qwen3.5-27B local inference requires a supported GPU. Use --api-provider for API-backed setup or --model with a CPU-supported profile."
+    tui_fatal "Qwen/Qwen3.6-27B local inference requires a supported GPU. Use --api-provider for API-backed setup or --model with a CPU-supported profile."
   fi
 
   models+=("$DEFAULT_MODEL")
-  model_descs+=("${C_BOLD}Qwen 3.5 27B${C_RESET}        ${C_GREY}CTOX local runtime, CUDA/Metal optimized path${C_RESET}")
+  model_descs+=("${C_BOLD}Qwen 3.6 27B${C_RESET}        ${C_GREY}CTOX local runtime, CUDA/Metal optimized path${C_RESET}")
 
   # If only one option or flag provided, skip selection
   if [[ -n "$MODEL_FLAG" ]]; then
@@ -1840,13 +1840,13 @@ write_runtime_sqlite_config() {
   local disable_nccl="1" world_size=""
 
   case "$model" in
-    Qwen/Qwen3.5-27B)
+    Qwen/Qwen3.6-27B|Qwen/Qwen3.5-27B)
       port="1235"; arch=""; max_seq="131072"; isq="Q4K"; pa_cache_type="turboquant3"; pa_mem_frac="0.80" ;;
     google/gemma-4-26B-A4B-it)
       port="1234"; arch=""; max_seq="131072"; isq=""; pa_mem_frac="0.80" ;;
     google/gemma-4-E4B-it)
       port="1234"; arch=""; max_seq="131072"; isq="" ;;
-    Qwen/Qwen3.5-35B-A3B)
+    Qwen/Qwen3.6-35B-A3B|Qwen/Qwen3.5-35B-A3B)
       port="1235"; arch=""; max_seq="262144"; isq="Q4K"; pa_cache_type="turboquant3"; pa_mem_frac="0.80" ;;
     Qwen/Qwen3.5-9B|Qwen/Qwen3.5-4B)
       port="1235"; arch=""; max_seq="131072"; isq="Q4K" ;;
@@ -2139,7 +2139,7 @@ parse_args() {
         printf 'Usage: install.sh [OPTIONS]\n\n'
         printf 'Options:\n'
         printf '  --backend=<cuda|metal|cpu>  Set compute backend (skip interactive selection)\n'
-        printf '  --model=<model>             Set default model (default: Qwen/Qwen3.5-27B)\n'
+        printf '  --model=<model>             Set default model (default: Qwen/Qwen3.6-27B)\n'
         printf '  --api-provider=<provider>   Seed API provider (for example: azure_foundry)\n'
         printf '  --azure-foundry-endpoint=<url>       Seed Azure Foundry endpoint\n'
         printf '  --azure-foundry-deployment-id=<id>   Seed Azure Foundry deployment/model id\n'

@@ -21,6 +21,7 @@
  *   SMOKE_MODES=tickets-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-lifecycle-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=browser-handoff-ui SMOKE_PAGE_PATH=/index.html#browser node src/core/rxdb/tools/browser_rust_smoke_matrix.js
+ *   SMOKE_MODES=coding-agents-ui SMOKE_PAGE_PATH=/index.html SMOKE_CODING_AGENT_PROVIDER=codex node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-burst-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-reload-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
  *   SMOKE_MODES=command-restart-browser-to-rust node src/core/rxdb/tools/browser_rust_smoke_matrix.js
@@ -96,6 +97,32 @@ const modeEvidenceRequirements = {
     values: {
       status: 'completed',
       ticket_source: 'local',
+    },
+  },
+  'coding-agents-ui': {
+    keys: [
+      'coding_agents_ui_provider',
+      'coding_agents_ui_workspace_root',
+      'coding_agents_ui_session_id',
+      'coding_agents_ui_status_ready',
+      'coding_agents_ui_create_marker_seen',
+      'coding_agents_ui_followup_marker_seen',
+      'coding_agents_ui_session_projection_status',
+      'coding_agents_ui_event_count',
+      'coding_agents_ui_user_event_count',
+      'coding_agents_ui_assistant_event_count',
+      'coding_agents_ui_active_module',
+    ],
+    minimums: {
+      coding_agents_ui_event_count: 4,
+      coding_agents_ui_user_event_count: 2,
+      coding_agents_ui_assistant_event_count: 2,
+    },
+    values: {
+      coding_agents_ui_status_ready: 1,
+      coding_agents_ui_create_marker_seen: 1,
+      coding_agents_ui_followup_marker_seen: 1,
+      coding_agents_ui_active_module: 'coding-agents',
     },
   },
   'business-os-ui-regression': {

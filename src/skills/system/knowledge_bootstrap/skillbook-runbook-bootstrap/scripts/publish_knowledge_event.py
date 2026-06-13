@@ -119,7 +119,7 @@ def validate_event(event: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Publish a validated knowledge event as CTOX self-work.")
+    parser = argparse.ArgumentParser(description="Publish a validated knowledge event as CTOX internal work.")
     parser.add_argument("--ctox-bin", default="ctox")
     parser.add_argument("--system", required=True)
     parser.add_argument("--event-json")
@@ -141,7 +141,7 @@ def main() -> None:
         kind, metadata = validate_event(event)
         command = [
             "ticket",
-            "self-work-put",
+            "internal-work-put",
             "--system",
             args.system,
             "--kind",

@@ -93,7 +93,7 @@ CATEGORIZED_FINDINGS:
 - <or "none">
 OPEN_ITEMS:
 - <concrete rework item>
-PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale="<why this resolves the latest communication>"
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/internal-work id or none> | rationale="<why this resolves the latest communication>"
 EVIDENCE:
 - source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>
 HANDOFF:
@@ -938,7 +938,7 @@ Email communication gate:\n\
 - decide whether the draft should be sent now, blocked, or reworked first\n\
 - if newer communication makes this draft stale, fail the review and state which newer message/context must be answered instead\n\
 - if the correct outcome is no outbound mail yet because the thread is waiting on specific input, return FAIL with DISPOSITION: NO_SEND and state the wait condition; do not invent rework\n\
-- emit PIPELINE_RESOLUTION for the mail: use no_action_needed only when the latest communication requires no queue/ticket change; otherwise name the exact queue/plan/ticket/self-work item created, updated, merged, extended, or blocked\n\
+- emit PIPELINE_RESOLUTION for the mail: use no_action_needed only when the latest communication requires no queue/ticket change; otherwise name the exact queue item, plan, ticket, or internal work item created, updated, merged, extended, or blocked\n\
 - treat every listed required deliverable as mandatory; if a required deliverable is missing, the mail must fail review and be reworked first\n\
 - treat every listed future promise, dated commitment, or deadline promise as mandatory review context; if a promise is not backed by a concrete CTOX schedule or open follow-up, the mail must fail review and be reworked first\n\
 - inspect recent relevant meeting outcomes before judging the draft; if the latest meeting changed decisions, blockers, commitments, names, recipients, or proof expectations, the draft must reflect that newer context\n\
@@ -958,9 +958,9 @@ External chat quick-response gate:\n\
 - this is a quick acknowledgement/reply for an external chat channel, not a final result mail\n\
 - judge the full chat action: channel, thread, subject when present, recipients when present, attachments, and body\n\
 - approve only short, timely, recipient-appropriate responses that either acknowledge the task accurately or ask a necessary clarifying question\n\
-- if the body promises follow-up work, verify durable pipeline backing exists first: queue item, plan, ticket case, or self-work linked to this thread\n\
+- if the body promises follow-up work, verify durable pipeline backing exists first: queue item, plan, ticket case, or internal work item linked to this thread\n\
 - classify the communication-to-pipeline delta before approving: new task, update existing task, merge duplicate, extend scope, no action needed, or blocked awaiting clarification\n\
-- verify that the chosen delta is durably represented by the evidence: every actionable request must be backed by a referenced queue item, plan, ticket, or self-work item; merged/extended work must name the existing item it changes\n\
+- verify that the chosen delta is durably represented by the evidence: every actionable request must be backed by a referenced queue item, plan, ticket, or internal work item; merged/extended work must name the existing item it changes\n\
 - fail if newer communication, meeting notes, ticket state, or durable knowledge changes scope, priority, recipient expectations, due date, or result validity and the response leaves stale or superseded work unresolved\n\
 - fail if any actionable request is hidden, dropped, vaguely promised, or left without an explicit pipeline resolution; nothing may remain unresolved under the conversation thread\n\
 - emit PIPELINE_RESOLUTION with the exact action and target before PASS; use blocked_needs_clarification when the chat response asks for missing input instead of creating/updating work\n\
@@ -1042,7 +1042,7 @@ Treat the worker's artifact text and completion summary as claims to audit, not 
 \n\
 Required review work:\n\
 1. load active strategic directives, mission state, and continuity for this conversation/thread\n\
-2. inspect recent verification runs, open claims, queue/self-work/ticket state, and the reviewed task result\n\
+2. inspect recent verification runs, open claims, queue/internal-work/ticket state, and the reviewed task result\n\
 3. inspect recent same-thread communication and recent relevant meeting outcomes before communication or artifact verdicts\n\
 4. inspect explicit artifact paths and attachments directly; for spreadsheets, verify row counts, headers, and whether the content satisfies the requested scope\n\
 5. inspect delivery state before accepting any claim that a message, mail, or attachment was sent\n\
@@ -1073,7 +1073,7 @@ CATEGORIZED_FINDINGS:\n\
 - <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <concrete rework item>\n\
-PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/internal-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
 - source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
 HANDOFF:\n\
@@ -1192,7 +1192,7 @@ CATEGORIZED_FINDINGS:\n\
 - <or \"none\">\n\
 OPEN_ITEMS:\n\
 - <concrete rework item or \"none\">\n\
-PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/self-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
+PIPELINE_RESOLUTION: action=new_task|update_existing|merge_duplicate|extend_scope|no_action_needed|blocked_needs_clarification | target=<queue/plan/ticket/internal-work id or none> | rationale=\"<why this resolves the latest communication>\"\n\
 EVIDENCE:\n\
 - source=reviewer|worker|external | method=read_file|stat_file|run_command|db_query|live_check|communication_check|claim|log|validator | target=<path, command, record, surface, or system> | result=<observed result>\n\
 HANDOFF:\n\
@@ -2188,7 +2188,7 @@ mod tests {
             artifact_action: Some("external_chat_quick_response".to_string()),
             artifact_channel: "teams".to_string(),
             deterministic_evidence: vec![
-                "External chat work backing for thread `teams:inf.yoda@example.test::chat::jill`: queue_open=1, plan_open=0, self_work_open=0.".to_string(),
+                "External chat work backing for thread `teams:inf.yoda@example.test::chat::jill`: queue_open=1, plan_open=0, internal_work_open=0.".to_string(),
             ],
             ..CompletionReviewRequest::default()
         };
