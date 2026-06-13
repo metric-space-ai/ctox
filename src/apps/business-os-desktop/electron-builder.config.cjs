@@ -1,6 +1,13 @@
 "use strict";
 
+const fs = require("node:fs");
+const path = require("node:path");
+
 const UPDATE_FEED_URL = "https://ctox.dev/downloads/business-os-desktop";
+const ctoxHelperResourceDir = path.join(__dirname, "resources", "ctox");
+const extraResources = fs.existsSync(ctoxHelperResourceDir)
+  ? [{ from: "resources/ctox", to: "ctox" }]
+  : [];
 
 module.exports = {
   appId: "ai.metric-space.ctox.business-os-desktop",
@@ -21,6 +28,7 @@ module.exports = {
     "!**/*.map",
     "!**/.DS_Store",
   ],
+  ...(extraResources.length ? { extraResources } : {}),
   protocols: [{
     name: "CTOX Business OS Desktop Pairing",
     schemes: ["ctox-business-os-desktop"],

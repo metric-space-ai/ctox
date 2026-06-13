@@ -15,7 +15,15 @@ function main() {
   assert.equal(packageJson.dependencies?.["electron-updater"], "^6.8.3");
   assert.equal(packageJson.devDependencies?.electron, "^39.8.10");
   assert.equal(packageJson.devDependencies?.["electron-builder"], "^26.8.1");
-  for (const script of ["dist", "pack:dir", "pack:dir:smoke", "release:check", "smoke:local-runtime", "smoke:signed-artifacts"]) {
+  for (const script of [
+    "dist",
+    "pack:dir",
+    "pack:dir:smoke",
+    "release:check",
+    "smoke:local-bundled-runtime",
+    "smoke:local-runtime",
+    "smoke:signed-artifacts",
+  ]) {
     assert.ok(packageJson.scripts?.[script], `missing package script: ${script}`);
   }
   assert.equal(packageJson.devDependencies?.["@electron/asar"], "^3.4.1");
@@ -28,6 +36,9 @@ function main() {
   assert.ok(builderConfig.files.includes("!test/**"), "packaging must exclude tests");
   assert.ok(builderConfig.files.includes("!release/**"), "packaging must exclude release artifacts");
   assert.ok(builderConfig.protocols?.some((entry) => entry.schemes?.includes("ctox-business-os-desktop")));
+  const builderSource = fs.readFileSync(path.join(appRoot, "electron-builder.config.cjs"), "utf8");
+  assert.match(builderSource, /extraResources/, "packaging must support external helper resources");
+  assert.match(builderSource, /resources["']?,\s*["']ctox/, "packaging must use resources/ctox for the helper");
 
   const publish = builderConfig.publish?.[0] || {};
   assert.equal(publish.provider, "generic");
@@ -75,6 +86,8 @@ function assertReleaseWorkflowMatrix() {
     "npm run test:electron-smoke",
     "npm run smoke:keychain-runtime",
     "dbus-run-session",
+    "cargo build --locked --release",
+    "resources/ctox",
     "npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never",
     "npm run smoke:signed-artifacts -- --platform mac",
   ]) {

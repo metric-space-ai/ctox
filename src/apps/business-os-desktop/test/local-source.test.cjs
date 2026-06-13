@@ -12,8 +12,10 @@ const {
   buildLocalCommandOptions,
   buildLocalInstallArgs,
   buildLocalPeerArgs,
+  localCtoxBinaryCandidates,
   normalizeLocalInstallOptions,
   normalizeLocalProfile,
+  resolveLocalCtoxBinary,
 } = require("../src/main/sources.cjs");
 
 test("local profile and install options validate CLI inputs", () => {
@@ -34,6 +36,33 @@ test("local profile and install options validate CLI inputs", () => {
     noCopyEnv: true,
     dryRun: true,
   });
+});
+
+test("local profile resolves bundled ctox helper before PATH fallback", () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-bundled-helper-"));
+  const helper = path.join(tempRoot, process.platform === "win32" ? "ctox.exe" : "ctox");
+  fs.writeFileSync(helper, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+
+  assert.equal(resolveLocalCtoxBinary({ bundledCtoxCandidates: [helper] }), helper);
+  assert.equal(
+    normalizeLocalProfile({ bundledCtoxCandidates: [helper] }).ctoxBinary,
+    helper,
+  );
+  assert.equal(
+    normalizeLocalProfile({
+      ctoxBinary: "/usr/local/bin/ctox",
+      bundledCtoxCandidates: [helper],
+    }).ctoxBinary,
+    "/usr/local/bin/ctox",
+  );
+
+  const candidates = localCtoxBinaryCandidates({
+    resourcesPath: tempRoot,
+    platform: "linux",
+    arch: "x64",
+  });
+  assert.ok(candidates.includes(path.join(tempRoot, "ctox", "ctox")));
+  assert.ok(candidates.includes(path.join(tempRoot, "ctox", "linux-x64", "ctox")));
 });
 
 test("local CLI args use business-os peer ensure/status and install target", () => {

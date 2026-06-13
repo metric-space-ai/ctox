@@ -235,6 +235,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.93.0"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: business-os-desktop-helper-${{ runner.os }}-${{ matrix.arch }}
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -248,7 +258,8 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 \
             libnotify4 libxtst6 xdg-utils xvfb fakeroot rpm \
-            dbus-x11 gnome-keyring libsecret-tools
+            dbus-x11 gnome-keyring libsecret-tools \
+            libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev
 
       - name: Install dependencies
         working-directory: src/apps/business-os-desktop
@@ -285,6 +296,18 @@ jobs:
             export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
             npm run smoke:keychain-runtime
           '
+
+      - name: Build bundled CTOX helper
+        shell: bash
+        run: |
+          cargo build --locked --release
+          mkdir -p src/apps/business-os-desktop/resources/ctox
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp target/release/ctox.exe src/apps/business-os-desktop/resources/ctox/ctox.exe
+          else
+            cp target/release/ctox src/apps/business-os-desktop/resources/ctox/ctox
+            chmod 755 src/apps/business-os-desktop/resources/ctox/ctox
+          fi
 
       - name: Build packaged app
         working-directory: src/apps/business-os-desktop

@@ -25,6 +25,7 @@ const { WINDOWS_CREDENTIAL_MANAGER_SCRIPT } = require("./secret-store.cjs");
 
 const execFileAsync = promisify(execFile);
 const OFFICIAL_CTOX_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh";
+const LOCAL_CTOX_RESOURCE_DIR = "ctox";
 
 function normalizeCtoxDevSessionPackage(payload) {
   const account = payload?.account && typeof payload.account === "object" ? payload.account : {};
@@ -775,7 +776,7 @@ function assertFreshSshInstallPreflight(preflight, install = {}) {
 }
 
 function normalizeLocalProfile(options = {}) {
-  const ctoxBinary = String(options.ctoxBinary || "ctox").trim();
+  const ctoxBinary = resolveLocalCtoxBinary(options);
   const ctoxRoot = String(options.ctoxRoot || "").trim();
   if (!ctoxBinary) throw new Error("ctox binary is required");
   if (ctoxBinary.startsWith("-") || /[\0\r\n]/.test(ctoxBinary)) {
@@ -788,6 +789,54 @@ function normalizeLocalProfile(options = {}) {
     ctoxBinary,
     ctoxRoot,
   };
+}
+
+function resolveLocalCtoxBinary(options = {}) {
+  const explicit = String(options.ctoxBinary || "").trim();
+  if (explicit) return explicit;
+  const bundled = localCtoxBinaryCandidates(options)
+    .find((candidate) => isExecutableFile(candidate));
+  return bundled || "ctox";
+}
+
+function localCtoxBinaryCandidates(options = {}) {
+  const platform = String(options.platform || process.platform || "").trim();
+  const arch = String(options.arch || process.arch || "").trim();
+  const executable = platform === "win32" ? "ctox.exe" : "ctox";
+  const candidates = [];
+  if (Array.isArray(options.bundledCtoxCandidates)) {
+    candidates.push(...options.bundledCtoxCandidates);
+  }
+  const resourcesPath = String(options.resourcesPath || process.resourcesPath || "").trim();
+  if (resourcesPath) {
+    candidates.push(
+      path.join(resourcesPath, LOCAL_CTOX_RESOURCE_DIR, executable),
+      path.join(resourcesPath, LOCAL_CTOX_RESOURCE_DIR, platform, executable),
+      path.join(resourcesPath, LOCAL_CTOX_RESOURCE_DIR, arch, executable),
+      path.join(resourcesPath, LOCAL_CTOX_RESOURCE_DIR, `${platform}-${arch}`, executable),
+    );
+  }
+  const appRoot = path.resolve(__dirname, "..", "..");
+  candidates.push(
+    path.join(appRoot, "resources", LOCAL_CTOX_RESOURCE_DIR, executable),
+    path.join(appRoot, "resources", LOCAL_CTOX_RESOURCE_DIR, platform, executable),
+    path.join(appRoot, "resources", LOCAL_CTOX_RESOURCE_DIR, arch, executable),
+    path.join(appRoot, "resources", LOCAL_CTOX_RESOURCE_DIR, `${platform}-${arch}`, executable),
+  );
+  return [...new Set(candidates
+    .map((candidate) => String(candidate || "").trim())
+    .filter((candidate) => candidate && !/[\0\r\n]/.test(candidate)))];
+}
+
+function isExecutableFile(filePath) {
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile()) return false;
+    fs.accessSync(filePath, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function normalizeLocalInstallOptions(options = {}) {
@@ -1147,6 +1196,8 @@ module.exports = {
   normalizeCtoxDevSessionPackage,
   instanceFromPeerStatus,
   normalizeLocalProfile,
+  resolveLocalCtoxBinary,
+  localCtoxBinaryCandidates,
   normalizeLocalInstallOptions,
   buildLocalPeerArgs,
   buildLocalInstallArgs,

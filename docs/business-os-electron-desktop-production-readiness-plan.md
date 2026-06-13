@@ -62,6 +62,15 @@ wieder testbar:
   abgelehnt, `peer ensure` laeuft gegen einen validen CTOX Runtime-Root, die
   Desktop-Quelle attached lokal, Secrets bleiben im SecretStore und der Launch
   bleibt WebRTC-only.
+- Der lokale Desktop-Quellpfad kann ohne expliziten `ctoxBinary` und ohne
+  globales PATH-`ctox` einen gebuendelten CTOX-Helper aus den App-Resources
+  verwenden. `npm run smoke:local-bundled-runtime` beweist den frischen
+  Desktop-Profilpfad ohne ctox.dev Account und ohne `ctoxRoot`: lokale
+  Installation, Inspect, Attach, App-Neustart und WebRTC-only Launch bleiben
+  moeglich. Der Release-Workflow baut den plattformpassenden CTOX-Helper vor
+  dem Electron-Package und `electron-builder` nimmt `resources/ctox` als externe
+  App-Resource auf. Noch offen ist der echte Tag-/Signed-Run auf sauberer
+  Maschine.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -215,9 +224,12 @@ Nicht umgesetzt oder noch nicht bewiesen:
 - Server-seitige Access Revocation und Desktop-Session-Rotation gegen echte
   ctox.dev-Tenants; lokal ist der Contract inklusive Electron-Smoke gruen.
 - Komplett frisches OS ohne vorhandenes lokales CTOX-Binary/validen CTOX
-  Runtime-Root ist noch nicht bewiesen. Das lokale Desktop-Profil ist frisch und
-  der Business-OS-Kundenroot wird installiert, aber der Local-Daemon-Pfad setzt
-  weiterhin ein vorhandenes `ctox` Binary plus validen CTOX Runtime-Root voraus.
+  Runtime-Root ist als Desktop-Vertrag naeher dran, aber noch nicht final
+  bewiesen: Der lokale Quellpfad kann jetzt einen gebuendelten CTOX-Helper aus
+  den App-Resources nutzen, der Release-Workflow baut diesen Helper pro
+  Plattform vor dem Electron-Package, und der Smoke laeuft ohne ctox.dev
+  Account, `ctoxRoot` oder explizites `ctoxBinary`. Offen bleibt der echte
+  Tag-/Signed-Run, der das auf sauberer Maschine ausfuehrt.
 - Pairing-Rotation/Widerruf ist gegen den SKF-Testhost auf Remote-`peer
   rotate`, lokalen Desktop-Import/Rotate/Revoke und WebRTC-only Launch-Konfig
   gruen. Der lokale native Peer erkennt Sync-Konfigurationsaenderungen jetzt
@@ -266,13 +278,13 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 0. Baseline & Architekturentscheidung | 8% | Abgeschlossen | 100% |
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 95% |
-| 3. Local Daemon Source | 12% | In Umsetzung | 88% |
+| 3. Local Daemon Source | 12% | In Umsetzung | 92% |
 | 4. Pairing Invite Source | 12% | In Umsetzung | 97% |
 | 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 97% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | In Umsetzung | 97% |
 | 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 68% |
-| **Gesamt** | **100%** | **In Umsetzung** | **94%** |
+| **Gesamt** | **100%** | **In Umsetzung** | **95%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
 
@@ -389,7 +401,7 @@ Tests:
 
 ## Welle 3: Local Daemon Source
 
-Status: In Umsetzung, 88%.
+Status: In Umsetzung, 92%.
 
 Aufgaben:
 
@@ -404,8 +416,17 @@ Aufgaben:
   zurueckzufallen.
 - [x] Fresh-Desktop-Profile-Smoke ohne ctox.dev Account: persistierte Registry
   in Temp-Profil, simulierter App-Neustart, lokaler WebRTC-Launch.
-- [ ] Fresh-Machine-Smoke ohne vorhandenes lokales CTOX-Binary/validen CTOX
-  Runtime-Root.
+- [x] Lokaler Quellpfad findet einen gebuendelten CTOX-Helper aus
+  App-Resources, wenn kein explizites `ctoxBinary` gesetzt ist; ein
+  vorhandenes explizites Binary gewinnt weiterhin.
+- [x] Fresh-Desktop-Profile-Smoke ohne ctox.dev Account, ohne `ctoxRoot` und
+  ohne explizites `ctoxBinary`: Installation, Inspect, Attach, App-Neustart und
+  WebRTC-only Launch laufen ueber den gebuendelten Helper-Vertrag.
+- [x] Release-Workflow baut vor `electron-builder` einen plattformpassenden
+  CTOX-Helper und legt ihn in `resources/ctox`; die Builder-Konfiguration
+  paketiert diesen Pfad als externe App-Resource.
+- [ ] Signierter Release-/Fresh-Machine-Smoke mit echtem, gebuendeltem
+  CTOX-Helper und ohne vorhandenes globales CTOX-Binary.
 
 Tests:
 
@@ -421,6 +442,15 @@ Tests:
 - [x] Desktop-JS-Test: Local-Command-Optionen setzen fuer valide CTOX Runtime-
   Roots `CTOX_ROOT` im Child-Prozess und lehnen Business-OS-Kundenroots als
   Runtime-Roots ab.
+- [x] Desktop-JS-Test: Lokales Profil waehlt einen ausfuehrbaren gebuendelten
+  CTOX-Helper vor PATH-Fallback und laesst explizite Binary-Auswahl gewinnen.
+- [x] `npm run smoke:local-bundled-runtime`: Frisches Desktop-Profil, ctox.dev
+  401, kein `ctoxRoot`, kein explizites `ctoxBinary`, lokale Installation ueber
+  gebuendelten Helper-Vertrag, Attach, persistierter Neustart und WebRTC-only
+  Launch ohne Registry-Secret-Leak.
+- [x] `npm run release:check`: Prueft, dass die Business-OS-Desktop-
+  Release-Matrix den gebuendelten CTOX-Helper baut und dass
+  `electron-builder` `resources/ctox` als externe App-Resource aufnehmen kann.
 
 ## Welle 4: Pairing Invite Source
 
@@ -701,6 +731,9 @@ Release Gates:
   macOS Signed-Artifact-Smoke.
 - [x] Release-Matrix fuehrt plattformweite Keychain-Runtime-Smokes aus:
   macOS Keychain, Linux Secret Service und Windows Credential Manager.
+- [x] Business-OS-Desktop Release-Matrix baut vor `electron-builder` den
+  plattformpassenden CTOX-Helper und paketiert ihn als `resources/ctox`
+  App-Resource fuer lokale Fresh-Machine-Flows.
 - [ ] Live-/Cross-Platform Desktop Electron E2E auf macOS, Windows und Linux.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
@@ -755,3 +788,4 @@ Release Gates:
 | 2026-06-13 | Welle 5 API-backed Fresh-Installer-Flags umgesetzt und live negativ validiert: Desktop-SSH-Fresh-Install kann `apiProvider`, `model` und `backend` validiert an den offiziellen `install.sh` per CLI-Argumenten weitergeben; `smoke:ssh-password-live` bietet dafuer `--install-api-provider`, `--install-model` und `--install-backend`. Gegen Kunstmen zeigte der Live-Test zwei echte Befunde: ohne API-Provider scheitert der offizielle Installer am lokalen GPU-Default, mit `--install-api-provider openai` startet der reale Cargo-Source-Build, ueberschreitet aber den 900s Desktop-Smoke-Timeout. Der verwaiste Build wurde gestoppt. Fresh-Install bleibt daher nicht production-ready; noetig sind prebuilt Linux-Artefakte oder ein installer/progress/timeout-faehiger Desktop-Fresh-Install-Pfad. Gruen: `node --check src/main/sources.cjs`, `node --check scripts/smoke-ssh-password-live.cjs`, `node --test test/ssh-source.test.cjs`, `npm run check`, `npm test` 103/103, `npm run release:check`, `npm run test:electron-smoke`, `git diff --check`. |
 | 2026-06-13 | Welle 4 Live-Rotation nachgezogen und echten Pairing-ID-Bug behoben: Remote-`peer rotate` aendert das `sync_room`; der Desktop band die Pairing-ID bisher an `instance_id + sync_room` und wies dadurch echte Rotations-Invites als falsche Instanz ab. Die ID ist jetzt `instance_id`-stabil, alte sync-room-basierte IDs werden beim Rotate migriert, alte SecretRefs geloescht. Neuer opt-in Smoke `smoke:pairing-ssh-live` prueft gegen SKF echtes SSH mit gepinntem Host-Key, Remote-`peer rotate`, lokalen Desktop-Import/Rotate/Revoke, WebRTC-only Launch und Secret-Freiheit von Registry/Evidenz. Live-Befund bleibt nicht voll gruen: Beide Test-VPS haben noch keinen ausgerollten `ctox business-os desktop invite` CLI-Befehl, daher nutzte der Smoke explizit den schwaecheren `--allow-peer-status-invite` Fallback; die aktive Peer-Session-Aenderung ist ebenfalls nicht bewiesen. Welle 4 steigt auf 96%. Gruen: `node --test test/invite-source.test.cjs`, `node --check scripts/smoke-pairing-ssh-live.cjs`, `npm run check`, Live-Smoke SKF mit `--rotate --revoke-local --allow-peer-status-invite`. |
 | 2026-06-13 | Welle 4 Native-Peer-Rotation lokal gehaertet: Der laufende native RxDB-Peer vergleicht im Watchdog seine aktive Room-/Passwort-/Signaling-Konfiguration mit der persistierten Sync-Konfiguration und beendet sich bei Aenderung kontrolliert, damit der bestehende Supervisor mit frischer Konfiguration respawnt. Damit ist die lokale Produktionslogik fuer Remote-`peer rotate` vorhanden; live bleibt der Browser-WebRTC-Reconnect offen, bis der aktualisierte `ctox` Stand auf den Test-VPS ausgerollt und gegen echte Reconnect-Evidenz geprueft ist. Welle 4 steigt auf 97%. Gruen: `cargo test native_peer_ -- --nocapture`. |
+| 2026-06-13 | Welle 3 Fresh-Machine-Vertrag verbessert: Der lokale Desktop-Quellpfad sucht bei fehlendem explizitem `ctoxBinary` jetzt zuerst nach einem gebuendelten CTOX-Helper in den App-Resources und faellt erst danach auf PATH-`ctox` zurueck. Neuer Smoke `smoke:local-bundled-runtime` beweist ein frisches Desktop-Profil ohne ctox.dev Account, ohne `ctoxRoot` und ohne explizites `ctoxBinary`: lokale Installation, Inspect, Attach, persistierter Neustart und WebRTC-only Launch bleiben secret-frei. Die Release-Matrix baut den plattformpassenden CTOX-Helper vor `electron-builder`; `electron-builder` paketiert `resources/ctox` als externe App-Resource, sobald der Helper liegt. Welle 3 steigt auf 92%, Gesamt auf 95%. Offen bleibt der signierte Release-/Fresh-Machine-Nachweis auf sauberer Maschine. Gruen: `npm run smoke:local-bundled-runtime`, `node --test test/local-source.test.cjs`, `npm test` 105/105, `npm run check`, `npm run release:check`. |
