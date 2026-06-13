@@ -3061,8 +3061,7 @@ impl LcmEngine {
     }
 
     fn context_token_count(&self, conversation_id: i64) -> Result<i64> {
-        Ok(self
-            .conn
+        self.conn
             .query_row(
                 r#"
                 SELECT COALESCE(SUM(COALESCE(m.token_count, s.token_count, 0)), 0)
@@ -3074,7 +3073,7 @@ impl LcmEngine {
                 [conversation_id],
                 |row| row.get(0),
             )
-            .unwrap_or(0))
+            .context("failed to compute context token count")
     }
 
     fn next_context_ordinal(&self, conversation_id: i64) -> Result<i64> {
@@ -7029,6 +7028,27 @@ mod tests {
         assert_eq!(
             fts_after, fts_before,
             "rolled-back transaction must leave no orphan messages_fts row"
+        );
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn context_token_count_propagates_db_errors() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let _ = engine.continuity_init_documents(7)?;
+
+        // A real DB error in the token query must surface as Err, not collapse to
+        // 0: a silent 0 would let pre-turn compaction skip a genuinely over-budget
+        // context. Removing context_items makes the query fail deterministically.
+        engine
+            .conn
+            .execute_batch("ALTER TABLE context_items RENAME TO context_items_hidden;")?;
+        assert!(
+            engine.context_token_count(7).is_err(),
+            "a failing token-count query must return Err, not a silent 0"
         );
 
         let _ = std::fs::remove_file(db_path);
