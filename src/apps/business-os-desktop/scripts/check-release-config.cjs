@@ -89,7 +89,7 @@ function assertReleaseWorkflowMatrix() {
     "cargo build --locked --release",
     "resources/ctox",
     "npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never",
-    "npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }}",
+    "npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }} --evidence-json release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json",
   ]) {
     assert.match(workflow, new RegExp(escapeRegExp(command)), `release workflow missing command: ${command}`);
   }
@@ -97,6 +97,8 @@ function assertReleaseWorkflowMatrix() {
   for (const platform of ["smokeMacArtifacts", "smokeLinuxArtifacts", "smokeWindowsArtifacts"]) {
     assert.match(signedArtifactSmoke, new RegExp(escapeRegExp(platform)), `signed artifact smoke missing ${platform}`);
   }
+  assert.match(signedArtifactSmoke, /ctox-business-os-desktop-release-artifact-smoke\/v1/);
+  assert.match(signedArtifactSmoke, /writeEvidence/);
   for (const linuxDependency of ["gnome-keyring", "libsecret-tools"]) {
     assert.match(workflow, new RegExp(escapeRegExp(linuxDependency)), `release workflow missing Linux keychain dependency: ${linuxDependency}`);
   }

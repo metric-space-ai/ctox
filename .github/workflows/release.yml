@@ -322,7 +322,7 @@ jobs:
 
       - name: Release artifact smoke
         working-directory: src/apps/business-os-desktop
-        run: npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }}
+        run: npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }} --evidence-json release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

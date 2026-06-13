@@ -92,9 +92,13 @@ Release-related checks:
 - `npm run pack:dir:smoke` builds a local unpacked app and verifies the bundle
   metadata plus packaged `app.asar` contents. This is an unsigned local smoke,
   not a production release artifact.
-- `npm run smoke:signed-artifacts -- --platform mac` verifies a signed macOS
-  release app with `codesign` and Gatekeeper assessment after a distribution
-  build.
+- `npm run smoke:signed-artifacts -- --platform <mac|linux|win>
+  --evidence-json <path>` verifies release artifacts after a distribution
+  build and writes uploadable JSON evidence with relative artifact paths. macOS
+  checks the `.app`, `app.asar`, bundled CTOX helper, `codesign` and Gatekeeper
+  assessment; Linux checks AppImage, `.deb`, `linux-unpacked`, `app.asar` and
+  helper; Windows checks the NSIS installer, `win-unpacked`, `app.asar` and
+  `ctox.exe`.
 - `npm run dist` builds platform installers. Production macOS releases require
   signing plus notarization build secrets; unsigned local artifacts are not
   release-ready.
