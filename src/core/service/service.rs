@@ -5346,7 +5346,9 @@ fn run_completion_review(
                 }
             }
             review::ReviewVerdict::Fail if actionable_rejection => {
-                if review_outcome_is_terminal_no_send(&outcome) {
+                if matches!(outcome.disposition, review::ReviewDisposition::NoSend)
+                    && review_outcome_is_terminal_no_send(&outcome)
+                {
                     push_event(
                         state,
                         format!(
@@ -15435,8 +15437,31 @@ mod tests {
             "Michael's latest thread says CTO1 should support technically after the decision."
                 .to_string(),
         );
+        outcome.disposition = review::ReviewDisposition::NoSend;
 
+        assert!(
+            matches!(outcome.disposition, review::ReviewDisposition::NoSend)
+                && review_outcome_is_terminal_no_send(&outcome)
+        );
+    }
+
+    #[test]
+    fn review_no_send_text_without_disposition_token_is_not_terminal() {
+        let mut outcome = review_outcome_for_no_send_test(
+            "Do not send a founder reply yet. The CRM thread is in wait mode until Marco provides the CRM/tool and sync scope.",
+        );
+        outcome.failed_gates.push(
+            "No-send: wait until the founders provide concrete technical inputs.".to_string(),
+        );
+
+        // The scraper alone still matches the prose, but the structured disposition
+        // defaults to Send, so the terminal no-send gate must not fire.
         assert!(review_outcome_is_terminal_no_send(&outcome));
+        assert_eq!(outcome.disposition, review::ReviewDisposition::Send);
+        assert!(
+            !(matches!(outcome.disposition, review::ReviewDisposition::NoSend)
+                && review_outcome_is_terminal_no_send(&outcome))
+        );
     }
 
     #[test]
