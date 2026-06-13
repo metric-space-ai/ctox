@@ -70,6 +70,17 @@ wieder testbar:
 - Pairing-Instanzen koennen per Ersatz-Invite rotiert und lokal widerrufen
   werden; Rotation invalidiert gecachte BrowserViews, und der Widerruf entfernt
   Registry-Eintrag und SecretStore-Referenzen.
+- Pairing-Identitaet ist jetzt an `instance_id` statt an `sync_room` gebunden.
+  Damit bleibt eine echte Remote-`peer rotate`-Rotation dieselbe Desktop-
+  Instanz, obwohl sich das `sync_room` durch den neuen Room-Secret-Hash
+  aendert; alte sync-room-basierte Desktop-IDs werden beim naechsten Rotate in
+  die neue ID migriert.
+- `npm run smoke:pairing-ssh-live` ist als opt-in Live-Smoke vorhanden. Gegen
+  den SKF-Testhost ist der Remote-`peer rotate` + Desktop-Import/Rotate/Revoke-
+  Pfad mit WebRTC-only Launch-Konfig und ohne Secret-Leak gruen; die Remote-
+  Instanz erzeugt das Desktop-Invite derzeit aber noch nicht selbst, weil der
+  ausgerollte VPS-`ctox` den neuen `business-os desktop invite` CLI-Befehl noch
+  nicht enthaelt.
 - SSH-managed Quelle deckt Host-Key-Fingerprint-Trust, app-eigene
   `ssh_known_hosts`, OpenSSH key/agent Attach, Remote-Preflight und
   Existing-CTOX-Upgrade auf Contract-Ebene ab.
@@ -201,7 +212,12 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Runtime-Root ist noch nicht bewiesen. Das lokale Desktop-Profil ist frisch und
   der Business-OS-Kundenroot wird installiert, aber der Local-Daemon-Pfad setzt
   weiterhin ein vorhandenes `ctox` Binary plus validen CTOX Runtime-Root voraus.
-- Pairing-Rotation/Widerruf gegen echte Remote-Instanz noch nicht E2E bewiesen.
+- Pairing-Rotation/Widerruf ist gegen den SKF-Testhost auf Remote-`peer
+  rotate`, lokalen Desktop-Import/Rotate/Revoke und WebRTC-only Launch-Konfig
+  gruen. Noch nicht bewiesen ist der volle Zielpfad, in dem die Remote-Instanz
+  selbst `ctox business-os desktop invite` bereitstellt und ein Browser nach
+  Rotation tatsaechlich wieder ueber den neu gestarteten nativen Peer
+  verbindet; auf beiden Test-VPS ist der Remote-CLI-Stand dafuer noch zu alt.
 - SSH/Sudo Fresh-Install ist gegen echte VPS noch nicht gruen: Der erste
   Kunstmen-Live-Versuch ohne API-Provider scheiterte korrekt am GPU-only
   Default des offiziellen Installers; der zweite Versuch mit
@@ -243,7 +259,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 95% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 88% |
-| 4. Pairing Invite Source | 12% | In Umsetzung | 95% |
+| 4. Pairing Invite Source | 12% | In Umsetzung | 96% |
 | 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 97% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | In Umsetzung | 97% |
@@ -284,7 +300,7 @@ Tests:
 
 ## Welle 2: ctox.dev Managed Source
 
-Status: In Umsetzung, 95%.
+Status: In Umsetzung, 96%.
 
 Aufgaben:
 
@@ -409,6 +425,11 @@ Aufgaben:
 - [x] SecretStore-Trennung für Room Secret.
 - [x] `ctox business-os desktop invite` CLI-Vertrag.
 - [x] Rotation per Ersatz-Invite und lokaler Widerruf.
+- [x] Pairing-Instanz-ID ist rotationsstabil: echte Remote-Rotation darf das
+  `sync_room` aendern, ohne dass der Desktop eine neue Instanz statt einer
+  Rotation erzeugt.
+- [x] Opt-in Live-Smoke fuer Remote-`peer rotate` via SSH, Desktop-Import,
+  lokale Pairing-Rotation, WebRTC-only Launch-Konfig und lokalen Widerruf.
 
 Tests:
 
@@ -421,14 +442,30 @@ Tests:
 - [x] Desktop-JS-Test: Rotation akzeptiert nur ein Ersatz-Invite fuer dieselbe
   Pairing-Identitaet, ersetzt das Secret im SecretStore und weist fremde
   Invites ab.
+- [x] Desktop-JS-Test: Rotation akzeptiert geaenderte `sync_room`-Werte fuer
+  dieselbe `instance_id`, migriert alte sync-room-basierte IDs, entfernt alte
+  SecretRefs und erzeugt keine doppelte Registry-Instanz.
 - [x] Electron-Renderer-Smoke: Pairing-Details zeigen Rotation und Widerruf;
   Rotation uebergibt nur einen neuen Payload, Widerruf entfernt die lokale
   Pairing-Instanz.
+- [x] `npm run smoke:pairing-ssh-live -- --rotate --revoke-local
+  --allow-peer-status-invite`: Gegen SKF `57.129.123.108` mit gepinntem
+  ED25519-Fingerprint rotiert der echte Remote-Peer sein Room-Secret, der
+  Desktop importiert und rotiert die Pairing-Instanz, Launch bleibt
+  `transport=webrtc` / `http_bridge_available=false`, lokaler Widerruf entfernt
+  Registry und SecretStore-Eintrag, Evidenz/Registry bleiben secret-frei. Der
+  Invite kam wegen altem Remote-CLI-Stand aus `peer status` statt aus
+  `desktop invite`.
 
 Noch offen:
 
-- [ ] Live-E2E: Remote-Instanz rotiert per `ctox business-os peer rotate`,
-  erzeugt neues Desktop-Invite, Desktop importiert es und verbindet weiter.
+- [ ] Remote-`ctox business-os desktop invite` auf den echten Test-VPS
+  ausrollen und live gegen diesen CLI-Pfad pruefen; aktuell melden SKF und
+  Kunstmen `unknown business-os command desktop`.
+- [ ] Full Live-E2E: Nach `ctox business-os peer rotate` muss ein Browser ueber
+  den neu gestarteten nativen Peer wieder verbinden. Der heutige Smoke beweist
+  den Desktop-Launch-Vertrag, nicht die echte Browser-WebRTC-Reconnect-Session;
+  die SKF-Evidenz zeigte zudem keine sichtbar geaenderte aktive Peer-Session.
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
@@ -700,3 +737,4 @@ Release Gates:
 | 2026-06-13 | Welle 2 echter AuthPanel-Login gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first` fuellt die echte ctox.dev Login-UI im Electron BrowserWindow aus, erkennt die danach gueltige Session ueber `/api/desktop/session-package`, schliesst das Loginfenster via `session-check`, prueft den Kunstmen-Management-Deep-Link und konsumiert danach einen WebRTC-only Launch. Dabei wurde ein Produktionsrisiko beseitigt: Der Desktop haengt nicht mehr an einem live nicht zuverlaessig navigierten Custom-Scheme-Callback; der Callback bleibt lokal/Electron ueber den Protocol-Smoke abgedeckt. Welle 2 steigt auf 95%, Gesamt auf 94%; offen bleibt echte ctox.dev Access-Revocation/Session-Rotation. Gruen: Live-Smoke AuthPanel, `node --test test/ctox-dev-login.test.cjs test/protocol-handler.test.cjs`, `npm run check`, `npm test` 102/102, `npm run test:electron-smoke`, `npm run release:check`, `git diff --check`. |
 | 2026-06-13 | Welle 5 zweiter VPS-Nachweis gruen: `smoke:ssh-password-live -- --host 51.210.246.120 --file-askpass-fallback --attach --display-name Kunstmen` prueft den Kunstmen-Testhost mit gepinntem ED25519-Fingerprint, echtem Passwort-SSH, Remote-Preflight, Remote-`peer ensure`, `ssh_managed` Registry-Shape, eigener Session-Partition und WebRTC-only Launch ohne Registry-Secret-Leak. Der Smoke-Harness erlaubt `--file-askpass-fallback --attach` jetzt explizit und speichert Live-Smoke-Secrets dabei nur in Memory; das ist ein schwaecherer zweiter Host-Nachweis, waehrend der voll platform-keychain-backed Attach weiter durch SKF belegt ist. Welle 5 steigt auf 97%; Fresh-Install und lokaler Artefaktpfad gegen echte VPS bleiben offen. Gruen: Kunstmen Fallback-Attach-Smoke, `node --check scripts/smoke-ssh-password-live.cjs`, `node --test test/ssh-source.test.cjs test/source-manager.test.cjs test/secret-store.test.cjs`. |
 | 2026-06-13 | Welle 5 API-backed Fresh-Installer-Flags umgesetzt und live negativ validiert: Desktop-SSH-Fresh-Install kann `apiProvider`, `model` und `backend` validiert an den offiziellen `install.sh` per CLI-Argumenten weitergeben; `smoke:ssh-password-live` bietet dafuer `--install-api-provider`, `--install-model` und `--install-backend`. Gegen Kunstmen zeigte der Live-Test zwei echte Befunde: ohne API-Provider scheitert der offizielle Installer am lokalen GPU-Default, mit `--install-api-provider openai` startet der reale Cargo-Source-Build, ueberschreitet aber den 900s Desktop-Smoke-Timeout. Der verwaiste Build wurde gestoppt. Fresh-Install bleibt daher nicht production-ready; noetig sind prebuilt Linux-Artefakte oder ein installer/progress/timeout-faehiger Desktop-Fresh-Install-Pfad. Gruen: `node --check src/main/sources.cjs`, `node --check scripts/smoke-ssh-password-live.cjs`, `node --test test/ssh-source.test.cjs`, `npm run check`, `npm test` 103/103, `npm run release:check`, `npm run test:electron-smoke`, `git diff --check`. |
+| 2026-06-13 | Welle 4 Live-Rotation nachgezogen und echten Pairing-ID-Bug behoben: Remote-`peer rotate` aendert das `sync_room`; der Desktop band die Pairing-ID bisher an `instance_id + sync_room` und wies dadurch echte Rotations-Invites als falsche Instanz ab. Die ID ist jetzt `instance_id`-stabil, alte sync-room-basierte IDs werden beim Rotate migriert, alte SecretRefs geloescht. Neuer opt-in Smoke `smoke:pairing-ssh-live` prueft gegen SKF echtes SSH mit gepinntem Host-Key, Remote-`peer rotate`, lokalen Desktop-Import/Rotate/Revoke, WebRTC-only Launch und Secret-Freiheit von Registry/Evidenz. Live-Befund bleibt nicht voll gruen: Beide Test-VPS haben noch keinen ausgerollten `ctox business-os desktop invite` CLI-Befehl, daher nutzte der Smoke explizit den schwaecheren `--allow-peer-status-invite` Fallback; die aktive Peer-Session-Aenderung ist ebenfalls nicht bewiesen. Welle 4 steigt auf 96%. Gruen: `node --test test/invite-source.test.cjs`, `node --check scripts/smoke-pairing-ssh-live.cjs`, `npm run check`, Live-Smoke SKF mit `--rotate --revoke-local --allow-peer-status-invite`. |

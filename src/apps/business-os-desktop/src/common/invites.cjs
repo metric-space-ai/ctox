@@ -44,7 +44,7 @@ function validateInvite(invite, now = new Date()) {
 function instanceFromInvite(invite) {
   validateInvite(invite);
   const instanceId = String(invite.instance_id || invite.sync_room.split(":")[1] || invite.display_name).trim();
-  const id = `paired:${stableId(["pairing_invite", instanceId, invite.sync_room])}`;
+  const id = `paired:${stableId(["pairing_invite", instanceId])}`;
   const secretRef = `keychain://ctox-business-os-desktop/${id}/room`;
   const instance = normalizeInstance({
     id,
@@ -103,4 +103,3 @@ module.exports = {
   instanceFromInvite,
   manualPairingToInvite,
 };
-

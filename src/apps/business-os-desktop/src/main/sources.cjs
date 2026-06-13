@@ -144,14 +144,22 @@ class PairingInviteInstanceSource extends RegistryBackedSource {
   async rotateInvite(instanceId, rawInvite, now = new Date()) {
     const existing = this.findInstance(instanceId);
     const { instance, secretMaterial } = instanceFromInvite(parseInvitePayload(rawInvite, now));
-    if (instance.id !== existing.id) {
+    if (!pairingInstancesShareIdentity(existing, instance)) {
       throw new Error("replacement invite does not match paired instance");
     }
     for (const secret of secretMaterial) {
       if (!this.secretStore?.set) throw new Error("secret store is required for invite secrets");
       await this.secretStore.set(secret.ref, secret.value);
     }
-    this.registrySaver(upsertInstance(this.registryProvider(), instance));
+    let nextRegistry = this.registryProvider();
+    if (instance.id !== existing.id) {
+      const nextSecretRefs = new Set(instance.secretRefs || []);
+      for (const ref of existing.secretRefs || []) {
+        if (!nextSecretRefs.has(ref) && this.secretStore?.delete) await this.secretStore.delete(ref);
+      }
+      nextRegistry = removeRegistryInstance(nextRegistry, existing.id);
+    }
+    this.registrySaver(upsertInstance(nextRegistry, instance));
     return instance;
   }
 
@@ -169,6 +177,13 @@ class PairingInviteInstanceSource extends RegistryBackedSource {
     if (!instance) throw new Error("paired instance not found");
     return instance;
   }
+}
+
+function pairingInstancesShareIdentity(left, right) {
+  return left?.source === "pairing_invite"
+    && right?.source === "pairing_invite"
+    && Boolean(String(left.instanceId || "").trim())
+    && String(left.instanceId || "").trim() === String(right.instanceId || "").trim();
 }
 
 class LocalDaemonInstanceSource extends RegistryBackedSource {

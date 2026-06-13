@@ -17,6 +17,7 @@ npm run test:electron-smoke
 npm run smoke:keychain-runtime
 npm run smoke:local-runtime
 npm run smoke:ctox-dev-live -- --email <email> --password-stdin --expected-tenant <name> --auth-window --manage-first --launch-first
+npm run smoke:pairing-ssh-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --rotate --revoke-local
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...>
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --attach
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --fresh-install
@@ -54,6 +55,17 @@ Release-related checks:
   Electron cookie jar, and `--launch-first` to consume a short-lived desktop
   launch token for the first matching managed instance and verify a WebRTC-only
   launch config.
+- `npm run smoke:pairing-ssh-live -- --host <host> --user <user> --password-stdin`
+  is an opt-in live smoke for invite-paired unmanaged instances. It uses SSH
+  only as the remote control channel, pins the host key, reads the SSH password
+  from stdin, imports a real remote Desktop invite into a fresh local desktop
+  registry, verifies the WebRTC-only launch config, optionally runs remote
+  `ctox business-os peer rotate`, rotates the local pairing, and optionally
+  revokes it locally without leaking the room secret into registry or evidence.
+  Add `--allow-peer-status-invite` only for older remote CTOX versions that do
+  not yet expose `ctox business-os desktop invite`; that fallback derives the
+  same invite shape from `peer status` and should be treated as weaker evidence
+  until the remote CLI is upgraded.
 - `npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin`
   is an opt-in live infrastructure smoke for password-only VPS access. It reads
   the password from stdin, stores it only in the platform keychain, runs the
