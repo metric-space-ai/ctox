@@ -515,12 +515,14 @@ fn validate_outcome_witness(
     }
 }
 
-fn artifact_ref_satisfies(expected: &ArtifactRef, delivered: &ArtifactRef) -> bool {
+pub(crate) fn artifact_ref_satisfies(expected: &ArtifactRef, delivered: &ArtifactRef) -> bool {
     expected.kind == delivered.kind
         && expected.expected_terminal_state == delivered.expected_terminal_state
         && (expected.primary_key == delivered.primary_key
             || expected.primary_key == "*"
-            || expected.primary_key.starts_with("thread:"))
+            || expected.primary_key.starts_with("thread:")
+            || (expected.kind == ArtifactKind::OutboundCommunication
+                && expected.primary_key.contains(':')))
 }
 
 fn is_outcome_terminal_transition(request: &CoreTransitionRequest) -> bool {
@@ -1944,6 +1946,59 @@ mod tests {
         let report = validate_transition(&request);
 
         assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn outbound_communication_outcome_witness_matches_colon_thread_key() {
+        let mut request = CoreTransitionRequest {
+            entity_type: CoreEntityType::QueueItem,
+            entity_id: "queue:teams".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Running,
+            to_state: CoreState::Completed,
+            event: CoreEvent::Complete,
+            actor: "ctox-service".to_string(),
+            evidence: CoreEvidenceRefs {
+                review_audit_key: Some("review-audit-pass-1".to_string()),
+                verification_id: Some("outcome-witness:teams".to_string()),
+                expected_artifact_refs: vec![ArtifactRef {
+                    kind: ArtifactKind::OutboundCommunication,
+                    primary_key: "teams:channel-42:thread-7".to_string(),
+                    expected_terminal_state: "delivered".to_string(),
+                }],
+                delivered_artifact_refs: vec![ArtifactRef {
+                    kind: ArtifactKind::OutboundCommunication,
+                    primary_key: "msg-abc123".to_string(),
+                    expected_terminal_state: "delivered".to_string(),
+                }],
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::from([
+                ("completion_review_required".to_string(), "true".to_string()),
+                ("completion_review_verdict".to_string(), "pass".to_string()),
+                (
+                    "reviewed_work_terminal_success".to_string(),
+                    "true".to_string(),
+                ),
+                ("outcome_witness".to_string(), "true".to_string()),
+            ]),
+        };
+
+        // A delivered OutboundCommunication keyed by a raw message_key satisfies an
+        // expected colon-thread key — the single unified predicate now carries the
+        // OutboundCommunication clause that both former validators must agree on.
+        let report = validate_transition(&request);
+        assert!(report.accepted, "{:?}", report.violations);
+
+        // A genuinely-missing OutboundCommunication artifact is still rejected, so
+        // the dedup tightens rather than loosens the gate.
+        request.evidence.delivered_artifact_refs = Vec::new();
+        let report = validate_transition(&request);
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "WP-Outcome-Missing"));
     }
 
     #[test]

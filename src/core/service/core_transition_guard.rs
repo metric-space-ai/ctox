@@ -226,7 +226,7 @@ fn validate_outcome_artifact_state(
             .evidence
             .delivered_artifact_refs
             .iter()
-            .any(|delivered| artifact_ref_satisfies(expected, delivered))
+            .any(|delivered| csm::artifact_ref_satisfies(expected, delivered))
         {
             report.violations.push(csm::CoreTransitionViolation {
                 code: "WP-Outcome-Missing".to_string(),
@@ -244,7 +244,7 @@ fn validate_outcome_artifact_state(
             .evidence
             .expected_artifact_refs
             .iter()
-            .find(|expected| artifact_ref_satisfies(expected, delivered))
+            .find(|expected| csm::artifact_ref_satisfies(expected, delivered))
         {
             if let Some(thread_key) = expected.primary_key.strip_prefix("thread:") {
                 if delivered.kind == csm::ArtifactKind::OutboundEmail
@@ -308,16 +308,6 @@ fn outbound_email_belongs_to_thread(
         |row| row.get(0),
     )?;
     Ok(count > 0)
-}
-
-fn artifact_ref_satisfies(expected: &csm::ArtifactRef, delivered: &csm::ArtifactRef) -> bool {
-    expected.kind == delivered.kind
-        && expected.expected_terminal_state == delivered.expected_terminal_state
-        && (expected.primary_key == delivered.primary_key
-            || expected.primary_key == "*"
-            || expected.primary_key.starts_with("thread:")
-            || (expected.kind == csm::ArtifactKind::OutboundCommunication
-                && expected.primary_key.contains(':')))
 }
 
 fn load_artifact_terminal_state(
