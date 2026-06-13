@@ -2265,12 +2265,20 @@ pub fn create_queue_task_with_metadata(
     let priority = canonical_queue_priority(&request.priority)?;
     let now = now_iso_string();
     let sort_at = queue_sort_at(&priority, &now)?;
+    // ref: tickets.rs:4603-4617 — honor a caller-supplied idempotency key so a
+    // crash-retried create folds to the same message_key (stable edge_id +
+    // ON CONFLICT(message_key) DO UPDATE); default to now-salt when absent so
+    // distinct callers are unaffected.
+    let idempotency_key = request
+        .extra_metadata
+        .as_ref()
+        .and_then(|extra| metadata_string_value(extra, "idempotency_key"));
     let digest = stable_digest(&format!(
         "{}:{}:{}:{}",
         title,
         prompt,
         request.thread_key.trim(),
-        now
+        idempotency_key.as_deref().unwrap_or(now.as_str())
     ));
     let message_key = format!("{QUEUE_ACCOUNT_KEY}::{digest}");
     let remote_id = format!("queue-{digest}");
@@ -9803,6 +9811,72 @@ mod tests {
         assert!(err.to_string().contains("promises follow-up work"));
 
         let _ = std::fs::remove_file(&db_path);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn create_queue_task_is_idempotent_under_same_idempotency_key() {
+        let root = std::env::temp_dir().join(format!(
+            "ctox-queue-idem-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("failed to create temp root");
+        let thread_key = "queue:idem::thread";
+        let make = |extra: Option<Value>| QueueTaskCreateRequest {
+            title: "Structure the latest export".to_string(),
+            prompt: "Structure the uploaded spreadsheet.".to_string(),
+            thread_key: thread_key.to_string(),
+            workspace_root: None,
+            priority: "normal".to_string(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: extra,
+        };
+
+        let first = create_queue_task(&root, make(Some(json!({"idempotency_key": "retry-abc"}))))
+            .expect("first create");
+        let second = create_queue_task(&root, make(Some(json!({"idempotency_key": "retry-abc"}))))
+            .expect("second create (retry)");
+        assert_eq!(
+            first.message_key, second.message_key,
+            "same idempotency key must yield the same message_key"
+        );
+
+        let conn = open_channel_db(&crate::paths::core_db(&root)).expect("failed to reopen db");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM communication_messages WHERE message_key = ?1",
+                [first.message_key.as_str()],
+                |row| row.get(0),
+            )
+            .expect("failed to count messages");
+        assert_eq!(
+            rows, 1,
+            "an idempotent retry must not duplicate the queue row"
+        );
+
+        let budget_key = format!("queue-task:thread:{thread_key}");
+        let edges: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ctox_core_spawn_edges WHERE budget_key = ?1 AND accepted = 1",
+                [budget_key.as_str()],
+                |row| row.get(0),
+            )
+            .expect("failed to count spawn edges");
+        assert_eq!(
+            edges, 1,
+            "an idempotent retry must spend the spawn budget only once"
+        );
+
+        let third = create_queue_task(&root, make(None)).expect("third create without key");
+        assert_ne!(
+            third.message_key, first.message_key,
+            "a keyless create must still get a distinct now-salted message_key"
+        );
+
         let _ = fs::remove_dir_all(&root);
     }
 
