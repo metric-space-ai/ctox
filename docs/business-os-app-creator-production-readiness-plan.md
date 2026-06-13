@@ -116,6 +116,25 @@ model behavior: the validator, exec guard, and skill must reject localStorage /
 sessionStorage, root probe files, module-local package-manager side effects,
 and transient invalid JSON exposure before a generated app can be accepted.
 
+Native R15 is another valid CTOX-native failure and explains why the earlier
+source-checkout guard confidence did not transfer into CTOX. The R15 workers
+entered through real `ctox.business_os.app.create` commands and used MiniMax M3
+with 256k context, but the MiniMax adapter still used the legacy shell command
+path (`unified_exec_enabled() == false`). The Business OS root-artifact guard
+had only protected `unified_exec`, so the worker bypassed it through the shell
+tool, created root-level `module.json` / `test-file.json` probes, tried
+symlink/hardlink aliases, and temporarily corrupted the installed inventory
+manifest with invalid test content. R15 was stopped after the first worker
+because this was a runtime enforcement gap, not an app-domain issue.
+
+Post-R15 hardening moves the Business OS app-artifact write guard into the
+shared shell paths used by legacy MiniMax execution, broadens the forbidden
+root-probe patterns (`test-*`, `*_test.*`, `*-test.*`, `_probe_*`), blocks
+root-level symlink/hardlink/copy attempts, and keeps module-directory writes
+legal. The next valid evidence round is R16 from a fresh isolated root using
+real Business OS command dispatch; it must prove the guard fires inside CTOX,
+not only in unit tests.
+
 ## Why CLI Passed But CTOX-Native Failed
 
 The source bench and CTOX-native bench test different contracts.
@@ -703,7 +722,7 @@ Only after this evidence should the App Creator be called production-ready.
 - Close the R14 validator false-green: reject `localStorage`, `sessionStorage`,
   root probe files, module-local `package.json`/lockfiles/`node_modules`, and
   transient JSON-manifest exposure before an app can be accepted.
-- Run CTOX-native R15 from a fresh isolated root using the rebuilt runtime and
+- Run CTOX-native R16 from a fresh isolated root using the rebuilt runtime and
   real Business OS app command dispatch. Do not use generic `queue add --skill`
   as production-readiness evidence.
 - Prove app-validator `review_rework` tasks are leased before fresh pending app
@@ -712,7 +731,7 @@ Only after this evidence should the App Creator be called production-ready.
   removed and returned to the agent as tool errors in a native run:
   `module.json`, `collections.schema.json`, `harness-module.json`,
   `harness-collections.schema.json`, artifact/status/blocker Markdown, and
-  root-level `_test_*` / `_probe_*` files.
+  root-level `test-*` / `*_test.*` / `*-test.*` / `_test_*` / `_probe_*` files.
 - Prove the native validator uses the current bundled validator/static checker,
   not a stale target-workspace skill copy.
 - Extend the exec guard for root-level `<module_id>/` app directories.
@@ -895,6 +914,71 @@ hardening verification:
 next action:
 - verify R14 hardening with targeted tests and rerun native R15 from a clean
   isolated root through ctox.business_os.app.create
+```
+
+### Native R15 2026-06-13
+
+```text
+status: valid CTOX-native first-worker failure
+entry path: ctox.business_os.app.create
+model: MiniMax M3
+context: 256k
+isolated root: /tmp/ctox-bos-native-r15-20260613-185315
+commands dispatched: subscriptions, inventory, projects, contracts, compliance
+
+positive evidence:
+- commands entered through real Business OS app create dispatch, not generic
+  queue add --skill
+- queue tasks carried suggested_skill=business-os-app-module-development and
+  the installed-module target block
+- worker reached MiniMax M3 through ctox_core_api
+- worker inspected existing Business OS modules and the bundled static checker
+  before implementation
+
+production blockers:
+- MiniMax still used the legacy shell path because its adapter reports
+  unified_exec_enabled() == false
+- the Business OS root-artifact write guard protected unified_exec only, so the
+  native MiniMax worker bypassed it through shell / local shell commands
+- worker created root-level module.json and test-file.json probes
+- worker attempted root-level symlink/hardlink aliasing for module.json
+- worker temporarily overwrote the installed inventory module.json with invalid
+  test content, causing the native module catalog to observe parse errors
+- final validation remained red: root-level module.json, missing required
+  module files, and no successful node syntax/test proof
+
+decision:
+- stop after the first worker; the finding is a shared runtime enforcement gap
+  for legacy shell execution, not an inventory-app issue
+
+hardening completed:
+- expose the Business OS app root-artifact write guard for shared tool use
+- apply the guard to ShellHandler Function, LocalShell, and shell_command paths
+- detect quoted redirects and quoted tee targets such as > "$MODROOT/module.json"
+- block root-level symlink/hardlink/copy/remove/probe attempts while allowing
+  real installed-module directory writes
+- extend validator and static checker root-artifact detection to test-*,
+  *_test.*, *-test.*, _test_*, and _probe_* names
+- update the skill hard-stop list to forbid root aliases, hardlinks, symlinks,
+  and probe files instead of "testing" the guard
+
+hardening verification:
+- rustfmt --edition 2024 src/core/harness/core/src/tools/handlers/unified_exec.rs src/core/harness/core/src/tools/handlers/unified_exec_tests.rs src/core/harness/core/src/tools/handlers/shell.rs src/core/harness/core/src/tools/handlers/shell_tests.rs
+- CARGO_BUILD_JOBS=1 cargo test -q --manifest-path src/core/harness/core/Cargo.toml business_os_guard -- --nocapture
+- CARGO_BUILD_JOBS=1 cargo test -q --manifest-path src/core/harness/core/Cargo.toml shell_command_handler -- --nocapture
+- node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.test.mjs
+- node src/apps/business-os/scripts/validate-app-module.test.mjs
+- CARGO_BUILD_JOBS=1 cargo test -q --bin ctox business_os_app_validation -- --nocapture
+- CARGO_BUILD_JOBS=1 cargo test -q --bin ctox app_create_queue_prompt_targets_app_module_skill -- --nocapture
+- CARGO_BUILD_JOBS=1 cargo test -q --bin ctox app_modify_queue_prompt_targets_app_module_not_skill_files -- --nocapture
+- CARGO_BUILD_JOBS=1 cargo build -q --bin ctox
+
+next action:
+- run native R16 from a fresh isolated root through ctox.business_os.app.create
+  and prove the guard fires inside MiniMax legacy shell execution before any app
+  can be accepted
 ```
 
 ### Validator Hook 2026-06-13
