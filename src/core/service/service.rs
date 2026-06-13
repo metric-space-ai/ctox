@@ -4341,6 +4341,7 @@ fn start_prompt_worker(
                             None
                         };
                         let mut app_validation_worker_failure_reason: Option<String> = None;
+                        let mut app_validation_verified_after_worker_error = false;
                         if !job.leased_message_keys.is_empty()
                             && business_os_app_module_target_from_prompt(&job.prompt).is_some()
                         {
@@ -4421,7 +4422,20 @@ fn start_prompt_worker(
                                         format!("{}: {}", summary, clip_text(&feedback, 220)),
                                     );
                                 }
-                                Ok(None) => {}
+                                Ok(None) => {
+                                    app_validation_verified_after_worker_error = true;
+                                    app_validation_worker_failure_reason = Some(format!(
+                                        "Business OS app artifacts validated after worker error for {}; worker error: {}",
+                                        job.source_label, compact_error
+                                    ));
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Validated Business OS app artifacts for {} after worker error; treating queue work as handled: {compact_error}",
+                                            job.source_label
+                                        ),
+                                    );
+                                }
                                 Err(validation_err) => push_event_locked(
                                     &mut shared,
                                     format!(
@@ -4435,6 +4449,7 @@ fn start_prompt_worker(
                         if !job.leased_message_keys.is_empty()
                             && !app_validation_rework
                             && !app_validation_terminal_failure
+                            && !app_validation_verified_after_worker_error
                         {
                             if retry_runtime_message {
                                 match apply_runtime_retry_feedback_to_leased_queue(
@@ -4525,6 +4540,33 @@ fn start_prompt_worker(
                                         ),
                                     );
                                 }
+                            }
+                        }
+                        if app_validation_verified_after_worker_error
+                            && !job.leased_message_keys.is_empty()
+                        {
+                            let completion_reason =
+                                app_validation_worker_failure_reason.as_deref().unwrap_or(
+                                    "Business OS app artifacts validated after worker error",
+                                );
+                            match apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+                                &root,
+                                &job,
+                                completion_reason,
+                            ) {
+                                Ok(updated) => push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Marked {updated} app-validation-verified queue task(s) handled after worker error"
+                                    ),
+                                ),
+                                Err(update_err) => push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Failed to mark app-validation-verified queue task(s) handled after worker error: {}",
+                                        clip_text(&update_err.to_string(), 180)
+                                    ),
+                                ),
                             }
                         }
                         if app_validation_terminal_failure && !job.leased_message_keys.is_empty() {
@@ -4639,7 +4681,15 @@ fn start_prompt_worker(
                                 block_ticket_self_work_item(&root, work_id, &note);
                             }
                         }
-                        if app_validation_rework {
+                        if app_validation_verified_after_worker_error {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "{} worker error occurred after Business OS app artifacts validated green: {compact_error}",
+                                    job.source_label
+                                ),
+                            );
+                        } else if app_validation_rework {
                             push_event_locked(
                                 &mut shared,
                                 format!(
@@ -6009,6 +6059,63 @@ fn apply_business_os_app_validation_rework_to_leased_queue(
     }
     channels::ack_leased_messages(root, &job.leased_message_keys, "review_rework")
         .context("failed to mark Business OS app validation rework queue task(s)")?;
+    Ok(updated)
+}
+
+fn apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    reason: &str,
+) -> Result<usize> {
+    anyhow::ensure!(
+        !job.leased_message_keys.is_empty(),
+        "Business OS app validation success had no leased queue task to update"
+    );
+    let mut fallback_message_keys = Vec::new();
+    let mut updated = 0usize;
+    for message_key in &job.leased_message_keys {
+        match crate::business_os::store::complete_business_command_from_app_validation_success(
+            root,
+            message_key,
+            reason,
+        )
+            .with_context(|| {
+                format!(
+                    "failed to complete Business OS app command after green validation for {message_key}"
+                )
+            })? {
+            Some(_) => updated = updated.saturating_add(1),
+            None => fallback_message_keys.push(message_key.clone()),
+        }
+    }
+    if !fallback_message_keys.is_empty() {
+        for message_key in &fallback_message_keys {
+            channels::update_queue_task(
+                root,
+                channels::QueueTaskUpdateRequest {
+                    message_key: message_key.clone(),
+                    route_status: Some("handled".to_string()),
+                    status_note: Some(
+                        "business-os:terminal-success: app validation passed".to_string(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .with_context(|| {
+                format!("failed to mark app-validation-verified queue task {message_key} handled")
+            })?;
+            updated = updated.saturating_add(1);
+            crate::business_os::store::refresh_business_command_queue_task_projection(
+                root,
+                message_key,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to refresh Business OS app validation handled projection for {message_key}"
+                )
+            })?;
+        }
+    }
     Ok(updated)
 }
 
@@ -18931,6 +19038,149 @@ Business OS command:
             )
             .expect("count validator rework proofs");
         assert_eq!(proof_count, 1);
+    }
+
+    #[test]
+    fn business_os_app_validation_worker_error_after_green_marks_same_task_handled() {
+        let root = temp_root("business-os-app-validation-worker-error-green");
+        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated = apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+            &root,
+            &job,
+            "Business OS app artifacts validated after worker error",
+        )
+        .expect("failed to mark green app validation worker error handled");
+        assert_eq!(updated, 1);
+        assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn business_os_app_validation_worker_error_after_green_completes_business_command() {
+        let root = temp_root("business-os-app-validation-worker-error-green-command");
+        let accepted = crate::business_os::store::accept_rxdb_business_command(
+            &root,
+            json!({
+                "id": "cmd_app_green",
+                "command_id": "cmd_app_green",
+                "module": "creator",
+                "command_type": "ctox.business_os.app.create",
+                "record_id": "subscriptions",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Create subscriptions app",
+                    "instruction": "Build a Business OS subscription app.",
+                    "module_id": "subscriptions",
+                    "install_target": "runtime-installed-module"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test"
+                }
+            }),
+        )
+        .expect("failed to accept app command");
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .expect("expected queue task id")
+            .to_string();
+        channels::lease_queue_task(&root, &task_id, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let task = channels::load_queue_task(&root, &task_id)
+            .expect("failed to load app queue task")
+            .expect("missing app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let updated = apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+            &root,
+            &job,
+            "Business OS app artifacts validated after worker error",
+        )
+        .expect("failed to complete app command after green validation");
+        assert_eq!(updated, 1);
+        assert_eq!(route_status_for(&root, &task_id), "handled");
+
+        let conn = crate::business_os::store::open_store(&root).expect("open store");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM business_commands WHERE command_id = ?1",
+                params!["cmd_app_green"],
+                |row| row.get(0),
+            )
+            .expect("read command status");
+        assert_eq!(status, "completed");
+        let payload_json: String = conn
+            .query_row(
+                "SELECT payload_json FROM business_records WHERE collection = 'business_commands' AND record_id = ?1",
+                params!["cmd_app_green"],
+                |row| row.get(0),
+            )
+            .expect("read command projection");
+        let projection: Value =
+            serde_json::from_str(&payload_json).expect("parse command projection");
+        assert_eq!(
+            projection.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            projection.get("task_status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            projection
+                .pointer("/result/validation_status")
+                .and_then(Value::as_str),
+            Some("passed")
+        );
+        assert_eq!(
+            projection
+                .pointer("/result/artifact_directory")
+                .and_then(Value::as_str),
+            Some("src/apps/business-os/installed-modules/subscriptions")
+        );
     }
 
     #[test]

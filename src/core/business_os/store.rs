@@ -5167,6 +5167,95 @@ pub fn complete_business_command_from_queue_reply(
     Ok(Some(serde_json::to_value(accepted)?))
 }
 
+pub fn complete_business_command_from_app_validation_success(
+    root: &Path,
+    task_id: &str,
+    reason: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let Some(command_id) = queue_projection_command_id(&conn, task_id)? else {
+        return Ok(None);
+    };
+    let command = load_business_command(&conn, &command_id)?;
+    let Some((module_id, install_target, artifact_directory)) =
+        business_os_app_command_target_metadata(&command)
+    else {
+        return Ok(None);
+    };
+    let completed_at_ms = now_ms() as i64;
+    conn.execute(
+        "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
+        params![command_id.as_str(), completed_at_ms],
+    )?;
+
+    let mut terminal_queue_task = channels::load_queue_task(root, task_id)?;
+    if let Some(task) = terminal_queue_task.as_ref() {
+        let _ = channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task.message_key.clone(),
+                route_status: Some("handled".to_string()),
+                status_note: Some(
+                    "business-os:terminal-success: app validation passed".to_string(),
+                ),
+                ..Default::default()
+            },
+        );
+        terminal_queue_task =
+            channels::load_queue_task(root, task_id)?.or_else(|| terminal_queue_task.clone());
+    }
+
+    let task_status = terminal_queue_task
+        .as_ref()
+        .map(|task| normalize_queue_status(&task.route_status).to_string())
+        .unwrap_or_else(|| "completed".to_string());
+    let command_payload = serde_json::json!({
+        "id": command_id,
+        "command_id": command_id,
+        "module": command.module.clone(),
+        "command_type": command.command_type.clone(),
+        "record_id": command.record_id.clone().unwrap_or_default(),
+        "status": "completed",
+        "inbound_channel": command_inbound_channel(&command),
+        "task_id": task_id,
+        "task_status": task_status,
+        "payload": command.payload.clone(),
+        "client_context": command.client_context.clone(),
+        "result": {
+            "module_id": module_id,
+            "install_target": install_target,
+            "artifact_directory": artifact_directory,
+            "validator": "business_os_app_module_validator",
+            "validation_status": "passed",
+            "completion_reason": reason
+        },
+        "updated_at_ms": completed_at_ms
+    });
+    upsert_business_record(
+        &conn,
+        "business_commands",
+        &command_id,
+        completed_at_ms,
+        command_payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "business_commands",
+        &command_id,
+        completed_at_ms,
+        command_payload.clone(),
+    )?;
+    refresh_queue_task_projection(
+        root,
+        &conn,
+        &command_id,
+        &command,
+        terminal_queue_task.as_ref(),
+        completed_at_ms,
+    )?;
+    Ok(Some(command_payload))
+}
+
 pub fn complete_ready_documents_report_commands(
     root: &Path,
     limit: usize,
@@ -16137,8 +16226,21 @@ fn business_os_required_skill_prompt_contract() -> &'static str {
 }
 
 fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> String {
-    if !is_business_os_app_module_command(command) {
+    let Some((module_id, install_target, module_dir)) =
+        business_os_app_command_target_metadata(command)
+    else {
         return String::new();
+    };
+    format!(
+        "\nBusiness OS app build target:\n- deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.\n- module_id: {module_id}\n- install_target: {install_target}\n- only_allowed_app_artifact_directory: {module_dir}\n- cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.\n- required shell write pattern: set MODULE_DIR=\"{module_dir}\" and write every file as \"$MODULE_DIR/<file>\"; create \"$MODULE_DIR/locales\" and \"$MODULE_DIR/tests\" before writing nested files.\n- path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.\n- no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.\n- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\n- installed manifest rule: for runtime-installed-module, module.json must use entry=\"installed-modules/{module_id}/index.html\" and install_scope=\"installed\"; parse module.json and collections.schema.json immediately after editing them.\n- schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.\n- repair order: fix target path, valid JSON, manifest mode, required files, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.\n- persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.\n- dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.\n- UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.\n- scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.\n- tool-call safety: do not generate mammoth single here-doc/tool-call writes; keep files concise or split large writes into bounded chunks, then run syntax checks.\n- repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.\n- automation: include at least one real business_commands dispatch that creates a normal CTOX chat/ticket/work item through the Business OS command flow.\n- stop condition: before claiming success, run module tests and the Business OS module/RxDB guards when available; a green custom test does not count while static validation is red.\n"
+    )
+}
+
+fn business_os_app_command_target_metadata(
+    command: &BusinessCommand,
+) -> Option<(String, String, String)> {
+    if !is_business_os_app_module_command(command) {
+        return None;
     }
     let module_id = first_non_empty_json_string(&[
         command.payload.get("module_id"),
@@ -16147,20 +16249,20 @@ fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> Str
         command.client_context.get("app_id"),
     ])
     .or(command.record_id.as_deref())
-    .unwrap_or(&command.module);
+    .unwrap_or(&command.module)
+    .to_string();
     let install_target = first_non_empty_json_string(&[
         command.payload.get("install_target"),
         command.client_context.get("install_target"),
     ])
-    .unwrap_or("runtime-installed-module");
+    .unwrap_or("runtime-installed-module")
+    .to_string();
     let module_dir = if install_target == "runtime-installed-module" {
         format!("src/apps/business-os/installed-modules/{module_id}")
     } else {
         format!("src/apps/business-os/modules/{module_id}")
     };
-    format!(
-        "\nBusiness OS app build target:\n- deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.\n- module_id: {module_id}\n- install_target: {install_target}\n- only_allowed_app_artifact_directory: {module_dir}\n- cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.\n- required shell write pattern: set MODULE_DIR=\"{module_dir}\" and write every file as \"$MODULE_DIR/<file>\"; create \"$MODULE_DIR/locales\" and \"$MODULE_DIR/tests\" before writing nested files.\n- path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.\n- no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.\n- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\n- installed manifest rule: for runtime-installed-module, module.json must use entry=\"installed-modules/{module_id}/index.html\" and install_scope=\"installed\"; parse module.json and collections.schema.json immediately after editing them.\n- schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.\n- repair order: fix target path, valid JSON, manifest mode, required files, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.\n- persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.\n- dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.\n- UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.\n- scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.\n- tool-call safety: do not generate mammoth single here-doc/tool-call writes; keep files concise or split large writes into bounded chunks, then run syntax checks.\n- repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.\n- automation: include at least one real business_commands dispatch that creates a normal CTOX chat/ticket/work item through the Business OS command flow.\n- stop condition: before claiming success, run module tests and the Business OS module/RxDB guards when available; a green custom test does not count while static validation is red.\n"
-    )
+    Some((module_id, install_target, module_dir))
 }
 
 fn rewrite_required_skills_preview(value: &mut Value, required_skills: &[String]) {
