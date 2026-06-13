@@ -320,10 +320,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never
 
-      - name: Signed macOS artifact smoke
-        if: runner.os == 'macOS'
+      - name: Release artifact smoke
         working-directory: src/apps/business-os-desktop
-        run: npm run smoke:signed-artifacts -- --platform mac
+        run: npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7

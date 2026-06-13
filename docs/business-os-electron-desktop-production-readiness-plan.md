@@ -1,6 +1,6 @@
 # Business OS Electron Desktop: Production Readiness Plan
 
-Status: In Umsetzung, Stand 2026-06-13
+Status: In Umsetzung, Stand 2026-06-14
 
 Ziel: Die CTOX Business-OS Desktop-App wird eine Slack-artige Desktop-Oberfläche,
 in der Nutzer schnell zwischen mehreren CTOX Instanzen wechseln können. Die App
@@ -172,11 +172,17 @@ wieder testbar:
   HTTPS-Auto-Update-Feed und `release:check` Verifier.
 - Der Tag-Release-Workflow enthält eine eigene Business-OS-Desktop-Matrix für
   macOS arm64/x64, Linux x64 und Windows x64; `release:check` verifiziert
-  Matrix, npm-Gates, Electron-Smokes, Distribution-Build und macOS
-  Signed-Artifact-Smoke.
+  Matrix, npm-Gates, Electron-Smokes, Distribution-Build und plattformweiten
+  Release-Artefakt-Smoke.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
   `dbus-run-session` und `gnome-keyring`.
+- `npm run smoke:signed-artifacts` ist jetzt plattformweit: macOS prueft
+  `.app`, `app.asar`, gebuendelten CTOX-Helper sowie `codesign`/`spctl`;
+  Linux prueft AppImage, `.deb`, `linux-unpacked`, `app.asar` und Helper;
+  Windows prueft NSIS-Installer, `win-unpacked`, `app.asar` und `ctox.exe`.
+  Der Workflow laesst diesen Smoke nach dem Plattform-Build mit
+  `matrix.builderPlatform` laufen.
 - Lokaler macOS Pack-Directory-Smoke baut eine unpacked `.app`, ueberspringt
   Notarization nur fuer `--dir`, und validiert `Info.plist` sowie `app.asar`
   ohne Test-/Release-Artefakte im Paket; das CTOX-App-Icon ist als PNG/ICNS
@@ -249,7 +255,9 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Workflow als echte Runtime-Smokes verdrahtet; ein tatsaechlich gruen
   gelaufener Matrix-Run steht noch aus.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
-  nicht live erzeugt und verifiziert.
+  nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
+  ist lokal gegen synthetische Release-Verzeichnisse und per `release:check`
+  gegen den Workflow bewiesen, aber nicht durch einen echten Tag-Run.
 - Vollständige Live-/Cross-Platform-Electron-E2E für managed + unmanaged Mixed
   Switching.
 
@@ -283,7 +291,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 97% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | In Umsetzung | 97% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 68% |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 72% |
 | **Gesamt** | **100%** | **In Umsetzung** | **95%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
@@ -702,7 +710,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 68%.
+Status: In Umsetzung, 72%.
 
 Release Gates:
 
@@ -728,12 +736,17 @@ Release Gates:
   macOS arm64/x64, Linux x64 und Windows x64.
 - [x] `npm run release:check` verifiziert die Business-OS-Desktop
   Release-Matrix inklusive npm-Gates, Electron-Smokes, Distribution-Build und
-  macOS Signed-Artifact-Smoke.
+  plattformweitem Release-Artefakt-Smoke.
 - [x] Release-Matrix fuehrt plattformweite Keychain-Runtime-Smokes aus:
   macOS Keychain, Linux Secret Service und Windows Credential Manager.
 - [x] Business-OS-Desktop Release-Matrix baut vor `electron-builder` den
   plattformpassenden CTOX-Helper und paketiert ihn als `resources/ctox`
   App-Resource fuer lokale Fresh-Machine-Flows.
+- [x] Release-Matrix fuehrt `npm run smoke:signed-artifacts -- --platform
+  ${{ matrix.builderPlatform }}` auf macOS, Linux und Windows aus.
+- [x] `smoke:signed-artifacts` prueft plattformweite Release-Struktur:
+  macOS `.app` plus `codesign`/`spctl` und Helper, Linux AppImage/`.deb` plus
+  `linux-unpacked`/Helper, Windows NSIS-Installer plus `win-unpacked`/Helper.
 - [ ] Live-/Cross-Platform Desktop Electron E2E auf macOS, Windows und Linux.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
@@ -789,3 +802,4 @@ Release Gates:
 | 2026-06-13 | Welle 4 Live-Rotation nachgezogen und echten Pairing-ID-Bug behoben: Remote-`peer rotate` aendert das `sync_room`; der Desktop band die Pairing-ID bisher an `instance_id + sync_room` und wies dadurch echte Rotations-Invites als falsche Instanz ab. Die ID ist jetzt `instance_id`-stabil, alte sync-room-basierte IDs werden beim Rotate migriert, alte SecretRefs geloescht. Neuer opt-in Smoke `smoke:pairing-ssh-live` prueft gegen SKF echtes SSH mit gepinntem Host-Key, Remote-`peer rotate`, lokalen Desktop-Import/Rotate/Revoke, WebRTC-only Launch und Secret-Freiheit von Registry/Evidenz. Live-Befund bleibt nicht voll gruen: Beide Test-VPS haben noch keinen ausgerollten `ctox business-os desktop invite` CLI-Befehl, daher nutzte der Smoke explizit den schwaecheren `--allow-peer-status-invite` Fallback; die aktive Peer-Session-Aenderung ist ebenfalls nicht bewiesen. Welle 4 steigt auf 96%. Gruen: `node --test test/invite-source.test.cjs`, `node --check scripts/smoke-pairing-ssh-live.cjs`, `npm run check`, Live-Smoke SKF mit `--rotate --revoke-local --allow-peer-status-invite`. |
 | 2026-06-13 | Welle 4 Native-Peer-Rotation lokal gehaertet: Der laufende native RxDB-Peer vergleicht im Watchdog seine aktive Room-/Passwort-/Signaling-Konfiguration mit der persistierten Sync-Konfiguration und beendet sich bei Aenderung kontrolliert, damit der bestehende Supervisor mit frischer Konfiguration respawnt. Damit ist die lokale Produktionslogik fuer Remote-`peer rotate` vorhanden; live bleibt der Browser-WebRTC-Reconnect offen, bis der aktualisierte `ctox` Stand auf den Test-VPS ausgerollt und gegen echte Reconnect-Evidenz geprueft ist. Welle 4 steigt auf 97%. Gruen: `cargo test native_peer_ -- --nocapture`. |
 | 2026-06-13 | Welle 3 Fresh-Machine-Vertrag verbessert: Der lokale Desktop-Quellpfad sucht bei fehlendem explizitem `ctoxBinary` jetzt zuerst nach einem gebuendelten CTOX-Helper in den App-Resources und faellt erst danach auf PATH-`ctox` zurueck. Neuer Smoke `smoke:local-bundled-runtime` beweist ein frisches Desktop-Profil ohne ctox.dev Account, ohne `ctoxRoot` und ohne explizites `ctoxBinary`: lokale Installation, Inspect, Attach, persistierter Neustart und WebRTC-only Launch bleiben secret-frei. Die Release-Matrix baut den plattformpassenden CTOX-Helper vor `electron-builder`; `electron-builder` paketiert `resources/ctox` als externe App-Resource, sobald der Helper liegt. Welle 3 steigt auf 92%, Gesamt auf 95%. Offen bleibt der signierte Release-/Fresh-Machine-Nachweis auf sauberer Maschine. Gruen: `npm run smoke:local-bundled-runtime`, `node --test test/local-source.test.cjs`, `npm test` 105/105, `npm run check`, `npm run release:check`. |
+| 2026-06-14 | Welle 8 Release-Artefakt-Smoke plattformweit gemacht: `smoke:signed-artifacts` ist nicht mehr mac-only. macOS prueft `.app`, `app.asar`, gebuendelten Helper sowie `codesign`/`spctl`; Linux prueft AppImage, `.deb`, `linux-unpacked`, `app.asar` und Helper; Windows prueft NSIS-Installer, `win-unpacked`, `app.asar` und `ctox.exe`. Der Release-Workflow ruft den Smoke nun mit `matrix.builderPlatform` auf allen drei Plattformen auf, und `release:check` erzwingt diesen Vertrag. Welle 8 steigt auf 72%; der echte Tag-/Signed-/Notarization-Run bleibt offen. Gruen: synthetischer mac/linux/win Artefakt-Smoke, `npm run check`, `npm run release:check`, Release-Workflow-YAML-Parse. |
