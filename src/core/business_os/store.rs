@@ -5,12 +5,12 @@ use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
-use rusqlite::params;
-use rusqlite::params_from_iter;
-use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
+use rusqlite::params_from_iter;
+use rusqlite::types::Value as SqlValue;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -16159,7 +16159,7 @@ fn business_os_app_command_target_prompt_block(command: &BusinessCommand) -> Str
         format!("src/apps/business-os/modules/{module_id}")
     };
     format!(
-        "\nBusiness OS app build target:\n- deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.\n- module_id: {module_id}\n- install_target: {install_target}\n- only_allowed_app_artifact_directory: {module_dir}\n- cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.\n- required shell write pattern: set MODULE_DIR=\"{module_dir}\" and write every file as \"$MODULE_DIR/<file>\"; create \"$MODULE_DIR/locales\" and \"$MODULE_DIR/tests\" before writing nested files.\n- path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.\n- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\n- installed manifest rule: for runtime-installed-module, module.json must use entry=\"installed-modules/{module_id}/index.html\" and install_scope=\"installed\"; parse module.json and collections.schema.json immediately after editing them.\n- schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.\n- repair order: fix target path, valid JSON, manifest mode, required files, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.\n- persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.\n- dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests.\n- UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.\n- repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.\n- automation: include at least one real business_commands dispatch that creates a normal CTOX chat/ticket/work item through the Business OS command flow.\n- stop condition: before claiming success, run module tests and the Business OS module/RxDB guards when available; a green custom test does not count while static validation is red.\n"
+        "\nBusiness OS app build target:\n- deliverable: runnable Business OS app/module files, not documentation, plans, trace files, blocker notes, or skill files.\n- module_id: {module_id}\n- install_target: {install_target}\n- only_allowed_app_artifact_directory: {module_dir}\n- cwd warning: shell tools run from the install root, not from the module directory; never use bare redirects like > module.json, > collections.schema.json, > {module_id}/index.js, or mkdir {module_id}.\n- required shell write pattern: set MODULE_DIR=\"{module_dir}\" and write every file as \"$MODULE_DIR/<file>\"; create \"$MODULE_DIR/locales\" and \"$MODULE_DIR/tests\" before writing nested files.\n- path rule: every generated app artifact must be under {module_dir}/; do not write root-level module.json, root-level collections.schema.json, root-level {module_id}/, root-level blocker/status Markdown, src/skills/, or any skill-named path. Ignore stale artifact-contract/review examples that contradict this target block.\n- no guard probing: do not test shell aliases, wrapper behavior, root write behavior, hardlinks, symlinks, or guard behavior; implement only inside {module_dir}/.\n- first file action: create {module_dir}/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\n- installed manifest rule: for runtime-installed-module, module.json must use entry=\"installed-modules/{module_id}/index.html\" and install_scope=\"installed\"; parse module.json and collections.schema.json immediately after editing them.\n- schema rule: module.json may list shell collections such as business_commands, but schema.js and collections.schema.json must export only module-owned collections.\n- repair order: fix target path, valid JSON, manifest mode, required files, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.\n- persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.\n- dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.\n- UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.\n- scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.\n- tool-call safety: do not generate mammoth single here-doc/tool-call writes; keep files concise or split large writes into bounded chunks, then run syntax checks.\n- repair hygiene: do not leave .bak/.orig/.rej/.tmp/bundle/probe files; do not line-number sed-patch large generated JavaScript when a bounded helper/file rewrite is safer.\n- automation: include at least one real business_commands dispatch that creates a normal CTOX chat/ticket/work item through the Business OS command flow.\n- stop condition: before claiming success, run module tests and the Business OS module/RxDB guards when available; a green custom test does not count while static validation is red.\n"
     )
 }
 
@@ -17097,8 +17097,11 @@ mod tests {
         );
         assert!(prompt.contains("do not write root-level module.json"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
-        assert!(prompt
-            .contains("set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""));
+        assert!(
+            prompt.contains(
+                "set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""
+            )
+        );
         assert!(prompt.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
@@ -17209,11 +17212,13 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
 
         // Roll back to the install baseline.
         let session = chef_session();
@@ -17232,11 +17237,13 @@ mod tests {
         let restored =
             fs::read_to_string(app_root.join("modules").join("widget").join("index.js"))?;
         assert_eq!(restored, "export const v = 1;\n");
-        assert!(!app_root
-            .join("modules")
-            .join("widget")
-            .join("extra.js")
-            .is_file());
+        assert!(
+            !app_root
+                .join("modules")
+                .join("widget")
+                .join("extra.js")
+                .is_file()
+        );
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -17481,9 +17488,10 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(task
-            .prompt
-            .contains(materialized_path.to_string_lossy().as_ref()));
+        assert!(
+            task.prompt
+                .contains(materialized_path.to_string_lossy().as_ref())
+        );
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -18268,8 +18276,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
-    ) -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -18607,8 +18615,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record(
-    ) -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record()
+    -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -18647,11 +18655,13 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(command
-            .pointer("/result/error")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .contains("health_status"));
+        assert!(
+            command
+                .pointer("/result/error")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("health_status")
+        );
         Ok(())
     }
 
@@ -20625,9 +20635,11 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(backbone
-            .iter()
-            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
+        assert!(
+            backbone
+                .iter()
+                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
+        );
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -21377,8 +21389,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
-    ) -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
+    -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -21715,10 +21727,11 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(send
-            .pointer("/result/physical_sent_at_ms")
-            .and_then(Value::as_i64)
-            .is_some());
+        assert!(
+            send.pointer("/result/physical_sent_at_ms")
+                .and_then(Value::as_i64)
+                .is_some()
+        );
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -23457,9 +23470,11 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(projections
-            .iter()
-            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
+        assert!(
+            projections
+                .iter()
+                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
+        );
 
         let write = accept_rxdb_business_command(
             root,
@@ -23733,9 +23748,11 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(modules
-            .iter()
-            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
+        assert!(
+            modules
+                .iter()
+                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
+        );
         Ok(())
     }
 

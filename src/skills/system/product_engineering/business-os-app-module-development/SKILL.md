@@ -22,15 +22,18 @@ you are about to create a skill file, skill trace, harness trace, README-only de
 you are about to build a generic Next.js/React/Vanilla app outside the Business OS module contract
 you are about to add package.json for any reason, npm/pnpm/yarn, node_modules, lockfiles, a bundler, CommonJS require, or CDN dependency management
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
+you are about to mention forbidden package-manager, bundler, or dependency names inside generated app files, tests, comments, or user-visible copy; keep those names only in validation/skill context
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
 you believe a harness, artifact contract, benchmark note, or review example requires root-level module.json, root-level collections.schema.json, root-level harness-module.json, root-level harness-collections.schema.json, root-level artifact/status/blocker Markdown, or any other root alias for an app deliverable
 you are about to test the guard by creating, moving, touching, symlinking, hardlinking, copying, or removing root-level app artifact probe files such as `test-*`, `_test_*`, `_probe_*`, `probe-*`, root `module.json`, root `collections.schema.json`, or guard/status scratch files
+you are about to probe shell aliases, tool wrappers, guard behavior, or temporary root write behavior instead of implementing the app in the allowed module directory
 the module has a visible button/action with no real handler, persistence change, automation command when relevant, and test or smoke assertion
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json or collections.schema.json would be exposed in an invalid or incomplete state after any edit
+you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 tests and Business OS guards were not run after the last code change
@@ -62,6 +65,7 @@ Requested detail/edit flow -> modal/drawer/pane pattern
 Requested automation -> existing business_commands pattern
 Collections to own -> schema.js and collections.schema.json names
 What not to implement because it would be slop
+How to keep this app small enough to build and verify in one pass
 ```
 
 ## Architecture Translation Layer
@@ -233,6 +237,14 @@ export function mount(ctx) {
 - Prefer existing shell/base classes and local module CSS. Do not redefine shell tokens on `:root`.
 - Use modals/drawers for focused create/edit flows when a third column would be decorative.
 - Keep text and controls compact enough for the Business OS workspace, not a marketing page.
+
+## Generation Discipline
+
+- Keep the first version intentionally small: one primary list/workbench, one detail/edit flow, the required automation action, and focused tests.
+- Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
+- Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
+- Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
+- Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.
 
 ## Persistence Pattern
 

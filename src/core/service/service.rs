@@ -1,6 +1,12 @@
 use anyhow::Context;
 use anyhow::Result;
 #[cfg(unix)]
+use libc::RLIMIT_NOFILE;
+#[cfg(unix)]
+use libc::SIG_IGN;
+#[cfg(unix)]
+use libc::SIGPIPE;
+#[cfg(unix)]
 use libc::geteuid;
 #[cfg(unix)]
 use libc::getrlimit;
@@ -12,15 +18,9 @@ use libc::setpgid;
 use libc::setrlimit;
 #[cfg(unix)]
 use libc::signal;
-#[cfg(unix)]
-use libc::RLIMIT_NOFILE;
-#[cfg(unix)]
-use libc::SIGPIPE;
-#[cfg(unix)]
-use libc::SIG_IGN;
-use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use rusqlite::params;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -90,8 +90,8 @@ use crate::service::core_state_machine::{
     CoreTransitionRequest, RuntimeLane,
 };
 use crate::service::core_transition_guard::{
-    enforce_core_transition, ensure_core_transition_guard_schema, evaluate_core_spawn,
-    CoreSpawnRequest,
+    CoreSpawnRequest, enforce_core_transition, ensure_core_transition_guard_schema,
+    evaluate_core_spawn,
 };
 use crate::state_invariants;
 use crate::verification;
@@ -958,7 +958,9 @@ fn run_boot_auto_submitted_reclassifier(root: &Path, state: &Arc<Mutex<SharedSta
     match channels::reclassify_historical_auto_submitted_inbounds(root) {
         Ok(count) if count > 0 => push_event(
             state,
-            format!("Boot reclassified {count} historical auto-submitted inbound(s) as terminal NO-SEND"),
+            format!(
+                "Boot reclassified {count} historical auto-submitted inbound(s) as terminal NO-SEND"
+            ),
         ),
         Ok(_) => {}
         Err(err) => push_event(
@@ -1342,25 +1344,27 @@ fn is_non_work_tui_probe(prompt: &str) -> bool {
 }
 
 fn start_work_hours_dispatcher(root: PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        thread::sleep(Duration::from_secs(60));
-        if !crate::service::working_hours::accepts_work(&root) {
-            continue;
-        }
-        let next_prompt = {
-            let mut shared = lock_shared_state(&state);
-            if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
-                None
-            } else {
-                maybe_start_next_queued_prompt_locked(&root, &mut shared)
+    thread::spawn(move || {
+        loop {
+            thread::sleep(Duration::from_secs(60));
+            if !crate::service::working_hours::accepts_work(&root) {
+                continue;
             }
-        };
-        if let Some(queued) = next_prompt {
-            push_event(
-                &state,
-                "Working-hours window open; resuming queued work".to_string(),
-            );
-            start_prompt_worker(root.clone(), state.clone(), queued);
+            let next_prompt = {
+                let mut shared = lock_shared_state(&state);
+                if shared.busy || runtime_blocker_backoff_remaining_secs(&shared).is_some() {
+                    None
+                } else {
+                    maybe_start_next_queued_prompt_locked(&root, &mut shared)
+                }
+            };
+            if let Some(queued) = next_prompt {
+                push_event(
+                    &state,
+                    "Working-hours window open; resuming queued work".to_string(),
+                );
+                start_prompt_worker(root.clone(), state.clone(), queued);
+            }
         }
     });
 }
@@ -3455,8 +3459,7 @@ fn start_prompt_worker(
                                         conversation_id: Some(conversation_id),
                                         severity: "error",
                                         reason: "agent turns repeatedly failed or timed out",
-                                        action_taken:
-                                            "deferred mission and stopped automatic retry loop",
+                                        action_taken: "deferred mission and stopped automatic retry loop",
                                         details: serde_json::json!({
                                             "agent_outcome": agent_outcome.as_str(),
                                             "agent_failure_count": record.agent_failure_count,
@@ -3709,10 +3712,7 @@ fn start_prompt_worker(
                                         app_validation_terminal_failure = true;
                                     } else {
                                         match apply_review_feedback_to_leased_queue(
-                                            &root,
-                                            &job,
-                                            &feedback,
-                                            &summary,
+                                            &root, &job, &feedback, &summary,
                                         ) {
                                             Ok(updated) if updated > 0 => {
                                                 push_event_locked(
@@ -4340,7 +4340,102 @@ fn start_prompt_worker(
                         } else {
                             None
                         };
-                        if !job.leased_message_keys.is_empty() {
+                        let mut app_validation_worker_failure_reason: Option<String> = None;
+                        if !job.leased_message_keys.is_empty()
+                            && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+                        {
+                            match business_os_app_module_validation_feedback(&root, &job) {
+                                Ok(Some(feedback))
+                                    if !business_os_app_validation_repair_exhausted(
+                                        &job.prompt,
+                                    ) =>
+                                {
+                                    let repair_attempts =
+                                        business_os_app_validation_repair_attempt_count(
+                                            &job.prompt,
+                                        );
+                                    let summary = format!(
+                                        "Business OS app artifact validation failed after worker error for {}",
+                                        job.source_label
+                                    );
+                                    match apply_business_os_app_validation_rework_to_leased_queue(
+                                        &root,
+                                        &job,
+                                        &feedback,
+                                        &summary,
+                                        repair_attempts.saturating_add(1),
+                                    ) {
+                                        Ok(updated) => {
+                                            app_validation_rework = true;
+                                            app_validation_worker_failure_reason = Some(format!(
+                                                "{}; worker error: {}",
+                                                summary, compact_error
+                                            ));
+                                            push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Converted {} worker error into Business OS app validation rework on {updated} leased queue task(s): {}",
+                                                    job.source_label,
+                                                    clip_text(&feedback, 220)
+                                                ),
+                                            );
+                                            for message_key in &job.leased_message_keys {
+                                                if let Err(projection_err) = crate::business_os::store::refresh_business_command_queue_task_projection(
+                                                    &root,
+                                                    message_key,
+                                                ) {
+                                                    push_event_locked(
+                                                        &mut shared,
+                                                        format!(
+                                                            "Failed to refresh Business OS app validation rework projection for {}: {}",
+                                                            message_key,
+                                                            clip_text(&projection_err.to_string(), 180)
+                                                        ),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                        Err(update_err) => push_event_locked(
+                                            &mut shared,
+                                            format!(
+                                                "Business OS app validation feedback could not convert {} worker error into rework: {}",
+                                                job.source_label,
+                                                clip_text(&update_err.to_string(), 180)
+                                            ),
+                                        ),
+                                    }
+                                }
+                                Ok(Some(feedback)) => {
+                                    app_validation_terminal_failure = true;
+                                    let summary = format!(
+                                        "Business OS app validation repair attempts exhausted after worker error for {}",
+                                        job.source_label
+                                    );
+                                    app_validation_worker_failure_reason = Some(format!(
+                                        "{}: {}",
+                                        summary,
+                                        clip_text(&feedback, 1200)
+                                    ));
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!("{}: {}", summary, clip_text(&feedback, 220)),
+                                    );
+                                }
+                                Ok(None) => {}
+                                Err(validation_err) => push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Business OS app validator errored after worker error for {}: {}",
+                                        job.source_label,
+                                        clip_text(&validation_err.to_string(), 180)
+                                    ),
+                                ),
+                            }
+                        }
+                        if !job.leased_message_keys.is_empty()
+                            && !app_validation_rework
+                            && !app_validation_terminal_failure
+                        {
                             if retry_runtime_message {
                                 match apply_runtime_retry_feedback_to_leased_queue(
                                     &root, &job, &err_text,
@@ -4432,6 +4527,43 @@ fn start_prompt_worker(
                                 }
                             }
                         }
+                        if app_validation_terminal_failure && !job.leased_message_keys.is_empty() {
+                            let failure_reason = app_validation_worker_failure_reason
+                                .as_deref()
+                                .unwrap_or(
+                                    "Business OS app validation repair attempts exhausted after worker error",
+                                );
+                            if let Err(ack_err) = channels::ack_leased_messages_with_failure_reason(
+                                &root,
+                                &job.leased_message_keys,
+                                "failed",
+                                failure_reason,
+                            ) {
+                                push_event_locked(
+                                    &mut shared,
+                                    format!(
+                                        "Failed to fail app-validation-exhausted queue task(s): {}",
+                                        clip_text(&ack_err.to_string(), 180)
+                                    ),
+                                );
+                            }
+                            for message_key in &job.leased_message_keys {
+                                if let Err(projection_err) = crate::business_os::store::fail_business_command_from_queue_error(
+                                    &root,
+                                    message_key,
+                                    failure_reason,
+                                ) {
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Failed to project exhausted Business OS app validation status for {}: {}",
+                                            message_key,
+                                            clip_text(&projection_err.to_string(), 180)
+                                        ),
+                                    );
+                                }
+                            }
+                        }
                         if !job.leased_ticket_event_keys.is_empty() {
                             let _ = tickets::ack_leased_ticket_events(
                                 &root,
@@ -4441,7 +4573,11 @@ fn start_prompt_worker(
                         }
                         shared.last_reply_chars =
                             failure_reply.as_ref().map(|reply| reply.chars().count());
-                        shared.last_error = Some(compact_error.clone());
+                        shared.last_error = Some(
+                            app_validation_worker_failure_reason
+                                .clone()
+                                .unwrap_or_else(|| compact_error.clone()),
+                        );
                         if let Some(work_id) = job.ticket_self_work_id.as_deref() {
                             if agent_failure_threshold_hit {
                                 let note = format!(
@@ -4503,7 +4639,15 @@ fn start_prompt_worker(
                                 block_ticket_self_work_item(&root, work_id, &note);
                             }
                         }
-                        if retry_worker_message && retry_has_durable_resume {
+                        if app_validation_rework {
+                            push_event_locked(
+                                &mut shared,
+                                format!(
+                                    "{} worker error is held as Business OS app validation rework: {compact_error}",
+                                    job.source_label
+                                ),
+                            );
+                        } else if retry_worker_message && retry_has_durable_resume {
                             push_event_locked(
                                 &mut shared,
                                 format!(
@@ -4568,7 +4712,9 @@ fn start_prompt_worker(
                         if let Some(title) = &runtime_retry_outcome {
                             push_event_locked(
                                 &mut shared,
-                                format!("Created runtime retry task after transient API failure: {title}"),
+                                format!(
+                                    "Created runtime retry task after transient API failure: {title}"
+                                ),
                             );
                         }
                     }
@@ -4622,12 +4768,12 @@ fn start_prompt_worker(
                             ) {
                                 Ok(updated) if updated > 0 => {
                                     push_event_locked(
-                                    &mut shared,
-                                    format!(
-                                        "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
-                                        job.source_label
-                                    ),
-                                );
+                                        &mut shared,
+                                        format!(
+                                            "Wrote sanitized review feedback back to {updated} leased queue task(s) for {}",
+                                            job.source_label
+                                        ),
+                                    );
                                     let mut released = 0usize;
                                     for message_key in &job.leased_message_keys {
                                         let route_status = channels::open_channel_db(
@@ -4640,23 +4786,23 @@ fn start_prompt_worker(
                                             Ok("review_rework") => {}
                                             Ok(other) => {
                                                 push_event_locked(
-                                                &mut shared,
-                                                format!(
-                                                    "Not releasing reviewed queue task {} to pending because its route status is {} instead of review_rework",
-                                                    message_key, other
-                                                ),
-                                            );
+                                                    &mut shared,
+                                                    format!(
+                                                        "Not releasing reviewed queue task {} to pending because its route status is {} instead of review_rework",
+                                                        message_key, other
+                                                    ),
+                                                );
                                                 continue;
                                             }
                                             Err(err) => {
                                                 push_event_locked(
-                                                &mut shared,
-                                                format!(
-                                                    "Not releasing reviewed queue task {} to pending because route status could not be verified: {}",
-                                                    message_key,
-                                                    clip_text(&err.to_string(), 180)
-                                                ),
-                                            );
+                                                    &mut shared,
+                                                    format!(
+                                                        "Not releasing reviewed queue task {} to pending because route status could not be verified: {}",
+                                                        message_key,
+                                                        clip_text(&err.to_string(), 180)
+                                                    ),
+                                                );
                                                 continue;
                                             }
                                         }
@@ -4696,52 +4842,52 @@ fn start_prompt_worker(
                                             )
                                         {
                                             push_event_locked(
-                                            &mut shared,
-                                            format!(
-                                                "Failed to prove reviewed queue task {} can requeue same main work: {}",
-                                                message_key,
-                                                clip_text(&err.to_string(), 180)
-                                            ),
-                                        );
+                                                &mut shared,
+                                                format!(
+                                                    "Failed to prove reviewed queue task {} can requeue same main work: {}",
+                                                    message_key,
+                                                    clip_text(&err.to_string(), 180)
+                                                ),
+                                            );
                                             continue;
                                         }
                                         match channels::set_queue_task_route_status(
-                                        &root,
-                                        message_key,
-                                        "pending",
-                                    ) {
-                                        Ok(true) => released += 1,
-                                        Ok(false) => {}
-                                        Err(err) => push_event_locked(
-                                            &mut shared,
-                                            format!(
-                                                "Failed to release reviewed queue task {} back to pending after feedback persisted: {}",
-                                                message_key,
-                                                clip_text(&err.to_string(), 180)
+                                            &root,
+                                            message_key,
+                                            "pending",
+                                        ) {
+                                            Ok(true) => released += 1,
+                                            Ok(false) => {}
+                                            Err(err) => push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Failed to release reviewed queue task {} back to pending after feedback persisted: {}",
+                                                    message_key,
+                                                    clip_text(&err.to_string(), 180)
+                                                ),
                                             ),
-                                        ),
-                                    }
+                                        }
                                     }
                                     if released > 0 {
                                         push_event_locked(
-                                        &mut shared,
-                                        format!(
-                                            "Released {released} reviewed queue task(s) from review_rework back to pending through the core requeue path"
-                                        ),
-                                    );
+                                            &mut shared,
+                                            format!(
+                                                "Released {released} reviewed queue task(s) from review_rework back to pending through the core requeue path"
+                                            ),
+                                        );
                                     }
                                     true
                                 }
                                 Ok(_) => false,
                                 Err(err) => {
                                     push_event_locked(
-                                    &mut shared,
-                                    format!(
-                                        "Failed to persist review feedback onto leased queue task for {}: {}; keeping the item in review_rework instead of requeueing stale work",
-                                        job.source_label,
-                                        clip_text(&err.to_string(), 180)
-                                    ),
-                                );
+                                        &mut shared,
+                                        format!(
+                                            "Failed to persist review feedback onto leased queue task for {}: {}; keeping the item in review_rework instead of requeueing stale work",
+                                            job.source_label,
+                                            clip_text(&err.to_string(), 180)
+                                        ),
+                                    );
                                     false
                                 }
                             }
@@ -4753,12 +4899,12 @@ fn start_prompt_worker(
                                 && outbound_in_process_review_retry_allowed(&job)
                             {
                                 push_event_locked(
-                                &mut shared,
-                                format!(
-                                    "Queued bounded review-feedback retry for proactive outbound {}",
-                                    job.source_label
-                                ),
-                            );
+                                    &mut shared,
+                                    format!(
+                                        "Queued bounded review-feedback retry for proactive outbound {}",
+                                        job.source_label
+                                    ),
+                                );
                                 outcome_recovery_prompt = Some(QueuedPrompt {
                                     prompt: feedback_prompt.clone(),
                                     goal: format!("Review-feedback retry for {}", job.goal),
@@ -4775,12 +4921,12 @@ fn start_prompt_worker(
                                 });
                             } else {
                                 push_event_locked(
-                                &mut shared,
-                                format!(
-                                    "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
-                                    job.source_label
-                                ),
-                            );
+                                    &mut shared,
+                                    format!(
+                                        "Review feedback for {} was not persisted to a durable queue item; suppressing in-memory retry outside the core review flow",
+                                        job.source_label
+                                    ),
+                                );
                             }
                         }
                     }
@@ -4878,8 +5024,7 @@ fn start_prompt_worker(
                     &job.leased_ticket_event_keys,
                 );
                 if !job.leased_message_keys.is_empty() {
-                    let failure_reason =
-                        "CTOX prompt worker panicked before the turn could finish. See service log.";
+                    let failure_reason = "CTOX prompt worker panicked before the turn could finish. See service log.";
                     let _ = channels::ack_leased_messages_with_failure_reason(
                         &root,
                         &job.leased_message_keys,
@@ -5838,6 +5983,35 @@ fn enforce_business_os_app_validation_feedback_transition(
     Ok(proof.proof_id)
 }
 
+fn apply_business_os_app_validation_rework_to_leased_queue(
+    root: &Path,
+    job: &QueuedPrompt,
+    feedback: &str,
+    summary: &str,
+    attempt: usize,
+) -> Result<usize> {
+    let updated = apply_review_feedback_to_leased_queue(root, job, feedback, summary)?;
+    anyhow::ensure!(
+        updated > 0,
+        "Business OS app validation feedback had no leased queue task to update"
+    );
+    for message_key in &job.leased_message_keys {
+        enforce_business_os_app_validation_feedback_transition(
+            root,
+            message_key,
+            job,
+            feedback,
+            attempt,
+        )
+        .with_context(|| {
+            format!("failed to record Business OS app validation rework proof for {message_key}")
+        })?;
+    }
+    channels::ack_leased_messages(root, &job.leased_message_keys, "review_rework")
+        .context("failed to mark Business OS app validation rework queue task(s)")?;
+    Ok(updated)
+}
+
 fn enforce_business_os_app_validation_requeue_transition(
     root: &Path,
     message_key: &str,
@@ -6047,9 +6221,7 @@ fn no_cascade_review_block(
         work_id: target_work_id,
         summary: format!(
             "Review failed for durable internal work kind `{}`. Core checkpoint proof `{}` accepted. Feed this review back into the same main-agent work item; do not spawn review-owned rework: {}",
-            kind,
-            checkpoint_proof,
-            outcome.summary
+            kind, checkpoint_proof, outcome.summary
         ),
     })
 }
@@ -6120,7 +6292,7 @@ fn review_delivery_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<St
         Err(err) => {
             return vec![format!(
                 "Outbound delivery evidence unavailable: failed to open channel DB: {err}"
-            )]
+            )];
         }
     };
     let mut stmt = match conn.prepare(
@@ -6137,7 +6309,7 @@ fn review_delivery_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<St
         Err(err) => {
             return vec![format!(
                 "Outbound delivery evidence unavailable for thread `{thread_key}`: {err}"
-            )]
+            )];
         }
     };
     let rows = match stmt.query_map(params![thread_key], |row| {
@@ -6183,7 +6355,7 @@ fn review_thread_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<Stri
         Err(err) => {
             return vec![format!(
                 "Same-thread communication evidence unavailable: failed to open channel DB: {err}"
-            )]
+            )];
         }
     };
     let mut stmt = match conn.prepare(
@@ -6199,7 +6371,7 @@ fn review_thread_evidence_summaries(root: &Path, job: &QueuedPrompt) -> Vec<Stri
         Err(err) => {
             return vec![format!(
                 "Same-thread communication evidence unavailable for `{thread_key}`: {err}"
-            )]
+            )];
         }
     };
     let rows = match stmt.query_map(params![thread_key], |row| {
@@ -6249,7 +6421,7 @@ fn review_external_work_backing_evidence_summaries(root: &Path, job: &QueuedProm
         Err(err) => {
             return vec![format!(
                 "External chat work backing unavailable: failed to open channel DB: {err}"
-            )]
+            )];
         }
     };
     let queue_count = conn
@@ -6383,7 +6555,7 @@ fn review_external_plan_backing_rows(conn: &Connection, thread_key: &str) -> Vec
         Err(err) => {
             return vec![format!(
                 "External chat plan backing rows unavailable for `{thread_key}`: {err}"
-            )]
+            )];
         }
     };
     let rows = match stmt.query_map(params![thread_key], |row| {
@@ -6399,7 +6571,7 @@ fn review_external_plan_backing_rows(conn: &Connection, thread_key: &str) -> Vec
         Err(err) => {
             return vec![format!(
                 "External chat plan backing rows unavailable for `{thread_key}`: {err}"
-            )]
+            )];
         }
     };
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -6432,7 +6604,7 @@ fn review_external_self_work_backing_rows(conn: &Connection, thread_key: &str) -
         Err(err) => {
             return vec![format!(
                 "External chat internal work backing rows unavailable for `{thread_key}`: {err}"
-            )]
+            )];
         }
     };
     let rows = match stmt.query_map(params![thread_key], |row| {
@@ -6481,7 +6653,7 @@ fn review_meeting_evidence_summaries(
         Err(err) => {
             return vec![format!(
                 "Recent meeting evidence unavailable: failed to open channel DB: {err}"
-            )]
+            )];
         }
     };
     let keywords = review_context_keywords(job);
@@ -6504,7 +6676,7 @@ fn review_meeting_evidence_summaries(
         Err(err) => {
             return vec![format!(
                 "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
-            )]
+            )];
         }
     };
     let rows = match stmt.query_map([], |row| {
@@ -6523,7 +6695,7 @@ fn review_meeting_evidence_summaries(
         Err(err) => {
             return vec![format!(
                 "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
-            )]
+            )];
         }
     };
     let mut summaries = Vec::new();
@@ -6550,7 +6722,7 @@ fn review_meeting_evidence_summaries(
         Err(err) => {
             return vec![format!(
                 "Recent meeting evidence unavailable for conversation {conversation_id}: {err}"
-            )]
+            )];
         }
     }
     if summaries.is_empty() {
@@ -8836,16 +9008,26 @@ fn naturalize_review_feedback_item(item: &str) -> Option<String> {
 
     let lowered = trimmed.to_ascii_lowercase();
     let mapped = if lowered == "missing_deliverable" || lowered.contains("missing deliverable") {
-        Some("Ein ausdruecklich angefordertes Ergebnis fehlt; es muss erstellt oder beschafft werden, bevor erneut geantwortet wird.")
+        Some(
+            "Ein ausdruecklich angefordertes Ergebnis fehlt; es muss erstellt oder beschafft werden, bevor erneut geantwortet wird.",
+        )
     } else if lowered == "unbacked_commitment" || lowered.contains("unbacked commitment") {
-        Some("Eine zugesagte Frist oder Lieferung ist nicht durch einen konkreten Termin, eine Folgeaufgabe oder ueberpruefbare Arbeit abgesichert.")
+        Some(
+            "Eine zugesagte Frist oder Lieferung ist nicht durch einen konkreten Termin, eine Folgeaufgabe oder ueberpruefbare Arbeit abgesichert.",
+        )
     } else if lowered.contains("founder_communication") || lowered.contains("founder communication")
     {
-        Some("Die Antwort erfuellt die Founder-Kommunikation nicht: aktuelle Frage, Empfaengerlogik oder Kontextbezug sind nicht sauber getroffen.")
+        Some(
+            "Die Antwort erfuellt die Founder-Kommunikation nicht: aktuelle Frage, Empfaengerlogik oder Kontextbezug sind nicht sauber getroffen.",
+        )
     } else if lowered.contains("owner_visible_claim") || lowered.contains("owner visible claim") {
-        Some("Eine Aussage an den Owner ist nicht ausreichend durch ueberpruefbare Arbeit oder sichtbare Evidenz belegt.")
+        Some(
+            "Eine Aussage an den Owner ist nicht ausreichend durch ueberpruefbare Arbeit oder sichtbare Evidenz belegt.",
+        )
     } else if lowered.contains("closure_claim") || lowered.contains("closure claim") {
-        Some("Der Entwurf behauptet Abschluss oder Fortschritt, ohne dass der Abschluss ausreichend belegt ist.")
+        Some(
+            "Der Entwurf behauptet Abschluss oder Fortschritt, ohne dass der Abschluss ausreichend belegt ist.",
+        )
     } else if lowered.contains("artifact action") {
         None
     } else {
@@ -8913,30 +9095,34 @@ fn looks_like_internal_label(text: &str) -> bool {
 }
 
 fn start_channel_router(root: std::path::PathBuf, state: Arc<Mutex<SharedState>>) {
-    thread::spawn(move || loop {
-        let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            route_external_messages(&root, &state)
-        }));
-        match routed {
-            Ok(Ok(())) => {}
-            Ok(Err(err)) => {
-                eprintln!("ctox channel route failed: {err:#}");
-                push_event(&state, format!("Channel route failed: {err}"));
+    thread::spawn(move || {
+        loop {
+            let routed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                route_external_messages(&root, &state)
+            }));
+            match routed {
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    eprintln!("ctox channel route failed: {err:#}");
+                    push_event(&state, format!("Channel route failed: {err}"));
+                }
+                Err(_) => {
+                    eprintln!("ctox channel router panic; continuing");
+                    push_event(&state, "Channel router panicked; continuing".to_string());
+                }
             }
-            Err(_) => {
-                eprintln!("ctox channel router panic; continuing");
-                push_event(&state, "Channel router panicked; continuing".to_string());
-            }
+            thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
         }
-        thread::sleep(Duration::from_secs(CHANNEL_ROUTER_POLL_SECS));
     });
 }
 
 fn start_channel_syncer(root: std::path::PathBuf) {
-    thread::spawn(move || loop {
-        let settings = live_service_settings(&root);
-        sync_configured_channels(&root, &settings);
-        thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
+    thread::spawn(move || {
+        loop {
+            let settings = live_service_settings(&root);
+            sync_configured_channels(&root, &settings);
+            thread::sleep(Duration::from_secs(channel_sync_poll_secs(&settings)));
+        }
     });
 }
 
@@ -9446,7 +9632,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     // and the swallowed error left the lease to expire and re-route forever.
     // Route to canonical statuses with an explicit reason, and surface ack
     // failures instead of silently re-looping the message.
-    let mut log_ack_failure = |label: &str, keys: &[String], result: Result<usize>| {
+    let log_ack_failure = |label: &str, keys: &[String], result: Result<usize>| {
         if let Err(err) = result {
             eprintln!(
                 "ctox service: routing ack '{label}' failed for {} message(s) [{}]: {err:#}",
@@ -9526,8 +9712,7 @@ fn handle_channel_router_guard_block(
             conversation_id: None,
             severity: "warning",
             reason: &reason,
-            action_taken:
-                "kept channel router alive and skipped this guarded background routing stage",
+            action_taken: "kept channel router alive and skipped this guarded background routing stage",
             details: serde_json::json!({
                 "stage": stage,
             }),
@@ -9774,8 +9959,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 mechanism_id: "ticket_reconciliation",
                 conversation_id: None,
                 severity: "info",
-                reason:
-                    "blocked ticket events became preparable after knowledge/control state changed",
+                reason: "blocked ticket events became preparable after knowledge/control state changed",
                 action_taken: "released blocked ticket events back to pending",
                 details: serde_json::json!({
                     "released_event_keys": released_blocked.clone(),
@@ -10007,8 +10191,7 @@ fn enqueue_prompt(
                         conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
                         severity: "warning",
                         reason: "hard runtime blocker cooldown is deferring new prompt dispatch",
-                        action_taken:
-                            "kept the new prompt queued until the runtime cooldown expires",
+                        action_taken: "kept the new prompt queued until the runtime cooldown expires",
                         details: serde_json::json!({
                             "remaining_secs": remaining_secs,
                             "pending": pending,
@@ -13210,7 +13393,9 @@ fn transition_self_work_after_review_rejection(
                 work_id,
                 "queued",
                 "ctox-review",
-                Some("Review rejection arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
+                Some(
+                    "Review rejection arrived before the work item had a planned state; moving it through the normal queue lifecycle.",
+                ),
                 "internal",
             )?;
             transition_planned_self_work_after_review_rejection(root, &planned, note)
@@ -13243,14 +13428,16 @@ fn transition_self_work_after_review_rejection(
                 "internal",
             )
         }
-        "rework_required" | "review_rework" | "rework" => tickets::transition_ticket_self_work_item(
-            root,
-            work_id,
-            "rework_required",
-            "ctox-review",
-            Some(note),
-            "internal",
-        ),
+        "rework_required" | "review_rework" | "rework" => {
+            tickets::transition_ticket_self_work_item(
+                root,
+                work_id,
+                "rework_required",
+                "ctox-review",
+                Some(note),
+                "internal",
+            )
+        }
         "failed" | "closed" | "done" | "completed" | "handled" | "cancelled" | "superseded" => {
             anyhow::bail!(
                 "cannot requeue review-rejected terminal ticket internal work item {work_id} in state {}",
@@ -13273,7 +13460,9 @@ fn transition_planned_self_work_after_review_rejection(
         &item.work_id,
         "published",
         "ctox-review",
-        Some("Review rejection applies to the just-executed queue slice; entering execution before review checkpoint state."),
+        Some(
+            "Review rejection applies to the just-executed queue slice; entering execution before review checkpoint state.",
+        ),
         "internal",
     )?;
     transition_executing_self_work_after_review_rejection(root, &executing, note)
@@ -13498,7 +13687,9 @@ fn transition_self_work_after_runtime_retry(
                 work_id,
                 "queued",
                 "ctox-runtime-retry",
-                Some("Runtime retry arrived before the work item had a planned state; moving it through the normal queue lifecycle."),
+                Some(
+                    "Runtime retry arrived before the work item had a planned state; moving it through the normal queue lifecycle.",
+                ),
                 "internal",
             )?;
             transition_planned_self_work_after_runtime_retry(root, &planned, note)
@@ -13881,9 +14072,7 @@ fn enrich_inbound_prompt(
         } else {
             format!(
                 "Wenn eine Antwort per E-Mail sinnvoll ist, sende keine direkte E-Mail aus diesem Run. Erstelle nur den empfaengerorientierten Antwortentwurf fuer den Review. Der Harness versendet die freigegebene Antwort danach automatisch an {} im bestehenden Thread '{}' mit Betreff \"Re: {}\".",
-                reply_target,
-                message.thread_key,
-                subject
+                reply_target, message.thread_key, subject
             )
         };
         return format!(
@@ -14365,8 +14554,7 @@ fn maybe_enqueue_timeout_continuation(
             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
             severity: "error",
             reason: "the agent turn hit the runtime time budget",
-            action_taken:
-                "suppressed timeout continuation spawn; original queue scope must retry or defer",
+            action_taken: "suppressed timeout continuation spawn; original queue scope must retry or defer",
             details: serde_json::json!({
                 "source_label": job.source_label,
                 "thread_key": job.thread_key.clone(),
@@ -14501,8 +14689,7 @@ fn maybe_suppress_fatal_harness_prompt_before_execution(
         return Ok(false);
     }
 
-    let reason =
-        "legacy timeout continuation jobs are forbidden because they can recursively restart timed-out harness turns";
+    let reason = "legacy timeout continuation jobs are forbidden because they can recursively restart timed-out harness turns";
     let action =
         "cancelled fatal harness continuation before starting an agent turn; no model tokens spent";
     let details = serde_json::json!({
@@ -14607,8 +14794,7 @@ fn maybe_enqueue_runtime_retry_continuation(
                 conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
                 severity: "warning",
                 reason: "the previous agent run hit a retryable model API failure",
-                action_taken:
-                    "kept the existing durable work item open with retry feedback/cooldown; no new retry task queued",
+                action_taken: "kept the existing durable work item open with retry feedback/cooldown; no new retry task queued",
                 details: serde_json::json!({
                     "source_label": job.source_label,
                     "thread_key": thread_key,
@@ -14631,8 +14817,7 @@ fn maybe_enqueue_runtime_retry_continuation(
             conversation_id: Some(turn_loop::CHAT_CONVERSATION_ID),
             severity: "critical",
             reason: "the previous agent run hit a retryable model API failure",
-            action_taken:
-                "suppressed standalone runtime retry task; the operator or original durable work must resume after cooldown",
+            action_taken: "suppressed standalone runtime retry task; the operator or original durable work must resume after cooldown",
             details: serde_json::json!({
                 "source_label": job.source_label,
                 "thread_key": thread_key,
@@ -14823,7 +15008,7 @@ fn render_runtime_retry_prompt(job: &QueuedPrompt, error_text: &str) -> String {
             "do not say the email was sent unless an outbound email row reached the accepted terminal state",
         );
     }
-    let mut prompt = format!(
+    let prompt = format!(
         "HARNESS FEEDBACK\nProblem: {problem}\n\nCURRENT TASK\n{}\n\nRUNTIME FAILURE\n{}\n\nREQUIRED ACTIONS\n- {}\n\nEXIT GATE\nFinish only after the durable outcome exists in runtime state. If the runtime is still unavailable, keep the work pending instead of claiming completion.",
         runtime_retry_current_task_summary(job),
         clip_text(error_text.trim(), 220),
@@ -15032,8 +15217,8 @@ struct SystemdUnitStatus {
 /// sub-second refresh ticks; a fresh probe costs three systemctl spawns.
 /// `start_background`/`stop_background` drop the cache on every exit path
 /// so an in-process toggle is visible on the next poll.
-fn systemd_unit_status_cache(
-) -> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
+fn systemd_unit_status_cache()
+-> &'static Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>> {
     static CACHE: OnceLock<Mutex<Option<(Instant, PathBuf, Option<SystemdUnitStatus>)>>> =
         OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(None))
@@ -15352,16 +15537,20 @@ mod tests {
 
         let evidence = review_external_work_backing_evidence_summaries(&root, &job);
         assert!(evidence.iter().any(|line| line.contains("queue_open=1")));
-        assert!(evidence
-            .iter()
-            .any(|line| line.contains("new_task, update_existing, merge_duplicate, extend_scope")));
-        assert!(evidence
-            .iter()
-            .any(|line| line.contains(&format!("message_key={}", queue_task.message_key))));
-        assert!(evidence
-            .iter()
-            .any(|line| line
-                .contains("Merge duplicate scraper request into existing Intersolar task")));
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line
+                    .contains("new_task, update_existing, merge_duplicate, extend_scope"))
+        );
+        assert!(
+            evidence
+                .iter()
+                .any(|line| line.contains(&format!("message_key={}", queue_task.message_key)))
+        );
+        assert!(evidence.iter().any(|line| {
+            line.contains("Merge duplicate scraper request into existing Intersolar task")
+        }));
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -15411,9 +15600,11 @@ mod tests {
         });
         let missing_target = communication_pipeline_resolution_guard_outcome(&request, &outcome)
             .expect("pipeline mutation without target must be rejected");
-        assert!(missing_target
-            .summary
-            .contains("names no durable target item"));
+        assert!(
+            missing_target
+                .summary
+                .contains("names no durable target item")
+        );
 
         outcome.pipeline_resolution = Some(review::PipelineResolution {
             action: review::PipelineResolutionAction::BlockedNeedsClarification,
@@ -15421,8 +15612,10 @@ mod tests {
             rationale: "Asked for the missing account id before changing queued work.".to_string(),
         });
         let approval_summary = communication_review_approval_summary(&outcome);
-        assert!(approval_summary
-            .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none"));
+        assert!(
+            approval_summary
+                .contains("PIPELINE_RESOLUTION: action=blocked_needs_clarification | target=none")
+        );
     }
 
     #[test]
@@ -15638,9 +15831,11 @@ mod tests {
         );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "queue_pressure_guard"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "queue_pressure_guard")
+        );
     }
 
     #[test]
@@ -15678,9 +15873,11 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(recent_events
-            .iter()
-            .any(|event| event.contains("State invariants at boot")));
+        assert!(
+            recent_events
+                .iter()
+                .any(|event| event.contains("State invariants at boot"))
+        );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -15731,9 +15928,11 @@ mod tests {
             let shared = lock_shared_state(&state);
             shared.recent_events.iter().cloned().collect::<Vec<_>>()
         };
-        assert!(recent_events
-            .iter()
-            .any(|event| event.contains("State invariants repaired at boot")));
+        assert!(
+            recent_events
+                .iter()
+                .any(|event| event.contains("State invariants repaired at boot"))
+        );
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
         assert!(events.iter().any(|event| {
@@ -15936,10 +16135,12 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate initial invariants");
-        assert!(before
-            .violations
-            .iter()
-            .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" }));
+        assert!(
+            before
+                .violations
+                .iter()
+                .any(|issue| { issue.code == "closed_mission_with_open_runtime_work" })
+        );
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -15965,10 +16166,12 @@ mod tests {
             .expect("failed to reload continuity");
         assert_ne!(continuity.focus.head_commit_id, "contbase_1_focus");
         assert!(continuity.focus.content.contains("- Mission state: active"));
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Continuation mode: continuous"));
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Continuation mode: continuous")
+        );
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
@@ -16034,10 +16237,12 @@ mod tests {
             turn_loop::CHAT_CONVERSATION_ID,
         )
         .expect("failed to evaluate sparse-open invariants");
-        assert!(before
-            .violations
-            .iter()
-            .any(|issue| { issue.code == "mission_state_requires_continuity_resync" }));
+        assert!(
+            before
+                .violations
+                .iter()
+                .any(|issue| { issue.code == "mission_state_requires_continuity_resync" })
+        );
 
         let state = Arc::new(Mutex::new(SharedState::default()));
         let repaired =
@@ -16067,14 +16272,18 @@ mod tests {
         let continuity = engine
             .stored_continuity_show_all(turn_loop::CHAT_CONVERSATION_ID)
             .expect("failed to reload continuity");
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Mission: Spill restore: Deferred documentation review"));
-        assert!(continuity
-            .focus
-            .content
-            .contains("- Next slice: Spill restore: Deferred documentation review"));
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Mission: Spill restore: Deferred documentation review")
+        );
+        assert!(
+            continuity
+                .focus
+                .content
+                .contains("- Next slice: Spill restore: Deferred documentation review")
+        );
     }
 
     #[test]
@@ -16171,10 +16380,12 @@ mod tests {
 
         ensure_queue_guard_locked(&root, &mut shared);
 
-        assert!(shared
-            .pending_prompts
-            .iter()
-            .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL));
+        assert!(
+            shared
+                .pending_prompts
+                .iter()
+                .all(|item| item.source_label != QUEUE_GUARD_SOURCE_LABEL)
+        );
     }
 
     #[test]
@@ -16205,10 +16416,12 @@ mod tests {
             shared.pending_prompts.front().unwrap().leased_message_keys,
             vec!["queue:system::next".to_string()]
         );
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("outcome-witness recovery")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("outcome-witness recovery"))
+        );
     }
 
     #[test]
@@ -16319,17 +16532,21 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|item| item.contains("Blocked ticket event")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|item| item.contains("Blocked ticket event"))
+        );
         drop(shared);
 
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "ticket_control_gate"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "ticket_control_gate")
+        );
     }
 
     #[test]
@@ -16366,10 +16583,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
         assert_eq!(prompt.source_label, "queue");
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -16411,8 +16630,10 @@ mod tests {
         ));
         assert!(prompt.contains("ticket source-skill-review-note --case-id case-1"));
         assert!(prompt.contains("Oeffentliche Ticketantwort:"));
-        assert!(prompt
-            .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\""));
+        assert!(
+            prompt
+                .contains("ticket writeback-comment --case-id case-1 --body \\\"<reply text>\\\"")
+        );
         assert!(prompt.contains("--internal"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -16528,10 +16749,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -16591,10 +16814,12 @@ mod tests {
             .expect("queued prompt missing");
         assert_eq!(prompt.source_label, "ticket:local");
         assert_eq!(prompt.suggested_skill.as_deref(), Some("system-onboarding"));
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill system-onboarding")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill system-onboarding"))
+        );
     }
 
     #[test]
@@ -16649,10 +16874,12 @@ mod tests {
             .expect("self-work missing after routing");
         assert_eq!(routed.state, "queued");
         let shared = state.lock().expect("state poisoned");
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Queued internal work")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Queued internal work"))
+        );
     }
 
     #[test]
@@ -16733,10 +16960,12 @@ mod tests {
             prompt.suggested_skill.as_deref(),
             Some("roller-ticket-desk-operator-v4")
         );
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("skill roller-ticket-desk-operator-v4")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("skill roller-ticket-desk-operator-v4"))
+        );
     }
 
     #[test]
@@ -16839,12 +17068,16 @@ mod tests {
 
         let shared = lock_shared_state(&state);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(!shared.pending_prompts[0]
-            .prompt
-            .contains("sk-proj-service-secret-1234567890"));
-        assert!(shared.pending_prompts[0]
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+        assert!(
+            !shared.pending_prompts[0]
+                .prompt
+                .contains("sk-proj-service-secret-1234567890")
+        );
+        assert!(
+            shared.pending_prompts[0]
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY")
+        );
         assert_eq!(
             shared.pending_prompts[0].suggested_skill.as_deref(),
             Some("secret-hygiene")
@@ -16868,9 +17101,11 @@ mod tests {
 
         assert_eq!(prepared.suggested_skill.as_deref(), Some("secret-hygiene"));
         assert!(prepared.auto_ingested_secrets >= 1);
-        assert!(prepared
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+        assert!(
+            prepared
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY")
+        );
     }
 
     #[test]
@@ -16926,10 +17161,12 @@ mod tests {
         assert_eq!(status.pending_count, 0);
         assert!(status.pending_previews.is_empty());
         assert_eq!(status.blocked_count, 1);
-        assert!(status
-            .blocked_previews
-            .iter()
-            .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing")));
+        assert!(
+            status
+                .blocked_previews
+                .iter()
+                .any(|preview| preview.contains("queue blocked  HY3 smoke artifact missing"))
+        );
     }
 
     #[test]
@@ -17059,10 +17296,12 @@ mod tests {
         assert_eq!(status.pid, Some(4242));
         assert_eq!(status.pending_count, 1);
         assert!(status.business_os.is_some());
-        assert!(status
-            .recent_events
-            .iter()
-            .any(|event| event.contains("system-onboarding")));
+        assert!(
+            status
+                .recent_events
+                .iter()
+                .any(|event| event.contains("system-onboarding"))
+        );
     }
 
     #[test]
@@ -17238,8 +17477,10 @@ mod tests {
             "Implement the requested slice.",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(prompt
-            .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n"));
+        assert!(
+            prompt
+                .starts_with("Work only inside this workspace:\n/tmp/ctox-workspace-contract\n\n")
+        );
         assert!(prompt.contains("Implement the requested slice."));
 
         let timeout_prompt = render_timeout_continue_prompt(
@@ -17247,8 +17488,10 @@ mod tests {
             "execution timed out after 180s",
             Some("/tmp/ctox-workspace-contract"),
         );
-        assert!(timeout_prompt
-            .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract"));
+        assert!(
+            timeout_prompt
+                .contains("Work only inside this workspace:\n/tmp/ctox-workspace-contract")
+        );
         assert!(timeout_prompt.contains("CURRENT TASK\nShip the next implementation slice."));
     }
 
@@ -17366,9 +17609,11 @@ mod tests {
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
             "false".to_string(),
         );
-        assert!(meeting_auto_join_policy_block(&settings, &message)
-            .expect("disabled block")
-            .contains("auto-join disabled"));
+        assert!(
+            meeting_auto_join_policy_block(&settings, &message)
+                .expect("disabled block")
+                .contains("auto-join disabled")
+        );
 
         settings.insert(
             "CTO_MEETING_AUTO_JOIN_ENABLED".to_string(),
@@ -17378,9 +17623,11 @@ mod tests {
             "CTO_MEETING_ALLOWED_INVITE_SENDERS".to_string(),
             "scheduler@example.com,@trusted.example".to_string(),
         );
-        assert!(meeting_auto_join_policy_block(&settings, &message)
-            .expect("sender block")
-            .contains("not in"));
+        assert!(
+            meeting_auto_join_policy_block(&settings, &message)
+                .expect("sender block")
+                .contains("not in")
+        );
 
         let allowed_exact = routed_email_message("scheduler@example.com");
         assert_eq!(
@@ -17450,10 +17697,12 @@ mod tests {
 
         let shared = state.lock().expect("state poisoned");
         assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Ignored non-work TUI route")));
+        assert!(
+            shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Ignored non-work TUI route"))
+        );
         drop(shared);
         assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
         let _ = std::fs::remove_dir_all(&root);
@@ -17856,10 +18105,12 @@ mod tests {
             pending.front().map(|item| item.source_label.as_str()),
             Some("tui")
         );
-        assert!(pending
-            .front()
-            .and_then(|item| item.outbound_email.as_ref())
-            .is_some());
+        assert!(
+            pending
+                .front()
+                .and_then(|item| item.outbound_email.as_ref())
+                .is_some()
+        );
         assert_eq!(
             pending.back().map(|item| item.source_label.as_str()),
             Some("email:founder")
@@ -18133,9 +18384,11 @@ mod tests {
         assert!(self_work.is_empty());
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "turn_timeout_continuation"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "turn_timeout_continuation")
+        );
     }
 
     #[test]
@@ -18168,10 +18421,12 @@ mod tests {
             maybe_enqueue_timeout_continuation(&root, &job, "direct session timeout after 900s")
                 .expect("timeout recovery should succeed");
 
-        assert!(created
-            .as_deref()
-            .unwrap_or_default()
-            .starts_with("Recover interrupted Run artifact controller"));
+        assert!(
+            created
+                .as_deref()
+                .unwrap_or_default()
+                .starts_with("Recover interrupted Run artifact controller")
+        );
         let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
             .expect("failed to list pending queue tasks");
         assert_eq!(pending.len(), 1);
@@ -18181,9 +18436,11 @@ mod tests {
             job.workspace_root.as_deref()
         );
         assert_eq!(pending[0].parent_message_key, None);
-        assert!(pending[0]
-            .prompt
-            .contains("DURABLE FILES THAT MUST STAY UPDATED"));
+        assert!(
+            pending[0]
+                .prompt
+                .contains("DURABLE FILES THAT MUST STAY UPDATED")
+        );
         assert!(pending[0].prompt.contains(controller.to_str().unwrap()));
         assert!(pending[0].prompt.contains(logbook.to_str().unwrap()));
         let self_work = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
@@ -18371,20 +18628,22 @@ mod tests {
         let shared = state.lock().expect("state poisoned");
         assert!(!shared.busy);
         assert!(shared.active_source_label.is_none());
-        assert!(!shared
-            .leased_message_keys_inflight
-            .contains(&task.message_key));
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event
-                .contains("Suppressed fatal harness continuation before model execution")));
+        assert!(
+            !shared
+                .leased_message_keys_inflight
+                .contains(&task.message_key)
+        );
+        assert!(shared.recent_events.iter().any(|event| {
+            event.contains("Suppressed fatal harness continuation before model execution")
+        }));
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "fatal_harness_loop_guard"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "fatal_harness_loop_guard")
+        );
     }
 
     #[test]
@@ -18554,12 +18813,16 @@ Business OS command:
         let reloaded = channels::load_queue_task(&root, &task.message_key)
             .expect("load failed")
             .expect("missing queue task");
-        assert!(reloaded
-            .prompt
-            .contains("Business OS app artifact validation failed."));
-        assert!(reloaded
-            .prompt
-            .contains("module.json install_scope must be installed"));
+        assert!(
+            reloaded
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
+        assert!(
+            reloaded
+                .prompt
+                .contains("module.json install_scope must be installed")
+        );
         assert!(reloaded.prompt.contains("Original task remains active"));
         assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
         let conn =
@@ -18575,6 +18838,93 @@ Business OS command:
                   AND accepted = 1
                   AND request_json LIKE '%"validator_rework":"true"%'
                   AND request_json LIKE '%"module_id":"contracts"%'
+                "#,
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("count validator rework proofs");
+        assert_eq!(proof_count, 1);
+    }
+
+    #[test]
+    fn business_os_app_validation_worker_error_keeps_same_task_reworkable() {
+        let root = temp_root("business-os-app-validation-worker-error-rework");
+        let script_dir = root.join("src/apps/business-os/scripts");
+        std::fs::create_dir_all(&script_dir).expect("create validator script dir");
+        std::fs::write(
+            script_dir.join("validate-app-module.mjs"),
+            "console.error('module.json layout.right is not allowed'); process.exit(1);\n",
+        )
+        .expect("write validator script fixture");
+        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create projects app".to_string(),
+                prompt: prompt.clone(),
+                thread_key: "business-os/apps/projects".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt,
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let feedback = business_os_app_module_validation_feedback(&root, &job)
+            .expect("validator hook failed")
+            .expect("expected validation feedback");
+        let updated = apply_business_os_app_validation_rework_to_leased_queue(
+            &root,
+            &job,
+            &feedback,
+            "Business OS app artifact validation failed after worker error for business-os:app-create",
+            1,
+        )
+        .expect("failed to convert worker error into app validation rework");
+        assert_eq!(updated, 1);
+
+        let reloaded = channels::load_queue_task(&root, &task.message_key)
+            .expect("load failed")
+            .expect("missing queue task");
+        assert_eq!(route_status_for(&root, &task.message_key), "review_rework");
+        assert!(
+            reloaded
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
+        assert!(reloaded.prompt.contains("layout.right is not allowed"));
+        assert!(reloaded.prompt.contains("Original task remains active"));
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        let proof_count: i64 = conn
+            .query_row(
+                r#"
+                SELECT COUNT(*)
+                FROM ctox_core_transition_proofs
+                WHERE entity_type = 'QueueItem'
+                  AND entity_id = ?1
+                  AND to_state = 'ReworkRequired'
+                  AND accepted = 1
+                  AND request_json LIKE '%"validator_rework":"true"%'
+                  AND request_json LIKE '%"module_id":"projects"%'
                 "#,
                 params![task.message_key],
                 |row| row.get(0),
@@ -18676,9 +19026,11 @@ Business OS command:
             route_status_for(&root, &pending_task.message_key),
             "pending"
         );
-        assert!(leased
-            .prompt
-            .contains("Business OS app artifact validation failed."));
+        assert!(
+            leased
+                .prompt
+                .contains("Business OS app artifact validation failed.")
+        );
     }
 
     #[test]
@@ -18826,7 +19178,7 @@ Business OS command:
             reasons: vec!["Runtime mission contract still open".to_string()],
             failed_gates: vec!["Closure readiness".to_string()],
             semantic_findings: vec![
-                "Do the remaining rework instead of closing the queue item.".to_string()
+                "Do the remaining rework instead of closing the queue item.".to_string(),
             ],
             categorized_findings: Vec::new(),
             open_items: vec!["Persist the missing closure evidence.".to_string()],
@@ -19230,11 +19582,13 @@ Business OS command:
             disposition,
             CompletionReviewDisposition::Hold { .. }
         ));
-        assert!(state
-            .lock()
-            .expect("service state poisoned")
-            .pending_prompts
-            .is_empty());
+        assert!(
+            state
+                .lock()
+                .expect("service state poisoned")
+                .pending_prompts
+                .is_empty()
+        );
     }
 
     #[test]
@@ -19624,9 +19978,11 @@ Business OS command:
             .expect("missing self-work");
         assert_eq!(reloaded.state, "published");
         assert_eq!(queued.thread_key, "queue/mission-1");
-        assert!(queued
-            .title
-            .contains("Continue mission Deliver the Kunstmen homepage reset"));
+        assert!(
+            queued
+                .title
+                .contains("Continue mission Deliver the Kunstmen homepage reset")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -19892,9 +20248,11 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(!blocked_tasks
-            .iter()
-            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
+        assert!(
+            !blocked_tasks
+                .iter()
+                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
+        );
     }
 
     #[test]
@@ -19960,9 +20318,11 @@ Business OS command:
 
         let blocked_tasks = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(!blocked_tasks
-            .iter()
-            .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str())));
+        assert!(
+            !blocked_tasks
+                .iter()
+                .any(|task| task.ticket_self_work_id.as_deref() == Some(item.work_id.as_str()))
+        );
     }
 
     #[test]
@@ -20011,14 +20371,14 @@ Business OS command:
 
         let blocked = channels::list_queue_tasks(&root, &["blocked".to_string()], 10)
             .expect("failed to list blocked queue tasks");
-        assert!(blocked
-            .iter()
-            .any(|task| task.message_key == first.message_key
+        assert!(blocked.iter().any(|task| {
+            task.message_key == first.message_key
                 && task
                     .status_note
                     .as_deref()
                     .unwrap_or("")
-                    .contains("darf nach einem Review-Reject nicht automatisch erneut starten")));
+                    .contains("darf nach einem Review-Reject nicht automatisch erneut starten")
+        }));
     }
 
     #[test]
@@ -20501,12 +20861,16 @@ Business OS command:
             items[0].suggested_skill.as_deref(),
             Some("follow-up-orchestrator")
         );
-        assert!(items[0]
-            .body_text
-            .contains("Use `ctox strategy show --conversation-id"));
-        assert!(items[0]
-            .body_text
-            .contains("--thread-key kunstmen-supervisor"));
+        assert!(
+            items[0]
+                .body_text
+                .contains("Use `ctox strategy show --conversation-id")
+        );
+        assert!(
+            items[0]
+                .body_text
+                .contains("--thread-key kunstmen-supervisor")
+        );
     }
 
     #[test]
@@ -20673,9 +21037,11 @@ Keep the work bounded to project preparation."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(tasks
-            .iter()
-            .any(|task| task.title == "prep-priority-plan: choose first work items"));
+        assert!(
+            tasks
+                .iter()
+                .any(|task| task.title == "prep-priority-plan: choose first work items")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -21322,12 +21688,16 @@ Use shell tools to create or update these files."
             .expect("load queue task")
             .expect("queue task exists");
         assert!(reloaded.prompt.contains("HARNESS FEEDBACK"));
-        assert!(reloaded
-            .prompt
-            .contains("without producing the required final assistant message"));
-        assert!(reloaded
-            .prompt
-            .contains("Create and verify the smoke artifact."));
+        assert!(
+            reloaded
+                .prompt
+                .contains("without producing the required final assistant message")
+        );
+        assert!(
+            reloaded
+                .prompt
+                .contains("Create and verify the smoke artifact.")
+        );
         assert_eq!(reloaded.workspace_root.as_deref(), Some("/tmp/qwen-smoke"));
         assert_eq!(route_status_for(&root, &task.message_key), "leased");
     }
@@ -21887,11 +22257,12 @@ Use shell tools to create or update these files."
         let failed_tasks = channels::list_queue_tasks(&root, &["failed".to_string()], 10)
             .expect("failed to list failed queue tasks");
         assert_eq!(failed_tasks.len(), FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD);
-        assert!(failed_tasks.iter().all(|task| task
-            .status_note
-            .as_deref()
-            .unwrap_or("")
-            .contains("neue belastbare Grundlage")));
+        assert!(failed_tasks.iter().all(|task| {
+            task.status_note
+                .as_deref()
+                .unwrap_or("")
+                .contains("neue belastbare Grundlage")
+        }));
 
         let note_count_after_first_block: i64 = conn
             .query_row(
@@ -22309,14 +22680,16 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply in same thread',
                 '2026-04-27T15:39:18Z', '2026-04-27T15:39:18Z', '{}'
             )"#,
-            rusqlite::params![serde_json::json!({
-                "thread_key": thread_key,
-                "to": ["michael.welsch@metric-space.ai"],
-                "cc": [],
-                "subject": "Re: Aw: Re: Visuelle Homepage",
-                "attachments": [],
-            })
-            .to_string()],
+            rusqlite::params![
+                serde_json::json!({
+                    "thread_key": thread_key,
+                    "to": ["michael.welsch@metric-space.ai"],
+                    "cc": [],
+                    "subject": "Re: Aw: Re: Visuelle Homepage",
+                    "attachments": [],
+                })
+                .to_string()
+            ],
         )
         .expect("failed to seed later reviewed send");
 
@@ -22549,14 +22922,16 @@ Use shell tools to create or update these files."
                 'later reviewed founder reply copied Michael on a different founder thread',
                 '2026-04-27T23:21:23Z', '2026-04-27T23:21:23Z', '{"ok":true}'
             )"#,
-            rusqlite::params![serde_json::json!({
-                "thread_key": "<current-thread@example.com>",
-                "to": ["o.schaefers@gmx.net"],
-                "cc": ["michael.welsch@metric-space.ai"],
-                "subject": "Re: Aw: Re: Visuelle Homepage",
-                "attachments": [],
-            })
-            .to_string()],
+            rusqlite::params![
+                serde_json::json!({
+                    "thread_key": "<current-thread@example.com>",
+                    "to": ["o.schaefers@gmx.net"],
+                    "cc": ["michael.welsch@metric-space.ai"],
+                    "subject": "Re: Aw: Re: Visuelle Homepage",
+                    "attachments": [],
+                })
+                .to_string()
+            ],
         )
         .expect("failed to seed later reviewed send");
 
@@ -22837,10 +23212,11 @@ Was jetzt zu tun ist:\n\
 
         let note = maybe_continue_platform_expertise_pipeline_after_success(&root, &job)
             .expect("platform pass continuation should succeed");
-        assert!(note
-            .as_deref()
-            .unwrap_or_default()
-            .contains("messaging-wording"));
+        assert!(
+            note.as_deref()
+                .unwrap_or_default()
+                .contains("messaging-wording")
+        );
 
         let items = tickets::list_ticket_self_work_items(&root, Some("local"), None, 10)
             .expect("failed to list self-work");
@@ -22987,17 +23363,21 @@ Was jetzt zu tun ist:\n\
         let shared = state.lock().expect("service state poisoned");
         assert!(!shared.busy);
         assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(shared
-            .recent_events
-            .back()
-            .map(|event| event.contains("runtime blocker cooldown"))
-            .unwrap_or(false));
+        assert!(
+            shared
+                .recent_events
+                .back()
+                .map(|event| event.contains("runtime blocker cooldown"))
+                .unwrap_or(false)
+        );
         drop(shared);
         let events = governance::list_recent_events(&root, turn_loop::CHAT_CONVERSATION_ID, 8)
             .expect("failed to list governance events");
-        assert!(events
-            .iter()
-            .any(|event| event.mechanism_id == "runtime_blocker_backoff"));
+        assert!(
+            events
+                .iter()
+                .any(|event| event.mechanism_id == "runtime_blocker_backoff")
+        );
     }
 
     #[test]
@@ -23267,9 +23647,11 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.contains("stale service pid file")));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.contains("stale service pid file"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -23281,9 +23663,11 @@ Was jetzt zu tun ist:\n\
 
         let alerts = runtime_lifecycle_alerts(&root, None, false).unwrap();
 
-        assert!(alerts
-            .iter()
-            .any(|alert| alert.contains("backend residue stale pid file")));
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.contains("backend residue stale pid file"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -23685,9 +24069,10 @@ Was jetzt zu tun ist:\n\
         assert!(paths.contains(&"/tmp/ctox-tb2-run/controller.json"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/results.jsonl"));
         assert!(paths.contains(&"/tmp/ctox-tb2-run/blogpost-notes.md"));
-        assert!(refs
-            .iter()
-            .all(|artifact| artifact.expected_terminal_state == "present"));
+        assert!(
+            refs.iter()
+                .all(|artifact| artifact.expected_terminal_state == "present")
+        );
     }
 
     #[test]
@@ -24217,16 +24602,18 @@ The controller must update stale files itself."
             delivered.is_empty(),
             "review-feedback must not accept files older than latest outcome rejection"
         );
-        assert!(workspace_file_artifact_diagnostic_for_expected(
-            &root,
-            &job,
-            &ArtifactRef {
-                kind: ArtifactKind::WorkspaceFile,
-                primary_key: controller_text,
-                expected_terminal_state: "fresh".to_string(),
-            },
-        )
-        .contains("stale"));
+        assert!(
+            workspace_file_artifact_diagnostic_for_expected(
+                &root,
+                &job,
+                &ArtifactRef {
+                    kind: ArtifactKind::WorkspaceFile,
+                    primary_key: controller_text,
+                    expected_terminal_state: "fresh".to_string(),
+                },
+            )
+            .contains("stale")
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -25045,9 +25432,11 @@ Those are not durable artifact requirements."
             classify_findings(&outcome.categorized_findings),
             ReviewRoutingClass::RewriteOnly
         );
-        assert!(outcome
-            .summary
-            .contains("internal status or completion report"));
+        assert!(
+            outcome
+                .summary
+                .contains("internal status or completion report")
+        );
     }
 
     #[test]
@@ -25518,9 +25907,11 @@ Those are not durable artifact requirements."
         let tasks =
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
-        assert!(tasks
-            .iter()
-            .all(|task| !task.title.starts_with("Founder communication rework:")));
+        assert!(
+            tasks
+                .iter()
+                .all(|task| !task.title.starts_with("Founder communication rework:"))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

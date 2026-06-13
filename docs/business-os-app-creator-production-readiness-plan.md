@@ -131,9 +131,27 @@ Post-R15 hardening moves the Business OS app-artifact write guard into the
 shared shell paths used by legacy MiniMax execution, broadens the forbidden
 root-probe patterns (`test-*`, `*_test.*`, `*-test.*`, `_probe_*`), blocks
 root-level symlink/hardlink/copy attempts, and keeps module-directory writes
-legal. The next valid evidence round is R16 from a fresh isolated root using
-real Business OS command dispatch; it must prove the guard fires inside CTOX,
-not only in unit tests.
+legal.
+
+Native R16 is valid CTOX-native evidence and failed on a new runtime-control
+gap. It used real `ctox.business_os.app.create` dispatch, MiniMax M3 with 256k
+context, and a release-like isolated root. The first worker (`projects`) stayed
+inside the installed-module directory and the deterministic validator correctly
+caught Business OS contract failures (`layout.right`, forbidden dependency
+literals in generated comments/tests, and a failing module test). However, the
+MiniMax/Responses turn then aborted with `invalid function arguments json
+string`. The service marked the app queue task `failed` and immediately leased a
+fresh app task because app validation feedback only ran on successful worker
+turns. That is not production-ready: provider/tool-call errors must not bypass
+deterministic app validation when red app artifacts exist.
+
+Post-R16 hardening runs Business OS app validation after worker/model/tool-call
+errors for app tasks, writes deterministic feedback onto the same leased queue
+task, records a `validator_rework` proof, and acknowledges the task as
+`review_rework` instead of failing it or leasing the next app. The target prompt
+and skill now also forbid guard probing, generated-file copies of forbidden
+dependency names, and mammoth single tool-call writes. The next valid evidence
+round is R17 from a fresh isolated root using real Business OS command dispatch.
 
 ## Why CLI Passed But CTOX-Native Failed
 
@@ -722,9 +740,12 @@ Only after this evidence should the App Creator be called production-ready.
 - Close the R14 validator false-green: reject `localStorage`, `sessionStorage`,
   root probe files, module-local `package.json`/lockfiles/`node_modules`, and
   transient JSON-manifest exposure before an app can be accepted.
-- Run CTOX-native R16 from a fresh isolated root using the rebuilt runtime and
+- Run CTOX-native R17 from a fresh isolated root using the rebuilt runtime and
   real Business OS app command dispatch. Do not use generic `queue add --skill`
   as production-readiness evidence.
+- Prove worker/model/tool-call errors on app tasks still run the deterministic
+  app validator and convert red app artifacts into same-task `review_rework`
+  before any fresh app task is leased.
 - Prove app-validator `review_rework` tasks are leased before fresh pending app
   tasks in a native run, not only a unit test.
 - Prove root-level app artifacts, aliases, and probe files are blocked or
@@ -743,6 +764,12 @@ Only after this evidence should the App Creator be called production-ready.
   `node:vm`, and `new Function` during Business OS app tasks, or whether
   validator failure is sufficient. Do not allow these patterns to reach a
   completed app.
+- Prove forbidden package-manager/bundler/dependency literals in generated app
+  files, tests, comments, and user-visible copy are rejected or repaired before
+  completion.
+- Prove generated app files are small enough for stable tool-call JSON, or that
+  agents split large writes into bounded chunks without malformed provider
+  function arguments.
 - Require agents to write `module.json` and `collections.schema.json`
   atomically or add runtime/catalog tolerance for in-progress invalid JSON.
 - Add live shell smoke automation for installed modules.
@@ -979,6 +1006,72 @@ next action:
 - run native R16 from a fresh isolated root through ctox.business_os.app.create
   and prove the guard fires inside MiniMax legacy shell execution before any app
   can be accepted
+```
+
+### Native R16 2026-06-13
+
+```text
+status: valid CTOX-native first-worker failure
+entry path: ctox.business_os.app.create
+model: MiniMax M3
+context: 256k
+isolated root: /tmp/ctox-bos-native-r16-20260613-201357
+commands dispatched: subscriptions, inventory, projects, contracts, compliance
+first worker: projects
+
+positive evidence:
+- worker reached MiniMax M3 through ctox_core_api with 262144 context tokens
+- worker inspected existing Business OS modules and app architecture before
+  implementation
+- worker initially used the provided installed-module target directory instead
+  of writing root-level module.json or root-level app aliases
+- manual mid-run validation caught the generated app as red instead of accepting
+  the worker self-report
+
+production blockers:
+- module.json used layout.right without a justified persistent third pane
+- generated app comments/tests contained forbidden package-manager/bundler
+  literals copied from validation context
+- generated module test failed because expected money formatting did not match
+  the implemented output
+- worker probed the tool environment (`type cat`, shell alias checks, temporary
+  root writes) instead of simply implementing inside MODULE_DIR
+- the MiniMax/Responses turn aborted with `invalid function arguments json
+  string` after app artifacts existed
+- the service marked the app queue task failed and leased the next pending app
+  because app validation feedback only ran on successful worker turns
+
+decision:
+- stop after the first systemic failure; the finding is runtime control-flow,
+  not a projects-domain app issue
+
+hardening completed:
+- run Business OS app artifact validation after worker/model/tool-call errors
+  for app tasks when leased app queue work exists
+- if red artifacts exist and repair attempts remain, write deterministic
+  validator feedback back onto the same queue task, record validator_rework, and
+  ack the task as review_rework
+- if app validation repair attempts are exhausted after a worker error, fail the
+  app task with an app-validation-specific reason instead of a generic prompt
+  failure
+- preserve app-validation rework as the owner of last_error/event text instead
+  of overwriting it with the generic provider/tool-call failure
+- extend the target prompt and skill to forbid guard probing, forbidden
+  generated-file dependency literals, and huge one-shot file writes
+
+hardening verification:
+- rustfmt --edition 2024 src/core/service/service.rs src/core/business_os/store.rs
+- node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.test.mjs
+- node src/apps/business-os/scripts/validate-app-module.test.mjs
+- CARGO_BUILD_JOBS=1 cargo test -q --bin ctox business_os_app_validation -- --nocapture
+- CARGO_BUILD_JOBS=1 cargo test -q --bin ctox app_create_queue_prompt_targets_app_module_skill -- --nocapture
+
+next action:
+- run app_modify_queue_prompt_targets_app_module_not_skill_files, rebuild ctox,
+  push the checkpoint to main, then run native R17 from a fresh isolated root
+  through ctox.business_os.app.create
 ```
 
 ### Validator Hook 2026-06-13
