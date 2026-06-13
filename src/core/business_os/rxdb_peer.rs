@@ -82,6 +82,8 @@ enum NativePeerExit {
     Shutdown,
     /// The watchdog saw a stale heartbeat and tore the peer down: respawn.
     WatchdogStale,
+    /// The persisted sync room/signaling config changed: respawn with fresh config.
+    ConfigChanged,
     /// Another process holds the peer lock: retry later (standby takeover).
     LockHeldElsewhere,
 }
@@ -708,6 +710,13 @@ pub fn spawn_native_peer(
                             delay.as_secs()
                         );
                     }
+                    Ok(NativePeerExit::ConfigChanged) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer sync config changed; \
+                             respawning in {}s",
+                            delay.as_secs()
+                        );
+                    }
                     Ok(NativePeerExit::LockHeldElsewhere) => {
                         eprintln!(
                             "[business-os] native rxdb peer lock held by another process; \
@@ -1252,6 +1261,7 @@ async fn run_native_peer(
         eprintln!("[business-os] native rxdb peer already runs in another process");
         return Ok(NativePeerExit::LockHeldElsewhere);
     };
+    let configured_signaling_urls = signaling_urls.clone();
     let signaling_base_url = signaling_urls
         .into_iter()
         .find(|url| !url.trim().is_empty())
@@ -1548,6 +1558,27 @@ async fn run_native_peer(
                     exit = NativePeerExit::WatchdogStale;
                     break;
                 }
+                match native_peer_sync_config_changed(
+                    &root,
+                    &sync_room,
+                    &signaling_room_password,
+                    &configured_signaling_urls,
+                ) {
+                    Ok(true) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer watchdog: sync config changed; \
+                             shutting down for a supervised respawn"
+                        );
+                        exit = NativePeerExit::ConfigChanged;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(err) => {
+                        eprintln!(
+                            "[business-os] native rxdb peer watchdog: sync config check failed: {err:#}"
+                        );
+                    }
+                }
             }
         }
     }
@@ -1613,6 +1644,28 @@ fn ice_servers_from_sync_config(values: &[Value]) -> Vec<RTCIceServer> {
                 ..RTCIceServer::default()
             })
         })
+        .collect()
+}
+
+fn native_peer_sync_config_changed(
+    root: &Path,
+    active_sync_room: &str,
+    active_signaling_room_password: &str,
+    active_signaling_urls: &[String],
+) -> anyhow::Result<bool> {
+    let config = store::sync_config(root)?;
+    Ok(config.sync_room != active_sync_room
+        || config.signaling_room_password != active_signaling_room_password
+        || normalized_signaling_urls(&config.signaling_urls)
+            != normalized_signaling_urls(active_signaling_urls))
+}
+
+fn normalized_signaling_urls(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
         .collect()
 }
 
@@ -7212,6 +7265,49 @@ mod tests {
         assert_eq!(status["heartbeat"]["fresh"], true);
         assert_eq!(status["peer_session_id"], "rxdb-rs-test");
         assert!(is_native_peer_running_for_root(root.path()));
+    }
+
+    #[test]
+    fn native_peer_sync_config_change_detects_room_rotation() {
+        let root = tempfile::tempdir().expect("temp root");
+        let initial = store::sync_config(root.path()).expect("initial sync config");
+        assert!(
+            !native_peer_sync_config_changed(
+                root.path(),
+                &initial.sync_room,
+                &initial.signaling_room_password,
+                &initial.signaling_urls,
+            )
+            .expect("unchanged config check"),
+            "current config must match itself"
+        );
+
+        let rotated =
+            store::rotate_sync_room_password(root.path()).expect("rotate sync room password");
+        assert_ne!(initial.sync_room, rotated.sync_room);
+        assert!(
+            native_peer_sync_config_changed(
+                root.path(),
+                &initial.sync_room,
+                &initial.signaling_room_password,
+                &initial.signaling_urls,
+            )
+            .expect("rotated config check"),
+            "room rotation must force native peer respawn"
+        );
+    }
+
+    #[test]
+    fn normalized_signaling_urls_ignores_empty_entries() {
+        let urls = vec![
+            " wss://signaling.ctox.dev ".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+        ];
+        assert_eq!(
+            normalized_signaling_urls(&urls),
+            vec!["wss://signaling.ctox.dev".to_string()]
+        );
     }
 
     #[test]
