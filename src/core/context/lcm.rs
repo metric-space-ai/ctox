@@ -1093,6 +1093,20 @@ impl LcmEngine {
     ) -> Result<MessageRecord> {
         let _ = self.continuity_init_documents(conversation_id)?;
         let now = iso_now();
+        let token_count = estimate_tokens(content) as i64;
+        let stored_outcome = if role == "assistant" {
+            outcome.map(|value| value.as_str().to_string())
+        } else {
+            None
+        };
+        // Persist the message row, its FTS row, and its context_items row atomically.
+        // A mid-sequence failure (e.g. SQLITE_BUSY, or a failing ordinal read) must not
+        // commit an orphan messages row: render/compaction JOIN through context_items and
+        // would never see it, while the persist-retry helper would insert a duplicate.
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .context("failed to begin add-message transaction")?;
         let seq = self
             .conn
             .query_row(
@@ -1100,13 +1114,7 @@ impl LcmEngine {
                 [conversation_id],
                 |row| row.get::<_, i64>(0),
             )
-            .unwrap_or(1);
-        let token_count = estimate_tokens(content) as i64;
-        let stored_outcome = if role == "assistant" {
-            outcome.map(|value| value.as_str().to_string())
-        } else {
-            None
-        };
+            .context("failed to compute next message seq")?;
         self.conn.execute(
             "INSERT INTO messages (conversation_id, seq, role, content, token_count, created_at, agent_outcome)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1131,6 +1139,8 @@ impl LcmEngine {
              VALUES (?1, ?2, ?3, ?4, NULL, ?5)",
             params![conversation_id, ordinal, ContextItemType::Message.as_str(), message_id, iso_now()],
         )?;
+        tx.commit()
+            .context("failed to commit add-message transaction")?;
         Ok(MessageRecord {
             message_id,
             conversation_id,
@@ -3068,14 +3078,13 @@ impl LcmEngine {
     }
 
     fn next_context_ordinal(&self, conversation_id: i64) -> Result<i64> {
-        Ok(self
-            .conn
+        self.conn
             .query_row(
                 "SELECT COALESCE(MAX(ordinal), 0) + 1 FROM context_items WHERE conversation_id = ?1",
                 [conversation_id],
                 |row| row.get(0),
             )
-            .unwrap_or(1))
+            .context("failed to compute next context ordinal")
     }
 
     fn leaf_source_text(&self, entries: &[ContextEntry]) -> Result<String> {
@@ -6966,6 +6975,60 @@ mod tests {
         assert_eq!(
             engine.last_agent_outcome(7)?,
             Some(AgentOutcome::TurnTimeout)
+        );
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    #[test]
+    fn add_message_with_outcome_rolls_back_on_partial_failure() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let _ = engine.continuity_init_documents(7)?;
+        engine.add_message_with_outcome(7, "user", "ping", None)?;
+
+        let messages_before: i64 = engine.conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
+            [7],
+            |row| row.get(0),
+        )?;
+        let fts_before: i64 =
+            engine
+                .conn
+                .query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get(0))?;
+
+        // Make the context_items step fail after the messages + FTS inserts have run,
+        // proving the whole row set rolls back as one transaction.
+        engine
+            .conn
+            .execute_batch("ALTER TABLE context_items RENAME TO context_items_hidden;")?;
+        let result =
+            engine.add_message_with_outcome(7, "assistant", "boom", Some(AgentOutcome::Success));
+        assert!(
+            result.is_err(),
+            "add_message_with_outcome must fail when the context_items step cannot run"
+        );
+        engine
+            .conn
+            .execute_batch("ALTER TABLE context_items_hidden RENAME TO context_items;")?;
+
+        let messages_after: i64 = engine.conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id = ?1",
+            [7],
+            |row| row.get(0),
+        )?;
+        let fts_after: i64 =
+            engine
+                .conn
+                .query_row("SELECT COUNT(*) FROM messages_fts", [], |row| row.get(0))?;
+        assert_eq!(
+            messages_after, messages_before,
+            "rolled-back transaction must leave no orphan messages row"
+        );
+        assert_eq!(
+            fts_after, fts_before,
+            "rolled-back transaction must leave no orphan messages_fts row"
         );
 
         let _ = std::fs::remove_file(db_path);
