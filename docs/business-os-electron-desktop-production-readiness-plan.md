@@ -78,6 +78,11 @@ wieder testbar:
   `systemd` und entweder passwordless `sudo -n` oder einer SecretStore-basierten
   Sudo-Passwort-Referenz der offizielle CTOX-Installer ausgefuehrt, danach
   `peer ensure`; Passwortargumente, `sshpass` und `sudo -S` bleiben verboten.
+- SSH-managed Fresh-Install kann dem offiziellen Installer CLI-Argumente fuer
+  API-backed Setups durchreichen (`--api-provider`, `--model`, `--backend`),
+  damit CPU-only VPS nicht zwangslaeufig auf das Default-Profil mit lokaler
+  GPU-Inferenz fallen. Diese Parameter werden als Installer-Flags uebergeben,
+  nicht als Runtime-Env-Toggles.
 - Fuer Hosts ohne passwordless sudo nutzt der Fresh-Install-Vertrag einen
   remote temporaeren Askpass/FIFO-Pfad: das Sudo-Secret kommt aus dem
   SecretStore und wird nur ueber stdin an den SSH-Prozess geschrieben.
@@ -197,9 +202,13 @@ Nicht umgesetzt oder noch nicht bewiesen:
   der Business-OS-Kundenroot wird installiert, aber der Local-Daemon-Pfad setzt
   weiterhin ein vorhandenes `ctox` Binary plus validen CTOX Runtime-Root voraus.
 - Pairing-Rotation/Widerruf gegen echte Remote-Instanz noch nicht E2E bewiesen.
-- SSH/Sudo Fresh-Install gegen echte VPS und Live-VPS-E2E inklusive lokalem
-  Artefakt. Der Existing-CTOX Live-Attach gegen SKF ist gruen, ersetzt aber
-  noch keinen Fresh-Install-Nachweis.
+- SSH/Sudo Fresh-Install ist gegen echte VPS noch nicht gruen: Der erste
+  Kunstmen-Live-Versuch ohne API-Provider scheiterte korrekt am GPU-only
+  Default des offiziellen Installers; der zweite Versuch mit
+  `--install-api-provider openai` kam bis zum realen Cargo-Source-Build, lief
+  aber nach 900s in den Desktop-Smoke-Timeout. Existing-CTOX Live-Attach gegen
+  SKF/Kunstmen ist gruen, ersetzt aber keinen unattended Fresh-Install-
+  Nachweis mit produktionsfaehiger Dauer und Rollback-/Progress-UX.
 - Linux Secret Service und Windows Credential Manager sind im Tag-Release-
   Workflow als echte Runtime-Smokes verdrahtet; ein tatsaechlich gruen
   gelaufener Matrix-Run steht noch aus.
@@ -432,6 +441,9 @@ Aufgaben:
 - [x] Remote Preflight für OS, systemd, sudo, `ctox`.
 - [x] Fresh Ubuntu Install auf Contract-Ebene mit offiziellem Installer,
   Linux/bash/curl/systemd/passwordless-sudo Preflight und `peer ensure`.
+- [x] Offizieller Fresh-Installer kann API-backed Parameter als CLI-Flags
+  bekommen: `apiProvider`, `model` und `backend` werden validiert und an
+  `install.sh` weitergereicht, ohne Env-Var-Runtime-Toggle.
 - [x] Existing-CTOX Upgrade/Restart auf CLI-Contract-Ebene.
 - [x] SourceManager routet `freshInstall: true` getrennt vom Existing-Upgrade.
 - [x] Hosts ohne passwordless sudo koennen den Fresh-Install-Vertrag mit einer
@@ -462,7 +474,10 @@ Aufgaben:
   wegen macOS-Keychain-TTY-Harness-Problemen bewusst den schwächeren
   `file-askpass-fallback` mit In-Memory-Smoke-Secrets; der voll
   platform-keychain-backed Attach bleibt durch SKF belegt.
-- [ ] Fresh Ubuntu Install gegen echten VPS.
+- [ ] Fresh Ubuntu Install gegen echten VPS ist noch nicht gruen: Kunstmen mit
+  `--install-api-provider openai` erreicht den echten offiziellen Installer und
+  startet den Cargo-Source-Build, laeuft aber im Desktop-Smoke nach 900s in den
+  Timeout; der verwaiste Build wurde danach gezielt gestoppt.
 - [ ] Live-Test des lokalen Artefaktpfads gegen einen echten VPS.
 
 Tests:
@@ -470,6 +485,9 @@ Tests:
 - [x] Desktop-JS-Test: Fresh-SSH-Install-Command nutzt den offiziellen
   `install.sh`, `curl -fsSL | bash`, `sudo -n true`, `ctox upgrade`, optional
   `ctox start` und `ctox status`, aber kein `sshpass`/`sudo -S`.
+- [x] Desktop-JS-Test: Fresh-SSH-Install kann API-backed Installer-Argumente
+  per `bash -s -- '--api-provider' ...` weitergeben, validiert untrusted
+  Zeichen und lehnt die Kombination mit lokalem Artefaktpfad ab.
 - [x] Desktop-JS-Test: Fresh-SSH-Install bricht ohne passwordless sudo
   oder Sudo-Secret-Ref fail-closed ab.
 - [x] Desktop-JS-Test: Fresh-SSH-Install akzeptiert eine Sudo-Secret-Ref,
@@ -525,6 +543,13 @@ Tests:
   Signaling-URL vorhanden und kein Registry-Secret-Leak. Dieser zweite Host ist
   ein Remote-/Launch-Nachweis mit schwächerem Secret-Backend; kein zweiter
   platform-keychain-backed Attach.
+- [x] Negativer Live-Befund Kunstmen Fresh-Install:
+  `--fresh-install --install-api-provider openai` vermeidet den frueheren
+  GPU-only Installer-Abbruch und startet real `cargo build --release --bin
+  ctox`; der Desktop-Smoke bricht aber nach 900s mit SSH-Timeout ab. Damit ist
+  der Flag-Contract live bestaetigt, aber Fresh-Install ist nicht
+  production-ready, solange der offizielle Installer auf kleinen VPS aus Source
+  baut oder der Desktop keine laengere/progressfaehige Install-Session fuehrt.
 
 ## Welle 6: Unified Switcher UX
 
@@ -674,3 +699,4 @@ Release Gates:
 | 2026-06-13 | Welle 2 Live-Management-Deep-Link gruen: `smoke:ctox-dev-live -- --manage-first` laedt nach ctox.dev Passwort-Auth den konkreten `/dashboard?tenant=<tenant-id>` Link im Electron Default-Session-Cookie-Jar, prueft HTTP 200, ctox.dev-Origin, keinen Login-Redirect und Tenant-Hinweis im gerenderten BrowserWindow-DOM. Gegen Produktion gruen fuer Kunstmen; danach bleibt der Launch-Pfad WebRTC-only (`transport=webrtc`, `http_bridge_available=false`). Welle 2 steigt auf 90%, Gesamt auf 93%; offen bleiben echter visueller AuthPanel-Login und echte Access-Revocation. Gruen: `smoke:ctox-dev-live -- --expected-tenant Kunstmen --manage-first --launch-first`. |
 | 2026-06-13 | Welle 2 echter AuthPanel-Login gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first` fuellt die echte ctox.dev Login-UI im Electron BrowserWindow aus, erkennt die danach gueltige Session ueber `/api/desktop/session-package`, schliesst das Loginfenster via `session-check`, prueft den Kunstmen-Management-Deep-Link und konsumiert danach einen WebRTC-only Launch. Dabei wurde ein Produktionsrisiko beseitigt: Der Desktop haengt nicht mehr an einem live nicht zuverlaessig navigierten Custom-Scheme-Callback; der Callback bleibt lokal/Electron ueber den Protocol-Smoke abgedeckt. Welle 2 steigt auf 95%, Gesamt auf 94%; offen bleibt echte ctox.dev Access-Revocation/Session-Rotation. Gruen: Live-Smoke AuthPanel, `node --test test/ctox-dev-login.test.cjs test/protocol-handler.test.cjs`, `npm run check`, `npm test` 102/102, `npm run test:electron-smoke`, `npm run release:check`, `git diff --check`. |
 | 2026-06-13 | Welle 5 zweiter VPS-Nachweis gruen: `smoke:ssh-password-live -- --host 51.210.246.120 --file-askpass-fallback --attach --display-name Kunstmen` prueft den Kunstmen-Testhost mit gepinntem ED25519-Fingerprint, echtem Passwort-SSH, Remote-Preflight, Remote-`peer ensure`, `ssh_managed` Registry-Shape, eigener Session-Partition und WebRTC-only Launch ohne Registry-Secret-Leak. Der Smoke-Harness erlaubt `--file-askpass-fallback --attach` jetzt explizit und speichert Live-Smoke-Secrets dabei nur in Memory; das ist ein schwaecherer zweiter Host-Nachweis, waehrend der voll platform-keychain-backed Attach weiter durch SKF belegt ist. Welle 5 steigt auf 97%; Fresh-Install und lokaler Artefaktpfad gegen echte VPS bleiben offen. Gruen: Kunstmen Fallback-Attach-Smoke, `node --check scripts/smoke-ssh-password-live.cjs`, `node --test test/ssh-source.test.cjs test/source-manager.test.cjs test/secret-store.test.cjs`. |
+| 2026-06-13 | Welle 5 API-backed Fresh-Installer-Flags umgesetzt und live negativ validiert: Desktop-SSH-Fresh-Install kann `apiProvider`, `model` und `backend` validiert an den offiziellen `install.sh` per CLI-Argumenten weitergeben; `smoke:ssh-password-live` bietet dafuer `--install-api-provider`, `--install-model` und `--install-backend`. Gegen Kunstmen zeigte der Live-Test zwei echte Befunde: ohne API-Provider scheitert der offizielle Installer am lokalen GPU-Default, mit `--install-api-provider openai` startet der reale Cargo-Source-Build, ueberschreitet aber den 900s Desktop-Smoke-Timeout. Der verwaiste Build wurde gestoppt. Fresh-Install bleibt daher nicht production-ready; noetig sind prebuilt Linux-Artefakte oder ein installer/progress/timeout-faehiger Desktop-Fresh-Install-Pfad. Gruen: `node --check src/main/sources.cjs`, `node --check scripts/smoke-ssh-password-live.cjs`, `node --test test/ssh-source.test.cjs`, `npm run check`, `npm test` 103/103, `npm run release:check`, `npm run test:electron-smoke`, `git diff --check`. |

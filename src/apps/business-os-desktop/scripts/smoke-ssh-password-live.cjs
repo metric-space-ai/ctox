@@ -10,10 +10,15 @@ const { createSecretStore } = require("../src/main/secret-store.cjs");
 const { ensureKnownHost } = require("../src/main/ssh-host-key.cjs");
 const {
   SshManagedInstanceSource,
+  buildScpArgs,
+  buildSshFreshCtoxInstallCommand,
+  buildSshLocalArtifactInstallCommand,
+  buildSshLocalArtifactPrepareCommand,
   buildSshPeerRemoteCommand,
   buildSshArgs,
   buildSshPreflightCommand,
   instanceFromPeerStatus,
+  normalizeSshInstallOptions,
   normalizeSshPreflight,
   parseSshPreflightOutput,
 } = require("../src/main/sources.cjs");
@@ -84,9 +89,37 @@ async function main() {
     assert.ok(fs.readFileSync(knownHostsPath, "utf8").includes(options.host), "known_hosts entry was not written");
 
     let attachEvidence = null;
-    if (options.attach) {
-      const instance = options.fileAskpassFallback
-        ? await runFileAskpassAttach({
+    let installEvidence = null;
+    if (options.attach || options.freshInstall) {
+      const install = normalizeSshInstallOptions({
+        releaseChannel: options.releaseChannel,
+        restartService: options.restartService,
+        localArtifactPath: options.localArtifactPath,
+        apiProvider: options.installApiProvider,
+        model: options.installModel,
+        backend: options.installBackend,
+      });
+      const result = options.freshInstall
+        ? await runFreshInstallFlow({
+            source,
+            registryProvider: () => registry,
+            registrySaver: (next) => {
+              registry = next;
+            },
+            profile,
+            password,
+            tempRoot,
+            knownHostsPath,
+            hostKey,
+            sshPasswordRef,
+            trustedHostKeyFingerprint,
+            displayName: options.displayName || `${options.user}@${options.host}`,
+            install,
+            useFileAskpassFallback: options.fileAskpassFallback,
+          })
+        : {
+            instance: options.fileAskpassFallback
+              ? await runFileAskpassAttach({
             source,
             registryProvider: () => registry,
             registrySaver: (next) => {
@@ -100,12 +133,15 @@ async function main() {
             sshPasswordRef,
             displayName: options.displayName || `${options.user}@${options.host}`,
           })
-        : await source.attachExisting({
+              : await source.attachExisting({
             ...profile,
             sshPasswordRef,
             trustedHostKeyFingerprint,
             displayName: options.displayName || `${options.user}@${options.host}`,
-          });
+          }),
+            install: null,
+          };
+      const { instance } = result;
       for (const ref of instance.secretRefs || []) createdSecretRefs.add(ref);
       const launch = await source.getLaunchConfig(instance.id);
       assert.equal(instance.source, "ssh_managed");
@@ -132,6 +168,19 @@ async function main() {
         httpBridgeAvailable: launch.ctoxConfig.http_bridge_available,
         registrySecretLeak: false,
       };
+      if (result.install) {
+        installEvidence = {
+          mode: result.install.mode,
+          artifact: result.install.artifact || "official-installer",
+          releaseChannel: result.install.releaseChannel,
+          restartService: result.install.restartService,
+          apiProvider: result.install.apiProvider || "",
+          model: result.install.model || "",
+          backend: result.install.backend || "",
+          stdoutBytes: Buffer.byteLength(String(result.install.stdout || "")),
+          stderrBytes: Buffer.byteLength(String(result.install.stderr || "")),
+        };
+      }
     }
 
     const evidence = {
@@ -153,6 +202,7 @@ async function main() {
         ctoxAvailable: preflight.ctoxAvailable,
         ctoxStatusOk: preflight.ctoxStatusOk,
       },
+      install: installEvidence,
       attach: attachEvidence,
     };
     const evidenceText = JSON.stringify(evidence, null, 2);
@@ -190,6 +240,13 @@ function parseArgs(args) {
     fileAskpassFallback: false,
     passwordStdin: false,
     attach: false,
+    freshInstall: false,
+    localArtifactPath: "",
+    installApiProvider: "",
+    installModel: "",
+    installBackend: "",
+    releaseChannel: "stable",
+    restartService: true,
     displayName: "",
     keepTemp: false,
   };
@@ -215,6 +272,25 @@ function parseArgs(args) {
       options.passwordStdin = true;
     } else if (arg === "--attach") {
       options.attach = true;
+    } else if (arg === "--fresh-install") {
+      options.freshInstall = true;
+    } else if (arg === "--local-artifact-path") {
+      options.localArtifactPath = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--install-api-provider") {
+      options.installApiProvider = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--install-model") {
+      options.installModel = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--install-backend") {
+      options.installBackend = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--release-channel") {
+      options.releaseChannel = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--no-restart-service") {
+      options.restartService = false;
     } else if (arg === "--display-name") {
       options.displayName = String(args[index + 1] || "").trim();
       index += 1;
@@ -228,6 +304,12 @@ function parseArgs(args) {
   if (!options.user) throw new Error("--user is required");
   if (!Number.isInteger(options.port) || options.port <= 0 || options.port > 65535) {
     throw new Error("--port must be between 1 and 65535");
+  }
+  if (options.localArtifactPath && !options.freshInstall) {
+    throw new Error("--local-artifact-path requires --fresh-install");
+  }
+  if ((options.installApiProvider || options.installModel || options.installBackend) && !options.freshInstall) {
+    throw new Error("--install-api-provider, --install-model and --install-backend require --fresh-install");
   }
   return options;
 }
@@ -265,6 +347,131 @@ async function runFileAskpassPreflight({ profile, password, tempRoot, knownHosts
   return normalizeSshPreflight(parseSshPreflightOutput(stdout), commandProfile);
 }
 
+async function runFreshInstallFlow({
+  source,
+  registryProvider,
+  registrySaver,
+  profile,
+  password,
+  tempRoot,
+  knownHostsPath,
+  hostKey,
+  sshPasswordRef,
+  trustedHostKeyFingerprint,
+  displayName,
+  install,
+  useFileAskpassFallback,
+}) {
+  if (!useFileAskpassFallback) {
+    const result = await source.installFresh({
+      ...profile,
+      sshPasswordRef,
+      trustedHostKeyFingerprint,
+      displayName,
+      releaseChannel: install.releaseChannel,
+      restartService: install.restartService,
+      ...(install.apiProvider ? { apiProvider: install.apiProvider } : {}),
+      ...(install.model ? { model: install.model } : {}),
+      ...(install.backend ? { backend: install.backend } : {}),
+      ...(install.localArtifactPath ? { localArtifactPath: install.localArtifactPath } : {}),
+    });
+    return {
+      instance: result.instance,
+      install: result.install,
+    };
+  }
+  const installResult = await runFileAskpassFreshInstallCommand({
+    profile,
+    password,
+    tempRoot,
+    knownHostsPath,
+    hostKey,
+    sshPasswordRef,
+    install,
+  });
+  const instance = await runFileAskpassAttach({
+    source,
+    registryProvider,
+    registrySaver,
+    profile,
+    password,
+    tempRoot,
+    knownHostsPath,
+    hostKey,
+    sshPasswordRef,
+    displayName,
+  });
+  return {
+    instance,
+    install: installResult,
+  };
+}
+
+async function runFileAskpassFreshInstallCommand({
+  profile,
+  password,
+  tempRoot,
+  knownHostsPath,
+  hostKey,
+  sshPasswordRef,
+  install,
+}) {
+  const { askpassPath } = ensureFileAskpass({ password, tempRoot });
+  ensureKnownHost({
+    knownHostsPath,
+    host: profile.host,
+    port: profile.port,
+    knownHostsLine: hostKey.knownHostsLine,
+  });
+  const commandProfile = {
+    ...profile,
+    knownHostsPath,
+    sshPasswordRef,
+  };
+  const env = fileAskpassEnv(askpassPath);
+  if (install.localArtifactPath) {
+    const remoteArtifactPath = ".cache/ctox/business-os-desktop/ctox-local-artifact";
+    await runProcess("ssh", buildSshArgs(commandProfile, buildSshLocalArtifactPrepareCommand(remoteArtifactPath)), {
+      timeout: 30000,
+      env,
+    });
+    await runProcess("scp", buildScpArgs(commandProfile, install.localArtifactPath, remoteArtifactPath), {
+      timeout: 300000,
+      env,
+    });
+    const { stdout, stderr } = await runProcess(
+      "ssh",
+      buildSshArgs(commandProfile, buildSshLocalArtifactInstallCommand(commandProfile, install, remoteArtifactPath)),
+      { timeout: 300000, env },
+    );
+    return {
+      ok: true,
+      mode: "fresh",
+      artifact: "local",
+      releaseChannel: install.releaseChannel,
+      restartService: install.restartService,
+      stdout: stdout.trim(),
+      stderr: stderr.trim(),
+    };
+  }
+  const { stdout, stderr } = await runProcess("ssh", buildSshArgs(commandProfile, buildSshFreshCtoxInstallCommand(commandProfile, install)), {
+    timeout: 900000,
+    env,
+  });
+  return {
+    ok: true,
+    mode: "fresh",
+    artifact: "official-installer",
+    releaseChannel: install.releaseChannel,
+    restartService: install.restartService,
+    apiProvider: install.apiProvider || "",
+    model: install.model || "",
+    backend: install.backend || "",
+    stdout: stdout.trim(),
+    stderr: stderr.trim(),
+  };
+}
+
 async function runFileAskpassAttach({
   source,
   registryProvider,
@@ -277,19 +484,7 @@ async function runFileAskpassAttach({
   sshPasswordRef,
   displayName,
 }) {
-  const passwordPath = path.join(tempRoot, "ssh-password");
-  const askpassPath = path.join(tempRoot, "askpass.sh");
-  if (!fs.existsSync(passwordPath)) {
-    fs.writeFileSync(passwordPath, password, { mode: 0o600 });
-  }
-  if (!fs.existsSync(askpassPath)) {
-    fs.writeFileSync(askpassPath, [
-      "#!/bin/sh",
-      "set -eu",
-      `cat ${shellQuote(passwordPath)}`,
-      "",
-    ].join("\n"), { mode: 0o700 });
-  }
+  const { askpassPath } = ensureFileAskpass({ password, tempRoot });
   ensureKnownHost({
     knownHostsPath,
     host: profile.host,
@@ -303,12 +498,7 @@ async function runFileAskpassAttach({
   };
   const { stdout } = await runProcess("ssh", buildSshArgs(commandProfile, buildSshPeerRemoteCommand(commandProfile, "ensure")), {
     timeout: 30000,
-    env: {
-      ...process.env,
-      SSH_ASKPASS: askpassPath,
-      SSH_ASKPASS_REQUIRE: "force",
-      DISPLAY: process.env.DISPLAY || ":0",
-    },
+    env: fileAskpassEnv(askpassPath),
   });
   const { instance, secretMaterial } = instanceFromPeerStatus(JSON.parse(stdout), {
     source: "ssh_managed",
@@ -332,6 +522,32 @@ async function runFileAskpassAttach({
     ],
   });
   return instance;
+}
+
+function ensureFileAskpass({ password, tempRoot }) {
+  const passwordPath = path.join(tempRoot, "ssh-password");
+  const askpassPath = path.join(tempRoot, "askpass.sh");
+  if (!fs.existsSync(passwordPath)) {
+    fs.writeFileSync(passwordPath, password, { mode: 0o600 });
+  }
+  if (!fs.existsSync(askpassPath)) {
+    fs.writeFileSync(askpassPath, [
+      "#!/bin/sh",
+      "set -eu",
+      `cat ${shellQuote(passwordPath)}`,
+      "",
+    ].join("\n"), { mode: 0o700 });
+  }
+  return { passwordPath, askpassPath };
+}
+
+function fileAskpassEnv(askpassPath) {
+  return {
+    ...process.env,
+    SSH_ASKPASS: askpassPath,
+    SSH_ASKPASS_REQUIRE: "force",
+    DISPLAY: process.env.DISPLAY || ":0",
+  };
 }
 
 function runProcess(program, args, options = {}) {

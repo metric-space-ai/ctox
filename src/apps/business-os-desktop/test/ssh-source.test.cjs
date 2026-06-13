@@ -217,6 +217,32 @@ test("ssh fresh install command uses official installer and no password args", (
   assert.equal(command.includes("sudo -S"), false);
 });
 
+test("ssh fresh install command forwards official installer options as CLI args", () => {
+  const install = normalizeSshInstallOptions({
+    releaseChannel: "stable",
+    restartService: false,
+    apiProvider: "openai",
+    model: "Qwen/Qwen3.6-27B",
+    backend: "cpu",
+  });
+  const command = buildSshFreshCtoxInstallCommand(
+    { installRoot: "~/.local/lib/ctox/current" },
+    install,
+  );
+  assert.equal(install.apiProvider, "openai");
+  assert.match(command, /\| bash -s -- '--api-provider' 'openai' '--model' 'Qwen\/Qwen3\.6-27B' '--backend' 'cpu'/);
+  assert.doesNotMatch(command, /CTOX_API_PROVIDER/);
+  assert.doesNotMatch(command, /ctox start/);
+  assert.throws(
+    () => normalizeSshInstallOptions({ apiProvider: "openai\nmalicious" }),
+    /unsupported characters/,
+  );
+  assert.throws(
+    () => normalizeSshInstallOptions({ localArtifactPath: "/tmp/ctox", apiProvider: "openai" }),
+    /official installer/,
+  );
+});
+
 test("ssh fresh install command supports sudo askpass through stdin secret refs", () => {
   const command = buildSshFreshCtoxInstallCommand(
     { installRoot: "~/.local/lib/ctox/current" },
@@ -679,6 +705,8 @@ test("ssh-managed fresh install runs official installer contract and registers p
     host: "fresh.example.com",
     user: "ubuntu",
     releaseChannel: "stable",
+    apiProvider: "openai",
+    backend: "cpu",
     trustedHostKeyFingerprint: "SHA256:trusted",
   });
   assert.equal(result.instance.source, "ssh_managed");
@@ -687,6 +715,8 @@ test("ssh-managed fresh install runs official installer contract and registers p
   assert.equal(result.install.mode, "fresh");
   assert.equal(result.install.releaseChannel, "stable");
   assert.equal(installOptions.releaseChannel, "stable");
+  assert.equal(installOptions.apiProvider, "openai");
+  assert.equal(installOptions.backend, "cpu");
   assert.equal(installProfile.host, "fresh.example.com");
   assert.equal(ensureCalled, true);
   assert.equal(JSON.stringify(registry).includes("fresh-room-secret"), false);

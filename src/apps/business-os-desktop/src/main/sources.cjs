@@ -542,6 +542,9 @@ async function runSshFreshCtoxInstallCommand(profile, install, secretStore, runn
     mode: "fresh",
     releaseChannel: install.releaseChannel,
     restartService: install.restartService,
+    apiProvider: install.apiProvider || "",
+    model: install.model || "",
+    backend: install.backend || "",
     stdout: stdout.trim(),
     stderr: stderr.trim(),
   };
@@ -584,6 +587,10 @@ function buildSshFreshCtoxInstallCommand(_profile, install) {
   const sudoPrelude = install.sudoPasswordRef
     ? buildInteractiveSudoAskpassPrelude()
     : "sudo -n true >/dev/null";
+  const installerArgs = buildCtoxInstallerArgs(install);
+  const installerCommand = installerArgs.length
+    ? `curl -fsSL ${shellQuote(OFFICIAL_CTOX_INSTALL_SCRIPT_URL)} | bash -s -- ${installerArgs.map(shellQuote).join(" ")}`
+    : `curl -fsSL ${shellQuote(OFFICIAL_CTOX_INSTALL_SCRIPT_URL)} | bash`;
   return [
     "set -eu",
     "if [ \"$(uname -s 2>/dev/null || true)\" != \"Linux\" ]; then echo 'ctox desktop ssh fresh install requires Linux' >&2; exit 12; fi",
@@ -591,12 +598,20 @@ function buildSshFreshCtoxInstallCommand(_profile, install) {
     "command -v curl >/dev/null",
     "command -v sudo >/dev/null",
     sudoPrelude,
-    `curl -fsSL ${shellQuote(OFFICIAL_CTOX_INSTALL_SCRIPT_URL)} | bash`,
+    installerCommand,
     "export PATH=\"$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:/usr/local/bin:$PATH\"",
     `ctox upgrade ${upgradeFlag}`,
     install.restartService ? "ctox start" : "",
     "ctox status",
   ].filter(Boolean).join("; ");
+}
+
+function buildCtoxInstallerArgs(install = {}) {
+  const args = [];
+  if (install.apiProvider) args.push("--api-provider", install.apiProvider);
+  if (install.model) args.push("--model", install.model);
+  if (install.backend) args.push("--backend", install.backend);
+  return args;
 }
 
 function buildSshLocalArtifactPrepareCommand(remoteArtifactPath = ".cache/ctox/business-os-desktop/ctox-local-artifact") {
@@ -829,13 +844,22 @@ function normalizeSshInstallOptions(options = {}) {
   }
   const sudoPasswordRef = String(options.sudoPasswordRef || "").trim();
   if (sudoPasswordRef) validateKeychainRef(sudoPasswordRef, "ssh sudoPasswordRef");
+  const apiProvider = normalizeOptionalSshInstallFlag(options.apiProvider, "ssh install apiProvider");
+  const model = normalizeOptionalSshInstallFlag(options.model, "ssh install model");
+  const backend = normalizeOptionalSshInstallFlag(options.backend, "ssh install backend");
+  const localArtifactPath = normalizeLocalArtifactPath(options.localArtifactPath);
+  if (localArtifactPath && (apiProvider || model || backend)) {
+    throw new Error("ssh install apiProvider, model and backend are only supported with the official installer");
+  }
   const install = {
     releaseChannel,
     restartService: options.restartService !== false,
   };
   if (sudoPasswordRef) install.sudoPasswordRef = sudoPasswordRef;
-  const localArtifactPath = normalizeLocalArtifactPath(options.localArtifactPath);
   if (localArtifactPath) install.localArtifactPath = localArtifactPath;
+  if (apiProvider) install.apiProvider = apiProvider;
+  if (model) install.model = model;
+  if (backend) install.backend = backend;
   return install;
 }
 
@@ -968,6 +992,15 @@ function normalizeLocalArtifactPath(value) {
     throw new Error("ssh localArtifactPath contains unsupported characters");
   }
   return artifactPath;
+}
+
+function normalizeOptionalSshInstallFlag(value, label) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.startsWith("-") || /[\0\r\n\t\s"'`;|&$<>\\]/.test(normalized)) {
+    throw new Error(`${label} contains unsupported characters`);
+  }
+  return normalized;
 }
 
 function validateKeychainRef(value, label) {

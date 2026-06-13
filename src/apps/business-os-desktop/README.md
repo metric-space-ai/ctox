@@ -19,6 +19,8 @@ npm run smoke:local-runtime
 npm run smoke:ctox-dev-live -- --email <email> --password-stdin --expected-tenant <name> --auth-window --manage-first --launch-first
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...>
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --attach
+npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --fresh-install
+npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --fresh-install --install-api-provider openai
 npm run release:check
 npm run pack:dir:smoke
 ```
@@ -59,7 +61,14 @@ Release-related checks:
   deletes the temporary keychain secret afterwards. Add `--attach` to run the
   full existing-CTOX SSH-managed attach path: remote `peer ensure`, local
   registry registration, WebRTC-only launch config, and a no-secret-leak
-  assertion for the registry and evidence. Use
+  assertion for the registry and evidence. Add `--fresh-install` to run the
+  official remote installer path before peer ensure; add
+  `--local-artifact-path <absolute-linux-binary>` with `--fresh-install` to
+  exercise the SCP/local-artifact path instead of the online installer. CPU-only
+  VPS hosts that cannot run the installer's default local inference profile can
+  pass installer flags with `--install-api-provider <provider>`,
+  `--install-model <model>` and `--install-backend <backend>`; these are passed
+  to `install.sh` as CLI arguments, not runtime environment toggles. Use
   `--trusted-host-key-fingerprint <sha256:...>` for pinned host keys, or
   `--trust-scanned-host-key` only for first-contact test hosts. If a terminal
   harness makes the platform keychain CLI interactive, add
