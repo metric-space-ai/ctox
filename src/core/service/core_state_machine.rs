@@ -385,6 +385,7 @@ pub fn validate_transition(request: &CoreTransitionRequest) -> CoreTransitionRep
     validate_rework_required_gate(request, &mut violations);
     validate_review_harness_static_model(&mut violations);
     validate_terminal_failure_gate(request, &mut violations);
+    validate_protected_terminal_failure_gate(request, &mut violations);
     validate_work_terminal_success_gate(request, &mut violations);
     validate_ticket_closure(request, &mut violations);
     validate_commitment_backing(request, &mut violations);
@@ -439,6 +440,60 @@ fn validate_terminal_failure_gate(
             "terminal_failure_requires_class",
             "work terminal failure requires a durable failure_class",
         ));
+    }
+}
+
+// Protected-lane failure-shaped terminals (FounderCommunication Sending->SendFailed,
+// Commitment AtRisk->Escalated, FounderCommunication ReplyNeeded->Escalated) are not
+// CoreState::Failed, so validate_terminal_failure_gate never sees them. They still
+// represent un-evidenced terminal failures on the highest-priority owner/founder and
+// commitment lanes, so the kernel requires a durable cause here too. SendFailed accepts
+// the durable cause the live producer already emits (metadata `provider_error`); the
+// Escalated terminals require the escalation they raised.
+fn validate_protected_terminal_failure_gate(
+    request: &CoreTransitionRequest,
+    violations: &mut Vec<CoreTransitionViolation>,
+) {
+    if request.lane == RuntimeLane::P3Housekeeping {
+        return;
+    }
+
+    let failure_reason = request
+        .metadata
+        .get("failure_reason")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    let provider_error = request
+        .metadata
+        .get("provider_error")
+        .map(|value| value.trim())
+        .unwrap_or("");
+    let escalation_id = request
+        .evidence
+        .escalation_id
+        .as_deref()
+        .unwrap_or("")
+        .trim();
+
+    match (request.entity_type, request.to_state) {
+        (CoreEntityType::FounderCommunication, CoreState::SendFailed) => {
+            if failure_reason.is_empty() && provider_error.is_empty() && escalation_id.is_empty() {
+                violations.push(violation(
+                    "protected_send_failed_requires_cause",
+                    "founder communication send-failed requires a durable cause (failure_reason, provider_error, or escalation_id)",
+                ));
+            }
+        }
+        (CoreEntityType::FounderCommunication, CoreState::Escalated)
+        | (CoreEntityType::Commitment, CoreState::Escalated) => {
+            if escalation_id.is_empty() && failure_reason.is_empty() {
+                violations.push(violation(
+                    "protected_escalation_requires_cause",
+                    "protected-lane escalation terminal requires a durable cause (escalation_id or failure_reason)",
+                ));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -2416,6 +2471,87 @@ mod tests {
         let report = validate_transition(&request);
 
         assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn protected_commitment_escalation_requires_cause() {
+        let mut request = CoreTransitionRequest {
+            entity_type: CoreEntityType::Commitment,
+            entity_id: "commitment-1".to_string(),
+            lane: RuntimeLane::P0CommitmentBacking,
+            from_state: CoreState::AtRisk,
+            to_state: CoreState::Escalated,
+            event: CoreEvent::Escalate,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata: BTreeMap::new(),
+        };
+        let report = validate_transition(&request);
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "protected_escalation_requires_cause"));
+
+        request.evidence.escalation_id = Some("escalation-1".to_string());
+        let report = validate_transition(&request);
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn protected_founder_send_failed_requires_cause() {
+        let mut request = CoreTransitionRequest {
+            entity_type: CoreEntityType::FounderCommunication,
+            entity_id: "founder-send-1".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::Sending,
+            to_state: CoreState::SendFailed,
+            event: CoreEvent::Fail,
+            actor: "ctox-reviewed-founder-send".to_string(),
+            evidence: CoreEvidenceRefs::default(),
+            metadata: BTreeMap::new(),
+        };
+        let report = validate_transition(&request);
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "protected_send_failed_requires_cause"));
+
+        request.metadata.insert(
+            "provider_error".to_string(),
+            "smtp 550 mailbox full".to_string(),
+        );
+        let report = validate_transition(&request);
+        assert!(report.accepted, "{:?}", report.violations);
+    }
+
+    #[test]
+    fn protected_founder_escalation_requires_cause() {
+        let mut request = CoreTransitionRequest {
+            entity_type: CoreEntityType::FounderCommunication,
+            entity_id: "founder-escalate-1".to_string(),
+            lane: RuntimeLane::P0FounderCommunication,
+            from_state: CoreState::ReplyNeeded,
+            to_state: CoreState::Escalated,
+            event: CoreEvent::Escalate,
+            actor: "ctox-runtime".to_string(),
+            evidence: CoreEvidenceRefs {
+                escalation_id: Some("escalation-1".to_string()),
+                ..CoreEvidenceRefs::default()
+            },
+            metadata: BTreeMap::new(),
+        };
+        let report = validate_transition(&request);
+        assert!(report.accepted, "{:?}", report.violations);
+
+        request.evidence.escalation_id = None;
+        let report = validate_transition(&request);
+        assert!(!report.accepted);
+        assert!(report
+            .violations
+            .iter()
+            .any(|violation| violation.code == "protected_escalation_requires_cause"));
     }
 
     #[test]
