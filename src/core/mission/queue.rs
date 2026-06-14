@@ -2644,6 +2644,45 @@ mod tests {
     }
 
     #[test]
+    fn render_confirmed_harness_findings_block_includes_confirmed_findings() -> Result<()> {
+        let root = temp_root("pm5-confirmed-block");
+        std::fs::create_dir_all(&root)?;
+
+        // No findings table / no findings yet -> empty block (the agent then
+        // gathers signals via `ctox harness-mining findings` itself).
+        assert!(render_confirmed_harness_findings_block(&root).is_empty());
+
+        // Seed a confirmed finding into the core db (paths::core_db nests it
+        // under root/runtime, so create that parent dir first).
+        let core_db = crate::paths::core_db(&root);
+        std::fs::create_dir_all(core_db.parent().unwrap())?;
+        let conn = Connection::open(&core_db)?;
+        crate::service::harness_mining::findings::ensure_findings_schema(&conn)?;
+        conn.execute(
+            "INSERT INTO ctox_hm_findings \
+             (finding_id, signature, kind, severity, status, detected_at, last_seen_at) \
+             VALUES ('f1','sig1','drift','critical','confirmed','t','t')",
+            [],
+        )?;
+        drop(conn);
+
+        // pm-5: a confirmed finding must actually reach the queue-repair prompt
+        // block, guarding the silent String::new() regression.
+        let block = render_confirmed_harness_findings_block(&root);
+        assert!(
+            !block.is_empty(),
+            "a confirmed finding must reach the queue-repair prompt block"
+        );
+        assert!(
+            block.contains("drift"),
+            "block should name the finding kind: {block}"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
     fn spills_list_returns_joined_queue_and_ticket_state() -> Result<()> {
         let root = temp_root("spills-list");
         std::fs::create_dir_all(&root)?;
