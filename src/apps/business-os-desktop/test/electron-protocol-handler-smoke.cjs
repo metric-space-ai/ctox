@@ -92,14 +92,21 @@ function runElectron(command, args, resultPath) {
     });
     child.on("close", (code) => {
       if (settled) return;
+      const payload = readResultFile(resultPath);
+      if (payload && typeof payload.ok === "boolean") {
+        observedCode = payload.ok ? 0 : 2;
+      }
+      if (observedCode === null) {
+        settled = true;
+        clearTimeout(timeout);
+        clearInterval(resultPoll);
+        reject(new Error(`electron protocol handler smoke exited before writing result (code ${code})\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+        return;
+      }
       settled = true;
       clearTimeout(timeout);
       clearInterval(resultPoll);
-      const payload = readResultFile(resultPath);
-      const fileCode = payload && typeof payload.ok === "boolean"
-        ? (payload.ok ? 0 : 2)
-        : null;
-      resolve({ code: observedCode ?? fileCode ?? code, stdout, stderr });
+      resolve({ code: observedCode, stdout, stderr });
     });
   });
 }

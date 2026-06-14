@@ -23,6 +23,7 @@ app.commandLine.appendSwitch("disable-gpu");
 const events = [];
 let ready = false;
 const isWindows = process.platform === "win32";
+const keepAlive = setInterval(() => {}, 1000);
 
 const protocolHandling = installDesktopProtocolHandling({
   app,
@@ -92,15 +93,18 @@ app.whenReady().then(async () => {
     flushResultCount: flushResults.length,
     pendingUrls: protocolHandling.getPendingUrls(),
   };
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
-  process.exit(result.ok ? 0 : 2);
+  writeResultAndExit(result, result.ok ? 0 : 2);
 }).catch((error) => {
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  fs.writeFileSync(outputPath, JSON.stringify({
+  writeResultAndExit({
     ok: false,
     error: error instanceof Error ? error.stack || error.message : String(error),
     events,
-  }, null, 2));
-  process.exit(1);
+  }, 1);
 });
+
+function writeResultAndExit(result, code) {
+  clearInterval(keepAlive);
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
+  process.exit(code);
+}
