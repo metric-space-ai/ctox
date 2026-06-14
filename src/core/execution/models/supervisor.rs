@@ -1615,6 +1615,44 @@ fn resolve_managed_engine_binary(
         })
     {
         if backend.binary.exists() {
+            // Per-model server binaries skip `ensure_engine_binary_matches_host`
+            // (that guard inspects the ctox-engine `doctor --json` build report,
+            // which these standalone server bins do not expose). The qwen3x-27b
+            // hybrid still links ggml-cuda dynamically and ships its CUDA `.so`
+            // directories via an `LD_LIBRARY_PATH` entry in `backend.env`. On a
+            // CUDA host, refuse to launch when any declared linker dir is
+            // missing — otherwise the process spawns and dies with an opaque
+            // `libggml-cuda.so: cannot open shared object file` at runtime.
+            // No-op when the backend declares no LD_LIBRARY_PATH (CPU / no-libdir
+            // models are unaffected).
+            if super::runtime_engine_guard::host_requires_nvidia_cuda(root) {
+                if let Some((_, ld_library_path)) = backend
+                    .env
+                    .iter()
+                    .find(|(key, _)| *key == "LD_LIBRARY_PATH")
+                {
+                    for component in ld_library_path
+                        .to_string_lossy()
+                        .split(':')
+                        .map(str::trim)
+                        .filter(|component| !component.is_empty())
+                    {
+                        let component_path = Path::new(component);
+                        if !component_path.is_dir() {
+                            anyhow::bail!(
+                                "local inference backend `{}` for model `{}` requires nvidia-cuda \
+                                 shared libraries, but the declared LD_LIBRARY_PATH directory {} is \
+                                 missing. CTOX refuses to launch a CUDA backend with an incomplete \
+                                 ggml/cuda linker path on a GPU host. Build the ggml-cuda libraries \
+                                 or point the backend's GGML lib dir at the directory that contains them.",
+                                backend.model_id,
+                                launch_spec.request_model,
+                                component_path.display(),
+                            );
+                        }
+                    }
+                }
+            }
             return Ok(backend.binary);
         }
         anyhow::bail!(

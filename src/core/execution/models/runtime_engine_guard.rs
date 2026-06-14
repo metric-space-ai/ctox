@@ -268,6 +268,20 @@ pub fn ensure_engine_binary_matches_host(
     );
 }
 
+/// Returns true when this host requires nvidia-cuda acceleration (a CUDA GPU
+/// is present, or the `CTOX_TEST_ENGINE_HOST_ACCELERATION` override selects
+/// it). Per-model server binaries under `src/core/inference/models/<model>/`
+/// bypass `ensure_engine_binary_matches_host` (they have no `doctor --json`
+/// build report), so the supervisor uses this predicate to decide whether to
+/// validate a backend's declared `LD_LIBRARY_PATH` ggml/cuda directories
+/// before spawning. See `supervisor::resolve_managed_engine_binary`.
+pub fn host_requires_nvidia_cuda(root: &Path) -> bool {
+    matches!(
+        detect_host_acceleration_requirement(root),
+        HostAccelerationRequirement::NvidiaCuda
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
