@@ -112,6 +112,9 @@ function assertReleaseWorkflowMatrix() {
     "dbus-run-session",
     "cargo build --locked --release",
     "resources/ctox",
+    "business-os desktop invite --format json",
+    "Desktop Release Helper Smoke",
+    "desktop-invite.json",
     "npm run dist -- --${{ matrix.builderPlatform }} --${{ matrix.arch }} --publish never",
     "npm run smoke:signed-artifacts -- --platform ${{ matrix.builderPlatform }} --evidence-json release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json",
   ]) {

@@ -32,8 +32,10 @@ Release-related checks:
   registered desktop protocol, hardened macOS signing/notarization hooks and
   generic HTTPS auto-update feed. It also verifies that the tag release
   workflow contains the Business OS Desktop macOS, Linux and Windows matrix,
-  including platform keychain runtime smokes, and that the main CI workflow
-  runs the Desktop E2E smoke matrix on macOS, Linux and Windows.
+  including platform keychain runtime smokes and a bundled CTOX helper
+  `business-os desktop invite` contract smoke before packaging. It also checks
+  that the main CI workflow runs the Desktop E2E smoke matrix on macOS, Linux
+  and Windows.
 - `npm run smoke:keychain-runtime` writes, reads and deletes a synthetic secret
   through the platform keychain: macOS Keychain, Linux Secret Service or
   Windows Credential Manager.

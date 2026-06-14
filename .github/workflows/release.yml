@@ -304,10 +304,14 @@ jobs:
           mkdir -p src/apps/business-os-desktop/resources/ctox
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp target/release/ctox.exe src/apps/business-os-desktop/resources/ctox/ctox.exe
+            CTOX_HELPER=src/apps/business-os-desktop/resources/ctox/ctox.exe
           else
             cp target/release/ctox src/apps/business-os-desktop/resources/ctox/ctox
             chmod 755 src/apps/business-os-desktop/resources/ctox/ctox
+            CTOX_HELPER=src/apps/business-os-desktop/resources/ctox/ctox
           fi
+          CTOX_ROOT="$RUNNER_TEMP/ctox-desktop-helper-contract" "$CTOX_HELPER" business-os desktop invite --format json --display-name "Desktop Release Helper Smoke" --ttl-hours 1 > "$RUNNER_TEMP/desktop-invite.json"
+          node -e "const fs=require('node:fs'); const invite=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(invite.type!=='ctox-business-os-invite'||invite.version!==1||invite.transport!=='webrtc'||invite.data_plane!=='rxdb-webrtc'||invite.http_bridge_available!==false||invite.secret_value_in_payload!==true||!String(invite.desktop_link||'').startsWith('ctox-business-os-desktop://pair?payload=')){throw new Error('bundled ctox helper desktop invite contract failed');}" "$RUNNER_TEMP/desktop-invite.json"
 
       - name: Build packaged app
         working-directory: src/apps/business-os-desktop

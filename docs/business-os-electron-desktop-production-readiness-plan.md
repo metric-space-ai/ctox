@@ -93,9 +93,10 @@ wieder testbar:
 - `npm run smoke:pairing-ssh-live` ist als opt-in Live-Smoke vorhanden. Gegen
   den SKF-Testhost ist der Remote-`peer rotate` + Desktop-Import/Rotate/Revoke-
   Pfad mit WebRTC-only Launch-Konfig und ohne Secret-Leak gruen; die Remote-
-  Instanz erzeugt das Desktop-Invite derzeit aber noch nicht selbst, weil der
-  ausgerollte VPS-`ctox` den neuen `business-os desktop invite` CLI-Befehl noch
-  nicht enthaelt.
+  Instanz erzeugt das Desktop-Invite derzeit aber noch nicht selbst. Ein
+  erneuter Live-Run ohne `--allow-peer-status-invite` gegen SKF am 2026-06-14
+  scheitert weiterhin mit `unknown business-os command desktop`; der aktuelle
+  Stable-Release-Stand auf dem VPS enthaelt den CLI-Befehl also noch nicht.
 - SSH-managed Quelle deckt Host-Key-Fingerprint-Trust, app-eigene
   `ssh_known_hosts`, OpenSSH key/agent Attach, Remote-Preflight und
   Existing-CTOX-Upgrade auf Contract-Ebene ab.
@@ -292,7 +293,11 @@ Nicht umgesetzt oder noch nicht bewiesen:
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
   bewiesen, aber noch nicht durch einen echten Tag-Run mit signierten
-  Installer-Artefakten.
+  Installer-Artefakten. Der Release-Workflow prueft jetzt zusaetzlich vor dem
+  Packaging, dass der frisch gebaute gebuendelte `ctox`-Helper den
+  `business-os desktop invite` JSON-Vertrag ausfuehren kann; das verhindert
+  kuenftige Desktop-Releases mit einem zu alten Helper, ersetzt aber nicht den
+  echten Tag-Run.
 
 ## Nicht Verhandelbare Produktregeln
 
@@ -324,7 +329,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 86% |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 87% |
 | **Gesamt** | **100%** | **In Umsetzung** | **97%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
@@ -538,6 +543,13 @@ Tests:
   Registry und SecretStore-Eintrag, Evidenz/Registry bleiben secret-frei. Der
   Invite kam wegen altem Remote-CLI-Stand aus `peer status` statt aus
   `desktop invite`.
+- [x] Negativer Live-Recheck ohne Fallback gegen SKF `57.129.123.108`:
+  `smoke:pairing-ssh-live -- --rotate --revoke-local` authentifiziert per
+  Passwort-SSH, bricht aber beim echten
+  `ctox business-os desktop invite --format json` weiter mit
+  `unknown business-os command desktop` ab. Damit ist der verbleibende Blocker
+  auf den veroeffentlichten/ausgerollten Remote-`ctox`-Stand eingegrenzt, nicht
+  auf Desktop-Import, lokale Rotation oder WebRTC-Launch.
 - [x] `cargo test native_peer_ -- --nocapture`: Native-Peer-Tests beweisen, dass
   eine unveraenderte Sync-Konfiguration nicht respawnt und eine
   `peer rotate`-Room-Aenderung als Respawn-Grund erkannt wird.
@@ -545,8 +557,10 @@ Tests:
 Noch offen:
 
 - [ ] Remote-`ctox business-os desktop invite` auf den echten Test-VPS
-  ausrollen und live gegen diesen CLI-Pfad pruefen; aktuell melden SKF und
-  Kunstmen `unknown business-os command desktop`.
+  ausrollen und live gegen diesen CLI-Pfad pruefen; SKF meldet auch nach dem
+  Stable-Fresh-Install/Release-Bundle-Pfad vom 2026-06-14 weiter
+  `unknown business-os command desktop`. Kunstmen hatte denselben alten
+  Remote-CLI-Befund.
 - [ ] Full Live-E2E: Nach `ctox business-os peer rotate` muss ein Browser ueber
   den neu gestarteten nativen Peer wieder verbinden. Lokal ist der Respawn-
   Trigger jetzt getestet; live muss noch ein aktualisierter Remote-`ctox` Stand
@@ -827,6 +841,10 @@ Release Gates:
 - [x] Business-OS-Desktop Release-Matrix baut vor `electron-builder` den
   plattformpassenden CTOX-Helper und paketiert ihn als `resources/ctox`
   App-Resource fuer lokale Fresh-Machine-Flows.
+- [x] Release-Matrix prueft nach `cargo build --locked --release` und vor
+  `electron-builder`, dass der frisch gebaute gebuendelte `ctox`-Helper
+  `business-os desktop invite --format json` ausfuehren kann und ein
+  Electron-kompatibles WebRTC-only Invite mit Desktop-Deep-Link liefert.
 - [x] Release-Matrix fuehrt `npm run smoke:signed-artifacts -- --platform
   ${{ matrix.builderPlatform }} --evidence-json
   release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json`
@@ -848,9 +866,10 @@ Release Gates:
   `27484995659` fuer Commit `01e258b9` sind auf allen drei
   Desktop-Zielplattformen gruen; Run `27485327715` fuer Commit `0e982165`
   und Run `27486101670` fuer Commit `80b11085` bestaetigen denselben Desktop-
-  Pfad erneut. Der aktuelle `main`-CI-Run `27489031650` fuer Commit
-  `4dc20c71` ist als Gesamt-CI gruen und bestaetigt Desktop-E2E, Plattform-
-  Keychain-Runtime-Smoke, RxDB-only Guards, `cargo check` und CLI-Matrix.
+  Pfad erneut. Die aktuellen `main`-CI-Runs `27489031650` fuer Commit
+  `4dc20c71` und `27492399333` fuer Commit `ea685cbb` sind als Gesamt-CI gruen
+  und bestaetigen Desktop-E2E, Plattform-Keychain-Runtime-Smoke, RxDB-only
+  Guards, `cargo check` und CLI-Matrix.
 - [x] `IoT Engine Soak` ist fuer den aktuellen `main`-Stand gruen:
   GitHub-Actions-Run `27489031659` fuer Commit `4dc20c71` laeuft nach
   gepinntem `esbuild@0.28.0` Install der JS-Modultests erfolgreich durch.
@@ -918,3 +937,5 @@ Release Gates:
 | 2026-06-14 | Welle 8 CI-Evidenz geschlossen: `main`-CI-Run `27489031650` fuer Commit `4dc20c71` ist vollstaendig gruen, inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, CTOX-CLI-Matrix und Harness-Tests. Der zusaetzliche `IoT Engine Soak` `27489031659` ist ebenfalls gruen; der vorherige Soak-Fehler war ein fehlender gepinnter `esbuild@0.28.0` Install fuer die JS-Modultests und wurde im Workflow behoben. Welle 8 steigt auf 86%, Gesamt auf 97%; production-ready bleibt blockiert durch echten Tag-Run mit signierten/notarisierten Installer-Artefakten, echte ctox.dev Revocation und offiziellen Online-SSH-Fresh-Install. |
 | 2026-06-14 | Welle 5 Online-Stable-Fresh-Install gruen gemacht: Der Desktop-SSH-Fresh-Install nutzt fuer `stable` ohne API-Seed-Flags jetzt das offizielle GitHub-Release-Bundle statt Source-Installer, validiert die `.sha256`-Datei, extrahiert `target/release/ctox`, installiert user-local nach `~/.local/bin/ctox` und fuehrt danach `ctox start/status` sowie `peer ensure` aus. Der Source-Installer bleibt fuer `dev` und API-backed Installer-Flags erhalten; dessen Kunstmen-Befund bleibt negativ, weil der echte Cargo-Source-Build nach 900s in den Smoke-Timeout laeuft. Live gruen gegen SKF `57.129.123.108`: `smoke:ssh-password-live -- --fresh-install --file-askpass-fallback`, Evidenz `install.artifact=release`, `transport=webrtc`, `http_bridge_available=false`, `registrySecretLeak=false`. Lokal gruen: `node --test src/apps/business-os-desktop/test/ssh-source.test.cjs`, `npm run check`, `npm test` 106/106. Welle 5 steigt auf 99%; Gesamt bleibt 97%. |
 | 2026-06-14 | Welle 5 Stable-API-Seed geschlossen: Stable-Fresh-Install nutzt jetzt auch mit `--install-api-provider`/`--install-model` das verifizierte GitHub-Release-Bundle statt `install.sh`, schreibt `CTOX_CHAT_SOURCE=api`, `CTOX_API_PROVIDER`, `CTOX_CHAT_MODEL`, `CTOX_CHAT_MODEL_BASE` und `CTOX_ACTIVE_MODEL` per SQLite in `runtime/ctox.sqlite3` und `runtime/ctox-runtime.sqlite3` und fuehrt danach `peer ensure` WebRTC-only aus. `--install-backend` bleibt im Stable-API-Pfad validiert, aber ohne Runtime-Schreibwirkung; im Dev-/Source-Pfad wird es weiter an `install.sh` durchgereicht. Live gruen gegen SKF `57.129.123.108`: `smoke:ssh-password-live -- --fresh-install --file-askpass-fallback --install-api-provider openai --install-model gpt-5.4 --install-backend cpu --no-restart-service`, Evidenz `install.artifact=release`, `apiProvider=openai`, `model=gpt-5.4`, `backend=cpu`, `transport=webrtc`, `http_bridge_available=false`, `registrySecretLeak=false`. Lokal gruen: `node --test src/apps/business-os-desktop/test/ssh-source.test.cjs`, `npm run check`, `npm test` 107/107, `git diff --check`. Welle 5 ist 100%; Gesamt bleibt 97%. |
+| 2026-06-14 | Welle 4/8 Remote-Invite-Blocker eingegrenzt und Release-Gate nachgezogen: Der Live-Smoke gegen SKF ohne `--allow-peer-status-invite` scheitert weiterhin beim echten Remote-Befehl `ctox business-os desktop invite --format json` mit `unknown business-os command desktop`; der veroeffentlichte Stable-Remote-Stand ist also noch zu alt fuer den Zielpfad. Damit derselbe Fehler nicht in einem neuen Desktop-Release landet, fuehrt `.github/workflows/release.yml` nach dem Helper-Build und vor `electron-builder` den frisch gebauten `resources/ctox/ctox`-Helper mit `business-os desktop invite --format json` aus und validiert Invite-Typ, Version, WebRTC-only Marker, Secret-Payload-Marker und Desktop-Deep-Link. Gruen: `npm run release:check`, `node --check scripts/check-release-config.cjs`. Welle 8 steigt auf 87%; Gesamt bleibt 97%. |
+| 2026-06-14 | Aktuelle `main`-CI fuer den Stable-API-Seed-Stand ist gruen: GitHub-Actions-Run `27492399333` fuer Commit `ea685cbb` bestaetigt die Gesamt-CI inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, `cargo check` und CLI-Matrix. |
