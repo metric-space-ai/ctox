@@ -329,7 +329,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 96% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
-| 4. Pairing Invite Source | 12% | In Umsetzung | 97% |
+| 4. Pairing Invite Source | 12% | In Umsetzung | 99% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
@@ -504,7 +504,7 @@ Tests:
 
 ## Welle 4: Pairing Invite Source
 
-Status: In Umsetzung, 97%.
+Status: In Umsetzung, 99%.
 
 Aufgaben:
 
@@ -547,30 +547,28 @@ Tests:
   Registry und SecretStore-Eintrag, Evidenz/Registry bleiben secret-frei. Der
   Invite kam wegen altem Remote-CLI-Stand aus `peer status` statt aus
   `desktop invite`.
-- [x] Negativer Live-Recheck ohne Fallback gegen SKF `57.129.123.108`:
+- [x] Fallback-freier Live-Recheck gegen SKF `57.129.123.108` nach
+  Fresh-Install des Linux-x64-CLI-Artefakts aus Release-Run `27495671970`:
   `smoke:pairing-ssh-live -- --rotate --revoke-local` authentifiziert per
-  Passwort-SSH, bricht aber beim echten
-  `ctox business-os desktop invite --format json` weiter mit
-  `unknown business-os command desktop` ab. Damit ist der verbleibende Blocker
-  auf den veroeffentlichten/ausgerollten Remote-`ctox`-Stand eingegrenzt, nicht
-  auf Desktop-Import, lokale Rotation oder WebRTC-Launch.
+  Passwort-SSH, bezieht initiales und rotiertes Invite aus dem echten
+  `ctox business-os desktop invite --format json` Pfad
+  (`inviteSource=desktop-invite-cli`, `remoteInviteCliAvailable=true`),
+  importiert und rotiert die Pairing-Instanz, sieht geaendertes `sync_room`
+  und Room Secret, startet weiter WebRTC-only (`transport=webrtc`,
+  `httpBridgeAvailable=false`) und leakt weder Registry- noch Evidence-
+  Secrets.
 - [x] `cargo test native_peer_ -- --nocapture`: Native-Peer-Tests beweisen, dass
   eine unveraenderte Sync-Konfiguration nicht respawnt und eine
   `peer rotate`-Room-Aenderung als Respawn-Grund erkannt wird.
 
 Noch offen:
 
-- [ ] Remote-`ctox business-os desktop invite` auf den echten Test-VPS
-  ausrollen und live gegen diesen CLI-Pfad pruefen; SKF meldet auch nach dem
-  Stable-Fresh-Install/Release-Bundle-Pfad vom 2026-06-14 weiter
-  `unknown business-os command desktop`. Kunstmen hatte denselben alten
-  Remote-CLI-Befund.
 - [ ] Full Live-E2E: Nach `ctox business-os peer rotate` muss ein Browser ueber
   den neu gestarteten nativen Peer wieder verbinden. Lokal ist der Respawn-
-  Trigger jetzt getestet; live muss noch ein aktualisierter Remote-`ctox` Stand
-  ausgerollt und die echte Browser-WebRTC-Reconnect-Session beobachtet werden.
-  Die bisherige SKF-Evidenz zeigte noch keine sichtbar geaenderte aktive Peer-
-  Session.
+  Trigger getestet, und der aktualisierte Remote-CLI-Pfad ist auf SKF live
+  gruen; die heutige SKF-Evidenz meldet aber noch
+  `activePeerSessionChanged=false`. Die echte Browser-WebRTC-Reconnect-Session
+  nach Rotation bleibt deshalb der letzte Welle-4-Beweis.
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
@@ -741,6 +739,14 @@ Tests:
   `transport=webrtc`, `http_bridge_available=false`, kein Registry-Secret-
   Leak. Der staerkere platform-keychain-backed SSH-Passwortpfad fuer SKF bleibt
   separat durch den Existing-Attach-Smoke belegt.
+- [x] Zusaetzlicher Live-Nachweis SKF-Testhost `57.129.123.108` mit lokalem
+  CLI-Artefakt aus dem gescheiterten Release-Run `27495671970` fuer `v0.3.29`:
+  `ctox-linux-x64.tar.gz` wurde lokal per SHA256 verifiziert, extrahiert und
+  per `--local-artifact-path` user-local nach `~/.local/bin/ctox` installiert.
+  Die Smoke-Evidenz meldet `install.artifact=local`, `source=ssh_managed`,
+  `transport=webrtc`, `http_bridge_available=false`,
+  `registrySecretLeak=false`; dieser Stand liefert danach den echten
+  `business-os desktop invite` CLI-Pfad fuer Welle 4.
 
 ## Welle 6: Unified Switcher UX
 
@@ -955,3 +961,4 @@ Release Gates:
 | 2026-06-14 | Aktueller `main`-Stand vollstaendig gruen: CI-Run `27494101063` fuer Commit `af5f87e8` und der Folge-Run `27494885618` fuer Commit `baae47d8` sind beide vollstaendig gruen. Damit sind Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, Windows-/macOS-/Linux-CLI-Matrix, `cargo check`, Harness-Core-Tests und Spawn-Liveness-Proof fuer den aktuellen Release-Kandidaten belegt. Der naechste Welle-8-Gate-Test ist ein neuer echter Tag-Release, weil `v0.3.28` historisch fehlgeschlagen und `v0.3.27` der letzte verwertbare Release bleibt. |
 | 2026-06-14 | Echter Tag-Release `v0.3.29` gestartet und final negativ eingeordnet: Release-Run `27495671970` scheiterte in der Business-OS-Desktop-Matrix. Linux-x64 kam durch Unit-/Syntax-/Release-Checks, Electron-Smokes, Keychain-Smoke, Helper-Build und Helper-Invite-Gate, scheiterte aber beim `.deb`-Build an fehlender `homepage`/Autor-E-Mail/Maintainer-Metadaten. macOS arm64 und x64 kamen ebenfalls bis `Build packaged app`, scheiterten dann an leeren macOS Signing-/Notarization-Secrets (`APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD`), die electron-builder als `not a file` meldete. Business-OS-Desktop Windows-x64, die klassische Desktop-Matrix und die CTOX-CLI-Matrix waren gruen; der GitHub-Release-Job wurde wegen der Desktop-Fehler uebersprungen. |
 | 2026-06-14 | Release-Metadaten-/Preflight-Fix nachgezogen: Commit `427f64a8` setzt Business-OS-Desktop `homepage`, Autor mit E-Mail und `linux.maintainer`, und der Release-Workflow prueft macOS Signing-/Notarization-Secrets vor `electron-builder` explizit fail-closed. Lokal gruen: `npm run release:check`, `npm test` 107/107, `npm run check`, `git diff --check`. `main`-CI-Run `27496841760` fuer Commit `427f64a8` ist vollstaendig gruen. Offen bleibt ein neuer echter Tag-Release nach Konfiguration der macOS-Secrets; ohne diese Secrets bleibt Welle 8 nicht production-ready. |
+| 2026-06-14 | Welle 4 Remote-Invite-Blocker geschlossen: Das Linux-x64-CLI-Artefakt aus dem fehlgeschlagenen `v0.3.29`-Release-Run `27495671970` wurde lokal per SHA256 verifiziert und gegen SKF ueber den lokalen Artefaktpfad installiert. Danach lief `smoke:pairing-ssh-live -- --rotate --revoke-local` ohne `--allow-peer-status-invite` gruen: initiales und rotiertes Invite kamen aus `ctox business-os desktop invite --format json`, `sync_room` und Room Secret wechselten, Launch blieb `transport=webrtc` / `httpBridgeAvailable=false`, Registry/Evidence blieben secret-frei. Nicht geschlossen ist der Browser-Reconnect-Beweis nach Rotation, weil die Live-Evidenz weiter `activePeerSessionChanged=false` meldet. Welle 4 steigt auf 99%; Gesamt bleibt 97%. |
