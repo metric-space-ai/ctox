@@ -287,6 +287,22 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/mission/strategy.rs",
         description: "Records a positive audit trail when an inbound-mail-driven strategic-directive mutation passes the owner-authority gate. Pairs with `strategic_directive_mutation_blocked_non_owner_sender`; together they make the authority decision visible in `ctox channel pipeline-status`.",
     },
+    DefaultMechanism {
+        mechanism_id: "plan_routing_repair",
+        mechanism_class: "survival",
+        autonomy: "autonomous_plan_routing_repair",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when boot/turn maintenance releases or closes stale plan queue routes so a crashed or superseded plan step cannot keep holding routing state. Without this registration the repair events were silently dropped by the governance reporting inner-join.",
+    },
+    DefaultMechanism {
+        mechanism_id: "channel_router_core_guard",
+        mechanism_class: "survival",
+        autonomy: "autonomous_router_core_guard",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when the channel router hits a core-workflow guard error, keeps the router alive, and skips the guarded background routing stage instead of crashing the loop. Registration makes these skips visible in governance reporting instead of being dropped by the inner-join.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -880,6 +896,20 @@ mod tests {
         assert!(inventory
             .iter()
             .any(|entry| entry.mechanism_id == "verification_assurance"));
+    }
+
+    #[test]
+    fn inventory_covers_router_and_plan_repair_mechanisms() {
+        // Both ids are emitted in production (run_plan_routing_repair and
+        // handle_channel_router_guard_block) but were unregistered, so the
+        // governance reporting inner-join silently dropped their events.
+        let inventory = mechanism_inventory();
+        for id in ["plan_routing_repair", "channel_router_core_guard"] {
+            assert!(
+                inventory.iter().any(|entry| entry.mechanism_id == id),
+                "mechanism {id} must be registered so governance reporting does not drop its events"
+            );
+        }
     }
 
     #[test]
