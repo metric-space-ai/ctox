@@ -2215,6 +2215,22 @@ fn score_queue_spill_candidate(
         );
     }
 
+    // Durable prior-failure evidence: count how many distinct failure
+    // signatures this queue task already accumulated in the accepted
+    // core-transition proofs. A task that keeps hitting distinct durable
+    // failures is a stronger spill candidate, because keeping it hot is likely
+    // to keep failing. Capped so a noisy task cannot dominate the ranking, and
+    // framed as distinct signatures (not a raw attempt tally) so retries of the
+    // same failure do not inflate the score.
+    let failure_signatures = distinct_failure_signature_count(root, &task.message_key)?;
+    if failure_signatures > 0 {
+        let bonus = failure_signatures.min(3);
+        score += bonus;
+        reasons.push(format!(
+            "task has {failure_signatures} distinct durable failure signature(s) in accepted core-transition proofs, so keeping it hot is likely to keep failing"
+        ));
+    }
+
     if score <= 0 {
         return Ok(None);
     }
@@ -2239,6 +2255,48 @@ fn score_queue_spill_candidate(
         recommendation,
         reasons,
     }))
+}
+
+/// Count distinct durable failure signatures recorded for this queue task in
+/// the accepted core-transition proofs. The proofs table (`ctox_core_transition_proofs`)
+/// lives in the CORE db (`paths::core_db`), not the queue-bridge db, so this
+/// opens the core db directly. Queue tasks are recorded with
+/// `entity_type = 'QueueItem'` and `entity_id = <message_key>`, and
+/// `entity_type`/`to_state` are persisted via `format!("{:?}", ..)` (PascalCase)
+/// by `core_transition_guard`. `request_json` distinguishes one failure
+/// signature from another, so we `COUNT(DISTINCT request_json)` rather than
+/// counting raw rows. A missing proofs table (process-mining schema not yet
+/// created on a fresh root) is treated as zero, not an error.
+fn distinct_failure_signature_count(root: &Path, message_key: &str) -> Result<i64> {
+    let conn = Connection::open(crate::paths::core_db(root))
+        .with_context(|| "failed to open core db for failure-signature count")?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let table_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ctox_core_transition_proofs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if table_exists == 0 {
+        return Ok(0);
+    }
+    let count: i64 = conn
+        .query_row(
+            r#"
+            SELECT COUNT(DISTINCT request_json)
+            FROM ctox_core_transition_proofs
+            WHERE entity_type = 'QueueItem'
+              AND entity_id = ?1
+              AND to_state = 'Failed'
+              AND accepted = 1
+            "#,
+            params![message_key],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    Ok(count)
 }
 
 fn now_iso_string() -> String {
@@ -2477,6 +2535,109 @@ mod tests {
                 .iter()
                 .any(|reason| reason.contains("already blocked")))
             .unwrap_or(false));
+
+        let _ = std::fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn spill_score_weights_distinct_durable_failure_signatures() -> Result<()> {
+        let root = temp_root("spill-failure-signatures");
+        std::fs::create_dir_all(&root)?;
+
+        // A plain pending normal-priority task: no blocked bonus, so the only
+        // way it gains failure weight is via the proofs evidence below.
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Flaky deploy retry".to_string(),
+                prompt: "Retry the deploy that keeps failing.".to_string(),
+                thread_key: "queue/flaky-deploy".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+
+        // Baseline score with no failure proofs present.
+        let baseline = score_queue_spill_candidate(&root, task.clone())?
+            .expect("normal pending task should be a candidate");
+
+        // Seed accepted Failed proofs for THIS task in the core db (the same db
+        // distinct_failure_signature_count reads).
+        let conn = Connection::open(crate::paths::core_db(&root))?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS ctox_core_transition_proofs (
+                proof_id TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                lane TEXT NOT NULL,
+                from_state TEXT NOT NULL,
+                to_state TEXT NOT NULL,
+                core_event TEXT NOT NULL,
+                actor TEXT NOT NULL,
+                accepted INTEGER NOT NULL,
+                violation_codes_json TEXT NOT NULL DEFAULT '[]',
+                request_json TEXT NOT NULL DEFAULT '{}',
+                report_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            "#,
+        )?;
+        let mut insert = |proof_id: &str,
+                          entity_id: &str,
+                          to_state: &str,
+                          accepted: i64,
+                          request_json: &str|
+         -> Result<()> {
+            conn.execute(
+                r#"INSERT INTO ctox_core_transition_proofs
+                    (proof_id, entity_type, entity_id, lane, from_state, to_state,
+                     core_event, actor, accepted, request_json, report_json, created_at, updated_at)
+                   VALUES (?1, 'QueueItem', ?2, 'P2MissionDelivery', 'Running', ?3,
+                           'Fail', 'worker', ?4, ?5, '{}',
+                           '2026-06-13T00:00:00.000Z', '2026-06-13T00:00:00.000Z')"#,
+                params![proof_id, entity_id, to_state, accepted, request_json],
+            )?;
+            Ok(())
+        };
+
+        // Two DISTINCT accepted Failed signatures for this task.
+        insert("p1", &task.message_key, "Failed", 1, r#"{"err":"oom"}"#)?;
+        insert("p2", &task.message_key, "Failed", 1, r#"{"err":"timeout"}"#)?;
+        // A duplicate signature (same request_json) must NOT add weight.
+        insert("p3", &task.message_key, "Failed", 1, r#"{"err":"oom"}"#)?;
+        // A rejected proof (accepted = 0) must NOT count.
+        insert(
+            "p4",
+            &task.message_key,
+            "Failed",
+            0,
+            r#"{"err":"rejected"}"#,
+        )?;
+        // A non-Failed accepted proof must NOT count.
+        insert("p5", &task.message_key, "Completed", 1, r#"{"ok":true}"#)?;
+        // A Failed proof for a DIFFERENT task must NOT skew this task.
+        insert("p6", "queue:other::task", "Failed", 1, r#"{"err":"other"}"#)?;
+        drop(conn);
+
+        let scored = score_queue_spill_candidate(&root, task.clone())?
+            .expect("task with failures should still be a candidate");
+
+        // Exactly +2 for the two distinct accepted Failed signatures.
+        assert_eq!(scored.candidate_score, baseline.candidate_score + 2);
+        assert!(
+            scored
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("distinct durable failure signature")),
+            "expected a distinct-failure-signature reason, got: {:?}",
+            scored.reasons
+        );
 
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
