@@ -1217,7 +1217,8 @@ impl LcmEngine {
 
         while rounds < self.config.max_rounds {
             rounds += 1;
-            let Some(summary_id) = self.compact_leaf_pass(conversation_id, summarizer, force)?
+            let Some(summary_id) =
+                self.compact_leaf_pass(conversation_id, summarizer, force, previous_tokens)?
             else {
                 break;
             };
@@ -1235,7 +1236,9 @@ impl LcmEngine {
 
         while rounds < self.config.max_rounds && (force || previous_tokens > threshold) {
             rounds += 1;
-            let Some(summary_id) = self.compact_condensed_pass(conversation_id, summarizer)? else {
+            let Some(summary_id) =
+                self.compact_condensed_pass(conversation_id, summarizer, force, previous_tokens)?
+            else {
                 break;
             };
             created.push(summary_id);
@@ -2631,7 +2634,8 @@ impl LcmEngine {
         &self,
         conversation_id: i64,
         summarizer: &S,
-        _force: bool,
+        force: bool,
+        previous_tokens: i64,
     ) -> Result<Option<String>> {
         let entries = self.context_entries(conversation_id)?;
         let message_entries: Vec<_> = entries
@@ -2700,7 +2704,7 @@ impl LcmEngine {
             .collect::<Result<Vec<_>>>()?
             .into_iter()
             .sum();
-        let summary_id = self.insert_summary(
+        let summary_id = self.insert_summary_token_gated(
             conversation_id,
             SummaryKind::Leaf,
             0,
@@ -2715,14 +2719,18 @@ impl LcmEngine {
                 .collect(),
             first_ordinal,
             selected.iter().map(|entry| entry.ordinal).collect(),
+            previous_tokens,
+            force,
         )?;
-        Ok(Some(summary_id))
+        Ok(summary_id)
     }
 
     fn compact_condensed_pass<S: Summarizer>(
         &self,
         conversation_id: i64,
         summarizer: &S,
+        force: bool,
+        previous_tokens: i64,
     ) -> Result<Option<String>> {
         let entries = self.context_entries(conversation_id)?;
         let message_entries: Vec<_> = entries
@@ -2793,7 +2801,7 @@ impl LcmEngine {
                     summarizer,
                 )?
                 .content;
-            let summary_id = self.insert_summary(
+            let summary_id = self.insert_summary_token_gated(
                 conversation_id,
                 SummaryKind::Condensed,
                 depth + 1,
@@ -2805,8 +2813,10 @@ impl LcmEngine {
                 Vec::new(),
                 first_ordinal,
                 same_depth.iter().map(|entry| entry.ordinal).collect(),
+                previous_tokens,
+                force,
             )?;
-            return Ok(Some(summary_id));
+            return Ok(summary_id);
         }
 
         Ok(None)
@@ -2877,6 +2887,9 @@ impl LcmEngine {
         Ok(chunk)
     }
 
+    // Superseded in production by insert_summary_token_gated; retained only for
+    // tests that want an unconditional (non-token-gated) insert.
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     fn insert_summary(
         &self,
@@ -2924,6 +2937,82 @@ impl LcmEngine {
             Err(err) => {
                 let _ = self.conn.execute_batch("ROLLBACK TO insert_summary");
                 let _ = self.conn.execute_batch("RELEASE insert_summary");
+                Err(err)
+            }
+        }
+    }
+
+    /// Insert a compaction summary inside a savepoint and keep it only if the
+    /// resulting context token count did not regress. The summarizer call must
+    /// have already run before this point so no LLM work happens under the
+    /// held write lock. On non-force passes the count must strictly decrease;
+    /// on a force pass it must merely not increase. Otherwise the insert and
+    /// the source-ordinal deletes are rolled back and `Ok(None)` is returned,
+    /// so a regressing pass can never durably enlarge the context.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_summary_token_gated(
+        &self,
+        conversation_id: i64,
+        kind: SummaryKind,
+        depth: i64,
+        content: &str,
+        descendant_count: i64,
+        descendant_token_count: i64,
+        source_message_token_count: i64,
+        child_summary_ids: &[String],
+        message_ids: Vec<i64>,
+        ordinal: i64,
+        replaced_ordinals: Vec<i64>,
+        previous_tokens: i64,
+        force: bool,
+    ) -> Result<Option<String>> {
+        let created_at = iso_now();
+        let summary_id = summary_id_for(conversation_id, content, depth);
+        let token_count = estimate_tokens(content) as i64;
+        self.conn
+            .execute_batch("SAVEPOINT insert_summary_gated")
+            .context("failed to begin savepoint for insert_summary_token_gated")?;
+        let result = self
+            .insert_summary_inner(
+                conversation_id,
+                &summary_id,
+                kind,
+                depth,
+                content,
+                token_count,
+                descendant_count,
+                descendant_token_count,
+                source_message_token_count,
+                &created_at,
+                child_summary_ids,
+                message_ids,
+                ordinal,
+                replaced_ordinals,
+            )
+            .and_then(|()| self.context_token_count(conversation_id));
+        match result {
+            Ok(current) => {
+                let regressed = if force {
+                    current > previous_tokens
+                } else {
+                    current >= previous_tokens
+                };
+                if regressed {
+                    let _ = self.conn.execute_batch("ROLLBACK TO insert_summary_gated");
+                    self.conn
+                        .execute_batch("RELEASE insert_summary_gated")
+                        .context("failed to release savepoint for insert_summary_token_gated")?;
+                    Ok(None)
+                } else {
+                    self.conn
+                        .execute_batch("RELEASE insert_summary_gated")
+                        .context("failed to release savepoint for insert_summary_token_gated")?;
+                    Ok(Some(summary_id))
+                }
+            }
+            Err(err) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO insert_summary_gated");
+                let _ = self.conn.execute_batch("RELEASE insert_summary_gated");
                 Err(err)
             }
         }
@@ -6005,7 +6094,6 @@ fn summary_id_for(conversation_id: i64, content: &str, depth: i64) -> String {
     hash.update(conversation_id.to_string().as_bytes());
     hash.update(depth.to_string().as_bytes());
     hash.update(content.as_bytes());
-    hash.update(iso_now().as_bytes());
     let digest = hash.finalize();
     let prefix = digest[..8]
         .iter()
@@ -6046,8 +6134,15 @@ mod tests {
                 context_threshold: 0.4,
                 min_compaction_tokens: 0,
                 fresh_tail_count: 2,
-                leaf_chunk_tokens: 20,
-                leaf_target_tokens: 120,
+                // Batch the compactable messages into one leaf chunk and force
+                // the heuristic summary to truncate well below the source, so
+                // the leaf pass genuinely reduces tokens. Single-message chunks
+                // (the old leaf_chunk_tokens: 20) produce a summary larger than
+                // their source, which the lcm-x5 token-gate now correctly rolls
+                // back — that regime is exercised by the RegressingSummarizer
+                // test below, not here.
+                leaf_chunk_tokens: 200,
+                leaf_target_tokens: 30,
                 condensed_target_tokens: 120,
                 leaf_min_fanout: 3,
                 condensed_min_fanout: 2,
@@ -6075,6 +6170,112 @@ mod tests {
 
         let expanded = engine.expand(&result.created_summary_ids[0], 1, true, 10_000)?;
         assert!(!expanded.messages.is_empty());
+
+        let _ = std::fs::remove_file(db_path);
+        Ok(())
+    }
+
+    /// A summarizer whose output is far larger than the source it replaces, so
+    /// a compaction pass that committed it unconditionally would durably
+    /// enlarge the context. The token-gate must roll the insert+delete back.
+    struct RegressingSummarizer;
+
+    impl Summarizer for RegressingSummarizer {
+        fn summarize(
+            &self,
+            _kind: SummaryKind,
+            _depth: i64,
+            lines: &[String],
+            _target_tokens: usize,
+        ) -> Result<String> {
+            Ok(lines.join(" ").repeat(8))
+        }
+    }
+
+    #[test]
+    fn compact_never_enlarges_context_under_regressing_summarizer() -> Result<()> {
+        let config = LcmConfig {
+            context_threshold: 0.4,
+            min_compaction_tokens: 0,
+            fresh_tail_count: 2,
+            leaf_chunk_tokens: 20,
+            leaf_target_tokens: 120,
+            condensed_target_tokens: 120,
+            leaf_min_fanout: 3,
+            condensed_min_fanout: 2,
+            max_rounds: 4,
+        };
+
+        for force in [false, true] {
+            let db_path = temp_db();
+            let engine = LcmEngine::open(&db_path, config.clone())?;
+            for idx in 0..8 {
+                engine.add_message(
+                    1,
+                    if idx % 2 == 0 { "user" } else { "assistant" },
+                    &format!("message {idx} about postgres migration planning"),
+                )?;
+            }
+            let tokens_before = engine.context_token_count(1)?;
+            let result = engine.compact(1, 40, &RegressingSummarizer, force)?;
+            assert_eq!(result.tokens_before, tokens_before);
+            assert!(
+                result.tokens_after <= result.tokens_before,
+                "force={force}: tokens_after ({}) must not exceed tokens_before ({})",
+                result.tokens_after,
+                result.tokens_before,
+            );
+            assert!(
+                engine.context_token_count(1)? <= tokens_before,
+                "force={force}: persisted context must not be enlarged",
+            );
+            let _ = std::fs::remove_file(db_path);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn insert_summary_token_gated_rolls_back_a_regressing_leaf_pass() -> Result<()> {
+        let db_path = temp_db();
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+
+        let m1 = engine.add_message(1, "user", "alpha")?;
+        let m2 = engine.add_message(1, "assistant", "beta")?;
+        let tokens_before = engine.context_token_count(1)?;
+        let ordinal = engine.next_context_ordinal(1)?;
+
+        // Content whose token estimate exceeds the removed source token sum, so
+        // committing it would enlarge the context.
+        let bloated = "x".repeat(4000);
+        let outcome = engine.insert_summary_token_gated(
+            1,
+            SummaryKind::Leaf,
+            0,
+            &bloated,
+            0,
+            0,
+            0,
+            &[],
+            vec![m1.message_id, m2.message_id],
+            ordinal,
+            vec![1, 2],
+            tokens_before,
+            false,
+        )?;
+
+        assert!(outcome.is_none(), "regressing pass must roll back");
+        assert_eq!(
+            engine.context_token_count(1)?,
+            tokens_before,
+            "rolled-back pass must leave the context token count unchanged",
+        );
+        assert_eq!(
+            engine
+                .get_summary(&summary_id_for(1, &bloated, 0))?
+                .is_none(),
+            true,
+            "the rolled-back summary row must not persist",
+        );
 
         let _ = std::fs::remove_file(db_path);
         Ok(())
@@ -6126,7 +6327,7 @@ mod tests {
         )?;
 
         let condensed_id = engine
-            .compact_condensed_pass(7, &HeuristicSummarizer)?
+            .compact_condensed_pass(7, &HeuristicSummarizer, true, i64::MAX)?
             .context("expected condensed summary")?;
         let condensed = engine
             .get_summary(&condensed_id)?
