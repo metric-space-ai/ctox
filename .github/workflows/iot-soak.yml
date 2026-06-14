@@ -90,6 +90,9 @@ jobs:
           cargo test --locked --bin ctox iot_ci_soak_ \
             --no-fail-fast -- --test-threads=1 --nocapture | tee iot-soak.log
 
+      - name: Install JS test dependencies
+        run: npm install --no-save --no-audit --no-fund esbuild@0.28.0
+
       - name: Run IoT module + RxDB-only contract checks (no HTTP bridge)
         run: |
           set -o pipefail
