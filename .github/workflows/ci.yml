@@ -11,6 +11,75 @@ env:
   CARGO_TARGET_DIR: target
 
 jobs:
+  check-business-os-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-22.04
+            platform: linux
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+    name: Business OS Desktop E2E (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/apps/business-os-desktop/package-lock.json
+
+      - name: Install Linux Electron dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-0 libnss3 libxss1 libasound2 libgbm1 \
+            libnotify4 libxtst6 xdg-utils xvfb dbus-x11 \
+            gnome-keyring libsecret-tools
+
+      - name: Install dependencies
+        working-directory: src/apps/business-os-desktop
+        run: npm ci
+
+      - name: Unit and syntax checks
+        working-directory: src/apps/business-os-desktop
+        run: |
+          npm test
+          npm run check
+          npm run release:check
+
+      - name: Electron smokes
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run test:electron-smoke
+
+      - name: Electron smokes (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: xvfb-run -a npm run test:electron-smoke
+
+      - name: Platform keychain runtime smoke
+        if: runner.os != 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: npm run smoke:keychain-runtime
+
+      - name: Platform keychain runtime smoke (Linux)
+        if: runner.os == 'Linux'
+        working-directory: src/apps/business-os-desktop
+        run: |
+          dbus-run-session -- bash -lc '
+            eval "$(printf "\n" | gnome-keyring-daemon --unlock --components=secrets)"
+            export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+            npm run smoke:keychain-runtime
+          '
+
   check-desktop:
     runs-on: ubuntu-22.04
     name: Desktop extra check (linux)

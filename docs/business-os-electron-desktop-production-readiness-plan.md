@@ -174,6 +174,11 @@ wieder testbar:
   macOS arm64/x64, Linux x64 und Windows x64; `release:check` verifiziert
   Matrix, npm-Gates, Electron-Smokes, Distribution-Build und plattformweiten
   Release-Artefakt-Smoke.
+- Die normale `main`-/PR-CI enthält jetzt zusätzlich ein Business-OS-Desktop-
+  E2E-Gate auf macOS, Linux und Windows. Es läuft ohne Distribution-Build,
+  aber mit `npm test`, `npm run check`, `npm run release:check`,
+  Electron-Smokes und Plattform-Keychain-Runtime-Smoke; Linux nutzt dafür
+  `xvfb`, `dbus-run-session`, `gnome-keyring` und `libsecret-tools`.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
   `dbus-run-session` und `gnome-keyring`.
@@ -292,7 +297,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 97% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | In Umsetzung | 97% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 74% |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 76% |
 | **Gesamt** | **100%** | **In Umsetzung** | **95%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
@@ -711,7 +716,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 74%.
+Status: In Umsetzung, 76%.
 
 Release Gates:
 
@@ -755,6 +760,10 @@ Release Gates:
   relativen Artefaktpfaden, Groessen, Helper-Pruefung und
   macOS-Signaturchecks; der Release-Workflow laedt diese Datei zusammen mit
   den Artefakten hoch.
+- [x] `main`-/PR-CI hat ein Business-OS-Desktop-E2E-Gate auf macOS, Linux und
+  Windows: Unit-/Syntax-/Release-Checks, Electron-Smokes und Plattform-
+  Keychain-Runtime-Smoke laufen in derselben Plattformbreite wie der Release-
+  Vorbau, aber ohne Installer-Build.
 - [ ] Live-/Cross-Platform Desktop Electron E2E auf macOS, Windows und Linux.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
@@ -812,3 +821,4 @@ Release Gates:
 | 2026-06-13 | Welle 3 Fresh-Machine-Vertrag verbessert: Der lokale Desktop-Quellpfad sucht bei fehlendem explizitem `ctoxBinary` jetzt zuerst nach einem gebuendelten CTOX-Helper in den App-Resources und faellt erst danach auf PATH-`ctox` zurueck. Neuer Smoke `smoke:local-bundled-runtime` beweist ein frisches Desktop-Profil ohne ctox.dev Account, ohne `ctoxRoot` und ohne explizites `ctoxBinary`: lokale Installation, Inspect, Attach, persistierter Neustart und WebRTC-only Launch bleiben secret-frei. Die Release-Matrix baut den plattformpassenden CTOX-Helper vor `electron-builder`; `electron-builder` paketiert `resources/ctox` als externe App-Resource, sobald der Helper liegt. Welle 3 steigt auf 92%, Gesamt auf 95%. Offen bleibt der signierte Release-/Fresh-Machine-Nachweis auf sauberer Maschine. Gruen: `npm run smoke:local-bundled-runtime`, `node --test test/local-source.test.cjs`, `npm test` 105/105, `npm run check`, `npm run release:check`. |
 | 2026-06-14 | Welle 8 Release-Artefakt-Smoke plattformweit gemacht: `smoke:signed-artifacts` ist nicht mehr mac-only. macOS prueft `.app`, `app.asar`, gebuendelten Helper sowie `codesign`/`spctl`; Linux prueft AppImage, `.deb`, `linux-unpacked`, `app.asar` und Helper; Windows prueft NSIS-Installer, `win-unpacked`, `app.asar` und `ctox.exe`. Der Release-Workflow ruft den Smoke nun mit `matrix.builderPlatform` auf allen drei Plattformen auf, und `release:check` erzwingt diesen Vertrag. Welle 8 steigt auf 72%; der echte Tag-/Signed-/Notarization-Run bleibt offen. Gruen: synthetischer mac/linux/win Artefakt-Smoke, `npm run check`, `npm run release:check`, Release-Workflow-YAML-Parse. |
 | 2026-06-14 | Welle 8 Release-Smoke-Evidenz ergaenzt: `smoke:signed-artifacts` kann jetzt pro Plattform ein JSON nach `ctox-business-os-desktop-release-artifact-smoke/v1` mit relativen Artefaktpfaden schreiben. Der Tag-Release-Workflow erzeugt `release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json` und laedt diese Evidenz zusammen mit den Artefakten hoch; `release:check` erzwingt Workflow- und Script-Vertrag. Welle 8 steigt auf 74%; echte signierte/notarisierte Tag-Artefakte bleiben weiter offen. Gruen: `node --test test/signed-artifacts-smoke.test.cjs`, `npm test`, `npm run check`, `npm run release:check`, Release-Workflow-YAML-Parse. |
+| 2026-06-14 | Welle 8 Main-CI-E2E-Gate ergaenzt: `.github/workflows/ci.yml` fuehrt Business OS Desktop jetzt auf macOS, Linux und Windows aus, jeweils mit `npm test`, `npm run check`, `npm run release:check`, Electron-Smokes und Plattform-Keychain-Runtime-Smoke. Linux nutzt `xvfb-run` fuer Electron und eine echte Secret-Service-Session ueber `dbus-run-session`/`gnome-keyring`; `release:check` verifiziert diesen CI-Vertrag. Welle 8 steigt auf 76%; ein tatsaechlich gruener GitHub-Actions-Run fuer alle drei Plattformen bleibt als Live-Evidenz noch abzuwarten. Gruen lokal: `npm run release:check`, CI-/Release-YAML-Parse. |

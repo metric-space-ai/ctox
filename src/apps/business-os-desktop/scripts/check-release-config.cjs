@@ -61,9 +61,33 @@ function main() {
   assert.match(mainSource, /configureAutoUpdates/);
   assert.match(mainSource, /electron-updater/);
 
+  assertCiWorkflowMatrix();
   assertReleaseWorkflowMatrix();
 
   console.log("desktop release config OK");
+}
+
+function assertCiWorkflowMatrix() {
+  const ciWorkflowPath = path.join(repoRoot, ".github", "workflows", "ci.yml");
+  const workflow = fs.readFileSync(ciWorkflowPath, "utf8");
+  assert.match(workflow, /^\s{2}check-business-os-desktop:/m, "CI workflow is missing Business OS Desktop job");
+  for (const platform of ["platform: mac", "platform: linux", "platform: win"]) {
+    assert.match(workflow, new RegExp(escapeRegExp(platform)), `CI workflow missing Desktop platform: ${platform}`);
+  }
+  for (const command of [
+    "npm ci",
+    "npm test",
+    "npm run check",
+    "npm run release:check",
+    "npm run test:electron-smoke",
+    "xvfb-run -a npm run test:electron-smoke",
+    "npm run smoke:keychain-runtime",
+    "dbus-run-session",
+    "gnome-keyring",
+    "libsecret-tools",
+  ]) {
+    assert.match(workflow, new RegExp(escapeRegExp(command)), `CI workflow missing command: ${command}`);
+  }
 }
 
 function assertReleaseWorkflowMatrix() {
