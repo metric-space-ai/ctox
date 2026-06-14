@@ -4413,7 +4413,12 @@ fn mark_outbound_send_accepted(
     status: &str,
     adapter_json: &Value,
 ) -> Result<()> {
-    conn.execute(
+    // Only transition a row that is still pending (or retrying after a prior
+    // failure); never clobber a row that has already reached a terminal state.
+    // A 0-row result means the send was already resolved, so this is an
+    // idempotent no-op — NOT an error: the caller uses `?` on the success path,
+    // and erroring there could trigger a re-send of an already-accepted message.
+    let changed = conn.execute(
         r#"
         UPDATE communication_messages
         SET status = ?2,
@@ -4425,6 +4430,7 @@ fn mark_outbound_send_accepted(
             ),
             observed_at = ?4
         WHERE message_key = ?1
+          AND status IN ('draft_pending_send', 'send_failed')
         "#,
         params![
             message_key,
@@ -4433,11 +4439,20 @@ fn mark_outbound_send_accepted(
             now_iso_string()
         ],
     )?;
+    if changed == 0 {
+        eprintln!(
+            "[ctox channels] mark_outbound_send_accepted: {message_key} was not in a pending state (already resolved); skipping idempotently"
+        );
+    }
     Ok(())
 }
 
 fn mark_outbound_send_failed(conn: &Connection, message_key: &str, error: &str) -> Result<()> {
-    conn.execute(
+    // Only mark a still-pending row as failed; a late or duplicate failure must
+    // never clobber a row that has already been accepted (or cancelled). A
+    // 0-row result is an idempotent no-op so a stray failure callback cannot
+    // override a successful send.
+    let changed = conn.execute(
         r#"
         UPDATE communication_messages
         SET status = 'send_failed',
@@ -4448,9 +4463,15 @@ fn mark_outbound_send_failed(conn: &Connection, message_key: &str, error: &str) 
             ),
             observed_at = ?3
         WHERE message_key = ?1
+          AND status IN ('draft_pending_send', 'send_failed')
         "#,
         params![message_key, error, now_iso_string()],
     )?;
+    if changed == 0 {
+        eprintln!(
+            "[ctox channels] mark_outbound_send_failed: {message_key} was not in a pending state (already resolved); skipping idempotently"
+        );
+    }
     Ok(())
 }
 
@@ -11696,6 +11717,56 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn outbound_send_marks_do_not_clobber_a_resolved_row() {
+        // EGRESS-5: the live mark_outbound_send_* now CAS-guard on a pending
+        // status, so a late/duplicate failure can never clobber an accepted
+        // send (and a duplicate accept can never resurrect a terminal row), and
+        // a 0-row case is an idempotent no-op rather than an error.
+        let db_path = unique_test_db_path("ctox-egress5-cas");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Body fuer EGRESS-5");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:egress5", &body_sha256)
+                .expect("pending send must persist")
+                .message_key;
+
+        // Accept the pending send.
+        mark_outbound_send_accepted(&conn, &message_key, "accepted", &json!({"ok": true}))
+            .expect("accept must succeed for a pending row");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| row.get(0),
+            )
+            .expect("row must exist");
+        assert_eq!(status, "accepted");
+
+        // A late/duplicate failure mark must NOT clobber the accepted send and
+        // must NOT error (erroring on the send path could trigger a re-send).
+        mark_outbound_send_failed(&conn, &message_key, "late smtp timeout")
+            .expect("a stale failure mark must be an idempotent no-op, not an error");
+        let status_after: String = conn
+            .query_row(
+                "SELECT status FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| row.get(0),
+            )
+            .expect("row must exist");
+        assert_eq!(
+            status_after, "accepted",
+            "a late failure must not clobber an accepted send"
+        );
+
+        // A duplicate accept on the now-terminal row is also an idempotent no-op.
+        mark_outbound_send_accepted(&conn, &message_key, "accepted", &json!({"ok": true}))
+            .expect("duplicate accept must be an idempotent no-op");
+
+        let _ = std::fs::remove_file(&db_path);
     }
 
     #[test]
