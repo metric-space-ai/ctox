@@ -194,13 +194,18 @@ wieder testbar:
   `27484995659` fuer Commit `01e258b9` bestaetigt dieselben Desktop-Jobs
   erneut. Weitere `main`-Runs `27485327715` fuer Commit `0e982165` und
   `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-E2E-Pfad
-  ebenfalls auf macOS, Linux und Windows. Die Gesamt-CI kann weiterhin durch
-  separate CTOX-CLI/Rust-Themen ausserhalb der Electron-App rot sein.
+  ebenfalls auf macOS, Linux und Windows. Der neueste `main`-CI-Run
+  `27489031650` fuer Commit `4dc20c71` bestaetigt den Desktop-E2E-Pfad erneut
+  und ist als Gesamt-CI inklusive CTOX-CLI-Matrix gruen.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
   `dbus-run-session` und `gnome-keyring`. Die Runs `27485327715` und
-  `27486101670` beweisen diesen Runtime-SecretStore-Pfad live fuer alle drei
-  Desktop-Zielplattformen.
+  `27486101670` sowie der aktuelle gruene Run `27489031650` beweisen diesen
+  Runtime-SecretStore-Pfad live fuer alle drei Desktop-Zielplattformen.
+- Der aktuelle `IoT Engine Soak`-Run `27489031659` fuer Commit `4dc20c71` ist
+  gruen. Damit ist auch der durch `src/core/business_os/**` getriggerte
+  Business-OS-/RxDB-only Soak nachgezogen; der vorherige Fehlstand war ein
+  fehlender gepinnter JS-Test-Dependency-Install fuer `esbuild`.
 - `npm run smoke:signed-artifacts` ist jetzt plattformweit: macOS prueft
   `.app`, `app.asar`, gebuendelten CTOX-Helper sowie `codesign`/`spctl`;
   Linux prueft AppImage, `.deb`, `linux-unpacked`, `app.asar` und Helper;
@@ -314,8 +319,8 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 98% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 82% |
-| **Gesamt** | **100%** | **In Umsetzung** | **96%** |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 86% |
+| **Gesamt** | **100%** | **In Umsetzung** | **97%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
 
@@ -750,7 +755,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 82%.
+Status: In Umsetzung, 86%.
 
 Release Gates:
 
@@ -803,7 +808,12 @@ Release Gates:
   `27484995659` fuer Commit `01e258b9` sind auf allen drei
   Desktop-Zielplattformen gruen; Run `27485327715` fuer Commit `0e982165`
   und Run `27486101670` fuer Commit `80b11085` bestaetigen denselben Desktop-
-  Pfad erneut.
+  Pfad erneut. Der aktuelle `main`-CI-Run `27489031650` fuer Commit
+  `4dc20c71` ist als Gesamt-CI gruen und bestaetigt Desktop-E2E, Plattform-
+  Keychain-Runtime-Smoke, RxDB-only Guards, `cargo check` und CLI-Matrix.
+- [x] `IoT Engine Soak` ist fuer den aktuellen `main`-Stand gruen:
+  GitHub-Actions-Run `27489031659` fuer Commit `4dc20c71` laeuft nach
+  gepinntem `esbuild@0.28.0` Install der JS-Modultests erfolgreich durch.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
   BrowserView-Guard vor dem lokalen Server abgebrochen.
@@ -865,3 +875,4 @@ Release Gates:
 | 2026-06-14 | Welle 8 Plan-Konsistenz bereinigt: Der Folge-Run `27484995659` fuer Commit `01e258b9` bestaetigt erneut gruenes `Business OS Desktop E2E` auf macOS, Linux und Windows, inklusive Plattform-Keychain-Runtime-Smokes. Der offene Punkt fuer vollstaendiges Cross-Platform-Mixed-Switching wurde aus der Restliste entfernt; die Restliste unterscheidet jetzt klar zwischen gruenem `main`-/PR-CI-E2E und dem weiterhin offenen echten Tag-Release mit signierten/notarisierten Installer-Artefakten. |
 | 2026-06-14 | Welle 7 abgeschlossen: Die `main`-CI-Runs `27485327715` fuer Commit `0e982165` und `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-Keychain-Runtime-Smoke auf macOS, Linux und Windows. Damit sind Linux Secret Service und Windows Credential Manager nicht mehr nur Workflow-Vertrag, sondern live im Desktop-E2E bewiesen; der verbleibende Release-Beweis gehoert jetzt nur noch zu Welle 8 Tag-Run/Installer-Artefakten. |
 | 2026-06-14 | Welle 5 lokaler Artefaktpfad live gruen: Das GitHub-Release-Artefakt `ctox-linux-x64.tar.gz` aus `v0.3.27` wurde lokal per SHA256 verifiziert, daraus `target/release/ctox` extrahiert und gegen SKF `57.129.123.108` ueber `smoke:ssh-password-live -- --fresh-install --local-artifact-path ... --file-askpass-fallback` ausgefuehrt. Der Smoke installierte das Binary nach `~/.local/bin/ctox`, pruefte `ctox start/status`, fuehrte Remote-`peer ensure` aus und erzeugte eine `ssh_managed` Desktop-Instanz mit WebRTC-only Launch-Konfig ohne Registry-Secret-Leak. Der offizielle Online-Fresh-Install bleibt wegen Source-Build-Dauer offen. |
+| 2026-06-14 | Welle 8 CI-Evidenz geschlossen: `main`-CI-Run `27489031650` fuer Commit `4dc20c71` ist vollstaendig gruen, inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, CTOX-CLI-Matrix und Harness-Tests. Der zusaetzliche `IoT Engine Soak` `27489031659` ist ebenfalls gruen; der vorherige Soak-Fehler war ein fehlender gepinnter `esbuild@0.28.0` Install fuer die JS-Modultests und wurde im Workflow behoben. Welle 8 steigt auf 86%, Gesamt auf 97%; production-ready bleibt blockiert durch echten Tag-Run mit signierten/notarisierten Installer-Artefakten, echte ctox.dev Revocation und offiziellen Online-SSH-Fresh-Install. |
