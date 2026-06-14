@@ -141,14 +141,27 @@ fn mark_boundary_window_consumed(conversation_id: i64, now_ts: &str) {
 /// as `Ok(false)` by the caller. The explicit interval trigger can still be
 /// enabled by operators; token-window safety is handled by actual TokenCount
 /// telemetry in the compact policy.
+/// Outcome of probing for a durable state transition. `detected` preserves the
+/// historical default-false semantics; `probe_errors` distinguishes a probe
+/// that ERRORED (e.g. a schema regression renamed a column) from one that
+/// genuinely found no boundary, so a query regression is surfaced instead of
+/// silently suppressing continuity refreshes.
+#[derive(Debug, Default)]
+struct DurableStateProbe {
+    detected: bool,
+    probe_errors: Vec<String>,
+}
+
 fn detect_durable_state_transition(
     root: &Path,
     lcm_db_path: &Path,
     conversation_id: i64,
     turn_start_ts: &str,
     boundary_window_ts: &str,
-) -> Result<bool> {
+) -> Result<DurableStateProbe> {
     use rusqlite::Connection;
+
+    let mut probe = DurableStateProbe::default();
 
     // Mission-side tables live in the unified CTOX runtime database. These
     // use the boundary WINDOW (since the last refresh), not the turn
@@ -160,26 +173,40 @@ fn detect_durable_state_transition(
             &mission_db,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
-        let self_work_closed: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM ticket_self_work_items \
-                 WHERE state = 'closed' AND updated_at > ?1",
-                rusqlite::params![boundary_window_ts],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let self_work_closed: i64 = match conn.query_row(
+            "SELECT COUNT(1) FROM ticket_self_work_items \
+             WHERE state = 'closed' AND updated_at > ?1",
+            rusqlite::params![boundary_window_ts],
+            |row| row.get(0),
+        ) {
+            Ok(count) => count,
+            Err(err) => {
+                probe
+                    .probe_errors
+                    .push(format!("ticket_self_work_items probe failed: {err}"));
+                0
+            }
+        };
         if self_work_closed > 0 {
-            return Ok(true);
+            probe.detected = true;
+            return Ok(probe);
         }
-        let knowledge_added: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
-                rusqlite::params![boundary_window_ts],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let knowledge_added: i64 = match conn.query_row(
+            "SELECT COUNT(1) FROM ticket_knowledge_entries WHERE created_at > ?1",
+            rusqlite::params![boundary_window_ts],
+            |row| row.get(0),
+        ) {
+            Ok(count) => count,
+            Err(err) => {
+                probe
+                    .probe_errors
+                    .push(format!("ticket_knowledge_entries probe failed: {err}"));
+                0
+            }
+        };
         if knowledge_added > 0 {
-            return Ok(true);
+            probe.detected = true;
+            return Ok(probe);
         }
     }
 
@@ -197,25 +224,30 @@ fn detect_durable_state_transition(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
         // `continuity_documents.kind` is stored lowercase ("focus", see
-        // ContinuityKind::as_str) and its primary key is `document_id`; the
-        // previous query (capitalized kind, join on nonexistent `d.id`)
-        // errored and the error was swallowed into "no boundary".
-        let focus_commits: i64 = conn
-            .query_row(
-                "SELECT COUNT(1) FROM continuity_commits c \
-                 JOIN continuity_documents d ON c.document_id = d.document_id \
-                 WHERE d.conversation_id = ?1 AND d.kind = 'focus' \
-                 AND CAST(c.created_at AS INTEGER) > ?2",
-                rusqlite::params![conversation_id, turn_start_millis],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        // ContinuityKind::as_str) and its primary key is `document_id`.
+        let focus_commits: i64 = match conn.query_row(
+            "SELECT COUNT(1) FROM continuity_commits c \
+             JOIN continuity_documents d ON c.document_id = d.document_id \
+             WHERE d.conversation_id = ?1 AND d.kind = 'focus' \
+             AND CAST(c.created_at AS INTEGER) > ?2",
+            rusqlite::params![conversation_id, turn_start_millis],
+            |row| row.get(0),
+        ) {
+            Ok(count) => count,
+            Err(err) => {
+                probe
+                    .probe_errors
+                    .push(format!("continuity_commits probe failed: {err}"));
+                0
+            }
+        };
         if focus_commits > 0 {
-            return Ok(true);
+            probe.detected = true;
+            return Ok(probe);
         }
     }
 
-    Ok(false)
+    Ok(probe)
 }
 
 use crate::context_health;
@@ -688,14 +720,25 @@ where
     // boundaries and force a continuity refresh even if the output budget
     // has not yet been hit.
     let boundary_window_ts = boundary_window_start(conversation_id, &turn_start_ts);
-    let state_transition_detected = detect_durable_state_transition(
+    let state_probe = detect_durable_state_transition(
         root,
         db_path,
         conversation_id,
         &turn_start_ts,
         &boundary_window_ts,
     )
-    .unwrap_or(false);
+    .unwrap_or_default();
+    if !state_probe.probe_errors.is_empty() {
+        // A probe that ERRORED (e.g. a schema regression) is degraded, not a
+        // genuine "no boundary"; surface it instead of silently suppressing
+        // the continuity refresh.
+        eprintln!(
+            "[ctox turn-loop] durable state-transition probe degraded ({} error(s)): {}",
+            state_probe.probe_errors.len(),
+            state_probe.probe_errors.join("; ")
+        );
+    }
+    let state_transition_detected = state_probe.detected;
     let effective_force_refresh = force_continuity_refresh || state_transition_detected;
     let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
     // New adaptive model: refresh only on durable state transition
@@ -1767,10 +1810,49 @@ mod tests {
         }
         let detected =
             detect_durable_state_transition(&root, &db_path, 7, &turn_start, &turn_start)
-                .expect("detection query must run");
+                .expect("detection query must run")
+                .detected;
         assert!(
             detected,
             "a focus commit after turn start must register as a durable boundary"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn durable_state_probe_surfaces_a_query_error_instead_of_suppressing() {
+        // turnloop-6: a probe whose query ERRORS (e.g. a schema regression
+        // renames a column or drops a table) must be reported via probe_errors,
+        // not collapsed into "no boundary" — otherwise a query regression
+        // silently stops forcing continuity refreshes.
+        let root = std::env::temp_dir().join(format!(
+            "ctox-turn-probe-err-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        // Create the mission db so it EXISTS but WITHOUT ticket_self_work_items,
+        // so the first probe query errors with "no such table".
+        let mission_db = crate::persistence::sqlite_path(&root);
+        std::fs::create_dir_all(mission_db.parent().unwrap()).unwrap();
+        rusqlite::Connection::open(&mission_db)
+            .unwrap()
+            .execute_batch("CREATE TABLE unrelated (x INTEGER);")
+            .unwrap();
+        let turn_start = current_rfc3339_timestamp();
+        let absent_lcm = root.join("no-such-lcm.sqlite");
+        let probe =
+            detect_durable_state_transition(&root, &absent_lcm, 7, &turn_start, &turn_start)
+                .expect("probe must not hard-error on a missing table");
+        assert!(
+            !probe.detected,
+            "a degraded probe must not claim a boundary"
+        );
+        assert!(
+            !probe.probe_errors.is_empty(),
+            "a missing-table probe error must be surfaced, not swallowed to no-boundary"
         );
         let _ = std::fs::remove_dir_all(&root);
     }
