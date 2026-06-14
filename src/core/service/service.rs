@@ -3107,6 +3107,7 @@ struct PromptWorkerActivity {
     source_label: String,
     leased_message_keys: Vec<String>,
     leased_ticket_event_keys: Vec<String>,
+    leases_released: bool,
 }
 
 impl PromptWorkerActivity {
@@ -3129,6 +3130,7 @@ impl PromptWorkerActivity {
             source_label: job.source_label.clone(),
             leased_message_keys: job.leased_message_keys.clone(),
             leased_ticket_event_keys: job.leased_ticket_event_keys.clone(),
+            leases_released: false,
         }
     }
 
@@ -3137,29 +3139,43 @@ impl PromptWorkerActivity {
         shared.worker_phase = Some(format!("{source_label}: {phase}"));
         shared.last_progress_epoch_secs = current_epoch_secs();
     }
+
+    fn release_leased_keys_locked(&mut self, shared: &mut SharedState) {
+        release_leased_keys_locked(
+            shared,
+            &self.leased_message_keys,
+            &self.leased_ticket_event_keys,
+        );
+        self.leases_released = true;
+    }
 }
 
 impl Drop for PromptWorkerActivity {
     fn drop(&mut self) {
         let (leaked_message_keys, leaked_ticket_event_keys) = {
             let mut shared = lock_shared_state(&self.state);
-            let leaked_message_keys = self
-                .leased_message_keys
-                .iter()
-                .filter(|key| shared.leased_message_keys_inflight.contains(*key))
-                .cloned()
-                .collect::<Vec<_>>();
-            let leaked_ticket_event_keys = self
-                .leased_ticket_event_keys
-                .iter()
-                .filter(|key| shared.leased_message_keys_inflight.contains(*key))
-                .cloned()
-                .collect::<Vec<_>>();
-            release_leased_keys_locked(
-                &mut shared,
-                &leaked_message_keys,
-                &leaked_ticket_event_keys,
-            );
+            let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
+                (Vec::new(), Vec::new())
+            } else {
+                let leaked_message_keys = self
+                    .leased_message_keys
+                    .iter()
+                    .filter(|key| shared.leased_message_keys_inflight.contains(*key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let leaked_ticket_event_keys = self
+                    .leased_ticket_event_keys
+                    .iter()
+                    .filter(|key| shared.leased_message_keys_inflight.contains(*key))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                release_leased_keys_locked(
+                    &mut shared,
+                    &leaked_message_keys,
+                    &leaked_ticket_event_keys,
+                );
+                (leaked_message_keys, leaked_ticket_event_keys)
+            };
             shared.worker_active_count = shared.worker_active_count.saturating_sub(1);
             if shared.worker_active_count == 0 {
                 shared.worker_phase = None;
@@ -3247,7 +3263,7 @@ fn start_prompt_worker(
     job: QueuedPrompt,
 ) {
     thread::spawn(move || {
-        let worker_activity = PromptWorkerActivity::start(&root, &state, &job);
+        let mut worker_activity = PromptWorkerActivity::start(&root, &state, &job);
         match maybe_suppress_fatal_harness_prompt_before_execution(&root, &state, &job) {
             Ok(true) => {
                 eprintln!(
@@ -3623,11 +3639,7 @@ fn start_prompt_worker(
                 shared.busy = false;
                 shared.last_completed_at = Some(now_iso_string());
                 shared.last_progress_epoch_secs = current_epoch_secs();
-                release_leased_keys_locked(
-                    &mut shared,
-                    &job.leased_message_keys,
-                    &job.leased_ticket_event_keys,
-                );
+                worker_activity.release_leased_keys_locked(&mut shared);
                 match result {
                     Ok(reply) => {
                         let email_reply_key =
@@ -5095,11 +5107,7 @@ fn start_prompt_worker(
                     "CTOX prompt worker panicked before the turn could finish. See service log."
                         .to_string(),
                 );
-                release_leased_keys_locked(
-                    &mut shared,
-                    &job.leased_message_keys,
-                    &job.leased_ticket_event_keys,
-                );
+                worker_activity.release_leased_keys_locked(&mut shared);
                 if !job.leased_message_keys.is_empty() {
                     let failure_reason = "CTOX prompt worker panicked before the turn could finish. See service log.";
                     let _ = channels::ack_leased_messages_with_failure_reason(
@@ -19033,6 +19041,66 @@ Business OS command:
         .expect("failed to mark green app validation worker error handled");
         assert_eq!(updated, 1);
         assert_eq!(route_status_for(&root, &task.message_key), "handled");
+    }
+
+    #[test]
+    fn prompt_worker_drop_does_not_fail_released_then_released_same_queue_key() {
+        let root = temp_root("prompt-worker-released-same-key-drop");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Create subscriptions app".to_string(),
+                prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                thread_key: "business-os/apps/subscriptions".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "high".to_string(),
+                suggested_skill: Some("business-os-app-module-development".to_string()),
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create app queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+        let mut activity = PromptWorkerActivity::start(&root, &state, &job);
+        {
+            let mut shared = lock_shared_state(&state);
+            activity.release_leased_keys_locked(&mut shared);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+
+        drop(activity);
+
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let conn =
+            channels::open_channel_db(&crate::paths::core_db(&root)).expect("open channel db");
+        let last_error: Option<String> = conn
+            .query_row(
+                "SELECT last_error FROM communication_routing_state WHERE message_key = ?1",
+                params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("read route last_error");
+        assert_eq!(last_error, None);
     }
 
     #[test]

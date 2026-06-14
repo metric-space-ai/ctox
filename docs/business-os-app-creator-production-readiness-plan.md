@@ -195,6 +195,23 @@ could complete the task. Post-R19 hardening disables generic durable-artifact
 inference and completion review for Business OS app targets after deterministic
 app validation passes.
 
+Native R20 corrected a core assumption: generated App Creator output for normal
+CTOX installations must live under the CTOX state root
+`runtime/business-os/installed-modules/<module_id>/`, not under
+`src/apps/business-os/installed-modules/<module_id>/`. Source-tree installed
+module paths are only useful for templates/development and do not count as
+release-install production evidence.
+
+Native R22 used the corrected release-like runtime path and real
+`ctox.business_os.app.create` dispatch with MiniMax M3 at 256k context. It
+produced two runtime-installed modules (`projects_r22` and `subscriptions_r22`)
+that manually validated green with the current bundled validator. The round
+still failed because the service marked queue tasks failed with
+`CTOX prompt worker exited before leased Business OS queue task was acknowledged`
+after the same queue key had been released and re-leased. This is an
+orchestration bug, not an app artifact bug: a completed/released worker must not
+fail a lease that belongs to a newer worker for the same queue key.
+
 ## Why CLI Passed But CTOX-Native Failed
 
 The source bench and CTOX-native bench test different contracts.
@@ -478,10 +495,10 @@ Agents should update this table as work progresses.
 | 0. Preserve R8 evidence | Done | `docs/business-os-skill-bench-2026-06-12.md` R8 section | R8 stopped after first hard failure |
 | 1. App command routing audit | In progress | `app_modify_queue_prompt_targets_app_module_not_skill_files`, `app_create_queue_prompt_targets_app_module_skill` | App create/modify command prompt and suggested skill covered; App Creator/App Store/browser entry audit still open |
 | 2. Mode-aware artifact validator | In progress | `src/apps/business-os/scripts/validate-app-module.mjs`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; R8/R13c contracts validation failures; R14 false-green on `localStorage`; R18 false-green on module-local `HARNESS_ARTIFACT_CONFLICT.md` | Covers source/installed static gate, source registry requirements, ESM syntax, module tests, JSON/report output, Web Storage, root probes, package side effects, and module-local diagnostic artifacts; atomic JSON exposure still needs runtime/catalog proof |
-| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`, `business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery`, `business_os_app_tasks_do_not_infer_root_workspace_file_artifacts`; R12/R16/R17/R18/R19 validator-rework and completion evidence | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, skips generic artifact outcome recovery/root-artifact inference/completion review for app tasks, and fails after bounded attempts; still needs fresh CTOX-native 5/5 confirmation |
+| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`, `business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery`, `business_os_app_tasks_do_not_infer_root_workspace_file_artifacts`; R12/R16/R17/R18/R19 validator-rework/completion evidence; R22 green artifacts followed by queue-ack lease ownership failure | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, skips generic artifact outcome recovery/root-artifact inference/completion review for app tasks, and fails after bounded attempts; R22 requires worker-local lease-release hardening and a fresh CTOX-native 5/5 confirmation |
 | 4. Validator integration tests | In progress | `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `cargo test --manifest-path src/core/harness/core/Cargo.toml business_os_`; `business_os_app_validation_feedback_requeues_same_task`; root-alias and stale-checker validator fixtures | Source/installed fixtures, queue-state proof, bundled-checker preference, and root-level exec guard are covered; broader App Creator/App Store flow tests still open |
 | 5. App Creator UI flow check | Not started |  | Minimal user UI, no generator workbench |
-| 6. CTOX-native R9-R19 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure; R18 subscriptions completed after green validation, contracts exposed module-local harness artifact and generic outcome-recovery conflict; R19 subscriptions validated green but generic terminal gate inferred wrong root artifacts | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R19 hardening |
+| 6. CTOX-native R9-R22 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure; R18 subscriptions completed after green validation, contracts exposed module-local harness artifact and generic outcome-recovery conflict; R19 subscriptions validated green but generic terminal gate inferred wrong root artifacts; R20 corrected installed-module root to runtime state; R22 validated two runtime-installed modules green but queue ack failed on lease ownership | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R22 lease-release hardening |
 | 7. Skill/resource cleanup from native evidence | In progress | R10/R13c/R14 failures folded into skill, module contract, verification docs, validator forbidden-file checks, bundled-checker preference, and exec guard prompt feedback | Only evidence-backed edits |
 | 8. Repeat native bench until 5/5 | Not started |  | No overfitting to one app |
 | 9. Release-install validation | Not started |  | No developer-local source paths required |
@@ -786,9 +803,12 @@ Only after this evidence should the App Creator be called production-ready.
 - Close the R14 validator false-green: reject `localStorage`, `sessionStorage`,
   root probe files, module-local `package.json`/lockfiles/`node_modules`, and
   transient JSON-manifest exposure before an app can be accepted.
-- Run CTOX-native R20 from a fresh isolated root using the rebuilt runtime and
+- Run the next CTOX-native bench from a fresh isolated root using the rebuilt runtime and
   real Business OS app command dispatch. Do not use generic `queue add --skill`
   as production-readiness evidence.
+- Prove released queue leases are worker-local: after an app task is validated
+  and released, an older worker activity must not fail a newer lease for the
+  same queue key during drop.
 - Prove worker/model/tool-call errors on app tasks still run the deterministic
   app validator and convert red app artifacts into same-task `review_rework`
   before any fresh app task is leased.
@@ -1406,6 +1426,60 @@ Required hardening:
   shell/source assets still come from the release app root
 - App Store/template/native module install commands must write installed modules
   into runtime/state, not into the release source tree
+```
+
+### Native R22 2026-06-14
+
+```text
+status: valid CTOX-native orchestration failure after green runtime-installed app artifacts
+entry path: ctox.business_os.app.create
+model: MiniMax M3
+context: 256k
+provider path: ctox_core_api
+isolated root: /tmp/ctox-bos-native-r22-20260614-124959
+install target contract: runtime-installed-module
+runtime target path: runtime/business-os/installed-modules/<module_id>
+commands dispatched: subscriptions, inventory, projects, contracts, compliance
+
+positive evidence:
+- commands entered through real Business OS app create dispatch
+- generated app files were under the corrected runtime installed-module path,
+  not under src/apps/business-os/installed-modules
+- projects_r22 manually validated green with the current bundled validator
+- subscriptions_r22 manually validated green with the current bundled validator
+- validation used installed-mode semantics for runtime-installed modules
+
+production blocker:
+- the service marked queue tasks failed with:
+  CTOX prompt worker exited before leased Business OS queue task was acknowledged
+- forensic finding: PromptWorkerActivity::drop used shared in-flight lease keys
+  without worker-local ownership/release state
+- after a worker released a queue key, the same task could be re-leased before
+  the old worker activity dropped; the old drop then mistook the newer lease for
+  its own leaked key and failed the task
+
+hardening in progress:
+- PromptWorkerActivity now records whether its leased keys were released before
+  drop
+- normal finalization and panic finalization release through the activity so
+  drop will not fail keys already released by that worker
+- regression test added:
+  prompt_worker_drop_does_not_fail_released_then_released_same_queue_key
+
+verification status:
+- rustfmt completed for src/core/service/service.rs
+- direct targeted cargo test attempts with the default vendored GGML build were
+  blocked before the test executed because
+  ctox-voxtral-mini-4b-realtime-2602 build-script-build hung with 0% CPU
+- existing build-script switch `CTOX_VOXTRAL_BUILD_GGML=0` avoided the unrelated
+  vendored GGML build and the targeted regression test passed:
+  `CTOX_VOXTRAL_BUILD_GGML=0 CARGO_TARGET_DIR=/tmp/ctox-r22-skipggml-target CARGO_BUILD_JOBS=4 cargo test -q --bin ctox prompt_worker_drop_does_not_fail_released_then_released_same_queue_key -- --nocapture`
+  result: 1 passed; 0 failed
+
+next action:
+- complete a compile/test proof for the lease-release hardening when the
+  unrelated model build script is unblocked
+- rebuild CTOX and rerun the five-app native bench from a fresh isolated root
 ```
 
 ### Native R9/R10 2026-06-13
