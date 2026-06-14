@@ -30,6 +30,7 @@ const CTOX_BROWSER_CAPABILITIES = [
 ];
 const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 30000;
+const NATIVE_PEER_RESTART_STABLE_MS = 1000;
 
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
@@ -316,18 +317,31 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
       for (const collection of requested) {
         await this.stopCollection(collection);
       }
-      collectionStartQueue = Promise.resolve();
-      const restarted = [];
-      for (const collection of requested) {
-        restarted.push(await this.startCollection(collection));
-        await delay(250);
-      }
-      for (let index = 0; index < requested.length; index += 1) {
-        const collection = requested[index];
-        try {
-          await waitForNativePeerOpenState(restarted[index]?.state, collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
-        } catch {
-          const lifecycleEvent = createNativePeerOpenTimeoutEvent(collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
+      const startBatch = async () => {
+        collectionStartQueue = Promise.resolve();
+        const batch = [];
+        for (const collection of requested) {
+          batch.push(await this.startCollection(collection));
+          await delay(250);
+        }
+        return batch;
+      };
+      const waitForStableBatch = async (batch) => {
+        for (let index = 0; index < requested.length; index += 1) {
+          await waitForStableNativePeerOpenState(
+            batch[index]?.state,
+            requested[index],
+            NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS,
+            NATIVE_PEER_RESTART_STABLE_MS,
+          );
+        }
+      };
+      let restarted = await startBatch();
+      try {
+        await waitForStableBatch(restarted);
+      } catch (error) {
+        const lifecycleEvent = serializeError(error);
+        for (const collection of requested) {
           recordCollection(collection, {
             status: 'reconnecting',
             connectionStatus: 'reconnecting',
@@ -336,12 +350,12 @@ export function createSyncRuntime({ db, config, onDiagnostic }) {
             reconnectingSince: new Date().toISOString(),
           });
           await this.stopCollection(collection);
-          restarted[index] = await this.startCollection(collection);
-          try {
-            await waitForNativePeerOpenState(restarted[index]?.state, collection, NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS);
-          } catch (retryError) {
-            throw new Error(`Native peer did not open for ${collection} after restart retry: ${formatLifecycleError(retryError)}`);
-          }
+        }
+        restarted = await startBatch();
+        try {
+          await waitForStableBatch(restarted);
+        } catch (retryError) {
+          throw new Error(`Native peer did not open for restarted collections after batch retry: ${formatLifecycleError(retryError)}`);
         }
       }
       return restarted;
@@ -419,6 +433,14 @@ async function waitForNativePeerOpenState(state, collection, timeoutMs) {
     await delay(500);
   }
   throw createNativePeerOpenTimeoutEvent(collection, timeoutMs);
+}
+
+async function waitForStableNativePeerOpenState(state, collection, timeoutMs, stableMs) {
+  await waitForNativePeerOpenState(state, collection, timeoutMs);
+  await withTimeout(state?.awaitInSync?.(), 3000);
+  await delay(stableMs);
+  if (hasOpenNativePeerState(state)) return true;
+  throw createNativePeerOpenTimeoutEvent(collection, stableMs);
 }
 
 function hasOpenNativePeerState(state) {
