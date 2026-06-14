@@ -32,6 +32,29 @@ test("normalizes ctox.dev session package into managed instances", () => {
   assert.equal(instances[0].healthSummary.httpDataProxy, false);
 });
 
+test("normalizes ctox.dev launch denial as non-launchable managed instance", () => {
+  const instances = normalizeCtoxDevSessionPackage({
+    account: {
+      tenants: [
+        {
+          id: "tenant_revoked",
+          slug: "revoked",
+          domain: "revoked.ctox.dev",
+          businessName: "Revoked",
+          status: "active",
+          healthStatus: "ok",
+          tenantRole: "viewer",
+          launchAllowed: false,
+        },
+      ],
+    },
+  });
+  assert.equal(instances.length, 1);
+  assert.equal(instances[0].id, "managed:tenant_revoked");
+  assert.equal(instances[0].status, "needs_auth");
+  assert.equal(instances[0].healthSummary.httpDataProxy, false);
+});
+
 test("ctox.dev source consumes launch token and launch config endpoints", async () => {
   const calls = [];
   const source = new CtoxDevInstanceSource({

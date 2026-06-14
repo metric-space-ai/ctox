@@ -37,6 +37,9 @@ class SourceManager {
   async getLaunchConfig(instance) {
     const source = this.sources[instance.source];
     if (!source) throw new Error(`unsupported source: ${instance.source}`);
+    if (instance.source === "ctox_dev" && instance.status && instance.status !== "available") {
+      throw new Error(`ctox.dev managed instance is not launchable: ${instance.status}`);
+    }
     return source.getLaunchConfig(instance.id);
   }
 

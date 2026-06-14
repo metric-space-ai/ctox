@@ -1,6 +1,6 @@
 # Business OS Electron Desktop: Production Readiness Plan
 
-Status: In Umsetzung, Stand 2026-06-14
+Status: In Umsetzung, Stand 2026-06-15
 
 Ziel: Die CTOX Business-OS Desktop-App wird eine Slack-artige Desktop-Oberfläche,
 in der Nutzer schnell zwischen mehreren CTOX Instanzen wechseln können. Die App
@@ -44,6 +44,11 @@ wieder testbar:
   Tenant-Mitgliedschaften aus der Desktop-Liste verschwinden, unmanaged
   Instanzen sichtbar bleiben und pro Aktivierung ein frischer Launch-Token
   samt rotiertem Launch-Kontext geholt wird.
+- ctox.dev-managed Instanzen, die im Session-Package zwar noch erscheinen, aber
+  `launchAllowed:false` tragen, werden jetzt fail-closed als `needs_auth`
+  behandelt: Der SourceManager fordert fuer solche Instanzen keinen
+  Launch-Token mehr an. Damit ist auch der Sperrfall abgedeckt, wenn ctox.dev
+  einen Tenant nicht entfernt, sondern nicht launchbar meldet.
 - Jede Instanz kann aus der Sidebar in eine native Detail-/Settings-Fläche
   geöffnet werden; managed Instanzen zeigen ctox.dev-Verwaltung statt lokaler
   Löschung, unmanaged Instanzen können lokal aus der App entfernt werden.
@@ -218,8 +223,8 @@ wieder testbar:
   `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-E2E-Pfad
   ebenfalls auf macOS, Linux und Windows. Der `main`-CI-Run `27489031650` fuer
   Commit `4dc20c71` bestaetigt den Desktop-E2E-Pfad erneut und ist als
-  Gesamt-CI inklusive CTOX-CLI-Matrix gruen; der aktuelle `main`-CI-Run
-  `27501383594` fuer Commit `761da15a` ist ebenfalls vollstaendig gruen und
+  Gesamt-CI inklusive CTOX-CLI-Matrix gruen; Run `27501383594` fuer Commit
+  `761da15a` ist ebenfalls vollstaendig gruen und
   bestaetigt Business-OS-Desktop-E2E auf macOS/Linux/Windows sowie die gesamte
   CTOX-CLI-Matrix.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
@@ -262,6 +267,11 @@ wieder testbar:
   "ctox-business-os-desktop"`, sechs managed Instanzen, darunter Kunstmen und
   SKF, und ein verbrauchter Desktop-Launch-Token fuer Kunstmen liefert eine
   WebRTC-only Launch-Konfig ohne HTTP-Bridge.
+- Der aktuelle Live-Recheck vom 2026-06-15 ist gruen: Die echte AuthPanel-UI
+  wurde im Electron BrowserWindow automatisiert, ctox.dev lieferte sechs
+  Tenants inklusive Kunstmen und SKF, `/dashboard?tenant=<tenant-id>` lud mit
+  HTTP 200 ohne Login-Redirect, und der Kunstmen-Launch blieb
+  `transport=webrtc` / `httpBridgeAvailable=false`.
 - Derselbe Live-Smoke kann mit `--manage-first` einen konkreten ctox.dev
   Management-Deep-Link pruefen: `/dashboard?tenant=<tenant-id>` laedt im
   authentifizierten Electron Cookie-Jar mit HTTP 200, redirectet nicht zum
@@ -283,7 +293,9 @@ wieder testbar:
 Nicht umgesetzt oder noch nicht bewiesen:
 
 - Server-seitige Access Revocation und Desktop-Session-Rotation gegen echte
-  ctox.dev-Tenants; lokal ist der Contract inklusive Electron-Smoke gruen.
+  ctox.dev-Tenants; lokal ist der Contract inklusive Electron-Smoke gruen, und
+  der Desktop blockiert jetzt auch den Live-kompatiblen Sperrfall
+  `launchAllowed:false` vor dem Launch-Token-Request.
 - Komplett frisches OS ohne vorhandenes lokales CTOX-Binary/validen CTOX
   Runtime-Root ist als Desktop-Vertrag naeher dran, aber noch nicht final
   bewiesen: Der lokale Quellpfad kann jetzt einen gebuendelten CTOX-Helper aus
@@ -329,7 +341,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | --- | ---: | --- | ---: |
 | 0. Baseline & Architekturentscheidung | 8% | Abgeschlossen | 100% |
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
-| 2. ctox.dev Managed Source | 14% | In Umsetzung | 96% |
+| 2. ctox.dev Managed Source | 14% | In Umsetzung | 97% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
 | 4. Pairing Invite Source | 12% | Abgeschlossen | 100% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
@@ -372,7 +384,7 @@ Tests:
 
 ## Welle 2: ctox.dev Managed Source
 
-Status: In Umsetzung, 96%.
+Status: In Umsetzung, 97%.
 
 Aufgaben:
 
@@ -394,6 +406,10 @@ Aufgaben:
   getrennt.
 - [x] Lokaler ctox.dev-Mock-Contract für Desktop-Session-/Launch-Rotation:
   jede Aktivierung holt einen frischen Launch-Token und Launch-Kontext.
+- [x] Desktop blockiert ctox.dev-managed Sperrstatus fail-closed:
+  `launchAllowed:false` wird als `needs_auth` normalisiert und vor dem
+  Launch-Token-Request abgewiesen, statt eine stale/entzogene Instanz zu
+  aktivieren.
 - [x] Live ctox.dev Account-/Session-Package-Pfad mit echtem Testaccount:
   Passwort-Auth ueber den echten ctox.dev Endpoint im Electron-Cookie-Jar,
   `desktopProtocol:"ctox-business-os-desktop"`, Tenant-Liste mit Kunstmen und
@@ -449,6 +465,15 @@ Tests:
 - [x] BrowserWindow/AuthPanel Login E2E mit echtem Testaccount:
   `smoke:ctox-dev-live -- --auth-window` meldet sich ueber die echte UI an und
   schliesst via `session-check`.
+- [x] Unit-/SourceManager-Test: `launchAllowed:false` aus dem ctox.dev
+  Session-Package erzeugt eine nicht launchbare managed Instanz und verhindert
+  den `/api/desktop/launch-token` Request.
+- [x] Live-Recheck 2026-06-15:
+  `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first
+  --expected-tenant Kunstmen --expected-tenant SKF` ist gegen Produktion gruen.
+  Evidenz: sechs Tenants, Kunstmen/SKF vorhanden, Management-Link HTTP 200 ohne
+  Login-Redirect, Kunstmen-Launch `transport=webrtc` und
+  `httpBridgeAvailable=false`.
 - [ ] Live-Entzug einer Mitgliedschaft entfernt oder sperrt die Instanz.
 
 ## Welle 3: Local Daemon Source
@@ -973,3 +998,4 @@ Release Gates:
 | 2026-06-14 | Welle 4/8 Verifikationsharness gehaertet: Der lokale RxDB-Rollover-Smoke `SMOKE_MODE=rollover-native-peer-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js` wurde als richtiger lokaler Beweis fuer Browser-Reconnect nach Native-Peer-Rollover identifiziert, scheiterte lokal aber vor der eigentlichen App-Pruefung an einem stillen `ctox`-Smoke-Binary-Build mit schwerem Default-Feature/ggml-CMake-Pfad. `browser_rust_smoke.js` baut das Smoke-Binary jetzt sichtbar mit dem dokumentierten `--no-default-features`-Vertrag und einem konfigurierbaren Timeout (`CTOX_SMOKE_BUILD_TIMEOUT_MS`, Default 30 Minuten), damit kuenftige Rollover-Laeufe nicht mehr ohne Ausgabe haengen. Gruen: `node --check src/core/rxdb/tools/browser_rust_smoke.js`. Kein Fortschrittsanstieg: Der eigentliche Rollover-/Browser-Reconnect-Smoke muss noch gruen laufen. |
 | 2026-06-14 | Welle 4 Rollover-Soak auf CI ausgefuehrt und ehrlich negativ eingeordnet: Workflow-Dispatch `27501450384` fuer `rollover-native-peer-browser-to-rust` auf Commit `761da15a` baute das Smoke-Binary auf GitHub Actions und startete den echten Browser/Rust-Rollover-Smoke. Versuch 1 scheiterte nach 68,8s mit `Timed out waiting for open native peer on desktop_files after native peer restart` (`peerCount=0`); Versuch 2 war funktional gruen mit `replicated_id=browser_rollover_smoke_1781447190564`, `replication_directions` fuer `desktop_files`/`desktop_file_chunks` jeweils `peerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der Workflow ist wegen `SOAK_FAIL_ON_RETRY=1` korrekt rot; Welle 4 bleibt bei 99%, bis ein retry-freier Rollover-Run gruen ist oder die Erstversuch-Flakiness behoben ist. Der normale `main`-CI-Run `27501383594` fuer denselben Commit ist vollstaendig gruen. |
 | 2026-06-14 | Welle 4 abgeschlossen: Commit `6e352b7f` stabilisiert WebRTC-Restart-Batches nach Native-Peer-Rollover. Der gezielte RxDB-Soak `27503869533` lief mit `SOAK_FAIL_ON_RETRY=1` im Modus `rollover-native-peer-browser-to-rust` im ersten Versuch gruen (`ok=true`, `retryCount=0`, `durationMs=12163`). Die Evidenz zeigt `replicated_id=browser_rollover_smoke_1781452549731`, `replication_directions` fuer `desktop_files` und `desktop_file_chunks` jeweils `peerCount=1`/`forkPeerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der vorherige Zwischenfix `4ca640cd`/Run `27503042581` war noch negativ auf Versuch 1 und bestaetigte damit die Batch-Restart-Ursache. Welle 4 ist 100%; Gesamt bleibt gerundet 97%. |
+| 2026-06-15 | Welle 2 ctox.dev Sperrpfad gehaertet: `launchAllowed:false` aus dem ctox.dev Session-Package wird als `needs_auth` normalisiert und der SourceManager verweigert den Launch vor dem `/api/desktop/launch-token` Request. Damit ist der Desktop fail-closed, wenn ctox.dev einen entzogenen oder nicht launchbaren Tenant noch in der Liste meldet. Live-Recheck gegen Produktion ist gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --expected-tenant Kunstmen --expected-tenant SKF` automatisiert die echte AuthPanel-UI, sieht sechs Tenants inklusive Kunstmen/SKF, laedt `/dashboard?tenant=<tenant-id>` mit HTTP 200 ohne Login-Redirect und startet Kunstmen WebRTC-only (`transport=webrtc`, `httpBridgeAvailable=false`). Gruen: `node --test test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, `npm test` 109/109, `npm run release:check`, `npm run test:electron-smoke` nach einem transienten ersten HTTP-Guard-Smoke-Fehler; der isolierte HTTP-Guard-Smoke war direkt gruen. Welle 2 steigt auf 97%; echte serverseitige Live-Revocation/Session-Rotation bleibt offen. |

@@ -129,6 +129,52 @@ test("source manager refreshes ctox.dev revocation without dropping unmanaged in
   );
 });
 
+test("source manager blocks non-launchable ctox.dev instances before launch token request", async () => {
+  let registry = createDefaultRegistry();
+  const calls = [];
+  const manager = new SourceManager({
+    registryProvider: () => registry,
+    registrySaver: (next) => {
+      registry = next;
+    },
+    secretStore: {
+      get: async () => "",
+      set: async () => undefined,
+      delete: async () => undefined,
+    },
+    fetchImpl: async (url, options) => {
+      calls.push([url, options?.method || "GET"]);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          account: {
+            tenants: [{
+              id: "tenant_denied",
+              slug: "denied",
+              domain: "denied.ctox.dev",
+              businessName: "Denied",
+              status: "active",
+              healthStatus: "ok",
+              tenantRole: "viewer",
+              launchAllowed: false,
+            }],
+          },
+        }),
+      };
+    },
+  });
+
+  const [instance] = await manager.listInstances();
+  assert.equal(instance.id, "managed:tenant_denied");
+  assert.equal(instance.status, "needs_auth");
+  await assert.rejects(
+    () => manager.getLaunchConfig(instance),
+    /not launchable: needs_auth/,
+  );
+  assert.deepEqual(calls, [["https://ctox.dev/api/desktop/session-package", "GET"]]);
+});
+
 test("source manager routes ssh fresh installs separately from existing upgrades", async () => {
   const manager = new SourceManager({
     registryProvider: () => createDefaultRegistry(),
