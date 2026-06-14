@@ -1063,9 +1063,21 @@ impl LcmEngine {
             }
         }
         if !found {
-            self.conn.execute_batch(&format!(
+            if let Err(err) = self.conn.execute_batch(&format!(
                 "ALTER TABLE {table} ADD COLUMN {column} {definition};"
-            ))?;
+            )) {
+                // Cross-process race: another writer may have added the column
+                // between the probe above and this ALTER. A duplicate-column
+                // error means the column now exists (the desired end state), so
+                // tolerate it instead of failing engine open.
+                if !err
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("duplicate column name")
+                {
+                    return Err(err.into());
+                }
+            }
         }
         Ok(())
     }

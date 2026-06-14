@@ -6351,6 +6351,17 @@ fn ensure_schema(conn: &Connection) -> Result<()> {
 /// New databases pick the column up from the CREATE TABLE statement
 /// in this same migration block. This is idempotent: we probe via
 /// `pragma_table_info` and only ALTER when the column is missing.
+/// True when a rusqlite error is SQLite's "duplicate column name" error, which
+/// is raised when an `ALTER TABLE ... ADD COLUMN` targets a column that already
+/// exists. A probe-then-ALTER migration can hit this when a concurrent process
+/// added the column between the probe and the ALTER, in which case the desired
+/// end state already holds and the error is benign.
+fn is_duplicate_column_error(err: &rusqlite::Error) -> bool {
+    err.to_string()
+        .to_ascii_lowercase()
+        .contains("duplicate column name")
+}
+
 fn ensure_terminal_no_send_column(conn: &Connection) -> Result<()> {
     let column_exists: bool = conn
         .query_row(
@@ -6367,11 +6378,20 @@ fn ensure_terminal_no_send_column(conn: &Connection) -> Result<()> {
         .map(|value| value != 0)
         .unwrap_or(false);
     if !column_exists {
-        conn.execute(
+        if let Err(err) = conn.execute(
             "ALTER TABLE communication_founder_reply_reviews ADD COLUMN terminal_no_send INTEGER NOT NULL DEFAULT 0",
             [],
-        )
-        .context("failed to add terminal_no_send column to communication_founder_reply_reviews")?;
+        ) {
+            // Cross-process race: another writer may have added the column
+            // between the probe above and this ALTER. A duplicate-column error
+            // means the column now exists, which is exactly the desired end
+            // state, so tolerate it instead of failing open_channel_db.
+            if !is_duplicate_column_error(&err) {
+                return Err(err).context(
+                    "failed to add terminal_no_send column to communication_founder_reply_reviews",
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -8817,6 +8837,29 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn duplicate_column_alter_error_is_recognized() {
+        // X2-03: the probe-then-ALTER migration tolerates a concurrent writer
+        // having added the column; is_duplicate_column_error is the predicate
+        // that makes that tolerance safe without swallowing unrelated errors.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (a INTEGER, terminal_no_send INTEGER);")
+            .unwrap();
+        // Adding an already-present column yields SQLite's duplicate-column error.
+        let dup = conn
+            .execute("ALTER TABLE t ADD COLUMN terminal_no_send INTEGER", [])
+            .unwrap_err();
+        assert!(
+            is_duplicate_column_error(&dup),
+            "expected duplicate-column error, got: {dup}"
+        );
+        // An unrelated error (missing table) must NOT be mistaken for it.
+        let other = conn
+            .execute("ALTER TABLE no_such_table ADD COLUMN x INTEGER", [])
+            .unwrap_err();
+        assert!(!is_duplicate_column_error(&other));
     }
 
     #[test]
