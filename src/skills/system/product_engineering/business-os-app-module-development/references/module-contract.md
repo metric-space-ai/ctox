@@ -508,7 +508,7 @@ Build in this order for new greenfield modules:
 3 validate module.json and collections.schema.json with JSON.parse
 4 index.html, index.css, index.js with mount(ctx), one collection subscription, one create/edit path
 5 one automation button that dispatches an existing command or a newly implemented native-backed command
-6 README and tests
+6 README and tests; tests import shared `.mjs` helpers and JSON/text files, not `../index.js` or `../schema.js`
 7 conformance, forbidden-pattern scan, real-shell proof
 ```
 

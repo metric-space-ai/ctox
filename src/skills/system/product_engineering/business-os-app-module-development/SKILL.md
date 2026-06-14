@@ -36,7 +36,7 @@ module.json or collections.schema.json would be exposed in an invalid or incompl
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
-you are about to import local app source in tests through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL instead of importing the local ESM file by URL
+you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -223,21 +223,24 @@ Do not continue with `index.js` or tests while either JSON file is invalid.
 For syntax checks use `node --check --input-type=module - < "$MODULE_DIR/index.js"`
 or the project validator. Do not create `package.json` with `"type": "module"`
 to make tests pass. Do not use `esbuild`, bundlers, transform loaders,
-`node:vm`, or `new Function` to make browser ESM importable in tests. If a test
-needs shared schema or logic, move that logic into a local browser-safe `.mjs`
-helper and import it normally from both runtime and tests.
+`node:vm`, or `new Function` to make browser ESM importable in tests.
 
-Module tests must import local ESM files through real file URLs so relative
-imports keep working:
+Node tests must not import browser entry files such as `../index.js` or
+`../schema.js` directly. Release-like installed-module benches may not have a
+package context, so Node treats `.js` as CommonJS even though the Business OS
+browser shell loads it as ESM. Put reusable schemas, command builders, reducers,
+and calculations in local browser-safe `.mjs` helpers, import those helpers from
+`index.js` or `schema.js`, and import the same helpers from tests:
 
 ```js
-const indexModule = await import(new URL('../index.js', import.meta.url).href);
-const schemaModule = await import(new URL('../schema.js', import.meta.url).href);
+import { buildFollowUpCommand } from '../core/automation.mjs';
+import { collectionSchemas } from '../core/schemas.mjs';
 ```
 
-Never read `index.js` or `schema.js` and import it as a
-`data:text/javascript;base64,...` URL. That breaks relative imports such as
-`import './schema.js'` and is not how the Business OS shell loads apps.
+Use JSON/text parity checks for `module.json`, `collections.schema.json`,
+`schema.js`, and `index.js` when needed. Never read `index.js` or `schema.js`
+and import it as a `data:text/javascript;base64,...` URL. That breaks relative
+imports and is not how the Business OS shell loads apps.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -308,7 +311,7 @@ phase 7 UI layout: default is one/two panes plus modal or drawer; no layout.righ
 phase 8 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
 phase 9 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
 phase 10 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
-phase 11 tests: tests import local ESM by file URL, not data: URLs; tests cover schema parity, core command builders, and at least one CRUD/automation path
+phase 11 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
 phase 12 validation: node --check, module_static_check, validate-app-module, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 13 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
 ```
@@ -320,7 +323,7 @@ module.json has layout.right without layout.third_pane_justification
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format
 schema.js or collections.schema.json redeclares business_commands
-tests load index.js/schema.js through data:text/javascript or base64
+tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
 the phase tracker says done while validator or browser proof is red
 ```
 
@@ -401,7 +404,7 @@ earlier layer is still red:
 6. UI contract: no default layout.right, right pane, right resizer, or decorative third pane
 7. runtime dependency contract: local browser ESM only, no remote URL, no bare package, no Node runtime import
 8. index.js ESM syntax
-9. no-dependency module tests
+9. no-dependency module tests that import `.mjs` helpers, not browser `.js` entrypoints
 10. real-shell smoke proof when available
 ```
 

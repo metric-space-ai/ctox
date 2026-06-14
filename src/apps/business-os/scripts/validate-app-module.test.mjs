@@ -343,4 +343,18 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.match(run.stderr, /imports local app source through a data: URL/);
 }
 
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'directentrytest', {
+    testJs: [
+      "import { mount } from '../index.js';",
+      "if (typeof mount !== 'function') throw new Error('missing mount');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'directentrytest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /imports browser \.js entrypoints directly/);
+}
+
 console.log('[validate-app-module.test] OK');

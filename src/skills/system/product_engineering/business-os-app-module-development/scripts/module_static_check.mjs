@@ -301,8 +301,13 @@ for (const path of files) {
 
 for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
   const text = readFileSync(path, 'utf8');
-  if (hasPathSegment(path, 'tests') && /data:text\/javascript/i.test(text)) {
-    fail(`${rel(path)} imports local app source through a data: URL; import local ESM files by file URL, for example await import(new URL('../index.js', import.meta.url).href), so relative imports keep working`);
+  if (hasPathSegment(path, 'tests')) {
+    if (/data:text\/javascript/i.test(text)) {
+      fail(`${rel(path)} imports local app source through a data: URL; test shared .mjs helpers and JSON/text parity instead`);
+    }
+    if (/(?:from\s+['"]\.\.\/(?:index|schema)\.js['"]|import\s*\(\s*(?:new\s+URL\s*\(\s*)?['"]\.\.\/(?:index|schema)\.js['"])/.test(text)) {
+      fail(`${rel(path)} imports browser .js entrypoints directly; put testable logic/schemas in local .mjs helpers and import those helpers from tests`);
+    }
   }
   const thirdPanePatterns = [
     /\blayout\.right\b/,

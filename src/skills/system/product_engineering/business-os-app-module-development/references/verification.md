@@ -439,7 +439,7 @@ module invents a module-local automation command without native handler and stil
 stub command returns ok/completed
 tests assert wrong field names or wrong unit scale
 test setup created package.json, package-lock.json, node_modules, or .opencode/node_modules artifacts
-test setup imports index.js or schema.js through a `data:text/javascript` URL or base64 source string instead of a real file URL
+test setup imports index.js or schema.js directly from Node, or through a `data:text/javascript` URL/base64 source string, instead of testing shared `.mjs` helpers plus JSON/text parity
 test setup imports a bundler only to compensate for `.js` ESM context instead of using one `.mjs` helper
 test setup rewrites or transform-loads schema.js instead of importing a shared `.mjs` schema helper or doing simple text/JSON parity checks
 test setup's fake DB fixture is broken, too complex, or asserts `db.raw`
