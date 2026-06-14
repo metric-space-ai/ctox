@@ -2653,9 +2653,65 @@ fn diagnose_harness_findings(conn: &Connection) -> Result<Value> {
         }));
     }
 
-    let status = if critical_confirmed > 0 {
+    // Surface audit-tick health: a failed or stalled audit loop means the
+    // confirmed-findings signal above is itself untrustworthy, so it must be
+    // visible here and not buried in ctox_hm_audit_runs. Own table_exists
+    // guard — the findings table existing does not guarantee the runs table.
+    let mut audit_failed = false;
+    let mut audit_stale = false;
+    let audit_runs_exists: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='ctox_hm_audit_runs'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    if audit_runs_exists > 0 {
+        let latest: Option<(String, String, Option<String>)> = conn
+            .query_row(
+                "SELECT status, started_at, error_text FROM ctox_hm_audit_runs ORDER BY started_at DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        if let Some((run_status, started_at, error_text)) = latest {
+            if run_status == "failed" {
+                audit_failed = true;
+                findings.push(json!({
+                    "code": "harness_audit_run_failed",
+                    "severity": "critical",
+                    "message": format!(
+                        "Latest harness-mining audit tick failed at {started_at}{} — confirmed findings may be stale; inspect ctox_hm_audit_runs and re-run the audit",
+                        error_text
+                            .map(|e| format!(": {e}"))
+                            .unwrap_or_default()
+                    ),
+                }));
+            } else {
+                // Three missed ticks at the ~300s audit cadence == 15 minutes.
+                // Use the same millisecond RFC3339 rendering as the stored
+                // started_at (now_iso_z / strftime '%f'); chrono's bare %f is
+                // dotless 9-digit nanos and would corrupt the lexicographic
+                // compare in the boundary minute.
+                let stale_cutoff = (chrono::Utc::now() - chrono::Duration::minutes(15))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                if started_at < stale_cutoff {
+                    audit_stale = true;
+                    findings.push(json!({
+                        "code": "harness_audit_run_stale",
+                        "severity": "warning",
+                        "message": format!(
+                            "Harness-mining audit tick last started at {started_at} (>15m ago) — findings freshness is not guaranteed; verify the audit loop is running"
+                        ),
+                    }));
+                }
+            }
+        }
+    }
+
+    let status = if critical_confirmed > 0 || audit_failed {
         "critical"
-    } else if !confirmed.is_empty() || !acknowledged.is_empty() {
+    } else if !confirmed.is_empty() || !acknowledged.is_empty() || audit_stale {
         "warning"
     } else {
         "ok"
@@ -6603,6 +6659,60 @@ mod tests {
         assert_eq!(send_gate_violations, 0);
         assert!(inbound_core > 0);
         assert_eq!(sync_telemetry, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn diagnose_harness_findings_surfaces_failed_audit_run() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        crate::service::harness_mining::findings::ensure_findings_schema(&conn)?;
+        // No confirmed findings — the only health signal is the audit run.
+        conn.execute(
+            "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status, error_text) \
+             VALUES ('r1', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'failed', 'synth')",
+            [],
+        )?;
+        let report = diagnose_harness_findings(&conn)?;
+        assert_eq!(report["status"], "critical");
+        assert!(report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["code"] == "harness_audit_run_failed"));
+        Ok(())
+    }
+
+    #[test]
+    fn diagnose_harness_findings_surfaces_stale_audit_run() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        crate::service::harness_mining::findings::ensure_findings_schema(&conn)?;
+        // Latest run completed but >15m ago -> stale warning, not critical.
+        conn.execute(
+            "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status) \
+             VALUES ('r-old', strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 minutes'), 'completed')",
+            [],
+        )?;
+        let report = diagnose_harness_findings(&conn)?;
+        assert_eq!(report["status"], "warning");
+        assert!(report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["code"] == "harness_audit_run_stale"));
+        Ok(())
+    }
+
+    #[test]
+    fn diagnose_harness_findings_fresh_run_is_ok() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        crate::service::harness_mining::findings::ensure_findings_schema(&conn)?;
+        conn.execute(
+            "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status) \
+             VALUES ('r-fresh', strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'completed')",
+            [],
+        )?;
+        let report = diagnose_harness_findings(&conn)?;
+        assert_eq!(report["status"], "ok");
         Ok(())
     }
 
