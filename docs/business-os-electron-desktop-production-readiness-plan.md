@@ -136,6 +136,15 @@ wieder testbar:
   `scp` auf den Remote-Host laden, user-local nach `~/.local/bin/ctox`
   installieren und danach `ctox start/status` sowie `peer ensure` nutzen. Der
   Online-Installer bleibt dafuer unbeteiligt.
+- Der lokale Artefaktpfad ist live gegen den SKF-Testhost gruen: Das
+  GitHub-Release-Artefakt `ctox-linux-x64.tar.gz` aus `v0.3.27` wurde per
+  SHA256 verifiziert, das enthaltene Linux-x64-`ctox` per `scp` hochgeladen,
+  nach `~/.local/bin/ctox` installiert, mit `ctox start/status` gestartet und
+  danach per `peer ensure` als `ssh_managed` Desktop-Instanz angebunden. Der
+  Launch bleibt `transport=webrtc` / `http_bridge_available=false`; Registry
+  und Evidenz bleiben secret-frei. Der Smoke nutzte fuer diesen Artefaktpfad
+  bewusst den File-Askpass-Fallback, waehrend der staerkere platform-keychain-
+  Passwortpfad fuer SKF separat gruen belegt ist.
 - Launch-Config setzt `transport=webrtc` und `http_bridge_available=false`.
 - BrowserView-Hosting nutzt pro Instanz die deterministische
   `sessionPartition`.
@@ -183,14 +192,15 @@ wieder testbar:
   und Windows: CI-Run `27484687888` fuer Commit `1b1940d5` hat alle drei
   `Business OS Desktop E2E`-Jobs erfolgreich abgeschlossen; der Folge-Run
   `27484995659` fuer Commit `01e258b9` bestaetigt dieselben Desktop-Jobs
-  erneut. Der aktuelle `main`-Run `27485327715` fuer Commit `0e982165`
-  bestaetigt den Desktop-E2E-Pfad ebenfalls auf macOS, Linux und Windows. Die
-  Gesamt-CI kann weiterhin durch separate CTOX-CLI/Rust-Themen ausserhalb der
-  Electron-App rot sein.
+  erneut. Weitere `main`-Runs `27485327715` fuer Commit `0e982165` und
+  `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-E2E-Pfad
+  ebenfalls auf macOS, Linux und Windows. Die Gesamt-CI kann weiterhin durch
+  separate CTOX-CLI/Rust-Themen ausserhalb der Electron-App rot sein.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
-  `dbus-run-session` und `gnome-keyring`. Run `27485327715` beweist diesen
-  Runtime-SecretStore-Pfad live fuer alle drei Desktop-Zielplattformen.
+  `dbus-run-session` und `gnome-keyring`. Die Runs `27485327715` und
+  `27486101670` beweisen diesen Runtime-SecretStore-Pfad live fuer alle drei
+  Desktop-Zielplattformen.
 - `npm run smoke:signed-artifacts` ist jetzt plattformweit: macOS prueft
   `.app`, `app.asar`, gebuendelten CTOX-Helper sowie `codesign`/`spctl`;
   Linux prueft AppImage, `.deb`, `linux-unpacked`, `app.asar` und Helper;
@@ -259,13 +269,15 @@ Nicht umgesetzt oder noch nicht bewiesen:
   `ctox business-os desktop invite` bereitstellt und ein Browser nach Rotation
   tatsaechlich wieder ueber den neu gestarteten nativen Peer verbindet; auf
   beiden Test-VPS ist der Remote-CLI-Stand dafuer noch zu alt.
-- SSH/Sudo Fresh-Install ist gegen echte VPS noch nicht gruen: Der erste
+- Der offizielle Online-SSH/Sudo-Fresh-Install ist gegen echte VPS noch nicht
+  gruen: Der erste
   Kunstmen-Live-Versuch ohne API-Provider scheiterte korrekt am GPU-only
   Default des offiziellen Installers; der zweite Versuch mit
   `--install-api-provider openai` kam bis zum realen Cargo-Source-Build, lief
   aber nach 900s in den Desktop-Smoke-Timeout. Existing-CTOX Live-Attach gegen
-  SKF/Kunstmen ist gruen, ersetzt aber keinen unattended Fresh-Install-
-  Nachweis mit produktionsfaehiger Dauer und Rollback-/Progress-UX.
+  SKF/Kunstmen und der lokale Release-Artefakt-Fresh-Install gegen SKF sind
+  gruen, ersetzen aber keinen unattended Online-Fresh-Install-Nachweis mit
+  produktionsfaehiger Dauer und Rollback-/Progress-UX.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
@@ -299,7 +311,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 96% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
 | 4. Pairing Invite Source | 12% | In Umsetzung | 97% |
-| 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 97% |
+| 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 98% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
 | 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 82% |
@@ -534,7 +546,7 @@ Noch offen:
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
-Status: In Umsetzung, 97%.
+Status: In Umsetzung, 98%.
 
 Aufgaben:
 
@@ -580,7 +592,11 @@ Aufgaben:
   `--install-api-provider openai` erreicht den echten offiziellen Installer und
   startet den Cargo-Source-Build, laeuft aber im Desktop-Smoke nach 900s in den
   Timeout; der verwaiste Build wurde danach gezielt gestoppt.
-- [ ] Live-Test des lokalen Artefaktpfads gegen einen echten VPS.
+- [x] Live-Test des lokalen Artefaktpfads gegen einen echten VPS: SKF
+  akzeptiert das verifizierte GitHub-Release-Binary `ctox-linux-x64` aus
+  `v0.3.27`, Installation nach `~/.local/bin/ctox`, `ctox start/status`,
+  Remote-`peer ensure`, lokale `ssh_managed` Registrierung und WebRTC-only
+  Launch-Konfig.
 
 Tests:
 
@@ -652,6 +668,16 @@ Tests:
   der Flag-Contract live bestaetigt, aber Fresh-Install ist nicht
   production-ready, solange der offizielle Installer auf kleinen VPS aus Source
   baut oder der Desktop keine laengere/progressfaehige Install-Session fuehrt.
+- [x] Live-Nachweis SKF-Testhost `57.129.123.108` mit lokalem Release-
+  Artefaktpfad: `ctox-linux-x64.tar.gz` aus GitHub Release `v0.3.27` wurde
+  lokal per SHA256 verifiziert, das enthaltene ELF-x86_64-Binary ueber
+  `--local-artifact-path` per `scp` auf den Host geladen, user-local nach
+  `~/.local/bin/ctox` installiert, via `ctox start/status` geprueft und danach
+  per `peer ensure` angebunden. Smoke-Evidenz: `install.artifact=local`,
+  `secretBackend=file-askpass-fallback`, `source=ssh_managed`,
+  `transport=webrtc`, `http_bridge_available=false`, kein Registry-Secret-
+  Leak. Der staerkere platform-keychain-backed SSH-Passwortpfad fuer SKF bleibt
+  separat durch den Existing-Attach-Smoke belegt.
 
 ## Welle 6: Unified Switcher UX
 
@@ -707,9 +733,9 @@ Aufgaben:
   Zielplattformen aus; Linux installiert `gnome-keyring`/`libsecret-tools` und
   startet eine Secret-Service-Session.
 - [x] Gruener Live-Nachweis aus Linux-/Windows-Zielplattform-Run: `main`-CI-
-  Run `27485327715` fuehrt den Desktop-Keychain-Runtime-Smoke auf macOS,
-  Linux und Windows erfolgreich aus; Linux nutzt dabei eine echte
-  Secret-Service-Session und Windows den Credential-Manager-Runtime-Pfad.
+  Runs `27485327715` und `27486101670` fuehren den Desktop-Keychain-Runtime-
+  Smoke auf macOS, Linux und Windows erfolgreich aus; Linux nutzt dabei eine
+  echte Secret-Service-Session und Windows den Credential-Manager-Runtime-Pfad.
 
 Tests:
 
@@ -776,7 +802,8 @@ Release Gates:
   GitHub-Actions-Run `27484687888` fuer Commit `1b1940d5` und Folge-Run
   `27484995659` fuer Commit `01e258b9` sind auf allen drei
   Desktop-Zielplattformen gruen; Run `27485327715` fuer Commit `0e982165`
-  bestaetigt denselben Desktop-Pfad erneut.
+  und Run `27486101670` fuer Commit `80b11085` bestaetigen denselben Desktop-
+  Pfad erneut.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
   BrowserView-Guard vor dem lokalen Server abgebrochen.
@@ -836,4 +863,5 @@ Release Gates:
 | 2026-06-14 | Welle 8 Main-CI-E2E-Gate ergaenzt: `.github/workflows/ci.yml` fuehrt Business OS Desktop jetzt auf macOS, Linux und Windows aus, jeweils mit `npm test`, `npm run check`, `npm run release:check`, Electron-Smokes und Plattform-Keychain-Runtime-Smoke. Linux nutzt `xvfb-run` fuer Electron und eine echte Secret-Service-Session ueber `dbus-run-session`/`gnome-keyring`; `release:check` verifiziert diesen CI-Vertrag. Welle 8 steigt auf 76%; ein tatsaechlich gruener GitHub-Actions-Run fuer alle drei Plattformen bleibt als Live-Evidenz noch abzuwarten. Gruen lokal: `npm run release:check`, CI-/Release-YAML-Parse. |
 | 2026-06-14 | Welle 8 Live-CI-Evidenz nachgezogen: GitHub-Actions-Run `27484687888` fuer Commit `1b1940d5` hat `Business OS Desktop E2E` auf macOS, Linux und Windows gruen abgeschlossen. Windows scheiterte vorher an einem Test-Harness-Problem im Electron Protocol-Smoke: echte `ctox-business-os-desktop://...` Deep-Link-URLs wurden als Prozess-ARGV an Electron uebergeben und Windows/Electron beendete den Fixture vor der Result-Datei. Der Smoke startet Electron jetzt nur noch mit Datei-Pfaden und liest die Deep-Link-Testdaten aus JSON, testet intern aber weiterhin echte Protocol-URLs. Welle 8 steigt auf 82%; offen bleibt der echte signierte/notarisierte Tag-Run mit Installer-/Fresh-Machine-Smoke. Gruen: `npm run test:electron-smoke`, `npm run check`, `node test/electron-protocol-handler-smoke.cjs`, GitHub Actions Desktop E2E mac/linux/win. Die Gesamt-CI bleibt separat von bekannten CTOX-CLI/Rust-Themen abhaengig. |
 | 2026-06-14 | Welle 8 Plan-Konsistenz bereinigt: Der Folge-Run `27484995659` fuer Commit `01e258b9` bestaetigt erneut gruenes `Business OS Desktop E2E` auf macOS, Linux und Windows, inklusive Plattform-Keychain-Runtime-Smokes. Der offene Punkt fuer vollstaendiges Cross-Platform-Mixed-Switching wurde aus der Restliste entfernt; die Restliste unterscheidet jetzt klar zwischen gruenem `main`-/PR-CI-E2E und dem weiterhin offenen echten Tag-Release mit signierten/notarisierten Installer-Artefakten. |
-| 2026-06-14 | Welle 7 abgeschlossen: Der aktuelle `main`-CI-Run `27485327715` fuer Commit `0e982165` bestaetigt den Desktop-Keychain-Runtime-Smoke auf macOS, Linux und Windows. Damit sind Linux Secret Service und Windows Credential Manager nicht mehr nur Workflow-Vertrag, sondern live im Desktop-E2E bewiesen; der verbleibende Release-Beweis gehoert jetzt nur noch zu Welle 8 Tag-Run/Installer-Artefakten. |
+| 2026-06-14 | Welle 7 abgeschlossen: Die `main`-CI-Runs `27485327715` fuer Commit `0e982165` und `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-Keychain-Runtime-Smoke auf macOS, Linux und Windows. Damit sind Linux Secret Service und Windows Credential Manager nicht mehr nur Workflow-Vertrag, sondern live im Desktop-E2E bewiesen; der verbleibende Release-Beweis gehoert jetzt nur noch zu Welle 8 Tag-Run/Installer-Artefakten. |
+| 2026-06-14 | Welle 5 lokaler Artefaktpfad live gruen: Das GitHub-Release-Artefakt `ctox-linux-x64.tar.gz` aus `v0.3.27` wurde lokal per SHA256 verifiziert, daraus `target/release/ctox` extrahiert und gegen SKF `57.129.123.108` ueber `smoke:ssh-password-live -- --fresh-install --local-artifact-path ... --file-askpass-fallback` ausgefuehrt. Der Smoke installierte das Binary nach `~/.local/bin/ctox`, pruefte `ctox start/status`, fuehrte Remote-`peer ensure` aus und erzeugte eine `ssh_managed` Desktop-Instanz mit WebRTC-only Launch-Konfig ohne Registry-Secret-Leak. Der offizielle Online-Fresh-Install bleibt wegen Source-Build-Dauer offen. |
