@@ -873,7 +873,8 @@ Release Gates:
   Pfad erneut. Die aktuellen `main`-CI-Runs `27489031650` fuer Commit
   `4dc20c71`, `27492399333` fuer Commit `ea685cbb`, `27493297770` fuer Commit
   `d2dcd21f`, `27493992898` fuer Commit `34558c2f`, `27494101063` fuer Commit
-  `af5f87e8` und `27494885618` fuer Commit `baae47d8` sind als Gesamt-CI
+  `af5f87e8`, `27494885618` fuer Commit `baae47d8`, `27495707818` fuer Commit
+  `5451dc16` und `27496841760` fuer Commit `427f64a8` sind als Gesamt-CI
   gruen und bestaetigen Desktop-E2E, Plattform-Keychain-Runtime-Smoke,
   RxDB-only Guards, `cargo check` und CLI-Matrix.
 - [x] `IoT Engine Soak` ist fuer den aktuellen `main`-Stand gruen:
@@ -885,6 +886,11 @@ Release Gates:
 - [x] Kein Secret in Registry, Logs, Support Bundle oder Crash Report:
   Registry weist secret-artige Felder zurueck, Support-Snapshots redigieren
   Logs, und Crash-Reporter-Extras werden redigiert, geflattet und begrenzt.
+- [x] Linux-Release-Metadaten fuer `.deb` sind gesetzt: `homepage`, Autor mit
+  E-Mail und `linux.maintainer`; `release:check` erzwingt den Vertrag.
+- [x] macOS-Signing-/Notarization-Secrets werden im Release-Workflow vor
+  `electron-builder` explizit fail-closed geprueft, damit fehlende Secrets
+  nicht mehr als kryptisches Packaging-Problem erscheinen.
 - [ ] Live Code signing, notarization und installer smoke aus einem echten
   Tag-Run.
 
@@ -947,3 +953,5 @@ Release Gates:
 | 2026-06-14 | Aktuelle `main`-CI fuer den Stable-API-Seed-Stand ist gruen: GitHub-Actions-Run `27492399333` fuer Commit `ea685cbb` bestaetigt die Gesamt-CI inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, `cargo check` und CLI-Matrix. |
 | 2026-06-14 | Release-/CI-Risiko eingeordnet: Der fehlgeschlagene Tag-Release `v0.3.28` ist nicht production-ready verwertbar. Der Windows-Release-Job scheiterte auf dem alten Tag an nicht vollstaendig `#[cfg(unix)]`-gekapselten Service-IPC-Symbolen; die aktuellen `main`-CI-Runs `27493297770` fuer Commit `d2dcd21f` und `27493992898` fuer Commit `34558c2f` beweisen dagegen wieder gruene Windows-CLI-Checks sowie gruene Business-OS-Desktop-E2E-Jobs auf macOS, Linux und Windows. Der Linux-arm64-Fehler im alten Tag-Release war ein GitHub-Artefakt-Upload-Timeout nach dem Build. Offen bleibt weiterhin ein neuer echter Tag-Run mit signierten/notarisierten Installer-Artefakten und dem neuen Helper-Invite-Gate. Der erste Versuch von `27493297770` hatte zusaetzlich einen Linux-x64-CLI-Abbruch vor den repo-eigenen Checks im `Swatinem/rust-cache@v2`-Schritt; der `rerun --failed` ist inzwischen gruen abgeschlossen. |
 | 2026-06-14 | Aktueller `main`-Stand vollstaendig gruen: CI-Run `27494101063` fuer Commit `af5f87e8` und der Folge-Run `27494885618` fuer Commit `baae47d8` sind beide vollstaendig gruen. Damit sind Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, Windows-/macOS-/Linux-CLI-Matrix, `cargo check`, Harness-Core-Tests und Spawn-Liveness-Proof fuer den aktuellen Release-Kandidaten belegt. Der naechste Welle-8-Gate-Test ist ein neuer echter Tag-Release, weil `v0.3.28` historisch fehlgeschlagen und `v0.3.27` der letzte verwertbare Release bleibt. |
+| 2026-06-14 | Echter Tag-Release `v0.3.29` gestartet und final negativ eingeordnet: Release-Run `27495671970` scheiterte in der Business-OS-Desktop-Matrix. Linux-x64 kam durch Unit-/Syntax-/Release-Checks, Electron-Smokes, Keychain-Smoke, Helper-Build und Helper-Invite-Gate, scheiterte aber beim `.deb`-Build an fehlender `homepage`/Autor-E-Mail/Maintainer-Metadaten. macOS arm64 und x64 kamen ebenfalls bis `Build packaged app`, scheiterten dann an leeren macOS Signing-/Notarization-Secrets (`APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD`), die electron-builder als `not a file` meldete. Business-OS-Desktop Windows-x64, die klassische Desktop-Matrix und die CTOX-CLI-Matrix waren gruen; der GitHub-Release-Job wurde wegen der Desktop-Fehler uebersprungen. |
+| 2026-06-14 | Release-Metadaten-/Preflight-Fix nachgezogen: Commit `427f64a8` setzt Business-OS-Desktop `homepage`, Autor mit E-Mail und `linux.maintainer`, und der Release-Workflow prueft macOS Signing-/Notarization-Secrets vor `electron-builder` explizit fail-closed. Lokal gruen: `npm run release:check`, `npm test` 107/107, `npm run check`, `git diff --check`. `main`-CI-Run `27496841760` fuer Commit `427f64a8` ist vollstaendig gruen. Offen bleibt ein neuer echter Tag-Release nach Konfiguration der macOS-Secrets; ohne diese Secrets bleibt Welle 8 nicht production-ready. |
