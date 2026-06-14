@@ -5,12 +5,12 @@ use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
-use rusqlite::Connection;
-use rusqlite::OpenFlags;
-use rusqlite::OptionalExtension;
 use rusqlite::params;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value as SqlValue;
+use rusqlite::Connection;
+use rusqlite::OpenFlags;
+use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -17199,11 +17199,8 @@ mod tests {
         );
         assert!(prompt.contains("do not write root-level module.json"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
-        assert!(
-            prompt.contains(
-                "set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""
-            )
-        );
+        assert!(prompt
+            .contains("set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""));
         assert!(prompt.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
@@ -17314,13 +17311,11 @@ mod tests {
 
         // A brand new source file added after the baseline.
         save_widget_source(root, "extra.js", "export const extra = true;\n")?;
-        assert!(
-            app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
 
         // Roll back to the install baseline.
         let session = chef_session();
@@ -17339,13 +17334,11 @@ mod tests {
         let restored =
             fs::read_to_string(app_root.join("modules").join("widget").join("index.js"))?;
         assert_eq!(restored, "export const v = 1;\n");
-        assert!(
-            !app_root
-                .join("modules")
-                .join("widget")
-                .join("extra.js")
-                .is_file()
-        );
+        assert!(!app_root
+            .join("modules")
+            .join("widget")
+            .join("extra.js")
+            .is_file());
         assert_eq!(
             baseline_sha,
             compute_module_bundle(&app_root, "widget")?.sha256
@@ -17590,10 +17583,9 @@ mod tests {
         assert!(materialized_path.is_file());
         assert_eq!(fs::read(&materialized_path)?, bytes);
         assert!(task.prompt.contains("Business OS attachments"));
-        assert!(
-            task.prompt
-                .contains(materialized_path.to_string_lossy().as_ref())
-        );
+        assert!(task
+            .prompt
+            .contains(materialized_path.to_string_lossy().as_ref()));
         assert!(task.prompt.contains("desktop_files/chatfile_verified"));
         assert!(task.prompt.contains(&content_hash));
         assert!(
@@ -18378,8 +18370,8 @@ mod tests {
     }
 
     #[test]
-    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records()
-    -> anyhow::Result<()> {
+    fn repair_queue_projections_redacts_inline_report_artifacts_and_counts_legacy_records(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
@@ -18717,8 +18709,8 @@ mod tests {
     }
 
     #[test]
-    fn customers_invalid_command_writes_failed_projection_without_partial_record()
-    -> anyhow::Result<()> {
+    fn customers_invalid_command_writes_failed_projection_without_partial_record(
+    ) -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
         let actor = serde_json::json!({
@@ -18757,13 +18749,11 @@ mod tests {
             outbound_string(&command, &["status"]).as_deref(),
             Some("failed")
         );
-        assert!(
-            command
-                .pointer("/result/error")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .contains("health_status")
-        );
+        assert!(command
+            .pointer("/result/error")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .contains("health_status"));
         Ok(())
     }
 
@@ -20737,11 +20727,9 @@ mod tests {
             !backbone.is_empty(),
             "message drafting skillbook must have a real workflow backbone"
         );
-        assert!(
-            backbone
-                .iter()
-                .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") })
-        );
+        assert!(backbone
+            .iter()
+            .any(|step| { outbound_string(step, &["step"]).as_deref() == Some("writeback") }));
         let routing = drafting
             .get("routing_taxonomy")
             .and_then(Value::as_array)
@@ -21491,8 +21479,8 @@ mod tests {
     }
 
     #[test]
-    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply()
-    -> anyhow::Result<()> {
+    fn outbound_active_engagement_keeps_sequence_version_until_explicit_reapply(
+    ) -> anyhow::Result<()> {
         // Welle 4 (367): a live campaign sequence change must not silently
         // re-version active engagements. Each engagement stays pinned to the
         // sequence snapshot it captured until an explicit reapply flow runs.
@@ -21829,11 +21817,10 @@ mod tests {
                 .and_then(Value::as_str),
             Some("manual_physical_letter_marked_sent")
         );
-        assert!(
-            send.pointer("/result/physical_sent_at_ms")
-                .and_then(Value::as_i64)
-                .is_some()
-        );
+        assert!(send
+            .pointer("/result/physical_sent_at_ms")
+            .and_then(Value::as_i64)
+            .is_some());
         // Idempotency: replaying send_approved must not re-mark.
         let send_again = accept_rxdb_business_command(
             root,
@@ -23572,11 +23559,9 @@ mod tests {
             .pointer("/result/projections")
             .and_then(Value::as_array)
             .expect("asset upsert reports projections");
-        assert!(
-            projections
-                .iter()
-                .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1")
-        );
+        assert!(projections
+            .iter()
+            .any(|p| p["collection"] == "iot_assets" && p["id"] == "asset-iot-bc-1"));
 
         let write = accept_rxdb_business_command(
             root,
@@ -23850,11 +23835,9 @@ mod tests {
             .get("modules")
             .and_then(Value::as_array)
             .context("catalog modules")?;
-        assert!(
-            modules
-                .iter()
-                .any(|module| module.get("id").and_then(Value::as_str) == Some("research"))
-        );
+        assert!(modules
+            .iter()
+            .any(|module| module.get("id").and_then(Value::as_str) == Some("research")));
         Ok(())
     }
 
