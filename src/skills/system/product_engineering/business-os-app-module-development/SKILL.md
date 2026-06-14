@@ -36,6 +36,7 @@ module.json or collections.schema.json would be exposed in an invalid or incompl
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
+you are about to import local app source in tests through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL instead of importing the local ESM file by URL
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -173,6 +174,11 @@ Minimum installed-module manifest fields:
 }
 ```
 
+This is also a negative example: do not add `"right": "Details"`,
+`"right": "Inspector"`, or any `layout.right` unless the user explicitly asked
+for a persistent third pane and you also add `layout.third_pane_justification`.
+The default Business OS app surface is one or two panes plus a modal/drawer.
+
 Minimum collection schema wrapper:
 
 ```json
@@ -193,6 +199,19 @@ Minimum collection schema wrapper:
 }
 ```
 
+The `schema_format` line is mandatory. Do not write this invalid shortcut:
+
+```json
+{ "collections": { "<id>_records": {} } }
+```
+
+After creating `collections.schema.json`, explicitly assert the wrapper before
+writing `index.js`:
+
+```sh
+node -e "const s=JSON.parse(require('fs').readFileSync('$MODULE_DIR/collections.schema.json','utf8')); if (s.schema_format !== 'ctox-business-os-module-collections-v1') throw new Error('missing schema_format wrapper'); console.log('collections schema wrapper OK')"
+```
+
 After writing `module.json` or `collections.schema.json`, immediately parse it:
 
 ```sh
@@ -207,6 +226,18 @@ to make tests pass. Do not use `esbuild`, bundlers, transform loaders,
 `node:vm`, or `new Function` to make browser ESM importable in tests. If a test
 needs shared schema or logic, move that logic into a local browser-safe `.mjs`
 helper and import it normally from both runtime and tests.
+
+Module tests must import local ESM files through real file URLs so relative
+imports keep working:
+
+```js
+const indexModule = await import(new URL('../index.js', import.meta.url).href);
+const schemaModule = await import(new URL('../schema.js', import.meta.url).href);
+```
+
+Never read `index.js` or `schema.js` and import it as a
+`data:text/javascript;base64,...` URL. That breaks relative imports such as
+`import './schema.js'` and is not how the Business OS shell loads apps.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -253,6 +284,45 @@ export function mount(ctx) {
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
 - Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.
+
+## New App Finalization Checklist
+
+Before saying the app is done, create and keep a short phase tracker current.
+For source modules, use `docs/business-os-<id>-implementation-plan.md`. For
+runtime-installed modules, keep the tracker in the active task/bench notes or
+final response; do not add Markdown status files to the installed module
+directory.
+
+Use this checklist exactly. Mark each item `done`, `rework`, `blocked`, or
+`deferred with reason`, and repair every `rework` item before final handoff:
+
+```text
+phase 0 target: resolved module directory is correct; runtime-installed apps use runtime/business-os/installed-modules/<id>, not src/apps/business-os/installed-modules
+phase 1 few-shots: inspected at least 3 existing modules and copied only concrete proven patterns
+phase 2 scope: app has one focused workbench, one create/edit/detail flow, one automation; no decorative views or fake future controls
+phase 3 manifest: module.json parses, id/entry/install_scope are correct, collections lists every read/write dependency
+phase 4 schema: collections.schema.json has schema_format ctox-business-os-module-collections-v1, contains only module-owned collections, and matches schema.js
+phase 5 persistence: all durable records use ctx.db facade collections; no ctox.db, db.raw, Web Storage, HTTP data route, table creation, or manual database file
+phase 6 automation: at least one visible action dispatches a real business_commands/commandBus work-chat-ticket flow and has a testable payload builder
+phase 7 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
+phase 8 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
+phase 9 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
+phase 10 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
+phase 11 tests: tests import local ESM by file URL, not data: URLs; tests cover schema parity, core command builders, and at least one CRUD/automation path
+phase 12 validation: node --check, module_static_check, validate-app-module, forbidden-pattern scan, and any available shell/browser smoke proof are green
+phase 13 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
+```
+
+Treat these common findings as automatic rework, not acceptable tradeoffs:
+
+```text
+module.json has layout.right without layout.third_pane_justification
+index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
+collections.schema.json starts directly with collections and omits schema_format
+schema.js or collections.schema.json redeclares business_commands
+tests load index.js/schema.js through data:text/javascript or base64
+the phase tracker says done while validator or browser proof is red
+```
 
 ## Persistence Pattern
 

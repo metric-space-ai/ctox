@@ -301,6 +301,9 @@ for (const path of files) {
 
 for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
   const text = readFileSync(path, 'utf8');
+  if (hasPathSegment(path, 'tests') && /data:text\/javascript/i.test(text)) {
+    fail(`${rel(path)} imports local app source through a data: URL; import local ESM files by file URL, for example await import(new URL('../index.js', import.meta.url).href), so relative imports keep working`);
+  }
   const thirdPanePatterns = [
     /\blayout\.right\b/,
     /\bdata-[\w-]*right\b/i,

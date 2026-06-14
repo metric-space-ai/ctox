@@ -501,7 +501,9 @@ after writing, render from the reactive subscription, not from a detached optimi
 Build in this order for new greenfield modules:
 
 ```text
-1 docs/business-os-<module>-implementation-plan.md with source inventory, few-shot map, porting map, phase tracker
+1 phase tracker with source inventory, few-shot map, porting map, and current status
+  - source module: docs/business-os-<module>-implementation-plan.md
+  - runtime-installed module: active task/bench tracker or final implementation note, not a Markdown file inside installed-modules/<module>
 2 module.json, collections.schema.json, schema.js, icon.svg, locales/de.json, locales/en.json
 3 validate module.json and collections.schema.json with JSON.parse
 4 index.html, index.css, index.js with mount(ctx), one collection subscription, one create/edit path

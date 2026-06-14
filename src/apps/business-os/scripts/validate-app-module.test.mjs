@@ -327,4 +327,20 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.match(run.stderr, /module test failed: runtime\/business-os\/installed-modules\/testbad\/tests\/basic\.test\.mjs/);
 }
 
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'dataurltest', {
+    testJs: [
+      "import { readFile } from 'node:fs/promises';",
+      "import { Buffer } from 'node:buffer';",
+      "const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');",
+      "await import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'dataurltest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /imports local app source through a data: URL/);
+}
+
 console.log('[validate-app-module.test] OK');

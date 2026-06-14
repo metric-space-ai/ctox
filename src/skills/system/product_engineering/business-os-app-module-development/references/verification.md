@@ -431,12 +431,15 @@ collections.schema.json missing or out of sync
 schema.js and collections.schema.json drift
 module.json or collections.schema.json is invalid JSON, often caused by unescaped inline SVG
 module.json contains layout.icon_svg copied by hand instead of using icon.svg or validated manifest JSON
+module.json contains layout.right without an explicit layout.third_pane_justification
+index.html or index.css contains right-pane/right-column/right-resizer/data-*-right/three-column layout copied from another module without a real persistent-context workflow
 index.css defines `:root` custom properties or redefines shell/base design tokens instead of scoping module-local variables under the module root
 unknown <module>.* command falls through to generic queue behavior
 module invents a module-local automation command without native handler and still claims normal CTOX work/ticket flow
 stub command returns ok/completed
 tests assert wrong field names or wrong unit scale
 test setup created package.json, package-lock.json, node_modules, or .opencode/node_modules artifacts
+test setup imports index.js or schema.js through a `data:text/javascript` URL or base64 source string instead of a real file URL
 test setup imports a bundler only to compensate for `.js` ESM context instead of using one `.mjs` helper
 test setup rewrites or transform-loads schema.js instead of importing a shared `.mjs` schema helper or doing simple text/JSON parity checks
 test setup's fake DB fixture is broken, too complex, or asserts `db.raw`
