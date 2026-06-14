@@ -3509,7 +3509,9 @@ fn start_prompt_worker(
                     mission_sync_outcome = Some(repaired);
                 }
             }
-            let app_validation_failed_before_review = if result.is_ok() {
+            let app_validation_before_review = if result.is_ok()
+                && business_os_app_module_target_from_prompt(&job.prompt).is_some()
+            {
                 match business_os_app_module_validation_feedback(&root, &job) {
                     Ok(Some(feedback)) => {
                         push_event(
@@ -3520,9 +3522,18 @@ fn start_prompt_worker(
                                 clip_text(&feedback, 220)
                             ),
                         );
-                        true
+                        Some(false)
                     }
-                    Ok(None) => false,
+                    Ok(None) => {
+                        push_event(
+                            &state,
+                            format!(
+                                "Business OS app validation passed before completion review for {}; deterministic app validator owns completion",
+                                job.source_label
+                            ),
+                        );
+                        Some(true)
+                    }
                     Err(err) => {
                         push_event(
                             &state,
@@ -3532,11 +3543,11 @@ fn start_prompt_worker(
                                 clip_text(&err.to_string(), 220)
                             ),
                         );
-                        true
+                        Some(false)
                     }
                 }
             } else {
-                false
+                None
             };
             // Completion review gate: when the executor's slice succeeded,
             // hand the slice to a separate, skeptical reviewer agent (a fresh
@@ -3545,12 +3556,19 @@ fn start_prompt_worker(
             // CTOX enqueues a rework slice with the reviewer's report as
             // input. Reviewer errors/timeouts hold terminal completion; they
             // must not silently complete the worker slice.
-            let review_disposition = if app_validation_failed_before_review {
+            let review_disposition = if let Some(app_validation_passed) =
+                app_validation_before_review
+            {
                 push_event(
                     &state,
                     format!(
-                        "Completion review skipped for {} because Business OS app validation owns this rework turn",
-                        job.source_label
+                        "Completion review skipped for {} because Business OS app validation {}",
+                        job.source_label,
+                        if app_validation_passed {
+                            "passed and owns completion"
+                        } else {
+                            "owns this rework turn"
+                        }
                     ),
                 );
                 CompletionReviewDisposition::None
@@ -3773,7 +3791,16 @@ fn start_prompt_worker(
                                         }
                                     }
                                 }
-                                Ok(None) => {}
+                                Ok(None) => {
+                                    should_handle_messages = true;
+                                    push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Business OS app validation passed for {}; queue completion may proceed without generic completion review",
+                                            job.source_label
+                                        ),
+                                    );
+                                }
                                 Err(err) => {
                                     let summary = format!(
                                         "Business OS app artifact validator errored for {}: {}",
@@ -7594,6 +7621,9 @@ fn workspace_file_is_fresh_enough(path: &Path, cutoff: Option<SystemTime>) -> bo
 }
 
 fn declared_workspace_file_artifacts_for_job(job: &QueuedPrompt) -> Vec<String> {
+    if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+        return Vec::new();
+    }
     let prompt = job.prompt.as_str();
     if !prompt_declares_workspace_file_artifact(prompt) {
         return Vec::new();
@@ -24831,6 +24861,27 @@ The controller must create preparation queue/tickets and record queue:system::* 
         };
 
         assert!(!should_queue_artifact_outcome_recovery(&job));
+    }
+
+    #[test]
+    fn business_os_app_tasks_do_not_infer_root_workspace_file_artifacts() {
+        let job = QueuedPrompt {
+            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions\n- first file action: create src/apps/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: "Create subscriptions app".to_string(),
+            preview: "Create subscriptions app".to_string(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["queue:system::subscriptions".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/subscriptions".to_string()),
+            workspace_root: Some("/tmp/ctox-business-os-app-subscriptions".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(declared_workspace_file_artifacts_for_job(&job).is_empty());
+        assert_eq!(artifact_first_execution_prompt(&job), job.prompt);
     }
 
     #[test]

@@ -184,6 +184,16 @@ artifacts except `README.md`, and Business OS app tasks must bypass generic
 artifact outcome recovery because the deterministic app validator owns their
 completion and repair contract.
 
+Native R19 proved the R18 validator hardening, but exposed the remaining
+generic artifact gate. The first worker (`subscriptions`) produced a valid
+installed module; manual validation returned green with 7/7 tests. The queue
+still failed because the generic completion-review terminal gate inferred
+workspace-root artifacts (`/module.json`, `/collections.schema.json`) from the
+Business OS app prompt and rejected completion before the app-specific contract
+could complete the task. Post-R19 hardening disables generic durable-artifact
+inference and completion review for Business OS app targets after deterministic
+app validation passes.
+
 ## Why CLI Passed But CTOX-Native Failed
 
 The source bench and CTOX-native bench test different contracts.
@@ -467,10 +477,10 @@ Agents should update this table as work progresses.
 | 0. Preserve R8 evidence | Done | `docs/business-os-skill-bench-2026-06-12.md` R8 section | R8 stopped after first hard failure |
 | 1. App command routing audit | In progress | `app_modify_queue_prompt_targets_app_module_not_skill_files`, `app_create_queue_prompt_targets_app_module_skill` | App create/modify command prompt and suggested skill covered; App Creator/App Store/browser entry audit still open |
 | 2. Mode-aware artifact validator | In progress | `src/apps/business-os/scripts/validate-app-module.mjs`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; R8/R13c contracts validation failures; R14 false-green on `localStorage`; R18 false-green on module-local `HARNESS_ARTIFACT_CONFLICT.md` | Covers source/installed static gate, source registry requirements, ESM syntax, module tests, JSON/report output, Web Storage, root probes, package side effects, and module-local diagnostic artifacts; atomic JSON exposure still needs runtime/catalog proof |
-| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`, `business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery`; R12/R16/R17/R18 validator-rework and completion evidence | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, skips generic artifact outcome recovery for app tasks, and fails after bounded attempts; still needs fresh CTOX-native 5/5 confirmation |
+| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`, `business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery`, `business_os_app_tasks_do_not_infer_root_workspace_file_artifacts`; R12/R16/R17/R18/R19 validator-rework and completion evidence | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, skips generic artifact outcome recovery/root-artifact inference/completion review for app tasks, and fails after bounded attempts; still needs fresh CTOX-native 5/5 confirmation |
 | 4. Validator integration tests | In progress | `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `cargo test --manifest-path src/core/harness/core/Cargo.toml business_os_`; `business_os_app_validation_feedback_requeues_same_task`; root-alias and stale-checker validator fixtures | Source/installed fixtures, queue-state proof, bundled-checker preference, and root-level exec guard are covered; broader App Creator/App Store flow tests still open |
 | 5. App Creator UI flow check | Not started |  | Minimal user UI, no generator workbench |
-| 6. CTOX-native R9-R18 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure; R18 subscriptions completed after green validation, contracts exposed module-local harness artifact and generic outcome-recovery conflict | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R18 hardening |
+| 6. CTOX-native R9-R19 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure; R18 subscriptions completed after green validation, contracts exposed module-local harness artifact and generic outcome-recovery conflict; R19 subscriptions validated green but generic terminal gate inferred wrong root artifacts | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R19 hardening |
 | 7. Skill/resource cleanup from native evidence | In progress | R10/R13c/R14 failures folded into skill, module contract, verification docs, validator forbidden-file checks, bundled-checker preference, and exec guard prompt feedback | Only evidence-backed edits |
 | 8. Repeat native bench until 5/5 | Not started |  | No overfitting to one app |
 | 9. Release-install validation | Not started |  | No developer-local source paths required |
@@ -775,7 +785,7 @@ Only after this evidence should the App Creator be called production-ready.
 - Close the R14 validator false-green: reject `localStorage`, `sessionStorage`,
   root probe files, module-local `package.json`/lockfiles/`node_modules`, and
   transient JSON-manifest exposure before an app can be accepted.
-- Run CTOX-native R19 from a fresh isolated root using the rebuilt runtime and
+- Run CTOX-native R20 from a fresh isolated root using the rebuilt runtime and
   real Business OS app command dispatch. Do not use generic `queue add --skill`
   as production-readiness evidence.
 - Prove worker/model/tool-call errors on app tasks still run the deterministic
@@ -809,6 +819,8 @@ Only after this evidence should the App Creator be called production-ready.
   `HARNESS_ARTIFACT_CONFLICT.md` are rejected before completion.
 - Prove generic outcome-witness artifact recovery is not queued for Business OS
   app tasks; the app validator must be the only app artifact owner.
+- Prove generic durable-artifact inference and completion-review terminal gates
+  are bypassed for Business OS app tasks after app validation is green.
 - Prove generated app files are small enough for stable tool-call JSON, or that
   agents split large writes into bounded chunks without malformed provider
   function arguments.
@@ -1242,6 +1254,67 @@ hardening verification:
 
 next action:
 - push the R18 hardening to main, then run native R19 from a fresh isolated
+  root through ctox.business_os.app.create
+```
+
+### Native R19 2026-06-14
+
+```text
+status: valid CTOX-native orchestration failure after green app artifacts
+entry path: ctox.business_os.app.create
+model: MiniMax M3
+context: 256k
+provider path: ctox_core_api
+isolated root: /tmp/ctox-bos-native-r19-20260614-040450
+source commit: 7c99d6fd4e401281e5268500893388dc90fd7af0
+commands dispatched: subscriptions, inventory, projects, contracts, compliance
+first worker: subscriptions
+
+positive evidence:
+- commands entered through real Business OS app create dispatch
+- runtime switch reported configured_context_tokens=262144 in
+  runtime/ctox-runtime.sqlite3
+- worker reached MiniMax M3 through ctox_core_api
+- subscriptions generated files only under
+  src/apps/business-os/installed-modules/subscriptions
+- manual validation:
+  node src/apps/business-os/scripts/validate-app-module.mjs subscriptions --installed --workspace /tmp/ctox-bos-native-r19-20260614-040450 --json
+  returned ok=true with static check OK, node_check OK, and 7/7 module tests
+  passing
+- the R18 module-local harness artifact guard did not fire because the app did
+  not create HARNESS_ARTIFACT_CONFLICT.md or similar diagnostic artifacts
+
+production blocker:
+- after green app artifacts, generic completion-review terminal gating inferred
+  root-level workspace artifacts from the app prompt
+- core transition proof rejected completion with WP-Outcome-Missing for
+  /private/tmp/ctox-bos-native-r19-20260614-040450/module.json and related
+  root artifacts
+- the Business OS command projection became failed/failed with
+  "CTOX prompt worker exited before leased Business OS queue task was
+  acknowledged."
+- this is not an app-quality failure; it is generic artifact-contract logic
+  misclassifying Business OS app prompts
+
+decision:
+- stop after the first worker; continuing the remaining apps would only retest
+  the same completion-gate collision
+
+hardening completed:
+- Business OS app targets now return no generic
+  declared_workspace_file_artifacts_for_job entries
+- Business OS app prompts no longer receive the HARNESS ARTIFACT CONTRACT
+  wrapper from artifact_first_execution_prompt
+- when deterministic app validation passes before completion review, generic
+  completion review is skipped and the queue task may complete through the app
+  validator path
+- when deterministic app validation fails or errors, generic review remains
+  skipped and the same app-validation rework path owns repair
+- added regression coverage:
+  business_os_app_tasks_do_not_infer_root_workspace_file_artifacts
+
+next action:
+- verify and push the R19 hardening, then run native R20 from a fresh isolated
   root through ctox.business_os.app.create
 ```
 
