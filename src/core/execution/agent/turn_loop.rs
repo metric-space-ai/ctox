@@ -629,6 +629,42 @@ where
             rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
         ));
     }
+    // The exact-token preflight above is a deliberate no-op on API runtimes:
+    // `exact_prompt_token_count` returns `Ok(None)` for any non-local kernel,
+    // so the loop breaks on the first iteration and an API turn reaches the
+    // model with zero overflow protection. Add a SEPARATE heuristic preflight
+    // for the API path that estimates the same `base_instructions + prompt`
+    // text the session sends, using lcm's char/4 token estimate against a
+    // looser ~95% input budget (the estimate is coarse, so the budget must not
+    // be as tight as the exact path). This only bails; it never compacts, and
+    // the distinct `context_preflight_heuristic_overflow` marker
+    // (source `heuristic-api`) gets a cooldown via
+    // `hard_runtime_blocker_retry_cooldown_secs`.
+    if !runtime.state.source.is_local() {
+        let heuristic_text = format!(
+            "{preflight_base_instructions}\n\n{}",
+            rendered_prompt.prompt
+        );
+        let estimated_tokens = lcm::estimate_tokens(&heuristic_text) as i64;
+        let context_limit = config.max_context_tokens.max(1);
+        let heuristic_budget = context_limit
+            .saturating_mul(95)
+            .checked_div(100)
+            .unwrap_or(1)
+            .max(1);
+        emit(&format!(
+            "heuristic-token-preflight tokens={} budget={} context={} source=heuristic-api",
+            estimated_tokens, heuristic_budget, context_limit
+        ));
+        if estimated_tokens > heuristic_budget {
+            anyhow::bail!(
+                "context_preflight_heuristic_overflow: estimated rendered prompt tokens {} exceed heuristic input budget {} for context window {} via heuristic-api — API-runtime preflight cannot tokenize exactly, so this is a char/4 estimate of base_instructions + rendered prompt",
+                estimated_tokens,
+                heuristic_budget,
+                context_limit
+            );
+        }
+    }
     let turn_start_ts = current_rfc3339_timestamp();
     emit("invoke-model");
     let reply = match session.as_deref_mut() {
@@ -1226,6 +1262,7 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("context selection is empty")
         || lower.contains("no context evidence rendered")
         || lower.contains("context_loop_short_circuit")
+        || lower.contains("context_preflight_heuristic_overflow")
         || lower.contains("mid-task compaction failed")
         || lower.contains("failed to parse structured compaction response")
     {
@@ -1486,6 +1523,27 @@ mod tests {
         assert!(fallback.starts_with("CURRENT REQUEST (authoritative)\n"));
         assert!(fallback.contains(prompt));
         assert!(fallback.contains(rendered.trim_start()));
+    }
+
+    #[test]
+    fn heuristic_api_overflow_marker_gets_a_cooldown() {
+        // turnloop-4: the API-runtime heuristic preflight bails with a
+        // distinctly-named marker. It must be classified as a hard runtime
+        // blocker with a cooldown, exactly like the exact/context bails,
+        // otherwise an overflowing API turn retries with no backoff.
+        let bail = format!(
+            "context_preflight_heuristic_overflow: estimated rendered prompt tokens {} exceed heuristic input budget {} for context window {} via heuristic-api",
+            200_000, 124_640, 131_200
+        );
+        assert_eq!(hard_runtime_blocker_retry_cooldown_secs(&bail), Some(60));
+
+        // The estimate helper this preflight relies on must be reachable and
+        // monotone in input size (this is what makes the budget comparison
+        // meaningful).
+        let small = lcm::estimate_tokens("hi");
+        let large = lcm::estimate_tokens(&"x".repeat(8_000));
+        assert!(large > small);
+        assert!(large >= 2_000); // ~8000 chars / 4
     }
 
     fn test_message(message_id: i64, seq: i64, role: &str, content: &str) -> lcm::MessageRecord {

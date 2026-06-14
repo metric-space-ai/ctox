@@ -6018,7 +6018,7 @@ fn parse_summary_kind(value: &str) -> SummaryKind {
     }
 }
 
-fn estimate_tokens(content: &str) -> usize {
+pub(crate) fn estimate_tokens(content: &str) -> usize {
     let chars = content.chars().count();
     chars.div_ceil(4).max(1)
 }
