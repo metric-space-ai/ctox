@@ -8884,6 +8884,39 @@ mod tests {
     }
 
     #[test]
+    fn queue_route_status_core_state_maps_all_canonical_arms() {
+        // tests-2: pin every canonical queue route_status -> CoreState mapping
+        // so a future edit cannot silently re-point one, and confirm an
+        // unmapped status bails rather than guessing a state.
+        let cases = [
+            ("", CoreState::Pending),
+            ("pending", CoreState::Pending),
+            ("PENDING", CoreState::Pending),
+            ("leased", CoreState::Leased),
+            ("running", CoreState::Running),
+            ("blocked", CoreState::Blocked),
+            ("approval-nag-handled", CoreState::Blocked),
+            ("review_rework", CoreState::ReworkRequired),
+            ("failed", CoreState::Failed),
+            ("handled", CoreState::Completed),
+            ("completed", CoreState::Completed),
+            ("cancelled", CoreState::Superseded),
+            ("superseded", CoreState::Superseded),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                queue_route_status_core_state(input).unwrap(),
+                expected,
+                "route status {input:?} must map to the pinned core state"
+            );
+        }
+        assert!(
+            queue_route_status_core_state("nonsense-status").is_err(),
+            "an unmapped route status must bail, not silently pick a state"
+        );
+    }
+
+    #[test]
     fn queue_tasks_round_trip_through_channel_store() {
         let root = std::env::temp_dir().join(format!(
             "ctox-queue-test-{}",
