@@ -216,6 +216,50 @@ fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Res
     Ok(())
 }
 
+/// Upsert exactly ONE key/value pair into the runtime_env_kv store WITHOUT
+/// rewriting the whole map (no DELETE-all + reinsert). Uses the single-row
+/// `ON CONFLICT(env_key) DO UPDATE` idiom and refuses secret/empty keys so it
+/// can never clobber a credential or write a blank row, and so it cannot race
+/// with `write_runtime_env_map`'s full rewrite into losing a concurrent key.
+pub fn set_runtime_env_value(root: &Path, key: &str, value: &str) -> Result<()> {
+    if key.trim().is_empty() || secrets::is_secret_key(key) {
+        return Ok(());
+    }
+    let conn = open_runtime_persistence_db(root)?;
+    conn.execute(
+        &format!(
+            "INSERT INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2) \
+             ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value"
+        ),
+        params![key, value],
+    )
+    .with_context(|| format!("failed to upsert runtime key {key}"))?;
+    Ok(())
+}
+
+/// Delete exactly ONE key from the runtime_env_kv store. No-op when absent.
+pub fn clear_runtime_env_value(root: &Path, key: &str) -> Result<()> {
+    if key.trim().is_empty() {
+        return Ok(());
+    }
+    let conn = open_runtime_persistence_db(root)?;
+    conn.execute(
+        &format!("DELETE FROM {RUNTIME_ENV_TABLE} WHERE env_key = ?1"),
+        params![key],
+    )
+    .with_context(|| format!("failed to clear runtime key {key}"))?;
+    Ok(())
+}
+
+/// Read exactly ONE persisted key from the runtime_env_kv store (bypassing the
+/// secrets/runtime-state merge). Returns None for an absent or blank value.
+pub fn get_runtime_env_value(root: &Path, key: &str) -> Option<String> {
+    load_persisted_runtime_env_map(root)
+        .ok()
+        .and_then(|map| map.get(key).cloned())
+        .filter(|value| !value.trim().is_empty())
+}
+
 fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
     let path = runtime_config_path(root);
     if let Some(parent) = path.parent() {

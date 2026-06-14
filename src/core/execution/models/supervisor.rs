@@ -696,7 +696,15 @@ pub fn persistent_backends_idle(root: &Path) -> Result<bool> {
 }
 
 pub fn persistent_backend_alerts(root: &Path) -> Result<Vec<String>> {
-    persistent_backend_residue(root)
+    // Surface the durable chat-launch-failure status here ONLY, not via
+    // persistent_backend_residue: residue also drives persistent_backends_idle(),
+    // and a lingering failure key must not make the fleet look perpetually
+    // non-idle and wedge the shutdown-wait loops.
+    let mut alerts = persistent_backend_residue(root)?;
+    if let Some(detail) = chat_backend_launch_failure(root) {
+        alerts.push(format!("chat backend launch failure: {detail}"));
+    }
+    Ok(alerts)
 }
 
 fn persistent_backend_residue(root: &Path) -> Result<Vec<String>> {
@@ -2064,6 +2072,7 @@ fn ensure_backend_process(
         Ok(()) => {
             let _ = finalize_chat_quant_artifact(root, role);
             let _ = maybe_prime_chat_quant_artifact(root, role);
+            let _ = clear_chat_backend_launch_failure(root, role);
             Ok(())
         }
         Err(err) => {
@@ -2078,9 +2087,49 @@ fn ensure_backend_process(
             release_backend_runtime_ownership(root, role);
             let _ = cleanup_failed_chat_quant_artifact(root, role);
             let _ = clear_failed_local_chat_runtime_projection(root, role);
+            let _ = record_chat_backend_launch_failure(root, role, &err);
             Err(err)
         }
     }
+}
+
+const CHAT_BACKEND_LAUNCH_FAILURE_KEY: &str = "CTOX_CHAT_BACKEND_LAUNCH_FAILURE";
+
+/// Persist a machine-readable, timestamped record of a Chat backend launch
+/// failure into ONE namespaced runtime_env_kv key, via a dedicated single-key
+/// upsert (not a full-map rewrite). No-op for auxiliary roles — only the
+/// primary chat backend failure is fatal and worth durable status. The value
+/// flattens the anyhow cause chain onto one line.
+fn record_chat_backend_launch_failure(
+    root: &Path,
+    role: ManagedBackendRole,
+    err: &anyhow::Error,
+) -> Result<()> {
+    if role != ManagedBackendRole::Chat {
+        return Ok(());
+    }
+    let timestamp = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let reason = format!("{err:#}").replace(['\n', '\r'], " ");
+    runtime_env::set_runtime_env_value(
+        root,
+        CHAT_BACKEND_LAUNCH_FAILURE_KEY,
+        &format!("{timestamp} {reason}"),
+    )
+}
+
+/// Clear the persisted Chat backend launch failure once the backend comes up
+/// healthy. No-op for auxiliary roles.
+fn clear_chat_backend_launch_failure(root: &Path, role: ManagedBackendRole) -> Result<()> {
+    if role != ManagedBackendRole::Chat {
+        return Ok(());
+    }
+    runtime_env::clear_runtime_env_value(root, CHAT_BACKEND_LAUNCH_FAILURE_KEY)
+}
+
+/// Read the persisted Chat backend launch failure status, if any, for surfacing
+/// through persistent_backend_alerts.
+fn chat_backend_launch_failure(root: &Path) -> Option<String> {
+    runtime_env::get_runtime_env_value(root, CHAT_BACKEND_LAUNCH_FAILURE_KEY)
 }
 
 fn dedupe_socket_backed_backend_processes(
@@ -3593,6 +3642,61 @@ mod tests {
             );
             assert!(propagate_backend_outcome(role, Ok(())).is_ok());
         }
+    }
+
+    #[test]
+    fn chat_backend_launch_failure_is_persisted_surfaced_and_cleared() {
+        let root = temp_root("chat-launch-failure-status");
+
+        // No failure recorded yet: alerts must not mention a chat launch failure.
+        assert!(chat_backend_launch_failure(&root).is_none());
+        let before = persistent_backend_alerts(&root).unwrap();
+        assert!(
+            !before
+                .iter()
+                .any(|alert| alert.contains("chat backend launch failure")),
+            "unexpected pre-existing chat launch failure alert: {before:?}"
+        );
+
+        // Record a Chat-role failure: it round-trips into the single namespaced
+        // key and surfaces as a durable alert.
+        let err = anyhow::anyhow!("chat backend exited before becoming ready (exit status: 17)");
+        record_chat_backend_launch_failure(&root, ManagedBackendRole::Chat, &err).unwrap();
+        let persisted = runtime_env::get_runtime_env_value(&root, CHAT_BACKEND_LAUNCH_FAILURE_KEY)
+            .expect("failure must be persisted");
+        assert!(persisted.contains("exit status: 17"));
+        let alerts = persistent_backend_alerts(&root).unwrap();
+        assert!(
+            alerts
+                .iter()
+                .any(|alert| alert.contains("chat backend launch failure")
+                    && alert.contains("exit status: 17")),
+            "alert not surfaced: {alerts:?}"
+        );
+
+        // Auxiliary-role failures must NOT overwrite the chat status key.
+        record_chat_backend_launch_failure(
+            &root,
+            ManagedBackendRole::Embedding,
+            &anyhow::anyhow!("embedding backend down"),
+        )
+        .unwrap();
+        assert_eq!(
+            runtime_env::get_runtime_env_value(&root, CHAT_BACKEND_LAUNCH_FAILURE_KEY).as_deref(),
+            Some(persisted.as_str()),
+            "auxiliary failure must not touch the chat status key"
+        );
+
+        // A successful start clears the key and drops the alert.
+        clear_chat_backend_launch_failure(&root, ManagedBackendRole::Chat).unwrap();
+        assert!(chat_backend_launch_failure(&root).is_none());
+        assert!(
+            !persistent_backend_alerts(&root)
+                .unwrap()
+                .iter()
+                .any(|alert| alert.contains("chat backend launch failure")),
+            "alert should be gone after clear"
+        );
     }
 
     fn production_source(source: &str) -> String {
