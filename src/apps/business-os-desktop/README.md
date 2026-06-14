@@ -23,6 +23,7 @@ npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin 
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --fresh-install
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --fresh-install --install-api-provider openai
 npm run release:check
+npm run release:secrets:check
 npm run pack:dir:smoke
 ```
 
@@ -36,6 +37,12 @@ Release-related checks:
   `business-os desktop invite` contract smoke before packaging. It also checks
   that the main CI workflow runs the Desktop E2E smoke matrix on macOS, Linux
   and Windows.
+- `npm run release:secrets:check` uses `gh secret list` to verify the required
+  repo secret names for signed/notarized Business OS Desktop releases:
+  `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`,
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK`, and
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD`. It checks names only, never
+  reads secret values.
 - `npm run smoke:keychain-runtime` writes, reads and deletes a synthetic secret
   through the platform keychain: macOS Keychain, Linux Secret Service or
   Windows Credential Manager.

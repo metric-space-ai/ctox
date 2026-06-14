@@ -210,6 +210,14 @@ wieder testbar:
   macOS arm64/x64, Linux x64 und Windows x64; `release:check` verifiziert
   Matrix, npm-Gates, Electron-Smokes, Distribution-Build und plattformweiten
   Release-Artefakt-Smoke.
+- `npm run release:secrets:check` prueft vor einem Tag-Run per `gh secret
+  list`, ob die benoetigten Repo-Secret-Namen fuer signierte/notarisierte
+  Business-OS-Desktop-Releases vorhanden sind. Der aktuelle GitHub-Befund ist
+  negativ: `gh secret list --repo metric-space-ai/ctox --json name,updatedAt`
+  liefert `[]`; ohne `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`,
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` wuerde ein neuer Tag-Run am
+  macOS-Preflight scheitern.
 - Die normale `main`-/PR-CI enthält jetzt zusätzlich ein Business-OS-Desktop-
   E2E-Gate auf macOS, Linux und Windows. Es läuft ohne Distribution-Build,
   aber mit `npm test`, `npm run check`, `npm run release:check`,
@@ -311,11 +319,14 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Packaging, dass der frisch gebaute gebuendelte `ctox`-Helper den
   `business-os desktop invite` JSON-Vertrag ausfuehren kann; das verhindert
   kuenftige Desktop-Releases mit einem zu alten Helper, ersetzt aber nicht den
-  echten Tag-Run. Der historische `v0.3.28` Tag-Release ist kein verwertbarer
-  Produktionsnachweis: Windows scheiterte dort noch an Unix-only Service-IPC-
-  Symbolen, waehrend der aktuelle `main`-Stand den Windows-CLI-Check wieder
-  besteht; Linux arm64 scheiterte im selben Release-Lauf erst beim
-  Artefakt-Upload mit `ETIMEDOUT`, also nicht an einem Desktop-Produktcheck.
+  echten Tag-Run. Ein lokaler Secret-Namen-Preflight ist vorhanden; aktuell
+  meldet GitHub aber keine konfigurierten Repo-Secrets, daher ist ein neuer
+  Tag-Release ohne Secret-Konfiguration nicht sinnvoll. Der historische
+  `v0.3.28` Tag-Release ist kein verwertbarer Produktionsnachweis: Windows
+  scheiterte dort noch an Unix-only Service-IPC-Symbolen, waehrend der aktuelle
+  `main`-Stand den Windows-CLI-Check wieder besteht; Linux arm64 scheiterte im
+  selben Release-Lauf erst beim Artefakt-Upload mit `ETIMEDOUT`, also nicht an
+  einem Desktop-Produktcheck.
 
 ## Nicht Verhandelbare Produktregeln
 
@@ -347,7 +358,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 87% |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 88% |
 | **Gesamt** | **100%** | **In Umsetzung** | **97%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
@@ -851,7 +862,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 87%.
+Status: In Umsetzung, 88%.
 
 Release Gates:
 
@@ -930,6 +941,12 @@ Release Gates:
 - [x] macOS-Signing-/Notarization-Secrets werden im Release-Workflow vor
   `electron-builder` explizit fail-closed geprueft, damit fehlende Secrets
   nicht mehr als kryptisches Packaging-Problem erscheinen.
+- [x] Lokaler Tag-Release-Preflight fuer Secret-Namen:
+  `npm run release:secrets:check` prueft per `gh secret list`, ob
+  `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`,
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und
+  `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` als Repo-Secrets vorhanden sind,
+  ohne Secret-Werte zu lesen.
 - [ ] Live Code signing, notarization und installer smoke aus einem echten
   Tag-Run.
 
@@ -999,3 +1016,4 @@ Release Gates:
 | 2026-06-14 | Welle 4 Rollover-Soak auf CI ausgefuehrt und ehrlich negativ eingeordnet: Workflow-Dispatch `27501450384` fuer `rollover-native-peer-browser-to-rust` auf Commit `761da15a` baute das Smoke-Binary auf GitHub Actions und startete den echten Browser/Rust-Rollover-Smoke. Versuch 1 scheiterte nach 68,8s mit `Timed out waiting for open native peer on desktop_files after native peer restart` (`peerCount=0`); Versuch 2 war funktional gruen mit `replicated_id=browser_rollover_smoke_1781447190564`, `replication_directions` fuer `desktop_files`/`desktop_file_chunks` jeweils `peerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der Workflow ist wegen `SOAK_FAIL_ON_RETRY=1` korrekt rot; Welle 4 bleibt bei 99%, bis ein retry-freier Rollover-Run gruen ist oder die Erstversuch-Flakiness behoben ist. Der normale `main`-CI-Run `27501383594` fuer denselben Commit ist vollstaendig gruen. |
 | 2026-06-14 | Welle 4 abgeschlossen: Commit `6e352b7f` stabilisiert WebRTC-Restart-Batches nach Native-Peer-Rollover. Der gezielte RxDB-Soak `27503869533` lief mit `SOAK_FAIL_ON_RETRY=1` im Modus `rollover-native-peer-browser-to-rust` im ersten Versuch gruen (`ok=true`, `retryCount=0`, `durationMs=12163`). Die Evidenz zeigt `replicated_id=browser_rollover_smoke_1781452549731`, `replication_directions` fuer `desktop_files` und `desktop_file_chunks` jeweils `peerCount=1`/`forkPeerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der vorherige Zwischenfix `4ca640cd`/Run `27503042581` war noch negativ auf Versuch 1 und bestaetigte damit die Batch-Restart-Ursache. Welle 4 ist 100%; Gesamt bleibt gerundet 97%. |
 | 2026-06-15 | Welle 2 ctox.dev Sperrpfad gehaertet: `launchAllowed:false` aus dem ctox.dev Session-Package wird als `needs_auth` normalisiert und der SourceManager verweigert den Launch vor dem `/api/desktop/launch-token` Request. Damit ist der Desktop fail-closed, wenn ctox.dev einen entzogenen oder nicht launchbaren Tenant noch in der Liste meldet. Live-Recheck gegen Produktion ist gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --expected-tenant Kunstmen --expected-tenant SKF` automatisiert die echte AuthPanel-UI, sieht sechs Tenants inklusive Kunstmen/SKF, laedt `/dashboard?tenant=<tenant-id>` mit HTTP 200 ohne Login-Redirect und startet Kunstmen WebRTC-only (`transport=webrtc`, `httpBridgeAvailable=false`). Gruen: `node --test test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, `npm test` 109/109, `npm run release:check`, `npm run test:electron-smoke` nach einem transienten ersten HTTP-Guard-Smoke-Fehler; der isolierte HTTP-Guard-Smoke war direkt gruen. Welle 2 steigt auf 97%; echte serverseitige Live-Revocation/Session-Rotation bleibt offen. |
+| 2026-06-15 | Welle 8 Release-Secret-Preflight ergaenzt: `npm run release:secrets:check` prueft lokal per GitHub CLI die benoetigten Repo-Secret-Namen fuer signierte/notarisierte Business-OS-Desktop-Releases, ohne Secret-Werte zu lesen. Aktueller Befund ist negativ: `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` und `gh variable list --repo metric-space-ai/ctox --json name,updatedAt,value` liefern jeweils `[]`; ein neuer Tag-Release wuerde deshalb am macOS-Preflight fuer `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` scheitern. Welle 8 steigt auf 88%, weil der Preflight reproduzierbar ist; production-ready bleibt bis zur Secret-Konfiguration und einem echten gruenen Tag-Run offen. |
