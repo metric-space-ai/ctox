@@ -92,7 +92,11 @@ function runElectron(command, args, resultPath) {
       settled = true;
       clearTimeout(timeout);
       clearInterval(resultPoll);
-      resolve({ code: observedCode === null ? code : observedCode, stdout, stderr });
+      const payload = readResultFile(resultPath);
+      const fileCode = payload && typeof payload.ok === "boolean"
+        ? (payload.ok ? 0 : 2)
+        : null;
+      resolve({ code: observedCode ?? fileCode ?? code, stdout, stderr });
     });
   });
 }

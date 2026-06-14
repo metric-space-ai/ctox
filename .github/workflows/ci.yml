@@ -48,12 +48,17 @@ jobs:
         working-directory: src/apps/business-os-desktop
         run: npm ci
 
-      - name: Unit and syntax checks
+      - name: Unit tests
         working-directory: src/apps/business-os-desktop
-        run: |
-          npm test
-          npm run check
-          npm run release:check
+        run: npm test
+
+      - name: Syntax checks
+        working-directory: src/apps/business-os-desktop
+        run: npm run check
+
+      - name: Release config check
+        working-directory: src/apps/business-os-desktop
+        run: npm run release:check
 
       - name: Electron smokes
         if: runner.os != 'Linux'

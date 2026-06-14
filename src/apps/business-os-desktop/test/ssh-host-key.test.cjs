@@ -85,7 +85,9 @@ test("ensureKnownHost writes app-owned known_hosts entries with port-aware host 
     knownHostsLine: `[example.com]:2222 ssh-rsa ${RSA_KEY}`,
   });
   assert.equal(fs.readFileSync(knownHostsPath, "utf8"), `[example.com]:2222 ssh-rsa ${RSA_KEY}\n`);
-  assert.equal((fs.statSync(knownHostsPath).mode & 0o777), 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((fs.statSync(knownHostsPath).mode & 0o777), 0o600);
+  }
 });
 
 test("known host pattern keeps default port simple", () => {
