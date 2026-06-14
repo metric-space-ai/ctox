@@ -524,12 +524,19 @@ fn prune_sqlite_access_process_events(conn: &Connection, keep_window: i64) -> Re
 
 fn prune_process_events_global(conn: &Connection, keep_window: i64) -> Result<usize> {
     let keep_window = keep_window.max(1);
-    // event_seq is a monotonic AUTOINCREMENT PK, so MAX/MIN are index lookups.
-    // Skip the DELETE entirely unless the seq span exceeds the window, keeping
-    // the per-command call effectively free in steady state while guaranteeing
-    // the table can never grow unbounded.
+    // event_seq is a monotonic AUTOINCREMENT PK shared across every case_id, so
+    // MAX/MIN are index lookups. Scope the prune to the NON-debug stream:
+    // sqlite-access debug rows are bounded separately by
+    // prune_sqlite_access_process_events, and counting them here would let a
+    // debug burst advance the eviction frontier and evict young genuine
+    // transition-evidence rows. The non-debug MAX(event_seq) still advances as
+    // real events accrue, so this stream keeps its own upper bound and the
+    // table can never grow unbounded.
+    // Skip the DELETE entirely unless the non-debug seq span exceeds the window,
+    // keeping the per-command call effectively free in steady state.
     let span: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(event_seq) - MIN(event_seq), 0) FROM ctox_process_events",
+        "SELECT COALESCE(MAX(event_seq) - MIN(event_seq), 0) FROM ctox_process_events \
+         WHERE case_id NOT LIKE 'sqlite-access:%'",
         [],
         |row| row.get(0),
     )?;
@@ -539,8 +546,10 @@ fn prune_process_events_global(conn: &Connection, keep_window: i64) -> Result<us
     let deleted = conn.execute(
         r#"
         DELETE FROM ctox_process_events
-        WHERE event_seq <= COALESCE(
-            (SELECT MAX(event_seq) - ?1 FROM ctox_process_events),
+        WHERE case_id NOT LIKE 'sqlite-access:%'
+          AND event_seq <= COALESCE(
+            (SELECT MAX(event_seq) - ?1 FROM ctox_process_events
+             WHERE case_id NOT LIKE 'sqlite-access:%'),
             -1
         )
         "#,
@@ -5829,6 +5838,66 @@ mod tests {
         )?;
         assert_eq!(deleted, 3);
         assert_eq!(remaining, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn global_prune_does_not_evict_genuine_transition_rows_behind_debug_burst() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("ctox.sqlite3");
+        let conn = Connection::open(&db_path)?;
+        ensure_process_mining_schema(&conn, &db_path)?;
+
+        let insert = |id: &str, case_id: &str| -> Result<()> {
+            conn.execute(
+                r#"
+                INSERT INTO ctox_process_events (
+                    event_id, observed_at, case_id, activity, lifecycle_transition,
+                    entity_type, entity_id, table_name, operation, from_state, to_state,
+                    primary_key_json, row_before_json, row_after_json, changed_columns_json,
+                    turn_id, command_id, actor_key, source, command_name, db_path, metadata_json
+                )
+                VALUES (
+                    ?1, '2026-05-01T00:00:00Z', ?2, 'act', 'transition',
+                    'ticket', 'e', 'ticket_self_work_items', 'UPDATE', 'queued', 'running',
+                    json_object(), json_object(), json_object(), json_array(),
+                    'turn', 'cmd', 'agent', 'test', 'update', 'db', json_object()
+                )
+                "#,
+                params![id, case_id],
+            )?;
+            Ok(())
+        };
+        // Debug burst first (low seqs), then a few genuine transition rows (high seqs).
+        for idx in 0..12 {
+            insert(
+                &format!("dbg-{idx}"),
+                "sqlite-access:/tmp/test:knowledge_notes",
+            )?;
+        }
+        for idx in 0..3 {
+            insert(
+                &format!("txn-{idx}"),
+                "ticket_self_work_items:{\"work_id\":\"w1\"}",
+            )?;
+        }
+
+        // The global span (debug + genuine) far exceeds the small keep window, but
+        // the non-debug span (3 rows) does not, so the scoped prune evicts none.
+        let deleted = prune_process_events_global(&conn, 2)?;
+        let genuine: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM ctox_process_events WHERE case_id NOT LIKE 'sqlite-access:%'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            deleted, 0,
+            "a debug burst must not advance the eviction frontier"
+        );
+        assert_eq!(
+            genuine, 3,
+            "genuine transition rows behind a debug burst must survive"
+        );
         Ok(())
     }
 
