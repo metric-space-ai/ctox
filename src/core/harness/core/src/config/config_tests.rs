@@ -633,6 +633,36 @@ fn permissions_profiles_require_default_permissions() -> std::io::Result<()> {
 }
 
 #[test]
+fn agents_max_threads_defaults_to_finite_and_rejects_zero() {
+    // liveness-4: with no agents.max_threads set, the resolved config must
+    // still bound agent spawning to a FINITE thread count (the
+    // DEFAULT_AGENT_MAX_THREADS fallback), never the unbounded Guards branch
+    // that an `agent_max_threads == None` would reach; and an explicit 0 must
+    // be rejected as InvalidInput.
+    let default_config = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect("default config must load");
+    assert!(
+        matches!(default_config.agent_max_threads, Some(n) if n >= 1),
+        "agent_max_threads must default to a finite >= 1 bound, got {:?}",
+        default_config.agent_max_threads
+    );
+
+    let zero_threads_cfg =
+        toml::from_str::<ConfigToml>("[agents]\nmax_threads = 0\n").expect("toml parses");
+    let err = Config::load_from_base_config_with_overrides(
+        zero_threads_cfg,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").path().to_path_buf(),
+    )
+    .expect_err("agents.max_threads = 0 must be rejected");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+}
+
+#[test]
 fn permissions_profiles_reject_writes_outside_workspace_root() -> std::io::Result<()> {
     let codex_home = TempDir::new()?;
     let cwd = TempDir::new()?;
