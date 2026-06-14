@@ -181,9 +181,10 @@ wieder testbar:
   `xvfb`, `dbus-run-session`, `gnome-keyring` und `libsecret-tools`.
 - Dieses Desktop-E2E-Gate ist in GitHub Actions live gruen auf macOS, Linux
   und Windows: CI-Run `27484687888` fuer Commit `1b1940d5` hat alle drei
-  `Business OS Desktop E2E`-Jobs erfolgreich abgeschlossen. Die Gesamt-CI kann
-  weiterhin durch separate CTOX-CLI/Rust-Themen ausserhalb der Electron-App
-  rot sein.
+  `Business OS Desktop E2E`-Jobs erfolgreich abgeschlossen; der Folge-Run
+  `27484995659` fuer Commit `01e258b9` bestaetigt dieselben Desktop-Jobs
+  erneut. Die Gesamt-CI kann weiterhin durch separate CTOX-CLI/Rust-Themen
+  ausserhalb der Electron-App rot sein.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
   `dbus-run-session` und `gnome-keyring`.
@@ -262,15 +263,14 @@ Nicht umgesetzt oder noch nicht bewiesen:
   aber nach 900s in den Desktop-Smoke-Timeout. Existing-CTOX Live-Attach gegen
   SKF/Kunstmen ist gruen, ersetzt aber keinen unattended Fresh-Install-
   Nachweis mit produktionsfaehiger Dauer und Rollback-/Progress-UX.
-- Linux Secret Service und Windows Credential Manager sind im Tag-Release-
-  Workflow als echte Runtime-Smokes verdrahtet; ein tatsaechlich gruen
-  gelaufener Matrix-Run steht noch aus.
+- Linux Secret Service und Windows Credential Manager sind im `main`-/PR-CI-
+  Desktop-E2E als echte Runtime-Smokes live gruen auf allen Plattformen. Offen
+  bleibt der gleiche Nachweis innerhalb eines echten Tag-Release-Runs, der
+  zusaetzlich die signierten Installer-Artefakte baut.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   ist lokal gegen synthetische Release-Verzeichnisse und per `release:check`
   gegen den Workflow bewiesen, aber nicht durch einen echten Tag-Run.
-- Vollständige Live-/Cross-Platform-Electron-E2E für managed + unmanaged Mixed
-  Switching.
 
 ## Nicht Verhandelbare Produktregeln
 
@@ -770,7 +770,8 @@ Release Gates:
   Keychain-Runtime-Smoke laufen in derselben Plattformbreite wie der Release-
   Vorbau, aber ohne Installer-Build.
 - [x] Live-/Cross-Platform Desktop Electron E2E auf macOS, Windows und Linux:
-  GitHub-Actions-Run `27484687888` fuer Commit `1b1940d5` ist auf allen drei
+  GitHub-Actions-Run `27484687888` fuer Commit `1b1940d5` und Folge-Run
+  `27484995659` fuer Commit `01e258b9` sind auf allen drei
   Desktop-Zielplattformen gruen.
 - [x] Keine HTTP-Business-OS-Datenrequests im lokalen Electron-E2E:
   Control-Plane-Status wird erlaubt, verbotene Datenpfade werden durch den
@@ -830,3 +831,4 @@ Release Gates:
 | 2026-06-14 | Welle 8 Release-Smoke-Evidenz ergaenzt: `smoke:signed-artifacts` kann jetzt pro Plattform ein JSON nach `ctox-business-os-desktop-release-artifact-smoke/v1` mit relativen Artefaktpfaden schreiben. Der Tag-Release-Workflow erzeugt `release/artifact-smoke-${{ matrix.builderPlatform }}-${{ matrix.arch }}.json` und laedt diese Evidenz zusammen mit den Artefakten hoch; `release:check` erzwingt Workflow- und Script-Vertrag. Welle 8 steigt auf 74%; echte signierte/notarisierte Tag-Artefakte bleiben weiter offen. Gruen: `node --test test/signed-artifacts-smoke.test.cjs`, `npm test`, `npm run check`, `npm run release:check`, Release-Workflow-YAML-Parse. |
 | 2026-06-14 | Welle 8 Main-CI-E2E-Gate ergaenzt: `.github/workflows/ci.yml` fuehrt Business OS Desktop jetzt auf macOS, Linux und Windows aus, jeweils mit `npm test`, `npm run check`, `npm run release:check`, Electron-Smokes und Plattform-Keychain-Runtime-Smoke. Linux nutzt `xvfb-run` fuer Electron und eine echte Secret-Service-Session ueber `dbus-run-session`/`gnome-keyring`; `release:check` verifiziert diesen CI-Vertrag. Welle 8 steigt auf 76%; ein tatsaechlich gruener GitHub-Actions-Run fuer alle drei Plattformen bleibt als Live-Evidenz noch abzuwarten. Gruen lokal: `npm run release:check`, CI-/Release-YAML-Parse. |
 | 2026-06-14 | Welle 8 Live-CI-Evidenz nachgezogen: GitHub-Actions-Run `27484687888` fuer Commit `1b1940d5` hat `Business OS Desktop E2E` auf macOS, Linux und Windows gruen abgeschlossen. Windows scheiterte vorher an einem Test-Harness-Problem im Electron Protocol-Smoke: echte `ctox-business-os-desktop://...` Deep-Link-URLs wurden als Prozess-ARGV an Electron uebergeben und Windows/Electron beendete den Fixture vor der Result-Datei. Der Smoke startet Electron jetzt nur noch mit Datei-Pfaden und liest die Deep-Link-Testdaten aus JSON, testet intern aber weiterhin echte Protocol-URLs. Welle 8 steigt auf 82%; offen bleibt der echte signierte/notarisierte Tag-Run mit Installer-/Fresh-Machine-Smoke. Gruen: `npm run test:electron-smoke`, `npm run check`, `node test/electron-protocol-handler-smoke.cjs`, GitHub Actions Desktop E2E mac/linux/win. Die Gesamt-CI bleibt separat von bekannten CTOX-CLI/Rust-Themen abhaengig. |
+| 2026-06-14 | Welle 8 Plan-Konsistenz bereinigt: Der Folge-Run `27484995659` fuer Commit `01e258b9` bestaetigt erneut gruenes `Business OS Desktop E2E` auf macOS, Linux und Windows, inklusive Plattform-Keychain-Runtime-Smokes. Der offene Punkt fuer vollstaendiges Cross-Platform-Mixed-Switching wurde aus der Restliste entfernt; die Restliste unterscheidet jetzt klar zwischen gruenem `main`-/PR-CI-E2E und dem weiterhin offenen echten Tag-Release mit signierten/notarisierten Installer-Artefakten. |
