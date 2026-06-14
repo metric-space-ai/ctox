@@ -8917,6 +8917,32 @@ mod tests {
     }
 
     #[test]
+    fn queue_sort_at_folds_priority_so_higher_priority_leases_first() {
+        // router-5: durable-queue lease order is `ORDER BY queue_sort_at ASC`,
+        // and queue_sort_at shifts the timestamp by priority. Pin that a higher
+        // priority yields an earlier sort key (urgent < high < normal < low) so
+        // priority can never silently invert, and that an unknown priority bails.
+        let now = "2026-06-14T12:00:00+00:00";
+        let urgent = queue_sort_at("urgent", now).unwrap();
+        let high = queue_sort_at("high", now).unwrap();
+        let normal = queue_sort_at("normal", now).unwrap();
+        let low = queue_sort_at("low", now).unwrap();
+        assert!(
+            urgent < high,
+            "urgent {urgent} must sort before high {high}"
+        );
+        assert!(
+            high < normal,
+            "high {high} must sort before normal {normal}"
+        );
+        assert!(normal < low, "normal {normal} must sort before low {low}");
+        assert!(
+            queue_sort_at("bogus", now).is_err(),
+            "an unsupported priority must bail"
+        );
+    }
+
+    #[test]
     fn queue_tasks_round_trip_through_channel_store() {
         let root = std::env::temp_dir().join(format!(
             "ctox-queue-test-{}",
