@@ -201,18 +201,21 @@ test("scp args upload local artifact with strict host-key checking", () => {
   assert.equal(args.at(-1), "ubuntu@example.com:.cache/ctox/business-os-desktop/ctox-local-artifact");
 });
 
-test("ssh fresh install command uses official installer and no password args", () => {
+test("ssh stable fresh install command uses verified release bundle and no password args", () => {
   const command = buildSshFreshCtoxInstallCommand(
     { installRoot: "~/.local/lib/ctox/current" },
     { releaseChannel: "stable", restartService: true },
   );
-  assert.match(command, /raw\.githubusercontent\.com\/metric-space-ai\/ctox\/main\/install\.sh/);
+  assert.match(command, /github\.com\/metric-space-ai\/ctox\/releases\/latest\/download/);
   assert.match(command, /curl -fsSL/);
-  assert.match(command, /\| bash/);
+  assert.match(command, /sha256sum -c/);
+  assert.match(command, /tar -xzf/);
+  assert.match(command, /target\/release\/ctox/);
   assert.match(command, /sudo -n true/);
-  assert.match(command, /ctox upgrade --stable/);
   assert.match(command, /ctox start/);
   assert.match(command, /ctox status/);
+  assert.doesNotMatch(command, /raw\.githubusercontent\.com\/metric-space-ai\/ctox\/main\/install\.sh/);
+  assert.doesNotMatch(command, /ctox upgrade --stable/);
   assert.equal(command.includes("sshpass"), false);
   assert.equal(command.includes("sudo -S"), false);
 });
@@ -253,6 +256,7 @@ test("ssh fresh install command supports sudo askpass through stdin secret refs"
     },
   );
   assert.match(command, /SUDO_ASKPASS="\$ASKPASS" sudo -A -v/);
+  assert.match(command, /github\.com\/metric-space-ai\/ctox\/releases\/latest\/download/);
   assert.match(command, /IFS= read -r CTOX_SUDO_PASSWORD/);
   assert.match(command, /PASS_FIFO/);
   assert.doesNotMatch(command, /sudo -n true/);
@@ -366,6 +370,7 @@ test("ssh fresh install runner pipes sudo secret through stdin only", async () =
     },
   );
   assert.equal(result.ok, true);
+  assert.equal(result.artifact, "release");
   assert.equal(captured.program, "ssh");
   assert.equal(captured.options.input, "sudo-secret\n");
   assert.equal(JSON.stringify(captured.args).includes("sudo-secret"), false);

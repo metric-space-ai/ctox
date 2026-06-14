@@ -25,6 +25,7 @@ const { WINDOWS_CREDENTIAL_MANAGER_SCRIPT } = require("./secret-store.cjs");
 
 const execFileAsync = promisify(execFile);
 const OFFICIAL_CTOX_INSTALL_SCRIPT_URL = "https://raw.githubusercontent.com/metric-space-ai/ctox/main/install.sh";
+const OFFICIAL_CTOX_RELEASE_DOWNLOAD_BASE_URL = "https://github.com/metric-space-ai/ctox/releases/latest/download";
 const LOCAL_CTOX_RESOURCE_DIR = "ctox";
 
 function normalizeCtoxDevSessionPackage(payload) {
@@ -548,6 +549,7 @@ async function runSshFreshCtoxInstallCommand(profile, install, secretStore, runn
     return runSshLocalArtifactInstallCommand(profile, install, runner);
   }
   const input = await resolveSudoPasswordInput(install, secretStore);
+  const artifact = shouldUseStableReleaseBundleInstall(install) ? "release" : "source";
   const { stdout, stderr } = await runSshProgram(profile, "ssh", buildSshArgs(profile, buildSshFreshCtoxInstallCommand(profile, install)), {
     timeout: 900000,
     windowsHide: true,
@@ -556,6 +558,7 @@ async function runSshFreshCtoxInstallCommand(profile, install, secretStore, runn
   return {
     ok: true,
     mode: "fresh",
+    artifact,
     releaseChannel: install.releaseChannel,
     restartService: install.restartService,
     apiProvider: install.apiProvider || "",
@@ -599,6 +602,9 @@ async function runSshLocalArtifactInstallCommand(profile, install, runner = runP
 }
 
 function buildSshFreshCtoxInstallCommand(_profile, install) {
+  if (shouldUseStableReleaseBundleInstall(install)) {
+    return buildSshStableReleaseBundleFreshInstallCommand(install);
+  }
   const upgradeFlag = install.releaseChannel === "dev" ? "--dev" : "--stable";
   const sudoPrelude = install.sudoPasswordRef
     ? buildInteractiveSudoAskpassPrelude()
@@ -617,6 +623,44 @@ function buildSshFreshCtoxInstallCommand(_profile, install) {
     installerCommand,
     "export PATH=\"$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:/usr/local/bin:$PATH\"",
     `ctox upgrade ${upgradeFlag}`,
+    install.restartService ? "ctox start" : "",
+    "ctox status",
+  ].filter(Boolean).join("; ");
+}
+
+function shouldUseStableReleaseBundleInstall(install = {}) {
+  return install.releaseChannel === "stable" && buildCtoxInstallerArgs(install).length === 0;
+}
+
+function buildSshStableReleaseBundleFreshInstallCommand(install) {
+  const sudoPrelude = install.sudoPasswordRef
+    ? buildInteractiveSudoAskpassPrelude()
+    : "sudo -n true >/dev/null";
+  return [
+    "set -eu",
+    "if [ \"$(uname -s 2>/dev/null || true)\" != \"Linux\" ]; then echo 'ctox desktop ssh fresh install requires Linux' >&2; exit 12; fi",
+    "command -v bash >/dev/null",
+    "command -v curl >/dev/null",
+    "command -v sudo >/dev/null",
+    "command -v tar >/dev/null",
+    "command -v sha256sum >/dev/null",
+    "command -v mktemp >/dev/null",
+    sudoPrelude,
+    "ARCH=$(uname -m 2>/dev/null || true)",
+    "case \"$ARCH\" in x86_64|amd64) CTOX_ASSET=ctox-linux-x64.tar.gz ;; aarch64|arm64) CTOX_ASSET=ctox-linux-arm64.tar.gz ;; *) echo \"unsupported ctox desktop ssh fresh install architecture: $ARCH\" >&2; exit 13 ;; esac",
+    "CTOX_RELEASE_BASE=" + shellQuote(OFFICIAL_CTOX_RELEASE_DOWNLOAD_BASE_URL),
+    "CTOX_TMP=$(mktemp -d)",
+    "cleanup_ctox_release_bundle() { rm -rf \"$CTOX_TMP\"; }",
+    "trap cleanup_ctox_release_bundle EXIT HUP INT TERM",
+    "curl -fsSL -o \"$CTOX_TMP/$CTOX_ASSET\" \"$CTOX_RELEASE_BASE/$CTOX_ASSET\"",
+    "curl -fsSL -o \"$CTOX_TMP/$CTOX_ASSET.sha256\" \"$CTOX_RELEASE_BASE/$CTOX_ASSET.sha256\"",
+    "( cd \"$CTOX_TMP\" && sha256sum -c \"$CTOX_ASSET.sha256\" )",
+    "mkdir -p \"$CTOX_TMP/bundle\" \"$HOME/.local/bin\"",
+    "tar -xzf \"$CTOX_TMP/$CTOX_ASSET\" -C \"$CTOX_TMP/bundle\"",
+    "test -x \"$CTOX_TMP/bundle/target/release/ctox\"",
+    "cp \"$CTOX_TMP/bundle/target/release/ctox\" \"$HOME/.local/bin/ctox\"",
+    "chmod 755 \"$HOME/.local/bin/ctox\"",
+    "export PATH=\"$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:/usr/local/bin:$PATH\"",
     install.restartService ? "ctox start" : "",
     "ctox status",
   ].filter(Boolean).join("; ");

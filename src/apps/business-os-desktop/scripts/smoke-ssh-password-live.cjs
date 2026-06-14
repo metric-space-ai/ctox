@@ -461,7 +461,7 @@ async function runFileAskpassFreshInstallCommand({
   return {
     ok: true,
     mode: "fresh",
-    artifact: "official-installer",
+    artifact: sshFreshInstallArtifact(install),
     releaseChannel: install.releaseChannel,
     restartService: install.restartService,
     apiProvider: install.apiProvider || "",
@@ -470,6 +470,14 @@ async function runFileAskpassFreshInstallCommand({
     stdout: stdout.trim(),
     stderr: stderr.trim(),
   };
+}
+
+function sshFreshInstallArtifact(install = {}) {
+  if (install.localArtifactPath) return "local";
+  if (install.releaseChannel === "stable" && !install.apiProvider && !install.model && !install.backend) {
+    return "release";
+  }
+  return "source";
 }
 
 async function runFileAskpassAttach({

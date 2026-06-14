@@ -75,21 +75,22 @@ Release-related checks:
   full existing-CTOX SSH-managed attach path: remote `peer ensure`, local
   registry registration, WebRTC-only launch config, and a no-secret-leak
   assertion for the registry and evidence. Add `--fresh-install` to run the
-  official remote installer path before peer ensure; add
+  stable online release-bundle path before peer ensure; add
   `--local-artifact-path <absolute-linux-binary>` with `--fresh-install` to
-  exercise the SCP/local-artifact path instead of the online installer. CPU-only
-  VPS hosts that cannot run the installer's default local inference profile can
-  pass installer flags with `--install-api-provider <provider>`,
-  `--install-model <model>` and `--install-backend <backend>`; these are passed
-  to `install.sh` as CLI arguments, not runtime environment toggles. Use
+  exercise the SCP/local-artifact path instead of the online release bundle.
+  Use `--release-channel dev` or pass installer flags with
+  `--install-api-provider <provider>`, `--install-model <model>` and
+  `--install-backend <backend>` when the source installer must be exercised;
+  those flags are passed to `install.sh` as CLI arguments, not runtime
+  environment toggles. Use
   `--trusted-host-key-fingerprint <sha256:...>` for pinned host keys, or
   `--trust-scanned-host-key` only for first-contact test hosts. If a terminal
   harness makes the platform keychain CLI interactive, add
-  `--file-askpass-fallback` for preflight-only diagnostics; that still proves
-  real SSH password auth and strict host-key checking, but it is weaker than
-  the full keychain-backed live path. Combined with `--attach`, the fallback
-  still runs remote `peer ensure` and verifies the WebRTC-only launch shape, but
-  stores live-smoke secrets only in memory.
+  `--file-askpass-fallback` for in-memory SSH password handling; that still
+  proves real SSH password auth and strict host-key checking, but it is weaker
+  than the full keychain-backed live path. Combined with `--attach` or
+  `--fresh-install`, the fallback runs the same remote command path and verifies
+  the WebRTC-only launch shape, but stores live-smoke secrets only in memory.
 - `npm run pack:dir:smoke` builds a local unpacked app and verifies the bundle
   metadata plus packaged `app.asar` contents. This is an unsigned local smoke,
   not a production release artifact.

@@ -100,10 +100,12 @@ wieder testbar:
   `ssh_known_hosts`, OpenSSH key/agent Attach, Remote-Preflight und
   Existing-CTOX-Upgrade auf Contract-Ebene ab.
 - SSH-managed Fresh-Install ist auf Contract-Ebene vorhanden: nach
-  Host-Key-Trust und Preflight wird auf Linux-Hosts mit `bash`, `curl`,
-  `systemd` und entweder passwordless `sudo -n` oder einer SecretStore-basierten
-  Sudo-Passwort-Referenz der offizielle CTOX-Installer ausgefuehrt, danach
-  `peer ensure`; Passwortargumente, `sshpass` und `sudo -S` bleiben verboten.
+  Host-Key-Trust und Preflight nutzt der Stable-Pfad ohne Installer-Seed-Flags
+  das offizielle GitHub-Release-Bundle, validiert die `.sha256`-Pruefsumme,
+  installiert das Binary user-local nach `~/.local/bin/ctox` und fuehrt danach
+  `peer ensure` aus. Der Source-Installer bleibt fuer `dev` und API-backed
+  Installer-Flags erhalten; Passwortargumente, `sshpass` und `sudo -S` bleiben
+  verboten.
 - SSH-managed Fresh-Install kann dem offiziellen Installer CLI-Argumente fuer
   API-backed Setups durchreichen (`--api-provider`, `--model`, `--backend`),
   damit CPU-only VPS nicht zwangslaeufig auf das Default-Profil mit lokaler
@@ -136,6 +138,13 @@ wieder testbar:
   `scp` auf den Remote-Host laden, user-local nach `~/.local/bin/ctox`
   installieren und danach `ctox start/status` sowie `peer ensure` nutzen. Der
   Online-Installer bleibt dafuer unbeteiligt.
+- Der Online-Stable-Fresh-Install ist live gegen den SKF-Testhost gruen: Der
+  Desktop-Smoke laedt `ctox-linux-x64.tar.gz` aus dem neuesten GitHub-Release,
+  prueft `sha256sum -c`, installiert `target/release/ctox` user-local, startet
+  CTOX, fuehrt `peer ensure` aus und erzeugt eine WebRTC-only `ssh_managed`
+  Launch-Konfig ohne Registry-Secret-Leak. Der Nachweis nutzt den
+  `file-askpass-fallback`; der platform-keychain-backed SSH-Passwortpfad ist
+  separat fuer Existing-Attach gruen.
 - Der lokale Artefaktpfad ist live gegen den SKF-Testhost gruen: Das
   GitHub-Release-Artefakt `ctox-linux-x64.tar.gz` aus `v0.3.27` wurde per
   SHA256 verifiziert, das enthaltene Linux-x64-`ctox` per `scp` hochgeladen,
@@ -274,15 +283,13 @@ Nicht umgesetzt oder noch nicht bewiesen:
   `ctox business-os desktop invite` bereitstellt und ein Browser nach Rotation
   tatsaechlich wieder ueber den neu gestarteten nativen Peer verbindet; auf
   beiden Test-VPS ist der Remote-CLI-Stand dafuer noch zu alt.
-- Der offizielle Online-SSH/Sudo-Fresh-Install ist gegen echte VPS noch nicht
-  gruen: Der erste
-  Kunstmen-Live-Versuch ohne API-Provider scheiterte korrekt am GPU-only
-  Default des offiziellen Installers; der zweite Versuch mit
-  `--install-api-provider openai` kam bis zum realen Cargo-Source-Build, lief
-  aber nach 900s in den Desktop-Smoke-Timeout. Existing-CTOX Live-Attach gegen
-  SKF/Kunstmen und der lokale Release-Artefakt-Fresh-Install gegen SKF sind
-  gruen, ersetzen aber keinen unattended Online-Fresh-Install-Nachweis mit
-  produktionsfaehiger Dauer und Rollback-/Progress-UX.
+- Der Online-Stable-Fresh-Install ueber das verifizierte Release-Bundle ist
+  gegen SKF gruen. Noch nicht gruen bleibt der Source-Installer-Fresh-Install
+  mit API-Seed-Flags auf kleinen CPU-only VPS: Kunstmen mit
+  `--install-api-provider openai` erreicht den echten Installer und startet den
+  Cargo-Source-Build, laeuft aber nach 900s in den Desktop-Smoke-Timeout. Dieser
+  Source-Pfad braucht weiterhin entweder prebuilt Installer-Artefakte,
+  Rollback-/Progress-UX oder eine laengere resumable Install-Session.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
@@ -316,7 +323,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 96% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
 | 4. Pairing Invite Source | 12% | In Umsetzung | 97% |
-| 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 98% |
+| 5. SSH/Sudo Remote Install Source | 14% | In Umsetzung | 99% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
 | 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 86% |
@@ -551,15 +558,17 @@ Noch offen:
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
-Status: In Umsetzung, 98%.
+Status: In Umsetzung, 99%.
 
 Aufgaben:
 
 - [x] SSH Host-Key-Fingerprint-Trust-Flow.
 - [x] Key/Agent-basierter Attach ohne Passwortargumente.
 - [x] Remote Preflight für OS, systemd, sudo, `ctox`.
-- [x] Fresh Ubuntu Install auf Contract-Ebene mit offiziellem Installer,
-  Linux/bash/curl/systemd/passwordless-sudo Preflight und `peer ensure`.
+- [x] Fresh Ubuntu Install auf Contract-Ebene mit Stable-Release-Bundle:
+  Linux/bash/curl/systemd/sudo Preflight, GitHub-Release-Download,
+  `.sha256`-Pruefung, user-local Binary-Install nach `~/.local/bin/ctox` und
+  anschliessendem `peer ensure`.
 - [x] Offizieller Fresh-Installer kann API-backed Parameter als CLI-Flags
   bekommen: `apiProvider`, `model` und `backend` werden validiert und an
   `install.sh` weitergereicht, ohne Env-Var-Runtime-Toggle.
@@ -593,7 +602,12 @@ Aufgaben:
   wegen macOS-Keychain-TTY-Harness-Problemen bewusst den schwächeren
   `file-askpass-fallback` mit In-Memory-Smoke-Secrets; der voll
   platform-keychain-backed Attach bleibt durch SKF belegt.
-- [ ] Fresh Ubuntu Install gegen echten VPS ist noch nicht gruen: Kunstmen mit
+- [x] Online-Stable-Fresh-Install gegen echten VPS: SKF laedt das aktuelle
+  GitHub-Release-Bundle online, validiert die SHA256-Datei, installiert das
+  enthaltene Linux-x64-Binary user-local, startet CTOX, fuehrt `peer ensure`
+  aus und liefert eine WebRTC-only `ssh_managed` Launch-Konfig.
+- [ ] Source-Installer-Fresh-Install mit API-Seed-Flags bleibt auf kleinen
+  CPU-only VPS nicht production-ready: Kunstmen mit
   `--install-api-provider openai` erreicht den echten offiziellen Installer und
   startet den Cargo-Source-Build, laeuft aber im Desktop-Smoke nach 900s in den
   Timeout; der verwaiste Build wurde danach gezielt gestoppt.
@@ -605,9 +619,10 @@ Aufgaben:
 
 Tests:
 
-- [x] Desktop-JS-Test: Fresh-SSH-Install-Command nutzt den offiziellen
-  `install.sh`, `curl -fsSL | bash`, `sudo -n true`, `ctox upgrade`, optional
-  `ctox start` und `ctox status`, aber kein `sshpass`/`sudo -S`.
+- [x] Desktop-JS-Test: Stable-Fresh-SSH-Install-Command ohne Seed-Flags nutzt
+  das offizielle GitHub-Release-Bundle, `curl -fsSL`, `sha256sum -c`,
+  `tar -xzf`, user-local `target/release/ctox`, optional `ctox start` und
+  `ctox status`, aber kein `sshpass`/`sudo -S`.
 - [x] Desktop-JS-Test: Fresh-SSH-Install kann API-backed Installer-Argumente
   per `bash -s -- '--api-provider' ...` weitergeben, validiert untrusted
   Zeichen und lehnt die Kombination mit lokalem Artefaktpfad ab.
@@ -670,9 +685,18 @@ Tests:
   `--fresh-install --install-api-provider openai` vermeidet den frueheren
   GPU-only Installer-Abbruch und startet real `cargo build --release --bin
   ctox`; der Desktop-Smoke bricht aber nach 900s mit SSH-Timeout ab. Damit ist
-  der Flag-Contract live bestaetigt, aber Fresh-Install ist nicht
-  production-ready, solange der offizielle Installer auf kleinen VPS aus Source
-  baut oder der Desktop keine laengere/progressfaehige Install-Session fuehrt.
+  der Source-Installer-Flag-Contract live bestaetigt; dieser Source-Pfad ist
+  nicht production-ready, solange der Installer auf kleinen VPS aus Source baut
+  oder der Desktop keine laengere/progressfaehige Install-Session fuehrt.
+- [x] Online-Stable-Fresh-Install Live-Nachweis SKF-Testhost `57.129.123.108`:
+  `smoke:ssh-password-live -- --fresh-install --file-askpass-fallback` laedt
+  das aktuelle Release-Bundle online, meldet `install.artifact=release`,
+  `releaseChannel=stable`, prueft `ctox start/status`, fuehrt `peer ensure`
+  aus und erzeugt eine `ssh_managed` Instanz mit
+  `transport=webrtc`, `http_bridge_available=false` und
+  `registrySecretLeak=false`. Der Nachweis nutzt den schwaecheren
+  `file-askpass-fallback`; der staerkere platform-keychain-backed
+  SSH-Passwortpfad ist separat fuer SKF Existing-Attach gruen.
 - [x] Live-Nachweis SKF-Testhost `57.129.123.108` mit lokalem Release-
   Artefaktpfad: `ctox-linux-x64.tar.gz` aus GitHub Release `v0.3.27` wurde
   lokal per SHA256 verifiziert, das enthaltene ELF-x86_64-Binary ueber
@@ -876,3 +900,4 @@ Release Gates:
 | 2026-06-14 | Welle 7 abgeschlossen: Die `main`-CI-Runs `27485327715` fuer Commit `0e982165` und `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-Keychain-Runtime-Smoke auf macOS, Linux und Windows. Damit sind Linux Secret Service und Windows Credential Manager nicht mehr nur Workflow-Vertrag, sondern live im Desktop-E2E bewiesen; der verbleibende Release-Beweis gehoert jetzt nur noch zu Welle 8 Tag-Run/Installer-Artefakten. |
 | 2026-06-14 | Welle 5 lokaler Artefaktpfad live gruen: Das GitHub-Release-Artefakt `ctox-linux-x64.tar.gz` aus `v0.3.27` wurde lokal per SHA256 verifiziert, daraus `target/release/ctox` extrahiert und gegen SKF `57.129.123.108` ueber `smoke:ssh-password-live -- --fresh-install --local-artifact-path ... --file-askpass-fallback` ausgefuehrt. Der Smoke installierte das Binary nach `~/.local/bin/ctox`, pruefte `ctox start/status`, fuehrte Remote-`peer ensure` aus und erzeugte eine `ssh_managed` Desktop-Instanz mit WebRTC-only Launch-Konfig ohne Registry-Secret-Leak. Der offizielle Online-Fresh-Install bleibt wegen Source-Build-Dauer offen. |
 | 2026-06-14 | Welle 8 CI-Evidenz geschlossen: `main`-CI-Run `27489031650` fuer Commit `4dc20c71` ist vollstaendig gruen, inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, CTOX-CLI-Matrix und Harness-Tests. Der zusaetzliche `IoT Engine Soak` `27489031659` ist ebenfalls gruen; der vorherige Soak-Fehler war ein fehlender gepinnter `esbuild@0.28.0` Install fuer die JS-Modultests und wurde im Workflow behoben. Welle 8 steigt auf 86%, Gesamt auf 97%; production-ready bleibt blockiert durch echten Tag-Run mit signierten/notarisierten Installer-Artefakten, echte ctox.dev Revocation und offiziellen Online-SSH-Fresh-Install. |
+| 2026-06-14 | Welle 5 Online-Stable-Fresh-Install gruen gemacht: Der Desktop-SSH-Fresh-Install nutzt fuer `stable` ohne API-Seed-Flags jetzt das offizielle GitHub-Release-Bundle statt Source-Installer, validiert die `.sha256`-Datei, extrahiert `target/release/ctox`, installiert user-local nach `~/.local/bin/ctox` und fuehrt danach `ctox start/status` sowie `peer ensure` aus. Der Source-Installer bleibt fuer `dev` und API-backed Installer-Flags erhalten; dessen Kunstmen-Befund bleibt negativ, weil der echte Cargo-Source-Build nach 900s in den Smoke-Timeout laeuft. Live gruen gegen SKF `57.129.123.108`: `smoke:ssh-password-live -- --fresh-install --file-askpass-fallback`, Evidenz `install.artifact=release`, `transport=webrtc`, `http_bridge_available=false`, `registrySecretLeak=false`. Lokal gruen: `node --test src/apps/business-os-desktop/test/ssh-source.test.cjs`, `npm run check`, `npm test` 106/106. Welle 5 steigt auf 99%; Gesamt bleibt 97%. |
