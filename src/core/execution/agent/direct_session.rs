@@ -1179,6 +1179,12 @@ impl PersistentSession {
                                                 &reason,
                                                 policy,
                                             );
+                                            // Mark the attempt so the hot CompactPolicy cannot
+                                            // immediately re-fire next turn: the timeout bail
+                                            // string matches no runtime-blocker cooldown (unlike
+                                            // the compact-failed arm), so without this the same
+                                            // doomed compaction retries in a tight loop.
+                                            policy.note_compacted();
                                             let interrupt_req = ClientRequest::TurnInterrupt {
                                                 request_id: seq.next(),
                                                 params: TurnInterruptParams {
