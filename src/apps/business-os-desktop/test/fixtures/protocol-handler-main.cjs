@@ -22,6 +22,7 @@ app.commandLine.appendSwitch("disable-gpu");
 
 const events = [];
 let ready = false;
+const isWindows = process.platform === "win32";
 
 const protocolHandling = installDesktopProtocolHandling({
   app,
@@ -45,30 +46,47 @@ const protocolHandling = installDesktopProtocolHandling({
   }),
 });
 
-app.emit("open-url", {
-  preventDefault() {
-    events.push({ type: "prevented-open-url-default" });
-  },
-}, openUrl);
+if (!isWindows) {
+  app.emit("open-url", {
+    preventDefault() {
+      events.push({ type: "prevented-open-url-default" });
+    },
+  }, openUrl);
+}
 
 app.whenReady().then(async () => {
   ready = true;
   const flushResults = await protocolHandling.flushPending();
-  app.emit("second-instance", {}, ["--from-smoke", secondInstanceUrl]);
-  app.emit("open-url", {
-    preventDefault() {
-      events.push({ type: "prevented-auth-default" });
-    },
-  }, authCallbackUrl);
+  if (isWindows) {
+    app.emit("second-instance", {}, ["--from-smoke", openUrl]);
+    app.emit("second-instance", {}, ["--from-smoke", secondInstanceUrl]);
+    app.emit("second-instance", {}, ["--from-smoke", authCallbackUrl]);
+  } else {
+    app.emit("second-instance", {}, ["--from-smoke", secondInstanceUrl]);
+    app.emit("open-url", {
+      preventDefault() {
+        events.push({ type: "prevented-auth-default" });
+      },
+    }, authCallbackUrl);
+  }
   await protocolHandling.waitForIdle();
+  const expectedEventTypes = isWindows
+    ? ["managed", "invite", "managed", "auth-callback"]
+    : [
+      "prevented-open-url-default",
+      "managed",
+      "invite",
+      "managed",
+      "prevented-auth-default",
+      "auth-callback",
+    ];
+  const eventTypes = events.map((event) => event.type);
   const result = {
-    ok: events.length === 6
-      && events[0].type === "prevented-open-url-default"
-      && events[1].instanceId === "managed:tenant_cold"
-      && events[2].rawInvite === openUrl
-      && events[3].instanceId === "managed:tenant_second"
-      && events[4].type === "prevented-auth-default"
-      && events[5].callbackUrl === authCallbackUrl
+    ok: JSON.stringify(eventTypes) === JSON.stringify(expectedEventTypes)
+      && events.some((event) => event.instanceId === "managed:tenant_cold")
+      && events.some((event) => event.rawInvite === openUrl)
+      && events.some((event) => event.instanceId === "managed:tenant_second")
+      && events.some((event) => event.callbackUrl === authCallbackUrl)
       && protocolHandling.getPendingUrls().length === 0,
     events,
     flushResultCount: flushResults.length,

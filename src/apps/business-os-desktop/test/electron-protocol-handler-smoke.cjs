@@ -29,14 +29,17 @@ async function main() {
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));
   assert.equal(payload.ok, true, JSON.stringify(payload, null, 2));
   assert.deepEqual(payload.pendingUrls, []);
-  assert.deepEqual(payload.events.map((event) => event.type), [
-    "prevented-open-url-default",
-    "managed",
-    "invite",
-    "managed",
-    "prevented-auth-default",
-    "auth-callback",
-  ]);
+  const expectedEvents = process.platform === "win32"
+    ? ["managed", "invite", "managed", "auth-callback"]
+    : [
+      "prevented-open-url-default",
+      "managed",
+      "invite",
+      "managed",
+      "prevented-auth-default",
+      "auth-callback",
+    ];
+  assert.deepEqual(payload.events.map((event) => event.type), expectedEvents);
   assert.equal(payload.events.at(-1).callbackUrl, authCallbackUrl);
 }
 
