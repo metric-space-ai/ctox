@@ -220,9 +220,49 @@ test("ssh stable fresh install command uses verified release bundle and no passw
   assert.equal(command.includes("sudo -S"), false);
 });
 
-test("ssh fresh install command forwards official installer options as CLI args", () => {
+test("ssh stable fresh install command seeds API runtime config without source build", () => {
   const install = normalizeSshInstallOptions({
     releaseChannel: "stable",
+    restartService: false,
+    apiProvider: "openai",
+    model: "gpt-5.4",
+    backend: "cpu",
+  });
+  const command = buildSshFreshCtoxInstallCommand(
+    { installRoot: "~/.local/lib/ctox/current" },
+    install,
+  );
+  assert.equal(install.apiProvider, "openai");
+  assert.match(command, /github\.com\/metric-space-ai\/ctox\/releases\/latest\/download/);
+  assert.match(command, /command -v sqlite3/);
+  assert.match(command, /runtime_env_kv/);
+  assert.equal(command.includes("CTOX_CHAT_SOURCE"), true);
+  assert.equal(command.includes("api"), true);
+  assert.equal(command.includes("CTOX_API_PROVIDER"), true);
+  assert.equal(command.includes("openai"), true);
+  assert.equal(command.includes("CTOX_CHAT_MODEL"), true);
+  assert.equal(command.includes("CTOX_CHAT_MODEL_BASE"), true);
+  assert.equal(command.includes("CTOX_ACTIVE_MODEL"), true);
+  assert.equal(command.includes("gpt-5.4"), true);
+  assert.equal(command.includes("cpu"), false);
+  assert.match(command, /ctox-runtime\.sqlite3/);
+  assert.doesNotMatch(command, /raw\.githubusercontent\.com\/metric-space-ai\/ctox\/main\/install\.sh/);
+  assert.doesNotMatch(command, /\| bash -s --/);
+  assert.doesNotMatch(command, /ctox upgrade --stable/);
+  assert.doesNotMatch(command, /ctox start/);
+  assert.throws(
+    () => normalizeSshInstallOptions({ apiProvider: "openai\nmalicious" }),
+    /unsupported characters/,
+  );
+  assert.throws(
+    () => normalizeSshInstallOptions({ localArtifactPath: "/tmp/ctox", apiProvider: "openai" }),
+    /localArtifactPath/,
+  );
+});
+
+test("ssh dev fresh install command forwards official installer options as CLI args", () => {
+  const install = normalizeSshInstallOptions({
+    releaseChannel: "dev",
     restartService: false,
     apiProvider: "openai",
     model: "Qwen/Qwen3.6-27B",
@@ -232,18 +272,10 @@ test("ssh fresh install command forwards official installer options as CLI args"
     { installRoot: "~/.local/lib/ctox/current" },
     install,
   );
-  assert.equal(install.apiProvider, "openai");
+  assert.match(command, /raw\.githubusercontent\.com\/metric-space-ai\/ctox\/main\/install\.sh/);
   assert.match(command, /\| bash -s -- '--api-provider' 'openai' '--model' 'Qwen\/Qwen3\.6-27B' '--backend' 'cpu'/);
-  assert.doesNotMatch(command, /CTOX_API_PROVIDER/);
-  assert.doesNotMatch(command, /ctox start/);
-  assert.throws(
-    () => normalizeSshInstallOptions({ apiProvider: "openai\nmalicious" }),
-    /unsupported characters/,
-  );
-  assert.throws(
-    () => normalizeSshInstallOptions({ localArtifactPath: "/tmp/ctox", apiProvider: "openai" }),
-    /official installer/,
-  );
+  assert.match(command, /ctox upgrade --dev/);
+  assert.doesNotMatch(command, /github\.com\/metric-space-ai\/ctox\/releases\/latest\/download/);
 });
 
 test("ssh fresh install command supports sudo askpass through stdin secret refs", () => {

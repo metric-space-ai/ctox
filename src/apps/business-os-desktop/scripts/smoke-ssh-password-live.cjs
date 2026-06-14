@@ -474,9 +474,7 @@ async function runFileAskpassFreshInstallCommand({
 
 function sshFreshInstallArtifact(install = {}) {
   if (install.localArtifactPath) return "local";
-  if (install.releaseChannel === "stable" && !install.apiProvider && !install.model && !install.backend) {
-    return "release";
-  }
+  if (install.releaseChannel === "stable") return "release";
   return "source";
 }
 

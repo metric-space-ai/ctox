@@ -75,14 +75,17 @@ Release-related checks:
   full existing-CTOX SSH-managed attach path: remote `peer ensure`, local
   registry registration, WebRTC-only launch config, and a no-secret-leak
   assertion for the registry and evidence. Add `--fresh-install` to run the
-  stable online release-bundle path before peer ensure; add
+  stable online release-bundle path before peer ensure. In the stable path,
+  `--install-api-provider <provider>` and `--install-model <model>` seed
+  API-backed runtime config into SQLite after the verified bundle install; this
+  avoids the source installer on small CPU-only VPS hosts. Use
+  `--release-channel dev` when the source installer must be exercised; in that
+  path `--install-api-provider <provider>`, `--install-model <model>` and
+  `--install-backend <backend>` are passed to `install.sh` as CLI arguments,
+  not runtime environment toggles. Add
   `--local-artifact-path <absolute-linux-binary>` with `--fresh-install` to
-  exercise the SCP/local-artifact path instead of the online release bundle.
-  Use `--release-channel dev` or pass installer flags with
-  `--install-api-provider <provider>`, `--install-model <model>` and
-  `--install-backend <backend>` when the source installer must be exercised;
-  those flags are passed to `install.sh` as CLI arguments, not runtime
-  environment toggles. Use
+  exercise the SCP/local-artifact path instead of the online release bundle;
+  local artifacts cannot be combined with installer seed flags. Use
   `--trusted-host-key-fingerprint <sha256:...>` for pinned host keys, or
   `--trust-scanned-host-key` only for first-contact test hosts. If a terminal
   harness makes the platform keychain CLI interactive, add

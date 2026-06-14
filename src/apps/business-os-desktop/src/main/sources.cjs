@@ -629,13 +629,14 @@ function buildSshFreshCtoxInstallCommand(_profile, install) {
 }
 
 function shouldUseStableReleaseBundleInstall(install = {}) {
-  return install.releaseChannel === "stable" && buildCtoxInstallerArgs(install).length === 0;
+  return install.releaseChannel === "stable";
 }
 
 function buildSshStableReleaseBundleFreshInstallCommand(install) {
   const sudoPrelude = install.sudoPasswordRef
     ? buildInteractiveSudoAskpassPrelude()
     : "sudo -n true >/dev/null";
+  const runtimeSeedCommands = buildSshRuntimeSeedCommands(install);
   return [
     "set -eu",
     "if [ \"$(uname -s 2>/dev/null || true)\" != \"Linux\" ]; then echo 'ctox desktop ssh fresh install requires Linux' >&2; exit 12; fi",
@@ -645,6 +646,7 @@ function buildSshStableReleaseBundleFreshInstallCommand(install) {
     "command -v tar >/dev/null",
     "command -v sha256sum >/dev/null",
     "command -v mktemp >/dev/null",
+    runtimeSeedCommands.length ? "command -v sqlite3 >/dev/null" : "",
     sudoPrelude,
     "ARCH=$(uname -m 2>/dev/null || true)",
     "case \"$ARCH\" in x86_64|amd64) CTOX_ASSET=ctox-linux-x64.tar.gz ;; aarch64|arm64) CTOX_ASSET=ctox-linux-arm64.tar.gz ;; *) echo \"unsupported ctox desktop ssh fresh install architecture: $ARCH\" >&2; exit 13 ;; esac",
@@ -661,9 +663,47 @@ function buildSshStableReleaseBundleFreshInstallCommand(install) {
     "cp \"$CTOX_TMP/bundle/target/release/ctox\" \"$HOME/.local/bin/ctox\"",
     "chmod 755 \"$HOME/.local/bin/ctox\"",
     "export PATH=\"$HOME/.local/bin:$HOME/.local/lib/ctox/current/bin:/usr/local/bin:$PATH\"",
+    ...runtimeSeedCommands,
     install.restartService ? "ctox start" : "",
     "ctox status",
   ].filter(Boolean).join("; ");
+}
+
+function buildSshRuntimeSeedCommands(install = {}) {
+  const rows = [];
+  if (install.apiProvider) {
+    rows.push(["CTOX_CHAT_SOURCE", "api"]);
+    rows.push(["CTOX_API_PROVIDER", normalizeRuntimeApiProvider(install.apiProvider)]);
+  }
+  if (install.model) {
+    rows.push(["CTOX_CHAT_MODEL", install.model]);
+    rows.push(["CTOX_CHAT_MODEL_BASE", install.model]);
+    rows.push(["CTOX_ACTIVE_MODEL", install.model]);
+  }
+  if (rows.length === 0) return [];
+  const values = rows
+    .map(([key, value]) => `(${sqlQuote(key)}, ${sqlQuote(value)})`)
+    .join(", ");
+  const sql = [
+    "PRAGMA busy_timeout=60000;",
+    "CREATE TABLE IF NOT EXISTS runtime_env_kv (env_key TEXT PRIMARY KEY, env_value TEXT NOT NULL);",
+    `INSERT OR REPLACE INTO runtime_env_kv(env_key, env_value) VALUES ${values};`,
+  ].join(" ");
+  return [
+    "mkdir -p \"$HOME/runtime\"",
+    `printf '%s\\n' ${shellQuote(sql)} > "$CTOX_TMP/runtime-seed.sql"`,
+    "for CTOX_RUNTIME_DB in \"$HOME/runtime/ctox.sqlite3\" \"$HOME/runtime/ctox-runtime.sqlite3\"; do sqlite3 \"$CTOX_RUNTIME_DB\" < \"$CTOX_TMP/runtime-seed.sql\"; done",
+  ];
+}
+
+function normalizeRuntimeApiProvider(provider) {
+  const normalized = String(provider || "").trim().toLowerCase();
+  if (["azure", "azure-foundry", "azure_openai"].includes(normalized)) return "azure_foundry";
+  return normalized;
+}
+
+function sqlQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
 }
 
 function buildCtoxInstallerArgs(install = {}) {
@@ -957,7 +997,7 @@ function normalizeSshInstallOptions(options = {}) {
   const backend = normalizeOptionalSshInstallFlag(options.backend, "ssh install backend");
   const localArtifactPath = normalizeLocalArtifactPath(options.localArtifactPath);
   if (localArtifactPath && (apiProvider || model || backend)) {
-    throw new Error("ssh install apiProvider, model and backend are only supported with the official installer");
+    throw new Error("ssh install apiProvider, model and backend are not supported with localArtifactPath");
   }
   const install = {
     releaseChannel,
