@@ -1028,6 +1028,27 @@ fn process_mining_branch(conn: &Connection) -> Result<SupportBranch> {
         conn,
         "SELECT COUNT(*) FROM ctox_process_events WHERE case_id LIKE 'sqlite-access:%'",
     )?;
+    // Surface harness-mining audit health alongside the raw event counts so the
+    // PROCESS MINING branch shows what the audit tick actually concluded, not
+    // just how many events were recorded. optional_count tolerates the findings
+    // table not existing yet (fresh deployment), and the audit-run read is a
+    // best-effort .ok().
+    let confirmed_findings = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_hm_findings WHERE status = 'confirmed'",
+    )?;
+    let confirmed_critical = optional_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_hm_findings WHERE status = 'confirmed' AND severity = 'critical'",
+    )?;
+    let last_audit_tick = conn
+        .query_row(
+            "SELECT status || ' at ' || started_at \
+             FROM ctox_hm_audit_runs ORDER BY started_at DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
     Ok(SupportBranch {
         kind: FlowBranchKind::ProcessMining,
         title: "PROCESS MINING".to_string(),
@@ -1038,6 +1059,11 @@ fn process_mining_branch(conn: &Connection) -> Result<SupportBranch> {
             "sqlite-access debug data is pruned as a sliding window, not kept forever.".to_string(),
             "Manual cleanup: ctox process-mining prune --sqlite-access-window 200000".to_string(),
             format!("Current events: {total_events} · sqlite-access: {sqlite_access_events}"),
+            format!("Confirmed findings: {confirmed_findings} (critical {confirmed_critical})"),
+            format!(
+                "Last audit tick: {}",
+                last_audit_tick.as_deref().unwrap_or("none yet")
+            ),
         ],
         returns_to_spine: true,
     })
@@ -1674,5 +1700,41 @@ mod tests {
         assert!(rendered.contains("TASK"));
         assert!(rendered.contains("REVIEW"));
         assert!(rendered.contains("├──►"));
+    }
+
+    #[test]
+    fn process_mining_branch_surfaces_confirmed_findings_and_last_audit() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::service::harness_mining::findings::ensure_findings_schema(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO ctox_hm_findings \
+             (finding_id, signature, kind, severity, status, detected_at, last_seen_at) \
+             VALUES ('f1','sig1','drift','critical','confirmed','t','t')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status) \
+             VALUES ('r1','2026-06-14T00:00:00.000Z','completed')",
+            [],
+        )
+        .unwrap();
+        let branch = process_mining_branch(&conn).unwrap();
+        assert!(
+            branch
+                .lines
+                .iter()
+                .any(|l| l.contains("Confirmed findings: 1 (critical 1)")),
+            "lines: {:?}",
+            branch.lines
+        );
+        assert!(
+            branch
+                .lines
+                .iter()
+                .any(|l| l.contains("Last audit tick: completed at 2026-06-14")),
+            "lines: {:?}",
+            branch.lines
+        );
     }
 }
