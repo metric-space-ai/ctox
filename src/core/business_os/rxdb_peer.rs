@@ -10813,7 +10813,7 @@ mod tests {
                 .expect("consume module save command");
             assert!(
                 root.path()
-                    .join("src/apps/business-os/installed-modules/new-module/module.json")
+                    .join("runtime/business-os/installed-modules/new-module/module.json")
                     .is_file()
             );
 
@@ -10849,7 +10849,7 @@ mod tests {
                 .expect("consume template install command");
             let installed_template_manifest = std::fs::read_to_string(
                 root.path()
-                    .join("src/apps/business-os/installed-modules/installed-from-template/module.json"),
+                    .join("runtime/business-os/installed-modules/installed-from-template/module.json"),
             )
             .expect("read installed template manifest");
             assert!(installed_template_manifest.contains("Installed From Template"));
@@ -10883,7 +10883,7 @@ mod tests {
             assert!(
                 !root
                     .path()
-                    .join("src/apps/business-os/installed-modules/new-module")
+                    .join("runtime/business-os/installed-modules/new-module")
                     .exists()
             );
 

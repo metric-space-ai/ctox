@@ -235,7 +235,7 @@ fn business_os_guard_blocks_root_manifest_alias_write() -> anyhow::Result<()> {
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
     let err = business_os_app_root_artifact_write_guard(
-        "cp src/apps/business-os/installed-modules/subscriptions/module.json harness-module.json",
+        "cp runtime/business-os/installed-modules/subscriptions/module.json harness-module.json",
         root.path(),
     )
     .expect("root manifest alias write should be blocked");
@@ -327,7 +327,7 @@ fn business_os_guard_blocks_root_manifest_symlink() -> anyhow::Result<()> {
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
     let target = root.path().join("module.json");
     let command = format!(
-        "ln -sf src/apps/business-os/installed-modules/inventory/module.json {}",
+        "ln -sf runtime/business-os/installed-modules/inventory/module.json {}",
         target.display()
     );
 
@@ -344,7 +344,7 @@ fn business_os_guard_blocks_module_package_json_write() -> anyhow::Result<()> {
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
     let err = business_os_app_root_artifact_write_guard(
-        "cat > src/apps/business-os/installed-modules/inventory/package.json <<'EOF'\n{\"type\":\"module\"}\nEOF",
+        "cat > runtime/business-os/installed-modules/inventory/package.json <<'EOF'\n{\"type\":\"module\"}\nEOF",
         root.path(),
     )
     .expect("module package.json write should be blocked");
@@ -359,7 +359,7 @@ fn business_os_guard_blocks_module_package_json_write_from_module_cwd() -> anyho
     let root = tempdir()?;
     let module_dir = root
         .path()
-        .join("src/apps/business-os/installed-modules/inventory");
+        .join("runtime/business-os/installed-modules/inventory");
     fs::create_dir_all(&module_dir)?;
 
     let err = business_os_app_root_artifact_write_guard(
@@ -379,10 +379,26 @@ fn business_os_guard_allows_installed_module_write_and_reads() -> anyhow::Result
     fs::create_dir_all(root.path().join("src/apps/business-os"))?;
 
     assert!(business_os_app_root_artifact_write_guard(
-        "cat module.json && cat > src/apps/business-os/installed-modules/contracts/module.json <<'EOF'\n{}\nEOF",
+        "cat module.json && cat > runtime/business-os/installed-modules/contracts/module.json <<'EOF'\n{}\nEOF",
         root.path(),
     )
     .is_none());
+    Ok(())
+}
+
+#[test]
+fn business_os_guard_blocks_source_tree_installed_module_write() -> anyhow::Result<()> {
+    let root = tempdir()?;
+    fs::create_dir_all(root.path().join("src/apps/business-os"))?;
+
+    let err = business_os_app_root_artifact_write_guard(
+        "MODULE_DIR=src/apps/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
+        root.path(),
+    )
+    .expect("source-tree installed module write should be blocked");
+
+    assert!(err.contains("source-tree installed module path"));
+    assert!(err.contains("runtime/business-os/installed-modules/<module_id>/"));
     Ok(())
 }
 
@@ -393,7 +409,7 @@ fn business_os_guard_allows_module_dir_manifest_write() -> anyhow::Result<()> {
 
     assert!(
         business_os_app_root_artifact_write_guard(
-            "MODULE_DIR=src/apps/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
+            "MODULE_DIR=runtime/business-os/installed-modules/inventory && cat > \"$MODULE_DIR/module.json\" <<'JSON'\n{}\nJSON",
             root.path(),
         )
         .is_none()

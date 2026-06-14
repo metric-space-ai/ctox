@@ -100,7 +100,8 @@ For a module id `<id>`, create or edit only the module directory:
 
 ```text
 modules/<id>/                 # core/starter/store source module
-installed-modules/<id>/       # runtime-created installed module
+runtime/business-os/installed-modules/<id>/
+                               # runtime-created installed module from an install root
   module.json
   collections.schema.json
   schema.js
@@ -116,11 +117,11 @@ installed-modules/<id>/       # runtime-created installed module
 Resolve the target directory before writing any file:
 
 ```text
-install_target = runtime-installed-module -> src/apps/business-os/installed-modules/<id>/
+install_target = runtime-installed-module -> runtime/business-os/installed-modules/<id>/
 install_target = source-module or core/starter/store source -> src/apps/business-os/modules/<id>/
 ```
 
-When `install_target` is `runtime-installed-module`, all generated app files must be under `src/apps/business-os/installed-modules/<id>/`. Do not create `<repo-root>/module.json`, `<repo-root>/collections.schema.json`, `<repo-root>/<id>/`, or any directory outside the resolved target. If the target directory is unclear, stop and ask or inspect the App Creator/install code; do not guess.
+When `install_target` is `runtime-installed-module`, all generated app files must be under `runtime/business-os/installed-modules/<id>/` from a CTOX install/release root. That `runtime/` directory is the local CTOX state root, so the absolute install location is `$CTOX_STATE_ROOT/business-os/installed-modules/<id>/` (for example `~/.local/state/ctox/business-os/installed-modules/<id>/`). Do not write runtime-installed apps under `src/apps/business-os/installed-modules/`; `src/apps/business-os/` is the release/source/template tree. Do not create `<repo-root>/module.json`, `<repo-root>/collections.schema.json`, `<repo-root>/<id>/`, or any directory outside the resolved target. If the target directory is unclear, stop and ask or inspect the App Creator/install code; do not guess.
 
 Do not create root aliases such as `<repo-root>/harness-module.json`,
 `<repo-root>/harness-collections.schema.json`, `<repo-root>/artifact-status.md`,
@@ -134,7 +135,7 @@ Shell tools often run with the repository or release installation root as the cu
 Use this write pattern for runtime-installed modules:
 
 ```sh
-MODULE_DIR="src/apps/business-os/installed-modules/<id>"
+MODULE_DIR="runtime/business-os/installed-modules/<id>"
 mkdir -p "$MODULE_DIR/locales" "$MODULE_DIR/tests"
 # Every generated file write must target "$MODULE_DIR/<file>".
 ```

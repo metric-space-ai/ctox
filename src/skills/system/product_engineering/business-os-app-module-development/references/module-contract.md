@@ -139,7 +139,8 @@ node -e "JSON.parse(require('fs').readFileSync('src/apps/business-os/modules/<mo
 ```
 
 For runtime-installed modules, adapt that command to
-`src/apps/business-os/installed-modules/<module>/module.json`. Do this before
+`runtime/business-os/installed-modules/<module>/module.json` from an install root
+or `$CTOX_STATE_ROOT/business-os/installed-modules/<module>/module.json`. Do this before
 writing large JavaScript files. A single invalid `module.json` can break native
 module-catalog sync for the whole installed app set.
 

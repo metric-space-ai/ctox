@@ -356,6 +356,9 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
             return Some(root_artifact_guard_message(artifact));
         }
     }
+    if let Some(artifact) = command_writes_source_tree_installed_module(command) {
+        return Some(source_tree_installed_module_guard_message(&artifact));
+    }
     if let Some(artifact) = command_writes_forbidden_root_app_artifact(command) {
         return Some(root_artifact_guard_message(&artifact));
     }
@@ -370,9 +373,19 @@ pub(crate) fn business_os_app_root_artifact_write_guard(
 fn root_artifact_guard_message(artifact: &str) -> String {
     format!(
         "Business OS app module guard blocked a root-level app artifact write to `{artifact}`. \
-Write app artifacts only under `src/apps/business-os/installed-modules/<module_id>/` or \
+Write runtime-installed app artifacts only under `runtime/business-os/installed-modules/<module_id>/` or \
+direct state-root `business-os/installed-modules/<module_id>/`; write source template artifacts under \
 `src/apps/business-os/modules/<module_id>/` using MODULE_DIR. Do not create workspace-root \
 manifests, schema aliases, blocker/status notes, harness aliases, or probe files for app deliverables."
+    )
+}
+
+fn source_tree_installed_module_guard_message(artifact: &str) -> String {
+    format!(
+        "Business OS app module guard blocked a write to the source-tree installed module path `{artifact}`. \
+Runtime-installed apps must be written under `runtime/business-os/installed-modules/<module_id>/` \
+or direct state-root `business-os/installed-modules/<module_id>/`. `src/apps/business-os/` is the \
+release/source/template tree, not the App Creator install target."
     )
 }
 
@@ -383,6 +396,40 @@ Business OS apps are no-build browser ESM modules. Do not create package.json, l
 node_modules, bundle files, or probe/repair artifacts. Use .mjs tests and local browser-safe ESM \
 helpers instead."
     )
+}
+
+fn command_writes_source_tree_installed_module(command: &str) -> Option<String> {
+    let compact = command.replace("\\\n", " ").replace('\n', " ");
+    let lower = compact.to_ascii_lowercase();
+    let source_path = "src/apps/business-os/installed-modules/";
+    if !lower.contains(source_path) {
+        return None;
+    }
+    let write_like = lower.contains('>')
+        || lower.contains(" tee ")
+        || lower.contains(" tee\t")
+        || lower.contains("mkdir ")
+        || lower.contains("mkdir\t")
+        || lower.contains("cp ")
+        || lower.contains("mv ")
+        || lower.contains("ln ")
+        || lower.contains("install ")
+        || lower.contains("writefilesync(")
+        || lower.contains("writefile(")
+        || lower.contains("fs.writefile")
+        || lower.contains(".write_text(")
+        || lower.contains(".write_bytes(");
+    write_like.then(|| {
+        let start = lower.find(source_path).unwrap_or(0);
+        let tail = &compact[start..];
+        tail.split(|ch: char| {
+            ch.is_whitespace() || matches!(ch, '"' | '\'' | '`' | ';' | '&' | '|')
+        })
+        .next()
+        .unwrap_or(source_path)
+        .trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`'))
+        .to_string()
+    })
 }
 
 #[derive(Debug)]
@@ -439,7 +486,8 @@ fn cleanup_new_business_os_app_root_artifacts(
     let mut message = String::from(
         "Business OS app module guard removed newly created root-level app artifact(s). \
 Generated app files must live only under \
-`src/apps/business-os/installed-modules/<module_id>/` or \
+`runtime/business-os/installed-modules/<module_id>/`, direct state-root \
+`business-os/installed-modules/<module_id>/`, or source template \
 `src/apps/business-os/modules/<module_id>/` as specified by the task. ",
     );
     if !removed.is_empty() {
@@ -546,6 +594,8 @@ fn root_artifact_token_name(token: &str) -> Option<String> {
         .to_string();
     if trimmed.contains('/') || trimmed.contains('\\') {
         let is_module_dir_target = lower_trimmed.contains("module_dir")
+            || lower_trimmed.contains("runtime/business-os/installed-modules/")
+            || lower_trimmed.contains("business-os/installed-modules/")
             || lower_trimmed.contains("src/apps/business-os/modules/")
             || lower_trimmed.contains("src/apps/business-os/installed-modules/");
         if !is_module_dir_target
@@ -622,7 +672,9 @@ fn command_writes_forbidden_business_os_module_side_effect(
             .unwrap_or(lower.as_str())
             .to_string();
         let path_is_under_business_os_module = lower.contains("src/apps/business-os/modules/")
-            || lower.contains("src/apps/business-os/installed-modules/");
+            || lower.contains("src/apps/business-os/installed-modules/")
+            || lower.contains("runtime/business-os/installed-modules/")
+            || lower.contains("business-os/installed-modules/");
         let forbidden = forbidden_business_os_module_side_effect_name(&basename)
             || lower.contains("/node_modules/")
             || lower.ends_with("/node_modules");
@@ -676,10 +728,14 @@ fn is_business_os_module_dir(workspace_root: &Path, cwd: &Path) -> bool {
         .map(|component| component.as_os_str().to_string_lossy().to_string())
         .collect::<Vec<_>>();
     segments.len() >= 5
-        && segments[0] == "src"
-        && segments[1] == "apps"
-        && segments[2] == "business-os"
-        && (segments[3] == "modules" || segments[3] == "installed-modules")
+        && ((segments[0] == "src"
+            && segments[1] == "apps"
+            && segments[2] == "business-os"
+            && (segments[3] == "modules" || segments[3] == "installed-modules"))
+            || (segments[0] == "runtime"
+                && segments[1] == "business-os"
+                && segments[2] == "installed-modules")
+            || (segments[0] == "business-os" && segments[1] == "installed-modules"))
 }
 
 fn command_programmatically_writes_path(command: &str, path: &str) -> bool {

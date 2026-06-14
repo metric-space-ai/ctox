@@ -81,9 +81,17 @@ function resolveStaticChecker(workspace) {
   return Array.from(new Set(candidates)).find((candidate) => existsSync(candidate));
 }
 
+function installedAppRootFor(workspace) {
+  const runtimeAppRoot = join(workspace, 'runtime/business-os');
+  if (existsSync(join(workspace, 'runtime')) || existsSync(runtimeAppRoot)) {
+    return runtimeAppRoot;
+  }
+  return join(workspace, 'business-os');
+}
+
 function moduleDirFor(workspace, moduleId, mode) {
   if (mode === 'installed') {
-    return join(workspace, 'src/apps/business-os/installed-modules', moduleId);
+    return join(installedAppRootFor(workspace), 'installed-modules', moduleId);
   }
   return join(workspace, 'src/apps/business-os/modules', moduleId);
 }

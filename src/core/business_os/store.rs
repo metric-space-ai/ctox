@@ -1624,7 +1624,8 @@ fn web_stack_secret_configured(
 
 pub fn module_catalog_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let app_root = resolve_business_os_app_root(root)?;
-    let modules = load_module_manifests(&app_root)?;
+    let installed_app_root = resolve_business_os_installed_app_root(root);
+    let modules = load_module_manifests(&app_root, &installed_app_root)?;
     let marketplace = load_marketplace_module_manifests(&app_root)?;
     let templates = load_template_manifests(&app_root)?;
     let governance = module_governance_map(
@@ -1808,7 +1809,8 @@ pub fn assign_module_founder(
 
 pub fn upsert_module_manifest_command(
     root: &Path,
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     session: &BusinessOsSession,
     request: ModuleUpsertRequest,
 ) -> anyhow::Result<Value> {
@@ -1818,7 +1820,7 @@ pub fn upsert_module_manifest_command(
         session_can_modify_module(root, session, &module_id)?,
         "module modification rights required"
     );
-    let manifest = upsert_module_manifest(app_root, request)?;
+    let manifest = upsert_module_manifest(source_app_root, installed_app_root, request)?;
     Ok(serde_json::json!({
         "ok": true,
         "module_id": manifest.id,
@@ -1828,7 +1830,8 @@ pub fn upsert_module_manifest_command(
 
 pub fn install_template_module_command(
     root: &Path,
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     session: &BusinessOsSession,
     request: ModuleInstallTemplateRequest,
 ) -> anyhow::Result<Value> {
@@ -1836,11 +1839,11 @@ pub fn install_template_module_command(
         session_can_manage_all(session),
         "chef or admin role required"
     );
-    let manifest = install_template_module(app_root, request)?;
+    let manifest = install_template_module(source_app_root, installed_app_root, request)?;
     let created_by = session_user_id(session).unwrap_or("").to_string();
     record_module_version(
         root,
-        app_root,
+        installed_app_root,
         &manifest.id,
         "install",
         "Installed from template",
@@ -3242,7 +3245,30 @@ fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBuf> {
         .context("Business OS app root not found")
 }
 
-fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+fn resolve_business_os_installed_app_root(root: &Path) -> PathBuf {
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "runtime")
+    {
+        return root.join("business-os");
+    }
+    let runtime = root.join("runtime");
+    if runtime.exists() {
+        return runtime.join("business-os");
+    }
+    let direct = root.join("business-os");
+    if direct.exists() {
+        return direct;
+    }
+    root.join("business-os")
+}
+
+fn load_module_manifests(
+    source_app_root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<Vec<ModuleManifest>> {
+    let app_root = source_app_root;
     let modules_root = app_root.join("modules");
     let mut manifests = Vec::new();
     if modules_root.is_dir() {
@@ -3285,7 +3311,7 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
             manifests.push(manifest);
         }
     }
-    for manifest in load_installed_module_manifests(app_root)? {
+    for manifest in load_installed_module_manifests(installed_app_root)? {
         if manifests.iter().any(|existing| existing.id == manifest.id) {
             continue;
         }
@@ -3435,12 +3461,13 @@ fn load_template_manifests(app_root: &Path) -> anyhow::Result<Vec<TemplateManife
 }
 
 fn install_template_module(
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     request: ModuleInstallTemplateRequest,
 ) -> anyhow::Result<ModuleManifest> {
     let template_id = source_sanitize_slug(&request.template_id);
     anyhow::ensure!(!template_id.is_empty(), "template_id is required");
-    let template_path = app_root
+    let template_path = source_app_root
         .join("template-store")
         .join(&template_id)
         .join("template.json");
@@ -3461,7 +3488,7 @@ fn install_template_module(
     } else {
         &template.source_module
     });
-    let source = app_root.join("modules").join(&source_module);
+    let source = source_app_root.join("modules").join(&source_module);
     if !source.join("module.json").is_file() {
         anyhow::bail!("template source module `{source_module}` is missing");
     }
@@ -3474,7 +3501,7 @@ fn install_template_module(
     } else {
         &request.module_id
     });
-    let module_id = unique_module_id(app_root, &requested_id);
+    let module_id = unique_module_id(installed_app_root, &requested_id);
     let module_title = if request.title.trim().is_empty() {
         if template.default_title.trim().is_empty() {
             template.title.clone()
@@ -3484,7 +3511,9 @@ fn install_template_module(
     } else {
         request.title.trim().to_owned()
     };
-    let target = app_root.join("installed-modules").join(&module_id);
+    let target = installed_app_root
+        .join("installed-modules")
+        .join(&module_id);
     copy_dir_recursive(&source, &target)?;
 
     let manifest_path = target.join("module.json");
@@ -3512,7 +3541,8 @@ fn install_template_module(
 }
 
 fn upsert_module_manifest(
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     request: ModuleUpsertRequest,
 ) -> anyhow::Result<ModuleManifest> {
     let module_id = source_sanitize_slug(&request.id);
@@ -3521,13 +3551,15 @@ fn upsert_module_manifest(
     anyhow::ensure!(!title.is_empty(), "module title is required");
     let is_core = is_core_module(&module_id);
     let target = if is_core {
-        app_root.join("modules").join(&module_id)
+        source_app_root.join("modules").join(&module_id)
     } else {
-        app_root.join("installed-modules").join(&module_id)
+        installed_app_root
+            .join("installed-modules")
+            .join(&module_id)
     };
     let manifest_path = target.join("module.json");
     if !manifest_path.is_file() {
-        create_blank_installed_module(app_root, &module_id, title, &request.description)?;
+        create_blank_installed_module(installed_app_root, &module_id, title, &request.description)?;
     }
     let mut manifest_value: Value = serde_json::from_str(
         &fs::read_to_string(&manifest_path)
@@ -7344,7 +7376,14 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 .context("invalid ctox.module.save payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = upsert_module_manifest_command(root, &app_root, &session, mutation)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = upsert_module_manifest_command(
+                root,
+                &app_root,
+                &installed_app_root,
+                &session,
+                mutation,
+            )?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7358,8 +7397,9 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let mutation: ModuleDeleteRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.module.delete payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let app_root = resolve_business_os_app_root(root)?;
-            let outcome = delete_installed_module_command(root, &app_root, &session, mutation)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome =
+                delete_installed_module_command(root, &installed_app_root, &session, mutation)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7375,7 +7415,14 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                     .context("invalid ctox.module.install_template payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
             let app_root = resolve_business_os_app_root(root)?;
-            let outcome = install_template_module_command(root, &app_root, &session, mutation)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = install_template_module_command(
+                root,
+                &app_root,
+                &installed_app_root,
+                &session,
+                mutation,
+            )?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7435,8 +7482,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
                 serde_json::from_value(command.payload.clone())
                     .context("invalid ctox.app_store.install payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let app_root = resolve_business_os_app_root(root)?;
-            let outcome = install_app_module(root, &app_root, &session, request)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = install_app_module(root, &installed_app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -7450,8 +7497,8 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             let request: AppStoreUninstallRequest = serde_json::from_value(command.payload.clone())
                 .context("invalid ctox.app_store.uninstall payload")?;
             let session = rxdb_authenticated_session(root, &command)?;
-            let app_root = resolve_business_os_app_root(root)?;
-            let outcome = uninstall_app_module(root, &app_root, &session, request)?;
+            let installed_app_root = resolve_business_os_installed_app_root(root);
+            let outcome = uninstall_app_module(root, &installed_app_root, &session, request)?;
             return write_rxdb_control_command_outcome(
                 root,
                 &command,
@@ -16258,7 +16305,7 @@ fn business_os_app_command_target_metadata(
     .unwrap_or("runtime-installed-module")
     .to_string();
     let module_dir = if install_target == "runtime-installed-module" {
-        format!("src/apps/business-os/installed-modules/{module_id}")
+        format!("runtime/business-os/installed-modules/{module_id}")
     } else {
         format!("src/apps/business-os/modules/{module_id}")
     };
@@ -17194,13 +17241,13 @@ mod tests {
         assert!(prompt.contains("- module_id: subscriptions"));
         assert!(
             prompt.contains(
-                "only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions"
+                "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions"
             )
         );
         assert!(prompt.contains("do not write root-level module.json"));
         assert!(prompt.contains("cwd warning: shell tools run from the install root"));
         assert!(prompt
-            .contains("set MODULE_DIR=\"src/apps/business-os/installed-modules/subscriptions\""));
+            .contains("set MODULE_DIR=\"runtime/business-os/installed-modules/subscriptions\""));
         assert!(prompt.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
@@ -17236,7 +17283,7 @@ mod tests {
         assert!(prompt.contains("- module_id: inventory"));
         assert!(prompt.contains("- install_target: runtime-installed-module"));
         assert!(prompt.contains(
-            "only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/inventory"
+            "only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory"
         ));
         assert_eq!(
             suggested_skill_for_command(&command).as_deref(),

@@ -22,13 +22,13 @@ function writeJson(path, value) {
 function makeWorkspace() {
   const root = mkdtempSync(join(tmpdir(), 'ctox-app-validator-'));
   mkdirSync(join(root, 'src/apps/business-os/modules'), { recursive: true });
-  mkdirSync(join(root, 'src/apps/business-os/installed-modules'), { recursive: true });
+  mkdirSync(join(root, 'runtime/business-os/installed-modules'), { recursive: true });
   writeJson(join(root, 'src/apps/business-os/modules/registry.json'), { modules: [] });
   return root;
 }
 
 function writeInstalledModule(root, moduleId, overrides = {}) {
-  const dir = join(root, 'src/apps/business-os/installed-modules', moduleId);
+  const dir = join(root, 'runtime/business-os/installed-modules', moduleId);
   mkdirSync(join(dir, 'locales'), { recursive: true });
   mkdirSync(join(dir, 'tests'), { recursive: true });
   writeJson(join(dir, 'module.json'), {
@@ -310,7 +310,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   });
   const run = runValidator(root, 'syntaxbad', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /node --check failed for src\/apps\/business-os\/installed-modules\/syntaxbad\/index\.js/);
+  assert.match(run.stderr, /node --check failed for runtime\/business-os\/installed-modules\/syntaxbad\/index\.js/);
 }
 
 {
@@ -324,7 +324,7 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   });
   const run = runValidator(root, 'testbad', '--installed');
   assert.notEqual(run.status, 0);
-  assert.match(run.stderr, /module test failed: src\/apps\/business-os\/installed-modules\/testbad\/tests\/basic\.test\.mjs/);
+  assert.match(run.stderr, /module test failed: runtime\/business-os\/installed-modules\/testbad\/tests\/basic\.test\.mjs/);
 }
 
 console.log('[validate-app-module.test] OK');

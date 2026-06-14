@@ -16,7 +16,14 @@ if (modeArg && modeArg !== '--installed') {
 
 const repoRoot = process.cwd();
 const sourceModuleDir = join(repoRoot, 'src/apps/business-os/modules', moduleId);
-const installedModuleDir = join(repoRoot, 'src/apps/business-os/installed-modules', moduleId);
+function installedAppRootFor(root) {
+  const runtimeAppRoot = join(root, 'runtime/business-os');
+  if (existsSync(join(root, 'runtime')) || existsSync(runtimeAppRoot)) {
+    return runtimeAppRoot;
+  }
+  return join(root, 'business-os');
+}
+const installedModuleDir = join(installedAppRootFor(repoRoot), 'installed-modules', moduleId);
 const installedMode = modeArg === '--installed' || (!existsSync(sourceModuleDir) && existsSync(installedModuleDir));
 const moduleDir = installedMode ? installedModuleDir : sourceModuleDir;
 const expectedEntry = installedMode

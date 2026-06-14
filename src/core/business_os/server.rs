@@ -195,6 +195,25 @@ fn resolve_business_os_app_root(root: &Path) -> PathBuf {
     .unwrap_or_else(|| root.join("business-os"))
 }
 
+fn resolve_business_os_installed_app_root(root: &Path) -> PathBuf {
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "runtime")
+    {
+        return root.join("business-os");
+    }
+    let runtime = root.join("runtime");
+    if runtime.exists() {
+        return runtime.join("business-os");
+    }
+    let direct = root.join("business-os");
+    if direct.exists() {
+        return direct;
+    }
+    root.join("business-os")
+}
+
 fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow::Result<()> {
     let method = request.method().clone();
     let url = request.url().to_string();
@@ -303,11 +322,12 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         }
         (Method::Get, "/api/business-os/modules") => {
             let session = request_session(&request);
+            let installed_app_root = resolve_business_os_installed_app_root(root);
             respond_json(
                 request,
                 &serde_json::json!({
                     "ok": true,
-                    "modules": load_module_manifests(app_root)?,
+                    "modules": load_module_manifests(app_root, &installed_app_root)?,
                     "governance": store::module_governance_map(root, &session)?
                 }),
             )?;
@@ -355,7 +375,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     respond_status(request, 403, "module modification rights required")?;
                     return Ok(());
                 }
-                let manifest = upsert_module_manifest(app_root, mutation)?;
+                let installed_app_root = resolve_business_os_installed_app_root(root);
+                let manifest = upsert_module_manifest(app_root, &installed_app_root, mutation)?;
                 respond_json(
                     request,
                     &serde_json::json!({
@@ -421,7 +442,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
             } else {
                 let body = read_json(&mut request)?;
                 let install = serde_json::from_value(body)?;
-                let manifest = install_template_module(app_root, install)?;
+                let installed_app_root = resolve_business_os_installed_app_root(root);
+                let manifest = install_template_module(app_root, &installed_app_root, install)?;
                 respond_json(
                     request,
                     &serde_json::json!({
@@ -1384,11 +1406,15 @@ fn respond_redirect_with_cookie(
     Ok(())
 }
 
-fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>> {
+fn load_module_manifests(
+    source_app_root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<Vec<ModuleManifest>> {
+    let app_root = source_app_root;
     let modules_root = app_root.join("modules");
     let mut manifests = Vec::new();
     if !modules_root.is_dir() {
-        return load_installed_module_manifests(app_root);
+        return load_installed_module_manifests(installed_app_root);
     }
     for entry in fs::read_dir(&modules_root)? {
         let entry = entry?;
@@ -1415,7 +1441,7 @@ fn load_module_manifests(app_root: &Path) -> anyhow::Result<Vec<ModuleManifest>>
         manifest.deletable = !core;
         manifests.push(manifest);
     }
-    for manifest in load_installed_module_manifests(app_root)? {
+    for manifest in load_installed_module_manifests(installed_app_root)? {
         if manifests.iter().any(|existing| existing.id == manifest.id) {
             continue;
         }
@@ -1805,14 +1831,15 @@ fn save_module_layout(root: &Path, layout: &Value) -> anyhow::Result<()> {
 }
 
 fn install_template_module(
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     request: InstallTemplateRequest,
 ) -> anyhow::Result<ModuleManifest> {
     let template_id = sanitize_slug(&request.template_id);
     if template_id.is_empty() {
         anyhow::bail!("template_id is required");
     }
-    let template_path = app_root
+    let template_path = source_app_root
         .join("template-store")
         .join(&template_id)
         .join("template.json");
@@ -1833,7 +1860,7 @@ fn install_template_module(
     } else {
         &template.source_module
     });
-    let source = app_root.join("modules").join(&source_module);
+    let source = source_app_root.join("modules").join(&source_module);
     if !source.join("module.json").is_file() {
         anyhow::bail!("template source module `{source_module}` is missing");
     }
@@ -1846,7 +1873,7 @@ fn install_template_module(
     } else {
         &request.module_id
     });
-    let module_id = unique_module_id(app_root, &requested_id);
+    let module_id = unique_module_id(installed_app_root, &requested_id);
     let module_title = if request.title.trim().is_empty() {
         if template.default_title.trim().is_empty() {
             template.title.clone()
@@ -1856,7 +1883,9 @@ fn install_template_module(
     } else {
         request.title.trim().to_owned()
     };
-    let target = app_root.join("installed-modules").join(&module_id);
+    let target = installed_app_root
+        .join("installed-modules")
+        .join(&module_id);
     copy_dir_recursive(&source, &target)?;
 
     let manifest_path = target.join("module.json");
@@ -1867,6 +1896,8 @@ fn install_template_module(
     manifest_value["id"] = Value::String(module_id.clone());
     manifest_value["title"] = Value::String(module_title);
     manifest_value["entry"] = Value::String(format!("installed-modules/{module_id}/index.html"));
+    manifest_value["install_scope"] = Value::String("installed".to_owned());
+    manifest_value["default_installed"] = Value::Bool(false);
     manifest_value["template_id"] = Value::String(template.id);
     fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest_value)?)
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;
@@ -1880,7 +1911,8 @@ fn install_template_module(
 }
 
 fn upsert_module_manifest(
-    app_root: &Path,
+    source_app_root: &Path,
+    installed_app_root: &Path,
     request: UpsertModuleRequest,
 ) -> anyhow::Result<ModuleManifest> {
     let module_id = sanitize_slug(&request.id);
@@ -1893,13 +1925,15 @@ fn upsert_module_manifest(
     }
     let is_core = is_core_module(&module_id);
     let target = if is_core {
-        app_root.join("modules").join(&module_id)
+        source_app_root.join("modules").join(&module_id)
     } else {
-        app_root.join("installed-modules").join(&module_id)
+        installed_app_root
+            .join("installed-modules")
+            .join(&module_id)
     };
     let manifest_path = target.join("module.json");
     if !manifest_path.is_file() {
-        create_blank_installed_module(app_root, &module_id, title, &request.description)?;
+        create_blank_installed_module(installed_app_root, &module_id, title, &request.description)?;
     }
     let mut manifest_value: Value = serde_json::from_str(
         &fs::read_to_string(&manifest_path)
@@ -1959,6 +1993,8 @@ fn create_blank_installed_module(
         "title": title,
         "description": description,
         "entry": format!("installed-modules/{module_id}/index.html"),
+        "install_scope": "installed",
+        "default_installed": false,
         "collections": ["business_commands"],
         "layout": {
             "shell": "pane",
@@ -2739,7 +2775,12 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     {
         return respond_status(request, 403, "forbidden");
     }
-    let file = app_root.join(rel);
+    let static_root = if rel.starts_with("installed-modules/") {
+        resolve_business_os_installed_app_root(root)
+    } else {
+        app_root.to_path_buf()
+    };
+    let file = static_root.join(rel);
     let target = if file.is_dir() {
         file.join("index.html")
     } else {

@@ -5949,7 +5949,7 @@ fn business_os_app_module_target_from_prompt(prompt: &str) -> Option<BusinessOsA
     let artifact_directory = prompt_line_value(prompt, "- only_allowed_app_artifact_directory:")
         .unwrap_or_else(|| {
             if mode_flag == "--installed" {
-                format!("src/apps/business-os/installed-modules/{module_id}")
+                format!("runtime/business-os/installed-modules/{module_id}")
             } else {
                 format!("src/apps/business-os/modules/{module_id}")
             }
@@ -18729,7 +18729,7 @@ mod tests {
 Business OS app build target:
 - module_id: contracts
 - install_target: runtime-installed-module
-- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts
+- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts
 Business OS command:
 - type: ctox.business_os.app.modify
 ";
@@ -18742,14 +18742,14 @@ Business OS command:
         assert_eq!(target.mode_flag, "--installed");
         assert_eq!(
             target.artifact_directory,
-            "src/apps/business-os/installed-modules/contracts"
+            "runtime/business-os/installed-modules/contracts"
         );
     }
 
     #[test]
     fn business_os_app_validation_feedback_is_repair_oriented() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\n".to_string(),
             goal: "Build contracts app".to_string(),
             preview: "Build contracts app".to_string(),
             source_label: "business-os:contracts".to_string(),
@@ -18766,7 +18766,7 @@ Business OS command:
             module_id: "contracts".to_string(),
             install_target: "runtime-installed-module".to_string(),
             mode_flag: "--installed",
-            artifact_directory: "src/apps/business-os/installed-modules/contracts".to_string(),
+            artifact_directory: "runtime/business-os/installed-modules/contracts".to_string(),
         };
 
         let feedback = render_business_os_app_module_validation_feedback(
@@ -18777,7 +18777,7 @@ Business OS command:
 
         assert!(feedback.contains("Continue the same app-build task"));
         assert!(feedback.contains(
-            "allowed artifact directory: src/apps/business-os/installed-modules/contracts"
+            "allowed artifact directory: runtime/business-os/installed-modules/contracts"
         ));
         assert!(
             feedback.contains("module.json.entry must be installed-modules/contracts/index.html")
@@ -18814,7 +18814,7 @@ Business OS command:
             "console.error('module.json install_scope must be installed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -18915,7 +18915,7 @@ Business OS command:
             "console.error('module.json layout.right is not allowed'); process.exit(1);\n",
         )
         .expect("write validator script fixture");
-        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: projects\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/projects\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -18993,7 +18993,7 @@ Business OS command:
     #[test]
     fn business_os_app_validation_worker_error_after_green_marks_same_task_handled() {
         let root = temp_root("business-os-app-validation-worker-error-green");
-        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -19129,14 +19129,14 @@ Business OS command:
             projection
                 .pointer("/result/artifact_directory")
                 .and_then(Value::as_str),
-            Some("src/apps/business-os/installed-modules/subscriptions")
+            Some("runtime/business-os/installed-modules/subscriptions")
         );
     }
 
     #[test]
     fn business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks() {
         let root = temp_root("business-os-app-validation-rework-priority");
-        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
+        let prompt = "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string();
         let rework_task = channels::create_queue_task(
             &root,
             channels::QueueTaskCreateRequest {
@@ -19201,7 +19201,7 @@ Business OS command:
             &root,
             channels::QueueTaskCreateRequest {
                 title: "Create inventory app".to_string(),
-                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+                prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
                 thread_key: "business-os/apps/inventory".to_string(),
                 workspace_root: Some(root.display().to_string()),
                 priority: "high".to_string(),
@@ -24846,7 +24846,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- src/apps/business-os/installed-modules/contracts/module.json\n- src/apps/business-os/installed-modules/contracts/index.js\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- runtime/business-os/installed-modules/contracts/module.json\n- runtime/business-os/installed-modules/contracts/index.js\n".to_string(),
             goal: "Create contracts app".to_string(),
             preview: "Create contracts app".to_string(),
             source_label: "business-os:app-create".to_string(),
@@ -24866,7 +24866,7 @@ The controller must create preparation queue/tickets and record queue:system::* 
     #[test]
     fn business_os_app_tasks_do_not_infer_root_workspace_file_artifacts() {
         let job = QueuedPrompt {
-            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/subscriptions\n- first file action: create src/apps/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            prompt: "Business OS app build target:\n- module_id: subscriptions\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/subscriptions\n- first file action: create runtime/business-os/installed-modules/subscriptions/, then write module.json, index.html, index.css, index.js with mount(ctx), schema.js, collections.schema.json, icon.svg, locales, and tests inside that directory.\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
             goal: "Create subscriptions app".to_string(),
             preview: "Create subscriptions app".to_string(),
             source_label: "business-os:app-create".to_string(),

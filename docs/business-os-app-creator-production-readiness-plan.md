@@ -79,12 +79,13 @@ Native R13c is valid CTOX-native evidence and failed on the first worker. The
 command used `ctox.business_os.app.create`, `module_id=subscriptions`,
 `install_target=runtime-installed-module`, and a 256k MiniMax M3 worker prompt
 containing the installed-module target contract. The worker wrote the main app
-under `src/apps/business-os/installed-modules/subscriptions`, but also created
-root-level harness aliases/status files, used a default right/third pane, used
-`esbuild`/`npx` as a test workaround, left forbidden `esbuild` literals in app
-files, and shipped a failing DOM test. The round was intentionally stopped after
-the first worker because this was a systemic guard gap, not a domain-specific
-app issue.
+under the then-configured source-tree installed-module path
+`src/apps/business-os/installed-modules/subscriptions`, which R20 later
+invalidated for normal release installs. It also created root-level harness
+aliases/status files, used a default right/third pane, used `esbuild`/`npx` as a
+test workaround, left forbidden `esbuild` literals in app files, and shipped a
+failing DOM test. The round was intentionally stopped after the first worker
+because this was a systemic guard gap, not a domain-specific app issue.
 
 Post-R13c hardening now includes broader exec blocking and cleanup for
 workspace-root app artifact aliases, direct validator detection of root aliases,
@@ -211,7 +212,7 @@ external harness runs static check, tests, conformance, rxdb-only
 CTOX-native App Creator bench:
 
 ```text
-target: src/apps/business-os/installed-modules/<module_id>/
+target: runtime/business-os/installed-modules/<module_id>/
 entry: installed-modules/<module_id>/index.html
 install_scope: installed
 agent is driven through Business OS commands and queue prompts
@@ -310,7 +311,7 @@ registry: src/apps/business-os/modules/registry.json must be updated
 Installed module:
 
 ```text
-directory: src/apps/business-os/installed-modules/<module_id>/
+directory: runtime/business-os/installed-modules/<module_id>/
 module.json.entry: installed-modules/<module_id>/index.html
 module.json.install_scope: installed
 registry: packaged source registry must not be edited
@@ -426,7 +427,7 @@ Business OS app artifact validation failed for contracts:
 - installed module manifests must use install_scope="installed"; found "store"
 - schema.js exports shell collection "business_commands"; keep it in module.json.collections only
 - remove layout.right or add layout.third_pane_justification with a concrete workflow reason
-Repair these files under src/apps/business-os/installed-modules/contracts/ and rerun validation.
+Repair these files under runtime/business-os/installed-modules/contracts/ and rerun validation.
 ```
 
 ### Layer 4: Agent Repair Loop
@@ -899,7 +900,9 @@ R13c status: valid CTOX-native first-worker failure
 entry path: ctox.business_os.app.create
 model: MiniMax M3
 context: 256k
-target: src/apps/business-os/installed-modules/subscriptions
+install target contract: runtime-installed-module
+legacy artifact directory actually used: src/apps/business-os/installed-modules/subscriptions
+R20 status: invalid as production-readiness evidence for release installs
 main failures:
 - created root-level harness-module.json
 - created root-level harness-collections.schema.json
@@ -945,6 +948,7 @@ entry path: ctox.business_os.app.create
 model: MiniMax M3
 context: 256k
 target: src/apps/business-os/installed-modules/inventory
+R20 status: invalid as production-readiness evidence for release installs
 isolated root: /tmp/ctox-bos-native-r14-20260613-174826
 
 setup finding:
@@ -955,7 +959,8 @@ setup finding:
 positive evidence:
 - worker reached MiniMax through provider mode ctox_core_api
 - worker inspected existing Business OS modules before implementation
-- worker wrote under the installed-module target directory
+- worker wrote under the then-configured installed-module target directory, but
+  R20 later proved that this source-tree path is not valid for release installs
 - final project validator reported ok=true for inventory after agent repairs
 
 production blockers:
@@ -1276,7 +1281,8 @@ positive evidence:
   runtime/ctox-runtime.sqlite3
 - worker reached MiniMax M3 through ctox_core_api
 - subscriptions generated files only under
-  src/apps/business-os/installed-modules/subscriptions
+  src/apps/business-os/installed-modules/subscriptions, which R20 later
+  invalidated for release installs
 - manual validation:
   node src/apps/business-os/scripts/validate-app-module.mjs subscriptions --installed --workspace /tmp/ctox-bos-native-r19-20260614-040450 --json
   returned ok=true with static check OK, node_check OK, and 7/7 module tests
@@ -1373,6 +1379,35 @@ remaining before production-ready:
 - release-like install validation without developer-local paths
 ```
 
+### Native R20 Install-Root Correction 2026-06-14
+
+```text
+status: architectural blocker found before continuing bench loops
+
+Finding:
+- a normal CTOX release root contains `runtime -> ~/.local/state/ctox`
+- mutable installed apps live under
+  `$CTOX_STATE_ROOT/business-os/installed-modules/<module_id>/`
+- from a release/install working directory, the correct relative target is
+  `runtime/business-os/installed-modules/<module_id>/`
+- `src/apps/business-os/` is the release/source/template tree; it is not the
+  writable target for App Creator output
+
+Invalid previous assumption:
+- treating `src/apps/business-os/installed-modules/<module_id>/` as the runtime
+  install target is wrong for normal CTOX installations
+- any bench green result that wrote generated App Creator output under `src/`
+  does not count as production readiness evidence
+
+Required hardening:
+- App Creator prompts must use `runtime/business-os/installed-modules/<id>/`
+- validators and static checks must validate that path in installed mode
+- static serving must load `/installed-modules/...` from runtime/state while
+  shell/source assets still come from the release app root
+- App Store/template/native module install commands must write installed modules
+  into runtime/state, not into the release source tree
+```
+
 ### Native R9/R10 2026-06-13
 
 ```text
@@ -1389,7 +1424,9 @@ R9 setup:
 R10 runtime evidence:
 - MiniMax M3 ran with 262144 context tokens
 - prompts carried suggested_skill=business-os-app-module-development
-- prompts targeted runtime-installed-module under src/apps/business-os/installed-modules/<module_id>
+- prompts targeted runtime-installed-module under
+  src/apps/business-os/installed-modules/<module_id>, which R20 later
+  invalidated for release installs
 - subscriptions created a module directory but failed installed-module validation
 - inventory wrote an invalid module.json and then stopped before required files existed
 
