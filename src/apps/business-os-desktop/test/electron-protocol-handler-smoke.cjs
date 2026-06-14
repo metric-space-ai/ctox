@@ -11,19 +11,23 @@ async function main() {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-electron-protocol-smoke-"));
   const outputPath = path.join(tempRoot, "result.json");
   const userDataPath = path.join(tempRoot, "userData");
+  const inputPath = path.join(tempRoot, "input.json");
   const fixture = path.join(__dirname, "fixtures/protocol-handler-main.cjs");
   const coldStartUrl = "ctox-business-os-desktop://instance/tenant_cold";
   const openUrl = "ctox-business-os-desktop://pair?payload=mac-open-url";
   const secondInstanceUrl = "ctox-business-os-desktop://instance/tenant_second";
   const authCallbackUrl = "ctox-business-os-desktop://auth/callback?desktop=1";
-  const result = await runElectron(electronPath, [
-    fixture,
-    outputPath,
-    userDataPath,
+  fs.writeFileSync(inputPath, `${JSON.stringify({
     coldStartUrl,
     openUrl,
     secondInstanceUrl,
     authCallbackUrl,
+  })}\n`);
+  const result = await runElectron(electronPath, [
+    fixture,
+    outputPath,
+    userDataPath,
+    inputPath,
   ], outputPath);
   assert.equal(result.code, 0, result.stderr || result.stdout);
   const payload = JSON.parse(fs.readFileSync(outputPath, "utf8"));

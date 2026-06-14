@@ -7,14 +7,18 @@ const { installDesktopProtocolHandling } = require("../../src/main/protocol-hand
 
 const outputPath = process.argv[2];
 const userDataPath = process.argv[3];
-const coldStartUrl = process.argv[4];
-const openUrl = process.argv[5];
-const secondInstanceUrl = process.argv[6];
-const authCallbackUrl = process.argv[7];
+const inputPath = process.argv[4];
 
-if (!outputPath || !userDataPath || !coldStartUrl || !openUrl || !secondInstanceUrl || !authCallbackUrl) {
-  throw new Error("usage: electron protocol-handler-main.cjs <outputPath> <userDataPath> <coldStartUrl> <openUrl> <secondInstanceUrl> <authCallbackUrl>");
+if (!outputPath || !userDataPath || !inputPath) {
+  throw new Error("usage: electron protocol-handler-main.cjs <outputPath> <userDataPath> <inputPath>");
 }
+
+const {
+  coldStartUrl,
+  openUrl,
+  secondInstanceUrl,
+  authCallbackUrl,
+} = JSON.parse(fs.readFileSync(inputPath, "utf8"));
 
 fs.mkdirSync(userDataPath, { recursive: true });
 app.setPath("userData", userDataPath);
