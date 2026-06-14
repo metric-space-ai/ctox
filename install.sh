@@ -963,14 +963,16 @@ setup_browser_runtime() {
   tui_module_start "Preparing browser / Patchright runtime"
   ensure_linux_browser_prereqs
   command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 && command -v npx >/dev/null 2>&1 || return 0
-  # Prefer the managed-install binary so its runtime-root resolution lands at
-  # the final location the user will run. Fall back to the source-tree binary
-  # only if the managed symlink is not yet present.
+  # During source/dev upgrades the managed shim may still point at the old
+  # binary being replaced. Prefer the freshly generated release-root wrapper
+  # when present because it pins CTOX_ROOT to the release being prepared.
   local ctox_bin=""
-  if [[ -x "$BIN_DIR/ctox" ]]; then
-    ctox_bin="$BIN_DIR/ctox"
+  if [[ -x "$source_root/bin/ctox" ]] && grep -q 'export CTOX_ROOT=' "$source_root/bin/ctox" 2>/dev/null; then
+    ctox_bin="$source_root/bin/ctox"
   elif [[ -x "$INSTALL_ROOT/current/bin/ctox" ]]; then
     ctox_bin="$INSTALL_ROOT/current/bin/ctox"
+  elif [[ -x "$BIN_DIR/ctox" ]]; then
+    ctox_bin="$BIN_DIR/ctox"
   elif [[ -x "$source_root/bin/ctox" ]]; then
     ctox_bin="$source_root/bin/ctox"
   else
