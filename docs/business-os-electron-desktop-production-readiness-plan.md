@@ -209,9 +209,12 @@ wieder testbar:
   `27484995659` fuer Commit `01e258b9` bestaetigt dieselben Desktop-Jobs
   erneut. Weitere `main`-Runs `27485327715` fuer Commit `0e982165` und
   `27486101670` fuer Commit `80b11085` bestaetigen den Desktop-E2E-Pfad
-  ebenfalls auf macOS, Linux und Windows. Der neueste `main`-CI-Run
-  `27489031650` fuer Commit `4dc20c71` bestaetigt den Desktop-E2E-Pfad erneut
-  und ist als Gesamt-CI inklusive CTOX-CLI-Matrix gruen.
+  ebenfalls auf macOS, Linux und Windows. Der `main`-CI-Run `27489031650` fuer
+  Commit `4dc20c71` bestaetigt den Desktop-E2E-Pfad erneut und ist als
+  Gesamt-CI inklusive CTOX-CLI-Matrix gruen; der aktuelle `main`-CI-Run
+  `27501383594` fuer Commit `761da15a` ist ebenfalls vollstaendig gruen und
+  bestaetigt Business-OS-Desktop-E2E auf macOS/Linux/Windows sowie die gesamte
+  CTOX-CLI-Matrix.
 - Derselbe Workflow fuehrt den Keychain-Runtime-Smoke auf macOS, Linux und
   Windows aus; Linux startet dafuer eine echte Secret-Service-Session ueber
   `dbus-run-session` und `gnome-keyring`. Die Runs `27485327715` und
@@ -283,12 +286,15 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Tag-/Signed-Run, der das auf sauberer Maschine ausfuehrt.
 - Pairing-Rotation/Widerruf ist gegen den SKF-Testhost auf Remote-`peer
   rotate`, lokalen Desktop-Import/Rotate/Revoke und WebRTC-only Launch-Konfig
-  gruen. Der lokale native Peer erkennt Sync-Konfigurationsaenderungen jetzt
-  und triggert einen Supervisor-Respawn. Noch nicht bewiesen ist der volle
-  Zielpfad, in dem die Remote-Instanz selbst
-  `ctox business-os desktop invite` bereitstellt und ein Browser nach Rotation
-  tatsaechlich wieder ueber den neu gestarteten nativen Peer verbindet; auf
-  beiden Test-VPS ist der Remote-CLI-Stand dafuer noch zu alt.
+  gruen. Der Remote-`ctox business-os desktop invite` CLI-Pfad ist nach
+  Installation des Linux-x64-CLI-Artefakts aus Release-Run `27495671970` auf
+  SKF live gruen. Der lokale native Peer erkennt Sync-Konfigurationsaenderungen
+  und triggert einen Supervisor-Respawn. Noch nicht sauber gruen ist der volle
+  Browser-Reconnect nach Rotation: Der gezielte RxDB-Rollover-Soak
+  `27501450384` lief im zweiten Versuch erfolgreich bis
+  `replicated_id=browser_rollover_smoke_1781447190564`, scheiterte aber als
+  Workflow, weil Versuch 1 nach 68,8s keinen offenen Native-Peer fuer
+  `desktop_files` sah und `SOAK_FAIL_ON_RETRY=1` gesetzt war.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
@@ -570,9 +576,13 @@ Noch offen:
   `activePeerSessionChanged=false`. Die echte Browser-WebRTC-Reconnect-Session
   nach Rotation bleibt deshalb der letzte Welle-4-Beweis. Der lokale
   RxDB-Smoke-Modus `rollover-native-peer-browser-to-rust` ist als passender
-  Beweis vorgesehen; sein Harness wurde nach einem stillen lokalen
-  Default-Feature-Build-Haenger gehaertet, muss aber noch mit baubarem oder
-  explizit bereitgestelltem `ctox`-Binary gruen laufen.
+  Beweis vorgesehen; CI-Run `27501450384` beweist, dass Build und Smoke auf
+  GitHub Actions laufen und Versuch 2 vollstaendig repliziert
+  (`replicated_id=browser_rollover_smoke_1781447190564`, keine Browserfehler,
+  keine Request-Failures, 11 Restart-Checkpoint-Epochen). Der Workflow ist aber
+  wegen `SOAK_FAIL_ON_RETRY=1` rot, weil Versuch 1 nach 68,8s mit
+  `peerCount=0` fuer `desktop_files after native peer restart` ausstieg. Fuer
+  Welle 4 fehlt damit ein retry-freier gruener Rollover-Run.
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
@@ -884,9 +894,10 @@ Release Gates:
   `4dc20c71`, `27492399333` fuer Commit `ea685cbb`, `27493297770` fuer Commit
   `d2dcd21f`, `27493992898` fuer Commit `34558c2f`, `27494101063` fuer Commit
   `af5f87e8`, `27494885618` fuer Commit `baae47d8`, `27495707818` fuer Commit
-  `5451dc16` und `27496841760` fuer Commit `427f64a8` sind als Gesamt-CI
-  gruen und bestaetigen Desktop-E2E, Plattform-Keychain-Runtime-Smoke,
-  RxDB-only Guards, `cargo check` und CLI-Matrix.
+  `5451dc16`, `27496841760` fuer Commit `427f64a8` und `27501383594` fuer
+  Commit `761da15a` sind als Gesamt-CI gruen und bestaetigen Desktop-E2E,
+  Plattform-Keychain-Runtime-Smoke, RxDB-only Guards, `cargo check` und
+  CLI-Matrix.
 - [x] `IoT Engine Soak` ist fuer den aktuellen `main`-Stand gruen:
   GitHub-Actions-Run `27489031659` fuer Commit `4dc20c71` laeuft nach
   gepinntem `esbuild@0.28.0` Install der JS-Modultests erfolgreich durch.
@@ -967,3 +978,4 @@ Release Gates:
 | 2026-06-14 | Release-Metadaten-/Preflight-Fix nachgezogen: Commit `427f64a8` setzt Business-OS-Desktop `homepage`, Autor mit E-Mail und `linux.maintainer`, und der Release-Workflow prueft macOS Signing-/Notarization-Secrets vor `electron-builder` explizit fail-closed. Lokal gruen: `npm run release:check`, `npm test` 107/107, `npm run check`, `git diff --check`. `main`-CI-Run `27496841760` fuer Commit `427f64a8` ist vollstaendig gruen. Offen bleibt ein neuer echter Tag-Release nach Konfiguration der macOS-Secrets; ohne diese Secrets bleibt Welle 8 nicht production-ready. |
 | 2026-06-14 | Welle 4 Remote-Invite-Blocker geschlossen: Das Linux-x64-CLI-Artefakt aus dem fehlgeschlagenen `v0.3.29`-Release-Run `27495671970` wurde lokal per SHA256 verifiziert und gegen SKF ueber den lokalen Artefaktpfad installiert. Danach lief `smoke:pairing-ssh-live -- --rotate --revoke-local` ohne `--allow-peer-status-invite` gruen: initiales und rotiertes Invite kamen aus `ctox business-os desktop invite --format json`, `sync_room` und Room Secret wechselten, Launch blieb `transport=webrtc` / `httpBridgeAvailable=false`, Registry/Evidence blieben secret-frei. Nicht geschlossen ist der Browser-Reconnect-Beweis nach Rotation, weil die Live-Evidenz weiter `activePeerSessionChanged=false` meldet. Welle 4 steigt auf 99%; Gesamt bleibt 97%. |
 | 2026-06-14 | Welle 4/8 Verifikationsharness gehaertet: Der lokale RxDB-Rollover-Smoke `SMOKE_MODE=rollover-native-peer-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js` wurde als richtiger lokaler Beweis fuer Browser-Reconnect nach Native-Peer-Rollover identifiziert, scheiterte lokal aber vor der eigentlichen App-Pruefung an einem stillen `ctox`-Smoke-Binary-Build mit schwerem Default-Feature/ggml-CMake-Pfad. `browser_rust_smoke.js` baut das Smoke-Binary jetzt sichtbar mit dem dokumentierten `--no-default-features`-Vertrag und einem konfigurierbaren Timeout (`CTOX_SMOKE_BUILD_TIMEOUT_MS`, Default 30 Minuten), damit kuenftige Rollover-Laeufe nicht mehr ohne Ausgabe haengen. Gruen: `node --check src/core/rxdb/tools/browser_rust_smoke.js`. Kein Fortschrittsanstieg: Der eigentliche Rollover-/Browser-Reconnect-Smoke muss noch gruen laufen. |
+| 2026-06-14 | Welle 4 Rollover-Soak auf CI ausgefuehrt und ehrlich negativ eingeordnet: Workflow-Dispatch `27501450384` fuer `rollover-native-peer-browser-to-rust` auf Commit `761da15a` baute das Smoke-Binary auf GitHub Actions und startete den echten Browser/Rust-Rollover-Smoke. Versuch 1 scheiterte nach 68,8s mit `Timed out waiting for open native peer on desktop_files after native peer restart` (`peerCount=0`); Versuch 2 war funktional gruen mit `replicated_id=browser_rollover_smoke_1781447190564`, `replication_directions` fuer `desktop_files`/`desktop_file_chunks` jeweils `peerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der Workflow ist wegen `SOAK_FAIL_ON_RETRY=1` korrekt rot; Welle 4 bleibt bei 99%, bis ein retry-freier Rollover-Run gruen ist oder die Erstversuch-Flakiness behoben ist. Der normale `main`-CI-Run `27501383594` fuer denselben Commit ist vollstaendig gruen. |
