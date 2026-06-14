@@ -411,6 +411,28 @@ pub fn start_backend_supervisor(root: PathBuf) {
     });
 }
 
+/// Propagate a managed-backend launch outcome according to its role: an
+/// auxiliary backend failure is logged and swallowed (best-effort, so the
+/// fleet keeps booting), while a chat (primary) backend failure is fatal and
+/// bubbles up so the caller can hold the task with cooldown instead of burning
+/// it. Pure so the propagation contract is unit-testable without a live host.
+fn propagate_backend_outcome(role: ManagedBackendRole, outcome: Result<()>) -> Result<()> {
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            if role.is_auxiliary() {
+                eprintln!(
+                    "ctox auxiliary backend {} unavailable; continuing without it: {err:#}",
+                    role.as_env_value()
+                );
+                Ok(())
+            } else {
+                Err(err)
+            }
+        }
+    }
+}
+
 pub fn ensure_persistent_backends(root: &Path) -> Result<()> {
     for role in MANAGED_BACKEND_ROLES {
         if !managed_backend_enabled(root, role) {
@@ -419,16 +441,7 @@ pub fn ensure_persistent_backends(root: &Path) -> Result<()> {
             release_backend_runtime_ownership(root, role);
             continue;
         }
-        if let Err(err) = ensure_backend_process(root, role, false) {
-            if role.is_auxiliary() {
-                eprintln!(
-                    "ctox auxiliary backend {} unavailable; continuing without it: {err:#}",
-                    role.as_env_value()
-                );
-                continue;
-            }
-            return Err(err);
-        }
+        propagate_backend_outcome(role, ensure_backend_process(root, role, false))?;
     }
     let _ = runtime_control::reconcile_runtime_switch_transaction(root);
     Ok(())
@@ -3519,6 +3532,30 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::OnceLock;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn propagate_backend_outcome_is_fatal_for_chat_best_effort_for_aux() {
+        // Chat (primary) failure must bubble up so the caller holds the task
+        // with cooldown instead of burning it.
+        assert!(propagate_backend_outcome(
+            ManagedBackendRole::Chat,
+            Err(anyhow::anyhow!("chat backend crashed")),
+        )
+        .is_err());
+        assert!(propagate_backend_outcome(ManagedBackendRole::Chat, Ok(())).is_ok());
+        // Auxiliary failures are swallowed so the rest of the fleet keeps booting.
+        for role in [
+            ManagedBackendRole::Embedding,
+            ManagedBackendRole::Stt,
+            ManagedBackendRole::Tts,
+            ManagedBackendRole::Vision,
+        ] {
+            assert!(
+                propagate_backend_outcome(role, Err(anyhow::anyhow!("aux backend down"))).is_ok()
+            );
+            assert!(propagate_backend_outcome(role, Ok(())).is_ok());
+        }
+    }
 
     fn production_source(source: &str) -> String {
         let mut production = String::new();
