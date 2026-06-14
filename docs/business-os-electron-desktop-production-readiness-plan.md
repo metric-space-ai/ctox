@@ -92,11 +92,18 @@ wieder testbar:
   neuen Konfiguration neu startet.
 - `npm run smoke:pairing-ssh-live` ist als opt-in Live-Smoke vorhanden. Gegen
   den SKF-Testhost ist der Remote-`peer rotate` + Desktop-Import/Rotate/Revoke-
-  Pfad mit WebRTC-only Launch-Konfig und ohne Secret-Leak gruen; die Remote-
-  Instanz erzeugt das Desktop-Invite derzeit aber noch nicht selbst. Ein
-  erneuter Live-Run ohne `--allow-peer-status-invite` gegen SKF am 2026-06-14
-  scheitert weiterhin mit `unknown business-os command desktop`; der aktuelle
-  Stable-Release-Stand auf dem VPS enthaelt den CLI-Befehl also noch nicht.
+  Pfad mit WebRTC-only Launch-Konfig und ohne Secret-Leak gruen. Nach
+  Installation des lokal SHA256-verifizierten Linux-x64-CLI-Artefakts aus dem
+  `v0.3.29`-Release-Run erzeugt SKF initiale und rotierte Invites ueber den
+  echten `ctox business-os desktop invite --format json` Pfad ohne
+  `--allow-peer-status-invite`-Fallback.
+- Der Browser/Rust-Rollover-Beweis fuer Pairing-Rotation ist jetzt
+  retry-frei gruen: RxDB-Soak `27503869533` lief mit
+  `SOAK_FAIL_ON_RETRY=1` auf Commit `6e352b7f` im Modus
+  `rollover-native-peer-browser-to-rust` im ersten Versuch durch,
+  replizierte nach Native-Peer-Restart ueber `desktop_files` und
+  `desktop_file_chunks` jeweils mit `peerCount=1`, sah
+  `checkpoint_epoch_count=11` und meldete keine Browser-/Request-/Assetfehler.
 - SSH-managed Quelle deckt Host-Key-Fingerprint-Trust, app-eigene
   `ssh_known_hosts`, OpenSSH key/agent Attach, Remote-Preflight und
   Existing-CTOX-Upgrade auf Contract-Ebene ab.
@@ -284,17 +291,6 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Plattform vor dem Electron-Package, und der Smoke laeuft ohne ctox.dev
   Account, `ctoxRoot` oder explizites `ctoxBinary`. Offen bleibt der echte
   Tag-/Signed-Run, der das auf sauberer Maschine ausfuehrt.
-- Pairing-Rotation/Widerruf ist gegen den SKF-Testhost auf Remote-`peer
-  rotate`, lokalen Desktop-Import/Rotate/Revoke und WebRTC-only Launch-Konfig
-  gruen. Der Remote-`ctox business-os desktop invite` CLI-Pfad ist nach
-  Installation des Linux-x64-CLI-Artefakts aus Release-Run `27495671970` auf
-  SKF live gruen. Der lokale native Peer erkennt Sync-Konfigurationsaenderungen
-  und triggert einen Supervisor-Respawn. Noch nicht sauber gruen ist der volle
-  Browser-Reconnect nach Rotation: Der gezielte RxDB-Rollover-Soak
-  `27501450384` lief im zweiten Versuch erfolgreich bis
-  `replicated_id=browser_rollover_smoke_1781447190564`, scheiterte aber als
-  Workflow, weil Versuch 1 nach 68,8s keinen offenen Native-Peer fuer
-  `desktop_files` sah und `SOAK_FAIL_ON_RETRY=1` gesetzt war.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
@@ -335,7 +331,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 96% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
-| 4. Pairing Invite Source | 12% | In Umsetzung | 99% |
+| 4. Pairing Invite Source | 12% | Abgeschlossen | 100% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
@@ -510,7 +506,7 @@ Tests:
 
 ## Welle 4: Pairing Invite Source
 
-Status: In Umsetzung, 99%.
+Status: Abgeschlossen.
 
 Aufgaben:
 
@@ -566,23 +562,20 @@ Tests:
 - [x] `cargo test native_peer_ -- --nocapture`: Native-Peer-Tests beweisen, dass
   eine unveraenderte Sync-Konfiguration nicht respawnt und eine
   `peer rotate`-Room-Aenderung als Respawn-Grund erkannt wird.
+- [x] RxDB WebRTC Soak `27503869533`:
+  `rollover-native-peer-browser-to-rust` auf Commit `6e352b7f` mit
+  `SOAK_FAIL_ON_RETRY=1` ist retry-frei gruen. Versuch 1 repliziert
+  `replicated_id=browser_rollover_smoke_1781452549731`, sieht fuer
+  `desktop_files` und `desktop_file_chunks` jeweils `peerCount=1` /
+  `forkPeerCount=1`, schreibt `checkpoint_epoch_count=11` und meldet
+  `browser_error_count=0`, `browser_request_failure_count=0` sowie
+  `browser_asset_response_error_count=0`.
 
 Noch offen:
 
-- [ ] Full Live-E2E: Nach `ctox business-os peer rotate` muss ein Browser ueber
-  den neu gestarteten nativen Peer wieder verbinden. Lokal ist der Respawn-
-  Trigger getestet, und der aktualisierte Remote-CLI-Pfad ist auf SKF live
-  gruen; die heutige SKF-Evidenz meldet aber noch
-  `activePeerSessionChanged=false`. Die echte Browser-WebRTC-Reconnect-Session
-  nach Rotation bleibt deshalb der letzte Welle-4-Beweis. Der lokale
-  RxDB-Smoke-Modus `rollover-native-peer-browser-to-rust` ist als passender
-  Beweis vorgesehen; CI-Run `27501450384` beweist, dass Build und Smoke auf
-  GitHub Actions laufen und Versuch 2 vollstaendig repliziert
-  (`replicated_id=browser_rollover_smoke_1781447190564`, keine Browserfehler,
-  keine Request-Failures, 11 Restart-Checkpoint-Epochen). Der Workflow ist aber
-  wegen `SOAK_FAIL_ON_RETRY=1` rot, weil Versuch 1 nach 68,8s mit
-  `peerCount=0` fuer `desktop_files after native peer restart` ausstieg. Fuer
-  Welle 4 fehlt damit ein retry-freier gruener Rollover-Run.
+- Keine offenen Welle-4-Punkte. Der alte negative Rollover-Run `27501450384`
+  bleibt als Historie im Changelog dokumentiert; der retry-freie Nachweis ist
+  Run `27503869533`.
 
 ## Welle 5: SSH/Sudo Remote Install Source
 
@@ -979,3 +972,4 @@ Release Gates:
 | 2026-06-14 | Welle 4 Remote-Invite-Blocker geschlossen: Das Linux-x64-CLI-Artefakt aus dem fehlgeschlagenen `v0.3.29`-Release-Run `27495671970` wurde lokal per SHA256 verifiziert und gegen SKF ueber den lokalen Artefaktpfad installiert. Danach lief `smoke:pairing-ssh-live -- --rotate --revoke-local` ohne `--allow-peer-status-invite` gruen: initiales und rotiertes Invite kamen aus `ctox business-os desktop invite --format json`, `sync_room` und Room Secret wechselten, Launch blieb `transport=webrtc` / `httpBridgeAvailable=false`, Registry/Evidence blieben secret-frei. Nicht geschlossen ist der Browser-Reconnect-Beweis nach Rotation, weil die Live-Evidenz weiter `activePeerSessionChanged=false` meldet. Welle 4 steigt auf 99%; Gesamt bleibt 97%. |
 | 2026-06-14 | Welle 4/8 Verifikationsharness gehaertet: Der lokale RxDB-Rollover-Smoke `SMOKE_MODE=rollover-native-peer-browser-to-rust SMOKE_PAGE_PATH=/index.html node src/core/rxdb/tools/browser_rust_smoke.js` wurde als richtiger lokaler Beweis fuer Browser-Reconnect nach Native-Peer-Rollover identifiziert, scheiterte lokal aber vor der eigentlichen App-Pruefung an einem stillen `ctox`-Smoke-Binary-Build mit schwerem Default-Feature/ggml-CMake-Pfad. `browser_rust_smoke.js` baut das Smoke-Binary jetzt sichtbar mit dem dokumentierten `--no-default-features`-Vertrag und einem konfigurierbaren Timeout (`CTOX_SMOKE_BUILD_TIMEOUT_MS`, Default 30 Minuten), damit kuenftige Rollover-Laeufe nicht mehr ohne Ausgabe haengen. Gruen: `node --check src/core/rxdb/tools/browser_rust_smoke.js`. Kein Fortschrittsanstieg: Der eigentliche Rollover-/Browser-Reconnect-Smoke muss noch gruen laufen. |
 | 2026-06-14 | Welle 4 Rollover-Soak auf CI ausgefuehrt und ehrlich negativ eingeordnet: Workflow-Dispatch `27501450384` fuer `rollover-native-peer-browser-to-rust` auf Commit `761da15a` baute das Smoke-Binary auf GitHub Actions und startete den echten Browser/Rust-Rollover-Smoke. Versuch 1 scheiterte nach 68,8s mit `Timed out waiting for open native peer on desktop_files after native peer restart` (`peerCount=0`); Versuch 2 war funktional gruen mit `replicated_id=browser_rollover_smoke_1781447190564`, `replication_directions` fuer `desktop_files`/`desktop_file_chunks` jeweils `peerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der Workflow ist wegen `SOAK_FAIL_ON_RETRY=1` korrekt rot; Welle 4 bleibt bei 99%, bis ein retry-freier Rollover-Run gruen ist oder die Erstversuch-Flakiness behoben ist. Der normale `main`-CI-Run `27501383594` fuer denselben Commit ist vollstaendig gruen. |
+| 2026-06-14 | Welle 4 abgeschlossen: Commit `6e352b7f` stabilisiert WebRTC-Restart-Batches nach Native-Peer-Rollover. Der gezielte RxDB-Soak `27503869533` lief mit `SOAK_FAIL_ON_RETRY=1` im Modus `rollover-native-peer-browser-to-rust` im ersten Versuch gruen (`ok=true`, `retryCount=0`, `durationMs=12163`). Die Evidenz zeigt `replicated_id=browser_rollover_smoke_1781452549731`, `replication_directions` fuer `desktop_files` und `desktop_file_chunks` jeweils `peerCount=1`/`forkPeerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der vorherige Zwischenfix `4ca640cd`/Run `27503042581` war noch negativ auf Versuch 1 und bestaetigte damit die Batch-Restart-Ursache. Welle 4 ist 100%; Gesamt bleibt gerundet 97%. |
