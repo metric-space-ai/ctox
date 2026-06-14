@@ -8281,6 +8281,9 @@ fn should_queue_artifact_outcome_recovery(job: &QueuedPrompt) -> bool {
     if job.source_label == OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL {
         return false;
     }
+    if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+        return false;
+    }
     if external_chat_channel_for_job(job).is_some() {
         return true;
     }
@@ -24921,6 +24924,26 @@ The controller must create preparation queue/tickets and record queue:system::* 
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some("queue/artifact-recovery".to_string()),
             workspace_root: Some("/tmp/ctox-outcome-recovery".to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        assert!(!should_queue_artifact_outcome_recovery(&job));
+    }
+
+    #[test]
+    fn business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery() {
+        let job = QueuedPrompt {
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: src/apps/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n\nOnly required durable files for this controller turn:\n- src/apps/business-os/installed-modules/contracts/module.json\n- src/apps/business-os/installed-modules/contracts/index.js\n".to_string(),
+            goal: "Create contracts app".to_string(),
+            preview: "Create contracts app".to_string(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["queue:system::contracts".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/contracts".to_string()),
+            workspace_root: Some("/tmp/ctox-business-os-app-contracts".to_string()),
             ticket_self_work_id: None,
             outbound_email: None,
             outbound_anchor: None,

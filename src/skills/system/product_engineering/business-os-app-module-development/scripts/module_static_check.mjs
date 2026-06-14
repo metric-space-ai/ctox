@@ -128,6 +128,21 @@ function forbiddenRootAppArtifactName(name) {
     || lower.endsWith('_blocker.md');
 }
 
+function forbiddenModuleArtifactName(name) {
+  const lower = String(name || '').toLowerCase();
+  return (lower.endsWith('.md') && lower !== 'readme.md')
+    || lower.startsWith('harness_')
+    || lower.startsWith('harness-')
+    || lower.includes('_harness_')
+    || lower.includes('-harness-')
+    || lower.includes('artifact_conflict')
+    || lower.includes('artifact-conflict')
+    || lower.includes('artifact_status')
+    || lower.includes('artifact-status')
+    || lower.includes('blocker')
+    || lower.includes('probe');
+}
+
 if (!existsSync(moduleDir)) {
   fail(`${rel(moduleDir)} does not exist`);
 }
@@ -262,6 +277,7 @@ for (const path of files) {
     name === 'yarn.lock' ||
     name === 'pnpm-lock.yaml' ||
     name === 'bun.lockb' ||
+    forbiddenModuleArtifactName(name) ||
     name?.startsWith('_probe_') ||
     name?.endsWith('.bundle.js') ||
     name?.endsWith('.bundle.mjs') ||

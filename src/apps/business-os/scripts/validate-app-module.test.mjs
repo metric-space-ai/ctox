@@ -218,6 +218,15 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  const dir = writeInstalledModule(root, 'moduleharnessnote');
+  writeFileSync(join(dir, 'HARNESS_ARTIFACT_CONFLICT.md'), 'do not accept this\n');
+  const run = runValidator(root, 'moduleharnessnote', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden module artifact .*HARNESS_ARTIFACT_CONFLICT\.md/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'stalechecker', {
     manifest: { entry: 'modules/stalechecker/index.html' },
   });

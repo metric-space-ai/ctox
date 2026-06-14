@@ -147,6 +147,13 @@ root harness aliases, or a README/status document instead of the app. If a
 guard blocks root writes, the correct action is to keep all app files under
 `MODULE_DIR`, not to create a root blocker/status/alias file.
 
+Do not satisfy a generic harness artifact request by writing conflict notes,
+status notes, blocker notes, probe files, or diagnostic Markdown inside the
+module directory. Generated Business OS module files are the app deliverables;
+`README.md` is the only allowed module-local Markdown file, and only when it
+helps the source module. For installed modules, do not add Markdown unless the
+target contract explicitly requires it.
+
 Write `module.json` and `collections.schema.json` atomically. Build the full JSON
 content first, write it to a temporary file inside `MODULE_DIR`, parse and check
 the critical fields, then move it into place. Never expose an invalid final
@@ -354,6 +361,7 @@ readiness proof.
 Do not leave repair artifacts in the module directory:
 
 ```text
+*.md except README.md
 *.bak
 *.orig
 *.rej
@@ -361,6 +369,12 @@ Do not leave repair artifacts in the module directory:
 *.bundle.js
 *.bundle.mjs
 _probe_*
+harness-*
+harness_*
+*artifact-conflict*
+*artifact-status*
+*blocker*
+*probe*
 test-*
 *-test.*
 node_modules/

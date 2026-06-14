@@ -170,6 +170,20 @@ keeps the synthetic no-command queue fallback handled for tests and legacy
 tasks. The next valid evidence round is R18 from a fresh isolated root using
 real Business OS command dispatch.
 
+Native R18 proved the R17 hardening in a real CTOX-native run: the
+`subscriptions` app reached green installed-module validation after a direct
+session timeout, and the service completed the queue task and Business OS
+command as app-validation verified. R18 then exposed the next systemic blocker
+on `contracts`: the generated module included
+`HARNESS_ARTIFACT_CONFLICT.md` inside the module directory, and the validator
+reported green. The service also queued generic artifact outcome recovery for a
+Business OS app task, which conflicted with the app target contract and nudged
+the worker toward diagnostic file artifacts instead of app-only deliverables.
+Post-R18 hardening must reject module-local harness/status/blocker/probe
+artifacts except `README.md`, and Business OS app tasks must bypass generic
+artifact outcome recovery because the deterministic app validator owns their
+completion and repair contract.
+
 ## Why CLI Passed But CTOX-Native Failed
 
 The source bench and CTOX-native bench test different contracts.
@@ -452,11 +466,11 @@ Agents should update this table as work progresses.
 | --- | --- | --- | --- |
 | 0. Preserve R8 evidence | Done | `docs/business-os-skill-bench-2026-06-12.md` R8 section | R8 stopped after first hard failure |
 | 1. App command routing audit | In progress | `app_modify_queue_prompt_targets_app_module_not_skill_files`, `app_create_queue_prompt_targets_app_module_skill` | App create/modify command prompt and suggested skill covered; App Creator/App Store/browser entry audit still open |
-| 2. Mode-aware artifact validator | In progress | `src/apps/business-os/scripts/validate-app-module.mjs`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; R8/R13c contracts validation failures; R14 false-green on `localStorage` | Covers source/installed static gate, source registry requirements, ESM syntax, module tests, JSON/report output; must now close Web Storage, root probe, package side-effect, and atomic JSON gaps |
-| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`; R12/R16/R17 validator-rework event proof | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, and fails after bounded attempts; still needs fresh CTOX-native 5/5 confirmation |
+| 2. Mode-aware artifact validator | In progress | `src/apps/business-os/scripts/validate-app-module.mjs`; `node src/apps/business-os/scripts/validate-app-module.test.mjs`; R8/R13c contracts validation failures; R14 false-green on `localStorage`; R18 false-green on module-local `HARNESS_ARTIFACT_CONFLICT.md` | Covers source/installed static gate, source registry requirements, ESM syntax, module tests, JSON/report output, Web Storage, root probes, package side effects, and module-local diagnostic artifacts; atomic JSON exposure still needs runtime/catalog proof |
+| 3. Runtime repair loop | In progress | `business_os_app_validation_feedback_requeues_same_task`, `business_os_app_validation_rework_is_leased_before_fresh_pending_app_tasks`, `business_os_app_validation_repair_attempt_count_caps_after_three`, `business_os_app_validation_feedback_is_repair_oriented`, `business_os_app_validation_worker_error_keeps_same_task_reworkable`, `business_os_app_validation_worker_error_after_green_completes_business_command`, `business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery`; R12/R16/R17/R18 validator-rework and completion evidence | Worker validates app module artifacts before generic completion review and after worker errors, writes failures to the same queue task, records `validator_rework`, preserves parseable app target metadata in repair prompts, routes through legal `review_rework -> pending -> leased`, completes commands after green validation despite late worker errors, skips generic artifact outcome recovery for app tasks, and fails after bounded attempts; still needs fresh CTOX-native 5/5 confirmation |
 | 4. Validator integration tests | In progress | `node src/apps/business-os/scripts/validate-app-module.test.mjs`; `cargo test --manifest-path src/core/harness/core/Cargo.toml business_os_`; `business_os_app_validation_feedback_requeues_same_task`; root-alias and stale-checker validator fixtures | Source/installed fixtures, queue-state proof, bundled-checker preference, and root-level exec guard are covered; broader App Creator/App Store flow tests still open |
 | 5. App Creator UI flow check | Not started |  | Minimal user UI, no generator workbench |
-| 6. CTOX-native R9-R18 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R17 hardening |
+| 6. CTOX-native R9-R18 bench | In progress | R9 isolated-root credential failure; R10 MiniMax execution and validator failures; R11 root-artifact/generic-review delay; R12 validator-rework proof and dispatch/root-write findings; R13 invalid generic queue setup; R13c valid command-dispatch first-worker failure; R14 validator false-green; R15 legacy-shell guard bypass; R16 worker-error red-artifact bypass; R17 green-validation late-error failure; R18 subscriptions completed after green validation, contracts exposed module-local harness artifact and generic outcome-recovery conflict | Five simple app prompts through real CTOX app-command paths; next round must rerun from a fresh isolated root after R18 hardening |
 | 7. Skill/resource cleanup from native evidence | In progress | R10/R13c/R14 failures folded into skill, module contract, verification docs, validator forbidden-file checks, bundled-checker preference, and exec guard prompt feedback | Only evidence-backed edits |
 | 8. Repeat native bench until 5/5 | Not started |  | No overfitting to one app |
 | 9. Release-install validation | Not started |  | No developer-local source paths required |
@@ -519,6 +533,8 @@ Tasks:
 - include UI third-pane checks
 - include forbidden runtime pattern checks
 - include no package-manager/no dependency-management checks
+- include no module-local harness/status/blocker/probe artifacts except
+  `README.md`
 - include `node --check` for generated ESM
 - include module-local tests when present
 - ensure validator is shipped in release builds or available through embedded
@@ -561,6 +577,8 @@ Exit criteria:
 - an intentionally bad manifest is repaired or rejected with exact evidence
 - command projection shows validation attempts and final gate result
 - no app appears as installable until validation passes
+- Business OS app tasks do not queue generic artifact outcome recovery; app
+  validation owns the app completion and repair contract
 
 ### Phase 4: Validator Integration Tests
 
@@ -757,7 +775,7 @@ Only after this evidence should the App Creator be called production-ready.
 - Close the R14 validator false-green: reject `localStorage`, `sessionStorage`,
   root probe files, module-local `package.json`/lockfiles/`node_modules`, and
   transient JSON-manifest exposure before an app can be accepted.
-- Run CTOX-native R18 from a fresh isolated root using the rebuilt runtime and
+- Run CTOX-native R19 from a fresh isolated root using the rebuilt runtime and
   real Business OS app command dispatch. Do not use generic `queue add --skill`
   as production-readiness evidence.
 - Prove worker/model/tool-call errors on app tasks still run the deterministic
@@ -787,6 +805,10 @@ Only after this evidence should the App Creator be called production-ready.
 - Prove forbidden package-manager/bundler/dependency literals in generated app
   files, tests, comments, and user-visible copy are rejected or repaired before
   completion.
+- Prove module-local harness/status/blocker/probe notes such as
+  `HARNESS_ARTIFACT_CONFLICT.md` are rejected before completion.
+- Prove generic outcome-witness artifact recovery is not queued for Business OS
+  app tasks; the app validator must be the only app artifact owner.
 - Prove generated app files are small enough for stable tool-call JSON, or that
   agents split large writes into bounded chunks without malformed provider
   function arguments.
@@ -1152,6 +1174,75 @@ verification after hardening:
 next action:
 - push the R17 control-flow hardening to main, then run native R18 from a fresh
   isolated root through ctox.business_os.app.create
+```
+
+### Native R18 2026-06-14
+
+```text
+status: valid CTOX-native partial success plus systemic second-worker failure
+entry path: ctox.business_os.app.create
+model: MiniMax M3
+context: 256k
+provider path: ctox_core_api
+isolated root: /tmp/ctox-bos-native-r18-20260613-234641
+source commit: ea1eff698ffe3f588ce24e8dded366132ac7966a
+commands dispatched: subscriptions, inventory, projects, contracts, compliance
+
+positive evidence:
+- subscriptions used the real Business OS app create path with installed-module
+  target metadata
+- the worker reached MiniMax M3 with configured_context_tokens=262144
+- after the worker ended with a direct-session timeout, deterministic app
+  validation returned green
+- the R17 hardening completed the subscriptions queue task and Business OS
+  command as app-validation verified instead of failing the command
+- manual validation:
+  node src/apps/business-os/scripts/validate-app-module.mjs subscriptions --installed --workspace /tmp/ctox-bos-native-r18-20260613-234641 --json
+  returned ok=true with 17/17 module tests passing
+- forensic root-artifact scan found no final root-level app artifact leakage
+
+production blocker:
+- the second worker, contracts, created
+  src/apps/business-os/installed-modules/contracts/HARNESS_ARTIFACT_CONFLICT.md
+- the validator still returned ok=true for contracts with that module-local
+  diagnostic artifact present
+- generic outcome-witness-recovery queued for the app task and expected durable
+  file artifacts, which conflicts with the Business OS app target contract
+- the worker responded by writing a conflict note instead of only app
+  deliverables
+- the final contracts failed status is contaminated by the operator stopping
+  the service after identifying the systemic failure; the valid finding is the
+  validator false-green plus generic recovery conflict
+
+decision:
+- stop after observing the second-worker systemic failure; continuing the other
+  pending apps would not prove production readiness
+
+hardening completed:
+- reject module-local harness/status/blocker/probe/diagnostic artifacts except
+  README.md
+- add validator regression coverage for HARNESS_ARTIFACT_CONFLICT.md
+- skip generic artifact outcome recovery for Business OS app tasks because the
+  deterministic app validator owns app repair and completion
+- update the skill so agents do not create conflict/status/blocker Markdown to
+  satisfy generic harness artifact pressure
+
+hardening verification:
+- rustfmt --edition 2024 src/core/service/service.rs
+- node --check src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.mjs
+- node --check src/apps/business-os/scripts/validate-app-module.test.mjs
+- node src/apps/business-os/scripts/validate-app-module.test.mjs
+- node src/apps/business-os/scripts/validate-app-module.mjs contracts --installed --workspace /tmp/ctox-bos-native-r18-20260613-234641 --json
+  now fails on HARNESS_ARTIFACT_CONFLICT.md
+- CARGO_TARGET_DIR=/tmp/ctox-r18-cargo-target CARGO_BUILD_JOBS=1 cargo test -q --bin ctox business_os_app_tasks_do_not_queue_generic_artifact_outcome_recovery -- --nocapture
+- CARGO_TARGET_DIR=/tmp/ctox-r18-cargo-target CARGO_BUILD_JOBS=1 cargo test -q --bin ctox business_os_app_validation -- --nocapture
+- CARGO_TARGET_DIR=/tmp/ctox-r18-cargo-target CARGO_BUILD_JOBS=1 cargo build -q --bin ctox
+- git diff --check -- R18 hardened files
+
+next action:
+- push the R18 hardening to main, then run native R19 from a fresh isolated
+  root through ctox.business_os.app.create
 ```
 
 ### Validator Hook 2026-06-13
