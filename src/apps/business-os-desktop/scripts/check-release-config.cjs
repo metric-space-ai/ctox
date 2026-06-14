@@ -11,7 +11,9 @@ const builderConfig = require(path.join(appRoot, "electron-builder.config.cjs"))
 
 function main() {
   assert.equal(packageJson.main, "src/main/main.cjs");
-  assert.equal(packageJson.author, "Metric Space AI");
+  assert.equal(packageJson.homepage, "https://ctox.dev");
+  assert.equal(packageJson.author, "Metric Space AI <michael.welsch@metric-space.ai>");
+  assert.match(packageJson.author, /<[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+>/, "package author must include an email");
   assert.equal(packageJson.dependencies?.["electron-updater"], "^6.8.3");
   assert.equal(packageJson.devDependencies?.electron, "^39.8.10");
   assert.equal(packageJson.devDependencies?.["electron-builder"], "^26.8.1");
@@ -54,6 +56,7 @@ function main() {
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.icon)), "desktop icon png is missing");
   assert.ok(fs.existsSync(path.join(appRoot, builderConfig.mac.icon)), "macOS icon icns is missing");
   assert.equal(builderConfig.linux?.icon, "build/icon.png");
+  assert.equal(builderConfig.linux?.maintainer, packageJson.author);
   const notarizeSource = fs.readFileSync(path.join(appRoot, builderConfig.afterSign), "utf8");
   assert.match(notarizeSource, /isDirOnlyPack/);
 
@@ -120,6 +123,13 @@ function assertReleaseWorkflowMatrix() {
   ]) {
     assert.match(workflow, new RegExp(escapeRegExp(command)), `release workflow missing command: ${command}`);
   }
+  assert.match(workflow, /Verify macOS signing secrets/, "release workflow must preflight macOS signing secrets");
+  assert.match(
+    workflow,
+    /for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD;/,
+    "release workflow missing complete macOS secret preflight variable list",
+  );
+  assert.match(workflow, /::error::\$\{variable\} is required/, "release workflow must emit explicit missing-secret errors");
   const signedArtifactSmoke = fs.readFileSync(path.join(appRoot, "scripts", "smoke-signed-artifacts.cjs"), "utf8");
   for (const platform of ["smokeMacArtifacts", "smokeLinuxArtifacts", "smokeWindowsArtifacts"]) {
     assert.match(signedArtifactSmoke, new RegExp(escapeRegExp(platform)), `signed artifact smoke missing ${platform}`);

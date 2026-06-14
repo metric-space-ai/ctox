@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "description": "Electron shell for CTOX Business OS managed and unmanaged instance switching.",
-  "author": "Metric Space AI",
+  "homepage": "https://ctox.dev",
+  "author": "Metric Space AI <michael.welsch@metric-space.ai>",
   "main": "src/main/main.cjs",
   "scripts": {
     "start": "electron .",

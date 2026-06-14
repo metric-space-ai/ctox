@@ -313,6 +313,25 @@ jobs:
           CTOX_ROOT="$RUNNER_TEMP/ctox-desktop-helper-contract" "$CTOX_HELPER" business-os desktop invite --format json --display-name "Desktop Release Helper Smoke" --ttl-hours 1 > "$RUNNER_TEMP/desktop-invite.json"
           node -e "const fs=require('node:fs'); const invite=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); if(invite.type!=='ctox-business-os-invite'||invite.version!==1||invite.transport!=='webrtc'||invite.data_plane!=='rxdb-webrtc'||invite.http_bridge_available!==false||invite.secret_value_in_payload!==true||!String(invite.desktop_link||'').startsWith('ctox-business-os-desktop://pair?payload=')){throw new Error('bundled ctox helper desktop invite contract failed');}" "$RUNNER_TEMP/desktop-invite.json"
 
+      - name: Verify macOS signing secrets
+        if: matrix.builderPlatform == 'mac'
+        shell: bash
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          CSC_LINK: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD }}
+        run: |
+          missing=0
+          for variable in APPLE_ID APPLE_ID_PASSWORD APPLE_TEAM_ID CSC_LINK CSC_KEY_PASSWORD; do
+            if [ -z "${!variable}" ]; then
+              echo "::error::${variable} is required for signed/notarized macOS Business OS Desktop releases"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Build packaged app
         working-directory: src/apps/business-os-desktop
         env:
