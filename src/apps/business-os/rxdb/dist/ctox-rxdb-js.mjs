@@ -5352,6 +5352,12 @@ var CtoxWebRtcReplicationState = class {
       clearTimeout(this.pushRetryTimer);
       this.pushRetryTimer = null;
     }
+    const shared = this.shared;
+    this.shared = null;
+    try {
+      shared?.unregister?.(this.collection.name);
+    } catch {
+    }
     try {
       this.demandLoader?.abortAllInFlight?.("replication-cancel");
     } catch {
@@ -5364,8 +5370,6 @@ var CtoxWebRtcReplicationState = class {
       await this.demandSidecar?.close?.();
     } catch {
     }
-    this.shared?.unregister?.(this.collection.name);
-    this.shared = null;
   }
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
   /// them to the underlying collection so that `find().exec()` and observable

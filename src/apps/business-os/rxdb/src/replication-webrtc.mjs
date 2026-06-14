@@ -1120,13 +1120,17 @@ class CtoxWebRtcReplicationState {
       clearTimeout(this.pushRetryTimer);
       this.pushRetryTimer = null;
     }
+    // Drop this collection from the shared peer before slower sidecar cleanup.
+    // Restart paths stop collections with a bounded timeout and then
+    // immediately start new bridges. If sidecar close stalls while the old
+    // SharedRoomPeer is still registered, the restart can attach to a closing
+    // peer and miss the first post-restart native connection.
+    const shared = this.shared;
+    this.shared = null;
+    try { shared?.unregister?.(this.collection.name); } catch {}
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
-    // Drop this collection from the shared peer. The peer (and its single
-    // connection) is closed only when the last collection unregisters.
-    this.shared?.unregister?.(this.collection.name);
-    this.shared = null;
   }
 
   /// V1.5 production wiring: build the sidecar + query demand loader and attach

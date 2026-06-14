@@ -149,6 +149,34 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
+// --- 5. cancel unregisters before slow sidecar cleanup ----------------------
+{
+  const state = await makeState('cancel-unregister-order');
+  const events = [];
+  let releaseClose;
+  state.shared.unregister = (collection) => events.push(`unregister:${collection}`);
+  state.demandLoader = {
+    abortAllInFlight(reason) { events.push(`abort:${reason}`); },
+  };
+  state.demandSidecar = {
+    stopEvictionScheduler() { events.push('stop-eviction'); },
+    close() {
+      events.push('close-start');
+      return new Promise((resolve) => { releaseClose = resolve; });
+    },
+  };
+  const cancelPromise = state.cancel();
+  await delay(10);
+  assert(
+    events[0] === 'unregister:cancel-unregister-order',
+    `cancel order: shared peer must unregister before cleanup starts, got ${events.join(',')}`,
+  );
+  assert(state.shared === null, 'cancel order: state.shared is cleared before slow cleanup finishes');
+  releaseClose();
+  await cancelPromise;
+  assert(events.includes('close-start'), 'cancel order: sidecar close still runs');
+}
+
 console.log('ctox-rxdb replication recovery smoke OK');
 
 function assert(condition, message) {
