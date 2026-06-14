@@ -297,7 +297,11 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Packaging, dass der frisch gebaute gebuendelte `ctox`-Helper den
   `business-os desktop invite` JSON-Vertrag ausfuehren kann; das verhindert
   kuenftige Desktop-Releases mit einem zu alten Helper, ersetzt aber nicht den
-  echten Tag-Run.
+  echten Tag-Run. Der historische `v0.3.28` Tag-Release ist kein verwertbarer
+  Produktionsnachweis: Windows scheiterte dort noch an Unix-only Service-IPC-
+  Symbolen, waehrend der aktuelle `main`-Stand den Windows-CLI-Check wieder
+  besteht; Linux arm64 scheiterte im selben Release-Lauf erst beim
+  Artefakt-Upload mit `ETIMEDOUT`, also nicht an einem Desktop-Produktcheck.
 
 ## Nicht Verhandelbare Produktregeln
 
@@ -809,7 +813,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 86%.
+Status: In Umsetzung, 87%.
 
 Release Gates:
 
@@ -939,3 +943,4 @@ Release Gates:
 | 2026-06-14 | Welle 5 Stable-API-Seed geschlossen: Stable-Fresh-Install nutzt jetzt auch mit `--install-api-provider`/`--install-model` das verifizierte GitHub-Release-Bundle statt `install.sh`, schreibt `CTOX_CHAT_SOURCE=api`, `CTOX_API_PROVIDER`, `CTOX_CHAT_MODEL`, `CTOX_CHAT_MODEL_BASE` und `CTOX_ACTIVE_MODEL` per SQLite in `runtime/ctox.sqlite3` und `runtime/ctox-runtime.sqlite3` und fuehrt danach `peer ensure` WebRTC-only aus. `--install-backend` bleibt im Stable-API-Pfad validiert, aber ohne Runtime-Schreibwirkung; im Dev-/Source-Pfad wird es weiter an `install.sh` durchgereicht. Live gruen gegen SKF `57.129.123.108`: `smoke:ssh-password-live -- --fresh-install --file-askpass-fallback --install-api-provider openai --install-model gpt-5.4 --install-backend cpu --no-restart-service`, Evidenz `install.artifact=release`, `apiProvider=openai`, `model=gpt-5.4`, `backend=cpu`, `transport=webrtc`, `http_bridge_available=false`, `registrySecretLeak=false`. Lokal gruen: `node --test src/apps/business-os-desktop/test/ssh-source.test.cjs`, `npm run check`, `npm test` 107/107, `git diff --check`. Welle 5 ist 100%; Gesamt bleibt 97%. |
 | 2026-06-14 | Welle 4/8 Remote-Invite-Blocker eingegrenzt und Release-Gate nachgezogen: Der Live-Smoke gegen SKF ohne `--allow-peer-status-invite` scheitert weiterhin beim echten Remote-Befehl `ctox business-os desktop invite --format json` mit `unknown business-os command desktop`; der veroeffentlichte Stable-Remote-Stand ist also noch zu alt fuer den Zielpfad. Damit derselbe Fehler nicht in einem neuen Desktop-Release landet, fuehrt `.github/workflows/release.yml` nach dem Helper-Build und vor `electron-builder` den frisch gebauten `resources/ctox/ctox`-Helper mit `business-os desktop invite --format json` aus und validiert Invite-Typ, Version, WebRTC-only Marker, Secret-Payload-Marker und Desktop-Deep-Link. Gruen: `npm run release:check`, `node --check scripts/check-release-config.cjs`. Welle 8 steigt auf 87%; Gesamt bleibt 97%. |
 | 2026-06-14 | Aktuelle `main`-CI fuer den Stable-API-Seed-Stand ist gruen: GitHub-Actions-Run `27492399333` fuer Commit `ea685cbb` bestaetigt die Gesamt-CI inklusive Business OS Desktop E2E auf macOS/Linux/Windows, Plattform-Keychain-Runtime-Smokes, RxDB-only Guards, `cargo check` und CLI-Matrix. |
+| 2026-06-14 | Release-/CI-Risiko eingeordnet: Der fehlgeschlagene Tag-Release `v0.3.28` ist nicht production-ready verwertbar. Der Windows-Release-Job scheiterte auf dem alten Tag an nicht vollstaendig `#[cfg(unix)]`-gekapselten Service-IPC-Symbolen; der aktuelle `main`-CI-Run `27493297770` fuer Commit `d2dcd21f` beweist dagegen wieder einen gruenen Windows-CLI-Check sowie gruene Business-OS-Desktop-E2E-Jobs auf macOS, Linux und Windows. Der Linux-arm64-Fehler im alten Tag-Release war ein GitHub-Artefakt-Upload-Timeout nach dem Build. Offen bleibt weiterhin ein neuer echter Tag-Run mit signierten/notarisierten Installer-Artefakten und dem neuen Helper-Invite-Gate. Der erste Versuch von `27493297770` hatte zusaetzlich einen Linux-x64-CLI-Abbruch vor den repo-eigenen Checks im `Swatinem/rust-cache@v2`-Schritt; ein `rerun --failed` laeuft als Infrastruktur-Retry. |
