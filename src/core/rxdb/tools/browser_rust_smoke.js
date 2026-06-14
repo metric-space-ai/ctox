@@ -1851,23 +1851,36 @@ async function waitForCtoxServerListening(child, ms = 60000) {
 function ensureCtoxSmokeBinary() {
   if (process.env.CTOX_BIN || process.env.CTOX_SKIP_SMOKE_BUILD === '1') return;
   const targetDir = path.join(root, 'runtime/build/core-rxdb-integration-target');
-  const result = spawnSync('cargo', [
+  const timeoutMs = parsePositiveIntegerEnv(
+    'CTOX_SMOKE_BUILD_TIMEOUT_MS',
+    process.env.CTOX_SMOKE_BUILD_TIMEOUT_MS || '1800000',
+    { max: 7200000 },
+  );
+  const args = [
     'build',
     '--locked',
     '--bin',
     'ctox',
+    '--no-default-features',
     '--target-dir',
     targetDir,
-  ], {
+  ];
+  console.log(`ctox_smoke_build_command=cargo ${args.join(' ')}`);
+  console.log(`ctox_smoke_build_timeout_ms=${timeoutMs}`);
+  const result = spawnSync('cargo', args, {
     cwd: root,
     env: {
       ...process.env,
       CARGO_TARGET_DIR: targetDir,
     },
-    encoding: 'utf8',
+    stdio: 'inherit',
+    timeout: timeoutMs,
   });
+  if (result.error) {
+    throw new Error(`ctox smoke binary build failed: ${result.error.message}`);
+  }
   if (result.status !== 0) {
-    throw new Error(`ctox smoke binary build failed: ${result.stderr || result.stdout || 'no output'}`);
+    throw new Error(`ctox smoke binary build failed with exit status ${result.status}`);
   }
   if (!fs.existsSync(ctoxBin)) {
     throw new Error(`ctox smoke binary was not produced at ${ctoxBin}`);
