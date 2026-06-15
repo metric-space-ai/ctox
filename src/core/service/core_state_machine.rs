@@ -1824,6 +1824,78 @@ fn violation(code: &'static str, message: impl Into<String>) -> CoreTransitionVi
 mod tests {
     use super::*;
 
+    /// catalog-doc-pin-1: render the executable catalog (start state, terminal
+    /// states, and every allowed edge) for every core entity into a canonical,
+    /// deterministic string. The committed GENERATED block in
+    /// docs/core_runtime_state_machine.md is pinned byte-for-byte against this,
+    /// so an agent that edits the catalog (adds/removes an edge, changes a
+    /// start/terminal state) cannot pass CI while the canonical audit doc rots.
+    fn render_canonical_state_machine() -> String {
+        use std::fmt::Write as _;
+        let mut out = String::from("```text\n");
+        for (index, &entity) in core_entity_types().iter().enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
+            let _ = writeln!(out, "{entity:?}:");
+            let _ = writeln!(out, "  start = {:?}", core_start_state(entity));
+            let terminals = core_terminal_states(entity)
+                .iter()
+                .map(|state| format!("{state:?}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "  terminal = {terminals}");
+            for (from, to) in allowed_transition_catalog(entity) {
+                let _ = writeln!(out, "  {from:?} -> {to:?}");
+            }
+        }
+        out.push_str("```");
+        out
+    }
+
+    #[test]
+    fn core_runtime_state_machine_doc_matches_catalog() {
+        // catalog-doc-pin-1: the doc claims to be "the exact, executable state
+        // machine implemented in core_state_machine.rs" and is a canonical audit
+        // reference, but nothing pinned it to the code. Assert the committed
+        // GENERATED block equals the rendered catalog (edges + start + terminal
+        // states for every entity), so editing allowed_transition_catalog /
+        // core_start_state / core_terminal_states cannot land while the doc rots.
+        const DOC: &str = include_str!("../../../docs/core_runtime_state_machine.md");
+        const BEGIN: &str = "<!-- BEGIN GENERATED core-state-machine -->";
+        const END: &str = "<!-- END GENERATED core-state-machine -->";
+        // Each marker must be unique, else find() below could latch onto a
+        // quoted copy and extract the wrong span.
+        assert_eq!(
+            DOC.matches(BEGIN).count(),
+            1,
+            "BEGIN marker must appear exactly once"
+        );
+        assert_eq!(
+            DOC.matches(END).count(),
+            1,
+            "END marker must appear exactly once"
+        );
+        let start = DOC
+            .find(BEGIN)
+            .expect("doc must contain the BEGIN GENERATED marker")
+            + BEGIN.len();
+        let end = DOC
+            .find(END)
+            .expect("doc must contain the END GENERATED marker");
+        assert!(start <= end, "BEGIN marker must precede END marker");
+        // Normalize CRLF so a Windows/autocrlf checkout (include_str! embeds the
+        // working-tree bytes) does not falsely fail against writeln!'s LF output.
+        let pinned = DOC[start..end].replace('\r', "");
+        let rendered = render_canonical_state_machine().replace('\r', "");
+        assert_eq!(
+            pinned.trim(),
+            rendered.trim(),
+            "docs/core_runtime_state_machine.md GENERATED block is out of sync with the \
+             executable catalog. Replace the block between the markers with:\n{rendered}"
+        );
+    }
+
     fn founder_send_request() -> CoreTransitionRequest {
         CoreTransitionRequest {
             entity_type: CoreEntityType::FounderCommunication,

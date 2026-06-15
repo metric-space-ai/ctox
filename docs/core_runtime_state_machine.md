@@ -205,6 +205,242 @@ Deterministic recovery loop for stuck or degraded states.
   - `RepairVerification` -> `StillDegraded`
   - `StillDegraded` -> `RepairPlanning`
 
+## Generated Transition Catalog (machine-pinned)
+
+The block below is generated from `allowed_transition_catalog`, `core_start_state`,
+and `core_terminal_states` in `core_state_machine.rs` and pinned byte-for-byte by the
+test `core_runtime_state_machine_doc_matches_catalog`. Do **not** hand-edit it: change
+the catalog in code, run that test, and paste its expected block here. It guarantees this
+canonical audit doc cannot silently drift from the executable transition kernel.
+
+<!-- BEGIN GENERATED core-state-machine -->
+```text
+Service:
+  start = Booting
+  terminal = Ready, Stopped
+  Booting -> Ready
+  Booting -> Degraded
+  Ready -> Processing
+  Processing -> Ready
+  Processing -> Degraded
+  Degraded -> Repairing
+  Repairing -> Ready
+  Repairing -> Degraded
+  Booting -> Stopped
+  Ready -> Stopped
+  Processing -> Stopped
+  Degraded -> Stopped
+  Repairing -> Stopped
+
+Mission:
+  start = Empty
+  terminal = MissionReady, MissionClosed
+  Empty -> Ingesting
+  Ingesting -> Rebuilding
+  Rebuilding -> MissionReady
+  MissionReady -> MissionRunning
+  MissionRunning -> WaitingOnExternal
+  MissionRunning -> MissionBlocked
+  WaitingOnExternal -> MissionRunning
+  MissionBlocked -> Repairing
+  Repairing -> MissionRunning
+  MissionRunning -> MissionClosed
+
+Context:
+  start = Cold
+  terminal = Fresh
+  Cold -> Hydrating
+  Hydrating -> Fresh
+  Fresh -> CompactionDue
+  CompactionDue -> Compacted
+  Compacted -> Fresh
+  Fresh -> Stale
+  Stale -> Hydrating
+
+QueueItem:
+  start = Pending
+  terminal = Completed, Superseded
+  Pending -> Completed
+  Pending -> Blocked
+  Pending -> Failed
+  Pending -> Leased
+  Pending -> ReworkRequired
+  Leased -> Pending
+  Leased -> Running
+  Leased -> Completed
+  Leased -> Blocked
+  Leased -> Failed
+  Leased -> ReworkRequired
+  Running -> Completed
+  Running -> Blocked
+  Running -> Failed
+  Running -> ReworkRequired
+  Running -> Superseded
+  Blocked -> Pending
+  Blocked -> Completed
+  Blocked -> Failed
+  Blocked -> ReworkRequired
+  Blocked -> Superseded
+  Failed -> Pending
+  Failed -> Blocked
+  Failed -> Completed
+  Failed -> ReworkRequired
+  Failed -> Superseded
+  ReworkRequired -> Pending
+  ReworkRequired -> Failed
+  ReworkRequired -> Superseded
+  Pending -> Superseded
+  Leased -> Superseded
+
+WorkItem:
+  start = Created
+  terminal = Closed, Failed, Superseded
+  Created -> Classified
+  Created -> Planned
+  Created -> Superseded
+  Classified -> TicketBacked
+  Classified -> Superseded
+  TicketBacked -> Planned
+  TicketBacked -> Superseded
+  Planned -> Closed
+  Planned -> Executing
+  Planned -> Blocked
+  Planned -> Failed
+  Planned -> Superseded
+  Executing -> Closed
+  Executing -> AwaitingReview
+  Executing -> Failed
+  AwaitingReview -> ReworkRequired
+  AwaitingReview -> AwaitingVerification
+  AwaitingReview -> Closed
+  AwaitingReview -> Failed
+  AwaitingReview -> Superseded
+  ReworkRequired -> Closed
+  ReworkRequired -> Executing
+  ReworkRequired -> Failed
+  ReworkRequired -> Superseded
+  AwaitingVerification -> Verified
+  Verified -> Closed
+  Executing -> Blocked
+  Executing -> Superseded
+  Blocked -> Closed
+  Blocked -> Failed
+  Blocked -> Planned
+  Blocked -> Superseded
+
+Ticket:
+  start = Created
+  terminal = Closed, Superseded
+  Created -> Classified
+  Created -> AwaitingReview
+  Created -> Blocked
+  Created -> Planned
+  Created -> Superseded
+  Classified -> Planned
+  Classified -> Superseded
+  Planned -> Blocked
+  Planned -> Executing
+  Planned -> Superseded
+  Executing -> Verified
+  Executing -> AwaitingReview
+  AwaitingReview -> ReworkRequired
+  AwaitingReview -> AwaitingVerification
+  AwaitingReview -> Planned
+  AwaitingReview -> Blocked
+  AwaitingReview -> Superseded
+  ReworkRequired -> Executing
+  ReworkRequired -> Superseded
+  AwaitingVerification -> Verified
+  Verified -> Closed
+  Executing -> Blocked
+  Executing -> Superseded
+  Blocked -> Planned
+  Blocked -> Superseded
+
+Review:
+  start = Drafting
+  terminal = Approved, Rejected
+  Drafting -> DraftReady
+  DraftReady -> Reviewing
+  Reviewing -> Approved
+  Reviewing -> Rejected
+  Reviewing -> SentBackForRework
+  SentBackForRework -> Drafting
+
+FounderCommunication:
+  start = InboundObserved
+  terminal = Done, Escalated, SendFailed
+  InboundObserved -> InboundObserved
+  InboundObserved -> ContextBuilt
+  ContextBuilt -> ReplyNeeded
+  ContextBuilt -> NoResponseNeeded
+  ReplyNeeded -> Drafting
+  Drafting -> DraftReady
+  DraftReady -> Reviewing
+  Reviewing -> Approved
+  Reviewing -> ReworkRequired
+  ReworkRequired -> ContextBuilt
+  Approved -> Sending
+  Sending -> Sent
+  Sending -> SendFailed
+  Sent -> AwaitingAcknowledgement
+  AwaitingAcknowledgement -> Done
+  NoResponseNeeded -> Done
+  ReplyNeeded -> Escalated
+
+Commitment:
+  start = Proposed
+  terminal = Delivered, Escalated, CancelledWithNotice
+  Proposed -> Reviewed
+  Reviewed -> Committed
+  Committed -> BackingScheduled
+  BackingScheduled -> DueSoon
+  DueSoon -> InProgress
+  InProgress -> Delivered
+  DueSoon -> AtRisk
+  InProgress -> AtRisk
+  AtRisk -> InProgress
+  AtRisk -> Escalated
+  Committed -> CancelledWithNotice
+  BackingScheduled -> CancelledWithNotice
+
+Schedule:
+  start = Created
+  terminal = Acknowledged, Expired, DisabledByPolicy
+  Created -> Enabled
+  Enabled -> Due
+  Due -> Emitted
+  Emitted -> BackingWorkQueued
+  BackingWorkQueued -> Acknowledged
+  Enabled -> Paused
+  Paused -> Enabled
+  Enabled -> Expired
+  Paused -> DisabledByPolicy
+  Enabled -> DisabledByPolicy
+
+Knowledge:
+  start = IncidentObserved
+  terminal = Active, Superseded
+  IncidentObserved -> LessonDrafted
+  LessonDrafted -> AwaitingReview
+  AwaitingReview -> EvidenceAttached
+  EvidenceAttached -> Active
+  Active -> Superseded
+
+Repair:
+  start = Healthy
+  terminal = Restored
+  Healthy -> PressureDetected
+  PressureDetected -> RepairPlanning
+  RepairPlanning -> RepairPlanReviewed
+  RepairPlanReviewed -> ApplyingDeterministicActions
+  ApplyingDeterministicActions -> RepairVerification
+  RepairVerification -> Restored
+  RepairVerification -> StillDegraded
+  StillDegraded -> RepairPlanning
+```
+<!-- END GENERATED core-state-machine -->
+
 ## Enforcement Rules
 
 ### Safety Gates
