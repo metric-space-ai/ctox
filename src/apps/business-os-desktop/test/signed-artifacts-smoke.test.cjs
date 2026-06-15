@@ -65,21 +65,21 @@ function assertEvidence(evidence, platform, checkKeys) {
 }
 
 function createMacFixture(root) {
-  const app = path.join(root, "mac-arm64", "CTOX Business-OS Desktop.app");
+  const app = path.join(root, "mac-arm64", "CTOX Business-OS Desktop Beta.app");
   writeFile(path.join(app, "Contents", "Info.plist"), "<plist></plist>");
   writeFile(path.join(app, "Contents", "Resources", "app.asar"), "asar");
   writeExecutable(path.join(app, "Contents", "Resources", "ctox", "ctox"), "#!/bin/sh\n");
 }
 
 function createLinuxFixture(root) {
-  writeFile(path.join(root, "CTOX Business-OS Desktop.AppImage"), "appimage");
+  writeFile(path.join(root, "CTOX Business-OS Desktop Beta.AppImage"), "appimage");
   writeFile(path.join(root, "ctox-business-os-desktop.deb"), "deb");
   writeFile(path.join(root, "linux-unpacked", "resources", "app.asar"), "asar");
   writeExecutable(path.join(root, "linux-unpacked", "resources", "ctox", "ctox"), "#!/bin/sh\n");
 }
 
 function createWindowsFixture(root) {
-  writeFile(path.join(root, "CTOX Business-OS Desktop Setup.exe"), "installer");
+  writeFile(path.join(root, "CTOX Business-OS Desktop Beta Setup.exe"), "installer");
   writeFile(path.join(root, "win-unpacked", "resources", "app.asar"), "asar");
   writeFile(path.join(root, "win-unpacked", "resources", "ctox", "ctox.exe"), "binary");
 }

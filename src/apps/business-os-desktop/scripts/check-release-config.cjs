@@ -32,7 +32,7 @@ function main() {
   assert.equal(packageJson.devDependencies?.["@electron/asar"], "^3.4.1");
 
   assert.equal(builderConfig.appId, "ai.metric-space.ctox.business-os-desktop");
-  assert.equal(builderConfig.productName, "CTOX Business-OS Desktop");
+  assert.equal(builderConfig.productName, "CTOX Business-OS Desktop Beta");
   assert.equal(builderConfig.asar, true);
   assert.equal(builderConfig.icon, "build/icon.png");
   assert.ok(builderConfig.files.includes("src/**/*"), "packaging must include app source");

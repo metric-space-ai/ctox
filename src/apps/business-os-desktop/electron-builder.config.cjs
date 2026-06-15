@@ -11,7 +11,7 @@ const extraResources = fs.existsSync(ctoxHelperResourceDir)
 
 module.exports = {
   appId: "ai.metric-space.ctox.business-os-desktop",
-  productName: "CTOX Business-OS Desktop",
+  productName: "CTOX Business-OS Desktop Beta",
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
   asar: true,
   directories: {
@@ -30,7 +30,7 @@ module.exports = {
   ],
   ...(extraResources.length ? { extraResources } : {}),
   protocols: [{
-    name: "CTOX Business OS Desktop Pairing",
+    name: "CTOX Business OS Desktop Beta Pairing",
     schemes: ["ctox-business-os-desktop"],
   }],
   publish: [{

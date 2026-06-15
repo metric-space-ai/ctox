@@ -33,7 +33,7 @@ test("crash report summary avoids serializing full registry secrets", () => {
   const extra = createCrashReportExtra({
     activeInstanceId: "ssh:demo",
     appInfo: {
-      name: "CTOX Business OS Desktop",
+      name: "CTOX Business OS Desktop Beta",
       version: "0.1.0",
       platform: "darwin",
     },
@@ -48,7 +48,7 @@ test("crash report summary avoids serializing full registry secrets", () => {
     },
   });
   const serialized = JSON.stringify(extra);
-  assert.equal(extra.appName, "CTOX Business OS Desktop");
+  assert.equal(extra.appName, "CTOX Business OS Desktop Beta");
   assert.equal(extra.activeInstanceId, "ssh:demo");
   assert.equal(extra["registrySummary.instanceCount"], "1");
   assert.equal(extra["registrySummary.sources.ssh_managed"], "1");
@@ -89,4 +89,3 @@ test("crash reporter extra updates are sanitized before registration", () => {
   assert.equal(containsLikelySecret(serialized), false);
   assert.equal(calls.length, 2);
 });
-

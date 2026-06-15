@@ -22,7 +22,7 @@ async function main() {
   const helperDir = path.join(resourcesRoot, "ctox");
   const helperPath = path.join(helperDir, "ctox");
   const releaseDir = path.join(appRoot, "release", `mac-${process.arch}`);
-  const appPath = path.join(releaseDir, "CTOX Business-OS Desktop.app");
+  const appPath = path.join(releaseDir, "CTOX Business-OS Desktop Beta.app");
   const packagedHelperPath = path.join(appPath, "Contents", "Resources", "ctox", "ctox");
   const resourcesRootExisted = fs.existsSync(resourcesRoot);
   const helperDirExisted = fs.existsSync(helperDir);

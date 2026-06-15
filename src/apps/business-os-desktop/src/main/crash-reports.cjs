@@ -32,7 +32,7 @@ function createCrashReportExtra({ registry, appInfo = {}, activeInstanceId = "" 
     sources[source] = (sources[source] || 0) + 1;
   }
   return sanitizeCrashReportExtra({
-    appName: appInfo.name || "CTOX Business OS Desktop",
+    appName: appInfo.name || "CTOX Business OS Desktop Beta",
     appVersion: appInfo.version || "",
     platform: appInfo.platform || process.platform,
     activeInstanceId,

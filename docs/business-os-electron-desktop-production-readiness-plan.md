@@ -1,6 +1,13 @@
 # Business OS Electron Desktop: Production Readiness Plan
 
-Status: In Umsetzung, Stand 2026-06-15
+Status: Beta, nicht production-ready, Stand 2026-06-15
+
+Release-/Kommunikationsregel: Die App muss bis zum Abschluss der offenen
+Produktionsgates überall als `CTOX Business-OS Desktop Beta` bezeichnet werden:
+Electron-Paket, Fenstertitel, Projektseite, ctox.dev Download-/Dashboard-
+Hinweise und Release-Artefakte. Keine ctox.dev- oder Projektseite darf die
+Desktop-App als production-ready, stabilen Hauptdownload oder gleichwertige
+Web-App-Alternative darstellen.
 
 Ziel: Die CTOX Business-OS Desktop-App wird eine Slack-artige Desktop-Oberfläche,
 in der Nutzer schnell zwischen mehreren CTOX Instanzen wechseln können. Die App

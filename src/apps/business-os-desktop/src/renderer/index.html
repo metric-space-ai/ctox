@@ -7,13 +7,16 @@
       content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src https://ctox.dev wss://signaling.ctox.dev;"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>CTOX Business OS Desktop</title>
+    <title>CTOX Business OS Desktop Beta</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
-        <div class="brand">CTOX Business OS</div>
+        <div class="brand">
+          <span>CTOX Business OS</span>
+          <span class="beta-badge">Beta</span>
+        </div>
         <button id="open-switcher" class="current-instance" type="button" aria-haspopup="dialog">
           <span id="current-instance-name">Instanz wählen</span>
           <span id="current-instance-meta">⌘K</span>
@@ -27,7 +30,7 @@
       <main class="content">
         <div id="empty-state" class="empty">
           <h1>Instanz auswählen</h1>
-          <p>Verbinde ctox.dev, SSH, lokale oder gekoppelte Instanzen und wechsle danach per Switcher.</p>
+          <p>Beta-Version: Verbinde ctox.dev, SSH, lokale oder gekoppelte Instanzen und wechsle danach per Switcher.</p>
           <button id="empty-open-switcher" type="button">Switcher öffnen</button>
         </div>
         <section id="instance-settings" class="settings-panel" hidden>

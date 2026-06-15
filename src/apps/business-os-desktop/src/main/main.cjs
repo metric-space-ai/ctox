@@ -91,7 +91,7 @@ async function createWindow() {
     height: 920,
     minWidth: 1180,
     minHeight: 720,
-    title: "CTOX Business OS Desktop",
+    title: "CTOX Business OS Desktop Beta",
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

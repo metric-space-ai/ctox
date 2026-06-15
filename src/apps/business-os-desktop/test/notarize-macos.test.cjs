@@ -22,7 +22,7 @@ test("macOS notarization hook fails closed for distribution targets without buil
       appOutDir: "/tmp/out",
       packager: {
         appInfo: {
-          productFilename: "CTOX Business-OS Desktop",
+          productFilename: "CTOX Business-OS Desktop Beta",
         },
       },
     }),

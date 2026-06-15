@@ -1,12 +1,28 @@
-# CTOX Business OS Desktop
+# CTOX Business OS Desktop Beta
 
-Electron target for the CTOX Business OS desktop experience.
+Electron beta target for the CTOX Business OS desktop experience.
+
+This app must be presented as **CTOX Business-OS Desktop Beta** until the
+production-readiness plan closes the remaining live ctox.dev revocation,
+signed/notarized release, installer, and UX gates. ctox.dev and project pages
+must not market the desktop app as production-ready.
 
 The product goal is a Slack-like instance switcher that can show ctox.dev
 managed instances next to unmanaged local, SSH-managed, and invite-paired
 instances. The Business OS data plane remains RxDB/WebRTC-only; Electron may
 bootstrap shell URLs and launch context, but it must not add an HTTP data
 bridge.
+
+Local user testing:
+
+- Hand users a clickable `CTOX Business-OS Desktop Beta.app`, installed outside
+  the source tree, for example in `~/Applications` or `/Applications`.
+- Do not ask testers to run `npm start`, `npm run pack:dir`, or open an app
+  from `src/apps/business-os-desktop/release`.
+- If a local unpacked app is built for testing, build it in a temporary output
+  directory and copy only the final `.app` bundle into the Applications folder.
+  The repository `release/` directory is reserved for CI/release-smoke output
+  and must not be treated as a user-facing install location.
 
 Useful checks:
 

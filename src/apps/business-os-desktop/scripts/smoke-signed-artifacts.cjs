@@ -98,9 +98,9 @@ function smokeWindowsArtifacts(releaseRoot) {
 
 function findMacAppBundle(releaseRoot) {
   const candidates = [
-    path.join(releaseRoot, `mac-${process.arch}`, "CTOX Business-OS Desktop.app"),
-    path.join(releaseRoot, "mac", "CTOX Business-OS Desktop.app"),
-    path.join(releaseRoot, "mac-universal", "CTOX Business-OS Desktop.app"),
+    path.join(releaseRoot, `mac-${process.arch}`, "CTOX Business-OS Desktop Beta.app"),
+    path.join(releaseRoot, "mac", "CTOX Business-OS Desktop Beta.app"),
+    path.join(releaseRoot, "mac-universal", "CTOX Business-OS Desktop Beta.app"),
   ];
   for (const candidate of candidates) {
     if (fs.existsSync(candidate)) return candidate;

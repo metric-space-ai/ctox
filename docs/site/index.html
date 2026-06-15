@@ -211,6 +211,21 @@
         line-height: 1.35;
       }
 
+      .beta-chip {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        min-height: 30px;
+        padding: 0 10px;
+        border: 1px solid rgba(180, 103, 0, 0.28);
+        background: rgba(255, 176, 63, 0.12);
+        color: #8a4d00;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+
       .download-strip {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -402,6 +417,12 @@
         color: #424955;
         font-size: 20px;
         line-height: 1.5;
+      }
+
+      .business-os-title-stack {
+        display: grid;
+        gap: 12px;
+        align-content: end;
       }
 
       .automation-claim {
@@ -838,6 +859,16 @@
         color: rgba(249, 251, 255, 0.72);
         font-size: 14px;
         line-height: 1.35;
+      }
+
+      .desktop-beta-note {
+        margin: 0;
+        padding: 14px 16px;
+        border: 1px solid rgba(255, 176, 63, 0.32);
+        background: rgba(255, 176, 63, 0.1);
+        color: rgba(255, 244, 220, 0.92);
+        font-size: 14px;
+        line-height: 1.45;
       }
 
       .desktop-links a {
@@ -1574,7 +1605,7 @@
             </p>
             <div class="hero-actions">
               <a class="hero-link" href="#install" data-scroll-to="install">Install CTOX</a>
-              <span class="hero-note">Install on one host, or manage local and remote instances with Desktop.</span>
+              <span class="hero-note">Install on one host, or manage local and remote instances with the Desktop Beta.</span>
             </div>
           </div>
         </div>
@@ -1668,8 +1699,9 @@ records
       <section class="business-os" aria-labelledby="business-os-title">
         <div class="section-inner">
           <div class="business-os-header">
-            <div>
+            <div class="business-os-title-stack">
               <p class="section-kicker">Fluid workspace shell</p>
+              <span class="beta-chip">Desktop app beta</span>
               <h2 id="business-os-title">Software that builds itself as you work.</h2>
             </div>
             <p>
@@ -1939,7 +1971,7 @@ records
             <p>
               Use the terminal path when you are already on the target host.
               Open the TUI to configure runtime, communication, tickets, and
-              remote access. Use the desktop app when you want a guided setup
+              remote access. Use the Desktop Beta when you want a guided setup
               for this machine or remote servers, and when you want to manage
               more than one CTOX instance from one place.
             </p>
@@ -1962,11 +1994,11 @@ ctox status</code>
                 </ol>
               </div>
               <div class="install-path">
-                <h3>Desktop install and instance manager</h3>
+                <h3>Desktop Beta and instance manager</h3>
                 <p>
-                  The desktop app can prepare CTOX on this computer or on SSH
+                  The CTOX Business-OS Desktop app is currently beta. It can prepare CTOX on this computer or on SSH
                   hosts, connect to remote WebRTC hosts, and keep multiple
-                  local or remote instances in one registry.
+                  local or remote instances in one registry, but it should be treated as a test build until the production gates are closed.
                 </p>
               </div>
             </div>
@@ -1996,12 +2028,16 @@ ctox status</code>
             <a class="final-link" href="https://github.com/metric-space-ai/ctox/releases/latest">
               Open latest release
             </a>
+            <p class="desktop-beta-note">
+              CTOX Business-OS Desktop is currently shipped as Beta. Use it to test managed ctox.dev instances, SSH installs,
+              local instances, and manual pairing; do not present it as production-ready.
+            </p>
             <div class="desktop-links" aria-label="Desktop downloads">
-              <span>Optional Desktop installers:</span>
-              <a data-asset="ctox-desktop-macos-arm64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Apple Silicon DMG</a>
-              <a data-asset="ctox-desktop-macos-x64.dmg" href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Intel DMG</a>
-              <a data-asset="ctox-desktop-windows-x64.msi" href="https://github.com/metric-space-ai/ctox/releases/latest">Windows x64 MSI</a>
-              <a data-asset="ctox-desktop-linux-x64.AppImage" href="https://github.com/metric-space-ai/ctox/releases/latest">Linux x64 AppImage</a>
+              <span>Optional Business-OS Desktop Beta installers:</span>
+              <a href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Apple Silicon Beta DMG</a>
+              <a href="https://github.com/metric-space-ai/ctox/releases/latest">macOS Intel Beta DMG</a>
+              <a href="https://github.com/metric-space-ai/ctox/releases/latest">Windows x64 Beta installer</a>
+              <a href="https://github.com/metric-space-ai/ctox/releases/latest">Linux x64 Beta AppImage/deb</a>
             </div>
           </div>
         </div>

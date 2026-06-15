@@ -15,7 +15,7 @@ function main() {
 
 function smokeMacBundle() {
   const appRoot = path.join(__dirname, "..");
-  const appPath = path.join(appRoot, "release", `mac-${process.arch}`, "CTOX Business-OS Desktop.app");
+  const appPath = path.join(appRoot, "release", `mac-${process.arch}`, "CTOX Business-OS Desktop Beta.app");
   const plistPath = path.join(appPath, "Contents", "Info.plist");
   const iconPath = path.join(appPath, "Contents", "Resources", "icon.icns");
   const asarPath = path.join(appPath, "Contents", "Resources", "app.asar");
