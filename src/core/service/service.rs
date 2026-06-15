@@ -3315,6 +3315,31 @@ fn record_work_outcome_flow_event(
     );
 }
 
+/// skills-6: emit a durable, chained audit event when a task is bound to a
+/// `suggested_skill` that is not a registered skill bundle (renamed/deleted/
+/// typo'd). The dispatch hint still renders degraded — a missing skill must not
+/// hard-fail the turn — but the broken binding is no longer silently treated as
+/// if it were valid.
+fn record_skill_bound_missing_flow_event(root: &Path, job: &QueuedPrompt, skill: &str) {
+    let body = format!("bound skill '{skill}' is not a registered skill bundle in the catalog");
+    crate::service::harness_flow::record_harness_flow_event_lossy(
+        root,
+        crate::service::harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: "skill.bound_missing",
+            title: "Bound skill missing from catalog",
+            body_text: &body,
+            message_key: job.leased_message_keys.first().map(String::as_str),
+            work_id: job.ticket_self_work_id.as_deref(),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: serde_json::json!({
+                "skill": skill,
+                "source_label": job.source_label,
+            }),
+        },
+    );
+}
+
 fn start_prompt_worker(
     root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
@@ -3446,6 +3471,20 @@ fn start_prompt_worker(
                 .leased_message_keys
                 .iter()
                 .any(|key| key.starts_with("plan:system::"));
+            // skills-6: a task bound to a suggested_skill that no longer exists in
+            // the catalog renders its dispatch hint verbatim as if valid. Validate
+            // the binding once at the prompt-worker boundary and stamp a chained
+            // audit event on absence (degrade, don't abort).
+            if let Some(skill) = job.suggested_skill.as_deref() {
+                match crate::skill_store::skill_bundle_exists(&root, skill) {
+                    Ok(true) => {}
+                    Ok(false) => record_skill_bound_missing_flow_event(&root, &job, skill),
+                    Err(err) => push_event(
+                        &event_state,
+                        format!("skill catalog check failed for bound skill '{skill}': {err}"),
+                    ),
+                }
+            }
             let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
             } else if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
@@ -15973,6 +16012,68 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn skill_bound_missing_writes_one_chained_audit_event() {
+        // skills-6: a task bound to a skill absent from the catalog must leave a
+        // single chained audit event (degrade, don't abort), not run as if unbound.
+        let root = temp_root("skill-bound-missing");
+        // A never-registered skill is absent from the catalog.
+        assert!(
+            !crate::skill_store::skill_bundle_exists(&root, "ghost-skill").unwrap(),
+            "an unregistered skill must not be reported as existing"
+        );
+
+        let job = QueuedPrompt {
+            prompt: "do the thing".to_string(),
+            goal: "thing".to_string(),
+            preview: "thing".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("ghost-skill".to_string()),
+            leased_message_keys: vec!["msg-1".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: Some("work-1".to_string()),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        record_skill_bound_missing_flow_event(&root, &job, "ghost-skill");
+
+        let db_path = root.join("runtime").join("ctox.sqlite3");
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let rows = conn
+            .prepare(
+                "SELECT message_key, work_id, metadata_json FROM ctox_harness_flow_events \
+                 WHERE event_kind = 'skill.bound_missing'",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "exactly one skill.bound_missing event");
+        let (message_key, work_id, metadata_json) = &rows[0];
+        assert_eq!(
+            message_key.as_deref(),
+            Some("msg-1"),
+            "event chains to the leased message key"
+        );
+        assert_eq!(
+            work_id.as_deref(),
+            Some("work-1"),
+            "event chains to the work item"
+        );
+        let metadata: serde_json::Value = serde_json::from_str(metadata_json).unwrap();
+        assert_eq!(metadata["skill"].as_str(), Some("ghost-skill"));
+        assert_eq!(metadata["source_label"].as_str(), Some("queue"));
     }
 
     #[test]

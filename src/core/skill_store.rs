@@ -490,6 +490,15 @@ pub fn resolve_materialized_skill_dir(root: &Path, skill_name: &str) -> Result<O
     Ok(None)
 }
 
+/// skills-6: true when `skill_name` is a registered skill bundle in the catalog
+/// (`ctox_skill_bundles`). The prompt-worker boundary uses this to detect a task
+/// bound to a renamed/deleted/typo'd skill so the binding can be audited instead
+/// of rendered verbatim as if valid. Propagates DB errors rather than masking a
+/// lookup failure as "missing".
+pub fn skill_bundle_exists(root: &Path, skill_name: &str) -> Result<bool> {
+    Ok(load_skill_bundle_by_name(root, skill_name)?.is_some())
+}
+
 pub fn load_skill_body_by_name(root: &Path, skill_name: &str) -> Result<Option<String>> {
     let Some(bundle) = load_skill_bundle_by_name(root, skill_name)? else {
         return Ok(None);
