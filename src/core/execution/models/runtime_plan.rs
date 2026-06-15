@@ -3368,6 +3368,10 @@ fn build_candidate_for_gpu_indices(
     // on CUDA hosts. Manifest-driven overrides (e.g. Q6K entries) are
     // left alone.
     let runtime_isq = quant.runtime_isq.map(str::to_string).map(|isq| {
+        // planner-model-firewall-allow: this is a legitimate hardware-quirk
+        // override (candle's Q4K kernel is tensor-core-less for Gemma 4 E
+        // variants), NOT a model-conditioned planner heuristic. Sanctioned for
+        // the tests-5b structural firewall in runtime_plan_boundary_tests.rs.
         let is_gemma4_e_variant = matches!(
             harness.model,
             "google/gemma-4-E2B-it" | "google/gemma-4-E4B-it"
@@ -3811,6 +3815,10 @@ fn resolve_harness_runtime(
     harness: ModelHarness,
     hardware: &HardwareProfile,
 ) -> ResolvedHarnessRuntime {
+    // planner-model-firewall-allow: device-pinning hardware quirk (pin
+    // CUDA_VISIBLE_DEVICES=0 for Gemma 4 E variants on a GPU-0 host), NOT a
+    // model-conditioned planner heuristic. Sanctioned for the tests-5b
+    // structural firewall in runtime_plan_boundary_tests.rs.
     let fixed_cuda_visible_devices = match harness.model {
         "google/gemma-4-E2B-it" | "google/gemma-4-E4B-it"
             if hardware.gpus.iter().any(|gpu| gpu.index == 0) =>
