@@ -83,6 +83,7 @@ function assertCiWorkflowMatrix() {
     "npm test",
     "npm run check",
     "npm run release:check",
+    "npm run pack:dir:bundled-runtime-smoke",
     "npm run test:electron-smoke",
     "xvfb-run -a npm run test:electron-smoke",
     "npm run smoke:keychain-runtime",

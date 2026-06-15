@@ -60,6 +60,11 @@ jobs:
         working-directory: src/apps/business-os-desktop
         run: npm run release:check
 
+      - name: Packaged bundled helper smoke
+        if: runner.os == 'macOS'
+        working-directory: src/apps/business-os-desktop
+        run: npm run pack:dir:bundled-runtime-smoke
+
       - name: Electron smokes
         if: runner.os != 'Linux'
         working-directory: src/apps/business-os-desktop

@@ -80,7 +80,9 @@ wieder testbar:
   Helper in `Contents/Resources/ctox/ctox` und nutzt genau diesen verpackten
   Helper aus einem frischen Desktop-Profil fuer Installation, Inspect, Attach,
   simulierten App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak.
-  Noch offen ist der echte Tag-/Signed-Run auf sauberer Maschine.
+  Der `main`-/PR-CI-Desktop-E2E-Job fuehrt diesen Smoke auf macOS ebenfalls
+  aus, damit der Nachweis nicht nur lokal existiert. Noch offen ist der echte
+  Tag-/Signed-Run auf sauberer Maschine.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -573,6 +575,9 @@ Tests:
   `Contents/Resources/ctox/ctox` als ausfuehrbare Datei und nutzt den
   verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect,
   Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak.
+- [x] `main`-/PR-CI fuehrt `npm run pack:dir:bundled-runtime-smoke` im
+  macOS-Desktop-E2E-Job aus; `npm run release:check` erzwingt diesen
+  Workflow-Vertrag.
 
 ## Welle 4: Pairing Invite Source
 
@@ -910,6 +915,9 @@ Release Gates:
   App-Resource-Helper und beweist, dass ein frisches Desktop-Profil ohne
   globales CTOX-Binary ueber den verpackten Helper lokal installieren,
   attachen, neu starten und WebRTC-only launchen kann.
+- [x] macOS `main`-/PR-CI fuehrt denselben Packaged-Helper-Smoke auf einem
+  sauberen GitHub-Runner aus; `release:check` prueft, dass der CI-Gate nicht
+  versehentlich entfernt wird.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -992,6 +1000,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Welle 3/8 CI-Gate fuer Packaged-App-Helper ergaenzt: Der `Business OS Desktop E2E (mac)` Job in `.github/workflows/ci.yml` fuehrt jetzt `npm run pack:dir:bundled-runtime-smoke` aus. `npm run release:check` erzwingt den Workflow-Befehl, damit der unpacked-`.app`-Helper-Nachweis auf einem sauberen macOS-Runner nicht wieder verloren geht. Offen bleibt weiter der signierte/notarisierte Tag-Run mit echten Installer-Artefakten. |
 | 2026-06-15 | Welle 3 Packaged-App-Helper-Nachweis ergaenzt: `npm run pack:dir:bundled-runtime-smoke` baut lokal eine unpacked macOS `.app` mit temporaerem gebuendeltem CTOX-Helper, validiert `Contents/Resources/ctox/ctox` als ausfuehrbar und nutzt den verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect, Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak. Welle 3 steigt auf 96%; production-ready bleibt durch echten signierten/notarisierten Tag-Run und echte ctox.dev Membership-Revocation blockiert. |
 | 2026-06-15 | ctox.dev Live-Revocation eingeordnet: Der aktuelle Live-Account ist per read-only Membership-Check auf allen sechs sichtbaren Tenants `owner`. Ein sicherer, reversibler Entzug der eigenen Mitgliedschaft ist mit diesem Account kein valider Test; fuer den Produktionsnachweis braucht es einen separaten Nicht-Owner-Testmember oder eine dedizierte Testinstanz mit administrativ kontrollierbarem Mitglied. |
 | 2026-06-13 | Plan im aktuellen Worktree neu angelegt und an den sichtbaren Stand angepasst. Electron-Scaffold wieder aufgebaut: Instanzmodell, Registry, ctox.dev Source-Adapter, Pairing-Source, Launch-Config, BrowserView-Host, Renderer-Shell und Electron Session-Isolation-Smoke. |
