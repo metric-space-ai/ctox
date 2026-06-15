@@ -300,10 +300,12 @@ wieder testbar:
 
 Nicht umgesetzt oder noch nicht bewiesen:
 
-- Server-seitige Access Revocation und Desktop-Session-Rotation gegen echte
-  ctox.dev-Tenants; lokal ist der Contract inklusive Electron-Smoke gruen, und
-  der Desktop blockiert jetzt auch den Live-kompatiblen Sperrfall
-  `launchAllowed:false` vor dem Launch-Token-Request.
+- Server-seitige Access Revocation gegen echte ctox.dev-Tenants; lokal ist der
+  Contract inklusive Electron-Smoke gruen, und der Desktop blockiert jetzt auch
+  den Live-kompatiblen Sperrfall `launchAllowed:false` vor dem
+  Launch-Token-Request. Desktop-Session-Rotation ist live bewiesen: Logout
+  entfernt jetzt auch ctox.dev-Domaincookies aus Electron, Session-Package ist
+  danach 401, alte Launches blockieren, Re-Login stellt die Tenants wieder her.
 - Komplett frisches OS ohne vorhandenes lokales CTOX-Binary/validen CTOX
   Runtime-Root ist als Desktop-Vertrag naeher dran, aber noch nicht final
   bewiesen: Der lokale Quellpfad kann jetzt einen gebuendelten CTOX-Helper aus
@@ -352,14 +354,14 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | --- | ---: | --- | ---: |
 | 0. Baseline & Architekturentscheidung | 8% | Abgeschlossen | 100% |
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
-| 2. ctox.dev Managed Source | 14% | In Umsetzung | 97% |
+| 2. ctox.dev Managed Source | 14% | In Umsetzung | 99% |
 | 3. Local Daemon Source | 12% | In Umsetzung | 92% |
 | 4. Pairing Invite Source | 12% | Abgeschlossen | 100% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
 | 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 88% |
-| **Gesamt** | **100%** | **In Umsetzung** | **97%** |
+| **Gesamt** | **100%** | **In Umsetzung** | **98%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
 
@@ -395,7 +397,7 @@ Tests:
 
 ## Welle 2: ctox.dev Managed Source
 
-Status: In Umsetzung, 97%.
+Status: In Umsetzung, 99%.
 
 Aufgaben:
 
@@ -435,8 +437,11 @@ Aufgaben:
 - [x] Visueller BrowserWindow-Login ueber die echte ctox.dev AuthPanel-UI; der
   Custom-Scheme-Callback ist lokal/Electron-gruen, live wird der Abschluss
   ueber Session-Check bewiesen.
-- [ ] Live Access Revocation und Desktop-Session-Rotation gegen echte
-  ctox.dev-Tenants.
+- [x] Live Desktop-Session-Rotation gegen echte ctox.dev-Session: Logout
+  entfernt ctox.dev-Storage und Domaincookies, `session-package` wird 401,
+  die managed Instanzliste ist leer, ein alter Launch-Token-Pfad blockiert,
+  Re-Login bringt die Tenants zurueck und Relaunch bleibt WebRTC-only.
+- [ ] Live Access Revocation gegen echte ctox.dev-Tenant-Mitgliedschaft.
 
 Tests:
 
@@ -484,6 +489,15 @@ Tests:
   --expected-tenant Kunstmen --expected-tenant SKF` ist gegen Produktion gruen.
   Evidenz: sechs Tenants, Kunstmen/SKF vorhanden, Management-Link HTTP 200 ohne
   Login-Redirect, Kunstmen-Launch `transport=webrtc` und
+  `httpBridgeAvailable=false`.
+- [x] Live-Session-Rotation 2026-06-15:
+  `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first
+  --session-rotation --expected-tenant Kunstmen --expected-tenant SKF` ist
+  gegen Produktion gruen. Evidenz: erster AuthPanel-Login sieht sechs Tenants,
+  Logout entfernt ein ctox.dev-Cookie, `/api/desktop/session-package` liefert
+  danach 401, managed Count ist 0, alter Launch blockiert mit
+  `ctox.dev launch token failed: 400`, Re-Login sieht wieder sechs Tenants und
+  Relaunch fuer Kunstmen bleibt `transport=webrtc` /
   `httpBridgeAvailable=false`.
 - [ ] Live-Entzug einer Mitgliedschaft entfernt oder sperrt die Instanz.
 
@@ -1017,3 +1031,4 @@ Release Gates:
 | 2026-06-14 | Welle 4 abgeschlossen: Commit `6e352b7f` stabilisiert WebRTC-Restart-Batches nach Native-Peer-Rollover. Der gezielte RxDB-Soak `27503869533` lief mit `SOAK_FAIL_ON_RETRY=1` im Modus `rollover-native-peer-browser-to-rust` im ersten Versuch gruen (`ok=true`, `retryCount=0`, `durationMs=12163`). Die Evidenz zeigt `replicated_id=browser_rollover_smoke_1781452549731`, `replication_directions` fuer `desktop_files` und `desktop_file_chunks` jeweils `peerCount=1`/`forkPeerCount=1`, `checkpoint_epoch_count=11`, `browser_error_count=0`, `browser_request_failure_count=0` und `browser_asset_response_error_count=0`. Der vorherige Zwischenfix `4ca640cd`/Run `27503042581` war noch negativ auf Versuch 1 und bestaetigte damit die Batch-Restart-Ursache. Welle 4 ist 100%; Gesamt bleibt gerundet 97%. |
 | 2026-06-15 | Welle 2 ctox.dev Sperrpfad gehaertet: `launchAllowed:false` aus dem ctox.dev Session-Package wird als `needs_auth` normalisiert und der SourceManager verweigert den Launch vor dem `/api/desktop/launch-token` Request. Damit ist der Desktop fail-closed, wenn ctox.dev einen entzogenen oder nicht launchbaren Tenant noch in der Liste meldet. Live-Recheck gegen Produktion ist gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --expected-tenant Kunstmen --expected-tenant SKF` automatisiert die echte AuthPanel-UI, sieht sechs Tenants inklusive Kunstmen/SKF, laedt `/dashboard?tenant=<tenant-id>` mit HTTP 200 ohne Login-Redirect und startet Kunstmen WebRTC-only (`transport=webrtc`, `httpBridgeAvailable=false`). Gruen: `node --test test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, `npm test` 109/109, `npm run release:check`, `npm run test:electron-smoke` nach einem transienten ersten HTTP-Guard-Smoke-Fehler; der isolierte HTTP-Guard-Smoke war direkt gruen. Welle 2 steigt auf 97%; echte serverseitige Live-Revocation/Session-Rotation bleibt offen. |
 | 2026-06-15 | Welle 8 Release-Secret-Preflight ergaenzt: `npm run release:secrets:check` prueft lokal per GitHub CLI die benoetigten Repo-Secret-Namen fuer signierte/notarisierte Business-OS-Desktop-Releases, ohne Secret-Werte zu lesen. Aktueller Befund ist negativ: `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` und `gh variable list --repo metric-space-ai/ctox --json name,updatedAt,value` liefern jeweils `[]`; ein neuer Tag-Release wuerde deshalb am macOS-Preflight fuer `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` scheitern. Welle 8 steigt auf 88%, weil der Preflight reproduzierbar ist; production-ready bleibt bis zur Secret-Konfiguration und einem echten gruenen Tag-Run offen. |
+| 2026-06-15 | Welle 2 Live-Session-Rotation geschlossen und echten Logout-Bug beseitigt: Der erste Produktions-Smoke mit `--session-rotation` zeigte, dass `clearStorageData` allein ctox.dev nicht ausloggt; `/api/desktop/session-package` blieb authentifiziert. `clearCtoxDevSession` entfernt jetzt zusaetzlich passende ctox.dev-Domaincookies aus Electron. Der erneute Live-Smoke `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --session-rotation --expected-tenant Kunstmen --expected-tenant SKF` ist gegen Produktion gruen: initial sechs Tenants, Kunstmen-Management-Link HTTP 200 ohne Login-Redirect, erster Launch WebRTC-only, Logout entfernt ein ctox.dev-Cookie, Session-Package danach 401, managed Count 0, alter Launch blockiert mit `ctox.dev launch token failed: 400`, Re-Login sieht wieder sechs Tenants, Relaunch fuer Kunstmen bleibt `transport=webrtc` / `httpBridgeAvailable=false`. Der Smoke schreibt bei Timeouts jetzt Teil-Evidenz mit letzter Stage. Gruen: `node --test test/ctox-dev-login.test.cjs test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, Live-Rotations-Smoke. Welle 2 steigt auf 99%, Gesamt auf 98%; offen bleibt echter serverseitiger Membership-Entzug. |

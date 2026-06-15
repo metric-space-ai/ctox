@@ -43,6 +43,7 @@ function parseArgs(args) {
     launchFirst: false,
     manageFirst: false,
     authWindow: false,
+    sessionRotation: false,
     keepTemp: false,
   };
   for (let index = 0; index < args.length; index += 1) {
@@ -62,6 +63,8 @@ function parseArgs(args) {
       options.manageFirst = true;
     } else if (arg === "--auth-window") {
       options.authWindow = true;
+    } else if (arg === "--session-rotation") {
+      options.sessionRotation = true;
     } else if (arg === "--password-stdin") {
       options.passwordStdin = true;
     } else if (arg === "--keep-temp") {
@@ -94,6 +97,7 @@ function runLiveFixture({ outputPath, userDataPath, password, options }) {
       ...(options.launchFirst ? ["--launch-first"] : []),
       ...(options.manageFirst ? ["--manage-first"] : []),
       ...(options.authWindow ? ["--auth-window"] : []),
+      ...(options.sessionRotation ? ["--session-rotation"] : []),
       ...options.expectedTenants.flatMap((tenant) => ["--expected-tenant", tenant]),
     ];
     let stdout = "";
@@ -105,12 +109,14 @@ function runLiveFixture({ outputPath, userDataPath, password, options }) {
       windowsHide: true,
     });
     child.stdin.end(`${password}\n`);
+    const timeoutMs = options.sessionRotation ? 180000 : 90000;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       child.kill("SIGKILL");
-      reject(new Error(`ctox.dev live smoke timed out\nstdout:\n${stdout}\nstderr:\n${stderr}`));
-    }, 90000);
+      const partial = readResult(outputPath);
+      reject(new Error(`ctox.dev live smoke timed out\npartial:\n${JSON.stringify(partial, null, 2)}\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+    }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {

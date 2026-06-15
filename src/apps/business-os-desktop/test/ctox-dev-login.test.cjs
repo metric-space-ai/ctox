@@ -67,14 +67,28 @@ test("builds ctox.dev management URLs without embedding launch secrets", () => {
 
 test("clears only the configured ctox.dev session origin", async () => {
   const calls = [];
+  const removed = [];
   const result = await clearCtoxDevSession({
     clearStorageData: async (options) => calls.push(options),
+    cookies: {
+      get: async () => [
+        { name: "session", domain: ".ctox.dev", path: "/", secure: true },
+        { name: "csrf", domain: "auth.ctox.dev", path: "/", secure: true },
+        { name: "too-broad", domain: "dev", path: "/", secure: true },
+        { name: "other", domain: "example.com", path: "/", secure: true },
+      ],
+      remove: async (url, name) => removed.push([url, name]),
+    },
   }, "https://ctox.dev/");
-  assert.deepEqual(result, { ok: true, origin: "https://ctox.dev" });
+  assert.deepEqual(result, { ok: true, origin: "https://ctox.dev", removedCookies: 2 });
   assert.deepEqual(calls, [{
     origin: "https://ctox.dev",
     storages: ["cookies", "localstorage", "indexdb", "cachestorage", "serviceworkers"],
   }]);
+  assert.deepEqual(removed, [
+    ["https://ctox.dev/", "session"],
+    ["https://auth.ctox.dev/", "csrf"],
+  ]);
 });
 
 test("custom protocol callback completes the active ctox.dev login window", async () => {

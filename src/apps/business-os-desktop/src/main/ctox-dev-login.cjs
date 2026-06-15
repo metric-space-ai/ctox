@@ -77,12 +77,41 @@ async function clearCtoxDevSession(desktopSession, baseUrl) {
   if (!desktopSession?.clearStorageData) {
     throw new Error("Electron session.clearStorageData is required");
   }
-  const origin = new URL(normalizeCtoxDevBaseUrl(baseUrl)).origin;
+  const base = new URL(normalizeCtoxDevBaseUrl(baseUrl));
+  const origin = base.origin;
   await desktopSession.clearStorageData({
     origin,
     storages: ["cookies", "localstorage", "indexdb", "cachestorage", "serviceworkers"],
   });
-  return { ok: true, origin };
+  const removedCookies = await clearCtoxDevCookies(desktopSession, base);
+  return { ok: true, origin, removedCookies };
+}
+
+async function clearCtoxDevCookies(desktopSession, base) {
+  if (!desktopSession.cookies?.get || !desktopSession.cookies?.remove) return 0;
+  const host = base.hostname.toLowerCase();
+  const cookies = await desktopSession.cookies.get({});
+  let removed = 0;
+  for (const cookie of cookies) {
+    if (!cookie.name) continue;
+    const domain = normalizeCookieDomain(cookie.domain || host);
+    if (!cookieMatchesCtoxDevBase(domain, host)) continue;
+    const url = `${cookie.secure === false ? base.protocol : "https:"}//${domain}${cookie.path || "/"}`;
+    await desktopSession.cookies.remove(url, cookie.name);
+    removed += 1;
+  }
+  return removed;
+}
+
+function normalizeCookieDomain(domain) {
+  return String(domain || "").trim().replace(/^\.+/, "").toLowerCase();
+}
+
+function cookieMatchesCtoxDevBase(domain, host) {
+  if (!domain || !host || domain.split(".").length < 2) return false;
+  return domain === host
+    || domain.endsWith(`.${host}`)
+    || host.endsWith(`.${domain}`);
 }
 
 async function openCtoxDevLoginWindow({

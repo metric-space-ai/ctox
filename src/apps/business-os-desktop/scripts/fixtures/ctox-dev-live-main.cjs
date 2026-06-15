@@ -26,15 +26,26 @@ app.on("window-all-closed", () => undefined);
 app.whenReady().then(async () => {
   let exitCode = 0;
   const password = await readPassword();
+  let progress = { ok: false, baseUrl: options.baseUrl, stage: "password-read" };
+  function writeProgress(stage, extra = {}) {
+    progress = { ...progress, ...extra, stage };
+    writeResult(progress);
+  }
+  writeProgress("starting-login");
   try {
     if (options.authWindow) {
       await clearCtoxDevSession(session.defaultSession, options.baseUrl);
+      writeProgress("initial-session-cleared");
     }
     const login = options.authWindow
       ? await loginWithAuthWindow(options.baseUrl, options.email, password)
       : await loginWithPasswordApi(options.baseUrl, options.email, password);
+    writeProgress("logged-in", { login: summarizeLogin(login) });
 
     const rawSessionPackage = await fetchRawSessionPackage(options.baseUrl);
+    writeProgress("session-package-loaded", {
+      sessionPackage: summarizeSessionPackage(rawSessionPackage),
+    });
     const registry = {
       settings: {
         ctoxDevBaseUrl: options.baseUrl,
@@ -53,6 +64,7 @@ app.whenReady().then(async () => {
     });
     const instances = await sourceManager.listInstances();
     const managedInstances = instances.filter((instance) => instance.source === "ctox_dev");
+    writeProgress("instances-loaded", { managedInstanceCount: managedInstances.length });
     const expectedTenantsPresent = options.expectedTenants.every((expected) => {
       const normalized = expected.toLowerCase();
       return managedInstances.some((instance) => [
@@ -66,7 +78,7 @@ app.whenReady().then(async () => {
       throw new Error(`expected tenants missing: ${options.expectedTenants.join(", ")}`);
     }
 
-    const selectedForOptionalFlows = (options.launchFirst || options.manageFirst)
+    const selectedForOptionalFlows = (options.launchFirst || options.manageFirst || options.sessionRotation)
       ? selectLaunchInstance(managedInstances, options.expectedTenants)
       : null;
 
@@ -83,6 +95,7 @@ app.whenReady().then(async () => {
       if (!management.tenantHintPresent) {
         throw new Error("ctox.dev dashboard management link did not expose the selected tenant");
       }
+      writeProgress("management-checked", { management });
     }
 
     let launch = null;
@@ -106,9 +119,28 @@ app.whenReady().then(async () => {
         hasRoomPassword: Boolean(launchConfig.ctoxConfig.signaling_room_password),
         expiresAt: launchConfig.expiresAt || "",
       };
+      writeProgress("launch-checked", { launch });
     }
 
-    const logout = await clearCtoxDevSession(session.defaultSession, options.baseUrl);
+    let sessionRotation = null;
+    if (options.sessionRotation) {
+      if (!selectedForOptionalFlows) throw new Error("no ctox.dev managed instances available for session rotation smoke");
+      writeProgress("session-rotation-started");
+      sessionRotation = await exerciseSessionRotation({
+        baseUrl: options.baseUrl,
+        email: options.email,
+        password,
+        sourceManager,
+        selectedInstance: selectedForOptionalFlows,
+        expectedTenants: options.expectedTenants,
+        useAuthWindow: options.authWindow,
+        writeProgress,
+      });
+    }
+
+    const logout = sessionRotation?.finalLogout
+      || await clearCtoxDevSession(session.defaultSession, options.baseUrl);
+    writeProgress("final-logout", { logout });
     const result = {
       ok: login.ok === true && login.completed === true,
       baseUrl: options.baseUrl,
@@ -127,6 +159,7 @@ app.whenReady().then(async () => {
       expectedTenantsPresent,
       management,
       launch,
+      sessionRotation,
       logout,
     };
     writeResult(result);
@@ -143,6 +176,26 @@ app.whenReady().then(async () => {
   }
 });
 
+function summarizeLogin(login) {
+  return {
+    ok: login?.ok === true,
+    completed: login?.completed === true,
+    method: login?.method || "",
+    via: login?.via || "",
+  };
+}
+
+function summarizeSessionPackage(rawSessionPackage) {
+  return {
+    ok: rawSessionPackage?.ok === true,
+    desktopProtocol: rawSessionPackage?.desktopProtocol || "",
+    accountAuthenticated: rawSessionPackage?.account?.authenticated === true,
+    tenantCount: Array.isArray(rawSessionPackage?.account?.tenants)
+      ? rawSessionPackage.account.tenants.length
+      : 0,
+  };
+}
+
 function parseArgs(args) {
   const parsed = {
     baseUrl: "https://ctox.dev",
@@ -151,6 +204,7 @@ function parseArgs(args) {
     launchFirst: false,
     manageFirst: false,
     authWindow: false,
+    sessionRotation: false,
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -169,6 +223,8 @@ function parseArgs(args) {
       parsed.manageFirst = true;
     } else if (arg === "--auth-window") {
       parsed.authWindow = true;
+    } else if (arg === "--session-rotation") {
+      parsed.sessionRotation = true;
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
@@ -335,14 +391,151 @@ async function fetchRawSessionPackage(baseUrl) {
 }
 
 async function isCtoxDevSessionAuthenticated(baseUrl) {
+  const state = await fetchSessionState(baseUrl);
+  return state.accountAuthenticated === true || state.tenantCount > 0;
+}
+
+async function fetchSessionState(baseUrl) {
   const response = await session.defaultSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/desktop/session-package`, {
     cache: "no-store",
     credentials: "include",
     headers: { "x-ctox-desktop-client": "ctox-business-os-desktop" },
   });
-  if (!response.ok) return false;
-  const payload = await response.json().catch(() => ({}));
-  return payload?.account?.authenticated === true || Array.isArray(payload?.account?.tenants);
+  const payload = response.ok ? await response.json().catch(() => ({})) : {};
+  return {
+    ok: response.ok,
+    status: response.status,
+    accountAuthenticated: payload?.account?.authenticated === true,
+    tenantCount: Array.isArray(payload?.account?.tenants) ? payload.account.tenants.length : 0,
+    desktopProtocol: payload?.desktopProtocol || "",
+  };
+}
+
+async function exerciseSessionRotation({
+  baseUrl,
+  email,
+  password,
+  sourceManager,
+  selectedInstance,
+  expectedTenants,
+  useAuthWindow,
+  writeProgress = () => undefined,
+}) {
+  const logout = await clearCtoxDevSession(session.defaultSession, baseUrl);
+  const postLogoutSession = await fetchSessionState(baseUrl);
+  const postLogoutInstances = await sourceManager.listInstances();
+  const postLogoutManagedCount = postLogoutInstances.filter((instance) => instance.source === "ctox_dev").length;
+  writeProgress("session-rotation-post-logout", {
+    sessionRotation: {
+      logout,
+      postLogoutSession,
+      postLogoutManagedCount,
+    },
+  });
+  if (postLogoutSession.accountAuthenticated === true || postLogoutSession.tenantCount > 0) {
+    throw new Error("ctox.dev session-package still authenticated after session logout");
+  }
+  let launchAfterLogoutError = "";
+  try {
+    await sourceManager.getLaunchConfig(selectedInstance);
+  } catch (error) {
+    launchAfterLogoutError = error instanceof Error ? error.message : String(error);
+  }
+  if (!launchAfterLogoutError) {
+    throw new Error("ctox.dev launch unexpectedly succeeded after session logout");
+  }
+  writeProgress("session-rotation-launch-blocked", {
+    sessionRotation: {
+      logout,
+      postLogoutSession,
+      postLogoutManagedCount,
+      launchAfterLogoutBlocked: true,
+      launchAfterLogoutError,
+    },
+  });
+  if (postLogoutManagedCount !== 0) {
+    throw new Error(`ctox.dev managed instances still visible after session logout: ${postLogoutManagedCount}`);
+  }
+
+  const relogin = useAuthWindow
+    ? await loginWithAuthWindow(baseUrl, email, password)
+    : await loginWithPasswordApi(baseUrl, email, password);
+  writeProgress("session-rotation-relogin", {
+    sessionRotation: {
+      logout,
+      postLogoutSession,
+      postLogoutManagedCount,
+      launchAfterLogoutBlocked: true,
+      relogin: summarizeLogin(relogin),
+    },
+  });
+  if (relogin.ok !== true || relogin.completed !== true) {
+    throw new Error("ctox.dev relogin did not complete after session rotation");
+  }
+  const postReloginSession = await fetchSessionState(baseUrl);
+  if (postReloginSession.accountAuthenticated !== true && postReloginSession.tenantCount === 0) {
+    throw new Error("ctox.dev session-package did not recover after relogin");
+  }
+  const postReloginInstances = await sourceManager.listInstances();
+  const managedInstances = postReloginInstances.filter((instance) => instance.source === "ctox_dev");
+  writeProgress("session-rotation-post-relogin", {
+    sessionRotation: {
+      logout,
+      postLogoutSession,
+      postLogoutManagedCount,
+      launchAfterLogoutBlocked: true,
+      relogin: summarizeLogin(relogin),
+      postReloginSession,
+      postReloginManagedCount: managedInstances.length,
+    },
+  });
+  const expectedTenantsPresent = expectedTenants.every((expected) => {
+    const normalized = expected.toLowerCase();
+    return managedInstances.some((instance) => [
+      instance.displayName,
+      instance.domain,
+      instance.tenantId,
+      instance.instanceId,
+    ].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalized)));
+  });
+  if (expectedTenants.length > 0 && !expectedTenantsPresent) {
+    throw new Error(`expected tenants missing after session rotation: ${expectedTenants.join(", ")}`);
+  }
+  const relaunchInstance = selectLaunchInstance(managedInstances, expectedTenants);
+  if (!relaunchInstance) throw new Error("no ctox.dev managed instances available after relogin");
+  const relaunchConfig = await sourceManager.getLaunchConfig(relaunchInstance);
+  if (relaunchConfig.ctoxConfig?.transport !== "webrtc") throw new Error("rotated launch config transport is not webrtc");
+  if (relaunchConfig.ctoxConfig?.http_bridge_available !== false) {
+    throw new Error("rotated launch config http_bridge_available is not false");
+  }
+  const finalLogout = await clearCtoxDevSession(session.defaultSession, baseUrl);
+  const result = {
+    logout,
+    postLogoutSession,
+    postLogoutManagedCount,
+    launchAfterLogoutBlocked: true,
+    launchAfterLogoutError,
+    relogin,
+    postReloginSession,
+    postReloginManagedCount: managedInstances.length,
+    expectedTenantsPresent,
+    relaunch: {
+      source: relaunchConfig.source,
+      tenantId: relaunchInstance.tenantId,
+      displayName: relaunchInstance.displayName,
+      launchUrlOrigin: safeOrigin(relaunchConfig.launchUrl),
+      transport: relaunchConfig.ctoxConfig.transport,
+      httpBridgeAvailable: relaunchConfig.ctoxConfig.http_bridge_available,
+      signalingUrlCount: Array.isArray(relaunchConfig.ctoxConfig.signaling_urls)
+        ? relaunchConfig.ctoxConfig.signaling_urls.length
+        : 0,
+      hasRoomPassword: Boolean(relaunchConfig.ctoxConfig.signaling_room_password),
+      expiresAt: relaunchConfig.expiresAt || "",
+    },
+    finalLogout,
+  };
+  writeProgress("session-rotation-complete", { sessionRotation: result });
+  return result;
 }
 
 async function inspectManagedDashboard(baseUrl, instance) {
