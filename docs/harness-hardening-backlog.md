@@ -1200,7 +1200,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — distinct `agent_failure_recovery` mechanism (governance.rs, class `recovery`) emitted by `record_agent_failure_recovery` (service.rs) only when a deferral is actually cleared. `reset_mission_agent_failure_count` now returns `MissionFailureReset { record, previous_deferred_reason, recovered_at }` (lcm.rs), capturing the pre-reset reason; the emit is idempotence-keyed on the per-recovery `recovered_at` timestamp (the obvious `watcher_trigger_count` is dead — never incremented in production — so it would have collapsed every cycle to one row). Tests pin the once-only `previous_deferred_reason` lifecycle, two distinct recoveries → two rows, a healthy turn → no row (isolated), and conversation scoping. (Adjacent: the pre-existing defer-side key has the same per-cycle collision; tracked separately.)
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/context/lcm.rs::reset_mission_agent_failure_count`, `src/core/service/service.rs::run_add_assistant_turn`, `src/core/service/service.rs::mission_agent_failure_threshold`
