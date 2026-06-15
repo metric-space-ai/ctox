@@ -6429,12 +6429,15 @@ fn complete_business_os_app_validation_success_to_leased_queue(
         !job.leased_message_keys.is_empty(),
         "Business OS app validation success had no leased queue task to update"
     );
+    let expected_module_id =
+        business_os_app_module_target_from_prompt(&job.prompt).map(|target| target.module_id);
     let mut fallback_message_keys = Vec::new();
     let mut updated = 0usize;
     for message_key in &job.leased_message_keys {
         match crate::business_os::store::complete_business_command_from_app_validation_success(
             root,
             message_key,
+            expected_module_id.as_deref(),
             reason,
         )
             .with_context(|| {
@@ -6545,7 +6548,8 @@ fn business_os_app_module_validation_feedback(
         )));
     }
 
-    let mut command = Command::new("node");
+    let mut command =
+        Command::new(crate::service::business_os::resolve_business_os_validator_node(root));
     command
         .arg(&script)
         .arg(&target.module_id)
@@ -20070,6 +20074,81 @@ Business OS command:
                 .and_then(Value::as_str),
             Some("runtime/business-os/installed-modules/subscriptions")
         );
+    }
+
+    #[test]
+    fn business_os_app_validation_success_refuses_mismatched_module_task() {
+        let root = temp_root("business-os-app-validation-mismatched-module-task");
+        let accepted = crate::business_os::store::accept_rxdb_business_command(
+            &root,
+            json!({
+                "id": "cmd_app_mismatch",
+                "command_id": "cmd_app_mismatch",
+                "module": "creator",
+                "command_type": "ctox.business_os.app.create",
+                "record_id": "subscriptions",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Create subscriptions app",
+                    "instruction": "Build a Business OS subscription app.",
+                    "module_id": "subscriptions",
+                    "install_target": "runtime-installed-module"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test"
+                }
+            }),
+        )
+        .expect("failed to accept app command");
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .expect("expected queue task id")
+            .to_string();
+        channels::lease_queue_task(&root, &task_id, "ctox-service-test")
+            .expect("failed to lease app queue task");
+        let task = channels::load_queue_task(&root, &task_id)
+            .expect("failed to load app queue task")
+            .expect("missing app queue task");
+        let job = QueuedPrompt {
+            prompt: "Business OS app build target:\n- module_id: inventory\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/inventory\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "business-os:app-create".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let error = complete_business_os_app_validation_success_to_leased_queue(
+            &root,
+            &job,
+            "Business OS app artifacts validated after worker error",
+        )
+        .expect_err("mismatched app validation must not complete command");
+        let error_report = format!("{error:?}");
+        assert!(
+            error_report.contains("queue task `queue:system::")
+                && error_report
+                    .contains("belongs to Business OS app module `subscriptions`, not `inventory`"),
+            "unexpected mismatch error: {error:?}"
+        );
+        assert_eq!(route_status_for(&root, &task_id), "leased");
+
+        let conn = crate::business_os::store::open_store(&root).expect("open store");
+        let status: String = conn
+            .query_row(
+                "SELECT status FROM business_commands WHERE command_id = ?1",
+                params!["cmd_app_mismatch"],
+                |row| row.get(0),
+            )
+            .expect("read command status");
+        assert_eq!(status, "accepted");
     }
 
     #[test]

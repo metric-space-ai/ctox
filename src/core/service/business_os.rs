@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::env;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
@@ -593,7 +594,10 @@ fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 .unwrap_or("Business OS app artifacts validated by ctox business-os app finalize");
             let result =
                 crate::business_os::store::complete_business_command_from_app_validation_success(
-                    root, task_id, reason,
+                    root,
+                    task_id,
+                    Some(module_id),
+                    reason,
                 )?
                 .with_context(|| {
                     format!("queue task `{task_id}` is not linked to a Business OS app command")
@@ -632,7 +636,7 @@ fn run_business_os_app_validator(
         "Business OS app validator is not available at {}",
         script.display()
     );
-    let mut command = Command::new("node");
+    let mut command = Command::new(resolve_business_os_validator_node(root));
     command
         .current_dir(root)
         .arg(script)
@@ -661,6 +665,22 @@ fn run_business_os_app_validator(
     command
         .output()
         .context("failed to run Business OS app validator")
+}
+
+pub(crate) fn resolve_business_os_validator_node(_root: &Path) -> PathBuf {
+    let mut candidates = Vec::new();
+    if let Ok(path) = env::var("PATH") {
+        candidates.extend(env::split_paths(&path).map(|dir| dir.join("node")));
+    }
+    candidates.extend([
+        PathBuf::from("/opt/homebrew/bin/node"),
+        PathBuf::from("/usr/local/bin/node"),
+        PathBuf::from("/usr/bin/node"),
+    ]);
+    candidates
+        .into_iter()
+        .find(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("node"))
 }
 
 fn app_validator_args_from_finalize_args(args: &[String]) -> Vec<String> {

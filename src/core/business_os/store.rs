@@ -5202,6 +5202,7 @@ pub fn complete_business_command_from_queue_reply(
 pub fn complete_business_command_from_app_validation_success(
     root: &Path,
     task_id: &str,
+    expected_module_id: Option<&str>,
     reason: &str,
 ) -> anyhow::Result<Option<Value>> {
     let conn = open_store(root)?;
@@ -5214,6 +5215,12 @@ pub fn complete_business_command_from_app_validation_success(
     else {
         return Ok(None);
     };
+    if let Some(expected_module_id) = expected_module_id {
+        anyhow::ensure!(
+            module_id == expected_module_id,
+            "queue task `{task_id}` belongs to Business OS app module `{module_id}`, not `{expected_module_id}`"
+        );
+    }
     let completed_at_ms = now_ms() as i64;
     conn.execute(
         "UPDATE business_commands SET status = 'completed', observed_at_ms = ?2 WHERE command_id = ?1",
