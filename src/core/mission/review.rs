@@ -140,6 +140,10 @@ pub struct CompletionReviewRequest {
     pub artifact_commitments: Vec<String>,
     pub commitment_backing: Vec<String>,
     pub deterministic_evidence: Vec<String>,
+    /// skills-2: the skill the executor was bound to (job.suggested_skill), so
+    /// the reviewer can see which skill contract the work was meant to follow.
+    /// Soft signal only — None preserves prior behaviour.
+    pub bound_skill: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -841,6 +845,12 @@ fn build_review_prompt(request: &CompletionReviewRequest, reasons: &[String]) ->
     } else {
         request.review_skill_path.trim()
     };
+    let bound_skill = request
+        .bound_skill
+        .as_deref()
+        .map(str::trim)
+        .filter(|skill| !skill.is_empty())
+        .unwrap_or("(none recorded)");
     let email_artifact = request.artifact_channel.eq_ignore_ascii_case("email");
     let founder_artifact = matches!(
         request.source_label.to_ascii_lowercase().as_str(),
@@ -1013,6 +1023,7 @@ Thread key: {thread_key}\n\
 Workspace root: {workspace_root}\n\
 Runtime DB: {runtime_db_path}\n\
 Review skill: {review_skill_path}\n\
+Executor bound skill: {bound_skill}\n\
 Trigger reasons: {reason_block}\n\
 \n\
 Original task contract:\n\
@@ -2086,6 +2097,28 @@ mod tests {
     }
 
     #[test]
+    fn build_review_prompt_renders_executor_bound_skill() {
+        // skills-2: the reviewer prompt surfaces the skill the executor was
+        // bound to, falling back to a placeholder when none was set.
+        let bound = CompletionReviewRequest {
+            bound_skill: Some("plan-orchestrator".to_string()),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&bound, &[]);
+        assert!(
+            rendered.contains("Executor bound skill: plan-orchestrator"),
+            "{rendered}"
+        );
+
+        let unbound = CompletionReviewRequest::default();
+        let rendered = build_review_prompt(&unbound, &[]);
+        assert!(
+            rendered.contains("Executor bound skill: (none recorded)"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn review_system_prompt_requires_self_report_verification() {
         assert!(REVIEW_SYSTEM_PROMPT.contains(
             "Treat every worker self-report, completion summary, status sentence, and claimed test result as an unverified lead only."
@@ -2113,6 +2146,7 @@ mod tests {
             source_label: "email:owner".to_string(),
             owner_visible: true,
             conversation_id: 77,
+            bound_skill: None,
             thread_key: "email-review:owner:abc".to_string(),
             workspace_root: "/srv/kunstmen".to_string(),
             runtime_db_path: "/srv/runtime/ctox.sqlite3".to_string(),

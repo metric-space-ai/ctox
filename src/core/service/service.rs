@@ -5312,6 +5312,7 @@ fn run_completion_review(
         source_label: job.source_label.clone(),
         owner_visible,
         conversation_id,
+        bound_skill: job.suggested_skill.clone(),
         thread_key: job.thread_key.clone().unwrap_or_default(),
         workspace_root: job.workspace_root.clone().unwrap_or_default(),
         runtime_db_path: db_path.to_string_lossy().to_string(),
