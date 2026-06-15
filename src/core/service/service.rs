@@ -3812,6 +3812,29 @@ fn start_prompt_worker(
                                             job.source_label
                                         ),
                                     );
+                                    if !job.leased_message_keys.is_empty() {
+                                        match complete_business_os_app_validation_success_to_leased_queue(
+                                            &root,
+                                            &job,
+                                            "Business OS app artifacts validated before queue completion",
+                                        ) {
+                                            Ok(updated) => push_event_locked(
+                                                &mut shared,
+                                                format!(
+                                                    "Marked {updated} app-validation-verified queue task(s) handled after normal worker success"
+                                                ),
+                                            ),
+                                            Err(update_err) => {
+                                                let summary = format!(
+                                                    "Failed to mark app-validation-verified queue task(s) handled after normal worker success: {}",
+                                                    clip_text(&update_err.to_string(), 180)
+                                                );
+                                                push_event_locked(&mut shared, summary.clone());
+                                                founder_send_error = Some(summary);
+                                                should_handle_messages = false;
+                                            }
+                                        }
+                                    }
                                 }
                                 Err(err) => {
                                     let summary = format!(
@@ -4588,7 +4611,7 @@ fn start_prompt_worker(
                                 app_validation_worker_failure_reason.as_deref().unwrap_or(
                                     "Business OS app artifacts validated after worker error",
                                 );
-                            match apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+                            match complete_business_os_app_validation_success_to_leased_queue(
                                 &root,
                                 &job,
                                 completion_reason,
@@ -6097,7 +6120,7 @@ fn apply_business_os_app_validation_rework_to_leased_queue(
     Ok(updated)
 }
 
-fn apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+fn complete_business_os_app_validation_success_to_leased_queue(
     root: &Path,
     job: &QueuedPrompt,
     reason: &str,
@@ -19033,7 +19056,7 @@ Business OS command:
             outbound_anchor: None,
         };
 
-        let updated = apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+        let updated = complete_business_os_app_validation_success_to_leased_queue(
             &root,
             &job,
             "Business OS app artifacts validated after worker error",
@@ -19152,7 +19175,7 @@ Business OS command:
             outbound_anchor: None,
         };
 
-        let updated = apply_business_os_app_validation_success_after_worker_error_to_leased_queue(
+        let updated = complete_business_os_app_validation_success_to_leased_queue(
             &root,
             &job,
             "Business OS app artifacts validated after worker error",
