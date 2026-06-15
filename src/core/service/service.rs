@@ -26816,11 +26816,17 @@ Those are not durable artifact requirements."
             "deferred mission and stopped automatic retry loop"
         );
         assert_eq!(
-            success.details.get("agent_outcome").and_then(|v| v.as_str()),
+            success
+                .details
+                .get("agent_outcome")
+                .and_then(|v| v.as_str()),
             Some("ExecutionError")
         );
         assert_eq!(
-            success.details.get("agent_failure_count").and_then(|v| v.as_i64()),
+            success
+                .details
+                .get("agent_failure_count")
+                .and_then(|v| v.as_i64()),
             Some(3)
         );
         assert_eq!(
