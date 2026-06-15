@@ -1365,7 +1365,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — option (a): a `## Generated Transition Catalog (machine-pinned)` block in docs/core_runtime_state_machine.md renders `allowed_transition_catalog` + `core_start_state` + `core_terminal_states` for every `core_entity_types()` entry behind BEGIN/END markers, and test `core_runtime_state_machine_doc_matches_catalog` (core_state_machine.rs) asserts the committed block equals the rendered catalog byte-for-byte (CRLF-normalized, unique-marker-guarded). A catalog edit now fails the test until the doc is regenerated.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `docs/core_runtime_state_machine.md (Allowed State Transitions sections 1-12)`, `src/core/service/core_state_machine.rs::allowed_transition_catalog (line 1003)`, `src/core/service/core_state_machine.rs::core_terminal_states (line 1234)`, `src/core/service/core_state_machine.rs::core_start_state (line 1215)`
