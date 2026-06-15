@@ -128,6 +128,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         description: "Defers a mission after repeated structured agent failures so the service stops retrying the same failing work item blindly.",
     },
     DefaultMechanism {
+        mechanism_id: "agent_failure_recovery",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_failure_circuit_breaker",
+        prompt_visibility: "prompt_visible",
+        module_hint: "src/service.rs",
+        description: "Records that a previously deferred mission recovered after a successful agent turn, clearing the agent-failure deferral and reopening the mission, so the defer/recover audit pair is two-sided.",
+    },
+    DefaultMechanism {
         mechanism_id: "runtime_api_retry_continuation",
         mechanism_class: "survival",
         autonomy: "autonomous_retry_backoff",

@@ -3575,7 +3575,23 @@ fn start_prompt_worker(
                         ),
                     }
                 } else {
-                    let _ = engine.reset_mission_agent_failure_count(conversation_id);
+                    match engine.reset_mission_agent_failure_count(conversation_id) {
+                        Ok(reset) => record_agent_failure_recovery(
+                            &root,
+                            conversation_id,
+                            &reset,
+                            agent_outcome,
+                            job.thread_key.as_deref(),
+                            &job.source_label,
+                        ),
+                        Err(err) => push_event(
+                            &state,
+                            format!(
+                                "agent_failure_count reset failed for conversation {}: {}",
+                                conversation_id, err
+                            ),
+                        ),
+                    }
                 }
             }
             let latest_runtime_error = result.as_ref().err().map(|err| err.to_string());
@@ -15379,6 +15395,47 @@ pub(crate) fn classify_agent_failure(error_text: &str) -> lcm::AgentOutcome {
     lcm::AgentOutcome::ExecutionError
 }
 
+/// govrec-5: emit the recovery half of the defer/recover governance pair when a
+/// mission that was deferred for repeated agent failures clears that deferral on
+/// a successful turn. No-op unless a deferral was actually cleared (so it never
+/// fires on an ordinary healthy turn), and idempotence-keyed on the per-recovery
+/// `recovered_at` timestamp so each distinct recovery cycle is exactly one row
+/// and a single recovery cannot double-write. Without this the audit trail showed
+/// a mission entering the deferred state but never leaving it.
+fn record_agent_failure_recovery(
+    root: &Path,
+    conversation_id: i64,
+    reset: &lcm::MissionFailureReset,
+    agent_outcome: lcm::AgentOutcome,
+    thread_key: Option<&str>,
+    source_label: &str,
+) {
+    let Some(previous_reason) = reset.previous_deferred_reason.as_deref() else {
+        return;
+    };
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "agent_failure_recovery",
+            conversation_id: Some(conversation_id),
+            severity: "info",
+            reason: "mission recovered after a successful agent turn",
+            action_taken: "cleared the agent-failure deferral after a successful agent turn",
+            details: serde_json::json!({
+                "previous_deferred_reason": previous_reason,
+                "agent_outcome": agent_outcome.as_str(),
+                "recovered_at": reset.recovered_at,
+                "thread_key": thread_key,
+                "source_label": source_label,
+            }),
+            idempotence_key: Some(&format!(
+                "agent-failure-recovery:{}:{}",
+                conversation_id, reset.recovered_at
+            )),
+        },
+    );
+}
+
 fn render_timeout_continue_prompt(
     goal: &str,
     blocker: &str,
@@ -26535,7 +26592,10 @@ Those are not durable artifact requirements."
         assert_eq!(after_two.agent_failure_count, 2);
 
         let after_reset = engine.reset_mission_agent_failure_count(101).unwrap();
-        assert_eq!(after_reset.agent_failure_count, 0);
+        assert_eq!(after_reset.record.agent_failure_count, 0);
+        // govrec-5: this reset cleared no deferral (the mission was never
+        // deferred), so there is no recovery to audit.
+        assert!(after_reset.previous_deferred_reason.is_none());
 
         let _ = engine.increment_mission_agent_failure_count(101).unwrap();
         let _ = engine.increment_mission_agent_failure_count(101).unwrap();
@@ -26550,6 +26610,122 @@ Those are not durable artifact requirements."
         );
         assert!(!deferred.is_open);
         assert!(deferred.allow_idle);
+
+        // govrec-5: recovering from the deferral surfaces the cleared reason
+        // exactly once, so the caller can audit the deferred->running transition.
+        let recovery = engine.reset_mission_agent_failure_count(101).unwrap();
+        assert_eq!(
+            recovery.previous_deferred_reason.as_deref(),
+            Some("agent_failure_threshold")
+        );
+        assert!(recovery.record.deferred_reason.is_none());
+        assert_eq!(recovery.record.agent_failure_count, 0);
+        // A second reset on the now-healthy mission surfaces no prior reason, so a
+        // long healthy run never re-emits a recovery event.
+        let no_recovery = engine.reset_mission_agent_failure_count(101).unwrap();
+        assert!(no_recovery.previous_deferred_reason.is_none());
+    }
+
+    #[test]
+    fn agent_failure_recovery_emits_one_audit_row_per_recovery() {
+        // govrec-5: the recovery half of the defer/recover governance pair.
+        let root = temp_root("agent-failure-recovery");
+        let db_path = root.join("ctox.sqlite3");
+        let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()).unwrap();
+        let _ = engine.continuity_init_documents(202).unwrap();
+        let record = engine.mission_state(202).unwrap();
+
+        // Count recovery rows, asserting each is scoped to the recovering mission
+        // (list_recent_events also returns NULL-conversation rows).
+        let recovery_rows = |root: &std::path::Path| -> usize {
+            let events = governance::list_recent_events(root, 202, 50).unwrap();
+            let recoveries: Vec<_> = events
+                .iter()
+                .filter(|event| event.mechanism_id == "agent_failure_recovery")
+                .collect();
+            for event in &recoveries {
+                assert_eq!(
+                    event.conversation_id,
+                    Some(202),
+                    "recovery rows must be scoped to conversation 202"
+                );
+            }
+            recoveries.len()
+        };
+
+        // Cycle 1: a cleared deferral emits exactly one row; re-emitting the SAME
+        // recovery (same recovered_at key) is deduped.
+        let cycle1 = lcm::MissionFailureReset {
+            record: record.clone(),
+            previous_deferred_reason: Some("agent_failure_threshold".to_string()),
+            recovered_at: "2026-06-15T10:00:00.001Z".to_string(),
+        };
+        record_agent_failure_recovery(
+            &root,
+            202,
+            &cycle1,
+            lcm::AgentOutcome::Success,
+            Some("t-202"),
+            "internal",
+        );
+        record_agent_failure_recovery(
+            &root,
+            202,
+            &cycle1,
+            lcm::AgentOutcome::Success,
+            Some("t-202"),
+            "internal",
+        );
+        assert_eq!(
+            recovery_rows(&root),
+            1,
+            "one cycle, deduped re-emit -> one row"
+        );
+
+        // Cycle 2: a DISTINCT recovery (different recovered_at) is a NEW row,
+        // proving the key is per-recovery, not per-conversation. thread_key None
+        // exercises the Option<&str> path.
+        let cycle2 = lcm::MissionFailureReset {
+            record: record.clone(),
+            previous_deferred_reason: Some("agent_failure_threshold".to_string()),
+            recovered_at: "2026-06-15T10:05:00.002Z".to_string(),
+        };
+        record_agent_failure_recovery(
+            &root,
+            202,
+            &cycle2,
+            lcm::AgentOutcome::Success,
+            None,
+            "internal",
+        );
+        assert_eq!(
+            recovery_rows(&root),
+            2,
+            "two distinct recoveries -> two rows"
+        );
+
+        // Gate: a reset that cleared NO deferral (an ordinary healthy turn) emits
+        // nothing — checked in isolation so an inverted gate cannot hide behind a
+        // prior row.
+        let before_healthy = recovery_rows(&root);
+        let healthy = lcm::MissionFailureReset {
+            record,
+            previous_deferred_reason: None,
+            recovered_at: "2026-06-15T10:10:00.003Z".to_string(),
+        };
+        record_agent_failure_recovery(
+            &root,
+            202,
+            &healthy,
+            lcm::AgentOutcome::Success,
+            Some("t-202"),
+            "internal",
+        );
+        assert_eq!(
+            recovery_rows(&root),
+            before_healthy,
+            "a healthy-turn reset (no cleared deferral) must not add a recovery row"
+        );
     }
 
     fn rewrite_finding(id: &str) -> review::CategorizedFinding {

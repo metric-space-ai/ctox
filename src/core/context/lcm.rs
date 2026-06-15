@@ -381,6 +381,20 @@ pub struct MissionStateRecord {
     pub rewrite_failure_count: i64,
 }
 
+/// govrec-5: outcome of clearing a mission's agent-failure deferral. Carries the
+/// pre-reset `deferred_reason` (already `None` on `record`) so the caller can
+/// emit a one-sided-defer's matching recovery governance event exactly once, and
+/// `recovered_at` (a fresh ms timestamp) as the per-recovery idempotence
+/// discriminator — real recovery cycles are seconds apart, so it distinguishes
+/// each cycle while staying stable for a single reset (the dead
+/// `watcher_trigger_count` could not, as it never increments in production).
+#[derive(Debug, Clone, Serialize)]
+pub struct MissionFailureReset {
+    pub record: MissionStateRecord,
+    pub previous_deferred_reason: Option<String>,
+    pub recovered_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MissionStateRepairOutcome {
     pub mission_state: MissionStateRecord,
@@ -1880,16 +1894,30 @@ impl LcmEngine {
     pub fn reset_mission_agent_failure_count(
         &self,
         conversation_id: i64,
-    ) -> Result<MissionStateRecord> {
+    ) -> Result<MissionFailureReset> {
         let mut record = self.mission_state(conversation_id)?;
+        // govrec-5: capture the pre-reset deferral reason so the caller can audit
+        // the recovery (deferred -> running) exactly once. The post-reset record
+        // already has deferred_reason == None, so without this the un-defer is
+        // invisible and the defer/recover governance pair is one-sided.
+        let previous_deferred_reason = record.deferred_reason.clone();
+        let recovered_at = iso_now();
         if record.agent_failure_count == 0 && record.deferred_reason.is_none() {
-            return Ok(record);
+            return Ok(MissionFailureReset {
+                record,
+                previous_deferred_reason,
+                recovered_at,
+            });
         }
         record.agent_failure_count = 0;
         // A successful turn implicitly clears any prior deferral reason.
         record.deferred_reason = None;
         self.persist_mission_state(&record)?;
-        Ok(record)
+        Ok(MissionFailureReset {
+            record,
+            previous_deferred_reason,
+            recovered_at,
+        })
     }
 
     /// Increment the per-mission rewrite-only review failure counter when a
