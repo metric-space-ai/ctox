@@ -33,6 +33,7 @@ const PROCESS_MINING_USAGE: &str = "usage:
   ctox process-mining objects [--limit <n>]
   ctox process-mining transitions [--limit <n>]
   ctox process-mining dfg [--limit <n>]
+  ctox process-mining skill-outcomes
   ctox process-mining core-liveness
   ctox process-mining spawn-liveness
   ctox process-mining spawn-edges [--limit <n>]
@@ -1073,6 +1074,11 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
                 "{}",
                 serde_json::to_string_pretty(&json!({"ok": true, "dfg": rows}))?
             );
+            Ok(())
+        }
+        Some("skill-outcomes") => {
+            let rollup = skill_outcome_rollup(&conn)?;
+            println!("{}", serde_json::to_string_pretty(&rollup)?);
             Ok(())
         }
         Some("core-liveness") => {
@@ -2173,6 +2179,134 @@ fn process_mining_limit(args: &[String], default: i64, max: i64) -> i64 {
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(default)
         .clamp(1, max)
+}
+
+/// skills-5 (aggregation): roll up `work.outcome` forensic flow events by the
+/// bound skill so a per-skill failure rate is computable from the same
+/// `ctox_harness_flow_events` ledger the executor stamps on every task. The
+/// emission side (`service::work_outcome_metadata`) writes
+/// `{skill, agent_outcome, source_label}` into `metadata_json` with
+/// `event_kind = 'work.outcome'`; this is the read side that process-mines it.
+///
+/// Missing-table tolerant: if no harness-flow event was ever recorded in this
+/// runtime db the ledger table does not exist yet, which is an empty rollup,
+/// not an error. A NULL/absent skill (an unbound task) rolls up under the
+/// `null` skill key so unbound-task outcomes stay visible rather than dropped.
+fn skill_outcome_rollup(conn: &Connection) -> Result<Value> {
+    let table_present = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ctox_harness_flow_events'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !table_present {
+        return Ok(json!({
+            "ok": true,
+            "skill_outcomes": [],
+            "total_outcomes": 0,
+            "malformed_skipped": 0,
+        }));
+    }
+
+    // A `work.outcome` row should always carry valid JSON (the emission side
+    // builds it with serde_json::to_string), but SQLite's json_extract ERRORS on
+    // malformed JSON rather than returning NULL — so a single corrupt/hand-edited
+    // row would otherwise crash the whole aggregation. Filter to json_valid rows
+    // and count what was skipped, so a corrupt forensic row degrades to a
+    // detectable skip instead of a hard failure (same discipline as the lossy
+    // flow-event counter).
+    let malformed_skipped: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM ctox_harness_flow_events \
+         WHERE event_kind = 'work.outcome' AND NOT json_valid(metadata_json)",
+        [],
+        |row| row.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT json_extract(metadata_json, '$.skill') AS skill,
+               json_extract(metadata_json, '$.agent_outcome') AS outcome,
+               COUNT(*) AS count
+        FROM ctox_harness_flow_events
+        WHERE event_kind = 'work.outcome'
+          AND json_valid(metadata_json)
+        GROUP BY skill, outcome
+        "#,
+    )?;
+    let grouped = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, Option<String>>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Roll the (skill, outcome) grid up into one row per skill. The failure
+    // classification mirrors `AgentOutcome::is_failure` exactly: every outcome
+    // other than "Success" is a failure (TurnTimeout, ExecutionError, and any
+    // future/unknown label), so a newly-added failing variant is never silently
+    // counted as a success.
+    let mut by_skill: BTreeMap<Option<String>, BTreeMap<String, i64>> = BTreeMap::new();
+    let mut total_outcomes: i64 = 0;
+    for (skill, outcome, count) in grouped {
+        let outcome = outcome.unwrap_or_else(|| "unknown".to_string());
+        *by_skill
+            .entry(skill)
+            .or_default()
+            .entry(outcome)
+            .or_insert(0) += count;
+        total_outcomes += count;
+    }
+
+    let mut skill_outcomes: Vec<Value> = by_skill
+        .into_iter()
+        .map(|(skill, outcomes)| {
+            let total: i64 = outcomes.values().sum();
+            let success: i64 = outcomes.get("Success").copied().unwrap_or(0);
+            let failure = total - success;
+            let failure_rate = if total > 0 {
+                failure as f64 / total as f64
+            } else {
+                0.0
+            };
+            json!({
+                "skill": skill,
+                "total": total,
+                "success": success,
+                "failure": failure,
+                "failure_rate": failure_rate,
+                "outcomes": outcomes,
+            })
+        })
+        .collect();
+    // Surface the heaviest-traffic skills first, then the worst failure rate,
+    // then by skill name for a stable, deterministic order.
+    skill_outcomes.sort_by(|a, b| {
+        let at = a["total"].as_i64().unwrap_or(0);
+        let bt = b["total"].as_i64().unwrap_or(0);
+        bt.cmp(&at)
+            .then_with(|| {
+                let ar = a["failure_rate"].as_f64().unwrap_or(0.0);
+                let br = b["failure_rate"].as_f64().unwrap_or(0.0);
+                br.partial_cmp(&ar).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| {
+                let ak = a["skill"].as_str().unwrap_or("");
+                let bk = b["skill"].as_str().unwrap_or("");
+                ak.cmp(bk)
+            })
+    });
+
+    Ok(json!({
+        "ok": true,
+        "skill_outcomes": skill_outcomes,
+        "total_outcomes": total_outcomes,
+        "malformed_skipped": malformed_skipped,
+    }))
 }
 
 fn proof_evidence_summary(request_json: &str) -> Value {
@@ -5734,6 +5868,131 @@ mod tests {
     // ctox-allow-direct-state-write: test fixture module
     use super::*;
     use tempfile::tempdir;
+
+    fn insert_flow_event(conn: &Connection, event_kind: &str, metadata_json: &str) {
+        conn.execute(
+            "INSERT INTO ctox_harness_flow_events (event_kind, metadata_json) VALUES (?1, ?2)",
+            params![event_kind, metadata_json],
+        )
+        .expect("insert flow event");
+    }
+
+    #[test]
+    fn skill_outcome_rollup_groups_by_skill_and_classifies_failures() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_harness_flow_events (event_kind TEXT NOT NULL, metadata_json TEXT NOT NULL);",
+        )?;
+        // rust-expert: 2 Success, 1 ExecutionError -> failure_rate 1/3.
+        insert_flow_event(
+            &conn,
+            "work.outcome",
+            r#"{"skill":"rust-expert","agent_outcome":"Success"}"#,
+        );
+        insert_flow_event(
+            &conn,
+            "work.outcome",
+            r#"{"skill":"rust-expert","agent_outcome":"Success"}"#,
+        );
+        insert_flow_event(
+            &conn,
+            "work.outcome",
+            r#"{"skill":"rust-expert","agent_outcome":"ExecutionError"}"#,
+        );
+        // doc-writer: 1 Success -> failure_rate 0.
+        insert_flow_event(
+            &conn,
+            "work.outcome",
+            r#"{"skill":"doc-writer","agent_outcome":"Success"}"#,
+        );
+        // unbound (no skill key): 1 TurnTimeout -> failure_rate 1.0, skill null.
+        insert_flow_event(&conn, "work.outcome", r#"{"agent_outcome":"TurnTimeout"}"#);
+        // A non-work.outcome event that also carries a skill must be excluded.
+        insert_flow_event(
+            &conn,
+            "turn.start",
+            r#"{"skill":"rust-expert","agent_outcome":"Success"}"#,
+        );
+
+        let rollup = skill_outcome_rollup(&conn)?;
+        assert_eq!(rollup["ok"], json!(true));
+        assert_eq!(
+            rollup["total_outcomes"],
+            json!(5),
+            "turn.start must be excluded"
+        );
+        assert_eq!(rollup["malformed_skipped"], json!(0));
+        let rows = rollup["skill_outcomes"].as_array().expect("array");
+        assert_eq!(rows.len(), 3);
+
+        // Heaviest traffic first: rust-expert (total 3).
+        assert_eq!(rows[0]["skill"], json!("rust-expert"));
+        assert_eq!(rows[0]["total"], json!(3));
+        assert_eq!(rows[0]["success"], json!(2));
+        assert_eq!(rows[0]["failure"], json!(1));
+        assert_eq!(rows[0]["outcomes"]["Success"], json!(2));
+        assert_eq!(rows[0]["outcomes"]["ExecutionError"], json!(1));
+        let rate = rows[0]["failure_rate"].as_f64().expect("rate");
+        assert!((rate - 1.0 / 3.0).abs() < 1e-9, "rate = {rate}");
+
+        // Tie on total (1 each) breaks by failure_rate DESC: unbound (1.0) before
+        // doc-writer (0.0). The unbound skill serializes as JSON null.
+        assert_eq!(rows[1]["skill"], Value::Null);
+        assert_eq!(rows[1]["total"], json!(1));
+        assert_eq!(rows[1]["failure"], json!(1));
+        assert_eq!(rows[1]["outcomes"]["TurnTimeout"], json!(1));
+
+        assert_eq!(rows[2]["skill"], json!("doc-writer"));
+        assert_eq!(rows[2]["success"], json!(1));
+        assert_eq!(rows[2]["failure"], json!(0));
+        assert_eq!(rows[2]["failure_rate"], json!(0.0));
+        Ok(())
+    }
+
+    #[test]
+    fn skill_outcome_rollup_is_missing_table_tolerant() -> Result<()> {
+        // A runtime db that has never recorded a harness-flow event has no
+        // ledger table yet; the rollup must read that as empty, not error.
+        let conn = Connection::open_in_memory()?;
+        let rollup = skill_outcome_rollup(&conn)?;
+        assert_eq!(rollup["ok"], json!(true));
+        assert_eq!(rollup["total_outcomes"], json!(0));
+        assert_eq!(rollup["malformed_skipped"], json!(0));
+        assert!(rollup["skill_outcomes"]
+            .as_array()
+            .expect("array")
+            .is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn skill_outcome_rollup_skips_malformed_metadata_json() -> Result<()> {
+        // SQLite's json_extract ERRORS on malformed JSON; a single corrupt
+        // work.outcome row must not crash the whole aggregation. It is skipped
+        // (excluded from skill_outcomes/total_outcomes) and counted in
+        // malformed_skipped so the corruption stays detectable.
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_harness_flow_events (event_kind TEXT NOT NULL, metadata_json TEXT NOT NULL);",
+        )?;
+        insert_flow_event(
+            &conn,
+            "work.outcome",
+            r#"{"skill":"rust-expert","agent_outcome":"Success"}"#,
+        );
+        // Corrupt JSON in a work.outcome row — must be skipped, not fatal.
+        insert_flow_event(&conn, "work.outcome", "{not valid json");
+
+        let rollup = skill_outcome_rollup(&conn)?;
+        assert_eq!(rollup["ok"], json!(true));
+        assert_eq!(rollup["total_outcomes"], json!(1));
+        assert_eq!(rollup["malformed_skipped"], json!(1));
+        let rows = rollup["skill_outcomes"].as_array().expect("array");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["skill"], json!("rust-expert"));
+        assert_eq!(rows[0]["total"], json!(1));
+        Ok(())
+    }
 
     #[test]
     fn process_mining_triggers_record_table_mutations() -> Result<()> {
