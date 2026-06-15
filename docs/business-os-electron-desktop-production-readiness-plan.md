@@ -89,6 +89,14 @@ wieder testbar:
   Linux und Windows; der macOS-Job fuehrt den `Packaged bundled helper smoke`
   erneut erfolgreich aus. Noch offen ist der echte Tag-/Signed-Run auf sauberer
   Maschine.
+- Der Folge-Run `27518721915` fuer Commit `e5d98bf8` bestaetigt den
+  Desktop-Pfad nach dem Plan-Nachtrag erneut: `Business OS Desktop E2E (mac)`,
+  `Business OS Desktop E2E (linux)`, `Business OS Desktop E2E (win)` und
+  `Desktop extra check (linux)` sind gruen; macOS enthaelt wieder den
+  erfolgreichen Step `Packaged bundled helper smoke`. Die breite
+  Linux-x86_64-CLI-Matrix war zum letzten Pruefzeitpunkt noch aktiv, hatte aber
+  die RxDB-/Business-OS-Guards bis einschliesslich Datei-Tombstones erfolgreich
+  abgeschlossen.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -230,7 +238,9 @@ wieder testbar:
   liefert `[]`; ohne `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`,
   `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und
   `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` wuerde ein neuer Tag-Run am
-  macOS-Preflight scheitern.
+  macOS-Preflight scheitern. Der Recheck vom 2026-06-15 bleibt negativ:
+  `npm run release:secrets:check` bricht fail-closed mit genau diesen fuenf
+  fehlenden Secrets ab, und die GitHub-Secret-Liste liefert weiter `[]`.
 - Die normale `main`-/PR-CI enthält jetzt zusätzlich ein Business-OS-Desktop-
   E2E-Gate auf macOS, Linux und Windows. Es läuft ohne Distribution-Build,
   aber mit `npm test`, `npm run check`, `npm run release:check`,
@@ -967,6 +977,12 @@ Release Gates:
   `Business OS Desktop E2E (linux)` und `Business OS Desktop E2E (win)`,
   erfolgreich; der macOS-Job enthaelt erneut den erfolgreichen Step
   `Packaged bundled helper smoke`.
+- [x] Folge-Recheck nach Plan-Nachtrag: Run `27518721915`, Commit `e5d98bf8`,
+  Jobs `Business OS Desktop E2E (mac)`, `Business OS Desktop E2E (linux)`,
+  `Business OS Desktop E2E (win)` und `Desktop extra check (linux)`,
+  erfolgreich; der macOS-Job enthaelt erneut den erfolgreichen Step
+  `Packaged bundled helper smoke`. Die Gesamt-CI war beim letzten Check noch
+  in der Linux-x86_64-CLI-Matrix aktiv, ohne roten Job.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -1049,6 +1065,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Status-Recheck nach Plan-Nachtrag: `npm run release:secrets:check` bricht weiterhin fail-closed ab, weil `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` fehlen; `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` liefert weiter `[]`. Der aktuelle CI-Run `27518721915` fuer Commit `e5d98bf8` ist in den Desktop-relevanten Jobs auf macOS/Linux/Windows gruen, inklusive `Packaged bundled helper smoke` auf macOS; die Gesamt-CI war beim Check noch im Linux-x86_64-CLI-Job aktiv. Kein Fortschrittsanstieg: echter Zwei-Account-ctox.dev-Revocation-Beweis und echter signed/notarized Tag-Run bleiben externe Gates. |
 | 2026-06-15 | Externen ctox.dev Live-Revocation-Blocker verifiziert und Plan nachgezogen: Neue Nicht-Owner entstehen in ctox.dev Produktion ueber Einladung/Magic-Link oder vorhandene User; bei konfiguriertem Resend liefert `sendInvitationEmail` keinen `previewLink`. Ohne Zugriff auf die Empfaenger-Mailbox oder ein zweites Passwortkonto kann der Zwei-Account-Smoke keinen authentifizierten Mitglieds-Login herstellen. Gleichzeitig ist der neue Desktop-CI-Run `27518440351` fuer Commit `ebb0b83a` in den relevanten Desktop-E2E-Jobs auf macOS/Linux/Windows gruen; macOS fuehrt den `Packaged bundled helper smoke` erneut erfolgreich aus. |
 | 2026-06-15 | Welle 2 Live-Revocation-Vertrag gehaertet: Der Zwei-Account-Smoke akzeptiert nach temporaerer Rollenherabstufung auf `viewer` jetzt beide korrekten ctox.dev-Reaktionen aus Desktop-Sicht, entweder `needs_auth` mit lokalem Launch-Blocker oder eine nicht mehr gelistete Instanz mit serverseitiger Launch-Token-Verweigerung. Neu ist `scripts/ctox-dev-live-contract.cjs` mit Unit-Tests; lokal gruen: `npm test` mit 115 Tests und `npm run check`. Der echte Produktionshaken bleibt weiter offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
 | 2026-06-15 | Welle 2 Live-Revocation-Harness vorbereitet: `smoke:ctox-dev-live` unterstuetzt jetzt einen opt-in Zwei-Account-Modus mit `--access-revocation`. Der Smoke trennt Owner/Admin- und Zielmitglied in zwei Electron-Sessions, prueft vorab WebRTC-only Launch fuer ein launchfaehiges Nicht-Owner-Mitglied, setzt dieses Mitglied temporaer auf `viewer`, erwartet `needs_auth` plus blockierten Launch vor dem Launch-Token-Request und stellt danach die urspruengliche Rolle wieder her. Lokal gruen: `npm run check`, `node --check scripts/smoke-ctox-dev-live.cjs`, `node --check scripts/fixtures/ctox-dev-live-main.cjs`. Der echte Produktionshaken bleibt offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
