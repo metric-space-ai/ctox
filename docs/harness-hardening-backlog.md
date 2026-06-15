@@ -1524,7 +1524,7 @@ Corrected, tighter version: (a) Add a state-layer mutation that operates on the 
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — `SPAWN_ENTITY_TYPES` (core_transition_guard.rs) is the closed spawn vocabulary enumerated from the real contracts (not `CoreEntityType` — a deliberately separate, broader space), and `analyze_spawner_contracts` (split out of `analyze_core_spawn_model`) flags any contract parent/child entity-type outside it (allowing `"*"`) as `spawner_contract_unregistered_entity_type:<pattern>:<type>`. Test `spawn_contract_entity_types_are_a_closed_vocabulary` pins: live contracts stay healthy, a `"Workitem"` typo flips `report.ok` with the specific violation, and `"*"` stays allowed + healthy. Optional callsite-threading deferred (touches the parallel agent's `tickets.rs`).
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/core_transition_guard.rs::core_spawner_contracts (line 715, e.g. parent_entity_types: &["WorkItem", "QueueTask", "Thread", ...])`, `src/core/service/core_transition_guard.rs::validate_core_spawn (parent/child membership check, lines 637-649)`, `src/core/service/core_transition_guard.rs::analyze_core_spawn_model (line 513)`
