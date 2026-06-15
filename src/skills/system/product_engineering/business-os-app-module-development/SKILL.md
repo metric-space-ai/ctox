@@ -350,7 +350,7 @@ phase 8 UI controls: every visible button, filter, tab, menu, and form action ha
 phase 9 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
 phase 10 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
 phase 11 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
-phase 12 validation: node --check, module_static_check, validate-app-module, forbidden-pattern scan, and any available shell/browser smoke proof are green
+phase 12 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 13 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
 ```
 
@@ -449,6 +449,8 @@ earlier layer is still red:
 Run the most specific checks available:
 
 ```sh
+ctox business-os app validate <id> --installed   # App Creator / runtime installed-modules targets
+ctox business-os app validate <id> --source      # source modules under src/apps/business-os/modules
 node --test src/apps/business-os/modules/<id>/**/*.test.mjs
 node src/apps/business-os/scripts/assert-module-conformance.mjs
 node src/apps/business-os/scripts/assert-rxdb-only.mjs
@@ -458,6 +460,7 @@ node src/skills/system/product_engineering/business-os-app-module-development/sc
 When validating an installed runtime module outside `modules/`, adapt the path or run a targeted test plus a static forbidden-pattern scan:
 
 ```sh
+ctox business-os app validate <id> --installed
 node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <id> --installed
 rg -n "ctx\\.db\\.raw|ctox\\.db|indexedDB|/rxdb/pull|/commands|fetch\\(|require\\(|package\\.json|node_modules" <module-dir>
 ```
@@ -495,7 +498,7 @@ package.json or lockfiles
 
 Never create a workspace-root alias, symlink, or hardlink to satisfy a check that expects `module.json` or `collections.schema.json` at the root. The check is wrong for Business OS app modules; the module manifest belongs only in the resolved module directory.
 
-If `module_static_check.mjs` or `validate-app-module.mjs` reports failures,
+If `ctox business-os app validate`, `module_static_check.mjs`, or `validate-app-module.mjs` reports failures,
 copy its bullets into your repair checklist and address them exactly. Do not
 claim completion because a separate custom test passes while the static checker
 is red.

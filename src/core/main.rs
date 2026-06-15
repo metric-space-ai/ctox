@@ -135,6 +135,8 @@ INSTALL / UPGRADE
                                  emit a Desktop pairing invite for this instance
   ctox business-os modules list|enable|disable
                                  manage optional Business OS skill-app modules
+  ctox business-os app validate <module-id> [--installed|--source]
+                                 validate a Business OS app module artifact
   ctox business-os skills list|enable|disable
                                  manage optional packed skills for Business OS
   ctox business-os repair queue-projections --dry-run|--apply

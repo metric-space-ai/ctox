@@ -314,6 +314,7 @@ pub fn handle_business_os_command(root: &Path, args: &[String]) -> anyhow::Resul
         Some("serve") => serve_native_business_os(root, &args[1..]),
         Some("peer") => handle_business_os_peer(root, &args[1..]),
         Some("rxdb") => handle_business_os_rxdb(root, &args[1..]),
+        Some("app") => handle_business_os_app(root, &args[1..]),
         Some("repair") => handle_business_os_repair(root, &args[1..]),
         Some("install") => install_business_os(root, &args[1..]),
         Some("commands") => handle_business_os_commands(root, &args[1..]),
@@ -551,6 +552,150 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some(other) => anyhow::bail!("unknown business-os rxdb command `{other}`"),
+    }
+}
+
+fn handle_business_os_app(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    match args.first().map(String::as_str) {
+        Some("validate") => {
+            let module_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .context(
+                    "usage: ctox business-os app validate <module-id> [--installed|--source] [--json] [--skip-tests] [--skip-node-check]",
+                )?;
+            let output = run_business_os_app_validator(root, module_id, &args[2..])?;
+            print_process_output(&output);
+            if !output.status.success() {
+                anyhow::bail!("Business OS app validation failed for `{module_id}`");
+            }
+            Ok(())
+        }
+        Some("finalize") => {
+            let module_id = args
+                .get(1)
+                .filter(|value| !value.starts_with("--"))
+                .context(
+                    "usage: ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]",
+                )?;
+            let task_id = flag_value(args, "--task-id").context(
+                "usage: ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]",
+            )?;
+            let validator_args = app_validator_args_from_finalize_args(args);
+            let output = run_business_os_app_validator(root, module_id, &validator_args)?;
+            print_process_output(&output);
+            if !output.status.success() {
+                anyhow::bail!(
+                    "Business OS app finalize refused to complete `{module_id}` because validation is red"
+                );
+            }
+            let reason = flag_value(args, "--reason")
+                .unwrap_or("Business OS app artifacts validated by ctox business-os app finalize");
+            let result =
+                crate::business_os::store::complete_business_command_from_app_validation_success(
+                    root, task_id, reason,
+                )?
+                .with_context(|| {
+                    format!("queue task `{task_id}` is not linked to a Business OS app command")
+                })?;
+            print_json(&serde_json::json!({
+                "ok": true,
+                "module_id": module_id,
+                "task_id": task_id,
+                "result": result,
+            }))
+        }
+        Some("--help") | Some("-h") | None => {
+            println!("{}", business_os_usage());
+            Ok(())
+        }
+        Some(other) => anyhow::bail!("unknown business-os app command `{other}`"),
+    }
+}
+
+fn run_business_os_app_validator(
+    root: &Path,
+    module_id: &str,
+    args: &[String],
+) -> anyhow::Result<std::process::Output> {
+    if module_id.is_empty()
+        || module_id == "."
+        || module_id == ".."
+        || module_id.contains('/')
+        || module_id.contains('\\')
+    {
+        anyhow::bail!("invalid Business OS app module id `{module_id}`");
+    }
+    let script = root.join("src/apps/business-os/scripts/validate-app-module.mjs");
+    anyhow::ensure!(
+        script.is_file(),
+        "Business OS app validator is not available at {}",
+        script.display()
+    );
+    let mut command = Command::new("node");
+    command
+        .current_dir(root)
+        .arg(script)
+        .arg(module_id)
+        .arg("--workspace")
+        .arg(root);
+    let mut has_mode = false;
+    for arg in args {
+        match arg.as_str() {
+            "--installed" | "--source" | "--json" | "--skip-tests" | "--skip-node-check" => {
+                if arg == "--installed" || arg == "--source" {
+                    has_mode = true;
+                }
+                command.arg(arg);
+            }
+            "--task-id" | "--reason" => {}
+            value if value.starts_with("--") => {
+                anyhow::bail!("unsupported business-os app validator option `{value}`")
+            }
+            _ => {}
+        }
+    }
+    if !has_mode && root.join("runtime/business-os/installed-modules").is_dir() {
+        command.arg("--installed");
+    }
+    command
+        .output()
+        .context("failed to run Business OS app validator")
+}
+
+fn app_validator_args_from_finalize_args(args: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for arg in args.iter().skip(2) {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match arg.as_str() {
+            "--task-id" | "--reason" => skip_next = true,
+            "--installed" | "--source" | "--json" | "--skip-tests" | "--skip-node-check" => {
+                out.push(arg.clone())
+            }
+            _ => {}
+        }
+    }
+    if !out
+        .iter()
+        .any(|arg| arg == "--installed" || arg == "--source")
+    {
+        out.push("--installed".to_string());
+    }
+    out
+}
+
+fn print_process_output(output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stdout.is_empty() {
+        print!("{stdout}");
+    }
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
     }
 }
 
@@ -1374,7 +1519,7 @@ fn print_business_os_help() {
 }
 
 fn business_os_usage() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os app validate <module-id> [--installed|--source] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os install --target <empty-dir> [--init-git] [--dry-run] [--no-copy-env]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {

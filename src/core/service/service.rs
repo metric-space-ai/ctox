@@ -3206,6 +3206,42 @@ impl Drop for PromptWorkerActivity {
             (leaked_message_keys, leaked_ticket_event_keys)
         };
 
+        let mut leaked_message_keys = leaked_message_keys;
+        let mut app_validation_completion_errors = Vec::new();
+        if !leaked_message_keys.is_empty() {
+            let mut still_leaked = Vec::new();
+            let mut completed = Vec::new();
+            for message_key in leaked_message_keys {
+                match complete_validated_business_os_app_queue_task(
+                    &self.root,
+                    &message_key,
+                    "Business OS app artifacts validated after worker lease cleanup",
+                ) {
+                    Ok(true) => completed.push(message_key),
+                    Ok(false) => still_leaked.push(message_key),
+                    Err(err) => {
+                        app_validation_completion_errors.push(format!(
+                            "{}: {}",
+                            message_key,
+                            clip_text(&err.to_string(), 180)
+                        ));
+                        still_leaked.push(message_key);
+                    }
+                }
+            }
+            if !completed.is_empty() {
+                let mut shared = lock_shared_state(&self.state);
+                push_event_locked(
+                    &mut shared,
+                    format!(
+                        "Completed {} validated Business OS app queue task(s) during worker lease cleanup",
+                        completed.len()
+                    ),
+                );
+            }
+            leaked_message_keys = still_leaked;
+        }
+
         if !leaked_message_keys.is_empty() {
             let failure_reason =
                 "CTOX prompt worker exited before leased Business OS queue task was acknowledged.";
@@ -3253,6 +3289,14 @@ impl Drop for PromptWorkerActivity {
                 push_event_locked(
                     &mut shared,
                     format!("Failed to project leaked Business OS queue lease: {error}"),
+                );
+            }
+            for error in app_validation_completion_errors {
+                push_event_locked(
+                    &mut shared,
+                    format!(
+                        "Failed Business OS app validation cleanup before lease failure: {error}"
+                    ),
                 );
             }
         }
@@ -4350,10 +4394,14 @@ fn start_prompt_worker(
                             }
                         }
                         if !job.leased_message_keys.is_empty() && should_handle_messages {
-                            let _ = channels::ack_leased_messages(
-                                &root,
-                                &job.leased_message_keys,
-                                "handled",
+                            record_ack_failure_locked(
+                                &mut shared,
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    "handled",
+                                ),
+                                "handled queue lease(s)",
                             );
                             // Auto-complete plan steps whose emit message was
                             // just handled by this turn so the plan advances
@@ -4364,10 +4412,14 @@ fn start_prompt_worker(
                                 }
                             }
                         } else if !job.leased_message_keys.is_empty() && terminal_no_send {
-                            let _ = channels::ack_leased_messages(
-                                &root,
-                                &job.leased_message_keys,
-                                "cancelled",
+                            record_ack_failure_locked(
+                                &mut shared,
+                                channels::ack_leased_messages(
+                                    &root,
+                                    &job.leased_message_keys,
+                                    "cancelled",
+                                ),
+                                "cancelled queue lease(s)",
                             );
                         } else if !job.leased_message_keys.is_empty() {
                             let terminal_queue_failure = matches!(
@@ -4439,10 +4491,14 @@ fn start_prompt_worker(
                             }
                         }
                         if !job.leased_ticket_event_keys.is_empty() && should_handle_messages {
-                            let _ = tickets::ack_leased_ticket_events(
-                                &root,
-                                &job.leased_ticket_event_keys,
-                                "handled",
+                            record_ack_failure_locked(
+                                &mut shared,
+                                tickets::ack_leased_ticket_events(
+                                    &root,
+                                    &job.leased_ticket_event_keys,
+                                    "handled",
+                                ),
+                                "handled ticket-event lease(s)",
                             );
                         } else if !job.leased_ticket_event_keys.is_empty() {
                             let retry_status = if matches!(
@@ -4458,10 +4514,14 @@ fn start_prompt_worker(
                             } else {
                                 "pending"
                             };
-                            let _ = tickets::ack_leased_ticket_events(
-                                &root,
-                                &job.leased_ticket_event_keys,
-                                retry_status,
+                            record_ack_failure_locked(
+                                &mut shared,
+                                tickets::ack_leased_ticket_events(
+                                    &root,
+                                    &job.leased_ticket_event_keys,
+                                    retry_status,
+                                ),
+                                &format!("ticket-event lease(s) ({retry_status})"),
                             );
                         }
                         shared.last_error = founder_send_error.clone();
@@ -6184,7 +6244,7 @@ fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
         return job.prompt.clone();
     };
     format!(
-        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Before claiming success, run the module tests plus `node src/apps/business-os/scripts/validate-app-module.mjs {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Before claiming success, run the module tests plus `ctox business-os app validate {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
         job.prompt,
         target.artifact_directory,
         target.artifact_directory,
@@ -6532,7 +6592,7 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n3. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  node src/apps/business-os/scripts/validate-app-module.mjs {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n3. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  ctox business-os app validate {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
@@ -10220,6 +10280,24 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
             return Ok(None);
         }
     }
+    match complete_validated_stale_business_os_app_queue_tasks(root, state, 8) {
+        Ok(updated) if updated > 0 => {
+            push_event(
+                state,
+                format!(
+                    "Recovered {updated} validated Business OS app queue task(s) before leasing new work"
+                ),
+            );
+        }
+        Ok(_) => {}
+        Err(err) => push_event(
+            state,
+            format!(
+                "Business OS app validation recovery skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     if let Some(prompt) = maybe_lease_business_os_app_validation_rework(root, state)? {
         return Ok(Some(prompt));
     }
@@ -10246,6 +10324,49 @@ fn maybe_lease_next_durable_queue_prompt_for_idle_dispatch(
         }));
     }
     Ok(None)
+}
+
+fn complete_validated_stale_business_os_app_queue_tasks(
+    root: &Path,
+    state: &Arc<Mutex<SharedState>>,
+    limit: usize,
+) -> Result<usize> {
+    let tasks = channels::list_queue_tasks(root, &["leased".to_string()], limit.max(1))?;
+    let mut updated = 0usize;
+    for task in tasks {
+        if inflight_leased_message_key(state, &task.message_key)
+            || business_os_app_module_target_from_prompt(&task.prompt).is_none()
+        {
+            continue;
+        }
+        if complete_validated_business_os_app_queue_task(
+            root,
+            &task.message_key,
+            "Business OS app artifacts validated during idle recovery",
+        )? {
+            updated = updated.saturating_add(1);
+        }
+    }
+    Ok(updated)
+}
+
+fn complete_validated_business_os_app_queue_task(
+    root: &Path,
+    message_key: &str,
+    reason: &str,
+) -> Result<bool> {
+    let Some(task) = channels::load_queue_task(root, message_key)? else {
+        return Ok(false);
+    };
+    if business_os_app_module_target_from_prompt(&task.prompt).is_none() {
+        return Ok(false);
+    }
+    let job = queued_prompt_from_queue_task(task);
+    match business_os_app_module_validation_feedback(root, &job)? {
+        Some(_) => Ok(false),
+        None => complete_business_os_app_validation_success_to_leased_queue(root, &job, reason)
+            .map(|updated| updated > 0),
+    }
 }
 
 fn maybe_lease_business_os_app_validation_rework(
@@ -14886,6 +15007,20 @@ fn push_event_locked(shared: &mut SharedState, event: String) {
     shared.recent_events.push_back(event);
 }
 
+/// Record swallowed lease-ack failures on the worker completion path.
+/// Best-effort: never aborts the worker, only makes a stuck lease diagnosable.
+fn record_ack_failure_locked<T>(shared: &mut SharedState, result: anyhow::Result<T>, what: &str) {
+    if let Err(err) = result {
+        push_event_locked(
+            shared,
+            format!(
+                "Failed to ack {what} after completion: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        );
+    }
+}
+
 fn queue_pressure_active(state: &Arc<Mutex<SharedState>>) -> bool {
     let shared = lock_shared_state(state);
     shared.pending_prompts.len() >= QUEUE_PRESSURE_GUARD_THRESHOLD
@@ -19417,9 +19552,7 @@ Business OS command:
         assert!(feedback.contains(
             "schema.js and collections.schema.json must export only module-owned collections"
         ));
-        assert!(feedback.contains(
-            "node src/apps/business-os/scripts/validate-app-module.mjs contracts --installed"
-        ));
+        assert!(feedback.contains("ctox business-os app validate contracts --installed"));
         assert!(feedback.contains("Immediate repair order:"));
         assert!(feedback.contains("Create or repair every missing required file first"));
         assert!(feedback.contains("Do not call `ctox queue ack`"));
@@ -19448,7 +19581,7 @@ Business OS command:
         assert!(prompt.contains("`ctox queue complete`"));
         assert!(prompt.contains("Do not act on queue IDs shown in context"));
         assert!(prompt.contains("First establish the required file inventory"));
-        assert!(prompt.contains("validate-app-module.mjs contracts --installed"));
+        assert!(prompt.contains("ctox business-os app validate contracts --installed"));
     }
 
     #[test]
@@ -26778,6 +26911,36 @@ Those are not durable artifact requirements."
         // long healthy run never re-emits a recovery event.
         let no_recovery = engine.reset_mission_agent_failure_count(101).unwrap();
         assert!(no_recovery.previous_deferred_reason.is_none());
+    }
+
+    #[test]
+    fn swallowed_success_ack_failure_is_recorded() {
+        // A failed success-path lease ack must surface a feed event, and a
+        // successful ack must record nothing.
+        let mut shared = SharedState::default();
+        record_ack_failure_locked(
+            &mut shared,
+            Err::<(), anyhow::Error>(anyhow::anyhow!("database is locked")),
+            "handled queue lease(s)",
+        );
+        assert_eq!(shared.recent_events.len(), 1);
+        assert!(
+            shared.recent_events[0].contains("Failed to ack handled queue lease(s)")
+                && shared.recent_events[0].contains("database is locked"),
+            "{:?}",
+            shared.recent_events
+        );
+
+        record_ack_failure_locked(
+            &mut shared,
+            Ok::<(), anyhow::Error>(()),
+            "handled queue lease(s)",
+        );
+        assert_eq!(
+            shared.recent_events.len(),
+            1,
+            "a successful ack must not add a feed event"
+        );
     }
 
     #[test]

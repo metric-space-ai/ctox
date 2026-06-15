@@ -21,14 +21,16 @@ not work on lower layers until the higher layer is green:
 ```
 
 Do not modify tests to match a broken module contract. A passing custom test is
-not evidence while `module_static_check.mjs` or `validate-app-module.mjs` is
-red.
+not evidence while `ctox business-os app validate`, `module_static_check.mjs`,
+or `validate-app-module.mjs` is red.
 
 ## Static Checks
 
 Run the narrow checks that match the touched files:
 
 ```sh
+ctox business-os app validate <module> --source
+ctox business-os app validate <module> --installed
 node -e "const fs=require('fs'); for (const f of ['src/apps/business-os/modules/<module>/module.json','src/apps/business-os/modules/<module>/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')"
 node -e "const fs=require('fs'); const f='src/apps/business-os/modules/registry.json'; if (fs.existsSync(f)) JSON.parse(fs.readFileSync(f,'utf8')); console.log('registry JSON OK')"
 node --check src/apps/business-os/modules/<module>/index.js
