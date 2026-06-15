@@ -989,7 +989,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — emission: per-task `work.outcome` harness-flow event stamped with `{skill, agent_outcome, source_label}` at the outcome-classification site (`service.rs::work_outcome_metadata`/`record_work_outcome_flow_event`, commit 9d7ba602); aggregation: `process_mining.rs::skill_outcome_rollup` + `ctox process-mining skill-outcomes` groups those events by `metadata.skill` into a per-skill failure rate (commit c3ee51c5). The skill-repair decision stays human/skill-lifecycle judgement (no auto-disable).
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/harness_flow.rs::RecordHarnessFlowEventRequest`, `src/core/service/process_mining.rs`, `src/core/service/service.rs::run_completion_review`
