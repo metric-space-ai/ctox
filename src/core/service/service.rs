@@ -23178,6 +23178,89 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn router_does_not_lease_external_inbound_while_worker_active() {
+        // tests-1: active_agent_loop_in_progress is `busy || worker_active_count
+        // > 0`, and route_external_messages early-returns on it so no NEW
+        // external work is leased while an agent loop runs. The sibling test
+        // above covers the `busy` half (founder-repair skipped). This pins the
+        // worker_active_count>0 half end-to-end: a lease-eligible
+        // (route_status='pending') inbound must stay pending and unleased when
+        // busy=false but worker_active_count=1. Dropping the worker_active_count
+        // term from the gate would let the router double-lease external work
+        // mid-worker and still pass every other test.
+        let root = temp_root("ctox-router-worker-active-lease");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:jill@example.test::INBOX::worker-active-lease";
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', '<worker-active-lease@example.com>',
+                'remote-worker-active-lease', 'inbound', 'INBOX', 'Jill Vendor',
+                'jill@example.test', '[]', '[]', '[]',
+                'Vendor follow-up',
+                'A normal external inbound awaiting routing.',
+                'Please confirm the delivery window.',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-04-29T20:00:00Z', '2026-04-29T20:00:00Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert normal inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-04-29T20:01:00Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert pending route");
+
+        let state = Arc::new(Mutex::new(SharedState {
+            busy: false,
+            worker_active_count: 1,
+            ..SharedState::default()
+        }));
+        route_external_messages(&root, &state)
+            .expect("worker-active channel router pass should not fail");
+
+        let (route_status, lease_owner): (String, Option<String>) = conn
+            .query_row(
+                "SELECT route_status, lease_owner FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![inbound_key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("failed to reload route status");
+        assert_eq!(
+            route_status, "pending",
+            "a worker-active loop must not lease the pending inbound"
+        );
+        assert!(
+            lease_owner.is_none(),
+            "the pending inbound must not be leased while a worker is active: {lease_owner:?}"
+        );
+        let tasks =
+            channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
+                .expect("failed to list queue tasks");
+        assert!(
+            tasks.is_empty(),
+            "router must not lease external inbound work while an agent loop is active"
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn stalled_founder_email_superseded_by_later_reviewed_thread_send_is_cancelled() {
         let root = temp_root("ctox-stalled-founder-superseded");
         let mut settings = BTreeMap::new();
