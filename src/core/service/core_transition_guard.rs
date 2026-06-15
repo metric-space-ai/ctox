@@ -558,13 +558,19 @@ pub fn check_core_spawn(conn: &Connection, request: &CoreSpawnRequest) -> Result
 }
 
 pub fn analyze_core_spawn_model() -> CoreSpawnModelReport {
-    let contracts = core_spawner_contracts().to_vec();
+    analyze_spawner_contracts(core_spawner_contracts())
+}
+
+/// spawn-contract-entity-pin-1: analyze a given set of spawner contracts. Split
+/// out of [`analyze_core_spawn_model`] so the entity-type vocabulary gate can be
+/// exercised against a deliberately-mistyped contract in tests.
+fn analyze_spawner_contracts(contracts: &[CoreSpawnerContract]) -> CoreSpawnModelReport {
     let mut violations = Vec::new();
     if contracts.is_empty() {
         violations.push("no_core_spawner_contracts_registered".to_string());
     }
 
-    for contract in &contracts {
+    for contract in contracts {
         if contract.pattern.trim().is_empty() {
             violations.push("spawner_contract_requires_pattern".to_string());
         }
@@ -579,6 +585,26 @@ pub fn analyze_core_spawn_model() -> CoreSpawnModelReport {
                 "spawner_contract_requires_parent_types:{}",
                 contract.pattern
             ));
+        }
+        // spawn-contract-entity-pin-1: every parent/child entity-type string must
+        // be a member of the closed spawn vocabulary. A drifted or mistyped
+        // literal (e.g. "Workitem") otherwise fails closed at validate_core_spawn
+        // with spawn_parent_type_not_registered and no proof-time signal — flag it
+        // here so the audited vocabulary stays tight. Checked independently of the
+        // intervention-skill resolution below (which can `continue`), so a typo is
+        // never masked by a co-occurring skill issue. `"*"` (wildcard) is allowed.
+        for entity_type in contract
+            .parent_entity_types
+            .iter()
+            .copied()
+            .chain(std::iter::once(contract.child_entity_type))
+        {
+            if entity_type != "*" && !SPAWN_ENTITY_TYPES.contains(&entity_type) {
+                violations.push(format!(
+                    "spawner_contract_unregistered_entity_type:{}:{}",
+                    contract.pattern, entity_type
+                ));
+            }
         }
         if contract.requires_budget && !(1..=64).contains(&contract.max_budget) {
             violations.push(format!(
@@ -623,7 +649,7 @@ pub fn analyze_core_spawn_model() -> CoreSpawnModelReport {
 
     CoreSpawnModelReport {
         ok: violations.is_empty(),
-        spawner_contracts: contracts,
+        spawner_contracts: contracts.to_vec(),
         violations,
         proof: "Every registered internal spawn has stable parent/child entity types, a finite budget, and a non-spawning intervention skill. Runtime enforcement rejects unregistered spawns, unstable IDs, over-budget requests, exhausted budgets, and cycles without finite budget. Therefore every accepted internal spawn path either advances to a new child once, consumes a finite budget, or is rejected into a bounded intervention effect set."
             .to_string(),
@@ -758,6 +784,28 @@ fn core_spawner_contract(spawn_kind: &str) -> Option<&'static CoreSpawnerContrac
         .iter()
         .find(|contract| spawn_kind_matches(contract.pattern, spawn_kind))
 }
+
+/// spawn-contract-entity-pin-1: the closed vocabulary of spawn parent/child
+/// entity-type strings, enumerated from the literals in `core_spawner_contracts`
+/// below. This is deliberately NOT the state-machine's `CoreEntityType` enum —
+/// the spawn space is a separate, broader vocabulary (e.g. `QueueTask` vs the
+/// enum's `QueueItem`; `Thread`/`Message`/`ControlPlane`/`IotAlarm`/`PlanStep`/
+/// `ScheduleTask`/`WebStackTask` have no enum counterpart). `analyze_core_spawn_model`
+/// flags any contract entity-type outside this set so adding a new spawn type is
+/// a conscious edit here, not a silent typo that fails closed at runtime. Keep it
+/// sorted and in lockstep with the contract literals. `"*"` (wildcard parent) is
+/// always allowed and is not listed.
+const SPAWN_ENTITY_TYPES: &[&str] = &[
+    "ControlPlane",
+    "IotAlarm",
+    "Message",
+    "PlanStep",
+    "QueueTask",
+    "ScheduleTask",
+    "Thread",
+    "WebStackTask",
+    "WorkItem",
+];
 
 fn core_spawner_contracts() -> &'static [CoreSpawnerContract] {
     const BLOCK_OR_CONSOLIDATE: &[CoreInterventionEffect] = &[
@@ -1649,6 +1697,78 @@ mod tests {
         assert!(report
             .proof
             .contains("Every registered internal spawn has stable parent/child"));
+    }
+
+    #[test]
+    fn spawn_contract_entity_types_are_a_closed_vocabulary() {
+        // spawn-contract-entity-pin-1: pin the spawn entity-type vocabulary.
+        // (1) The live contracts must use only registered types — this is the
+        // guard that keeps SPAWN_ENTITY_TYPES in lockstep with the literals.
+        let live = analyze_core_spawn_model();
+        let live_unregistered: Vec<_> = live
+            .violations
+            .iter()
+            .filter(|v| v.starts_with("spawner_contract_unregistered_entity_type:"))
+            .collect();
+        assert!(
+            live_unregistered.is_empty(),
+            "a live spawner contract uses an entity type missing from SPAWN_ENTITY_TYPES: {live_unregistered:?}"
+        );
+
+        // (2) A mistyped parent entity type turns the model unhealthy and names
+        // the offending literal — the typo otherwise only fails closed at runtime.
+        // The vocabulary gate is case-sensitive: "Workitem" != "WorkItem", so the
+        // literal must match SPAWN_ENTITY_TYPES exactly.
+        let typo = CoreSpawnerContract {
+            pattern: "self-work:typo",
+            parent_entity_types: &["Workitem"],
+            child_entity_type: "QueueTask",
+            effect: CoreSpawnEffect::DurableSelfWork,
+            requires_budget: true,
+            max_budget: 8,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: &[],
+        };
+        let report = analyze_spawner_contracts(&[typo]);
+        assert!(
+            !report.ok,
+            "a mistyped parent entity type must fail the model: {report:#?}"
+        );
+        assert!(
+            report
+                .violations
+                .iter()
+                .any(|v| v == "spawner_contract_unregistered_entity_type:self-work:typo:Workitem"),
+            "expected the unregistered-type violation naming 'Workitem': {:?}",
+            report.violations
+        );
+
+        // (3) The "*" wildcard parent is always allowed: a contract using it is
+        // fully healthy (report.ok) — asserting overall health (not just the
+        // absence of the vocabulary violation) guards against a false green if an
+        // unrelated violation were to creep into the wildcard fixture.
+        let wildcard = CoreSpawnerContract {
+            pattern: "self-work:wild",
+            parent_entity_types: &["*"],
+            child_entity_type: "WorkItem",
+            effect: CoreSpawnEffect::DurableSelfWork,
+            requires_budget: true,
+            max_budget: 8,
+            intervention_skill: "queue-cleanup",
+            intervention_effects: &[],
+        };
+        let wildcard_report = analyze_spawner_contracts(&[wildcard]);
+        assert!(
+            wildcard_report.ok,
+            "the '*' wildcard parent contract must be healthy: {wildcard_report:#?}"
+        );
+        assert!(
+            !wildcard_report
+                .violations
+                .iter()
+                .any(|v| v.starts_with("spawner_contract_unregistered_entity_type:")),
+            "the '*' wildcard parent must not raise a vocabulary violation"
+        );
     }
 
     #[test]
