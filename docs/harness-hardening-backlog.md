@@ -76,7 +76,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 2 · impact **high** · effort **S** · kind **bug** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor resolves to live code (drifted line numbers only): add_message_with_outcome (1087-1144), persist_lcm_message_with_retry (752-779), insert_summary SAVEPOINT (2889/2915). The atomicity hole is real and demonstrable: three sepa...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `lcm.rs::add_message_with_outcome (1087-1144)`, `turn_loop.rs::persist_lcm_message_with_retry (752-779)`, `lcm.rs::insert_summary SAVEPOINT (2940-2995)`
 - **Problem:** Three autocommit INSERTs (messages, fts, context_items) with no transaction; if context_items fails the committed messages row is invisible to compaction (context_entries joins context_items 3018) and render, and the 4x persist-retry inserts a duplicate while the first is orphaned; insert_summary already uses a SAVEPOINT.
 - **Fix:** Wrap the body in unchecked_transaction() and commit, like continuity_apply_diff (1497-1504).
@@ -93,7 +93,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/channels.rs::take_messages (lines 6754-6798, SELECT outside txn then unconditional ON CONFLICT DO UPDATE SET lease_owner=excluded.lease_owner)`, `src/core/mission/channels.rs::lease_queue_task (lines 2650-2678, no transaction at all, unconditional lease UPDATE)`, `src/core/service/core_transition_guard.rs::evaluate_core_transition (line 163 validates only request.from_state, never reads persisted current state)`, `src/core/mission/channels.rs::update_pending_send_to_accepted (line 5509, the correct CAS precedent already in this file)`
@@ -108,7 +108,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 2 · impact **high** · effort **M** · kind **concurrency** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim verified against live code. The count-then-insert is genuinely non-atomic: validate_core_spawn does a COUNT(*) read (699) that excludes the current edge_id (edge_id <> ?2, 862), and the INSERT is a separ...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/core_transition_guard.rs::validate_core_spawn (lines 695-704, reads accepted_spawn_budget_count then returns)`, `src/core/service/core_transition_guard.rs::evaluate_core_spawn (lines 438-478, INSERTs the edge AFTER validation, no enclosing transaction)`, `src/core/service/core_transition_guard.rs::accepted_spawn_budget_count (referenced at line 699; COUNT(*) over accepted edges by budget_key)`, `docs/harness-operating-model.md (Finite Budget liveness argument, budget<=64 contracts)`
 - **Problem:** evaluate_core_spawn validates the spawn by calling validate_core_spawn, which checks `accepted_spawn_budget_count(conn, budget_key, edge_id) >= max_attempts` (line 699-700) to enforce the finite budget that the operating model relies on for liveness. It then INSERTs the new edge into ctox_core_spawn_edges (line 446) — but the count and the insert are NOT wrapped in a single write transaction, and callers pass their own per-call connection. Two concurrent spawners sharing a budget_key both read existing=max-1 (both under the cap), both pass validation, and both insert distinct edge_ids (edge_id is deterministic over request_json, so different children do NOT collide on the ON CONFLICT). The accepted-edge count now exceeds max_attempts. This violates the 'every accepted spawn path has a finite budget' invariant that harness-operating-model.md treats as a release-blocking contract. Distinct from Pass-1's 'spawn-budget values untested' (a value-correctness gap): this is the budget enforcement itself racing.
 - **Fix:** The fix is to make the budget read and the edge insert atomic so the second racer observes the first's committed edge. SQLite gives this for free with a BEGIN IMMEDIATE write transaction around validate+insert on a single connection; busy_timeout then serializes the two spawners and the loser correctly sees existing==max and is rejected with spawn_budget_exhausted.
@@ -124,7 +124,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 2 · impact **high** · effort **S** · kind **bug** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Conclusively grounded. The entity-lifecycle asymmetry is real: every reviewed founder send is driven Approved->Sending before the provider call, the failure outcome emits Sending->SendFailed through the kernel, but the success outcome em...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/mission/channels.rs::send_email_message (4117-4213)`, `src/core/mission/channels.rs::enforce_reviewed_founder_send_core_transition (5425)`, `src/core/mission/channels.rs::emit_reviewed_founder_send_failed_transition (5613-5659)`, `src/core/mission/channels.rs::mark_founder_reply_review_sent (5083)`, `src/core/service/core_state_machine.rs::allowed_transition_catalog (1160 (Sending,Sent))`, `src/core/service/core_state_machine.rs::is_outcome_terminal_transition (526-531)`
 - **Problem:** The egress path drives the FounderCommunication entity Approved->Sending before the provider call and Sending->SendFailed on failure, but on SUCCESS no code emits the catalog-legal (Sending,Sent) transition. grep over all of src/core finds exactly one from_state:CoreState::Sending emitter and it is the failure path (channels.rs:5643); the only other CoreState::Sent reference is a reverse-mapping table in process_mining.rs:4815, not an emitter. Consequence: every successfully sent founder/owner mail leaves its entity permanently in the non-terminal Sending state. Failure is witnessed by the kernel; success is not. Because the outcome-witness terminal gate (is_outcome_terminal_transition) only fires for Completed/Closed/Sent/Done, the strongest validation never runs for the highest-blast-radius case, and process-mining/liveness see successful sends as perpetually in-flight. mark_founder_reply_review_sent only updates the review table, bypassing the Core State Machine for the success outcome.
 - **Fix:** Make the success outcome flow through the same kernel the failure outcome already does: after mark_outbound_send_accepted succeeds, emit the Sending->Sent core transition with the same CoreEvidenceRefs (review_audit_key + body/recipient hashes) already assembled for the Approved->Sending edge, symmetric to enforce_reviewed_founder_send_failed_core_transition. This hardens an existing function on the existing serial path; no new runner.
@@ -140,7 +140,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 2 · impact **high** · effort **M** · kind **bug** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Independently verified every load-bearing claim against current code; the ticket's grounding caveat matched live source in all eight checks. The double-send crash window is real and present on a P0 founder-egress path: record_outbound_pe...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/mission/channels.rs::send_email_message (4161-4199)`, `src/core/mission/channels.rs::record_outbound_pending_send (4221-4301)`, `src/core/mission/channels.rs::existing_durable_outbound_send_result (4309-4348)`, `src/core/mission/channels.rs::is_durable_outbound_send_state (4350-4365)`, `src/core/communication/adapters.rs::EmailAdapter::send_cli (225-232)`
 - **Problem:** Re-send idempotency depends solely on the durable communication_messages row. The pending row is written as (status=draft_pending_send, folder_hint=outbox); adapter.send_cli physically sends; then mark_outbound_send_accepted flips folder_hint to sent. is_durable_outbound_send_state requires folder_hint=='sent' AND status not in the failed set, so a draft_pending_send row is explicitly NOT durable (channels.rs:4356). If the process dies (or the conn errors) after send_cli returns Ok but before mark_outbound_send_accepted commits, the row stays (draft_pending_send, outbox). On the next attempt record_outbound_pending_send re-finds the same deterministic key, existing_durable_outbound_send_result returns None, and send_cli is called a SECOND time. EmailSendCommandRequest carries no idempotency key / deterministic Message-ID derived from message_key (adapters.rs:71, send_cli at 225 just forwards), so the provider cannot dedupe either. The in-process acquire_reviewed_founder_send_lock does not survive a crash and is not even held on the send_reviewed_email_communication_request branch (channels.rs:3322).
 - **Fix:** Tighten the existing durability check + provider request rather than add a runner. Pass a deterministic idempotency token (the existing pending_send_message_key/body_sha256) into EmailSendCommandRequest so a re-attempt is suppressed provider-side, and/or treat a draft_pending_send row whose provider call was already initiated as a hold-then-verify rather than a blind re-send. Both harden existing functions on the existing serial path.
@@ -190,7 +190,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::mission_agent_failure_threshold`, `src/core/service/service.rs::timeout_auto_retry_enabled`, `src/core/execution/models/runtime_env.rs::env_or_config`, `src/core/execution/models/runtime_env.rs::config_flag`
@@ -240,7 +240,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/supervisor.rs::wait_for_backend_ready`, `src/core/execution/agent/turn_loop.rs::summarize_known_infra_error`, `src/core/execution/agent/turn_loop.rs::hard_runtime_blocker_retry_cooldown_secs`, `src/core/service/service.rs::runtime_blocker_backoff_remaining_secs`
@@ -257,7 +257,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/runtime_plan.rs::reusable_persisted_chat_runtime_plan`, `src/core/execution/models/runtime_plan.rs::inspect_hardware_profile_uncached`, `src/core/execution/models/runtime_plan.rs::ChatRuntimePlan`
@@ -272,7 +272,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 2 · impact **high** · effort **S** · kind **migration-safety** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim is verified against live code. The migration genuinely runs RENAME/CREATE/INSERT/DROP as a single un-transacted execute_batch under WAL+autocommit on a fresh connection, so a crash between CREATE and INS...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `tickets.rs::migrate_ticket_self_work_items_schema (10440-10489)`, `rxdb_peer.rs::sync_ticket_state_with_database (3983)`
 - **Problem:** Legacy DBs run RENAME/CREATE/INSERT/DROP as one execute_batch with no BEGIN/COMMIT while daemon (3s projection), TUI, CLIs share the file; a kill mid-migration leaves the canonical table missing and replicates a truncated ctox_ticket_self_work_items over WebRTC. Probe re-runs on all 90 open sites.
 - **Fix:** Wrap in conn.unchecked_transaction and gate behind the persistence.rs::initialized_paths/governance.rs once-guard; 1:1 copy unchanged.
@@ -287,7 +287,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Real liveness/correctness defect, fully grounded in live code. The resolution UPDATE (findings.rs:170-179) stales a confirmed finding after a single missed observation, while promotion requires two consecutive ticks (record_or_confirm fi...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/harness_mining/findings.rs::mark_unseen_stale`, `src/core/service/harness_mining/findings.rs::run_audit_tick`, `src/core/mission/queue.rs::render_confirmed_harness_findings_block`
 - **Problem:** mark_unseen_stale fires `UPDATE ... SET status='stale' WHERE status IN ('detected','confirmed') AND last_seen_at < tick_started_at`. Staling a `detected` finding is the intended 2-tick gate. But it ALSO stales a `confirmed` finding the instant it is not re-observed at one tick. The underlying algorithms are window-bounded (conformance `--window 1000`, stuck/sojourn over recent rows): a transient gap — a breach event aging just out of the 1000-row window, a sub-table query erroring inside `run_or_error`, or a single failed tick — flips a confirmed, operator-relevant finding straight to `stale` with resolved_by='audit-tick:no-longer-observed', WITHOUT ever passing acknowledge/mitigate/verify. Once stale, `render_confirmed_harness_findings_block` (which lists only status='confirmed') stops injecting it into the queue-repair prompt, so the recovery agent loses the signal. The downgrade is indistinguishable from a genuine resolution.
 - **Fix:** Tighten the existing stale predicate so a *confirmed* finding requires N consecutive unseen ticks (symmetric with the 2-tick gate that promoted it), instead of one. This hardens the exact UPDATE that is the gate's resolution half, keeping detected→stale at one tick but making confirmed→stale require sustained absence — preserving the durable signal the repair prompt depends on.
@@ -305,7 +305,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/harness_mining/findings.rs::run_audit_tick`, `src/core/service/service.rs::start_harness_audit_watcher`, `src/core/service/process_mining.rs::diagnose_harness_findings`, `src/core/service/harness_mining/mod.rs::ui_snapshot`
@@ -328,7 +328,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 1 · impact **high** · effort **M** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor, line number (drifted only slightly or matching exactly, e.g. core_transition_guard.rs:116), and behavioral claim verifies against live code. The coverage gap is real and end-to-end: the strongest conformance signal — a SQLi...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/process_mining.rs::findings_for_mapping`, `src/core/service/process_mining.rs::record_unmapped_event`, `src/core/service/harness_mining/brief.rs::synthesize`, `src/core/service/harness_mining/findings.rs::run_audit_tick`
 - **Problem:** The strongest conformance signal — a SQLite table mutation with NO mapping rule (`ctox_pm_unmapped_events`) — is the literal 'a decision happened that the state machine cannot see'. process_mining.rs surfaces it only as an ephemeral CLI finding via findings_for_mapping ('unmapped_sqlite_events', severity critical) inside the mapping/diagnose report. brief::synthesize, the ONLY input to run_audit_tick, builds findings from 5 algorithms and never reads unmapped_events or the rejected rows of ctox_core_spawn_edges. So the most important coverage gaps never enter ctox_hm_findings, never get the 2-tick confirmation, never reach the queue-repair prompt, and never get a lifecycle. A persistent coverage hole is invisible to every automated consumer.
 - **Fix:** Add an `unmapped_coverage` finding kind to the SAME brief::synthesize ranking that already feeds the 2-tick gate, sourced from the counts process_mining already computes. This rides the existing brief→audit-tick→findings pipeline; no new scanner, no new table — it just promotes an already-recorded signal into the durable findings lifecycle.
@@ -346,7 +346,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/queue.rs::apply_queue_repair_actions`, `src/core/mission/queue.rs::run_agentic_queue_repair`, `src/core/mission/queue.rs::cleanup_queue_scope`
@@ -363,7 +363,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/channels.rs::create_queue_task_with_metadata`, `src/core/mission/channels.rs::enforce_queue_task_spawn`
@@ -380,7 +380,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::review_outcome_is_terminal_no_send`, `src/core/service/service.rs:5311`, `src/core/mission/review.rs::ReviewDisposition`, `src/core/mission/review.rs::parse_disposition`, `src/core/mission/review.rs:1295`
@@ -428,7 +428,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim verified against live code (line numbers drifted ~88 lines, symbols intact). The gap is real and consequential: the worker_active_count>0 half of the serial-lease-exclusivity gate in route_external_messa...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/service.rs::active_agent_loop_in_progress`, `src/core/service/service.rs::route_external_messages`, `src/core/service/service.rs::channel_router_does_not_repair_founder_mail_during_active_agent_loop`, `src/core/service/service.rs::service_status_stays_busy_while_worker_activity_is_finalizing`
 - **Problem:** active_agent_loop_in_progress (service.rs:9001) returns shared.busy || shared.worker_active_count > 0, and route_external_messages (service.rs:9006-9029) early-returns on it so no NEW external work is leased while an agent loop runs — this is THE central serial-stability assumption (Pruefsatz Q2). But the only route_external_messages test that exercises the gate, channel_router_does_not_repair_founder_mail_during_active_agent_loop (service.rs:21930), sets only busy:true and only asserts the founder-REPAIR branch is skipped. The worker_active_count>0 half is exercised solely by status_from_shared_state in service_status_stays_busy_while_worker_activity_is_finalizing (service.rs:16794), which never calls the router. No test proves that with worker_active_count=1 (busy=false), route_external_messages refuses to lease a fresh pending inbound message. A refactor that drops the worker_active_count term from active_agent_loop_in_progress would let the router double-lease external work mid-worker and pass every test.
 - **Fix:** Add a test that pins the existing exclusivity gate on the worker_active_count branch end-to-end: seed one pending inbound communication_messages row, set SharedState{busy:false, worker_active_count:1}, call route_external_messages, and assert the row stays pending with no lease_owner and no new queue task — the mirror of the existing busy=true test, closing the other half of the same guard.
@@ -463,7 +463,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::start_prompt_worker working-hours hold (3268-3283)`, `src/core/service/service.rs::PromptWorkerActivity::drop (3139-3238)`, `src/core/service/service.rs::PromptWorkerActivity::start (3109-3130)`, `src/core/service/service.rs::route_external_messages idle dispatch (9068-9070)`
@@ -478,7 +478,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 2 · impact **medium** · effort **S** · kind **bug** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Grounded and accurate. context_token_count (lcm.rs:3053-3068) returns Result<i64> but ends in .unwrap_or(0), so any query_row error (locked DB, schema drift, type mismatch) is silently coerced to 0. That feeds evaluate_compaction (1171) ...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `lcm.rs::context_token_count unwrap_or(0) (3053-3068)`, `lcm.rs::evaluate_compaction (1166-1183)`, `lcm.rs::compact guard (1192-1202)`, `turn_engine.rs::build_turn_plan (95-107)`
 - **Problem:** unwrap_or(0) turns any SUM-join error into 0, so evaluate_compaction reports should_compact=false and compact early-returns at 1194 even when context is huge; the only backstop is the preflight loop (528), surfacing as the Pass-1 turnloop overflow with no trace of the swallowed read.
 - **Fix:** Propagate with ? (fn returns Result<i64>); callers already return Result to build_turn_plan.
@@ -493,7 +493,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 2 · impact **medium** · effort **S** · kind **concurrency** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — All anchors verified in live code (line numbers drifted ~13 lines but symbols/locations correct). The success/timeout asymmetry is real: the compact-success arm calls policy.note_compacted() (direct_session.rs:1159) while the timeout arm...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `direct_session.rs timeout branch no note_compacted (1172-1202)`, `direct_session.rs policy field (345)`, `compact.rs::note_compacted (255-258), suppression (216-247)`
 - **Problem:** CompactPolicy lives across turns and resets only via note_compacted(); the success path calls it (1159) but the timeout path interrupts and bails without it, so the dispatched ThreadCompactStart leaves the policy hot and the next turn first TokenCount immediately re-fires Compact on a thread just interrupted mid-compact.
 - **Fix:** Call policy.note_compacted() on the timeout branch before bail, mirroring success.
@@ -508,7 +508,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 2 · impact **medium** · effort **M** · kind **design-pattern** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim verified against live code. The defect is real and reachable: each compaction pass commits its insert+delete via an unconditional SAVEPOINT RELEASE (insert_summary:2910) before the token recompute (compa...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `lcm.rs::compact loops progress-check after insert (1208-1241)`, `lcm.rs::compact_leaf_pass insert+delete (2693-2709)`, `turn_engine.rs::assess_compaction_guard advisory (121-127)`, `lcm.rs::summary_id_for now-salt (5995-6007)`
 - **Problem:** Each pass deletes source context_items and inserts a summary BEFORE checking tokens dropped (1216-1222), so a regressing chunk commits a net-larger context irreversibly with no outer tx; NoProgress is only telemetry; summary_id_for also salts the hash with iso_now() defeating content-addressed idempotency (the now-salt anti-pattern Pass-1 flagged for queue keys).
 - **Fix:** Wrap each pass in unchecked_transaction and commit only if context_token_count strictly decreased (force: not increased); drop the iso_now() salt.
@@ -540,7 +540,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 2 · impact **medium** · effort **M** · kind **dead-code** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim is verified in live code (only minor line drift: send_failed transition emitter is at 5613 as cited, loop at 8949 vs cited 8899). The catalog promises a SendFailed->DeliveryRepair->Sending recovery loop ...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/core_state_machine.rs::allowed_transition_catalog (1162-1163 SendFailed->DeliveryRepair, DeliveryRepair->Sending)`, `src/core/mission/channels.rs::mark_outbound_send_failed (4396-4412)`, `src/core/mission/channels.rs::emit_reviewed_founder_send_failed_transition (5613)`
 - **Problem:** The FounderCommunication catalog declares a delivery-repair retry loop SendFailed->DeliveryRepair->Sending (core_state_machine.rs:1162-1163), but grep over all of src/core finds zero emitters of either edge and no DeliveryRepair driver. A provider failure sets the row to send_failed (mark_outbound_send_failed) and emits Sending->SendFailed, then nothing ever re-attempts it: no loop scans send_failed rows, and SendFailed is not a terminal state (terminals are Done/Escalated, core_state_machine.rs:1246). The founder mail is neither delivered, terminally failed, nor retried - a silent stall that Pass-1's 'partial/failed delivery -> durable typed outcome and bounded retry, or a silent stall' probe targets. This is the catalog promising a recovery path that does not exist.
 - **Fix:** Either (a) implement a bounded DeliveryRepair re-attempt that re-enters Sending through the SAME entity and the SAME enforce_reviewed_founder_send_core_transition path (with an attempt budget), or (b) if no driver is intended near-term, the catalog edges are a smell that misleads liveness/process-mining - flag and either wire a minimal repair tick or document the stall as the intended manual-recovery contract. Implementing (a) reuses the existing send path; it does NOT add a second runner because it re-enters the existing serial send through the existing transition functions.
@@ -558,7 +558,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/channels.rs::mark_outbound_send_accepted (4367-4394 - LIVE, no CAS)`, `src/core/mission/channels.rs::mark_outbound_send_failed (4396-4412 - LIVE, no CAS)`, `src/core/mission/channels.rs::update_pending_send_to_accepted (5491-5529 - CAS-guarded, tests only)`, `src/core/mission/channels.rs::update_pending_send_to_failed (5534-5575 - CAS-guarded, tests only)`
@@ -577,7 +577,7 @@ CORRECTED FIX (inverse of the sketch): keep the LIVE functions as the one transi
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/governance.rs::DEFAULT_MECHANISMS`, `src/core/service/mission_governor.rs::evaluate_loop_governor`, `src/core/context/lcm.rs::increment_mission_rewrite_failure_count`
@@ -598,7 +598,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every load-bearing claim is independently confirmed in live code, including the self-attested "Grounding caveat" details. Two recovery/keepalive mechanisms (plan_routing_repair, channel_router_core_guard) are emitted via governance::reco...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/governance.rs::list_recent_events_from_conn`, `src/core/service/service.rs::run_plan_routing_repair`, `src/core/service/governance.rs::DEFAULT_MECHANISMS`
 - **Problem:** list_recent_events_from_conn (governance.rs:665) reads events with `FROM governance_events e JOIN governance_mechanisms m ON m.mechanism_id = e.mechanism_id` (inner join). Two recovery mechanisms are emitted by production code but are NOT in DEFAULT_MECHANISMS: 'plan_routing_repair' (service.rs:1381, the boot+cycle stale-plan-route repair) and 'channel_router_core_guard' (service.rs:9435, the router-keepalive guard-skip). Their rows are written to governance_events but the inner join filters them out of every prompt snapshot and TUI governance view (governance.rs:682). record_event has no FK either, so the writes succeed and then become permanently invisible — a silent observability hole precisely on two recovery/keepalive paths.
 - **Fix:** Register the two emitted mechanisms in DEFAULT_MECHANISMS so the existing join surfaces them, and harden the contract so an emit of an unregistered mechanism cannot silently vanish.
@@ -682,7 +682,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `channels.rs::ensure_terminal_no_send_column (6248-6271)`, `lcm.rs::ensure_column (1051-1071)`
@@ -698,7 +698,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/process_mining.rs::prune_process_events_global`, `src/core/service/process_mining.rs::prune_sqlite_access_process_events`, `src/core/service/process_mining.rs::ensure_process_mining_schema`
@@ -715,7 +715,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/harness/core/src/agent/status.rs:20 (is_final)`, `src/core/harness/core/src/agent/control.rs:621 (maybe_start_completion_watcher)`, `src/core/harness/core/src/tools/handlers/agent_jobs.rs:896 (find_finished_threads)`, `src/core/harness/core/src/tools/handlers/agent_jobs.rs:940 (reap_stale_active_items)`
@@ -736,7 +736,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 🏷 Pass 1 · impact **medium** · effort **M** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and structural claim verifies against live code (line numbers drifted by ~30-90 lines but symbols exact). This is not merely drift risk: it is an active over-rejection. For external-chat (teams/jami/whatsapp/meeting) termina...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/core_state_machine.rs::validate_outcome_witness (line 489) + artifact_ref_satisfies (line 518)`, `src/core/service/core_transition_guard.rs::validate_outcome_artifact_state (line 215) + artifact_ref_satisfies (line 313)`
 - **Problem:** There are two artifact_ref_satisfies implementations with DIFFERENT rules: the pure one in core_state_machine.rs (matches on '*', or primary_key starts_with 'thread:') and the guard one in core_transition_guard.rs which additionally matches OutboundCommunication keys containing ':'. validate_transition runs the pure check (WP-Outcome-Missing if no satisfying delivered ref), then evaluate_core_transition runs validate_outcome_artifact_state which re-checks the SAME expected refs plus DB state. The two satisfaction predicates can disagree (an OutboundCommunication artifact the guard considers satisfied is rejected by the pure pass before the DB check ever runs), so the effective contract depends on which layer fires first and the duplicated logic can drift on the next edit.
 - **Fix:** Collapse to one source of truth for artifact_ref_satisfies and one outcome-witness entry point: keep the DB-backed validate_outcome_artifact_state (it strictly subsumes the pure presence check) and have it call a single shared satisfies() predicate, removing the divergent pure copy from the per-request path. This tightens the existing WP-Outcome gate by making it deterministic regardless of layer ordering.
@@ -752,7 +752,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 🏷 Pass 1 · impact **medium** · effort **M** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor and behavioral claim verifies against live code. The harness deterministically computes hard loop facts (exact-normalized user-turn repetition and structured-failure count, both reaching Critical) yet the only invocation-ref...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/context/context_health.rs::repeated_recent_user_turns`, `src/core/context/context_health.rs::recent_blocked_status_count`, `src/core/context/context_health.rs::context_health_preempts_current_slice`, `src/core/execution/agent/turn_loop.rs::ensure_rendered_prompt_is_invocable`
 - **Problem:** context_health computes hard, deterministic loop facts: an exact-normalized-match user turn count (repeated_recent_user_turns) and a repeated structured non-success/failure count over the last 8 assistant rows (recent_blocked_status_count), and raises blocked_status_loop / recent_user_turn_repeated to Critical at >=3 / >1. But the turn loop only refuses invocation when context selection is EMPTY and Critical (ensure_rendered_prompt_is_invocable, turn_loop.rs:826). A turn that is re-issuing an identical user prompt after repeated structured failures is still invoked — the harness burns another full local-inference turn (up to the 3600s budget) on a retry the deterministic signal already marked critical. There is no distinct `Blocked` outcome today, so the ticket must not pretend the signal is narrower than the code actually is.
 - **Fix:** Add a deterministic short-circuit on the EXISTING critical loop codes (blocked_status_loop AND recent_user_turn_repeated both Critical) inside the existing ensure_rendered_prompt_is_invocable guard, or first introduce a narrower `Blocked`/`ContextRejected` outcome and gate only on that. Bail BEFORE invoke-model with a typed, retry-coolable error so the existing service classify path records it and cooldown handles it. This stays a hard-fact gate (exact key match on prompt text + structured outcome tokens), never a semantic 'are these similar' judgement.
@@ -790,7 +790,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/core_state_machine.rs::validate_ticket_closure`, `src/core/service/core_state_machine.rs:775`, `src/core/mission/verification.rs::RecordedSliceAssurance::closure_blocking_open_items`, `src/core/context/lcm.rs::mission_assurance_snapshot`, `src/core/context/live_context.rs:1369`
@@ -858,7 +858,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/supervisor.rs::ensure_persistent_backends`, `src/core/execution/models/supervisor.rs::start_backend_supervisor`, `src/core/execution/models/supervisor.rs::persistent_backend_alerts`
@@ -875,7 +875,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/supervisor.rs::ensure_persistent_backends`, `src/core/execution/models/supervisor.rs::is_auxiliary`, `src/core/execution/models/supervisor.rs::api_runtime_does_not_keep_primary_generation_managed`
@@ -898,7 +898,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/supervisor.rs::resolve_managed_engine_binary`, `src/core/execution/models/runtime_engine_guard.rs::ensure_engine_binary_matches_host`, `src/core/execution/models/local_model.rs::resolve_local_model_backend`
@@ -915,7 +915,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/harness_flow.rs::process_mining_branch`, `src/core/service/harness_flow.rs::build_flow_with_connection`, `src/core/service/process_mining.rs::diagnose_harness_findings`
@@ -932,7 +932,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/queue.rs::score_queue_spill_candidate`, `src/core/mission/channels.rs::queue_completed_has_terminal_success_proof`
@@ -949,7 +949,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::route_external_messages`, `src/core/service/service.rs::queue_pressure_active`, `src/core/service/service.rs::ensure_queue_guard_locked`
@@ -972,7 +972,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::route_external_messages`, `src/core/mission/channels.rs::ack_leased_messages_with_reason`, `src/core/service/governance.rs::record_event`
@@ -1006,7 +1006,7 @@ Tighter recommendation: rather than driving the full ensure_backend_process spaw
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/core_state_machine.rs::validate_terminal_failure_gate (line 403, entity guard restricts to QueueItem|WorkItem|Ticket)`, `src/core/service/core_state_machine.rs::allowed_transition_catalog (Commitment AtRisk->Escalated line ~1179; FounderCommunication Sending->SendFailed line ~1161)`, `src/core/service/core_state_machine.rs::core_terminal_states (Commitment terminal Escalated; FounderCommunication terminal Escalated, line 1234)`
@@ -1049,7 +1049,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/agent/turn_loop.rs:528`, `src/core/execution/agent/direct_session.rs::exact_prompt_token_count`, `src/core/execution/agent/direct_session.rs::exact_prompt_safe_input_budget`
@@ -1067,7 +1067,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — The finding is genuinely grounded: the boot-only communication-route reclaim (communication_routing_state, reclaimed only by the boot path, not by the periodic reconcile) records no governance event, while the structurally analogous peri...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/service.rs::release_stale_service_communication_leases_on_boot`, `src/core/service/service.rs::release_stale_service_communication_leases`, `src/core/service/service.rs::reconcile_ticket_runtime_state`
 - **Problem:** On every restart, release_stale_service_communication_leases_on_boot (service.rs:1268) flips orphaned 'leased' communication routes back to 'pending' (the core crash-recovery path for a daemon that died mid-turn) but only calls push_event — it records NO governance event. The structurally identical periodic reconcile (reconcile_ticket_runtime_state, service.rs:9566) DOES emit a 'ticket_reconciliation' governance event for the same kind of reclaim. So a crash that stranded N leased work items, then got auto-reclaimed at boot, leaves zero durable audit/process-mining evidence — exactly the restart scenario where you most want it. The boot state-invariant check right next to it (service.rs:816) is fully audited, making the gap an inconsistency, not a design choice.
 - **Fix:** Add a governance::record_event on the boot reclaim path, mirroring the existing ticket_reconciliation event shape, so crash-recovery lease reclaims are durably auditable and surface in the governance prompt block and process-mining.
@@ -1083,7 +1083,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — All anchors and the described asymmetry are real and accurately documented (rare for this backlog) — the bound skill is delivered to the executor only out-of-band (service.rs:3378) and is dropped before the review request is built, so th...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/service.rs::run_completion_review`, `src/core/mission/review.rs::CompletionReviewRequest`, `src/core/service/service.rs::collect_review_evidence_summaries`
 - **Problem:** run_completion_review builds CompletionReviewRequest with review_skill_path (the generic external-review skill), task_goal, task_prompt, and ad-hoc deterministic_evidence, but never sets the executor's job.suggested_skill. The reviewer cannot check the artifact against the skill the work was bound to; the contract is reconstructed ad hoc on the review side instead of carried task->worker->review.
 - **Fix:** Tighten the EXISTING review handoff: carry job.suggested_skill into CompletionReviewRequest and surface it in the existing review prompt next to review_skill_path so the reviewer opens the bound skill and verifies against it. No new review subtask, stays on the same main work item.
@@ -1135,7 +1135,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/channels.rs::enforce_queue_route_status_transition`, `src/core/mission/channels.rs::queue_route_status_core_state`, `src/core/mission/channels.rs::legacy_queue_route_status_core_state`, `src/core/service/state_write_guard.rs::protected_state_writes_are_core_guarded_or_explicit_test_fixtures`
@@ -1182,7 +1182,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 2 · impact **medium** · effort **S** · kind **dead-code** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Fully grounded and unusually honest: every anchor exists, the zero-writer claim is true, and the ticket pre-emptively corrects its own one inaccuracy (6611 is a test fixture, not a third production schema). But this is a pure dead-audit-...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/core_transition_guard.rs:121 (terminal_reaped_at TEXT — schema, INSERT-only table; no UPDATE ctox_core_spawn_edges anywhere)`, `src/core/service/process_mining.rs:6611 (mirror schema), :1102/:1128 (SELECTed + surfaced into spawn-edges audit JSON as always null)`, `src/apps/desktop/src/db_reader.rs:1695 (SpawnEdgeRow.terminal_reaped_at), :1921/:1943 (read into desktop reader)`, `grep: zero `terminal_reaped_at =` / `SET terminal_reaped_at` / `UPDATE ctox_core_spawn_edges` writers in the whole tree`
 - **Problem:** `ctox_core_spawn_edges` is INSERT-only (no UPDATE statement exists against it), and `terminal_reaped_at` has no writer anywhere. Yet it is declared in three schema definitions, SELECTed in the process-mining `spawn-edges` audit (process_mining.rs:1102) and the desktop db_reader (db_reader.rs:1921), and serialized into the audit JSON (process_mining.rs:1128) and the SpawnEdgeRow struct. The result: every spawn-edge audit/explain output presents `terminal_reaped_at: null` for every row, implying the harness tracks when a spawn edge's terminal was reaped — when in fact reaping is never recorded. This is dead audit state that makes the audit lie by omission: an operator inspecting spawn edges sees a field that can never be anything but null and may conclude no reaping ever occurred, rather than that it is simply untracked.
 - **Fix:** Two behavior/persistence-preserving options, both valid under the architecture rule: (a) delete the column from all three schema sites + both readers (zero writers, zero behavior change — the field is structurally always null); or (b) if spawn-edge reaping SHOULD be tracked, wire the existing spawn-reaper to write `terminal_reaped_at` so the audit stops lying. The table is local SQLite, NOT an rxdb-replicated collection (no hits in src/core/rxdb or business-os/rxdb), so the data-plane contracts pipeline does NOT gate this. Recommend (a) for now plus a follow-up to wire reaping if the field is wanted.
@@ -1231,7 +1231,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Unusually well-researched for a backlog with known hallucinations: every anchor, line number, format string, and behavioral claim is verified against live code, and the "no test references" claim is literally true. But grounded is not th...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/mission/queue.rs::render_confirmed_harness_findings_block`, `src/core/service/service.rs::harness_audit_tick_once`, `src/core/service/service.rs::start_harness_audit_watcher`
 - **Problem:** The entire feedback value of this subsystem rests on render_confirmed_harness_findings_block injecting confirmed findings into the queue-repair prompt, and on harness_audit_tick_once producing those confirmed rows. findings.rs has unit tests for the lifecycle, but there is NO test proving the integration invariant: 'a seeded confirmed finding appears verbatim in the queue-repair prompt block' and 'two audit ticks over a seeded breach yield a status=confirmed row'. The block also silently returns String::new() on any error (table missing, read fails), so a regression that breaks the read would be invisible — the prompt just quietly loses the findings section with no test catching it. This is an un-pinned, load-bearing invariant.
 - **Fix:** Pin the existing feedback path with a test that drives the real functions: seed a finding via record_or_confirm twice (→confirmed), call render_confirmed_harness_findings_block against the same root, assert the finding_id/kind/severity appear in the returned string. This hardens the existing path with no code change beyond test-only construction.
@@ -1263,7 +1263,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Grounding is solid: the live predicate review_outcome_is_terminal_no_send (service.rs:569-636) is a pure ASCII-lowercase text scraper that drives the terminal NoSend close (service.rs:5349) and genuinely never reads outcome.disposition, ...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/service.rs:15282`, `src/core/service/service.rs:15298`, `src/core/service/service.rs::review_outcome_is_terminal_no_send`, `src/core/mission/review.rs::ReviewDisposition`
 - **Problem:** The existing no-send tests review_no_send_wait_is_terminal (service.rs:15282) and review_missing_founder_work_is_not_terminal_no_send (service.rs:15298) only exercise the keyword scraper and never set outcome.disposition. There is no test proving that the structured reviewer signal ReviewDisposition::NoSend is the authority for the terminal close, nor that a DISPOSITION:SEND outcome whose prose happens to contain 'do not send' is NOT terminally closed. The documented invariant (review.rs:386-390: 'the service core never scrapes summary or finding text to derive it') is therefore un-pinned, which is precisely how the review-1 drift slipped in. Per the constraints doc, a test that pins an un-pinned invariant is itself a valid hardening.
 - **Fix:** Add the missing invariant test alongside review-1 so the structured-disposition authority is regression-locked even before the predicate is changed. This pins an existing path's intended contract.
@@ -1279,7 +1279,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **partial** · stability **marginal** — Anchors all real and line-drifted only: the loop-active early-return (9115-9117) is genuinely a bare `return Ok(())` that emits no audit/process-mining evidence, and record_event's INSERT OR IGNORE + (mechanism_id, idempotence_key) uniqu...
 
-- [ ] **open**
+- [x] **shipped**
 - **Anchors:** `src/core/service/service.rs::route_external_messages`, `src/core/service/service.rs::active_agent_loop_in_progress`, `src/core/service/governance.rs::record_event`
 - **Problem:** When a worker is active, `route_external_messages` returns at service.rs:9027-9029 with zero evidence. Every other router skip records a governance event (preflight, guard-block, queue-pressure-guard, runtime-backoff), but the single most frequent arbitration decision — 'this tick leased nothing because a turn is in flight' — leaves no durable trace. Process-mining cannot reconstruct how long the serial slot was occupied, how many ticks starved waiting, or whether founder mail sat blocked behind a long task, because the deciding gate is invisible.
 - **Fix:** Make the existing serial-router gate auditable without changing its behavior: emit one throttled governance event on the loop-active early-return, keyed so it does not flood. This rides the existing `governance::record_event` sink that process-mining already consumes, and turns an un-mined hot-path decision into Process-Mining evidence (constraints doc line 209/212).
@@ -1297,7 +1297,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/channels.rs::queue_sort_at`, `src/core/mission/channels.rs::list_queue_tasks_from_conn_with_statuses`, `src/core/service/service.rs::maybe_lease_next_durable_queue_prompt_for_idle_dispatch`
@@ -1348,7 +1348,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/harness/core/src/agent/guards.rs:80 (reserve_spawn_slot unbounded branch when max_threads is None)`, `src/core/harness/core/src/config/mod.rs:2406 (agent_max_threads .or(DEFAULT_AGENT_MAX_THREADS))`, `src/core/harness/core/src/harness_spawn_liveness.rs:31 (analyzer flags DEFAULT None)`, `src/core/harness/core/src/config/config_tests.rs:4308`
@@ -1414,7 +1414,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped**
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/agent/turn_loop.rs::detect_durable_state_transition`, `src/core/execution/agent/turn_loop.rs:662`
