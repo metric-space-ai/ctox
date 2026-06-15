@@ -47,11 +47,12 @@ function installBusinessOsHttpDataGuard(view, isForbiddenBusinessOsHttpDataReque
 }
 
 function layoutInstanceBrowserView(view, contentBounds) {
+  const chromeHeight = 56;
   view.setBounds({
-    x: 300,
-    y: 52,
-    width: Math.max(640, contentBounds.width - 300),
-    height: Math.max(480, contentBounds.height - 52),
+    x: 0,
+    y: chromeHeight,
+    width: Math.max(640, contentBounds.width),
+    height: Math.max(480, contentBounds.height - chromeHeight),
   });
   view.setAutoResize({ width: true, height: true });
 }

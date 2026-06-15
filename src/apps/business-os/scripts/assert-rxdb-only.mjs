@@ -148,6 +148,27 @@ function assertLoginDoesNotDefaultToAdmin() {
   if (!/const\s+pairedConfig\s*=\s*await\s+readBusinessOsLaunchConfig\(\)/.test(appContent)) {
     offenders.push('src/apps/business-os/app.js: loadSession must await pairing config before authenticating');
   }
+  const loadSessionStart = appContent.indexOf('async function loadSession()');
+  const loadSessionEnd = appContent.indexOf('\nfunction allowsPairingConfigSession', loadSessionStart);
+  if (loadSessionStart < 0 || loadSessionEnd < 0) {
+    offenders.push('src/apps/business-os/app.js: missing loadSession');
+    return;
+  }
+  const loadSession = appContent.slice(loadSessionStart, loadSessionEnd);
+  const pairedIndex = loadSession.indexOf('const pairedConfig = await readBusinessOsLaunchConfig()');
+  const injectedIndex = loadSession.indexOf('const injected = readInjectedDesktopSession()');
+  const pairingBranchIndex = loadSession.indexOf('if (pairedConfig && allowsPairingConfigSession(pairedConfig))');
+  const authenticatedInjectedIndex = loadSession.indexOf('if (injected?.authenticated) return injected');
+  const plainInjectedIndex = loadSession.indexOf('if (injected) return injected');
+  if (pairedIndex < 0 || injectedIndex < 0 || pairingBranchIndex < 0 || authenticatedInjectedIndex < 0) {
+    offenders.push('src/apps/business-os/app.js: loadSession must prefer authenticated injection and URL pairing over unauthenticated injection');
+  }
+  if (pairedIndex > injectedIndex) {
+    offenders.push('src/apps/business-os/app.js: loadSession must read URL pairing before server-injected session stubs');
+  }
+  if (plainInjectedIndex >= 0 && plainInjectedIndex < pairingBranchIndex) {
+    offenders.push('src/apps/business-os/app.js: unauthenticated injected session must not block URL pairing');
+  }
 }
 
 function assertCtoxDbBrandingContract() {

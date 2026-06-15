@@ -42,6 +42,7 @@ let registryPath;
 let registry;
 let secretStore;
 let activeViewId = null;
+let chromeOverlayVisible = false;
 const views = new Map();
 const protocolHandling = installDesktopProtocolHandling({
   app,
@@ -105,16 +106,40 @@ async function createWindow() {
 }
 
 function layoutActiveView() {
-  if (!mainWindow || !activeViewId) return;
+  if (!mainWindow || !activeViewId || chromeOverlayVisible) return;
   const view = views.get(activeViewId);
   if (!view) return;
   layoutInstanceBrowserView(view, mainWindow.getContentBounds());
 }
 
+function isViewAttached(view) {
+  return Boolean(mainWindow?.getBrowserViews?.().includes(view));
+}
+
+function attachActiveView() {
+  if (!mainWindow || !activeViewId || chromeOverlayVisible) return;
+  const view = views.get(activeViewId);
+  if (!view) return;
+  if (!isViewAttached(view)) mainWindow.addBrowserView(view);
+  layoutActiveView();
+}
+
+function detachActiveView() {
+  if (!mainWindow || !activeViewId) return;
+  const view = views.get(activeViewId);
+  if (view && isViewAttached(view)) mainWindow.removeBrowserView(view);
+}
+
+function setChromeOverlayVisible(visible) {
+  chromeOverlayVisible = Boolean(visible);
+  if (chromeOverlayVisible) detachActiveView();
+  else attachActiveView();
+  return { ok: true, visible: chromeOverlayVisible };
+}
+
 function showAppShell() {
-  if (mainWindow && activeViewId && views.has(activeViewId)) {
-    mainWindow.removeBrowserView(views.get(activeViewId));
-  }
+  chromeOverlayVisible = false;
+  detachActiveView();
   activeViewId = null;
   updateCrashReportExtra(crashReporter, {
     activeInstanceId: "",
@@ -142,17 +167,14 @@ async function activateInstance(instance) {
     await scrubCtoxConfigFromWebContents(view.webContents).catch(() => undefined);
     views.set(instance.id, view);
   }
-  if (activeViewId && views.has(activeViewId)) {
-    mainWindow.removeBrowserView(views.get(activeViewId));
-  }
+  detachActiveView();
   activeViewId = instance.id;
   updateCrashReportExtra(crashReporter, {
     activeInstanceId: activeViewId,
     activeInstanceSource: instance.source,
     activeInstanceStatus: instance.status,
   });
-  mainWindow.addBrowserView(view);
-  layoutActiveView();
+  attachActiveView();
   sourceManager.markInstanceUsed(instance.id);
   return { ok: true };
 }
@@ -235,11 +257,18 @@ async function isCtoxDevSessionAuthenticated() {
 
 async function logoutCtoxDev() {
   const result = await clearCtoxDevSession(session.defaultSession, registry.settings.ctoxDevBaseUrl);
+  destroyManagedViews();
   const instances = await sourceManager.listInstances();
   return {
     ...result,
     instances,
   };
+}
+
+function destroyManagedViews() {
+  for (const instanceId of Array.from(views.keys())) {
+    if (String(instanceId).startsWith("managed:")) destroyInstanceView(instanceId);
+  }
 }
 
 async function openCtoxDevManagedInstance(instance) {
@@ -255,6 +284,7 @@ ipcMain.handle("instances:list", async () => sourceManager.listInstances());
 ipcMain.handle("instances:activate", async (_event, instance) => activateInstance(instance));
 ipcMain.handle("instances:remove", async (_event, instance) => removeInstance(instance));
 ipcMain.handle("app-shell:show", async () => showAppShell());
+ipcMain.handle("app-shell:set-overlay-visible", async (_event, visible) => setChromeOverlayVisible(visible));
 ipcMain.handle("invites:import", async (_event, rawInvite) => sourceManager.importInvite(rawInvite));
 ipcMain.handle("pairing:manual", async (_event, options) => sourceManager.importManualPairing(options || {}));
 ipcMain.handle("pairing:rotate", async (_event, instance, rawInvite) => rotatePairing(instance, rawInvite));
@@ -288,5 +318,6 @@ app.on("window-all-closed", () => {
 module.exports = {
   activateInstance,
   activateManagedInstance,
+  setChromeOverlayVisible,
   showAppShell,
 };

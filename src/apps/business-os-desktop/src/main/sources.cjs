@@ -11,7 +11,10 @@ const {
   manualPairingToInvite,
   parseInvitePayload,
 } = require("../common/invites.cjs");
-const { buildPairingLaunchConfig } = require("./launch-config.cjs");
+const {
+  buildLaunchUrl,
+  buildPairingLaunchConfig,
+} = require("./launch-config.cjs");
 const {
   removeInstance: removeRegistryInstance,
   upsertInstance,
@@ -87,10 +90,11 @@ class CtoxDevInstanceSource {
     });
     if (!launchResponse.ok) throw new Error(`ctox.dev launch config failed: ${launchResponse.status}`);
     const launchPayload = await launchResponse.json();
+    const ctoxConfig = launchPayload.pairingConfig || {};
     return {
       source: "ctox_dev",
-      launchUrl: launchPayload.launchUrl,
-      ctoxConfig: launchPayload.pairingConfig || {},
+      launchUrl: buildLaunchUrl(launchPayload.launchUrl, ctoxConfig),
+      ctoxConfig,
       expiresAt: tokenPayload.expiresAt,
     };
   }

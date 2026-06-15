@@ -43,6 +43,7 @@ function parseArgs(args) {
     passwordStdin: false,
     expectedTenants: [],
     launchFirst: false,
+    renderLaunchFirst: false,
     manageFirst: false,
     authWindow: false,
     sessionRotation: false,
@@ -63,6 +64,9 @@ function parseArgs(args) {
       options.expectedTenants.push(String(args[index + 1] || "").trim());
       index += 1;
     } else if (arg === "--launch-first") {
+      options.launchFirst = true;
+    } else if (arg === "--render-launch-first") {
+      options.renderLaunchFirst = true;
       options.launchFirst = true;
     } else if (arg === "--manage-first") {
       options.manageFirst = true;
@@ -116,6 +120,7 @@ function runLiveFixture({ outputPath, userDataPath, credentials, options }) {
       "--email",
       options.email,
       ...(options.launchFirst ? ["--launch-first"] : []),
+      ...(options.renderLaunchFirst ? ["--render-launch-first"] : []),
       ...(options.manageFirst ? ["--manage-first"] : []),
       ...(options.authWindow ? ["--auth-window"] : []),
       ...(options.sessionRotation ? ["--session-rotation"] : []),

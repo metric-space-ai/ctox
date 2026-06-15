@@ -49,9 +49,12 @@ wieder testbar:
   behandelt: Der SourceManager fordert fuer solche Instanzen keinen
   Launch-Token mehr an. Damit ist auch der Sperrfall abgedeckt, wenn ctox.dev
   einen Tenant nicht entfernt, sondern nicht launchbar meldet.
-- Jede Instanz kann aus der Sidebar in eine native Detail-/Settings-Fläche
-  geöffnet werden; managed Instanzen zeigen ctox.dev-Verwaltung statt lokaler
-  Löschung, unmanaged Instanzen können lokal aus der App entfernt werden.
+- Die fruehere permanente Sidebar ist durch eine Slack-artige, temporaere
+  Instanzpalette ersetzt: Topbar-Button oder `Cmd/Ctrl+K` oeffnet den Switcher,
+  Instanzwechsel braucht maximal zwei Klicks, und das Business-OS-WebView nutzt
+  wieder die volle Breite. Details/Verwaltung bleiben in nativen Desktop-
+  Flaechen erreichbar; managed Instanzen zeigen ctox.dev-Verwaltung statt
+  lokaler Loeschung, unmanaged Instanzen koennen lokal entfernt werden.
 - Local-Daemon-Quelle kann `ctox business-os peer status`, `peer ensure` und
   `business-os install --target` auf CLI-Contract-Ebene nutzen.
 - Lokale unmanaged Instanzen ueberleben einen App-Neustart ohne ctox.dev
@@ -203,11 +206,11 @@ wieder testbar:
   abgedeckt.
 - Ein zweiter Electron-Smoke prüft OS-Protokoll-Lifecycle für Cold-Start-URL,
   macOS `open-url` und `second-instance` Dispatch.
-- Die Sidebar rendert Source-, Role-, Status- und RxDB/WebRTC-Health-Badges
-  fuer managed und unmanaged Instanzen; ein Renderer-Smoke prueft DOM und
-  Suche.
+- Der temporaere Instanz-Switcher rendert Source-, Role-, Status- und
+  RxDB/WebRTC-Health-Badges fuer managed und unmanaged Instanzen; ein
+  Renderer-Smoke prueft DOM, Suche und Tastaturaktivierung.
 - Der Renderer-Smoke beweist den gemischten Switcher-Pfad lokal: Aktivierung
-  per Sidebar-Klick und `Cmd/Ctrl+K` + Suche + `Enter` funktioniert fuer
+  per temporaerer Palette und `Cmd/Ctrl+K` + Suche + `Enter` funktioniert fuer
   ctox.dev-managed, SSH-managed unmanaged und Pairing-Instanzen; alle
   Aktivierungsnachweise bleiben `rxdb-webrtc` ohne HTTP-Datenproxy.
 - Der BrowserView installiert einen HTTP-Datenpfad-Guard: erlaubte
@@ -304,6 +307,18 @@ wieder testbar:
   Tenants inklusive Kunstmen und SKF, `/dashboard?tenant=<tenant-id>` lud mit
   HTTP 200 ohne Login-Redirect, und der Kunstmen-Launch blieb
   `transport=webrtc` / `httpBridgeAvailable=false`.
+- Der gerenderte Live-Launch wird jetzt opt-in mit `--render-launch-first`
+  geprueft. Der Smoke laedt den echten Kunstmen WebView und failt bei zweitem
+  Login oder `System-Start fehlgeschlagen`. Der am 2026-06-15 reproduzierte
+  Doppel-Login hatte zwei Ursachen: Desktop haengte `pairingConfig` nicht an
+  nackte ctox.dev `launchUrl`s an, und die Business-OS-Shell bevorzugte einen
+  unauthentifizierten, serverseitig injizierten Session-Stub vor dem gueltigen
+  URL-`ctox_config`. Beides ist behoben und guard-railed.
+- Die beiden Testinstanzen Kunstmen und SKF wurden fuer diesen Live-Beweis mit
+  Backup auf Shell-Build `20260615-desktop-url-pairing1` aktualisiert. Fuer
+  Production muss derselbe Stand ueber einen normalen CTOX-Release/Install-Pfad
+  ausgerollt werden; manuelles Kopieren auf Testinstanzen ist nur Verifikation,
+  kein Release-Ersatz.
 - Derselbe Live-Smoke kann mit `--manage-first` einen konkreten ctox.dev
   Management-Deep-Link pruefen: `/dashboard?tenant=<tenant-id>` laedt im
   authentifizierten Electron Cookie-Jar mit HTTP 200, redirectet nicht zum
@@ -523,6 +538,12 @@ Tests:
   `https://cto1.kunstmen.com`, `transport=webrtc`,
   `http_bridge_available=false`, Signaling-URL vorhanden und Room-Passwort nur
   als redigierter Presence-Nachweis.
+- [x] Live-Render-Nachweis fuer Kunstmen:
+  `smoke:ctox-dev-live -- --auth-window --manage-first --render-launch-first
+  --expected-tenant Kunstmen --expected-tenant SKF` laedt die echte Shell im
+  Electron WebView, scrubbt `ctox_config`, zeigt Build
+  `20260615-desktop-url-pairing1`, fordert keinen zweiten Login und zeigt keinen
+  Systemstartfehler.
 - [x] Live-Management-Smoke: `/dashboard?tenant=<tenant-id>` liefert im
   authentifizierten Electron Cookie-Jar 200, bleibt auf ctox.dev, redirectet
   nicht zum Login und der BrowserWindow-DOM enthaelt einen Hinweis auf den
@@ -888,9 +909,9 @@ Status: Abgeschlossen.
 
 Aufgaben:
 
-- [x] Gemeinsame Sidebar.
+- [x] Slack-artiger, temporaerer Instanz-Switcher statt permanenter Sidebar.
 - [x] Quick Switch mit `Cmd/Ctrl+K`, `Enter`, `Escape`.
-- [x] Empty State für Instanz-Auswahl.
+- [x] Dunkler Empty State fuer Instanz-Auswahl.
 - [x] Source-, Role-, Health- und Offline-Badges vollständig.
 - [x] ctox.dev-managed Verwaltungs-/Deauth-Verweise.
 - [x] Per-instance Settings.
@@ -904,7 +925,7 @@ Tests:
 - [x] Renderer-Smoke: managed Instanz zeigt ctox.dev-Verwaltung, aber keine
   lokale Entfernen-Aktion.
 - [x] Renderer-Smoke: unmanaged SSH-Instanz kann lokal entfernt werden.
-- [x] Electron-Renderer-Smoke: Sidebar-Klick aktiviert managed Instanz;
+- [x] Electron-Renderer-Smoke: temporaerer Switcher aktiviert managed Instanz;
   `Cmd/Ctrl+K`, Suche und `Enter` aktivieren SSH- und Pairing-Instanzen.
 - [x] Electron-Renderer-Smoke: alle gemischten Aktivierungen melden
   `rxdb-webrtc` und `httpDataProxy=false`.
@@ -1145,3 +1166,4 @@ Release Gates:
 | 2026-06-15 | Welle 2 ctox.dev Sperrpfad gehaertet: `launchAllowed:false` aus dem ctox.dev Session-Package wird als `needs_auth` normalisiert und der SourceManager verweigert den Launch vor dem `/api/desktop/launch-token` Request. Damit ist der Desktop fail-closed, wenn ctox.dev einen entzogenen oder nicht launchbaren Tenant noch in der Liste meldet. Live-Recheck gegen Produktion ist gruen: `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --expected-tenant Kunstmen --expected-tenant SKF` automatisiert die echte AuthPanel-UI, sieht sechs Tenants inklusive Kunstmen/SKF, laedt `/dashboard?tenant=<tenant-id>` mit HTTP 200 ohne Login-Redirect und startet Kunstmen WebRTC-only (`transport=webrtc`, `httpBridgeAvailable=false`). Gruen: `node --test test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, `npm test` 109/109, `npm run release:check`, `npm run test:electron-smoke` nach einem transienten ersten HTTP-Guard-Smoke-Fehler; der isolierte HTTP-Guard-Smoke war direkt gruen. Welle 2 steigt auf 97%; echte serverseitige Live-Revocation/Session-Rotation bleibt offen. |
 | 2026-06-15 | Welle 8 Release-Secret-Preflight ergaenzt: `npm run release:secrets:check` prueft lokal per GitHub CLI die benoetigten Repo-Secret-Namen fuer signierte/notarisierte Business-OS-Desktop-Releases, ohne Secret-Werte zu lesen. Aktueller Befund ist negativ: `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` und `gh variable list --repo metric-space-ai/ctox --json name,updatedAt,value` liefern jeweils `[]`; ein neuer Tag-Release wuerde deshalb am macOS-Preflight fuer `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` scheitern. Welle 8 steigt auf 88%, weil der Preflight reproduzierbar ist; production-ready bleibt bis zur Secret-Konfiguration und einem echten gruenen Tag-Run offen. |
 | 2026-06-15 | Welle 2 Live-Session-Rotation geschlossen und echten Logout-Bug beseitigt: Der erste Produktions-Smoke mit `--session-rotation` zeigte, dass `clearStorageData` allein ctox.dev nicht ausloggt; `/api/desktop/session-package` blieb authentifiziert. `clearCtoxDevSession` entfernt jetzt zusaetzlich passende ctox.dev-Domaincookies aus Electron. Der erneute Live-Smoke `smoke:ctox-dev-live -- --auth-window --manage-first --launch-first --session-rotation --expected-tenant Kunstmen --expected-tenant SKF` ist gegen Produktion gruen: initial sechs Tenants, Kunstmen-Management-Link HTTP 200 ohne Login-Redirect, erster Launch WebRTC-only, Logout entfernt ein ctox.dev-Cookie, Session-Package danach 401, managed Count 0, alter Launch blockiert mit `ctox.dev launch token failed: 400`, Re-Login sieht wieder sechs Tenants, Relaunch fuer Kunstmen bleibt `transport=webrtc` / `httpBridgeAvailable=false`. Der Smoke schreibt bei Timeouts jetzt Teil-Evidenz mit letzter Stage. Gruen: `node --test test/ctox-dev-login.test.cjs test/ctox-dev-source.test.cjs test/source-manager.test.cjs`, `npm run check`, Live-Rotations-Smoke. Welle 2 steigt auf 99%, Gesamt auf 98%; offen bleibt echter serverseitiger Membership-Entzug. |
+| 2026-06-15 | Desktop-UX und Live-Launch repariert: Die permanente helle Sidebar wurde durch eine dunkle Topbar plus temporaeren Slack-artigen Instanz-Switcher ersetzt; der BrowserView nutzt wieder volle Breite und wird waehrend der Palette ausgeblendet. Der echte Doppel-Login wurde reproduziert und behoben: ctox.dev gab fuer Kunstmen eine nackte `launchUrl` plus `pairingConfig` zurueck, Desktop packt das `ctox_config` jetzt selbst in die URL, und die Business-OS-Shell laesst ein gueltiges URL-Pairing nicht mehr von einem unauthentifizierten, serverseitig injizierten Session-Stub blockieren. Neuer Live-Smoke `--render-launch-first` rendert die echte Kunstmen-Shell und failt bei zweitem Login oder Systemstartfehler; nach Testinstanz-Hotfix auf Build `20260615-desktop-url-pairing1` ist der Smoke gruen: sechs ctox.dev Tenants inklusive Kunstmen/SKF, Management-Link HTTP 200, WebView ohne zweiten Login, `ctox_config` gescrubbt, kein Systemstartfehler. Gruen: `node src/apps/business-os/scripts/assert-rxdb-only.mjs`, `npm run check`, `npm test` 115/115, `npm run test:electron-smoke`, Live-Smoke mit `--auth-window --manage-first --render-launch-first --expected-tenant Kunstmen --expected-tenant SKF`. Offen fuer Production bleibt der normale Release-/Install-Rollout dieser Shell auf alle Instanzen; die Testinstanz-Kopie ist kein Release-Ersatz. |

@@ -46,7 +46,8 @@ app.whenReady().then(async () => {
     const quickSwitchFocused = await window.webContents.executeJavaScript(`
       (() => {
         document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
-        return document.activeElement === document.getElementById("search");
+        return document.activeElement === document.getElementById("search")
+          && document.getElementById("switcher-backdrop").hidden === false;
       })()
     `, true);
     await window.webContents.executeJavaScript(`
@@ -63,6 +64,7 @@ app.whenReady().then(async () => {
     await waitForDom(window, "window.ctoxDesktopSmoke.activateRequests().length === 2");
     await window.webContents.executeJavaScript(`
       (() => {
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true, bubbles: true }));
         const searchInput = document.getElementById("search");
         searchInput.value = "paired";
         searchInput.dispatchEvent(new Event("input", { bubbles: true }));

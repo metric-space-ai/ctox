@@ -71,6 +71,6 @@ test("layout keeps BrowserView in the app content region", () => {
     setAutoResize: (resize) => calls.push(["resize", resize]),
   };
   layoutInstanceBrowserView(view, { width: 1440, height: 920 });
-  assert.deepEqual(calls[0], ["bounds", { x: 300, y: 52, width: 1140, height: 868 }]);
+  assert.deepEqual(calls[0], ["bounds", { x: 0, y: 56, width: 1440, height: 864 }]);
   assert.deepEqual(calls[1], ["resize", { width: true, height: true }]);
 });

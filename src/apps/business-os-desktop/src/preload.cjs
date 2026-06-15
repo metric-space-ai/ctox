@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("ctoxDesktop", {
   activateInstance: (instance) => ipcRenderer.invoke("instances:activate", instance),
   removeInstance: (instance) => ipcRenderer.invoke("instances:remove", instance),
   showAppShell: () => ipcRenderer.invoke("app-shell:show"),
+  setChromeOverlayVisible: (visible) => ipcRenderer.invoke("app-shell:set-overlay-visible", Boolean(visible)),
   importInvite: (rawInvite) => ipcRenderer.invoke("invites:import", rawInvite),
   importManualPairing: (options) => ipcRenderer.invoke("pairing:manual", options),
   rotatePairing: (instance, rawInvite) => ipcRenderer.invoke("pairing:rotate", instance, rawInvite),

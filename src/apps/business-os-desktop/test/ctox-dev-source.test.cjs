@@ -69,10 +69,11 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
       if (url === "https://ctox.dev/api/desktop/launch/token_1") {
         assert.equal(options.method, "POST");
         return jsonResponse({
-          launchUrl: "https://skf.ctox.dev/?ctox_config=packed",
+          launchUrl: "https://skf.ctox.dev/",
           pairingConfig: {
             transport: "webrtc",
             http_bridge_available: false,
+            sync_room: "ctox-business-os:skf",
           },
         });
       }
@@ -81,7 +82,14 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
   });
   const launch = await source.getLaunchConfig("managed:tenant_skf");
   assert.equal(launch.source, "ctox_dev");
-  assert.equal(launch.launchUrl, "https://skf.ctox.dev/?ctox_config=packed");
+  const launchUrl = new URL(launch.launchUrl);
+  assert.equal(launchUrl.origin, "https://skf.ctox.dev");
+  assert.equal(launchUrl.searchParams.has("ctox_config"), true);
+  assert.deepEqual(decodeCtoxConfig(launchUrl), {
+    transport: "webrtc",
+    http_bridge_available: false,
+    sync_room: "ctox-business-os:skf",
+  });
   assert.equal(launch.ctoxConfig.http_bridge_available, false);
   assert.equal(calls.length, 2);
 });
@@ -147,7 +155,7 @@ test("ctox.dev source requests a fresh launch token for each activation", async 
       }
       launchUrls.push([url, options.method]);
       return jsonResponse({
-        launchUrl: `https://skf.ctox.dev/?ctox_config=token_${tokenCounter}`,
+        launchUrl: "https://skf.ctox.dev/",
         pairingConfig: {
           transport: "webrtc",
           http_bridge_available: false,
@@ -163,11 +171,17 @@ test("ctox.dev source requests a fresh launch token for each activation", async 
   assert.equal(second.expiresAt, "2099-01-01T00:00:02.000Z");
   assert.equal(first.ctoxConfig.epoch, 1);
   assert.equal(second.ctoxConfig.epoch, 2);
+  assert.equal(decodeCtoxConfig(new URL(first.launchUrl)).epoch, 1);
+  assert.equal(decodeCtoxConfig(new URL(second.launchUrl)).epoch, 2);
   assert.deepEqual(launchUrls, [
     ["https://ctox.dev/api/desktop/launch/token_1", "POST"],
     ["https://ctox.dev/api/desktop/launch/token_2", "POST"],
   ]);
 });
+
+function decodeCtoxConfig(url) {
+  return JSON.parse(Buffer.from(url.searchParams.get("ctox_config"), "base64url").toString("utf8"));
+}
 
 function jsonResponse(payload) {
   return {

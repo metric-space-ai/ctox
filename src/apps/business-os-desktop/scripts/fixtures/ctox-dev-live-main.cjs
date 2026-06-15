@@ -113,6 +113,7 @@ app.whenReady().then(async () => {
         tenantId: selectedForOptionalFlows.tenantId,
         displayName: selectedForOptionalFlows.displayName,
         launchUrlOrigin: safeOrigin(launchConfig.launchUrl),
+        launchUrlPath: safePath(launchConfig.launchUrl),
         transport: launchConfig.ctoxConfig.transport,
         httpBridgeAvailable: launchConfig.ctoxConfig.http_bridge_available,
         signalingUrlCount: Array.isArray(launchConfig.ctoxConfig.signaling_urls)
@@ -121,6 +122,16 @@ app.whenReady().then(async () => {
         hasRoomPassword: Boolean(launchConfig.ctoxConfig.signaling_room_password),
         expiresAt: launchConfig.expiresAt || "",
       };
+      if (options.renderLaunchFirst) {
+        launch.render = await inspectRenderedLaunch(launchConfig, selectedForOptionalFlows);
+        writeProgress("launch-render-checked", { launch });
+        if (launch.render.loginPromptVisible) {
+          throw new Error("rendered launch asked for a second login");
+        }
+        if (launch.render.systemStartFailed) {
+          throw new Error(`rendered launch failed to start: ${launch.render.failureText || "unknown failure"}`);
+        }
+      }
       writeProgress("launch-checked", { launch });
     }
 
@@ -186,6 +197,7 @@ app.whenReady().then(async () => {
   } catch (error) {
     exitCode = 1;
     writeResult({
+      ...progress,
       ok: false,
       baseUrl: options.baseUrl,
       error: error instanceof Error ? error.message : String(error),
@@ -221,6 +233,7 @@ function parseArgs(args) {
     email: "",
     expectedTenants: [],
     launchFirst: false,
+    renderLaunchFirst: false,
     manageFirst: false,
     authWindow: false,
     sessionRotation: false,
@@ -240,6 +253,9 @@ function parseArgs(args) {
       parsed.expectedTenants.push(String(args[index + 1] || "").trim());
       index += 1;
     } else if (arg === "--launch-first") {
+      parsed.launchFirst = true;
+    } else if (arg === "--render-launch-first") {
+      parsed.renderLaunchFirst = true;
       parsed.launchFirst = true;
     } else if (arg === "--manage-first") {
       parsed.manageFirst = true;
@@ -270,6 +286,152 @@ function parseArgs(args) {
   }
   parsed.expectedTenants = parsed.expectedTenants.filter(Boolean);
   return parsed;
+}
+
+function inspectRenderedLaunch(launchConfig, instance) {
+  return new Promise((resolve) => {
+    const partition = instance.sessionPartition || `persist:ctox-render-${Date.now()}`;
+    session.fromPartition(partition);
+    const window = new BrowserWindow({
+      show: false,
+      width: 1440,
+      height: 920,
+      webPreferences: {
+        contextIsolation: true,
+        nodeIntegration: false,
+        partition,
+      },
+    });
+    const consoleMessages = [];
+    let failLoad = null;
+    let settled = false;
+    const timeout = setTimeout(() => finish("timeout"), 18000);
+    window.webContents.on("console-message", (_event, details) => {
+      consoleMessages.push({
+        level: details.level,
+        message: String(details.message || "").slice(0, 240),
+      });
+    });
+    window.webContents.once("did-fail-load", (_event, errorCode, errorDescription, validatedUrl) => {
+      failLoad = {
+        errorCode,
+        errorDescription: String(errorDescription || ""),
+        origin: safeOrigin(validatedUrl),
+      };
+      setTimeout(() => finish("did-fail-load"), 1000);
+    });
+    window.webContents.once("did-finish-load", () => {
+      setTimeout(() => finish("did-finish-load"), 9000);
+    });
+    async function finish(reason) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      let page = {};
+      try {
+        page = await window.webContents.executeJavaScript(`(() => {
+          function decodeConfig(packed) {
+            try {
+              const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+              const normalized = String(packed || "").replace(/-/g, "+").replace(/_/g, "/").replace(/\\s/g, "");
+              let buffer = 0;
+              let bits = 0;
+              const bytes = [];
+              for (const char of normalized) {
+                if (char === "=") break;
+                const index = alphabet.indexOf(char);
+                if (index < 0) throw new Error("invalid base64url character");
+                buffer = (buffer << 6) | index;
+                bits += 6;
+                if (bits >= 8) {
+                  bits -= 8;
+                  bytes.push((buffer >> bits) & 0xff);
+                }
+              }
+              const decoded = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
+              return {
+                ok: true,
+                keyCount: Object.keys(decoded || {}).length,
+                hasSyncRoom: Boolean(decoded?.sync_room || decoded?.syncRoom),
+                signalingUrlCount: Array.isArray(decoded?.signaling_urls)
+                  ? decoded.signaling_urls.length
+                  : (Array.isArray(decoded?.signalingUrls) ? decoded.signalingUrls.length : 0),
+                hasRoomPassword: Boolean(decoded?.signaling_room_password || decoded?.signalingRoomPassword || decoded?.room_password || decoded?.roomPassword),
+                hasSession: Boolean(decoded?.session?.authenticated),
+                source: String(decoded?.source || "")
+              };
+            } catch (error) {
+              return { ok: false, error: String(error && error.message || error || "decode failed").slice(0, 160) };
+            }
+          }
+          const scripts = Array.from(document.scripts || []).map((script) => script.src || "").filter(Boolean);
+          const appScript = scripts.find((src) => /\\/app\\.js(?:\\?|$)/.test(src)) || "";
+          const params = new URLSearchParams(location.search || "");
+          const packedConfig = params.get("ctox_config") || params.get("ctoxConfig") || "";
+          return {
+            title: document.title || "",
+            url: location.href,
+            bodyText: (document.body && document.body.innerText || "").slice(0, 20000),
+            hasCtoxConfigParam: Boolean(packedConfig),
+            ctoxConfigLength: packedConfig.length,
+            decodedCtoxConfig: decodeConfig(packedConfig),
+            loggedOutMarker: localStorage.getItem("ctox.businessOs.loggedOut") || "",
+            pairingConfigStored: Boolean(localStorage.getItem("ctox.businessOs.pairingConfig")),
+            appScript,
+            appBuild: (appScript.match(/[?&]v=([^&#]+)/) || [])[1] || ""
+          };
+        })()`, true);
+      } catch (_error) {
+        page = {};
+      }
+      if (!window.isDestroyed()) window.destroy();
+      const bodyText = String(page.bodyText || "");
+      const failureText = extractLaunchFailureText(bodyText);
+      resolve({
+        ok: !failLoad,
+        reason,
+        finalOrigin: safeOrigin(page.url || launchConfig.launchUrl),
+        finalPath: safePath(page.url || launchConfig.launchUrl),
+        title: String(page.title || ""),
+        bodyTextLength: bodyText.length,
+        bodyPreview: bodyText.replace(/\s+/g, " ").trim().slice(0, 500),
+        appBuild: String(page.appBuild || ""),
+        hasCtoxConfigParam: Boolean(page.hasCtoxConfigParam),
+        ctoxConfigLength: Number(page.ctoxConfigLength || 0),
+        decodedCtoxConfig: page.decodedCtoxConfig || null,
+        loggedOutMarker: String(page.loggedOutMarker || ""),
+        pairingConfigStored: Boolean(page.pairingConfigStored),
+        loginPromptVisible: /magic link|passwort|anmelden|einloggen|sign in|log in/i.test(bodyText),
+        systemStartFailed: Boolean(failureText),
+        failureText,
+        failLoad,
+        consoleMessageCount: consoleMessages.length,
+        consoleMessages: consoleMessages.slice(0, 8),
+      });
+    }
+    window.loadURL(launchConfig.launchUrl).catch((error) => {
+      failLoad = {
+        errorCode: 0,
+        errorDescription: error instanceof Error ? error.message : String(error),
+        origin: safeOrigin(launchConfig.launchUrl),
+      };
+      finish("loadURL-error");
+    });
+  });
+}
+
+function extractLaunchFailureText(bodyText) {
+  const text = String(bodyText || "");
+  const patterns = [
+    /System-Start fehlgeschlagen[\s\S]{0,700}/i,
+    /Netzwerkverbindung fehlgeschlagen[\s\S]{0,500}/i,
+    /Signalisierungs-Server[\s\S]{0,500}/i,
+  ];
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[0].replace(/\s+/g, " ").trim().slice(0, 700);
+  }
+  return "";
 }
 
 async function loginWithAuthWindow(baseUrl, email, password) {
@@ -562,6 +724,7 @@ async function exerciseSessionRotation({
       tenantId: relaunchInstance.tenantId,
       displayName: relaunchInstance.displayName,
       launchUrlOrigin: safeOrigin(relaunchConfig.launchUrl),
+      launchUrlPath: safePath(relaunchConfig.launchUrl),
       transport: relaunchConfig.ctoxConfig.transport,
       httpBridgeAvailable: relaunchConfig.ctoxConfig.http_bridge_available,
       signalingUrlCount: Array.isArray(relaunchConfig.ctoxConfig.signaling_urls)

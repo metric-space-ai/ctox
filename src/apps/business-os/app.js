@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260611-snappy-shell2';
+const APP_BUILD = '20260615-desktop-url-pairing1';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -5483,8 +5483,10 @@ function shellCtoxHealthProblem(status) {
 }
 
 async function loadSession() {
+  const pairedConfig = await readBusinessOsLaunchConfig();
   const explicitLogout = localStorage.getItem(LOGGED_OUT_KEY) === '1';
-  if (explicitLogout) {
+  const urlPairingLaunch = pairedConfig && allowsPairingConfigSession(pairedConfig);
+  if (explicitLogout && !urlPairingLaunch) {
     return {
       ok: true,
       authenticated: false,
@@ -5492,11 +5494,12 @@ async function loadSession() {
       reason: 'logged_out',
     };
   }
+  if (explicitLogout && urlPairingLaunch) {
+    localStorage.removeItem(LOGGED_OUT_KEY);
+  }
 
   const injected = readInjectedDesktopSession();
-  if (injected) return injected;
-
-  const pairedConfig = await readBusinessOsLaunchConfig();
+  if (injected?.authenticated) return injected;
 
   if (pairedConfig && allowsPairingConfigSession(pairedConfig)) {
     const user = pairedConfig.session?.user || pairedConfig.user || {};

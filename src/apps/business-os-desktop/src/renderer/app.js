@@ -3,13 +3,22 @@
 const state = {
   instances: [],
   query: "",
+  activeInstanceId: "",
   selectedDetailsId: "",
+  switcherOpen: false,
   sudoPasswordRefs: {},
   sshPasswordRefs: {},
 };
 
 const list = document.getElementById("instances");
 const search = document.getElementById("search");
+const openSwitcherButton = document.getElementById("open-switcher");
+const emptyOpenSwitcherButton = document.getElementById("empty-open-switcher");
+const closeSwitcherButton = document.getElementById("close-switcher");
+const switcherBackdrop = document.getElementById("switcher-backdrop");
+const switcherCount = document.getElementById("switcher-count");
+const currentInstanceName = document.getElementById("current-instance-name");
+const currentInstanceMeta = document.getElementById("current-instance-meta");
 const loginButton = document.getElementById("login-ctox-dev");
 const logoutButton = document.getElementById("logout-ctox-dev");
 const manualPairingButton = document.getElementById("manual-pairing");
@@ -27,6 +36,12 @@ const passwordDialogInput = document.getElementById("password-dialog-input");
 const passwordDialogCancel = document.getElementById("password-dialog-cancel");
 const badgeApi = window.CtoxInstanceBadges;
 
+openSwitcherButton.addEventListener("click", () => openSwitcher());
+emptyOpenSwitcherButton.addEventListener("click", () => openSwitcher());
+closeSwitcherButton.addEventListener("click", () => closeSwitcher());
+switcherBackdrop.addEventListener("click", (event) => {
+  if (event.target === switcherBackdrop) closeSwitcher();
+});
 loginButton.addEventListener("click", loginCtoxDev);
 logoutButton.addEventListener("click", logoutCtoxDev);
 manualPairingButton.addEventListener("click", importManualPairing);
@@ -37,26 +52,32 @@ search.addEventListener("input", () => {
 document.addEventListener("keydown", async (event) => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
-    search.focus();
-    search.select();
+    await openSwitcher();
   }
-  if (event.key === "Enter" && document.activeElement === search) {
+  if (event.key === "Enter" && state.switcherOpen) {
+    event.preventDefault();
     const [first] = filteredInstances();
     if (first) await activateInstance(first);
   }
-  if (event.key === "Escape" && document.activeElement === search) {
-    search.value = "";
-    state.query = "";
-    render();
+  if (event.key === "Escape" && state.switcherOpen) {
+    event.preventDefault();
+    closeSwitcher();
   }
 });
 
 async function refresh() {
-  state.instances = await window.ctoxDesktop.listInstances();
+  setInstances(await window.ctoxDesktop.listInstances());
+  render();
+}
+
+function setInstances(instances) {
+  state.instances = Array.isArray(instances) ? instances : [];
   if (state.selectedDetailsId && !state.instances.some((instance) => instance.id === state.selectedDetailsId)) {
     state.selectedDetailsId = "";
   }
-  render();
+  if (state.activeInstanceId && !state.instances.some((instance) => instance.id === state.activeInstanceId)) {
+    state.activeInstanceId = "";
+  }
 }
 
 function filteredInstances() {
@@ -75,13 +96,15 @@ function filteredInstances() {
 }
 
 function render() {
+  const filtered = filteredInstances();
   list.replaceChildren();
-  for (const instance of filteredInstances()) {
+  for (const instance of filtered) {
     const row = document.createElement("div");
     row.className = "instance";
     const button = document.createElement("button");
     button.className = "instance-main";
     button.type = "button";
+    button.setAttribute("aria-selected", String(instance.id === state.activeInstanceId));
     button.innerHTML = `
       <span class="name"></span>
       <span class="badges"></span>
@@ -96,7 +119,13 @@ function render() {
     if (actions) row.appendChild(actions);
     list.appendChild(row);
   }
-  emptyState.hidden = state.instances.length > 0;
+  switcherBackdrop.hidden = !state.switcherOpen;
+  switcherCount.textContent = `${filtered.length} von ${state.instances.length} Instanzen`;
+  const activeInstance = state.instances.find((instance) => instance.id === state.activeInstanceId);
+  currentInstanceName.textContent = activeInstance?.displayName || "Instanz wählen";
+  currentInstanceMeta.textContent = activeInstance ? sourceLabel(activeInstance.source) : "⌘K";
+  emptyState.hidden = state.instances.length > 0 || Boolean(state.selectedDetailsId);
+  emptyOpenSwitcherButton.disabled = state.instances.length === 0;
   renderSettingsPanel();
 }
 
@@ -183,11 +212,17 @@ function actionButton(label, handler, className) {
 
 async function activateInstance(instance) {
   await window.ctoxDesktop.activateInstance(instance);
+  state.activeInstanceId = instance.id;
+  state.selectedDetailsId = "";
+  await closeSwitcher();
+  render();
 }
 
 async function showDetails(instance) {
+  await closeSwitcher();
   await window.ctoxDesktop.showAppShell?.();
   state.selectedDetailsId = instance.id;
+  state.activeInstanceId = "";
   render();
 }
 
@@ -207,21 +242,41 @@ async function importManualPairing() {
 async function loginCtoxDev() {
   const result = await window.ctoxDesktop.loginCtoxDev();
   if (Array.isArray(result?.instances)) {
-    state.instances = result.instances;
+    setInstances(result.instances);
+    render();
+    if (state.instances.length > 0) await openSwitcher();
+    return;
+  }
+  await refresh();
+  if (state.instances.length > 0) await openSwitcher();
+}
+
+async function logoutCtoxDev() {
+  const result = await window.ctoxDesktop.logoutCtoxDev();
+  if (Array.isArray(result?.instances)) {
+    setInstances(result.instances);
     render();
     return;
   }
   await refresh();
 }
 
-async function logoutCtoxDev() {
-  const result = await window.ctoxDesktop.logoutCtoxDev();
-  if (Array.isArray(result?.instances)) {
-    state.instances = result.instances;
-    render();
-    return;
-  }
-  await refresh();
+async function openSwitcher() {
+  state.switcherOpen = true;
+  render();
+  search.focus();
+  search.select();
+  await window.ctoxDesktop.setChromeOverlayVisible?.(true);
+}
+
+async function closeSwitcher() {
+  if (!state.switcherOpen) return;
+  state.switcherOpen = false;
+  search.value = "";
+  state.query = "";
+  render();
+  await window.ctoxDesktop.setChromeOverlayVisible?.(false);
+  openSwitcherButton.focus();
 }
 
 async function openManagedInstance(instance) {

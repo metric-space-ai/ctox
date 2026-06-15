@@ -11,33 +11,55 @@
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
-    <aside class="sidebar">
-      <div class="brand">CTOX</div>
-      <div class="actions">
-        <button id="login-ctox-dev" type="button">ctox.dev</button>
-        <button id="logout-ctox-dev" type="button">Abmelden</button>
-        <button id="manual-pairing" type="button">Pairing</button>
-      </div>
-      <input id="search" type="search" placeholder="Instanz suchen" aria-label="Instanz suchen">
-      <div id="instances" class="instances"></div>
-    </aside>
-    <main class="content">
-      <div id="empty-state" class="empty">
-        <h1>Instanz auswählen</h1>
-        <p>Managed, lokale und gekoppelte Instanzen erscheinen gemeinsam in der Sidebar.</p>
-      </div>
-      <section id="instance-settings" class="settings-panel" hidden>
-        <div class="settings-header">
-          <div>
-            <h1 id="settings-name"></h1>
-            <div id="settings-meta" class="settings-meta"></div>
-          </div>
-          <div id="settings-actions" class="settings-actions"></div>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">CTOX Business OS</div>
+        <button id="open-switcher" class="current-instance" type="button" aria-haspopup="dialog">
+          <span id="current-instance-name">Instanz wählen</span>
+          <span id="current-instance-meta">⌘K</span>
+        </button>
+        <div class="actions">
+          <button id="login-ctox-dev" type="button">ctox.dev</button>
+          <button id="manual-pairing" type="button">Pairing</button>
+          <button id="logout-ctox-dev" type="button">Abmelden</button>
         </div>
-        <div id="settings-badges" class="settings-badges"></div>
-        <dl id="settings-fields" class="settings-fields"></dl>
-      </section>
-    </main>
+      </header>
+      <main class="content">
+        <div id="empty-state" class="empty">
+          <h1>Instanz auswählen</h1>
+          <p>Verbinde ctox.dev, SSH, lokale oder gekoppelte Instanzen und wechsle danach per Switcher.</p>
+          <button id="empty-open-switcher" type="button">Switcher öffnen</button>
+        </div>
+        <section id="instance-settings" class="settings-panel" hidden>
+          <div class="settings-header">
+            <div>
+              <h1 id="settings-name"></h1>
+              <div id="settings-meta" class="settings-meta"></div>
+            </div>
+            <div id="settings-actions" class="settings-actions"></div>
+          </div>
+          <div id="settings-badges" class="settings-badges"></div>
+          <dl id="settings-fields" class="settings-fields"></dl>
+        </section>
+      </main>
+      <div id="switcher-backdrop" class="switcher-backdrop" hidden>
+        <section class="switcher-panel" role="dialog" aria-modal="true" aria-labelledby="switcher-title">
+          <div class="switcher-header">
+            <div>
+              <h2 id="switcher-title">Instanz wechseln</h2>
+              <p id="switcher-count"></p>
+            </div>
+            <button id="close-switcher" class="icon-button" type="button" aria-label="Switcher schließen">×</button>
+          </div>
+          <input id="search" type="search" placeholder="Instanz suchen" aria-label="Instanz suchen">
+          <div id="instances" class="instances"></div>
+          <div class="switcher-footer">
+            <span>Enter öffnet die erste Instanz</span>
+            <span>Esc schließt</span>
+          </div>
+        </section>
+      </div>
+    </div>
     <dialog id="password-dialog" class="password-dialog">
       <form id="password-form" method="dialog">
         <h2 id="password-dialog-title">Sudo-Passwort</h2>

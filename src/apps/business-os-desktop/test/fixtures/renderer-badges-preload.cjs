@@ -115,6 +115,7 @@ contextBridge.exposeInMainWorld("ctoxDesktop", {
     };
   },
   showAppShell: async () => ({ ok: true }),
+  setChromeOverlayVisible: async (visible) => ({ ok: true, visible: Boolean(visible) }),
   loginCtoxDev: async () => ({ ok: true }),
   logoutCtoxDev: async () => {
     instances = instances.filter((instance) => instance.source !== "ctox_dev");
