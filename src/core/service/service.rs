@@ -15882,6 +15882,28 @@ mod tests {
     }
 
     #[test]
+    fn review_no_send_disposition_drives_the_terminal_close() {
+        // review-6: the SAME no-send prose, with the structured disposition
+        // flipped to NoSend, now drives the terminal close. The structured
+        // disposition — not the scraped text — is what makes it terminal (the
+        // negative is pinned in
+        // review_no_send_text_without_disposition_token_is_not_terminal).
+        let mut outcome = review_outcome_for_no_send_test(
+            "Do not send a founder reply yet. Wait until the inputs arrive.",
+        );
+        outcome
+            .failed_gates
+            .push("No-send: wait for the concrete inputs.".to_string());
+        outcome.disposition = review::ReviewDisposition::NoSend;
+        assert_eq!(outcome.disposition, review::ReviewDisposition::NoSend);
+        assert!(
+            matches!(outcome.disposition, review::ReviewDisposition::NoSend)
+                && review_outcome_is_terminal_no_send(&outcome),
+            "a NoSend disposition with no-send prose must drive the terminal close"
+        );
+    }
+
+    #[test]
     fn review_missing_founder_work_is_not_terminal_no_send() {
         let mut outcome = review_outcome_for_no_send_test(
             "Do not send the current mail because missing deliverables must be done before contacting the founders.",
