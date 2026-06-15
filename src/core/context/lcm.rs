@@ -95,6 +95,11 @@ pub enum AgentOutcome {
     TurnTimeout,
     /// The turn aborted with a runtime / harness execution error.
     ExecutionError,
+    /// The turn was rejected deterministically because the rendered prompt could
+    /// not fit the context/token budget (turnloop-5: exact-token overflow). A
+    /// distinct class so process-mining and the agent-failure counter can tell a
+    /// repeated context-budget reject apart from a generic backend crash.
+    ContextRejected,
     /// The turn was aborted by the harness (e.g. mission state invariant).
     Aborted,
     /// The turn was cancelled before it could finish (operator stop).
@@ -107,6 +112,7 @@ impl AgentOutcome {
             AgentOutcome::Success => "Success",
             AgentOutcome::TurnTimeout => "TurnTimeout",
             AgentOutcome::ExecutionError => "ExecutionError",
+            AgentOutcome::ContextRejected => "ContextRejected",
             AgentOutcome::Aborted => "Aborted",
             AgentOutcome::Cancelled => "Cancelled",
         }
@@ -123,6 +129,7 @@ impl AgentOutcome {
             "Success" => Some(AgentOutcome::Success),
             "TurnTimeout" => Some(AgentOutcome::TurnTimeout),
             "ExecutionError" => Some(AgentOutcome::ExecutionError),
+            "ContextRejected" => Some(AgentOutcome::ContextRejected),
             "Aborted" => Some(AgentOutcome::Aborted),
             "Cancelled" => Some(AgentOutcome::Cancelled),
             _ => None,
@@ -7310,6 +7317,7 @@ mod tests {
             AgentOutcome::Success,
             AgentOutcome::TurnTimeout,
             AgentOutcome::ExecutionError,
+            AgentOutcome::ContextRejected,
             AgentOutcome::Aborted,
             AgentOutcome::Cancelled,
         ] {
@@ -7324,6 +7332,7 @@ mod tests {
         assert!(!AgentOutcome::Success.is_agent_failure());
         assert!(AgentOutcome::TurnTimeout.is_agent_failure());
         assert!(AgentOutcome::ExecutionError.is_agent_failure());
+        assert!(AgentOutcome::ContextRejected.is_agent_failure());
         assert!(AgentOutcome::Aborted.is_agent_failure());
         assert!(AgentOutcome::Cancelled.is_agent_failure());
     }

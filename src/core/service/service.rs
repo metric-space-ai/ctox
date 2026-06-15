@@ -15365,6 +15365,17 @@ pub(crate) fn classify_agent_failure(error_text: &str) -> lcm::AgentOutcome {
     if lowered.contains("aborted") || lowered.contains("invariant violated") {
         return lcm::AgentOutcome::Aborted;
     }
+    // turnloop-5: a deterministic exact-token context overflow is a budget reject,
+    // not a generic backend crash. Give it the dedicated ContextRejected class so
+    // the agent-failure counter and process-mining can tell "we keep overflowing
+    // the context budget" apart from "the backend crashed". Scoped to exact
+    // overflow only; context_selection_empty stays a transient-retry case until
+    // its policy/tests are deliberately changed. (It is already non-transient in
+    // runtime_error_is_transient_api_failure, which matches no exact-overflow
+    // marker.)
+    if lowered.contains("context_preflight_exact_overflow") {
+        return lcm::AgentOutcome::ContextRejected;
+    }
     lcm::AgentOutcome::ExecutionError
 }
 
@@ -22280,6 +22291,17 @@ Use shell tools to create or update these files."
     }
 
     #[test]
+    fn exact_context_overflow_is_not_a_transient_api_failure() {
+        // turnloop-5: a deterministic exact-token context overflow is a budget
+        // reject (AgentOutcome::ContextRejected), NOT a transient API/infra
+        // failure. It must never be routed into infra-retry handling — pin that
+        // the transient classifier excludes the marker, so accidentally adding it
+        // to the substring list later is caught.
+        let error = "context_preflight_exact_overflow: exact rendered prompt tokens 9000 exceed safe input budget 8000 for context window 8192 after 2 LCM compaction rounds via selector";
+        assert!(!runtime_error_is_transient_api_failure(error));
+    }
+
+    #[test]
     fn chatgpt_subscription_refresh_error_keeps_work_retryable() {
         let error = "direct session error: ErrorEvent { message: \"Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.\", codex_error_info: Some(Unauthorized) }";
         assert_eq!(
@@ -26470,6 +26492,28 @@ Those are not durable artifact requirements."
     fn classify_agent_failure_falls_back_to_execution_error() {
         assert_eq!(
             classify_agent_failure("connection refused"),
+            crate::lcm::AgentOutcome::ExecutionError
+        );
+    }
+
+    #[test]
+    fn classify_agent_failure_recognises_context_overflow() {
+        // turnloop-5: a deterministic exact-token overflow is its own reject
+        // class, not a generic ExecutionError crash — so process-mining and the
+        // agent-failure counter can isolate a repeated context-budget reject.
+        assert_eq!(
+            classify_agent_failure(
+                "context_preflight_exact_overflow: exact rendered prompt tokens 9000 exceed safe input budget 8000 for context window 8192 after 2 LCM compaction rounds via selector"
+            ),
+            crate::lcm::AgentOutcome::ContextRejected
+        );
+        // Scope boundary: empty-selection is intentionally NOT folded into
+        // ContextRejected (its transient-retry policy is unchanged), so it still
+        // classifies as ExecutionError here.
+        assert_eq!(
+            classify_agent_failure(
+                "context_selection_empty: refusing model invocation because LCM history exists but no context evidence rendered"
+            ),
             crate::lcm::AgentOutcome::ExecutionError
         );
     }
