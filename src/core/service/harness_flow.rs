@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::persistence::{sqlite_busy_timeout_duration, sqlite_busy_timeout_millis};
@@ -303,8 +304,34 @@ pub fn record_harness_flow_event(
     })
 }
 
+/// Count of forensic flow events whose durable write was dropped since process
+/// start. The flow ledger is the weakest-durability writer in the audit plane —
+/// `record_harness_flow_event` opens a fresh WAL connection to the contended
+/// `runtime/ctox.sqlite3`, so an INSERT can fail (e.g. SQLITE_BUSY under the
+/// serial router's contention). This counter, paired with the stderr log in
+/// `record_harness_flow_event_lossy`, makes a lost forensic write detectable
+/// instead of silently swallowed (x-flow-event-lossy-nontxn).
+static DROPPED_HARNESS_FLOW_EVENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Number of forensic flow events dropped (write failed) since process start.
+pub fn dropped_harness_flow_event_count() -> u64 {
+    DROPPED_HARNESS_FLOW_EVENTS.load(AtomicOrdering::Relaxed)
+}
+
 pub fn record_harness_flow_event_lossy(root: &Path, request: RecordHarnessFlowEventRequest<'_>) {
-    let _ = record_harness_flow_event(root, request);
+    // x-flow-event-lossy-nontxn (b): capture identifying fields before `request`
+    // is moved, so a dropped write names the event it lost. The previous
+    // `let _ =` swallowed every error (including SQLITE_BUSY) silently, so a
+    // committed durable state change could lose its forensic event with no
+    // trace. Log + count the drop so it is detectable.
+    let event_kind = request.event_kind;
+    let chain_key = chain_key(request.message_key, request.work_id, request.ticket_key);
+    if let Err(err) = record_harness_flow_event(root, request) {
+        DROPPED_HARNESS_FLOW_EVENTS.fetch_add(1, AtomicOrdering::Relaxed);
+        eprintln!(
+            "[ctox harness-flow] dropped forensic flow event kind={event_kind} chain={chain_key}: {err}"
+        );
+    }
 }
 
 fn build_flow(
@@ -1673,6 +1700,45 @@ fn clip(value: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn record_harness_flow_event_lossy_counts_a_dropped_write() {
+        // x-flow-event-lossy-nontxn (b): a forensic write whose connection cannot
+        // be opened must be COUNTED + logged, not silently swallowed. Force
+        // open_event_connection to fail by making runtime/ a FILE (so its
+        // create_dir_all errors), then confirm the drop counter advanced. Only
+        // forced-failure paths touch the counter, so a strict increase pins the
+        // fix even under parallel test execution.
+        let root = std::env::temp_dir().join(format!(
+            "ctox-xflow-drop-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("create test root");
+        std::fs::write(root.join("runtime"), b"not a directory").expect("seed runtime as a file");
+
+        let before = dropped_harness_flow_event_count();
+        record_harness_flow_event_lossy(
+            &root,
+            RecordHarnessFlowEventRequest {
+                event_kind: "test.forced_drop",
+                title: "forced drop",
+                body_text: "",
+                message_key: Some("msg-x-flow"),
+                work_id: None,
+                ticket_key: None,
+                attempt_index: None,
+                metadata: serde_json::json!({}),
+            },
+        );
+        assert!(
+            dropped_harness_flow_event_count() > before,
+            "a dropped forensic write must increment the drop counter"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn renderer_keeps_support_branches_off_the_main_box() {
