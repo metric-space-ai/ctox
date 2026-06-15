@@ -1093,11 +1093,19 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
             let core_report = core_transition_guard::analyze_core_spawn_model();
             let harness_report =
                 ctox_core::harness_spawn_liveness::analyze_harness_subagent_spawn_model();
+            // x-subagent-liveness: the forensic backstop over the actual threads
+            // ledger is DETECTIVE evidence — reported here but not part of the
+            // preventive `ok` gate (it can only catch a breach after the fact, and
+            // must never spuriously fail a fresh-host run); it surfaces as a soft
+            // warning in self-diagnose instead.
+            let forensic_report =
+                ctox_core::harness_spawn_liveness::analyze_harness_subagent_thread_forensics();
             let ok = core_report.ok && harness_report.ok;
             let report = json!({
                 "ok": ok,
                 "core_spawn_liveness": core_report,
                 "harness_subagent_liveness": harness_report,
+                "harness_subagent_thread_forensics": forensic_report,
             });
             println!("{}", serde_json::to_string_pretty(&report)?);
             if !ok {
@@ -2527,6 +2535,28 @@ fn run_process_mining_self_diagnosis(conn: &Connection, limit: i64) -> Result<Va
         "Every harness subagent path must be depth-bounded, count-bounded, leaf-only, and unable to spawn recursive worker trees.",
         serde_json::to_value(&harness_spawn_liveness)?,
         harness_spawn_liveness
+            .violations
+            .iter()
+            .map(|violation| json!({ "finding": violation }))
+            .collect(),
+    );
+    // x-subagent-liveness: forensic backstop over the persisted threads ledger.
+    // Detective evidence — surfaced as a soft WARNING, never `critical`: it catches
+    // a structural breach only after it occurred in production, and is vacuously ok
+    // on a fresh/CI host with no deep rows.
+    let harness_thread_forensics =
+        ctox_core::harness_spawn_liveness::analyze_harness_subagent_thread_forensics();
+    push_subsystem(
+        &mut subsystems,
+        "harness_subagent_thread_forensics",
+        if harness_thread_forensics.ok {
+            "ok"
+        } else {
+            "warning"
+        },
+        "Detective backstop over persisted subagent thread rows: parent/child subagent_depth is monotone-by-one and no subagent is the parent of a thread that itself has a child (leaf/path-shape). Config-independent; the config-relative agents.max_depth is never a critical gate here.",
+        serde_json::to_value(&harness_thread_forensics)?,
+        harness_thread_forensics
             .violations
             .iter()
             .map(|violation| json!({ "finding": violation }))
