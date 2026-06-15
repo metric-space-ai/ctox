@@ -3460,7 +3460,7 @@ fn start_prompt_worker(
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
                             agent_failure_count_after_turn = record.agent_failure_count;
-                            let threshold = mission_agent_failure_threshold();
+                            let threshold = mission_agent_failure_threshold(&root);
                             if record.agent_failure_count >= threshold {
                                 agent_failure_threshold_hit = true;
                                 let _ = engine.defer_mission_for_reason(
@@ -4388,7 +4388,7 @@ fn start_prompt_worker(
                         let timeout_worker_message =
                             matches!(agent_outcome, lcm::AgentOutcome::TurnTimeout);
                         let timeout_retry_message =
-                            timeout_worker_message && timeout_auto_retry_enabled();
+                            timeout_worker_message && timeout_auto_retry_enabled(&root);
                         let retry_worker_message =
                             retry_founder_message || retry_runtime_message || timeout_retry_message;
                         let retry_has_durable_resume = !job.leased_message_keys.is_empty()
@@ -8940,21 +8940,24 @@ fn review_checkpoint_audit_key(work_id: &str, outcome: &review::ReviewOutcome) -
     format!("review-checkpoint-{:x}", hasher.finalize())
 }
 
-fn mission_agent_failure_threshold() -> i64 {
-    match std::env::var("CTOX_MISSION_AGENT_FAILURE_THRESHOLD") {
-        Ok(value) => match value.trim().parse::<i64>() {
+fn mission_agent_failure_threshold(root: &Path) -> i64 {
+    // govrec-1: read from the typed runtime store (env_or_config), not a raw
+    // process env var, so this survival threshold lives in the persisted config
+    // surface like the rest of CTOX's runtime state.
+    match runtime_env::env_or_config(root, "CTOX_MISSION_AGENT_FAILURE_THRESHOLD") {
+        Some(value) => match value.trim().parse::<i64>() {
             Ok(parsed) if parsed > 0 => parsed.min(MAX_AGENT_FAILURE_THRESHOLD),
             _ => DEFAULT_AGENT_FAILURE_THRESHOLD,
         },
-        Err(_) => DEFAULT_AGENT_FAILURE_THRESHOLD,
+        None => DEFAULT_AGENT_FAILURE_THRESHOLD,
     }
 }
 
-fn timeout_auto_retry_enabled() -> bool {
-    std::env::var("CTOX_TIMEOUT_AUTO_RETRY")
-        .ok()
-        .and_then(|value| parse_boolish(&value))
-        .unwrap_or(false)
+fn timeout_auto_retry_enabled(root: &Path) -> bool {
+    // govrec-1: config_flag is env_or_config + parse_boolish + unwrap_or(false),
+    // i.e. behaviour-identical to the prior raw env read but sourced from the
+    // runtime store.
+    runtime_env::config_flag(root, "CTOX_TIMEOUT_AUTO_RETRY")
 }
 
 fn failed_worker_route_status(
@@ -8974,14 +8977,6 @@ fn failed_worker_route_status(
         "pending"
     } else {
         "failed"
-    }
-}
-
-fn parse_boolish(value: &str) -> Option<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
     }
 }
 
