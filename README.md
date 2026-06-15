@@ -198,23 +198,24 @@ If you want a coding agent to install the CTOX Business OS deploy skill from
 GitHub, copy this prompt into your coding agent:
 
 ```text
-Install the CTOX Business OS deploy skill from GitHub so this agent can set up
-and verify CTOX Business OS remote-control deployments.
-
-If this is Codex, use the built-in skill installer:
-
-python3 ~/.codex/skills/.system/skill-installer/scripts/install-skill-from-github.py \
-  --repo metric-space-ai/ctox-business-os-deploy-skill \
-  --path ctox-business-os-deploy
-
-If this is another coding agent, install the skill folder from:
+Install the CTOX Business OS deploy skill from GitHub so this agent can set up,
+connect, and verify CTOX Business OS remote-control deployments.
 
 https://github.com/metric-space-ai/ctox-business-os-deploy-skill/tree/main/ctox-business-os-deploy
 
-After installing the skill, restart or reload the agent runtime and report the
-installed skill path. Do not configure CTOX, tokens, or MCP endpoints yet unless
-I explicitly ask for deployment setup.
+Use your runtime's native skill-installation mechanism. If your runtime does
+not have one, clone or download the repository and install only the
+`ctox-business-os-deploy/` folder as a skill named `ctox-business-os-deploy`.
+
+After installation, verify that the skill's `SKILL.md` and `references/`
+folder are available to you. Restart or reload your agent runtime if required.
+Do not configure CTOX, tokens, ctox.dev coupling, or MCP endpoints yet unless I
+explicitly ask for deployment setup.
 ```
+
+The linked skill repository documents the Business OS MCP channel, the
+ctox.dev/local/self-hosted deployment choices, MCP policy setup, gateway
+connection routines, audit export, and end-to-end verification checks.
 
 The installer creates a managed layout by default:
 
