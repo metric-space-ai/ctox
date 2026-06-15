@@ -3309,6 +3309,13 @@ fn start_prompt_worker(
             shared.active_source_label = None;
             shared.last_progress_epoch_secs = current_epoch_secs();
             insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
+            // X2-02: this is an intentional after-hours re-queue, not a worker
+            // crash. Release the still-inflight leased keys so
+            // PromptWorkerActivity::Drop does not treat them as leaked and
+            // fail-ack the underlying queue task / Business OS command / ticket
+            // lease while the prompt is held for retry. The keys are no longer
+            // in-flight (no worker is processing them during the hold).
+            worker_activity.release_leased_keys_locked(&mut shared);
             push_event_locked(
                 &mut shared,
                 format!(
@@ -19380,6 +19387,91 @@ Business OS command:
             )
             .expect("read route last_error");
         assert_eq!(last_error, None);
+    }
+
+    #[test]
+    fn working_hours_hold_requeues_without_failing_leased_queue_task() {
+        // X2-02: a working-hours boundary race can land a freshly-dispatched
+        // worker in the after-hours hold with its leased keys still in-flight.
+        // The hold re-queues the prompt; it must ALSO release the leases so
+        // PromptWorkerActivity::Drop does not treat them as leaked and fail-ack
+        // (mark 'failed') the underlying queue task while the prompt is merely
+        // held for retry. This mirrors the start_prompt_worker hold block.
+        let root = temp_root("x2-02-working-hours-hold-requeue");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Reconcile vendor pipeline".to_string(),
+                prompt: "Reconcile the vendor pipeline and report.".to_string(),
+                thread_key: "queue/vendor-pipeline".to_string(),
+                workspace_root: Some(root.display().to_string()),
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task");
+        channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
+            .expect("failed to lease queue task");
+        let job = QueuedPrompt {
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            track_leased_keys_locked(&mut shared, &job.leased_message_keys, &[]);
+        }
+        let mut worker_activity = PromptWorkerActivity::start(&root, &state, &job);
+
+        // The start_prompt_worker working-hours hold block: re-queue + release.
+        {
+            let mut shared = lock_shared_state(&state);
+            insert_pending_prompt_ordered(&mut shared.pending_prompts, job.clone());
+            worker_activity.release_leased_keys_locked(&mut shared);
+            push_event_locked(
+                &mut shared,
+                format!(
+                    "Held {} prompt outside working hours: test",
+                    job.source_label
+                ),
+            );
+        }
+        drop(worker_activity);
+
+        // The leased queue task is held, not failed.
+        assert_eq!(route_status_for(&root, &task.message_key), "leased");
+        let shared = lock_shared_state(&state);
+        // Re-queued exactly once for retry.
+        assert_eq!(
+            shared
+                .pending_prompts
+                .iter()
+                .filter(|prompt| prompt.leased_message_keys == job.leased_message_keys)
+                .count(),
+            1
+        );
+        // Drop did not emit the leaked-lease fail-ack.
+        assert!(
+            !shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("leaked queue lease")),
+            "hold must not fail-ack the lease: {:?}",
+            shared.recent_events
+        );
     }
 
     #[test]
