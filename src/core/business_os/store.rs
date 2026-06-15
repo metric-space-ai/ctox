@@ -6951,6 +6951,7 @@ pub fn accept_rxdb_business_command(root: &Path, document: Value) -> anyhow::Res
             .to_string(),
         command_type: document
             .get("command_type")
+            .or_else(|| document.get("type"))
             .and_then(Value::as_str)
             .unwrap_or("business_os.command")
             .to_string(),
@@ -17292,6 +17293,55 @@ mod tests {
             suggested_skill_for_command(&command).as_deref(),
             Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
         );
+    }
+
+    #[test]
+    fn app_create_rxdb_command_accepts_type_alias_from_cli_dispatch() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd_app_type_alias",
+                "module": "creator",
+                "type": "ctox.business_os.app.create",
+                "record_id": "inventory",
+                "payload": {
+                    "title": "Build Inventory",
+                    "instruction": "Build a Business OS inventory app.",
+                    "module_id": "inventory",
+                    "install_target": "runtime-installed-module",
+                    "target": "app"
+                },
+                "client_context": {
+                    "source": "business-os-app-creator-native-test",
+                    "target": "app"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            accepted.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let conn = open_store(root)?;
+        let command_type: String = conn.query_row(
+            "SELECT command_type FROM business_commands WHERE command_id = ?1",
+            params!["cmd_app_type_alias"],
+            |row| row.get(0),
+        )?;
+        assert_eq!(command_type, "ctox.business_os.app.create");
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queued task id")?;
+        let task = channels::load_queue_task(root, task_id)?.context("expected queue task")?;
+        assert_eq!(
+            task.suggested_skill.as_deref(),
+            Some(BUSINESS_OS_APP_MODULE_SKILL_NAME)
+        );
+        assert!(task.prompt.contains("- type: ctox.business_os.app.create"));
+        Ok(())
     }
 
     #[test]

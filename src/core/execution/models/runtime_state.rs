@@ -111,6 +111,7 @@ pub fn default_local_runtime_kind() -> LocalRuntimeKind {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalRuntimeKind {
+    #[serde(alias = "ggml")]
     Candle,
 }
 
@@ -804,7 +805,7 @@ fn derive_runtime_state(
     };
 
     Ok(InferenceRuntimeState {
-        version: 11,
+        version: 12,
         source,
         local_runtime,
         base_model,
@@ -984,6 +985,10 @@ fn migrate_runtime_state(root: &Path, state: &mut InferenceRuntimeState) -> Resu
         state.version = 11;
         migrated = true;
     }
+    if state.version < 12 {
+        state.version = 12;
+        migrated = true;
+    }
     if state.base_model.is_none() {
         state.base_model = state
             .requested_model
@@ -1113,6 +1118,18 @@ fn derive_auxiliary_runtime_state(
 
 fn load_runtime_env_map_for_resolution(root: &Path) -> Result<BTreeMap<String, String>> {
     let conn = open_runtime_state_db(root)?;
+    let has_runtime_env_table = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runtime_env_kv'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()
+        .context("failed to inspect runtime env table")?
+        .is_some();
+    if !has_runtime_env_table {
+        return Ok(BTreeMap::new());
+    }
     let mut stmt = conn
         .prepare("SELECT env_key, env_value FROM runtime_env_kv ORDER BY env_key")
         .context("failed to prepare runtime env resolution query")?;
@@ -1151,6 +1168,48 @@ mod tests {
         let path = std::env::temp_dir().join(format!("ctox-runtime-state-test-{unique}"));
         std::fs::create_dir_all(path.join("runtime")).unwrap();
         path
+    }
+
+    #[test]
+    fn load_runtime_state_accepts_legacy_ggml_local_runtime() {
+        let root = make_temp_root();
+        let state = InferenceRuntimeState {
+            version: 11,
+            source: InferenceSource::Api,
+            local_runtime: LocalRuntimeKind::Candle,
+            base_model: Some("MiniMax-M3".to_string()),
+            requested_model: Some("MiniMax-M3".to_string()),
+            active_model: Some("MiniMax-M3".to_string()),
+            engine_model: None,
+            engine_port: None,
+            configured_context_tokens: Some(262_144),
+            realized_context_tokens: None,
+            upstream_base_url: DEFAULT_MINIMAX_RESPONSES_BASE_URL.to_string(),
+            local_preset: Some("Quality".to_string()),
+            boost: BoostRuntimeState::default(),
+            adapter_tuning: AdapterRuntimeTuning::default(),
+            embedding: AuxiliaryRuntimeState::default(),
+            transcription: AuxiliaryRuntimeState::default(),
+            speech: AuxiliaryRuntimeState::default(),
+            vision: AuxiliaryRuntimeState::default(),
+        };
+        let raw = serde_json::to_string(&state)
+            .unwrap()
+            .replace("\"local_runtime\":\"candle\"", "\"local_runtime\":\"ggml\"");
+        let conn = open_runtime_state_db(&root).unwrap();
+        conn.execute(
+            &format!("INSERT INTO {RUNTIME_STATE_TABLE} (state_id, state_json) VALUES (1, ?1)"),
+            params![raw],
+        )
+        .unwrap();
+
+        let loaded = load_runtime_state(&root).unwrap().unwrap();
+
+        assert_eq!(loaded.local_runtime, LocalRuntimeKind::Candle);
+        assert_eq!(loaded.version, 12);
+        let persisted = load_runtime_state_json_from_db(&conn).unwrap().unwrap();
+        assert!(persisted.contains("\"local_runtime\": \"candle\""));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn sample_plan(model: &str) -> ChatRuntimePlan {
