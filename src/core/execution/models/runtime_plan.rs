@@ -2061,7 +2061,12 @@ fn reusable_persisted_chat_runtime_plan(
                 build_bundle_for_model(root, model, requested_preset, &hardware, env_map).ok()
             }
         }
-        _ => None,
+        // gateway-2: a failed GPU probe — nvidia-smi timeout (Err) or a no-GPU
+        // host (empty profile) — cannot confirm the persisted plan still matches
+        // the live hardware. Reusing it would relaunch with a stale topology /
+        // fingerprint / memory budget, so force a replan instead of silently
+        // returning the stale plan through the skipped equality check below.
+        _ => return Ok(None),
     };
     if fresh_bundle
         .as_ref()
@@ -4849,6 +4854,14 @@ fn inspect_hardware_profile_uncached(root: &Path) -> Result<HardwareProfile> {
     };
 
     if let Some(spec) = runtime_env::env_or_config(root, "CTOX_TEST_GPU_TOTALS_MB") {
+        // gateway-2 test hook: an explicit "none" forces the no-GPU probe
+        // outcome deterministically on any host. macOS would otherwise return a
+        // non-empty Metal profile and a runner without nvidia-smi is not a
+        // reliable empty signal, so this lets the probe-failure reuse guard be
+        // exercised host-independently through the same SQLite-backed override.
+        if spec.trim().eq_ignore_ascii_case("none") {
+            return Ok(empty_profile());
+        }
         let gpus = spec
             .split(';')
             .filter_map(|chunk| {
@@ -6660,6 +6673,89 @@ mod tests {
             .unwrap()
             .expect("persisted plan should be reused");
         assert_eq!(resolved, persisted);
+    }
+
+    #[test]
+    fn probe_failure_forces_replan_instead_of_reusing_stale_plan() {
+        // gateway-2: when the GPU probe fails (nvidia-smi timeout -> Err, or a
+        // no-GPU host -> empty profile) the persisted plan cannot be confirmed
+        // against the live hardware, so it must NOT be reused. The "none"
+        // sentinel forces the empty-profile outcome deterministically. The root
+        // is never probed with GPUs first, so the cache holds the empty result.
+        // (apply_chat_runtime_plan_reuses_matching_persisted_plan is the
+        // positive control: a matching plan IS reused while the probe succeeds.)
+        let unique = temp_root("gateway2-probe-failure");
+        write_test_gpu_totals(&unique, "none");
+
+        let persisted = ChatRuntimePlan {
+            model: "Qwen/Qwen3.5-4B".to_string(),
+            preset: ChatPreset::Quality,
+            quantization: "Q6K".to_string(),
+            runtime_isq: Some("Q6K".to_string()),
+            max_seq_len: 131_072,
+            compaction_threshold_percent: 75,
+            compaction_min_tokens: 12_288,
+            min_context_floor_applied: true,
+            paged_attn: "auto".to_string(),
+            pa_cache_type: Some("turboquant3".to_string()),
+            pa_memory_fraction: Some("0.45".to_string()),
+            pa_context_len: Some(131_072),
+            disable_nccl: true,
+            tensor_parallel_backend: None,
+            mn_local_world_size: None,
+            max_batch_size: 1,
+            max_seqs: 1,
+            cuda_visible_devices: "0".to_string(),
+            device_layers: None,
+            topology: None,
+            allow_device_layers_with_topology: false,
+            nm_device_ordinal: Some(0),
+            base_device_ordinal: Some(0),
+            moe_experts_backend: None,
+            disable_flash_attn: true,
+            force_no_mmap: false,
+            force_language_model_only: false,
+            require_prebuilt_uqff_for_chat_start: false,
+            isq_singlethread: true,
+            isq_cpu_threads: None,
+            expected_tok_s: 44.0,
+            hardware_fingerprint: "gateway2-probe-failure-test".to_string(),
+            theoretical_breakdown: TheoreticalResourceBreakdown {
+                contract_source: "gateway-2 probe-failure test".to_string(),
+                effective_total_budget_mb: 0,
+                kv_budget_cap_mb: 0,
+                kv_budget_fraction_milli: 0,
+                weight_residency_mb: 0,
+                kv_cache_mb: 0,
+                fixed_runtime_base_overhead_mb: 0,
+                backend_runtime_overhead_mb: 0,
+                activation_overhead_mb: 0,
+                load_peak_overhead_mb: 0,
+                safety_headroom_mb: 0,
+                required_effective_total_budget_mb: 0,
+                required_total_mb: 0,
+            },
+            rationale: vec!["gateway-2 probe-failure test".to_string()],
+            gpu_allocations: vec![],
+            moe_cache: None,
+        };
+        store_persisted_chat_runtime_plan(&unique, Some(&persisted)).unwrap();
+
+        let mut request_env = chat_only_env_map();
+        request_env.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
+        request_env.insert("CTOX_CHAT_MODEL".to_string(), "Qwen/Qwen3.5-4B".to_string());
+        request_env.insert(
+            "CTOX_CHAT_LOCAL_PRESET".to_string(),
+            ChatPreset::Quality.label().to_string(),
+        );
+
+        let reused =
+            reusable_persisted_chat_runtime_plan(&unique, &request_env, None, None, None).unwrap();
+        let _ = std::fs::remove_dir_all(&unique);
+        assert!(
+            reused.is_none(),
+            "a failed GPU probe must force a replan, not reuse the stale plan: {reused:?}"
+        );
     }
 
     #[test]
