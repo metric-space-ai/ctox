@@ -4479,7 +4479,7 @@ pub(crate) fn drain_pending_mission_state_clobbers() -> Vec<PendingMissionStateC
 pub fn drain_pending_mission_state_clobber_events_to_governance(root: &Path) {
     let pending = drain_pending_mission_state_clobbers();
     for attempt in pending {
-        let _ = crate::governance::record_event(
+        crate::governance::record_event_or_count(
             root,
             crate::governance::GovernanceEventRequest {
                 mechanism_id: "mission_state_field_clobbered_blocked",

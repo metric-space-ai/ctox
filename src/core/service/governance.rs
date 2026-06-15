@@ -11,6 +11,8 @@ use sha2::Sha256;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::SystemTime;
@@ -454,6 +456,35 @@ pub fn record_event(
     load_event_by_id(&conn, &event_id).map(Some)
 }
 
+/// x2-3: process-lifetime count of durable governance audit-write failures that
+/// were swallowed by [`record_event_or_count`] callers (`record_event` returning
+/// Err — typically SQLITE_BUSY under the serial router's WAL contention). The
+/// `let _ = record_event(...)` drop used at ~35 sites made these losses invisible,
+/// silently undermining the harness's "auditable" claim; the counter (plus a
+/// logged line per failure) gives them a durable, queryable trace.
+static DROPPED_AUDIT_WRITES: AtomicU64 = AtomicU64::new(0);
+
+/// x2-3: the swallow-safe form of [`record_event`]. Records the governance event
+/// and, on failure, makes the loss VISIBLE — a logged line carrying the mechanism
+/// id and the error, plus a bump of the durable [`dropped_audit_writes`] counter —
+/// instead of the silent `let _ = record_event(...)` drop it replaces. Returns
+/// nothing: callers that previously discarded the `Result` now get accountability
+/// without threading error handling through every governance touchpoint.
+pub fn record_event_or_count(root: &Path, request: GovernanceEventRequest<'_>) {
+    let mechanism_id = request.mechanism_id;
+    if let Err(err) = record_event(root, request) {
+        DROPPED_AUDIT_WRITES.fetch_add(1, Ordering::Relaxed);
+        eprintln!("governance audit write failed [{mechanism_id}]: {err:#}");
+    }
+}
+
+/// x2-3: process-lifetime count of governance audit-write failures swallowed by
+/// [`record_event_or_count`]. Surfaced so a host losing audit rows under DB
+/// contention is observable rather than silently lossy.
+pub fn dropped_audit_writes() -> u64 {
+    DROPPED_AUDIT_WRITES.load(Ordering::Relaxed)
+}
+
 /// Record a governance event and report whether THIS call created it.
 ///
 /// Returns `true` when the event was newly inserted and `false` when an
@@ -881,6 +912,43 @@ impl<T> Pipe for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// x2-3: a swallowed governance audit-write failure must leave a durable trace
+    /// (the dropped_audit_writes counter) instead of vanishing silently. Force
+    /// record_event to fail by rooting it at a regular FILE so the governance db
+    /// parent directory cannot be created.
+    #[test]
+    fn record_event_or_count_increments_dropped_counter_on_failure() {
+        let not_a_dir = std::env::temp_dir().join(format!(
+            "ctox-governance-x2-3-not-a-dir-{}",
+            now_millis_string()
+        ));
+        std::fs::write(&not_a_dir, b"x").expect("failed to create blocking file");
+
+        let before = dropped_audit_writes();
+        record_event_or_count(
+            &not_a_dir,
+            GovernanceEventRequest {
+                mechanism_id: "x2_3_forced_failure",
+                conversation_id: None,
+                severity: "info",
+                reason: "forced failure for the dropped-audit-write counter test",
+                action_taken: "noop",
+                details: serde_json::json!({}),
+                idempotence_key: None,
+            },
+        );
+        let after = dropped_audit_writes();
+        // Process-global counter: assert the monotonic delta so the test is robust
+        // to other tests incrementing it concurrently.
+        assert!(
+            after >= before + 1,
+            "a swallowed audit-write failure must increment dropped_audit_writes \
+             (before={before}, after={after})"
+        );
+
+        let _ = std::fs::remove_file(&not_a_dir);
+    }
 
     fn temp_root(label: &str) -> std::path::PathBuf {
         let root =

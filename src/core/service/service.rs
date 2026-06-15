@@ -819,7 +819,7 @@ fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 .collect::<Vec<_>>();
             if violation_codes.is_empty() {
                 push_event(state, "State invariants clean at boot".to_string());
-                let _ = governance::record_event(
+                governance::record_event_or_count(
                     root,
                     governance::GovernanceEventRequest {
                         mechanism_id: "state_invariant_guard",
@@ -863,7 +863,7 @@ fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) 
                                 violation_codes.join(", ")
                             ),
                         );
-                        let _ = governance::record_event(
+                        governance::record_event_or_count(
                             root,
                             governance::GovernanceEventRequest {
                                 mechanism_id: "state_invariant_guard",
@@ -894,7 +894,7 @@ fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) 
                     state,
                     format!("State invariants at boot: {}", violation_codes.join(", ")),
                 );
-                let _ = governance::record_event(
+                governance::record_event_or_count(
                     root,
                     governance::GovernanceEventRequest {
                         mechanism_id: "state_invariant_guard",
@@ -942,7 +942,7 @@ fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) 
                 )
             };
             push_event(state, summary);
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "state_invariant_guard",
@@ -1177,7 +1177,7 @@ fn run_turn_end_state_invariant_check(
                         "previous_focus_head_commit_id": repair.previous_focus_head_commit_id,
                         "focus_head_commit_id": repair.focus_head_commit_id,
                     });
-                    let _ = governance::record_event(
+                    governance::record_event_or_count(
                         root,
                         governance::GovernanceEventRequest {
                             mechanism_id: "state_invariant_guard",
@@ -1200,7 +1200,7 @@ fn run_turn_end_state_invariant_check(
                     violation_codes.join(", ")
                 ),
             );
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "state_invariant_guard",
@@ -1254,7 +1254,7 @@ fn run_turn_end_state_invariant_check(
                 )
             };
             push_event(state, summary);
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "state_invariant_guard",
@@ -1287,7 +1287,7 @@ fn release_stale_service_communication_leases_on_boot(
             // govrec-2: boot stale-lease reclaim is crash recovery and must be
             // auditable, not just a transient feed line. Record a governance
             // event so the reclaim is mineable in process-mining.
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "boot_lease_reclaim",
@@ -1401,7 +1401,7 @@ fn run_plan_routing_repair(root: &Path, state: &Arc<Mutex<SharedState>>, phase: 
                     if repaired == 1 { "entry" } else { "entries" }
                 ),
             );
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "plan_routing_repair",
@@ -9789,7 +9789,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         // router-1: this loop-active skip was a silent early-return. Emit one
         // throttled governance event so a router repeatedly blocked by an
         // in-progress agent loop is mineable. Behaviour is otherwise unchanged.
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "channel_router_loop_active",
@@ -9812,7 +9812,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         // silent early-return. Emit one idempotent governance event so the
         // queue-pressure containment is mineable, not invisible. Behaviour is
         // otherwise unchanged.
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "queue_pressure_router_skip",
@@ -9840,7 +9840,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     // observable.
     let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
     if top_inbound_rank >= FOUNDER_INBOUND_DISPATCH_RANK {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "router_defer_durable_for_founder",
@@ -9965,7 +9965,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         if let Some(reason) = blocked_inbound_reason(&message, &settings) {
             let mechanism_id = governance::mechanism_id_for_block_reason(&reason);
             let event_key = format!("blocked-inbound:{}", message.message_key);
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id,
@@ -10187,7 +10187,7 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             // evidence tying a re-routing ack-loop back to its cause. Record a
             // governance event keyed by the failing label so a repeated
             // ack-reject loop is queryable, not just stderr noise.
-            let _ = governance::record_event(
+            governance::record_event_or_count(
                 root,
                 governance::GovernanceEventRequest {
                     mechanism_id: "routing_ack_failed",
@@ -10265,7 +10265,7 @@ fn handle_channel_router_guard_block(
         stage,
         normalize_token(&reason)
     );
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "channel_router_core_guard",
@@ -10469,7 +10469,7 @@ fn run_ticket_dispatch_preflight(
         let idempotence_key = format!("ticket-preflight:{}:{}", issue.system, issue.code);
         let system = issue.system.clone();
         let code = issue.code.clone();
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "ticket_dispatch_preflight",
@@ -10516,7 +10516,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             "ticket-reconcile:released-queue:{}",
             normalize_token(&released_queue_leases.join(","))
         );
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "ticket_reconciliation",
@@ -10548,7 +10548,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             "ticket-reconcile:released-leases:{}",
             normalize_token(&released_leases.join(","))
         );
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "ticket_reconciliation",
@@ -10575,7 +10575,7 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             "ticket-reconcile:released-blocked:{}",
             normalize_token(&released_blocked.join(","))
         );
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "ticket_reconciliation",
@@ -10679,7 +10679,7 @@ fn route_ticket_events(
                     "blocked ticket event before active handling because its control state was incomplete"
                 };
                 let idempotence_key = format!("blocked-ticket:{}", event.event_key);
-                let _ = governance::record_event(
+                governance::record_event_or_count(
                     root,
                     governance::GovernanceEventRequest {
                         mechanism_id,
@@ -14914,7 +14914,7 @@ fn sync_configured_tickets(
             system,
             normalize_token(&clip_text(error, 96))
         );
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "ticket_adapter_sync",
@@ -15224,7 +15224,7 @@ fn maybe_enqueue_timeout_continuation(
     if should_queue_durable_artifact_timeout_recovery(job) {
         return queue_durable_artifact_timeout_recovery(root, job, blocker);
     }
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "turn_timeout_continuation",
@@ -15292,7 +15292,7 @@ fn queue_durable_artifact_timeout_recovery(
         &job.leased_message_keys,
         &title,
     )? {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "turn_timeout_continuation",
@@ -15336,7 +15336,7 @@ fn queue_durable_artifact_timeout_recovery(
             })),
         },
     )?;
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "turn_timeout_continuation",
@@ -15379,7 +15379,7 @@ fn maybe_suppress_fatal_harness_prompt_before_execution(
         "goal": clip_text(&job.goal, 180),
         "preview": clip_text(&job.preview, 180),
     });
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "fatal_harness_loop_guard",
@@ -15465,7 +15465,7 @@ fn maybe_enqueue_runtime_retry_continuation(
     let event_key = format!("runtime-api-retry:{thread_key}:{title}");
     let not_before = runtime_retry_not_before_iso(error_text);
     if !job.leased_message_keys.is_empty() || job.ticket_self_work_id.is_some() {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "runtime_api_retry_continuation",
@@ -15488,7 +15488,7 @@ fn maybe_enqueue_runtime_retry_continuation(
         return Ok(None);
     }
 
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "runtime_api_retry_continuation",
@@ -15677,7 +15677,7 @@ fn record_agent_failure_threshold_outcome(
             )
         }
     };
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "agent_failure_threshold",
@@ -15709,7 +15709,7 @@ fn record_agent_failure_recovery(
     let Some(previous_reason) = reset.previous_deferred_reason.as_deref() else {
         return;
     };
-    let _ = governance::record_event(
+    governance::record_event_or_count(
         root,
         governance::GovernanceEventRequest {
             mechanism_id: "agent_failure_recovery",

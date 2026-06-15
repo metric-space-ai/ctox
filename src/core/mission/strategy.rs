@@ -239,7 +239,7 @@ fn check_inbound_strategy_authority(
         "thread_key": check.thread_key,
     });
     if allowed {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "strategic_directive_mutation_owner_authorised",
@@ -256,7 +256,7 @@ fn check_inbound_strategy_authority(
         );
         Ok(())
     } else {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "strategic_directive_mutation_blocked_non_owner_sender",

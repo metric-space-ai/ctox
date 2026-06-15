@@ -455,7 +455,7 @@ fn create_goal(root: &Path, request: PlanCreateRequest) -> Result<GoalWithStepsV
     // (mirrors the prevailing `let _ =` pattern around governance writes in
     // service.rs); the supersede itself is already committed.
     for entry in &superseded_supersede {
-        let _ = governance::record_event(
+        governance::record_event_or_count(
             root,
             governance::GovernanceEventRequest {
                 mechanism_id: "plan_goal_superseded_for_duplicate_slice",
