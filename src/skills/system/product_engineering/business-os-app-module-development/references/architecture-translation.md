@@ -48,6 +48,13 @@ CTOX command/projection side
   -> runtime/ctox.sqlite3 when core state is involved
   -> projected RxDB documents
   -> replicated back to the browser
+
+App Creator lifecycle
+  -> app command enters business_commands
+  -> CTOX service creates and leases the app-build queue task
+  -> coding agent writes only module files
+  -> CTOX service validates the module
+  -> CTOX service completes, reworks, or fails the queue and command
 ```
 
 HTTP may deliver the static shell, module files, `collections.schema.json`, and
@@ -98,6 +105,13 @@ runtime installed module
   -> loaded from installed-modules/<module>/module.json
   -> no packaged registry edit required
 ```
+
+Do not confuse open CTOX work context with the app-build target. Queue IDs
+shown in continuity, `current_queue_item_id`, and open-work blocks are service
+context. An App Creator agent must not call queue lifecycle commands or select
+a different queue row from that context. The authoritative target is the app
+build block: `module_id`, `install_target`, and
+`only_allowed_app_artifact_directory`.
 
 ## Lifecycle Of A Module
 
@@ -227,6 +241,7 @@ POST /api/invoices/:id/post | Next.js API route + Postgres transaction | ctx.com
 | IndexedDB/localStorage app store | Do not call `indexedDB`, `localStorage`, or `sessionStorage` for Business OS data. | Use `ctx.db`; the shell owns IndexedDB and recovery. |
 | WebSocket/SSE live updates | Do not open a custom live-data socket. | Use CTOX DB WebRTC replication plus collection subscriptions. Use `ctx.eventBus` only for local shell/cross-module signals, not persistence. |
 | Backend cron/job | Do not run durable business jobs from browser timers. | Create `business_commands` and native/CTOX handlers; schedule durable work in CTOX where needed. |
+| Queue/task completion | Do not call `ctox queue ack/complete/release/fail` or write queue rows from the app agent. | Let the CTOX service validator complete or rework the queue after the app passes validation. |
 | File upload API | Do not add an HTTP file API. | Use `desktop_files` / `desktop_file_chunks` and the appropriate CTOX command/materialization path. |
 | Auth middleware | Do not create module-local auth/session storage. | Use `ctx.session`, `ctx.governance`, and native policy gates for privileged commands. |
 | npm package import | Do not use dependency management, import maps, bare imports, CommonJS, CDN runtime imports, generated app bundles, or `node:*` in browser modules. Do not prepare package-manager setup as a later activation step. | Use plain ESM, local relative `.js`/`.mjs` modules, existing shell/runtime APIs, or vendored browser ESM source committed with the module/repo. If the library is not available in that shape, defer the feature. |

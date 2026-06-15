@@ -3408,6 +3408,8 @@ fn start_prompt_worker(
                 .any(|key| key.starts_with("plan:system::"));
             let base_execution_prompt = if is_business_os_chat_queue_job(&root, &job) {
                 business_os_chat_execution_prompt(&job)
+            } else if business_os_app_module_target_from_prompt(&job.prompt).is_some() {
+                business_os_app_module_execution_prompt(&job)
             } else {
                 artifact_first_execution_prompt(&job)
             };
@@ -6072,6 +6074,21 @@ fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     )
 }
 
+fn business_os_app_module_execution_prompt(job: &QueuedPrompt) -> String {
+    let Some(target) = business_os_app_module_target_from_prompt(&job.prompt) else {
+        return job.prompt.clone();
+    };
+    format!(
+        "{}\n\nBusiness OS app module execution rules:\n- Your only deliverable is the runnable Business OS app/module under `{}`. Do not create plans, skill files, trace files, root aliases, or blocker/status notes as substitutes for the app.\n- The CTOX service owns queue and Business OS command lifecycle. Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or direct SQL against queue/command/runtime status tables. Do not act on queue IDs shown in context or open-work blocks; they are service context, not your completion target.\n- Do not run process-mining, harness self-diagnosis, ticket, skillbook, or queue-cleanup commands unless this app build prompt explicitly asks for that separate operational work.\n- First establish the required file inventory under `{}`: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and at least one tests/*.test.mjs file. If any required file is missing, create it before optional UI polish.\n- Use `MODULE_DIR=\"{}\"` and write every generated file as `$MODULE_DIR/<file>`. Do not write root-level app artifacts or `src/apps/business-os/installed-modules` for runtime-installed modules.\n- Use one/two panes plus modals or drawers by default. Remove `layout.right`, right panes, right-column CSS/resizers, and three-column grids unless the user explicitly requested a persistent third pane and the manifest carries a concrete workflow justification.\n- Every visible control must have a real handler that mutates a module-owned collection or dispatches a tested Business OS command payload. Remove decorative controls instead of leaving placeholders.\n- Before claiming success, run the module tests plus `node src/apps/business-os/scripts/validate-app-module.mjs {} {}`. If validation reports any failure, repair the exact bullets and rerun; do not finish on a red validator.\n- Final response should only summarize app files and verification. Do not include queue IDs, command IDs, internal table names, or lifecycle claims.",
+        job.prompt,
+        target.artifact_directory,
+        target.artifact_directory,
+        target.artifact_directory,
+        target.module_id,
+        target.mode_flag,
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BusinessOsAppModuleTarget {
     module_id: String,
@@ -6410,13 +6427,14 @@ fn render_business_os_app_module_validation_feedback(
     report: &str,
 ) -> String {
     format!(
-        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  node src/apps/business-os/scripts/validate-app-module.mjs {} {}\n\nOriginal task remains active:\n{}",
+        "Business OS app artifact validation failed. Continue the same app-build task and repair the generated module before finishing.\n\nTask source: {}\n\nBusiness OS app build target:\n- module_id: {}\n- install_target: {}\n- only_allowed_app_artifact_directory: {}\n\nallowed artifact directory: {}\n\nValidator report:\n{}\n\nImmediate repair order:\n1. Create or repair every missing required file first: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, and tests/*.test.mjs under {}.\n2. Remove default third/right panes, right-column CSS/resizers, and three-column grids unless the workflow explicitly justifies a persistent third pane.\n3. Re-run the validator and keep repairing exact bullets until it is green.\n\nRepair rules:\n- Edit only files under {}.\n- Do not create root-level module.json, root-level collections.schema.json, src/skills output, package-manager files, node_modules, or HTTP/database fallbacks.\n- Do not call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or direct SQL against queue/command/runtime status rows. CTOX service owns lifecycle completion after green validation.\n- For installed modules, module.json.entry must be installed-modules/{}/index.html and module.json.install_scope must be installed.\n- schema.js and collections.schema.json must export only module-owned collections; shell collections such as business_commands stay dependencies in module.json.collections only.\n- Remove default third/right panes unless there is a concrete persistent workflow justification.\n- Run the validator again before claiming completion:\n  node src/apps/business-os/scripts/validate-app-module.mjs {} {}\n\nOriginal task remains active:\n{}",
         job.source_label,
         target.module_id,
         target.install_target,
         target.artifact_directory,
         target.artifact_directory,
         clip_text(report.trim(), 6000),
+        target.artifact_directory,
         target.artifact_directory,
         target.module_id,
         target.module_id,
@@ -19082,6 +19100,35 @@ Business OS command:
         assert!(feedback.contains(
             "node src/apps/business-os/scripts/validate-app-module.mjs contracts --installed"
         ));
+        assert!(feedback.contains("Immediate repair order:"));
+        assert!(feedback.contains("Create or repair every missing required file first"));
+        assert!(feedback.contains("Do not call `ctox queue ack`"));
+    }
+
+    #[test]
+    fn business_os_app_execution_prompt_forbids_queue_lifecycle() {
+        let job = QueuedPrompt {
+            prompt: "Business OS app build target:\n- module_id: contracts\n- install_target: runtime-installed-module\n- only_allowed_app_artifact_directory: runtime/business-os/installed-modules/contracts\nBusiness OS command:\n- type: ctox.business_os.app.create\n".to_string(),
+            goal: "Build contracts app".to_string(),
+            preview: "Build contracts app".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("business-os-app-module-development".to_string()),
+            leased_message_keys: vec!["queue:system::contracts".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/apps/contracts".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let prompt = business_os_app_module_execution_prompt(&job);
+
+        assert!(prompt.contains("The CTOX service owns queue and Business OS command lifecycle"));
+        assert!(prompt.contains("`ctox queue complete`"));
+        assert!(prompt.contains("Do not act on queue IDs shown in context"));
+        assert!(prompt.contains("First establish the required file inventory"));
+        assert!(prompt.contains("validate-app-module.mjs contracts --installed"));
     }
 
     #[test]

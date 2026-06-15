@@ -26,6 +26,7 @@ The module does not own:
 - upstream RxDB plugins
 - a separate IndexedDB database
 - global shell design tokens
+- queue, command, or runtime lifecycle completion
 
 ## Known Good Existing Modules
 
@@ -65,6 +66,7 @@ find src/apps/business-os/modules/<id> -maxdepth 3 -type f | sort
 | npm package | existing shipped ESM vendor file or browser API |
 | build step | not allowed |
 | global CSS theme | shell tokens and module-local CSS only |
+| queue/task ack | CTOX service validator and lifecycle code, never module/app code |
 
 ## Data Plane
 
@@ -92,6 +94,11 @@ When an app needs a new collection:
 6. Use the shell-provided collection handle at runtime.
 
 The Business OS shell and native peer register collections from these schema artifacts. If a collection is missing from `schema.js`, it may silently fail to sync. If `collections.schema.json` is missing, the runtime/module tooling may not know how to create or validate the collection on install.
+
+Do not create collections by opening SQLite, using `ctox.db`, or writing
+IndexedDB directly. The module artifacts are the schema contract; Business OS
+creates module-owned collections from those artifacts when the module is
+registered/loaded.
 
 ## Shell Collections
 
@@ -127,6 +134,11 @@ button/control
 -> visible state update
 -> test/smoke assertion
 ```
+
+Before adding optional UI, prove the required module file set exists. Missing
+`index.js`, locales, icon, or tests are not polish gaps; they are app-build
+blockers. Remove a copied third/right pane before finalization unless the
+workflow truly needs persistent side context.
 
 ## Automation Payloads
 
@@ -172,3 +184,7 @@ Avoid these exact failures:
 - writing tests that prove helper functions but not the visible actions
 - declaring collections in only one of `module.json`, `schema.js`, or `collections.schema.json`
 - using fixed seed ids that collide on repeated runs
+- trying to close the CTOX queue from inside the app-build worker
+- following an unrelated `current_queue_item_id` instead of the target
+  `module_id` and `only_allowed_app_artifact_directory`
+- claiming completion while required files are missing

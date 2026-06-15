@@ -25,6 +25,8 @@ you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as
 you are about to mention forbidden package-manager, bundler, or dependency names inside generated app files, tests, comments, or user-visible copy; keep those names only in validation/skill context
 you are about to use IndexedDB directly, localStorage, sessionStorage, Postgres, SQLite from browser code, ctox.db, ctx.db.raw, HTTP data APIs, /rxdb/pull, /commands, or any fallback data path
 you are about to write app files outside the resolved module directory, such as root-level module.json, root-level collections.schema.json, root-level <id>/, src/skills/, or any skill-named path
+you are about to call `ctox queue ack`, `ctox queue complete`, `ctox queue release`, `ctox queue fail`, `ctox queue block`, or edit queue/command/runtime-status rows directly; CTOX service owns lifecycle completion
+you are about to let `current_queue_item_id`, an open-work block, or an unrelated queue row redirect the app build away from the authoritative module_id and only_allowed_app_artifact_directory
 you believe a harness, artifact contract, benchmark note, or review example requires root-level module.json, root-level collections.schema.json, root-level harness-module.json, root-level harness-collections.schema.json, root-level artifact/status/blocker Markdown, or any other root alias for an app deliverable
 you are about to test the guard by creating, moving, touching, symlinking, hardlinking, copying, or removing root-level app artifact probe files such as `test-*`, `_test_*`, `_probe_*`, `probe-*`, root `module.json`, root `collections.schema.json`, or guard/status scratch files
 you are about to probe shell aliases, tool wrappers, guard behavior, or temporary root write behavior instead of implementing the app in the allowed module directory
@@ -33,6 +35,8 @@ the module declares collections in module.json but not in schema.js and collecti
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
 module.json or collections.schema.json would be exposed in an invalid or incomplete state after any edit
+any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
+the validator reports missing files, right/third-pane layout, schema, manifest, dependency, syntax, or test failures and you are about to finish instead of repairing the exact bullets
 you are about to write a very large app file as one huge tool-call argument or here-doc; keep generated files concise and split large writes into bounded chunks
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
@@ -68,6 +72,22 @@ Collections to own -> schema.js and collections.schema.json names
 What not to implement because it would be slop
 How to keep this app small enough to build and verify in one pass
 ```
+
+5. Resolve the target directory and write a required-file inventory before any
+   optional UI or polish:
+
+```text
+MODULE_DIR=<resolved target from the prompt>
+required files: module.json, collections.schema.json, schema.js, index.html,
+index.css, index.js, icon.svg, locales/de.json, locales/en.json,
+tests/<id>.test.mjs
+first repair action if red: create missing required files, then remove any
+unjustified right/third pane, then rerun validation
+```
+
+Do not use queue IDs or open-work context as a target selector. The App
+Creator/CTOX service will complete queue and command state after the app
+validator is green.
 
 ## Architecture Translation Layer
 
@@ -140,6 +160,24 @@ MODULE_DIR="runtime/business-os/installed-modules/<id>"
 mkdir -p "$MODULE_DIR/locales" "$MODULE_DIR/tests"
 # Every generated file write must target "$MODULE_DIR/<file>".
 ```
+
+Immediately after the initial file pass, prove the required file inventory
+before adding optional features:
+
+```sh
+test -f "$MODULE_DIR/module.json" &&
+test -f "$MODULE_DIR/collections.schema.json" &&
+test -f "$MODULE_DIR/schema.js" &&
+test -f "$MODULE_DIR/index.html" &&
+test -f "$MODULE_DIR/index.css" &&
+test -f "$MODULE_DIR/index.js" &&
+test -f "$MODULE_DIR/icon.svg" &&
+test -f "$MODULE_DIR/locales/de.json" &&
+test -f "$MODULE_DIR/locales/en.json" &&
+find "$MODULE_DIR/tests" -name '*.test.mjs' -type f | grep -q .
+```
+
+If this proof fails, stop optional work and create the missing files.
 
 The app target block from the CTOX queue prompt is authoritative for app
 artifacts. Ignore stale harness examples, review text, artifact-contract
