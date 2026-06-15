@@ -39,6 +39,13 @@ impl Options {
     }
 }
 
+/// Best-effort COUNT(*) over a table that may not exist yet on a fresh
+/// deployment (returns 0 on any error / missing table). Used for the
+/// coverage-gap signals below.
+fn optional_table_count(conn: &Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |row| row.get(0)).unwrap_or(0)
+}
+
 pub fn synthesize(conn: &Connection, opts: &Options) -> Result<Value> {
     // Run all the underlying algorithms with conservative defaults; if one
     // fails we record the failure but continue, so a corrupt sub-table
@@ -179,6 +186,31 @@ pub fn synthesize(conn: &Connection, opts: &Options) -> Result<Value> {
                 "state": slow,
             }));
         }
+    }
+
+    // pm-3: coverage-gap evidence. Currently-unmapped process events and
+    // rejected core spawn-edges are gaps the audit never turned into durable
+    // findings; surface them here so they flow through the same 2-tick
+    // record_or_confirm pipeline as the other signals.
+    let unmapped_events =
+        optional_table_count(conn, "SELECT COUNT(*) FROM ctox_pm_unmapped_events");
+    if unmapped_events > 0 {
+        findings.push(json!({
+            "kind": "unmapped_coverage",
+            "severity": if unmapped_events >= 25 { "critical" } else { "warning" },
+            "unmapped_events": unmapped_events,
+        }));
+    }
+    let rejected_spawn_edges = optional_table_count(
+        conn,
+        "SELECT COUNT(*) FROM ctox_core_spawn_edges WHERE accepted = 0",
+    );
+    if rejected_spawn_edges > 0 {
+        findings.push(json!({
+            "kind": "spawn_rejected",
+            "severity": if rejected_spawn_edges >= 10 { "critical" } else { "warning" },
+            "rejected_spawn_edges": rejected_spawn_edges,
+        }));
     }
 
     let (status, top_signal, next_step) = top_signal_and_next(
@@ -449,5 +481,39 @@ mod tests {
         let report = synthesize(&conn, &Options::default()).unwrap();
         let next_step = report["recommended_next_step"].as_str().unwrap();
         assert!(next_step.starts_with("ctox harness-mining"));
+    }
+
+    #[test]
+    fn brief_surfaces_unmapped_and_rejected_coverage_gaps() {
+        // pm-3: currently-unmapped process events and rejected core spawn-edges
+        // must become brief findings (so they flow through the 2-tick pipeline).
+        let conn = setup_conn();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE ctox_pm_unmapped_events (event_id TEXT PRIMARY KEY);
+            CREATE TABLE ctox_core_spawn_edges (
+                edge_id TEXT PRIMARY KEY,
+                accepted INTEGER NOT NULL
+            );
+            INSERT INTO ctox_pm_unmapped_events (event_id) VALUES ('e1'), ('e2');
+            INSERT INTO ctox_core_spawn_edges (edge_id, accepted)
+                VALUES ('s1', 0), ('s2', 1);
+            "#,
+        )
+        .unwrap();
+        let report = synthesize(&conn, &Options::default()).unwrap();
+        let findings = report["findings"].as_array().unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["kind"] == "unmapped_coverage" && f["unmapped_events"] == 2),
+            "expected unmapped_coverage finding, got: {findings:?}"
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|f| f["kind"] == "spawn_rejected" && f["rejected_spawn_edges"] == 1),
+            "expected spawn_rejected finding, got: {findings:?}"
+        );
     }
 }
