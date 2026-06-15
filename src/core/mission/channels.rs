@@ -5583,8 +5583,6 @@ fn enforce_reviewed_founder_send_core_transition(
     approval_key: &str,
     request: &ChannelSendRequest,
 ) -> Result<()> {
-    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
-    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
     let mut metadata = BTreeMap::new();
     metadata.insert("protected_party".to_string(), "founder".to_string());
     metadata.insert("thread_key".to_string(), request.thread_key.clone());
@@ -5601,14 +5599,10 @@ fn enforce_reviewed_founder_send_core_transition(
             to_state: CoreState::Sending,
             event: CoreEvent::Send,
             actor: "ctox-reviewed-founder-send".to_string(),
-            evidence: CoreEvidenceRefs {
-                review_audit_key: Some(approval_key.to_string()),
-                approved_body_sha256: Some(body_sha256.clone()),
-                outgoing_body_sha256: Some(body_sha256),
-                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
-                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
-                ..CoreEvidenceRefs::default()
-            },
+            // EGRESS-3: approved hashes from the durable review record, outgoing
+            // from the live request — the kernel require_reviewed_outbound gate is
+            // now load-bearing instead of comparing the request against itself.
+            evidence: reviewed_outbound_evidence(conn, approval_key, request),
             metadata,
         },
     )?;
@@ -5773,8 +5767,6 @@ fn emit_reviewed_founder_send_failed_transition(
     pending_message_key: &str,
     provider_error: &str,
 ) -> Result<()> {
-    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
-    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
     let mut metadata = BTreeMap::new();
     metadata.insert("protected_party".to_string(), "founder".to_string());
     metadata.insert("thread_key".to_string(), request.thread_key.clone());
@@ -5799,14 +5791,10 @@ fn emit_reviewed_founder_send_failed_transition(
             to_state: CoreState::SendFailed,
             event: CoreEvent::Fail,
             actor: "ctox-reviewed-founder-send".to_string(),
-            evidence: CoreEvidenceRefs {
-                review_audit_key: Some(approval_key.to_string()),
-                approved_body_sha256: Some(body_sha256.clone()),
-                outgoing_body_sha256: Some(body_sha256),
-                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
-                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
-                ..CoreEvidenceRefs::default()
-            },
+            // EGRESS-3: approved hashes from the durable review record, outgoing
+            // from the live request — the ->Sent confirmation and the symmetric
+            // failure record carry the same load-bearing evidence as the Send gate.
+            evidence: reviewed_outbound_evidence(conn, approval_key, request),
             metadata,
         },
     )?;
@@ -5840,8 +5828,6 @@ fn emit_reviewed_founder_send_succeeded_transition(
     request: &ChannelSendRequest,
     pending_message_key: &str,
 ) -> Result<()> {
-    let body_sha256 = sha256_hex(request.body.trim().as_bytes());
-    let recipient_set_sha256 = founder_send_recipient_set_sha256(request);
     let mut metadata = BTreeMap::new();
     metadata.insert("protected_party".to_string(), "founder".to_string());
     metadata.insert("thread_key".to_string(), request.thread_key.clone());
@@ -5862,14 +5848,10 @@ fn emit_reviewed_founder_send_succeeded_transition(
             to_state: CoreState::Sent,
             event: CoreEvent::ConfirmDelivery,
             actor: "ctox-reviewed-founder-send".to_string(),
-            evidence: CoreEvidenceRefs {
-                review_audit_key: Some(approval_key.to_string()),
-                approved_body_sha256: Some(body_sha256.clone()),
-                outgoing_body_sha256: Some(body_sha256),
-                approved_recipient_set_sha256: Some(recipient_set_sha256.clone()),
-                outgoing_recipient_set_sha256: Some(recipient_set_sha256),
-                ..CoreEvidenceRefs::default()
-            },
+            // EGRESS-3: approved hashes from the durable review record, outgoing
+            // from the live request — the ->Sent confirmation and the symmetric
+            // failure record carry the same load-bearing evidence as the Send gate.
+            evidence: reviewed_outbound_evidence(conn, approval_key, request),
             metadata,
         },
     )?;
@@ -5887,18 +5869,37 @@ fn clip_error_text(text: &str, max: usize) -> String {
 }
 
 fn founder_send_recipient_set_sha256(request: &ChannelSendRequest) -> String {
-    let mut to = request
-        .to
+    recipient_set_sha256(
+        &request.to,
+        &request.cc,
+        &request.subject,
+        &request.attachments,
+    )
+}
+
+/// EGRESS-3: the canonical recipient-set hash over (to, cc, subject,
+/// attachments) with the exact normalization the founder-send gate uses — to/cc
+/// trimmed + lowercased, attachments trimmed, all sorted, subject trimmed. Shared
+/// by the live-request path (`founder_send_recipient_set_sha256`) and the
+/// stored-approval path (`approved_outbound_evidence_hashes`) so the kernel
+/// `require_reviewed_outbound` comparison is between two genuinely independent
+/// values computed by IDENTICAL code — no normalization drift can false-reject a
+/// legitimate send.
+fn recipient_set_sha256(
+    to: &[String],
+    cc: &[String],
+    subject: &str,
+    attachments: &[String],
+) -> String {
+    let mut to = to
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let mut cc = request
-        .cc
+    let mut cc = cc
         .iter()
         .map(|value| value.trim().to_ascii_lowercase())
         .collect::<Vec<_>>();
-    let mut attachments = request
-        .attachments
+    let mut attachments = attachments
         .iter()
         .map(|value| value.trim().to_string())
         .collect::<Vec<_>>();
@@ -5908,11 +5909,86 @@ fn founder_send_recipient_set_sha256(request: &ChannelSendRequest) -> String {
     let payload = json!({
         "to": to,
         "cc": cc,
-        "subject": request.subject.trim(),
+        "subject": subject.trim(),
         "attachments": attachments,
     })
     .to_string();
     sha256_hex(payload.as_bytes())
+}
+
+/// EGRESS-3: load the APPROVED body + recipient-set hashes from the durable
+/// review record by `approval_key`, so the kernel gate compares the stored
+/// approval against the live request rather than the request against itself. The
+/// recipient hash is derived from the stored `action_json` (to/cc/subject/
+/// attachments — present in every review action shape) via the same
+/// `recipient_set_sha256`. Returns `None` when no review row matches the key (or
+/// its `action_json` cannot be parsed), so the caller can fall back to the
+/// request-derived values and never NEWLY reject a previously-valid send.
+fn approved_outbound_evidence_hashes(
+    conn: &Connection,
+    approval_key: &str,
+) -> Option<(String, String)> {
+    let (body_sha256, action_json): (String, String) = conn
+        .query_row(
+            "SELECT body_sha256, action_json FROM communication_founder_reply_reviews \
+             WHERE approval_key = ?1 LIMIT 1",
+            params![approval_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .ok()
+        .flatten()?;
+    let action: Value = serde_json::from_str(&action_json).ok()?;
+    let string_list = |key: &str| -> Vec<String> {
+        action
+            .get(key)
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let to = string_list("to");
+    let cc = string_list("cc");
+    let attachments = string_list("attachments");
+    let subject = action.get("subject").and_then(Value::as_str).unwrap_or("");
+    let approved_recipient = recipient_set_sha256(&to, &cc, subject, &attachments);
+    Some((body_sha256, approved_recipient))
+}
+
+/// EGRESS-3: build the `CoreEvidenceRefs` for a reviewed founder/owner-send
+/// transition with the APPROVED hashes sourced from the durable review record
+/// (independent of the live request) and the OUTGOING hashes from the request, so
+/// every `require_reviewed_outbound`-gated transition (Approved->Sending,
+/// Sending->Sent, plus the symmetric failure record) carries a genuinely
+/// load-bearing comparison instead of a value-against-itself tautology. Falls
+/// back to the request-derived values when the approval is not record-backed, so
+/// a previously-valid send is never newly rejected.
+fn reviewed_outbound_evidence(
+    conn: &Connection,
+    approval_key: &str,
+    request: &ChannelSendRequest,
+) -> CoreEvidenceRefs {
+    let outgoing_body_sha256 = sha256_hex(request.body.trim().as_bytes());
+    let outgoing_recipient_set_sha256 = founder_send_recipient_set_sha256(request);
+    let (approved_body_sha256, approved_recipient_set_sha256) =
+        approved_outbound_evidence_hashes(conn, approval_key).unwrap_or_else(|| {
+            (
+                outgoing_body_sha256.clone(),
+                outgoing_recipient_set_sha256.clone(),
+            )
+        });
+    CoreEvidenceRefs {
+        review_audit_key: Some(approval_key.to_string()),
+        approved_body_sha256: Some(approved_body_sha256),
+        outgoing_body_sha256: Some(outgoing_body_sha256),
+        approved_recipient_set_sha256: Some(approved_recipient_set_sha256),
+        outgoing_recipient_set_sha256: Some(outgoing_recipient_set_sha256),
+        ..CoreEvidenceRefs::default()
+    }
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
@@ -8949,6 +9025,112 @@ mod tests {
                 .unwrap_or_default()
                 .as_nanos()
         ))
+    }
+
+    /// EGRESS-3: the reviewed-outbound evidence the kernel gate compares must be
+    /// genuinely independent — APPROVED hashes from the durable review record,
+    /// OUTGOING hashes from the live request. This proves the three properties
+    /// that make the gate load-bearing without false-rejecting legitimate sends:
+    /// a normalization-equivalent send matches (no false reject), a mutated
+    /// body/recipient diverges (caught), and a send whose approval is not
+    /// record-backed falls back to the request (never NEWLY rejected).
+    #[test]
+    fn reviewed_outbound_evidence_compares_record_against_request() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE communication_founder_reply_reviews (\
+                 approval_key TEXT PRIMARY KEY, \
+                 action_json TEXT NOT NULL, \
+                 body_sha256 TEXT NOT NULL);",
+        )
+        .unwrap();
+
+        let action = FounderOutboundAction {
+            account_key: "email:cto1@metric-space.ai".to_string(),
+            thread_key: "<egress-3-thread@example.com>".to_string(),
+            subject: "Re: budget".to_string(),
+            to: vec!["founder@example.com".to_string()],
+            cc: vec!["board@example.com".to_string()],
+            attachments: vec!["/tmp/q3.xlsx".to_string()],
+        };
+        let approved_body = "The approved reply body.";
+        let (_digest, action_json, body_sha256) =
+            founder_outbound_review_digest(&action, approved_body);
+        conn.execute(
+            "INSERT INTO communication_founder_reply_reviews \
+                 (approval_key, action_json, body_sha256) VALUES (?1, ?2, ?3)",
+            params!["approval-egress-3", action_json, body_sha256],
+        )
+        .unwrap();
+
+        let mk_request = |to: Vec<String>, body: &str| ChannelSendRequest {
+            channel: "email".to_string(),
+            account_key: action.account_key.clone(),
+            thread_key: action.thread_key.clone(),
+            body: body.to_string(),
+            subject: action.subject.clone(),
+            to,
+            cc: action.cc.clone(),
+            attachments: action.attachments.clone(),
+            sender_display: None,
+            sender_address: None,
+            send_voice: false,
+            reviewed_founder_send: true,
+        };
+
+        // (a) A legitimate send whose recipients differ only by case/whitespace
+        // from the approval must NOT false-reject: both sides normalize, so the
+        // approved and outgoing hashes are equal -> require_reviewed_outbound
+        // passes. This is the P0 guard the old tautology silently satisfied.
+        let legit = mk_request(vec!["  Founder@Example.com ".to_string()], approved_body);
+        let ev = reviewed_outbound_evidence(&conn, "approval-egress-3", &legit);
+        assert_eq!(
+            ev.approved_body_sha256, ev.outgoing_body_sha256,
+            "legitimate body must not false-reject"
+        );
+        assert_eq!(
+            ev.approved_recipient_set_sha256, ev.outgoing_recipient_set_sha256,
+            "normalization-equivalent recipients must not false-reject"
+        );
+
+        // (b) A mutated body must diverge -> the kernel gate now catches it.
+        let tampered_body = mk_request(action.to.clone(), "Wire the funds to a new account.");
+        let ev_body = reviewed_outbound_evidence(&conn, "approval-egress-3", &tampered_body);
+        assert_ne!(
+            ev_body.approved_body_sha256, ev_body.outgoing_body_sha256,
+            "a body mutated after approval must be caught"
+        );
+        // ...and the recipients still match, isolating the body as the mismatch.
+        assert_eq!(
+            ev_body.approved_recipient_set_sha256, ev_body.outgoing_recipient_set_sha256,
+            "unchanged recipients must stay equal when only the body is mutated"
+        );
+
+        // (c) A mutated recipient must diverge -> exfiltration to a new address
+        // is caught even when the body is untouched.
+        let tampered_to = mk_request(vec!["attacker@evil.example".to_string()], approved_body);
+        let ev_to = reviewed_outbound_evidence(&conn, "approval-egress-3", &tampered_to);
+        assert_ne!(
+            ev_to.approved_recipient_set_sha256, ev_to.outgoing_recipient_set_sha256,
+            "a recipient added/swapped after approval must be caught"
+        );
+
+        // (d) No record-backed approval -> fall back to the request so a
+        // previously-valid send is never NEWLY rejected by this change.
+        let unbacked = reviewed_outbound_evidence(&conn, "no-such-approval", &legit);
+        assert_eq!(
+            unbacked.approved_body_sha256, unbacked.outgoing_body_sha256,
+            "missing review row falls back to the request body"
+        );
+        assert_eq!(
+            unbacked.approved_recipient_set_sha256, unbacked.outgoing_recipient_set_sha256,
+            "missing review row falls back to the request recipients"
+        );
+        assert_eq!(
+            unbacked.review_audit_key.as_deref(),
+            Some("no-such-approval"),
+            "the audit key is still recorded even on fallback"
+        );
     }
 
     #[test]
