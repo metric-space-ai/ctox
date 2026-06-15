@@ -4458,9 +4458,16 @@ fn stranded_outbound_send_attempt(conn: &Connection, message_key: &str) -> Resul
         return Ok(None);
     };
     let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
-    // A durable (accepted) row is handled by existing_durable_outbound_send_result;
-    // only a not-yet-durable row whose send was already initiated is stranded.
+    // A durable (accepted) row is handled by existing_durable_outbound_send_result.
     if is_durable_outbound_send_state(&status, &folder_hint, &metadata) {
+        return Ok(None);
+    }
+    // Only a still-pending row is "maybe sent". A send_failed row means
+    // adapter.send_cli returned Err (the provider rejected it = NOT delivered),
+    // so it is safe to retry and must never be treated as stranded — and
+    // mark_outbound_send_failed already clears the marker, so this is also
+    // defense-in-depth against a lingering marker on a non-pending row.
+    if status != "draft_pending_send" {
         return Ok(None);
     }
     Ok(metadata
@@ -4502,7 +4509,10 @@ fn mark_outbound_send_accepted(
         SET status = ?2,
             folder_hint = 'sent',
             metadata_json = json_set(
-                json_set(metadata_json, '$.pendingSend', false),
+                json_remove(
+                    json_set(metadata_json, '$.pendingSend', false),
+                    '$.send_attempt_started_at'
+                ),
                 '$.adapterResult',
                 json(?3)
             ),
@@ -4535,7 +4545,10 @@ fn mark_outbound_send_failed(conn: &Connection, message_key: &str, error: &str) 
         UPDATE communication_messages
         SET status = 'send_failed',
             metadata_json = json_set(
-                json_set(metadata_json, '$.pendingSend', false),
+                json_remove(
+                    json_set(metadata_json, '$.pendingSend', false),
+                    '$.send_attempt_started_at'
+                ),
                 '$.sendError',
                 ?2
             ),
@@ -12219,6 +12232,29 @@ mod tests {
                 .expect("stranded probe")
                 .is_none(),
             "an accepted (durable) row is not stranded"
+        );
+
+        // A genuinely-failed send (adapter.send_cli returned Err = the provider
+        // rejected it, NOT delivered) must stay retryable: mark_outbound_send_failed
+        // clears the marker and a send_failed row is never treated as stranded.
+        let failed_request =
+            phase1_test_request("Hallo Jill,\n\nEGRESS-2 provider-rejected body.\n\nGruesse");
+        let failed_body_sha256 = sha256_hex(failed_request.body.trim().as_bytes());
+        let failed_key = record_outbound_pending_send(
+            &conn,
+            &failed_request,
+            "founder-review:egress2-failed",
+            &failed_body_sha256,
+        )
+        .expect("pending send must persist")
+        .message_key;
+        mark_outbound_send_attempt_started(&conn, &failed_key).expect("mark attempt");
+        mark_outbound_send_failed(&conn, &failed_key, "smtp 550 rejected").expect("mark failed");
+        assert!(
+            stranded_outbound_send_attempt(&conn, &failed_key)
+                .expect("stranded probe")
+                .is_none(),
+            "a send_failed row (provider rejected, never delivered) must stay retryable"
         );
 
         let _ = std::fs::remove_file(&db_path);
