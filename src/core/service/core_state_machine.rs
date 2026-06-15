@@ -1216,8 +1216,14 @@ pub fn allowed_transition_catalog(
             (Approved, Sending),
             (Sending, Sent),
             (Sending, SendFailed),
-            (SendFailed, DeliveryRepair),
-            (DeliveryRepair, Sending),
+            // EGRESS-4: the SendFailed -> DeliveryRepair -> Sending recovery loop
+            // had NO production emitter — no driver ever moved a row through
+            // DeliveryRepair — so it only advertised an automatic resend that did
+            // not exist, misleading liveness/process-mining. It is removed. A
+            // failed founder send is now a TERMINAL hold (see core_terminal_states):
+            // CTOX never auto-resends founder mail; recovery is a manual operator
+            // action (verify delivery, then issue a fresh send), and EGRESS-2's
+            // stranded-send guard prevents a blind duplicate on that fresh send.
             (Sent, AwaitingAcknowledgement),
             (AwaitingAcknowledgement, Done),
             (NoResponseNeeded, Done),
@@ -1300,7 +1306,11 @@ pub fn core_terminal_states(entity_type: CoreEntityType) -> &'static [CoreState]
         WorkItem => &[Closed, Failed, Superseded],
         Ticket => &[Closed, Superseded],
         Review => &[Approved, Rejected],
-        FounderCommunication => &[Done, Escalated],
+        // EGRESS-4: SendFailed is a TERMINAL failure-hold. A failed founder send
+        // does not auto-recover (the dead DeliveryRepair retry loop was removed);
+        // it terminates here pending manual operator recovery, and the
+        // protected-terminal-failure gate already requires a durable cause for it.
+        FounderCommunication => &[Done, Escalated, SendFailed],
         Commitment => &[Delivered, Escalated, CancelledWithNotice],
         Schedule => &[Acknowledged, Expired, DisabledByPolicy],
         Knowledge => &[Active, Superseded],
@@ -2187,6 +2197,32 @@ mod tests {
         let report = analyze_core_liveness();
 
         assert!(report.ok, "{report:#?}");
+    }
+
+    #[test]
+    fn founder_send_failed_is_a_terminal_hold_with_no_dead_recovery_loop() {
+        // EGRESS-4 (option b): the SendFailed -> DeliveryRepair -> Sending
+        // recovery loop had no driver and only advertised an auto-recovery that
+        // did not exist. It is removed; a failed founder send is a TERMINAL hold
+        // pending manual operator recovery (a re-send is a fresh send, guarded
+        // against duplicates by EGRESS-2's stranded-send check).
+        let catalog = allowed_transition_catalog(CoreEntityType::FounderCommunication);
+        assert!(
+            !catalog.contains(&(CoreState::SendFailed, CoreState::DeliveryRepair)),
+            "the dead SendFailed -> DeliveryRepair edge must be removed"
+        );
+        assert!(
+            !catalog.contains(&(CoreState::DeliveryRepair, CoreState::Sending)),
+            "the dead DeliveryRepair -> Sending edge must be removed"
+        );
+        assert!(
+            core_terminal_states(CoreEntityType::FounderCommunication)
+                .contains(&CoreState::SendFailed),
+            "SendFailed must be a terminal hold so liveness has no non-terminal dead-end"
+        );
+        // The whole-graph liveness invariant still holds with SendFailed terminal
+        // (also guarded by core_liveness_graph_has_no_unreachable_or_dead_end_states).
+        assert!(analyze_core_liveness().ok);
     }
 
     #[test]

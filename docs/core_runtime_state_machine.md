@@ -126,7 +126,12 @@ Durable audit gate checking drafted content and code artifacts.
 ### 8. FounderCommunication State
 High-priority, non-spillable lane for communication.
 - **Start State**: `InboundObserved`
-- **Terminal States**: `Done`, `Escalated`
+- **Terminal States**: `Done`, `Escalated`, `SendFailed`
+  - `SendFailed` is a terminal **failure-hold**: CTOX never auto-resends founder
+    mail. A failed send stays here pending manual operator recovery (verify
+    delivery, then issue a fresh send — guarded against a blind duplicate by the
+    EGRESS-2 stranded-send check). The dead `SendFailed -> DeliveryRepair ->
+    Sending` recovery loop was removed (EGRESS-4) because no driver emitted it.
 - **Valid Transitions**:
   - `InboundObserved` -> `InboundObserved` | `ContextBuilt`
   - `ContextBuilt` -> `ReplyNeeded` | `NoResponseNeeded`
@@ -137,8 +142,6 @@ High-priority, non-spillable lane for communication.
   - `ReworkRequired` -> `ContextBuilt`
   - `Approved` -> `Sending`
   - `Sending` -> `Sent` | `SendFailed`
-  - `SendFailed` -> `DeliveryRepair`
-  - `DeliveryRepair` -> `Sending`
   - `Sent` -> `AwaitingAcknowledgement`
   - `AwaitingAcknowledgement` -> `Done`
   - `NoResponseNeeded` -> `Done`
