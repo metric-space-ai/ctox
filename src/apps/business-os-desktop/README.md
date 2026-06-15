@@ -17,6 +17,7 @@ npm run test:electron-smoke
 npm run smoke:keychain-runtime
 npm run smoke:local-runtime
 npm run smoke:ctox-dev-live -- --email <email> --password-stdin --expected-tenant <name> --auth-window --manage-first --launch-first --session-rotation
+npm run smoke:ctox-dev-live -- --email <owner-email> --password-stdin --auth-window --access-revocation --access-revocation-tenant <tenant> --access-revocation-member-email <member-email>
 npm run smoke:pairing-ssh-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --rotate --revoke-local
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...>
 npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin --trusted-host-key-fingerprint <sha256:...> --attach
@@ -73,6 +74,14 @@ Release-related checks:
   launch config. Add `--session-rotation` to prove that ctox.dev logout clears
   Electron storage and domain cookies, blocks stale managed launches, then
   restores managed tenants and WebRTC-only launch after re-login.
+  Add `--access-revocation --access-revocation-tenant <tenant>
+  --access-revocation-member-email <member-email>` to run a reversible live
+  access-revocation proof with a separate launchable non-owner member. In that
+  mode stdin must contain the owner/admin password on line 1 and the member
+  password on line 2. The smoke signs into separate Electron sessions, verifies
+  the member can launch WebRTC-only, temporarily changes that member to
+  `viewer`, verifies the Desktop marks the tenant `needs_auth` and blocks
+  launch before requesting a new launch token, then restores the original role.
 - `npm run smoke:pairing-ssh-live -- --host <host> --user <user> --password-stdin`
   is an opt-in live smoke for invite-paired unmanaged instances. It uses SSH
   only as the remote control channel, pins the host key, reads the SSH password

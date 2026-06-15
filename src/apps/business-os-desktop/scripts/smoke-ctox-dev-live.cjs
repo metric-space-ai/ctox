@@ -8,7 +8,7 @@ const path = require("node:path");
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
-  const password = await readPassword(options);
+  const credentials = await readCredentials(options);
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ctox-desktop-ctox-dev-live-"));
   const outputPath = path.join(tempRoot, "result.json");
   const userDataPath = path.join(tempRoot, "userData");
@@ -16,11 +16,13 @@ async function main() {
     const result = await runLiveFixture({
       outputPath,
       userDataPath,
-      password,
+      credentials,
       options,
     });
     const resultText = JSON.stringify(result, null, 2);
-    assert.equal(resultText.includes(password), false, "ctox.dev live smoke evidence leaked password");
+    for (const secret of [credentials.password, credentials.memberPassword].filter(Boolean)) {
+      assert.equal(resultText.includes(secret), false, "ctox.dev live smoke evidence leaked password");
+    }
     if (!result.ok) {
       throw new Error(result.error || "ctox.dev live smoke failed");
     }
@@ -44,6 +46,9 @@ function parseArgs(args) {
     manageFirst: false,
     authWindow: false,
     sessionRotation: false,
+    accessRevocation: false,
+    accessRevocationTenant: "",
+    accessRevocationMemberEmail: "",
     keepTemp: false,
   };
   for (let index = 0; index < args.length; index += 1) {
@@ -65,6 +70,14 @@ function parseArgs(args) {
       options.authWindow = true;
     } else if (arg === "--session-rotation") {
       options.sessionRotation = true;
+    } else if (arg === "--access-revocation") {
+      options.accessRevocation = true;
+    } else if (arg === "--access-revocation-tenant") {
+      options.accessRevocationTenant = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--access-revocation-member-email") {
+      options.accessRevocationMemberEmail = String(args[index + 1] || "").trim();
+      index += 1;
     } else if (arg === "--password-stdin") {
       options.passwordStdin = true;
     } else if (arg === "--keep-temp") {
@@ -78,11 +91,19 @@ function parseArgs(args) {
   if (!options.passwordStdin) {
     throw new Error("--password-stdin is required; never pass ctox.dev passwords as command arguments");
   }
+  if (options.accessRevocation) {
+    if (!options.accessRevocationTenant) {
+      throw new Error("--access-revocation-tenant is required with --access-revocation");
+    }
+    if (!options.accessRevocationMemberEmail) {
+      throw new Error("--access-revocation-member-email is required with --access-revocation");
+    }
+  }
   options.expectedTenants = options.expectedTenants.filter(Boolean);
   return options;
 }
 
-function runLiveFixture({ outputPath, userDataPath, password, options }) {
+function runLiveFixture({ outputPath, userDataPath, credentials, options }) {
   return new Promise((resolve, reject) => {
     const electronPath = require("electron");
     const fixture = path.join(__dirname, "fixtures/ctox-dev-live-main.cjs");
@@ -98,6 +119,12 @@ function runLiveFixture({ outputPath, userDataPath, password, options }) {
       ...(options.manageFirst ? ["--manage-first"] : []),
       ...(options.authWindow ? ["--auth-window"] : []),
       ...(options.sessionRotation ? ["--session-rotation"] : []),
+      ...(options.accessRevocation ? ["--access-revocation"] : []),
+      ...(options.accessRevocationTenant ? ["--access-revocation-tenant", options.accessRevocationTenant] : []),
+      ...(options.accessRevocationMemberEmail ? [
+        "--access-revocation-member-email",
+        options.accessRevocationMemberEmail,
+      ] : []),
       ...options.expectedTenants.flatMap((tenant) => ["--expected-tenant", tenant]),
     ];
     let stdout = "";
@@ -108,8 +135,11 @@ function runLiveFixture({ outputPath, userDataPath, password, options }) {
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
-    child.stdin.end(`${password}\n`);
-    const timeoutMs = options.sessionRotation ? 180000 : 90000;
+    child.stdin.end([
+      credentials.password,
+      credentials.memberPassword,
+    ].filter(Boolean).join("\n") + "\n");
+    const timeoutMs = options.sessionRotation || options.accessRevocation ? 180000 : 90000;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
@@ -153,7 +183,7 @@ function readResult(filePath) {
   }
 }
 
-function readPassword(options) {
+function readCredentials(options) {
   if (!options.passwordStdin) {
     throw new Error("--password-stdin is required");
   }
@@ -164,12 +194,22 @@ function readPassword(options) {
       input += chunk;
     });
     process.stdin.on("end", () => {
-      const password = input.replace(/\r?\n$/, "");
+      const normalized = input.replace(/\r?\n$/, "");
+      const password = options.accessRevocation
+        ? String(normalized.split(/\r?\n/)[0] || "")
+        : normalized;
       if (!password) {
         reject(new Error("password stdin was empty"));
         return;
       }
-      resolve(password);
+      const memberPassword = options.accessRevocation
+        ? String(normalized.split(/\r?\n/)[1] || "")
+        : "";
+      if (options.accessRevocation && !memberPassword) {
+        reject(new Error("member password stdin was empty; pass admin password on line 1 and member password on line 2"));
+        return;
+      }
+      resolve({ password, memberPassword });
     });
     process.stdin.on("error", reject);
   });

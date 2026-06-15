@@ -25,7 +25,8 @@ app.on("window-all-closed", () => undefined);
 
 app.whenReady().then(async () => {
   let exitCode = 0;
-  const password = await readPassword();
+  const credentials = await readCredentials();
+  const password = credentials.password;
   let progress = { ok: false, baseUrl: options.baseUrl, stage: "password-read" };
   function writeProgress(stage, extra = {}) {
     progress = { ...progress, ...extra, stage };
@@ -138,6 +139,22 @@ app.whenReady().then(async () => {
       });
     }
 
+    let accessRevocation = null;
+    if (options.accessRevocation) {
+      writeProgress("access-revocation-started");
+      accessRevocation = await exerciseAccessRevocation({
+        baseUrl: options.baseUrl,
+        adminSession: session.defaultSession,
+        adminEmail: options.email,
+        memberSession: session.fromPartition("persist:ctox-dev-access-revocation-member"),
+        memberEmail: options.accessRevocationMemberEmail,
+        memberPassword: credentials.memberPassword,
+        tenantSelector: options.accessRevocationTenant,
+        adminManagedInstances: managedInstances,
+        writeProgress,
+      });
+    }
+
     const logout = sessionRotation?.finalLogout
       || await clearCtoxDevSession(session.defaultSession, options.baseUrl);
     writeProgress("final-logout", { logout });
@@ -160,6 +177,7 @@ app.whenReady().then(async () => {
       management,
       launch,
       sessionRotation,
+      accessRevocation,
       logout,
     };
     writeResult(result);
@@ -205,6 +223,9 @@ function parseArgs(args) {
     manageFirst: false,
     authWindow: false,
     sessionRotation: false,
+    accessRevocation: false,
+    accessRevocationTenant: "",
+    accessRevocationMemberEmail: "",
   };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -225,11 +246,27 @@ function parseArgs(args) {
       parsed.authWindow = true;
     } else if (arg === "--session-rotation") {
       parsed.sessionRotation = true;
+    } else if (arg === "--access-revocation") {
+      parsed.accessRevocation = true;
+    } else if (arg === "--access-revocation-tenant") {
+      parsed.accessRevocationTenant = String(args[index + 1] || "").trim();
+      index += 1;
+    } else if (arg === "--access-revocation-member-email") {
+      parsed.accessRevocationMemberEmail = String(args[index + 1] || "").trim();
+      index += 1;
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
   }
   if (!parsed.email) throw new Error("--email is required");
+  if (parsed.accessRevocation) {
+    if (!parsed.accessRevocationTenant) {
+      throw new Error("--access-revocation-tenant is required with --access-revocation");
+    }
+    if (!parsed.accessRevocationMemberEmail) {
+      throw new Error("--access-revocation-member-email is required with --access-revocation");
+    }
+  }
   parsed.expectedTenants = parsed.expectedTenants.filter(Boolean);
   return parsed;
 }
@@ -360,8 +397,8 @@ function redactKnown(value, secrets) {
   return result;
 }
 
-async function loginWithPasswordApi(baseUrl, email, password) {
-  const response = await session.defaultSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/auth/password`, {
+async function loginWithPasswordApi(baseUrl, email, password, browserSession = session.defaultSession) {
+  const response = await browserSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/auth/password`, {
     method: "POST",
     cache: "no-store",
     credentials: "include",
@@ -380,8 +417,8 @@ async function loginWithPasswordApi(baseUrl, email, password) {
   };
 }
 
-async function fetchRawSessionPackage(baseUrl) {
-  const response = await session.defaultSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/desktop/session-package`, {
+async function fetchRawSessionPackage(baseUrl, browserSession = session.defaultSession) {
+  const response = await browserSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/desktop/session-package`, {
     cache: "no-store",
     credentials: "include",
     headers: { "x-ctox-desktop-client": "ctox-business-os-desktop" },
@@ -395,8 +432,8 @@ async function isCtoxDevSessionAuthenticated(baseUrl) {
   return state.accountAuthenticated === true || state.tenantCount > 0;
 }
 
-async function fetchSessionState(baseUrl) {
-  const response = await session.defaultSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/desktop/session-package`, {
+async function fetchSessionState(baseUrl, browserSession = session.defaultSession) {
+  const response = await browserSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/desktop/session-package`, {
     cache: "no-store",
     credentials: "include",
     headers: { "x-ctox-desktop-client": "ctox-business-os-desktop" },
@@ -538,6 +575,203 @@ async function exerciseSessionRotation({
   return result;
 }
 
+async function exerciseAccessRevocation({
+  baseUrl,
+  adminSession,
+  adminEmail,
+  memberSession,
+  memberEmail,
+  memberPassword,
+  tenantSelector,
+  adminManagedInstances,
+  writeProgress = () => undefined,
+}) {
+  if (String(memberEmail || "").toLowerCase() === String(adminEmail || "").toLowerCase()) {
+    throw new Error("access revocation member must be different from the admin login");
+  }
+  const tenant = selectTenantForAccessRevocation(adminManagedInstances, tenantSelector);
+  if (!tenant) throw new Error(`no ctox.dev managed tenant matched access revocation selector: ${tenantSelector}`);
+  const membersPayload = await fetchTenantMembers(baseUrl, tenant.tenantId, adminSession);
+  const targetMember = (membersPayload.members || []).find((member) => (
+    String(member.email || "").toLowerCase() === String(memberEmail || "").toLowerCase()
+  ));
+  if (!targetMember?.user_id) {
+    throw new Error(`access revocation member not found on selected tenant: ${memberEmail}`);
+  }
+  const originalRole = String(targetMember.role || "");
+  if (!["admin", "operator", "user"].includes(originalRole)) {
+    throw new Error(`access revocation member must start as launchable non-owner role, got: ${originalRole || "missing"}`);
+  }
+
+  await clearCtoxDevSession(memberSession, baseUrl);
+  const memberLogin = await loginWithPasswordApi(baseUrl, memberEmail, memberPassword, memberSession);
+  const memberSourceManager = createSourceManagerForSession(baseUrl, memberSession);
+  const preRevocationSession = await fetchSessionState(baseUrl, memberSession);
+  const preRevocationInstances = await memberSourceManager.listInstances();
+  const preRevocationInstance = findInstanceForTenant(preRevocationInstances, tenant.tenantId);
+  if (!preRevocationInstance) {
+    throw new Error("access revocation target tenant is not visible to member before role change");
+  }
+  if (preRevocationInstance.status !== "available") {
+    throw new Error(`access revocation target tenant is not launchable before role change: ${preRevocationInstance.status}`);
+  }
+  const preRevocationLaunch = await memberSourceManager.getLaunchConfig(preRevocationInstance);
+  if (preRevocationLaunch.ctoxConfig?.transport !== "webrtc") {
+    throw new Error("access revocation pre-check launch transport is not webrtc");
+  }
+  if (preRevocationLaunch.ctoxConfig?.http_bridge_available !== false) {
+    throw new Error("access revocation pre-check launch http_bridge_available is not false");
+  }
+  writeProgress("access-revocation-prechecked", {
+    accessRevocation: {
+      tenantId: tenant.tenantId,
+      displayName: tenant.displayName,
+      memberEmail,
+      originalRole,
+      memberLogin: summarizeLogin(memberLogin),
+      preRevocationSession,
+      preRevocationStatus: preRevocationInstance.status,
+      preRevocationLaunch: {
+        transport: preRevocationLaunch.ctoxConfig.transport,
+        httpBridgeAvailable: preRevocationLaunch.ctoxConfig.http_bridge_available,
+      },
+    },
+  });
+
+  let restored = false;
+  try {
+    await updateTenantMemberRole(baseUrl, tenant.tenantId, targetMember.user_id, "viewer", adminSession);
+    const postRevocationSessionPackage = await fetchRawSessionPackage(baseUrl, memberSession);
+    const postRevocationSession = summarizeSessionPackage(postRevocationSessionPackage);
+    const postRevocationInstances = await memberSourceManager.listInstances();
+    const postRevocationInstance = findInstanceForTenant(postRevocationInstances, tenant.tenantId);
+    if (!postRevocationInstance) {
+      throw new Error("access revocation target tenant disappeared instead of becoming blocked; use delete-specific proof");
+    }
+    if (postRevocationInstance.status !== "needs_auth") {
+      throw new Error(`access revocation target tenant did not become needs_auth: ${postRevocationInstance.status}`);
+    }
+    let launchAfterRevocationError = "";
+    try {
+      await memberSourceManager.getLaunchConfig(postRevocationInstance);
+    } catch (error) {
+      launchAfterRevocationError = error instanceof Error ? error.message : String(error);
+    }
+    if (!launchAfterRevocationError) {
+      throw new Error("access revocation launch unexpectedly succeeded after viewer role change");
+    }
+    if (!/not launchable: needs_auth/.test(launchAfterRevocationError)) {
+      throw new Error(`access revocation launch failed for unexpected reason: ${launchAfterRevocationError}`);
+    }
+    writeProgress("access-revocation-blocked", {
+      accessRevocation: {
+        tenantId: tenant.tenantId,
+        displayName: tenant.displayName,
+        memberEmail,
+        originalRole,
+        revokedRole: "viewer",
+        postRevocationSession,
+        postRevocationStatus: postRevocationInstance.status,
+        launchAfterRevocationBlocked: true,
+        launchAfterRevocationError,
+      },
+    });
+
+    await updateTenantMemberRole(baseUrl, tenant.tenantId, targetMember.user_id, originalRole, adminSession);
+    restored = true;
+    const postRestoreSessionPackage = await fetchRawSessionPackage(baseUrl, memberSession);
+    const postRestoreInstances = await memberSourceManager.listInstances();
+    const postRestoreInstance = findInstanceForTenant(postRestoreInstances, tenant.tenantId);
+    if (!postRestoreInstance || postRestoreInstance.status !== "available") {
+      throw new Error("access revocation target tenant did not become available after role restore");
+    }
+    const result = {
+      tenantId: tenant.tenantId,
+      displayName: tenant.displayName,
+      memberEmail,
+      originalRole,
+      revokedRole: "viewer",
+      preRevocationSession,
+      preRevocationStatus: preRevocationInstance.status,
+      postRevocationSession,
+      postRevocationStatus: postRevocationInstance.status,
+      launchAfterRevocationBlocked: true,
+      launchAfterRevocationError,
+      restored,
+      postRestoreSession: summarizeSessionPackage(postRestoreSessionPackage),
+      postRestoreStatus: postRestoreInstance.status,
+    };
+    writeProgress("access-revocation-complete", { accessRevocation: result });
+    return result;
+  } finally {
+    if (!restored) {
+      await updateTenantMemberRole(baseUrl, tenant.tenantId, targetMember.user_id, originalRole, adminSession)
+        .catch(() => null);
+    }
+    await clearCtoxDevSession(memberSession, baseUrl).catch(() => null);
+  }
+}
+
+function createSourceManagerForSession(baseUrl, browserSession) {
+  const registry = {
+    settings: {
+      ctoxDevBaseUrl: baseUrl,
+      shellUrl: `${baseUrl.replace(/\/+$/, "")}/business-os/`,
+    },
+    instances: [],
+    usage: {},
+  };
+  return new SourceManager({
+    registryProvider: () => registry,
+    registrySaver: () => undefined,
+    secretStore: new MemorySecretStore(),
+    ctoxDevBaseUrl: baseUrl,
+    shellUrl: registry.settings.shellUrl,
+    fetchImpl: browserSession.fetch.bind(browserSession),
+  });
+}
+
+async function fetchTenantMembers(baseUrl, tenantId, browserSession) {
+  const response = await browserSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/instances/${encodeURIComponent(tenantId)}/members`, {
+    cache: "no-store",
+    credentials: "include",
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`ctox.dev members fetch failed: ${response.status}`);
+  }
+  return payload;
+}
+
+async function updateTenantMemberRole(baseUrl, tenantId, userId, role, browserSession) {
+  const response = await browserSession.fetch(`${baseUrl.replace(/\/+$/, "")}/api/instances/${encodeURIComponent(tenantId)}/members`, {
+    method: "PATCH",
+    cache: "no-store",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ userId, role }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(`ctox.dev member role update failed: ${response.status}`);
+  }
+  return payload;
+}
+
+function selectTenantForAccessRevocation(instances, selector) {
+  const normalized = String(selector || "").trim().toLowerCase();
+  return (instances || []).find((instance) => [
+    instance.displayName,
+    instance.domain,
+    instance.tenantId,
+    instance.instanceId,
+  ].filter(Boolean).some((value) => String(value).toLowerCase().includes(normalized)));
+}
+
+function findInstanceForTenant(instances, tenantId) {
+  return (instances || []).find((instance) => String(instance.tenantId || "") === String(tenantId || ""));
+}
+
 async function inspectManagedDashboard(baseUrl, instance) {
   const manageUrl = buildCtoxDevManagedInstanceUrl(baseUrl, instance);
   const fetchResponse = await session.defaultSession.fetch(manageUrl, {
@@ -641,7 +875,7 @@ function safePath(rawUrl) {
   }
 }
 
-function readPassword() {
+function readCredentials() {
   return new Promise((resolve, reject) => {
     let input = "";
     process.stdin.setEncoding("utf8");
@@ -649,12 +883,19 @@ function readPassword() {
       input += chunk;
     });
     process.stdin.on("end", () => {
-      const password = input.replace(/\r?\n$/, "");
+      const normalized = input.replace(/\r?\n$/, "");
+      const lines = normalized.split(/\r?\n/);
+      const password = options.accessRevocation ? String(lines[0] || "") : normalized;
       if (!password) {
         reject(new Error("password stdin was empty"));
         return;
       }
-      resolve(password);
+      const memberPassword = options.accessRevocation ? String(lines[1] || "") : "";
+      if (options.accessRevocation && !memberPassword) {
+        reject(new Error("member password stdin was empty"));
+        return;
+      }
+      resolve({ password, memberPassword });
     });
     process.stdin.on("error", reject);
   });

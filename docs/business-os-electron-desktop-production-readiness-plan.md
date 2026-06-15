@@ -316,6 +316,13 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Launch-Token-Request. Desktop-Session-Rotation ist live bewiesen: Logout
   entfernt jetzt auch ctox.dev-Domaincookies aus Electron, Session-Package ist
   danach 401, alte Launches blockieren, Re-Login stellt die Tenants wieder her.
+  Der Live-Smoke hat jetzt einen opt-in Zwei-Account-Modus fuer reversible
+  Revocation per temporaerer Rollenherabstufung auf `viewer`: Er prueft vorher
+  einen WebRTC-only Launch fuer ein launchfaehiges Nicht-Owner-Mitglied, setzt
+  dieses Mitglied per ctox.dev Membership-API auf `viewer`, erwartet
+  `needs_auth` und blockierten Launch vor dem Launch-Token-Request und stellt
+  danach die urspruengliche Rolle wieder her. Der Modus ist noch nicht gegen
+  Produktion gelaufen.
   Der aktuelle Live-Account ist laut read-only ctox.dev Membership-Check auf
   allen sichtbaren Tenants `owner`; ein sicherer, reversibler
   Membership-Entzug ist damit nicht beweisbar. Dafuer braucht es einen
@@ -457,6 +464,11 @@ Aufgaben:
   entfernt ctox.dev-Storage und Domaincookies, `session-package` wird 401,
   die managed Instanzliste ist leer, ein alter Launch-Token-Pfad blockiert,
   Re-Login bringt die Tenants zurueck und Relaunch bleibt WebRTC-only.
+- [x] Opt-in Live-Smoke-Vertrag fuer echten ctox.dev Access-Revocation-Proof:
+  Mit separatem launchfaehigem Nicht-Owner-Mitglied kann der Smoke in zwei
+  Electron-Sessions Admin- und Mitgliedssicht trennen, das Mitglied temporaer
+  auf `viewer` setzen, `needs_auth` plus blockierten Launch pruefen und die
+  urspruengliche Rolle wiederherstellen.
 - [ ] Live Access Revocation gegen echte ctox.dev-Tenant-Mitgliedschaft.
 
 Tests:
@@ -515,6 +527,14 @@ Tests:
   `ctox.dev launch token failed: 400`, Re-Login sieht wieder sechs Tenants und
   Relaunch fuer Kunstmen bleibt `transport=webrtc` /
   `httpBridgeAvailable=false`.
+- [x] `smoke:ctox-dev-live -- --access-revocation
+  --access-revocation-tenant <tenant> --access-revocation-member-email
+  <member-email>` ist als opt-in Produktions-Smoke verdrahtet. Im
+  Revocation-Modus erwartet stdin zwei Zeilen: Owner/Admin-Passwort, dann
+  Mitglieds-Passwort. Der Smoke nutzt getrennte Electron-Sessions, prueft
+  vorab WebRTC-only Launch fuer das Mitglied, setzt dessen Rolle temporaer auf
+  `viewer`, erwartet `needs_auth` und `ctox.dev managed instance is not
+  launchable: needs_auth`, und stellt die urspruengliche Rolle wieder her.
 - [ ] Live-Entzug einer Mitgliedschaft entfernt oder sperrt die Instanz.
 
 ## Welle 3: Local Daemon Source
@@ -1009,6 +1029,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Welle 2 Live-Revocation-Harness vorbereitet: `smoke:ctox-dev-live` unterstuetzt jetzt einen opt-in Zwei-Account-Modus mit `--access-revocation`. Der Smoke trennt Owner/Admin- und Zielmitglied in zwei Electron-Sessions, prueft vorab WebRTC-only Launch fuer ein launchfaehiges Nicht-Owner-Mitglied, setzt dieses Mitglied temporaer auf `viewer`, erwartet `needs_auth` plus blockierten Launch vor dem Launch-Token-Request und stellt danach die urspruengliche Rolle wieder her. Lokal gruen: `npm run check`, `node --check scripts/smoke-ctox-dev-live.cjs`, `node --check scripts/fixtures/ctox-dev-live-main.cjs`. Der echte Produktionshaken bleibt offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
 | 2026-06-15 | Welle 3/8 macOS-CI-Evidenz fuer Packaged-App-Helper nachgetragen: GitHub-Actions-Run `27517440788` fuer Commit `a182ea06` hat im Job `Business OS Desktop E2E (mac)` den Step `Packaged bundled helper smoke` erfolgreich abgeschlossen. Welle 3 steigt auf 97%, Welle 8 auf 89%; Gesamt bleibt konservativ bei 98%, weil echter signierter/notarisierter Tag-Run und echte ctox.dev Membership-Revocation weiter fehlen. |
 | 2026-06-15 | Welle 3/8 CI-Gate fuer Packaged-App-Helper ergaenzt: Der `Business OS Desktop E2E (mac)` Job in `.github/workflows/ci.yml` fuehrt jetzt `npm run pack:dir:bundled-runtime-smoke` aus. `npm run release:check` erzwingt den Workflow-Befehl, damit der unpacked-`.app`-Helper-Nachweis auf einem sauberen macOS-Runner nicht wieder verloren geht. Offen bleibt weiter der signierte/notarisierte Tag-Run mit echten Installer-Artefakten. |
 | 2026-06-15 | Welle 3 Packaged-App-Helper-Nachweis ergaenzt: `npm run pack:dir:bundled-runtime-smoke` baut lokal eine unpacked macOS `.app` mit temporaerem gebuendeltem CTOX-Helper, validiert `Contents/Resources/ctox/ctox` als ausfuehrbar und nutzt den verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect, Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak. Welle 3 steigt auf 96%; production-ready bleibt durch echten signierten/notarisierten Tag-Run und echte ctox.dev Membership-Revocation blockiert. |
