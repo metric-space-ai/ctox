@@ -9833,6 +9833,22 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
                 keys.len(),
                 keys.join(", ")
             );
+            // router-7: an ack failure that only eprintln'd left no mineable
+            // evidence tying a re-routing ack-loop back to its cause. Record a
+            // governance event keyed by the failing label so a repeated
+            // ack-reject loop is queryable, not just stderr noise.
+            let _ = governance::record_event(
+                root,
+                governance::GovernanceEventRequest {
+                    mechanism_id: "routing_ack_failed",
+                    conversation_id: None,
+                    severity: "warning",
+                    reason: label,
+                    action_taken: "routing ack failed; the lease may re-route until resolved",
+                    details: serde_json::json!({ "message_count": keys.len() }),
+                    idempotence_key: Some(label),
+                },
+            );
         }
     };
     if !duplicates.is_empty() {

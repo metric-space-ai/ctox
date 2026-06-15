@@ -319,6 +319,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/service.rs",
         description: "Records when the channel router defers routing because an agent reasoning/tool/review loop is still in progress. This deferral was previously a silent early-return; registration makes the loop-active arbitration visible in governance reporting instead of being dropped by the inner-join.",
     },
+    DefaultMechanism {
+        mechanism_id: "routing_ack_failed",
+        mechanism_class: "survival",
+        autonomy: "autonomous_routing_ack_audit",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when a routing ack fails (a lease may then re-route the message until resolved). The failure used to be eprintln-only; registration makes a repeated ack-reject loop mineable in governance reporting instead of being dropped by the inner-join.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -925,6 +933,7 @@ mod tests {
             "channel_router_core_guard",
             "queue_pressure_router_skip",
             "channel_router_loop_active",
+            "routing_ack_failed",
         ] {
             assert!(
                 inventory.iter().any(|entry| entry.mechanism_id == id),
