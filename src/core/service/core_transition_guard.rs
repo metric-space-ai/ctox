@@ -162,6 +162,7 @@ pub fn evaluate_core_transition(
 
     let mut report = csm::validate_transition(request);
     validate_outcome_artifact_state(conn, request, &mut report)?;
+    validate_closure_assurance_claims(conn, request, &mut report)?;
     let request_json = serde_json::to_string(request)?;
     let report_json = serde_json::to_string(&report)?;
     let violation_codes = report
@@ -284,6 +285,54 @@ fn validate_outcome_artifact_state(
                 });
             }
         }
+    }
+
+    report.accepted = report.violations.is_empty();
+    Ok(())
+}
+
+/// Block ticket/work-item closure while the owning conversation still has open,
+/// closure-blocking assurance claims.
+///
+/// The transition request itself carries no conversation scope, so the closure
+/// caller (e.g. `enforce_reviewed_work_terminal_success`) stamps the resolved
+/// `assurance_conversation_id` into `metadata`. This gate is therefore additive:
+/// transitions that do not stamp the key keep their prior behavior, and only a
+/// stamped Ticket/WorkItem `-> Closed` transition with at least one open
+/// closure-blocking claim is rejected. The authoritative claim count is queried
+/// here (not trusted from a caller-supplied count) so a stale or absent stamp
+/// can never wave a closure past an open blocker.
+fn validate_closure_assurance_claims(
+    conn: &Connection,
+    request: &csm::CoreTransitionRequest,
+    report: &mut csm::CoreTransitionReport,
+) -> Result<()> {
+    if !report.accepted {
+        return Ok(());
+    }
+    if !matches!(
+        request.entity_type,
+        csm::CoreEntityType::Ticket | csm::CoreEntityType::WorkItem
+    ) || request.to_state != csm::CoreState::Closed
+    {
+        return Ok(());
+    }
+    let Some(raw) = request.metadata.get("assurance_conversation_id") else {
+        return Ok(());
+    };
+    let Ok(conversation_id) = raw.trim().parse::<i64>() else {
+        return Ok(());
+    };
+
+    let open_blocking = crate::lcm::count_open_closure_blocking_claims(conn, conversation_id)?;
+    if open_blocking > 0 {
+        report.violations.push(csm::CoreTransitionViolation {
+            code: "closure_blocked_by_open_assurance_claims".to_string(),
+            message: format!(
+                "ticket/work closure requires resolved assurance: {open_blocking} closure-blocking \
+                 claim(s) still open for conversation {conversation_id}"
+            ),
+        });
     }
 
     report.accepted = report.violations.is_empty();
@@ -1248,6 +1297,105 @@ mod tests {
         let proof = evaluate_core_transition(&conn, &request)?;
 
         assert!(proof.accepted, "{:?}", proof.report.violations);
+        Ok(())
+    }
+
+    #[test]
+    fn closure_blocked_by_open_assurance_claims() -> Result<()> {
+        // review-3: a reviewed work item must not reach Closed while its owning
+        // conversation still has open, closure-blocking assurance claims. The
+        // completion-review gate stamps `assurance_conversation_id`; the guard
+        // then queries the authoritative open-blocker count.
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            r#"
+            CREATE TABLE mission_claims (
+                claim_key TEXT PRIMARY KEY,
+                conversation_id INTEGER NOT NULL,
+                blocks_closure INTEGER NOT NULL,
+                claim_status TEXT NOT NULL,
+                expires_at TEXT
+            );
+            "#,
+        )?;
+
+        let conversation_id: i64 = 4242;
+        let mut metadata = reviewed_outcome_metadata("self-work");
+        metadata.insert(
+            "assurance_conversation_id".to_string(),
+            conversation_id.to_string(),
+        );
+        let request = CoreTransitionRequest {
+            entity_type: CoreEntityType::WorkItem,
+            entity_id: "self-work:wi-7".to_string(),
+            lane: RuntimeLane::P2MissionDelivery,
+            from_state: CoreState::AwaitingReview,
+            to_state: CoreState::Closed,
+            event: CoreEvent::Close,
+            actor: "ctox-completion-review-terminal-gate".to_string(),
+            evidence: reviewed_outcome_evidence(
+                CoreEvidenceRefs::default(),
+                "outcome-witness:wi-7",
+            ),
+            metadata,
+        };
+
+        // Baseline: no open closure-blocking claim -> closure clears every gate.
+        let proof = evaluate_core_transition(&conn, &request)?;
+        assert!(
+            proof.accepted,
+            "closure with no open assurance claims must pass: {:?}",
+            proof.report.violations
+        );
+
+        // An open, closure-blocking claim for the stamped conversation blocks it.
+        conn.execute(
+            "INSERT INTO mission_claims \
+                 (claim_key, conversation_id, blocks_closure, claim_status, expires_at) \
+             VALUES ('claim-1', ?1, 1, 'open', NULL)",
+            params![conversation_id],
+        )?;
+        let proof = evaluate_core_transition(&conn, &request)?;
+        assert!(!proof.accepted);
+        assert!(
+            proof
+                .report
+                .violations
+                .iter()
+                .any(|violation| violation.code == "closure_blocked_by_open_assurance_claims"),
+            "expected closure-assurance violation, got {:?}",
+            proof.report.violations
+        );
+
+        // Verifying the claim clears the blocker; closure passes again.
+        conn.execute(
+            "UPDATE mission_claims SET claim_status = 'verified' WHERE claim_key = 'claim-1'",
+            [],
+        )?;
+        let proof = evaluate_core_transition(&conn, &request)?;
+        assert!(
+            proof.accepted,
+            "a verified claim must not block closure: {:?}",
+            proof.report.violations
+        );
+
+        // Regression guard: the gate is additive. A closure that does not stamp
+        // the conversation scope keeps its prior behavior even with the blocker
+        // re-opened, so unrelated closure paths (e.g. the Codex-owned ticket
+        // close) are never silently broken by this gate.
+        conn.execute(
+            "UPDATE mission_claims SET claim_status = 'open' WHERE claim_key = 'claim-1'",
+            [],
+        )?;
+        let mut unstamped = request.clone();
+        unstamped.metadata.remove("assurance_conversation_id");
+        let proof = evaluate_core_transition(&conn, &unstamped)?;
+        assert!(
+            proof.accepted,
+            "an unstamped closure must be unaffected by the assurance gate: {:?}",
+            proof.report.violations
+        );
+
         Ok(())
     }
 

@@ -5265,6 +5265,42 @@ fn map_mission_claim_row(
     })
 }
 
+/// Count open, closure-blocking mission claims for a conversation.
+///
+/// Single source of truth for the closure-assurance gate
+/// (`core_transition_guard::validate_closure_assurance_claims`). The
+/// open-claim predicate mirrors `LcmEngine::list_mission_claims` with
+/// `include_verified = false` (a claim is open while it is not yet `verified`,
+/// or while its verification has expired), restricted here to
+/// `blocks_closure = 1`. This is the same set `mission_assurance_snapshot`
+/// exposes as `closure_blocking_claims`, but counted authoritatively (no
+/// display `LIMIT`) so the gate sees every open blocker.
+///
+/// Tolerates a database whose LCM schema has not been initialized yet
+/// (`mission_claims` absent) by reporting zero open blockers, so a transition
+/// guard running against a bare connection never errors on the lookup.
+pub fn count_open_closure_blocking_claims(conn: &Connection, conversation_id: i64) -> Result<i64> {
+    let now_millis: i64 = iso_now().parse().unwrap_or(i64::MAX);
+    let result = conn.query_row(
+        "SELECT COUNT(*) FROM mission_claims
+         WHERE conversation_id = ?1
+           AND blocks_closure = 1
+           AND (claim_status != 'verified'
+                OR (expires_at IS NOT NULL AND CAST(expires_at AS INTEGER) <= ?2))",
+        params![conversation_id, now_millis],
+        |row| row.get::<_, i64>(0),
+    );
+    match result {
+        Ok(count) => Ok(count),
+        Err(rusqlite::Error::SqliteFailure(_, Some(message)))
+            if message.contains("no such table") =>
+        {
+            Ok(0)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 fn map_strategic_directive_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<StrategicDirectiveRecord> {

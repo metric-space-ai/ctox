@@ -5966,6 +5966,20 @@ fn conversation_thread_key_for_queue_job(root: &Path, job: &QueuedPrompt) -> Opt
     job.thread_key.clone()
 }
 
+/// Resolve the assurance conversation scope for a queued job's terminal
+/// closure. This MUST stay identical to the conversation id the mission turn
+/// loop runs the agent under (the prompt worker resolves it the same way, via
+/// `conversation_thread_key_for_queue_job`), so the closure-assurance gate
+/// (review-3) queries the same conversation the verification harness writes
+/// mission claims to. Business-OS chat jobs run under a transformed
+/// `{thread}/chat/{command}` key, so resolving from the raw thread key would
+/// query the wrong (always-empty) conversation and silently disarm the gate.
+fn assurance_conversation_id_for_job(root: &Path, job: &QueuedPrompt) -> i64 {
+    turn_loop::conversation_id_for_thread_key(
+        conversation_thread_key_for_queue_job(root, job).as_deref(),
+    )
+}
+
 fn business_os_chat_execution_prompt(job: &QueuedPrompt) -> String {
     format!(
         "{}\n\nBusiness OS chat execution rules:\n- Your final assistant message is shown verbatim to a non-technical business user inside a small chat bubble. Write it as a direct, concise answer addressed to that user.\n- Answer in the user's language (German unless the request is clearly in another language).\n- Do NOT include internal reasoning, chain-of-thought, planning notes, tool transcripts, command output, file paths, diffs, stack traces, raw JSON, or queue/command/task IDs. Do NOT paste source code or large data dumps unless the user explicitly asked for code — summarize the result in plain words instead.\n- Light Markdown is allowed (short paragraphs, **bold**, bullet lists, and fenced code blocks only when the user actually asked for code). Keep it brief.\n- Do not update Business OS SQLite stores, RxDB projections, queue rows, command rows, chat rows, or runtime status tables yourself.\n- Do not call `ctox queue complete`, `ctox queue release`, `ctox queue fail`, or equivalent direct SQL for this Business OS command.\n- You may inspect referenced files or readonly state when needed to answer accurately.\n- The CTOX service will persist your final answer back into the Business OS chat and acknowledge the queue item.",
@@ -8155,6 +8169,18 @@ fn enforce_reviewed_work_terminal_success(
         ),
         ("source_label".to_string(), job.source_label.clone()),
     ]);
+    // Stamp the conversation scope so the core transition guard can refuse the
+    // WorkItem `-> Closed` transition below while this conversation still has
+    // open closure-blocking assurance claims (review-3). Resolve it through the
+    // same helper the mission turn loop uses, so business-OS chat jobs (which
+    // run under a transformed `{thread}/chat/{command}` conversation) line up
+    // with the conversation the verification harness writes claims to instead
+    // of querying the raw thread key's always-empty conversation.
+    let assurance_conversation_id = assurance_conversation_id_for_job(root, job);
+    metadata.insert(
+        "assurance_conversation_id".to_string(),
+        assurance_conversation_id.to_string(),
+    );
     let verification_id = if expected_artifact_refs.is_empty() {
         metadata.insert(
             "validation_not_required_policy_proof".to_string(),
@@ -15721,6 +15747,67 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn assurance_conversation_id_for_job_matches_turn_loop_for_business_os_chat() {
+        let root = temp_root("assurance-conversation-id");
+
+        // A business-OS chat job runs under a transformed `{thread}/chat/{command}`
+        // conversation; the mission turn loop resolves the agent's conversation id
+        // the same way (conversation_thread_key_for_queue_job). The closure
+        // assurance stamp MUST resolve the same id, or the gate queries an
+        // always-empty conversation and never fires (review-3 reachability).
+        let business_job = QueuedPrompt {
+            prompt: "business_os.chat.task\n- command_id: cmd-7".to_string(),
+            goal: "answer business os chat".to_string(),
+            preview: "chat".to_string(),
+            source_label: "business-os".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/founder".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let resolved = assurance_conversation_id_for_job(&root, &business_job);
+        let expected =
+            turn_loop::conversation_id_for_thread_key(Some("business-os/founder/chat/cmd-7"));
+        assert_eq!(
+            resolved, expected,
+            "assurance id must use the transformed business-os chat conversation key"
+        );
+        // The original bug resolved from the raw thread key, which maps to a
+        // different conversation; this guards against regressing to that.
+        let raw = turn_loop::conversation_id_for_thread_key(Some("business-os/founder"));
+        assert_ne!(
+            resolved, raw,
+            "business-os assurance id must not collapse to the raw thread-key conversation"
+        );
+
+        // A plain (non-business-OS) job resolves straight from its thread key.
+        let plain_job = QueuedPrompt {
+            prompt: "Reconcile the pipeline and reply.".to_string(),
+            goal: "reconcile".to_string(),
+            preview: "reply".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: None,
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("self-work/wi-9".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: Some("self-work:wi-9".to_string()),
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        assert_eq!(
+            assurance_conversation_id_for_job(&root, &plain_job),
+            turn_loop::conversation_id_for_thread_key(Some("self-work/wi-9")),
+            "plain jobs resolve the assurance id directly from the thread key"
+        );
     }
 
     fn review_outcome_for_no_send_test(summary: &str) -> review::ReviewOutcome {
