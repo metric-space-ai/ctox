@@ -84,8 +84,11 @@ wieder testbar:
   aus, damit der Nachweis nicht nur lokal existiert. GitHub-Actions-Run
   `27517440788` fuer Commit `a182ea06` hat den Step
   `Packaged bundled helper smoke` im Job `Business OS Desktop E2E (mac)`
-  erfolgreich abgeschlossen. Noch offen ist der echte Tag-/Signed-Run auf
-  sauberer Maschine.
+  erfolgreich abgeschlossen. Der aktuelle Desktop-CI-Recheck `27518440351`
+  fuer Commit `ebb0b83a` bestaetigt denselben Desktop-E2E-Pfad auf macOS,
+  Linux und Windows; der macOS-Job fuehrt den `Packaged bundled helper smoke`
+  erneut erfolgreich aus. Noch offen ist der echte Tag-/Signed-Run auf sauberer
+  Maschine.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -328,7 +331,12 @@ Nicht umgesetzt oder noch nicht bewiesen:
   allen sichtbaren Tenants `owner`; ein sicherer, reversibler
   Membership-Entzug ist damit nicht beweisbar. Dafuer braucht es einen
   separaten Nicht-Owner-Testmember oder eine explizit dafuer angelegte
-  Testinstanz.
+  Testinstanz. Die ctox.dev-Produktionsquelle bestaetigt den externen Haken:
+  neue Nicht-Owner entstehen ueber Einladung/Magic-Link oder einen bereits
+  vorhandenen User; bei konfiguriertem Resend liefert `sendInvitationEmail`
+  keinen `previewLink`. Ohne Zugriff auf die Empfaenger-Mailbox oder ein
+  vorhandenes zweites Passwortkonto kann der Smoke keinen authentifizierten
+  Mitglieds-Login herstellen.
 - Komplett frisches OS ohne vorhandenes lokales CTOX-Binary/validen CTOX
   Runtime-Root ist lokal bis zur unpacked `.app` bewiesen: Der lokale
   Quellpfad kann einen gebuendelten CTOX-Helper aus den App-Resources nutzen,
@@ -954,6 +962,11 @@ Release Gates:
 - [x] Live-CI-Nachweis fuer den macOS Packaged-Helper-Smoke: Run
   `27517440788`, Commit `a182ea06`, Job `Business OS Desktop E2E (mac)`,
   Step `Packaged bundled helper smoke`, erfolgreich.
+- [x] Aktueller Desktop-CI-Recheck fuer den gehaerteten Revocation-Contract:
+  Run `27518440351`, Commit `ebb0b83a`, Jobs `Business OS Desktop E2E (mac)`,
+  `Business OS Desktop E2E (linux)` und `Business OS Desktop E2E (win)`,
+  erfolgreich; der macOS-Job enthaelt erneut den erfolgreichen Step
+  `Packaged bundled helper smoke`.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -1036,6 +1049,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Externen ctox.dev Live-Revocation-Blocker verifiziert und Plan nachgezogen: Neue Nicht-Owner entstehen in ctox.dev Produktion ueber Einladung/Magic-Link oder vorhandene User; bei konfiguriertem Resend liefert `sendInvitationEmail` keinen `previewLink`. Ohne Zugriff auf die Empfaenger-Mailbox oder ein zweites Passwortkonto kann der Zwei-Account-Smoke keinen authentifizierten Mitglieds-Login herstellen. Gleichzeitig ist der neue Desktop-CI-Run `27518440351` fuer Commit `ebb0b83a` in den relevanten Desktop-E2E-Jobs auf macOS/Linux/Windows gruen; macOS fuehrt den `Packaged bundled helper smoke` erneut erfolgreich aus. |
 | 2026-06-15 | Welle 2 Live-Revocation-Vertrag gehaertet: Der Zwei-Account-Smoke akzeptiert nach temporaerer Rollenherabstufung auf `viewer` jetzt beide korrekten ctox.dev-Reaktionen aus Desktop-Sicht, entweder `needs_auth` mit lokalem Launch-Blocker oder eine nicht mehr gelistete Instanz mit serverseitiger Launch-Token-Verweigerung. Neu ist `scripts/ctox-dev-live-contract.cjs` mit Unit-Tests; lokal gruen: `npm test` mit 115 Tests und `npm run check`. Der echte Produktionshaken bleibt weiter offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
 | 2026-06-15 | Welle 2 Live-Revocation-Harness vorbereitet: `smoke:ctox-dev-live` unterstuetzt jetzt einen opt-in Zwei-Account-Modus mit `--access-revocation`. Der Smoke trennt Owner/Admin- und Zielmitglied in zwei Electron-Sessions, prueft vorab WebRTC-only Launch fuer ein launchfaehiges Nicht-Owner-Mitglied, setzt dieses Mitglied temporaer auf `viewer`, erwartet `needs_auth` plus blockierten Launch vor dem Launch-Token-Request und stellt danach die urspruengliche Rolle wieder her. Lokal gruen: `npm run check`, `node --check scripts/smoke-ctox-dev-live.cjs`, `node --check scripts/fixtures/ctox-dev-live-main.cjs`. Der echte Produktionshaken bleibt offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
 | 2026-06-15 | Welle 3/8 macOS-CI-Evidenz fuer Packaged-App-Helper nachgetragen: GitHub-Actions-Run `27517440788` fuer Commit `a182ea06` hat im Job `Business OS Desktop E2E (mac)` den Step `Packaged bundled helper smoke` erfolgreich abgeschlossen. Welle 3 steigt auf 97%, Welle 8 auf 89%; Gesamt bleibt konservativ bei 98%, weil echter signierter/notarisierter Tag-Run und echte ctox.dev Membership-Revocation weiter fehlen. |
