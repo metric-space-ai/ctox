@@ -1692,7 +1692,6 @@ pub struct SpawnEdgeRow {
     pub budget_key: Option<String>,
     pub max_attempts: Option<i64>,
     pub updated_at: String,
-    pub terminal_reaped_at: Option<String>,
 }
 
 /// Counts for the overview dashboard. None of the queries fail loudly — if a
@@ -1918,7 +1917,7 @@ pub fn query_spawn_edges(root: &Path, limit: usize) -> Vec<SpawnEdgeRow> {
         "SELECT edge_id, parent_entity_type, parent_entity_id,
                 child_entity_type, child_entity_id, spawn_kind, spawn_reason,
                 accepted, violation_codes_json, budget_key, max_attempts,
-                updated_at, terminal_reaped_at
+                updated_at
          FROM ctox_core_spawn_edges
          ORDER BY updated_at DESC
          LIMIT ?1",
@@ -1940,7 +1939,6 @@ pub fn query_spawn_edges(root: &Path, limit: usize) -> Vec<SpawnEdgeRow> {
             budget_key: row.get(9)?,
             max_attempts: row.get(10)?,
             updated_at: row.get(11)?,
-            terminal_reaped_at: row.get(12)?,
         })
     })
     .ok()

@@ -5907,6 +5907,37 @@ mod tests {
         .expect("insert flow event");
     }
 
+    /// X3: ctox_core_spawn_edges has exactly one column with no writer anywhere
+    /// in the tree — zero `UPDATE ctox_core_spawn_edges` statements exist and the
+    /// production spawn-edge INSERT (core_transition_guard.rs) omits it — so it is
+    /// always NULL. The `ctox process-mining spawn-edges` CLI must never SELECT or
+    /// project that column: doing so advertises a reaping / budget-release
+    /// lifecycle the Core Spawn Guard never honors. Pin the production projection
+    /// so a future edit cannot silently re-add the dead, always-null field.
+    #[test]
+    fn spawn_edges_cli_projection_omits_unwritten_columns() {
+        let src = include_str!("process_mining.rs");
+        // Scan production code only — everything before the test module — so this
+        // test's own text is never counted as an occurrence.
+        let production = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production prefix precedes the test module");
+        // Assembled at runtime so the column literal never appears in this test's
+        // own source (which include_str! would otherwise pick up).
+        let unwritten = ["terminal", "reaped", "at"].join("_");
+        assert!(
+            production.contains("Some(\"spawn-edges\")"),
+            "spawn-edges CLI handler must exist for this guard to be meaningful"
+        );
+        assert!(
+            !production.contains(unwritten.as_str()),
+            "the spawn-edges CLI SELECT/projection must not reference the \
+             writer-less column `{unwritten}` (always NULL); projecting it would \
+             advertise a reaping lifecycle that does not exist"
+        );
+    }
+
     #[test]
     fn skill_outcome_rollup_groups_by_skill_and_classifies_failures() -> Result<()> {
         let conn = Connection::open_in_memory()?;
