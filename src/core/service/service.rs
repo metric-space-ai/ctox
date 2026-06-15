@@ -9470,6 +9470,23 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         return Ok(());
     }
     if queue_pressure_active(state) {
+        // router-2: this skip of all downstream router stages was previously a
+        // silent early-return. Emit one idempotent governance event so the
+        // queue-pressure containment is mineable, not invisible. Behaviour is
+        // otherwise unchanged.
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "queue_pressure_router_skip",
+                conversation_id: None,
+                severity: "info",
+                reason: "queue_pressure_active",
+                action_taken:
+                    "skipped downstream channel-router stages while queue pressure is active",
+                details: serde_json::json!({}),
+                idempotence_key: Some("queue-pressure-router-skip"),
+            },
+        );
         return Ok(());
     }
     if let Some(prompt) = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)? {

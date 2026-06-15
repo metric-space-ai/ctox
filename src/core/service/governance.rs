@@ -303,6 +303,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/service.rs",
         description: "Records when the channel router hits a core-workflow guard error, keeps the router alive, and skips the guarded background routing stage instead of crashing the loop. Registration makes these skips visible in governance reporting instead of being dropped by the inner-join.",
     },
+    DefaultMechanism {
+        mechanism_id: "queue_pressure_router_skip",
+        mechanism_class: "survival",
+        autonomy: "autonomous_queue_containment",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when the channel router skips all downstream stages because pending prompt pressure is active. This skip was previously a silent early-return; registration makes the queue-pressure containment visible in governance reporting instead of being dropped by the inner-join.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -904,7 +912,11 @@ mod tests {
         // handle_channel_router_guard_block) but were unregistered, so the
         // governance reporting inner-join silently dropped their events.
         let inventory = mechanism_inventory();
-        for id in ["plan_routing_repair", "channel_router_core_guard"] {
+        for id in [
+            "plan_routing_repair",
+            "channel_router_core_guard",
+            "queue_pressure_router_skip",
+        ] {
             assert!(
                 inventory.iter().any(|entry| entry.mechanism_id == id),
                 "mechanism {id} must be registered so governance reporting does not drop its events"
