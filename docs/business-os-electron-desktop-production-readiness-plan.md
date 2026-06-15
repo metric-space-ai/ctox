@@ -93,10 +93,11 @@ wieder testbar:
   Desktop-Pfad nach dem Plan-Nachtrag erneut: `Business OS Desktop E2E (mac)`,
   `Business OS Desktop E2E (linux)`, `Business OS Desktop E2E (win)` und
   `Desktop extra check (linux)` sind gruen; macOS enthaelt wieder den
-  erfolgreichen Step `Packaged bundled helper smoke`. Die breite
-  Linux-x86_64-CLI-Matrix war zum letzten Pruefzeitpunkt noch aktiv, hatte aber
-  die RxDB-/Business-OS-Guards bis einschliesslich Datei-Tombstones erfolgreich
-  abgeschlossen.
+  erfolgreichen Step `Packaged bundled helper smoke`. Der aktuelle Recheck
+  `27519477604` fuer Commit `d5ab1894` ist nach Rerun eines GitHub-Runner-
+  Infrastrukturfehlers (`No space left on device`) vollstaendig gruen:
+  Desktop-E2E auf macOS/Linux/Windows, `Desktop extra check (linux)` und die
+  gesamte CTOX-CLI-Matrix sind erfolgreich.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -981,8 +982,14 @@ Release Gates:
   Jobs `Business OS Desktop E2E (mac)`, `Business OS Desktop E2E (linux)`,
   `Business OS Desktop E2E (win)` und `Desktop extra check (linux)`,
   erfolgreich; der macOS-Job enthaelt erneut den erfolgreichen Step
-  `Packaged bundled helper smoke`. Die Gesamt-CI war beim letzten Check noch
-  in der Linux-x86_64-CLI-Matrix aktiv, ohne roten Job.
+  `Packaged bundled helper smoke`.
+- [x] Aktueller Voll-CI-Recheck nach Plan-Aktualisierung: Run `27519477604`,
+  Commit `d5ab1894`, ist im zweiten Versuch vollstaendig gruen. Der erste
+  Versuch verlor nur den Linux-x86_64-CLI-Job durch einen GitHub-Runner-
+  Infrastrukturfehler (`No space left on device`); der gezielte Rerun dieses
+  Jobs bestand alle RxDB-/Business-OS-Guards, `cargo check`, Harness-Tests und
+  Spawn-Liveness. Desktop-E2E macOS/Linux/Windows und `Desktop extra check
+  (linux)` waren ebenfalls gruen.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -1065,6 +1072,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Aktuellen Voll-CI-Recheck nachgezogen: Run `27519477604` fuer Commit `d5ab1894` ist nach gezieltem Rerun des zuvor durch GitHub-Runner-Disk-Failure (`No space left on device`) betroffenen Linux-x86_64-CLI-Jobs vollstaendig gruen. Desktop-E2E auf macOS/Linux/Windows, `Desktop extra check (linux)` und die gesamte CLI-Matrix sind erfolgreich. Release-Secrets bleiben unveraendert blockierend: `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` liefert `[]`, und `npm run release:secrets:check` bricht fail-closed wegen `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` ab. Kein Fortschrittsanstieg: echter Zwei-Account-ctox.dev-Revocation-Beweis und echter signed/notarized Tag-Run bleiben externe Gates. |
 | 2026-06-15 | Status-Recheck nach Plan-Nachtrag: `npm run release:secrets:check` bricht weiterhin fail-closed ab, weil `APPLE_ID`, `APPLE_ID_PASSWORD`, `APPLE_TEAM_ID`, `CTOX_BUSINESS_OS_DESKTOP_CSC_LINK` und `CTOX_BUSINESS_OS_DESKTOP_CSC_KEY_PASSWORD` fehlen; `gh secret list --repo metric-space-ai/ctox --json name,updatedAt` liefert weiter `[]`. Der aktuelle CI-Run `27518721915` fuer Commit `e5d98bf8` ist in den Desktop-relevanten Jobs auf macOS/Linux/Windows gruen, inklusive `Packaged bundled helper smoke` auf macOS; die Gesamt-CI war beim Check noch im Linux-x86_64-CLI-Job aktiv. Kein Fortschrittsanstieg: echter Zwei-Account-ctox.dev-Revocation-Beweis und echter signed/notarized Tag-Run bleiben externe Gates. |
 | 2026-06-15 | Externen ctox.dev Live-Revocation-Blocker verifiziert und Plan nachgezogen: Neue Nicht-Owner entstehen in ctox.dev Produktion ueber Einladung/Magic-Link oder vorhandene User; bei konfiguriertem Resend liefert `sendInvitationEmail` keinen `previewLink`. Ohne Zugriff auf die Empfaenger-Mailbox oder ein zweites Passwortkonto kann der Zwei-Account-Smoke keinen authentifizierten Mitglieds-Login herstellen. Gleichzeitig ist der neue Desktop-CI-Run `27518440351` fuer Commit `ebb0b83a` in den relevanten Desktop-E2E-Jobs auf macOS/Linux/Windows gruen; macOS fuehrt den `Packaged bundled helper smoke` erneut erfolgreich aus. |
 | 2026-06-15 | Welle 2 Live-Revocation-Vertrag gehaertet: Der Zwei-Account-Smoke akzeptiert nach temporaerer Rollenherabstufung auf `viewer` jetzt beide korrekten ctox.dev-Reaktionen aus Desktop-Sicht, entweder `needs_auth` mit lokalem Launch-Blocker oder eine nicht mehr gelistete Instanz mit serverseitiger Launch-Token-Verweigerung. Neu ist `scripts/ctox-dev-live-contract.cjs` mit Unit-Tests; lokal gruen: `npm test` mit 115 Tests und `npm run check`. Der echte Produktionshaken bleibt weiter offen, bis ein separater Nicht-Owner-Testmember mit Passwort verfuegbar ist. |
