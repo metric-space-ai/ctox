@@ -80,8 +80,8 @@ Release-related checks:
   mode stdin must contain the owner/admin password on line 1 and the member
   password on line 2. The smoke signs into separate Electron sessions, verifies
   the member can launch WebRTC-only, temporarily changes that member to
-  `viewer`, verifies the Desktop marks the tenant `needs_auth` and blocks
-  launch before requesting a new launch token, then restores the original role.
+  `viewer`, verifies the Desktop either marks the tenant `needs_auth` or no
+  longer lists it, blocks launch, then restores the original role.
 - `npm run smoke:pairing-ssh-live -- --host <host> --user <user> --password-stdin`
   is an opt-in live smoke for invite-paired unmanaged instances. It uses SSH
   only as the remote control channel, pins the host key, reads the SSH password

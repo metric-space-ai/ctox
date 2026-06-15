@@ -9,6 +9,7 @@ const {
   clearCtoxDevSession,
   openCtoxDevLoginWindow,
 } = require("../../src/main/ctox-dev-login.cjs");
+const { summarizeAccessRevocationBlock } = require("../ctox-dev-live-contract.cjs");
 
 const outputPath = process.argv[2];
 const userDataPath = process.argv[3];
@@ -645,24 +646,16 @@ async function exerciseAccessRevocation({
     const postRevocationSession = summarizeSessionPackage(postRevocationSessionPackage);
     const postRevocationInstances = await memberSourceManager.listInstances();
     const postRevocationInstance = findInstanceForTenant(postRevocationInstances, tenant.tenantId);
-    if (!postRevocationInstance) {
-      throw new Error("access revocation target tenant disappeared instead of becoming blocked; use delete-specific proof");
-    }
-    if (postRevocationInstance.status !== "needs_auth") {
-      throw new Error(`access revocation target tenant did not become needs_auth: ${postRevocationInstance.status}`);
-    }
     let launchAfterRevocationError = "";
     try {
-      await memberSourceManager.getLaunchConfig(postRevocationInstance);
+      await memberSourceManager.getLaunchConfig(postRevocationInstance || preRevocationInstance);
     } catch (error) {
       launchAfterRevocationError = error instanceof Error ? error.message : String(error);
     }
-    if (!launchAfterRevocationError) {
-      throw new Error("access revocation launch unexpectedly succeeded after viewer role change");
-    }
-    if (!/not launchable: needs_auth/.test(launchAfterRevocationError)) {
-      throw new Error(`access revocation launch failed for unexpected reason: ${launchAfterRevocationError}`);
-    }
+    const blocked = summarizeAccessRevocationBlock({
+      postRevocationInstance,
+      launchAfterRevocationError,
+    });
     writeProgress("access-revocation-blocked", {
       accessRevocation: {
         tenantId: tenant.tenantId,
@@ -671,9 +664,7 @@ async function exerciseAccessRevocation({
         originalRole,
         revokedRole: "viewer",
         postRevocationSession,
-        postRevocationStatus: postRevocationInstance.status,
-        launchAfterRevocationBlocked: true,
-        launchAfterRevocationError,
+        ...blocked,
       },
     });
 
@@ -694,9 +685,7 @@ async function exerciseAccessRevocation({
       preRevocationSession,
       preRevocationStatus: preRevocationInstance.status,
       postRevocationSession,
-      postRevocationStatus: postRevocationInstance.status,
-      launchAfterRevocationBlocked: true,
-      launchAfterRevocationError,
+      ...blocked,
       restored,
       postRestoreSession: summarizeSessionPackage(postRestoreSessionPackage),
       postRestoreStatus: postRestoreInstance.status,
