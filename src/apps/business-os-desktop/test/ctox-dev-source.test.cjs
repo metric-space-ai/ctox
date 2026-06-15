@@ -94,6 +94,62 @@ test("ctox.dev source consumes launch token and launch config endpoints", async 
   assert.equal(calls.length, 2);
 });
 
+test("ctox.dev source preserves server-packed launch URL when pairing metadata is redacted", async () => {
+  const packedConfig = {
+    transport: "webrtc",
+    http_bridge_available: false,
+    sync_room: "ctox-business-os:skf:real-room",
+    signaling_room_password: "real-room-secret",
+    signaling_urls: ["wss://signaling.ctox.dev/?token=real-token"],
+  };
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return jsonResponse({
+        launchUrl: `https://skf.ctox.dev/?ctox_config=${Buffer.from(JSON.stringify(packedConfig), "utf8").toString("base64url")}`,
+        pairingConfig: {
+          transport: "webrtc",
+          http_bridge_available: false,
+          sync_room: "<redacted>",
+          signaling_room_password: "<redacted>",
+          signaling_urls: ["wss://signaling.ctox.dev/?token=<redacted>"],
+        },
+      });
+    },
+  });
+
+  const launch = await source.getLaunchConfig("managed:tenant_skf");
+  assert.deepEqual(decodeCtoxConfig(new URL(launch.launchUrl)), packedConfig);
+  assert.equal(launch.ctoxConfig.signaling_room_password, "<redacted>");
+});
+
+test("ctox.dev source rejects redacted pairing metadata without a packed launch URL", async () => {
+  const source = new CtoxDevInstanceSource({
+    baseUrl: "https://ctox.dev",
+    fetchImpl: async (url) => {
+      if (url === "https://ctox.dev/api/desktop/launch-token") {
+        return jsonResponse({ launchConfigUrl: "https://ctox.dev/api/desktop/launch/token_1" });
+      }
+      return jsonResponse({
+        launchUrl: "https://skf.ctox.dev/",
+        pairingConfig: {
+          transport: "webrtc",
+          sync_room: "<redacted>",
+          signaling_room_password: "<redacted>",
+        },
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => source.getLaunchConfig("managed:tenant_skf"),
+    /redacted pairing metadata/,
+  );
+});
+
 test("ctox.dev source refreshes managed tenants after server-side revocation", async () => {
   let revoked = false;
   const source = new CtoxDevInstanceSource({

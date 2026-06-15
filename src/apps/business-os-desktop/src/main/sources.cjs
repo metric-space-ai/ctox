@@ -91,13 +91,42 @@ class CtoxDevInstanceSource {
     if (!launchResponse.ok) throw new Error(`ctox.dev launch config failed: ${launchResponse.status}`);
     const launchPayload = await launchResponse.json();
     const ctoxConfig = launchPayload.pairingConfig || {};
+    const launchUrl = selectCtoxDevLaunchUrl(launchPayload.launchUrl, ctoxConfig);
     return {
       source: "ctox_dev",
-      launchUrl: buildLaunchUrl(launchPayload.launchUrl, ctoxConfig),
+      launchUrl,
       ctoxConfig,
       expiresAt: tokenPayload.expiresAt,
     };
   }
+}
+
+function selectCtoxDevLaunchUrl(rawLaunchUrl, ctoxConfig) {
+  const launchUrl = String(rawLaunchUrl || "").trim();
+  if (!launchUrl) throw new Error("ctox.dev launch config is missing launchUrl");
+  if (launchUrlHasPackedConfig(launchUrl)) return launchUrl;
+  if (containsRedactedPairingSecret(ctoxConfig)) {
+    throw new Error("ctox.dev launch config has only redacted pairing metadata and no packed launch URL");
+  }
+  return buildLaunchUrl(launchUrl, ctoxConfig);
+}
+
+function launchUrlHasPackedConfig(rawLaunchUrl) {
+  try {
+    const url = new URL(String(rawLaunchUrl || ""));
+    if (url.searchParams.has("ctox_config") || url.searchParams.has("ctoxConfig")) return true;
+    const hash = String(url.hash || "").replace(/^#/, "");
+    const queryStart = hash.indexOf("?");
+    if (queryStart < 0) return false;
+    const params = new URLSearchParams(hash.slice(queryStart + 1));
+    return params.has("ctox_config") || params.has("ctoxConfig");
+  } catch {
+    return false;
+  }
+}
+
+function containsRedactedPairingSecret(value) {
+  return /<redacted>|\[redacted\]/i.test(JSON.stringify(value || {}));
 }
 
 class RegistryBackedSource {

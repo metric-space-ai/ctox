@@ -144,7 +144,9 @@ function runLiveFixture({ outputPath, userDataPath, credentials, options }) {
       credentials.password,
       credentials.memberPassword,
     ].filter(Boolean).join("\n") + "\n");
-    const timeoutMs = options.sessionRotation || options.accessRevocation ? 180000 : 90000;
+    const timeoutMs = options.sessionRotation || options.accessRevocation
+      ? 180000
+      : (options.renderLaunchFirst ? 150000 : 90000);
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;

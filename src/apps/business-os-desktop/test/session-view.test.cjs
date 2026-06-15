@@ -32,10 +32,12 @@ test("instance BrowserView uses the instance session partition", () => {
     scrubCtoxConfigFromWebContents: async () => undefined,
     isAllowedBusinessOsNavigation: () => true,
     isForbiddenBusinessOsHttpDataRequest: () => false,
+    instancePreloadPath: "/tmp/ctox-instance-preload.cjs",
   });
   assert.equal(options.webPreferences.partition, "persist:ctox-local-a");
   assert.equal(options.webPreferences.contextIsolation, true);
   assert.equal(options.webPreferences.nodeIntegration, false);
+  assert.equal(options.webPreferences.preload, "/tmp/ctox-instance-preload.cjs");
 });
 
 test("BrowserView installs a fail-closed HTTP data-plane request guard", () => {
@@ -64,13 +66,13 @@ test("BrowserView installs a fail-closed HTTP data-plane request guard", () => {
   assert.deepEqual(decisions, [{ cancel: false }, { cancel: true }]);
 });
 
-test("layout keeps BrowserView in the app content region", () => {
+test("layout lets BrowserView own the full app viewport", () => {
   const calls = [];
   const view = {
     setBounds: (bounds) => calls.push(["bounds", bounds]),
     setAutoResize: (resize) => calls.push(["resize", resize]),
   };
   layoutInstanceBrowserView(view, { width: 1440, height: 920 });
-  assert.deepEqual(calls[0], ["bounds", { x: 0, y: 56, width: 1440, height: 864 }]);
+  assert.deepEqual(calls[0], ["bounds", { x: 0, y: 0, width: 1440, height: 920 }]);
   assert.deepEqual(calls[1], ["resize", { width: true, height: true }]);
 });

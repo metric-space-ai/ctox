@@ -137,6 +137,12 @@ function setChromeOverlayVisible(visible) {
   return { ok: true, visible: chromeOverlayVisible };
 }
 
+function openInstanceSwitcherOverlay() {
+  setChromeOverlayVisible(true);
+  mainWindow?.webContents?.send?.("desktop:switcher-open");
+  return { ok: true };
+}
+
 function showAppShell() {
   chromeOverlayVisible = false;
   detachActiveView();
@@ -285,6 +291,7 @@ ipcMain.handle("instances:activate", async (_event, instance) => activateInstanc
 ipcMain.handle("instances:remove", async (_event, instance) => removeInstance(instance));
 ipcMain.handle("app-shell:show", async () => showAppShell());
 ipcMain.handle("app-shell:set-overlay-visible", async (_event, visible) => setChromeOverlayVisible(visible));
+ipcMain.handle("app-shell:open-switcher", async () => openInstanceSwitcherOverlay());
 ipcMain.handle("invites:import", async (_event, rawInvite) => sourceManager.importInvite(rawInvite));
 ipcMain.handle("pairing:manual", async (_event, options) => sourceManager.importManualPairing(options || {}));
 ipcMain.handle("pairing:rotate", async (_event, instance, rawInvite) => rotatePairing(instance, rawInvite));

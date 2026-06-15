@@ -36,6 +36,9 @@ const passwordDialogInput = document.getElementById("password-dialog-input");
 const passwordDialogCancel = document.getElementById("password-dialog-cancel");
 const badgeApi = window.CtoxInstanceBadges;
 
+window.ctoxDesktop.onOpenSwitcher?.(() => {
+  openSwitcher({ focus: true }).catch((error) => console.error("open switcher failed", error));
+});
 openSwitcherButton.addEventListener("click", () => openSwitcher());
 emptyOpenSwitcherButton.addEventListener("click", () => openSwitcher());
 closeSwitcherButton.addEventListener("click", () => closeSwitcher());
@@ -261,11 +264,13 @@ async function logoutCtoxDev() {
   await refresh();
 }
 
-async function openSwitcher() {
+async function openSwitcher(options = {}) {
   state.switcherOpen = true;
   render();
-  search.focus();
-  search.select();
+  if (options.focus !== false) {
+    search.focus();
+    search.select();
+  }
   await window.ctoxDesktop.setChromeOverlayVisible?.(true);
 }
 

@@ -131,6 +131,9 @@ app.whenReady().then(async () => {
         if (launch.render.systemStartFailed) {
           throw new Error(`rendered launch failed to start: ${launch.render.failureText || "unknown failure"}`);
         }
+        if (!launch.render.ok) {
+          throw new Error(`rendered launch did not become ready: ${launch.render.reason || "unknown reason"}`);
+        }
       }
       writeProgress("launch-checked", { launch });
     }
@@ -291,7 +294,7 @@ function parseArgs(args) {
 function inspectRenderedLaunch(launchConfig, instance) {
   return new Promise((resolve) => {
     const partition = instance.sessionPartition || `persist:ctox-render-${Date.now()}`;
-    session.fromPartition(partition);
+    const browserSession = session.fromPartition(partition);
     const window = new BrowserWindow({
       show: false,
       width: 1440,
@@ -303,9 +306,39 @@ function inspectRenderedLaunch(launchConfig, instance) {
       },
     });
     const consoleMessages = [];
+    const networkEvents = [];
     let failLoad = null;
     let settled = false;
-    const timeout = setTimeout(() => finish("timeout"), 18000);
+    const timeout = setTimeout(() => finish("timeout"), 90000);
+    let pollTimer = null;
+    let lastPage = {};
+    let lastFailureText = "";
+    let lastLoginPromptVisible = false;
+    const webRequest = browserSession.webRequest;
+    if (webRequest?.onErrorOccurred) {
+      webRequest.onErrorOccurred(
+        { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+        (details) => pushNetworkEvent(networkEvents, {
+          type: "error",
+          url: details.url,
+          error: details.error,
+        }),
+      );
+    }
+    if (webRequest?.onCompleted) {
+      webRequest.onCompleted(
+        { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
+        (details) => {
+          if (details.statusCode >= 400 || /^wss?:/i.test(String(details.url || ""))) {
+            pushNetworkEvent(networkEvents, {
+              type: "completed",
+              url: details.url,
+              statusCode: details.statusCode,
+            });
+          }
+        },
+      );
+    }
     window.webContents.on("console-message", (_event, details) => {
       consoleMessages.push({
         level: details.level,
@@ -321,74 +354,52 @@ function inspectRenderedLaunch(launchConfig, instance) {
       setTimeout(() => finish("did-fail-load"), 1000);
     });
     window.webContents.once("did-finish-load", () => {
-      setTimeout(() => finish("did-finish-load"), 9000);
+      pollRenderedLaunch();
     });
+    async function pollRenderedLaunch() {
+      if (settled || window.isDestroyed()) return;
+      const page = await captureRenderedLaunchPage(window).catch(() => ({}));
+      const bodyText = String(page.bodyText || "");
+      const failureText = extractLaunchFailureText(bodyText);
+      const loginPromptVisible = /magic link|passwort|anmelden|einloggen|sign in|log in/i.test(bodyText);
+      lastPage = page;
+      lastFailureText = failureText;
+      lastLoginPromptVisible = loginPromptVisible;
+      if (failLoad) {
+        finish("did-fail-load");
+        return;
+      }
+      if (loginPromptVisible) {
+        finish("login-prompt-visible");
+        return;
+      }
+      if (failureText || page.startupErrorVisible) {
+        finish("startup-error-visible");
+        return;
+      }
+      if (page.decodedCtoxConfig?.redactedMarkerCount > 0) {
+        finish("redacted-launch-config");
+        return;
+      }
+      if (page.shellReady === true) {
+        finish("shell-ready");
+        return;
+      }
+      pollTimer = setTimeout(pollRenderedLaunch, 1000);
+    }
     async function finish(reason) {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
-      let page = {};
-      try {
-        page = await window.webContents.executeJavaScript(`(() => {
-          function decodeConfig(packed) {
-            try {
-              const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-              const normalized = String(packed || "").replace(/-/g, "+").replace(/_/g, "/").replace(/\\s/g, "");
-              let buffer = 0;
-              let bits = 0;
-              const bytes = [];
-              for (const char of normalized) {
-                if (char === "=") break;
-                const index = alphabet.indexOf(char);
-                if (index < 0) throw new Error("invalid base64url character");
-                buffer = (buffer << 6) | index;
-                bits += 6;
-                if (bits >= 8) {
-                  bits -= 8;
-                  bytes.push((buffer >> bits) & 0xff);
-                }
-              }
-              const decoded = JSON.parse(new TextDecoder().decode(new Uint8Array(bytes)));
-              return {
-                ok: true,
-                keyCount: Object.keys(decoded || {}).length,
-                hasSyncRoom: Boolean(decoded?.sync_room || decoded?.syncRoom),
-                signalingUrlCount: Array.isArray(decoded?.signaling_urls)
-                  ? decoded.signaling_urls.length
-                  : (Array.isArray(decoded?.signalingUrls) ? decoded.signalingUrls.length : 0),
-                hasRoomPassword: Boolean(decoded?.signaling_room_password || decoded?.signalingRoomPassword || decoded?.room_password || decoded?.roomPassword),
-                hasSession: Boolean(decoded?.session?.authenticated),
-                source: String(decoded?.source || "")
-              };
-            } catch (error) {
-              return { ok: false, error: String(error && error.message || error || "decode failed").slice(0, 160) };
-            }
-          }
-          const scripts = Array.from(document.scripts || []).map((script) => script.src || "").filter(Boolean);
-          const appScript = scripts.find((src) => /\\/app\\.js(?:\\?|$)/.test(src)) || "";
-          const params = new URLSearchParams(location.search || "");
-          const packedConfig = params.get("ctox_config") || params.get("ctoxConfig") || "";
-          return {
-            title: document.title || "",
-            url: location.href,
-            bodyText: (document.body && document.body.innerText || "").slice(0, 20000),
-            hasCtoxConfigParam: Boolean(packedConfig),
-            ctoxConfigLength: packedConfig.length,
-            decodedCtoxConfig: decodeConfig(packedConfig),
-            loggedOutMarker: localStorage.getItem("ctox.businessOs.loggedOut") || "",
-            pairingConfigStored: Boolean(localStorage.getItem("ctox.businessOs.pairingConfig")),
-            appScript,
-            appBuild: (appScript.match(/[?&]v=([^&#]+)/) || [])[1] || ""
-          };
-        })()`, true);
-      } catch (_error) {
-        page = {};
-      }
+      if (pollTimer) clearTimeout(pollTimer);
+      const page = Object.keys(lastPage || {}).length
+        ? lastPage
+        : await captureRenderedLaunchPage(window).catch(() => ({}));
       if (!window.isDestroyed()) window.destroy();
       const bodyText = String(page.bodyText || "");
-      const failureText = extractLaunchFailureText(bodyText);
+      const failureText = lastFailureText || extractLaunchFailureText(bodyText);
       resolve({
-        ok: !failLoad,
+        ok: !failLoad && page.shellReady === true && !lastLoginPromptVisible && !failureText && !page.startupErrorVisible,
         reason,
         finalOrigin: safeOrigin(page.url || launchConfig.launchUrl),
         finalPath: safePath(page.url || launchConfig.launchUrl),
@@ -401,12 +412,19 @@ function inspectRenderedLaunch(launchConfig, instance) {
         decodedCtoxConfig: page.decodedCtoxConfig || null,
         loggedOutMarker: String(page.loggedOutMarker || ""),
         pairingConfigStored: Boolean(page.pairingConfigStored),
-        loginPromptVisible: /magic link|passwort|anmelden|einloggen|sign in|log in/i.test(bodyText),
-        systemStartFailed: Boolean(failureText),
+        shellReady: page.shellReady === true,
+        moduleLoading: String(page.moduleLoading || ""),
+        activeModule: String(page.activeModule || ""),
+        startupLoaderVisible: page.startupLoaderVisible === true,
+        startupErrorVisible: page.startupErrorVisible === true,
+        statusText: String(page.statusText || "").slice(0, 240),
+        loginPromptVisible: lastLoginPromptVisible,
+        systemStartFailed: Boolean(failureText) || page.startupErrorVisible === true,
         failureText,
         failLoad,
         consoleMessageCount: consoleMessages.length,
         consoleMessages: consoleMessages.slice(0, 8),
+        networkEvents: networkEvents.slice(-12),
       });
     }
     window.loadURL(launchConfig.launchUrl).catch((error) => {
@@ -418,6 +436,105 @@ function inspectRenderedLaunch(launchConfig, instance) {
       finish("loadURL-error");
     });
   });
+}
+
+async function captureRenderedLaunchPage(window) {
+  return window.webContents.executeJavaScript(`(() => {
+    function isVisible(element) {
+      if (!element || element.hidden) return false;
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+    }
+    function decodeConfig(packed) {
+      try {
+        const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        const normalized = String(packed || "").replace(/-/g, "+").replace(/_/g, "/").replace(/\\s/g, "");
+        let buffer = 0;
+        let bits = 0;
+        const bytes = [];
+        for (const char of normalized) {
+          if (char === "=") break;
+          const index = alphabet.indexOf(char);
+          if (index < 0) throw new Error("invalid base64url character");
+          buffer = (buffer << 6) | index;
+          bits += 6;
+          if (bits >= 8) {
+            bits -= 8;
+            bytes.push((buffer >> bits) & 0xff);
+          }
+        }
+        const rawJson = new TextDecoder().decode(new Uint8Array(bytes));
+        const decoded = JSON.parse(rawJson);
+        const signalingUrls = Array.isArray(decoded?.signaling_urls)
+          ? decoded.signaling_urls
+          : (Array.isArray(decoded?.signalingUrls) ? decoded.signalingUrls : []);
+        const roomPassword = String(decoded?.signaling_room_password || decoded?.signalingRoomPassword || decoded?.room_password || decoded?.roomPassword || "");
+        const redactedMarkerCount = (rawJson.match(/<redacted>|\\[redacted\\]/gi) || []).length;
+        return {
+          ok: true,
+          keyCount: Object.keys(decoded || {}).length,
+          hasSyncRoom: Boolean(decoded?.sync_room || decoded?.syncRoom),
+          signalingUrlCount: signalingUrls.length,
+          signalingUrlRedactedMarkerCount: signalingUrls.filter((url) => /<redacted>|\\[redacted\\]/i.test(String(url || ""))).length,
+          hasRoomPassword: Boolean(roomPassword),
+          roomPasswordLength: roomPassword.length,
+          roomPasswordIsRedacted: /<redacted>|\\[redacted\\]/i.test(roomPassword),
+          hasSession: Boolean(decoded?.session?.authenticated),
+          source: String(decoded?.source || ""),
+          redactedMarkerCount
+        };
+      } catch (error) {
+        return { ok: false, error: String(error && error.message || error || "decode failed").slice(0, 160) };
+      }
+    }
+    const scripts = Array.from(document.scripts || []).map((script) => script.src || "").filter(Boolean);
+    const appScript = scripts.find((src) => /\\/app\\.js(?:\\?|$)/.test(src)) || "";
+    const params = new URLSearchParams(location.search || "");
+    const packedConfig = params.get("ctox_config") || params.get("ctoxConfig") || "";
+    const moduleLoading = document.body?.dataset?.moduleLoading || "";
+    const activeModule = document.body?.dataset?.activeModule || "";
+    const startupLoaderVisible = isVisible(document.getElementById("startup-loader"));
+    const startupErrorVisible = isVisible(document.getElementById("startup-error-card"));
+    const statusText = document.querySelector("[data-status-text]")?.textContent || "";
+    const moduleRootCount = document.querySelectorAll("[data-module-root]").length;
+    return {
+      title: document.title || "",
+      url: location.href,
+      bodyText: (document.body && document.body.innerText || "").slice(0, 20000),
+      hasCtoxConfigParam: Boolean(packedConfig),
+      ctoxConfigLength: packedConfig.length,
+      decodedCtoxConfig: decodeConfig(packedConfig),
+      loggedOutMarker: localStorage.getItem("ctox.businessOs.loggedOut") || "",
+      pairingConfigStored: Boolean(localStorage.getItem("ctox.businessOs.pairingConfig")),
+      appScript,
+      appBuild: (appScript.match(/[?&]v=([^&#]+)/) || [])[1] || "",
+      moduleLoading,
+      activeModule,
+      moduleRootCount,
+      startupLoaderVisible,
+      startupErrorVisible,
+      statusText,
+      shellReady: !moduleLoading && !startupLoaderVisible && !startupErrorVisible && Boolean(activeModule || moduleRootCount > 0)
+    };
+  })()`, true);
+}
+
+function pushNetworkEvent(events, event) {
+  const normalized = networkEventSummary(event);
+  if (!normalized.origin && !normalized.path) return;
+  events.push(normalized);
+  if (events.length > 60) events.splice(0, events.length - 60);
+}
+
+function networkEventSummary(event) {
+  return {
+    type: String(event?.type || ""),
+    origin: safeOrigin(event?.url),
+    path: safePathWithoutSearch(event?.url),
+    statusCode: Number(event?.statusCode || 0),
+    error: String(event?.error || "").slice(0, 180),
+  };
 }
 
 function extractLaunchFailureText(bodyText) {
@@ -1022,6 +1139,14 @@ function safePath(rawUrl) {
   try {
     const url = new URL(String(rawUrl || ""));
     return `${url.pathname}${url.search}`;
+  } catch (_error) {
+    return "";
+  }
+}
+
+function safePathWithoutSearch(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "")).pathname;
   } catch (_error) {
     return "";
   }
