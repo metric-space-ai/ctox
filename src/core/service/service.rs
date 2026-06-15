@@ -9463,6 +9463,21 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
     // reprioritize external work while a worker is still inside a full
     // reasoning/tool/review loop; arbitration belongs after that loop ends.
     if active_agent_loop_in_progress(state) {
+        // router-1: this loop-active skip was a silent early-return. Emit one
+        // throttled governance event so a router repeatedly blocked by an
+        // in-progress agent loop is mineable. Behaviour is otherwise unchanged.
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "channel_router_loop_active",
+                conversation_id: None,
+                severity: "info",
+                reason: "active_agent_loop_in_progress",
+                action_taken: "deferred channel routing until the active agent loop ends",
+                details: serde_json::json!({}),
+                idempotence_key: Some("channel-router-loop-active"),
+            },
+        );
         return Ok(());
     }
     if let Some(prompt) = maybe_take_next_queued_prompt_for_idle_dispatch(root, state) {

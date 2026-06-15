@@ -311,6 +311,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/service.rs",
         description: "Records when the channel router skips all downstream stages because pending prompt pressure is active. This skip was previously a silent early-return; registration makes the queue-pressure containment visible in governance reporting instead of being dropped by the inner-join.",
     },
+    DefaultMechanism {
+        mechanism_id: "channel_router_loop_active",
+        mechanism_class: "survival",
+        autonomy: "autonomous_router_loop_deferral",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when the channel router defers routing because an agent reasoning/tool/review loop is still in progress. This deferral was previously a silent early-return; registration makes the loop-active arbitration visible in governance reporting instead of being dropped by the inner-join.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -916,6 +924,7 @@ mod tests {
             "plan_routing_repair",
             "channel_router_core_guard",
             "queue_pressure_router_skip",
+            "channel_router_loop_active",
         ] {
             assert!(
                 inventory.iter().any(|entry| entry.mechanism_id == id),
