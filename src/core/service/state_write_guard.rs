@@ -71,6 +71,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scan_source_file_flags_a_multi_line_protected_update() {
+        // tests-5(c): pin the scanner's own sensitivity. A protected-table
+        // UPDATE whose protected SET column sits on a LATER line (a multi-line
+        // statement) must still raise exactly one Violation — the scanner reads
+        // a multi-line window for the column, so spanning lines must not let a
+        // direct, unguarded protected write slip past. (Without this fixture the
+        // scanner's detection had no positive coverage and could silently
+        // regress.) This synthetic source carries no core guard and no
+        // allow-marker, so it must be flagged.
+        let contents = r#"
+fn write_state(conn: &Connection, work_id: &str, state: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE ticket_self_work_items
+         SET state = ?2,
+             updated_at = ?3
+         WHERE work_id = ?1",
+        params![work_id, state, now],
+    )?;
+    Ok(())
+}
+"#;
+        let mut violations = Vec::new();
+        scan_source_file(
+            Path::new("src/example_module.rs"),
+            contents,
+            &mut violations,
+        );
+        assert_eq!(
+            violations.len(),
+            1,
+            "expected exactly one protected-write violation: {violations:?}"
+        );
+        assert_eq!(violations[0].table, "ticket_self_work_items");
+        assert_eq!(violations[0].column, "state");
+        assert_eq!(violations[0].statement_kind, "UPDATE");
+    }
+
     fn scan_tracked_sources(root: &Path) -> Result<Vec<Violation>, String> {
         let mut violations = Vec::new();
         for path in tracked_rust_sources(root)? {
