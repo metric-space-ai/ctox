@@ -3275,6 +3275,46 @@ impl Drop for PromptWorkerActivity {
     }
 }
 
+/// Build the metadata for a `work.outcome` harness-flow event: the executor's
+/// bound skill (if any) joined to the structured task outcome (skills-5).
+fn work_outcome_metadata(
+    job: &QueuedPrompt,
+    agent_outcome: lcm::AgentOutcome,
+) -> serde_json::Value {
+    serde_json::json!({
+        "skill": job.suggested_skill,
+        "agent_outcome": agent_outcome.as_str(),
+        "source_label": job.source_label,
+    })
+}
+
+/// Emit a per-task `work.outcome` forensic flow event stamping the bound skill
+/// and structured outcome onto the existing message/work chain, so a
+/// systematically-failing skill becomes detectable in the flow ledger and can
+/// later be aggregated into a per-skill failure rate (skills-5). Best-effort:
+/// the outcome is already durable on `messages.agent_outcome`; this is the
+/// skill-joined forensic projection.
+fn record_work_outcome_flow_event(
+    root: &Path,
+    job: &QueuedPrompt,
+    agent_outcome: lcm::AgentOutcome,
+) {
+    let title = format!("Work outcome: {}", agent_outcome.as_str());
+    crate::service::harness_flow::record_harness_flow_event_lossy(
+        root,
+        crate::service::harness_flow::RecordHarnessFlowEventRequest {
+            event_kind: "work.outcome",
+            title: &title,
+            body_text: "",
+            message_key: job.leased_message_keys.first().map(String::as_str),
+            work_id: job.ticket_self_work_id.as_deref(),
+            ticket_key: None,
+            attempt_index: None,
+            metadata: work_outcome_metadata(job, agent_outcome),
+        },
+    );
+}
+
 fn start_prompt_worker(
     root: std::path::PathBuf,
     state: Arc<Mutex<SharedState>>,
@@ -3451,6 +3491,14 @@ fn start_prompt_worker(
                 Ok(_) => lcm::AgentOutcome::Success,
                 Err(err) => classify_agent_failure(&err.to_string()),
             };
+            // skills-5: durably JOIN the executor's bound skill to this task's
+            // pass/fail outcome. Skill invocations are otherwise only Codex OTEL
+            // counters and the flow ledger has no per-task outcome event, so a
+            // skill (or skill-bound task family) failing systematically across
+            // many inputs is invisible. Emit a `work.outcome` flow event stamped
+            // with the skill + structured outcome so process-mining can later
+            // aggregate a per-skill failure rate.
+            record_work_outcome_flow_event(&root, &job, agent_outcome);
             let retryable_runtime_failure = result
                 .as_ref()
                 .err()
@@ -15857,6 +15905,56 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn work_outcome_metadata_stamps_bound_skill_and_outcome() {
+        // skills-5: the work.outcome flow event durably JOINS the executor's
+        // bound skill to the structured task outcome, so process-mining can
+        // later compute a per-skill failure rate (otherwise skill invocations
+        // are only Codex OTEL counters with no per-task outcome).
+        let mut job = QueuedPrompt {
+            prompt: "Build the subscriptions module.".to_string(),
+            goal: "build subscriptions".to_string(),
+            preview: "subscriptions".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: Some("frontend-skill".to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+
+        let success = work_outcome_metadata(&job, crate::lcm::AgentOutcome::Success);
+        assert_eq!(success["skill"].as_str(), Some("frontend-skill"));
+        assert_eq!(
+            success["agent_outcome"].as_str(),
+            Some(crate::lcm::AgentOutcome::Success.as_str())
+        );
+        assert_eq!(success["source_label"].as_str(), Some("queue"));
+
+        // The skill is stamped on the FAILURE outcome too (not only success), so
+        // a systematically-failing skill is attributable; a distinct outcome
+        // variant renders its own stable string.
+        let failure = work_outcome_metadata(&job, crate::lcm::AgentOutcome::ExecutionError);
+        assert_eq!(failure["skill"].as_str(), Some("frontend-skill"));
+        assert_eq!(
+            failure["agent_outcome"].as_str(),
+            Some(crate::lcm::AgentOutcome::ExecutionError.as_str())
+        );
+        let timeout = work_outcome_metadata(&job, crate::lcm::AgentOutcome::TurnTimeout);
+        assert_eq!(
+            timeout["agent_outcome"].as_str(),
+            Some(crate::lcm::AgentOutcome::TurnTimeout.as_str())
+        );
+
+        // A job with no bound skill still records a (null-skill) outcome row.
+        job.suggested_skill = None;
+        let no_skill = work_outcome_metadata(&job, crate::lcm::AgentOutcome::Success);
+        assert!(no_skill["skill"].is_null());
     }
 
     #[test]
