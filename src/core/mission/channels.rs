@@ -4161,6 +4161,21 @@ fn send_email_message(
     let approval_key = reviewed_context
         .map(|context| context.approval_key)
         .unwrap_or("");
+    // EGRESS-2: a crash between the provider send (adapter.send_cli) and the
+    // accepted-mark strands a draft_pending_send row carrying a
+    // send_attempt_started_at marker. Refuse to blind-resend that founder email
+    // — the provider may already have delivered it — and require operator
+    // verification instead of silently duplicating it. This runs BEFORE
+    // record_outbound_pending_send, whose ON CONFLICT would overwrite the
+    // marker on the stranded row.
+    let stranded_message_key = pending_send_message_key(request, &body_sha256);
+    if let Some(attempt_started_at) = stranded_outbound_send_attempt(conn, &stranded_message_key)? {
+        anyhow::bail!(
+            "refusing to re-send founder email {stranded_message_key}: a provider send was \
+             initiated at {attempt_started_at} but never confirmed accepted (possible crash \
+             between send and acknowledgement); verify delivery before resending"
+        );
+    }
     let pending_send = record_outbound_pending_send(conn, request, approval_key, &body_sha256)?;
     let pending_message_key = pending_send.message_key;
     if let Some(existing) = pending_send.existing_result {
@@ -4188,6 +4203,11 @@ fn send_email_message(
             "deduplicated": true,
         }));
     }
+    // EGRESS-2: record that the provider call is about to happen BEFORE the
+    // physical send, so a crash after send_cli but before the accepted-mark is
+    // recoverable as "maybe sent" (stranded_outbound_send_attempt) rather than
+    // an unconditional resend on the next attempt.
+    mark_outbound_send_attempt_started(conn, &pending_message_key)?;
     let adapter_json = match adapter.send_cli(
         root,
         &communication_adapters::EmailSendCommandRequest {
@@ -4405,6 +4425,64 @@ fn is_durable_outbound_send_state(status: &str, folder_hint: &str, metadata: &Va
         .or_else(|| metadata.get("pending_send"))
         .and_then(Value::as_bool)
         .unwrap_or(false)
+}
+
+/// Whether an outbound row's provider send was already initiated but never
+/// confirmed accepted — i.e. a not-yet-durable `draft_pending_send` row
+/// carrying a `send_attempt_started_at` marker. Such a row is "maybe sent": a
+/// process can crash after `adapter.send_cli` returns Ok but before
+/// `mark_outbound_send_accepted` commits, and a blind resend would duplicate a
+/// founder email. Returns the recorded attempt timestamp when stranded so the
+/// caller can refuse the resend and require operator verification (EGRESS-2).
+fn stranded_outbound_send_attempt(conn: &Connection, message_key: &str) -> Result<Option<String>> {
+    let existing = conn
+        .query_row(
+            r#"
+            SELECT status, folder_hint, metadata_json
+            FROM communication_messages
+            WHERE message_key = ?1
+              AND channel = 'email'
+              AND direction = 'outbound'
+            "#,
+            params![message_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((status, folder_hint, metadata_json)) = existing else {
+        return Ok(None);
+    };
+    let metadata = serde_json::from_str::<Value>(&metadata_json).unwrap_or(Value::Null);
+    // A durable (accepted) row is handled by existing_durable_outbound_send_result;
+    // only a not-yet-durable row whose send was already initiated is stranded.
+    if is_durable_outbound_send_state(&status, &folder_hint, &metadata) {
+        return Ok(None);
+    }
+    Ok(metadata
+        .get("send_attempt_started_at")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned))
+}
+
+/// Stamp `send_attempt_started_at` into the row metadata immediately before
+/// `adapter.send_cli`, without disturbing the rest of the metadata, so a crash
+/// in the send→accept window leaves a recoverable "maybe sent" marker that
+/// `stranded_outbound_send_attempt` detects (EGRESS-2).
+fn mark_outbound_send_attempt_started(conn: &Connection, message_key: &str) -> Result<()> {
+    conn.execute(
+        r#"
+        UPDATE communication_messages
+        SET metadata_json = json_set(metadata_json, '$.send_attempt_started_at', ?2)
+        WHERE message_key = ?1
+        "#,
+        params![message_key, now_iso_string()],
+    )?;
+    Ok(())
 }
 
 fn mark_outbound_send_accepted(
@@ -12094,6 +12172,53 @@ mod tests {
         assert_eq!(
             send_failed, 1,
             "the Sending->SendFailed transition must be witnessed by the kernel"
+        );
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+
+    #[test]
+    fn phase1_stranded_send_attempt_blocks_blind_resend() {
+        // EGRESS-2: distinguish "never sent" from "maybe sent". A fresh pending
+        // row (provider call not yet initiated) is safe to retry; once the
+        // provider send is initiated (send_attempt_started_at marker) the row is
+        // stranded "maybe sent" and send_email_message must refuse to
+        // blind-resend it; once accepted (durable) it is no longer stranded
+        // because the durable-result dedupe owns it.
+        let db_path = unique_test_db_path("ctox-phase1-stranded-send-attempt");
+        let conn = open_channel_db(&db_path).expect("failed to open db");
+        let request = phase1_test_request("Hallo Jill,\n\nEGRESS-2 crash-window body.\n\nGruesse");
+        let body_sha256 = sha256_hex(request.body.trim().as_bytes());
+        let message_key =
+            record_outbound_pending_send(&conn, &request, "founder-review:egress2", &body_sha256)
+                .expect("pending send must persist")
+                .message_key;
+
+        // Fresh pending row: a crash before send_cli is safe to retry.
+        assert!(
+            stranded_outbound_send_attempt(&conn, &message_key)
+                .expect("stranded probe")
+                .is_none(),
+            "a pending row whose provider call has not started is not stranded"
+        );
+
+        // Provider send initiated, then crash before the accepted-mark.
+        mark_outbound_send_attempt_started(&conn, &message_key).expect("mark attempt");
+        assert!(
+            stranded_outbound_send_attempt(&conn, &message_key)
+                .expect("stranded probe")
+                .is_some(),
+            "a row whose provider call was initiated but not accepted is stranded"
+        );
+
+        // Acceptance makes the row durable; the durable-result dedupe owns it.
+        mark_outbound_send_accepted(&conn, &message_key, "accepted", &json!({ "ok": true }))
+            .expect("mark accepted");
+        assert!(
+            stranded_outbound_send_attempt(&conn, &message_key)
+                .expect("stranded probe")
+                .is_none(),
+            "an accepted (durable) row is not stranded"
         );
 
         let _ = std::fs::remove_file(&db_path);
