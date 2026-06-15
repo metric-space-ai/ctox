@@ -2042,6 +2042,91 @@ pub fn lease_pending_inbound_messages(
         .collect())
 }
 
+/// router-4: read-only, NON-leasing peek at the inbound messages the serial
+/// router would lease this tick. Mirrors `take_messages` (no channel filter) — the
+/// same eligibility `lease_pending_inbound_messages` uses (direction='inbound',
+/// route_status pending|leased, `not_before` elapsed, our-own/free lease, one row
+/// per thread) — but performs NO lease UPDATE. Lets the router consult
+/// `source_label_dispatch_rank` at the durable-queue-vs-inbound boundary without
+/// consuming the message it is only inspecting.
+pub fn peek_leasable_inbound_messages(
+    root: &Path,
+    limit: usize,
+    lease_owner: &str,
+) -> Result<Vec<RoutedInboundMessage>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let mut statement = conn.prepare(
+        r#"
+        WITH eligible AS (
+            SELECT
+                m.message_key, m.channel, m.account_key, m.thread_key, m.remote_id,
+                m.direction, m.folder_hint, m.sender_display, m.sender_address,
+                m.subject, m.preview, m.body_text, m.status, m.seen,
+                m.external_created_at, m.observed_at, m.metadata_json,
+                r.route_status, r.lease_owner, r.leased_at, r.acked_at, r.updated_at,
+                ROW_NUMBER() OVER (
+                    PARTITION BY m.thread_key
+                    ORDER BY
+                        CASE
+                            WHEN r.route_status = 'pending' THEN 0
+                            WHEN r.route_status = 'leased' THEN 1
+                            ELSE 2
+                        END ASC,
+                        CASE WHEN m.channel = 'queue' THEN m.external_created_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.external_created_at END DESC,
+                        CASE WHEN m.channel = 'queue' THEN m.observed_at END ASC,
+                        CASE WHEN m.channel <> 'queue' THEN m.observed_at END DESC,
+                        m.message_key DESC
+                ) AS thread_rank
+            FROM communication_messages m
+            JOIN communication_routing_state r ON r.message_key = m.message_key
+            WHERE m.direction = 'inbound'
+              AND r.route_status IN ('pending', 'leased')
+              AND (
+                    json_extract(m.metadata_json, '$.not_before') IS NULL
+                 OR json_extract(m.metadata_json, '$.not_before') = ''
+                 OR json_extract(m.metadata_json, '$.not_before') <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+              )
+              AND (
+                    r.route_status = 'pending'
+                    OR r.lease_owner IS NULL
+                    OR r.lease_owner = ''
+                    OR r.lease_owner = ?1
+              )
+        )
+        SELECT
+            message_key, channel, account_key, thread_key, remote_id, direction,
+            folder_hint, sender_display, sender_address, subject, preview, body_text,
+            status, seen, external_created_at, observed_at, metadata_json,
+            route_status, lease_owner, leased_at, acked_at, updated_at
+        FROM eligible
+        WHERE thread_rank = 1
+        ORDER BY
+            CASE
+                WHEN route_status = 'pending' THEN 0
+                WHEN route_status = 'leased' THEN 1
+                ELSE 2
+            END ASC,
+            CASE WHEN channel = 'queue' THEN external_created_at END ASC,
+            CASE WHEN channel <> 'queue' THEN external_created_at END DESC,
+            CASE WHEN channel = 'queue' THEN observed_at END ASC,
+            CASE WHEN channel <> 'queue' THEN observed_at END DESC,
+            message_key DESC
+        LIMIT ?2
+        "#,
+    )?;
+    let rows = statement.query_map(params![lease_owner, limit as i64], map_channel_message_row)?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+        .map(|items| {
+            items
+                .into_iter()
+                .map(routed_inbound_message_from_view)
+                .collect()
+        })
+}
+
 pub fn list_stalled_inbound_messages(
     root: &Path,
     limit: usize,

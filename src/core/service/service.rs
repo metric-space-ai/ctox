@@ -644,6 +644,12 @@ const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
 const REVIEW_FEEDBACK_SOURCE_LABEL: &str = "review-feedback";
 const OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL: &str = "outcome-witness-recovery";
 const CHANNEL_ROUTER_SERIAL_LEASE_LIMIT: usize = 1;
+// router-4: defer the durable-queue idle lease only for the top inbound rank band
+// (founder/owner/admin/meeting-mention = source_label_dispatch_rank 4), so the
+// founder-priority fix never starves the durable queue with ordinary email/ticket
+// work. ROUTER_INBOUND_RANK_PROBE_LIMIT bounds the read-only rank probe per tick.
+const FOUNDER_INBOUND_DISPATCH_RANK: u8 = 4;
+const ROUTER_INBOUND_RANK_PROBE_LIMIT: usize = 32;
 const REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS: usize = 6_000;
 const STANDALONE_OUTBOUND_DB_LOCK_RETRY_MARKER: &str =
     "transient database lock interrupted the reviewed outbound send";
@@ -9821,7 +9827,35 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         );
         return Ok(());
     }
-    if let Some(prompt) = maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)? {
+    let settings = live_service_settings(root);
+    // router-4: honor source_label_dispatch_rank at the durable-queue-vs-inbound
+    // boundary. A freshly-arrived top-rank (founder/owner/admin = rank 4) inbound
+    // must not lose the single serial slot to a rank-1 durable-queue task purely
+    // because the durable lease is examined first this tick. Read-only, NON-leasing
+    // rank probe; if such inbound is runnable, defer the durable lease and fall
+    // through to the inbound leasing below so it takes the slot. The durable task
+    // stays pending and is leased on a later tick once no higher-ranked inbound
+    // remains — bounded to the top rank band so ordinary email/ticket work does not
+    // starve the durable queue, and the governance event makes any starvation
+    // observable.
+    let top_inbound_rank = highest_leasable_inbound_rank(root, &settings);
+    if top_inbound_rank >= FOUNDER_INBOUND_DISPATCH_RANK {
+        let _ = governance::record_event(
+            root,
+            governance::GovernanceEventRequest {
+                mechanism_id: "router_defer_durable_for_founder",
+                conversation_id: None,
+                severity: "info",
+                reason: "a top-rank inbound message is runnable this tick",
+                action_taken:
+                    "deferred the durable-queue idle lease so higher-ranked inbound can take the serial slot",
+                details: serde_json::json!({ "inbound_rank": top_inbound_rank }),
+                idempotence_key: Some("router-defer-durable-for-founder"),
+            },
+        );
+    } else if let Some(prompt) =
+        maybe_lease_next_durable_queue_prompt_for_idle_dispatch(root, state)?
+    {
         enqueue_prompt(
             root,
             state,
@@ -9854,7 +9888,6 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
             return Err(err.context("failed to route assigned ticket internal work"));
         }
     }
-    let settings = live_service_settings(root);
     let ticket_preflight_issues = run_ticket_dispatch_preflight(root, state, &settings);
     let ticket_dispatch_allowed = ticket_preflight_issues
         .iter()
@@ -10856,6 +10889,25 @@ fn source_label_dispatch_rank(source_label: &str) -> u8 {
         return 2;
     }
     1
+}
+
+/// router-4: top serial-dispatch rank (founder/owner/admin = 4) among the inbound
+/// messages the router would lease this tick; 0 when none are runnable. Read-only —
+/// peeks the leasable set WITHOUT consuming it, then scores each message with the
+/// SAME `inbound_source_label` + `source_label_dispatch_rank` the leasing sort uses,
+/// so the durable-vs-inbound boundary decision matches what leasing would do.
+fn highest_leasable_inbound_rank(root: &Path, settings: &BTreeMap<String, String>) -> u8 {
+    channels::peek_leasable_inbound_messages(
+        root,
+        ROUTER_INBOUND_RANK_PROBE_LIMIT,
+        CHANNEL_ROUTER_LEASE_OWNER,
+    )
+    .ok()
+    .into_iter()
+    .flatten()
+    .map(|message| source_label_dispatch_rank(&inbound_source_label(settings, &message)))
+    .max()
+    .unwrap_or(0)
 }
 
 fn insert_pending_prompt_ordered(queue: &mut VecDeque<QueuedPrompt>, prompt: QueuedPrompt) {
@@ -23284,6 +23336,130 @@ Use shell tools to create or update these files."
                 .expect("failed to list queue tasks");
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "Platform homepage work");
+    }
+
+    /// router-4: at an idle tick a freshly-arrived founder/owner inbound (rank 4)
+    /// must take the single serial slot ahead of a rank-1 durable-queue task — the
+    /// durable lease must DEFER, not win purely because it is examined first. The
+    /// sibling test below pins that the durable lease still fires when no
+    /// higher-ranked inbound is pending (the guard must not over-block).
+    #[test]
+    fn durable_queue_lease_defers_to_pending_founder_inbound() {
+        let root = temp_root("ctox-router4-defer-durable-for-founder");
+        let mut runtime_settings = BTreeMap::new();
+        runtime_settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &runtime_settings)
+            .expect("failed to persist owner setting");
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:cto1@metric-space.ai', '<router4-founder-thread@example.com>',
+                'remote-router4-1', 'inbound', 'INBOX', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]', 'Founder input',
+                'Founder input', 'Please answer me before doing anything else.', '', '',
+                'normal', 'received', 0, 0, '2026-04-24T18:55:00Z', '2026-04-24T18:55:00Z', '{}'
+            )"#,
+            rusqlite::params!["email:cto1@metric-space.ai::INBOX::router4"],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error, updated_at
+            ) VALUES (?1, 'pending', NULL, NULL, NULL, NULL, '2026-04-24T18:55:00Z')"#,
+            rusqlite::params!["email:cto1@metric-space.ai::INBOX::router4"],
+        )
+        .expect("failed to insert founder routing state");
+
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Bulk durable queue work".to_string(),
+                prompt: "Low-priority durable batch task.".to_string(),
+                thread_key: "bulk-durable".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        // The durable task must remain pending — its rank-1 lease deferred to the
+        // rank-4 founder inbound this tick.
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            pending
+                .iter()
+                .any(|task| task.message_key == queue_task.message_key),
+            "durable queue task must stay pending while a founder inbound is runnable"
+        );
+        // ...and the tick fell through to inbound leasing: the founder inbound was
+        // actually leased (no longer pending), confirming the defer, not a stall.
+        let founder_status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params!["email:cto1@metric-space.ai::INBOX::router4"],
+                |row| row.get(0),
+            )
+            .expect("failed to read founder routing state");
+        assert_ne!(
+            founder_status, "pending",
+            "founder inbound should have been leased/handled this tick"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// router-4 (negative): with no higher-ranked inbound pending, the durable-queue
+    /// idle lease must still fire so the guard does not starve the durable queue.
+    #[test]
+    fn durable_queue_lease_fires_when_no_higher_ranked_inbound() {
+        let root = temp_root("ctox-router4-durable-no-inbound");
+        let queue_task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Bulk durable queue work".to_string(),
+                prompt: "Low-priority durable batch task.".to_string(),
+                thread_key: "bulk-durable".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to seed durable queue task");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        route_external_messages(&root, &state).expect("routing should succeed");
+
+        // No higher-ranked inbound to defer to -> the durable lease must fire, so the
+        // task is no longer pending.
+        let pending = channels::list_queue_tasks(&root, &["pending".to_string()], 10)
+            .expect("failed to list pending queue tasks");
+        assert!(
+            !pending
+                .iter()
+                .any(|task| task.message_key == queue_task.message_key),
+            "durable queue task must be leased when no higher-ranked inbound is pending"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
