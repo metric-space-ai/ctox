@@ -371,19 +371,22 @@ pub fn ensure_governance(root: &Path) -> Result<()> {
     upsert_default_mechanisms(&conn)
 }
 
-pub fn record_event(
-    root: &Path,
-    request: GovernanceEventRequest<'_>,
-) -> Result<Option<GovernanceEventRecord>> {
-    let conn = open_governance_db(root)?;
-    upsert_default_mechanisms(&conn)?;
-    let created_at = now_millis_string();
+/// Insert a governance event, returning its deterministic id and whether THIS
+/// call created the row (`true`) or an idempotence-key collision suppressed it
+/// (`false`). The `INSERT OR IGNORE` plus the UNIQUE(mechanism_id,
+/// idempotence_key) index make the newness verdict atomic, so callers can take
+/// a once-per-key side effect without a check-then-act race.
+fn insert_governance_event(
+    conn: &Connection,
+    request: &GovernanceEventRequest<'_>,
+    created_at: &str,
+) -> Result<(String, bool)> {
     let event_id = governance_event_id(
         request.mechanism_id,
         request.reason,
         request.action_taken,
         &request.details,
-        &created_at,
+        created_at,
     );
     let details_json = serde_json::to_string(&request.details)
         .context("failed to encode governance event details")?;
@@ -411,7 +414,18 @@ pub fn record_event(
             created_at,
         ],
     )?;
-    if inserted == 0 {
+    Ok((event_id, inserted != 0))
+}
+
+pub fn record_event(
+    root: &Path,
+    request: GovernanceEventRequest<'_>,
+) -> Result<Option<GovernanceEventRecord>> {
+    let conn = open_governance_db(root)?;
+    upsert_default_mechanisms(&conn)?;
+    let created_at = now_millis_string();
+    let (event_id, was_new) = insert_governance_event(&conn, &request, &created_at)?;
+    if !was_new {
         let Some(idempotence_key) = request.idempotence_key else {
             return Ok(None);
         };
@@ -430,6 +444,22 @@ pub fn record_event(
             .transpose();
     }
     load_event_by_id(&conn, &event_id).map(Some)
+}
+
+/// Record a governance event and report whether THIS call created it.
+///
+/// Returns `true` when the event was newly inserted and `false` when an
+/// idempotence-key collision suppressed it. Callers that must take a side
+/// effect at most once per `(mechanism_id, idempotence_key)` (e.g. the loop
+/// governor logging a single repair recommendation per repeated blocker) gate
+/// the side effect on the returned flag — the atomic `INSERT OR IGNORE` makes a
+/// concurrent second call return `false`, with no check-then-act race.
+pub fn record_event_if_new(root: &Path, request: GovernanceEventRequest<'_>) -> Result<bool> {
+    let conn = open_governance_db(root)?;
+    upsert_default_mechanisms(&conn)?;
+    let created_at = now_millis_string();
+    let (_event_id, was_new) = insert_governance_event(&conn, &request, &created_at)?;
+    Ok(was_new)
 }
 
 pub fn prompt_snapshot(root: &Path, conversation_id: i64) -> Result<GovernancePromptSnapshot> {
@@ -910,6 +940,49 @@ mod tests {
         )?
         .context("expected existing event")?;
         assert_eq!(first.event_id, second.event_id);
+        Ok(())
+    }
+
+    fn loop_governor_event(idempotence_key: &str) -> GovernanceEventRequest<'_> {
+        GovernanceEventRequest {
+            mechanism_id: "mission_loop_governor",
+            conversation_id: Some(1),
+            severity: "warning",
+            reason: "repeated blocker under loop pressure",
+            action_taken: "recorded a forced repair recommendation",
+            details: json!({"work_id": "work-1"}),
+            idempotence_key: Some(idempotence_key),
+        }
+    }
+
+    #[test]
+    fn record_event_if_new_reports_first_insert_only() -> Result<()> {
+        let root = temp_root("record-if-new");
+        ensure_governance(&root)?;
+        // First emit for a key creates the row; the second is suppressed by the
+        // UNIQUE(mechanism_id, idempotence_key) index. This is what gates the
+        // loop governor's once-per-(work, blocker) side effect with no
+        // check-then-act race.
+        assert!(
+            record_event_if_new(&root, loop_governor_event("loop:work-1:stuck"))?,
+            "first emit must create the event"
+        );
+        assert!(
+            !record_event_if_new(&root, loop_governor_event("loop:work-1:stuck"))?,
+            "second emit for the same key must be suppressed"
+        );
+        // A distinct blocker key is a distinct recovery and emits again.
+        assert!(
+            record_event_if_new(&root, loop_governor_event("loop:work-1:other"))?,
+            "a different key is a different event"
+        );
+        // Exactly one row per distinct key survived.
+        let rows: i64 = open_governance_db(&root)?.query_row(
+            "SELECT COUNT(*) FROM governance_events WHERE mechanism_id = 'mission_loop_governor'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(rows, 2, "two distinct keys -> two rows, no duplicates");
         Ok(())
     }
 

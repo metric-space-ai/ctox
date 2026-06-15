@@ -151,6 +151,14 @@ fn normalize_token(value: &str) -> String {
         .join(" ")
 }
 
+/// Stable idempotence component for a mission blocker. Uses the same
+/// normalization `blockers_equivalent` applies, so two blocker strings the
+/// governor treats as the same loop collapse to one key — letting callers emit
+/// at most one forced-repair record per (work item, distinct blocker).
+pub fn normalized_blocker_key(blocker: &str) -> String {
+    normalize_token(blocker)
+}
+
 fn clip_text(value: &str, max_chars: usize) -> String {
     let mut iter = value.chars();
     let clipped = iter.by_ref().take(max_chars).collect::<String>();
@@ -172,7 +180,7 @@ fn fallback_text<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 
 #[cfg(test)]
 mod tests {
-    use super::evaluate_loop_governor;
+    use super::{blockers_equivalent, evaluate_loop_governor, normalized_blocker_key};
     use crate::context_health;
     use crate::lcm;
 
@@ -246,5 +254,26 @@ mod tests {
             None,
         );
         assert!(!decision.should_enqueue_repair);
+    }
+
+    #[test]
+    fn normalized_blocker_key_collapses_equivalent_blockers() {
+        // The key must follow the same equivalence the governor uses so a
+        // caller emits at most one repair per distinct blocker.
+        assert!(blockers_equivalent(
+            "Disk  FULL: /var/log",
+            "disk full   /var/log"
+        ));
+        assert_eq!(
+            normalized_blocker_key("Disk  FULL: /var/log"),
+            normalized_blocker_key("disk full   /var/log"),
+            "equivalent blockers must share a key"
+        );
+        assert_ne!(
+            normalized_blocker_key("disk full"),
+            normalized_blocker_key("network timeout"),
+            "distinct blockers must not collide"
+        );
+        assert!(normalized_blocker_key("   :  ").is_empty());
     }
 }

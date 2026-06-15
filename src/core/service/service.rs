@@ -3543,6 +3543,84 @@ fn start_prompt_worker(
                     mission_sync_outcome = Some(repaired);
                 }
             }
+            // govrec-3: surface the otherwise-dead `mission_loop_governor`
+            // mechanism. When the same blocker keeps resurfacing under loop
+            // pressure, record an authoritative governance event so the
+            // repeated-blocker pattern the prompt block advertises actually
+            // emits instead of staying invisible. Idempotent per (work item,
+            // normalized blocker) so it fires at most once per distinct
+            // blocker; the existing agent_failure_threshold path keeps owning
+            // the terminal bound and re-attempt scheduling, so this adds the
+            // missing observability/authority without a competing retry loop.
+            if !founder_visible_mail_turn && latest_runtime_error.is_some() {
+                if let Some(work_id) = job.ticket_self_work_id.as_deref() {
+                    let mission_record = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+                        .ok()
+                        .and_then(|engine| {
+                            engine.stored_mission_state(conversation_id).ok().flatten()
+                        });
+                    let decision = crate::service::mission_governor::evaluate_loop_governor(
+                        &job.goal,
+                        mission_record.as_ref(),
+                        context_health.as_ref(),
+                        agent_outcome.as_str(),
+                        latest_runtime_error.as_deref(),
+                    );
+                    if decision.should_enqueue_repair {
+                        // A governor that decided to repair always carries a
+                        // non-empty blocker: should_enqueue_repair implies
+                        // repeated_blocker, which requires the stored and latest
+                        // blockers to be equivalent and non-empty. A missing or
+                        // empty-normalizing blocker therefore has no stable
+                        // per-blocker dedupe key — skip rather than emit under an
+                        // empty key that would collapse distinct blockers.
+                        let blocker_key = decision
+                            .blocker_summary
+                            .as_deref()
+                            .map(crate::service::mission_governor::normalized_blocker_key)
+                            .unwrap_or_default();
+                        if !blocker_key.is_empty() {
+                            let idempotence_key =
+                                format!("mission_loop_governor:{work_id}:{blocker_key}");
+                            // record_event_if_new is atomic: the UNIQUE
+                            // (mechanism_id, idempotence_key) index makes the
+                            // next turn carrying the same blocker return false,
+                            // so the log fires at most once per distinct blocker
+                            // with no check-then-act race.
+                            let recorded = governance::record_event_if_new(
+                                &root,
+                                governance::GovernanceEventRequest {
+                                    mechanism_id: "mission_loop_governor",
+                                    conversation_id: Some(conversation_id),
+                                    severity: "warning",
+                                    reason:
+                                        "the same blocker keeps resurfacing under loop pressure without fresh progress",
+                                    action_taken:
+                                        "recorded a forced repair/replan recommendation for the stalled work item",
+                                    details: serde_json::json!({
+                                        "work_id": work_id,
+                                        "blocker": decision.blocker_summary,
+                                        "repair_title": decision.repair_title,
+                                        "repair_prompt": decision.repair_prompt,
+                                        "reason": decision.reason,
+                                        "source_label": job.source_label.clone(),
+                                    }),
+                                    idempotence_key: Some(&idempotence_key),
+                                },
+                            )
+                            .unwrap_or(false);
+                            if recorded {
+                                push_event(
+                                    &state,
+                                    format!(
+                                        "Mission loop governor: repeated blocker on durable work {work_id}; recorded a repair recommendation"
+                                    ),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             let app_validation_before_review = if result.is_ok()
                 && business_os_app_module_target_from_prompt(&job.prompt).is_some()
             {
