@@ -327,6 +327,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         module_hint: "src/service.rs",
         description: "Records when a routing ack fails (a lease may then re-route the message until resolved). The failure used to be eprintln-only; registration makes a repeated ack-reject loop mineable in governance reporting instead of being dropped by the inner-join.",
     },
+    DefaultMechanism {
+        mechanism_id: "boot_lease_reclaim",
+        mechanism_class: "survival",
+        autonomy: "autonomous_crash_recovery_audit",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Records when boot-time repair reclaims stale service communication leases left by a prior crash. The reclaim was previously only a transient feed line; registration makes crash recovery auditable in governance reporting instead of being invisible to process-mining.",
+    },
 ];
 
 pub fn handle_governance_command(root: &Path, args: &[String]) -> Result<()> {
@@ -934,6 +942,7 @@ mod tests {
             "queue_pressure_router_skip",
             "channel_router_loop_active",
             "routing_ack_failed",
+            "boot_lease_reclaim",
         ] {
             assert!(
                 inventory.iter().any(|entry| entry.mechanism_id == id),

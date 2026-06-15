@@ -1273,10 +1273,28 @@ fn release_stale_service_communication_leases_on_boot(
 ) {
     match release_stale_service_communication_leases(root) {
         Ok(0) => {}
-        Ok(count) => push_event(
-            state,
-            format!("Released {count} stale service communication lease(s) at boot"),
-        ),
+        Ok(count) => {
+            push_event(
+                state,
+                format!("Released {count} stale service communication lease(s) at boot"),
+            );
+            // govrec-2: boot stale-lease reclaim is crash recovery and must be
+            // auditable, not just a transient feed line. Record a governance
+            // event so the reclaim is mineable in process-mining.
+            let _ = governance::record_event(
+                root,
+                governance::GovernanceEventRequest {
+                    mechanism_id: "boot_lease_reclaim",
+                    conversation_id: None,
+                    severity: "info",
+                    reason: "crash_recovery_stale_lease_reclaim",
+                    action_taken:
+                        "released stale service communication leases left by a prior crash at boot",
+                    details: serde_json::json!({ "released_count": count }),
+                    idempotence_key: None,
+                },
+            );
+        }
         Err(err) => push_event(
             state,
             format!("Boot lease repair failed for communication routes: {err}"),
