@@ -20,6 +20,7 @@ function main() {
   for (const script of [
     "dist",
     "pack:dir",
+    "pack:dir:bundled-runtime-smoke",
     "pack:dir:smoke",
     "release:check",
     "smoke:local-bundled-runtime",

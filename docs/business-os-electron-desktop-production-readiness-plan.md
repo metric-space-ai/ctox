@@ -74,8 +74,13 @@ wieder testbar:
   Installation, Inspect, Attach, App-Neustart und WebRTC-only Launch bleiben
   moeglich. Der Release-Workflow baut den plattformpassenden CTOX-Helper vor
   dem Electron-Package und `electron-builder` nimmt `resources/ctox` als externe
-  App-Resource auf. Noch offen ist der echte Tag-/Signed-Run auf sauberer
-  Maschine.
+  App-Resource auf.
+- `npm run pack:dir:bundled-runtime-smoke` baut lokal eine unpacked macOS
+  `.app` mit temporaerem gebuendeltem CTOX-Helper, prueft den ausfuehrbaren
+  Helper in `Contents/Resources/ctox/ctox` und nutzt genau diesen verpackten
+  Helper aus einem frischen Desktop-Profil fuer Installation, Inspect, Attach,
+  simulierten App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak.
+  Noch offen ist der echte Tag-/Signed-Run auf sauberer Maschine.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -306,13 +311,19 @@ Nicht umgesetzt oder noch nicht bewiesen:
   Launch-Token-Request. Desktop-Session-Rotation ist live bewiesen: Logout
   entfernt jetzt auch ctox.dev-Domaincookies aus Electron, Session-Package ist
   danach 401, alte Launches blockieren, Re-Login stellt die Tenants wieder her.
+  Der aktuelle Live-Account ist laut read-only ctox.dev Membership-Check auf
+  allen sichtbaren Tenants `owner`; ein sicherer, reversibler
+  Membership-Entzug ist damit nicht beweisbar. Dafuer braucht es einen
+  separaten Nicht-Owner-Testmember oder eine explizit dafuer angelegte
+  Testinstanz.
 - Komplett frisches OS ohne vorhandenes lokales CTOX-Binary/validen CTOX
-  Runtime-Root ist als Desktop-Vertrag naeher dran, aber noch nicht final
-  bewiesen: Der lokale Quellpfad kann jetzt einen gebuendelten CTOX-Helper aus
-  den App-Resources nutzen, der Release-Workflow baut diesen Helper pro
-  Plattform vor dem Electron-Package, und der Smoke laeuft ohne ctox.dev
-  Account, `ctoxRoot` oder explizites `ctoxBinary`. Offen bleibt der echte
-  Tag-/Signed-Run, der das auf sauberer Maschine ausfuehrt.
+  Runtime-Root ist lokal bis zur unpacked `.app` bewiesen: Der lokale
+  Quellpfad kann einen gebuendelten CTOX-Helper aus den App-Resources nutzen,
+  der Release-Workflow baut diesen Helper pro Plattform vor dem
+  Electron-Package, und die Smokes laufen ohne ctox.dev Account, `ctoxRoot`
+  oder explizites `ctoxBinary`. Offen bleibt der echte Tag-/Signed-Run, der
+  denselben Pfad auf sauberer Maschine mit signiertem/notarisiertem Artefakt
+  ausfuehrt.
 - Signierte/notarisierte Installer-Artefakte sind aus einem echten Tag-Run noch
   nicht live erzeugt und verifiziert. Die plattformweite Artefakt-Smoke-Logik
   und die Plattform-Keychain-Smokes sind lokal beziehungsweise im `main`-CI
@@ -355,7 +366,7 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 0. Baseline & Architekturentscheidung | 8% | Abgeschlossen | 100% |
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 99% |
-| 3. Local Daemon Source | 12% | In Umsetzung | 92% |
+| 3. Local Daemon Source | 12% | In Umsetzung | 96% |
 | 4. Pairing Invite Source | 12% | Abgeschlossen | 100% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
@@ -503,7 +514,7 @@ Tests:
 
 ## Welle 3: Local Daemon Source
 
-Status: In Umsetzung, 92%.
+Status: In Umsetzung, 96%.
 
 Aufgaben:
 
@@ -527,6 +538,10 @@ Aufgaben:
 - [x] Release-Workflow baut vor `electron-builder` einen plattformpassenden
   CTOX-Helper und legt ihn in `resources/ctox`; die Builder-Konfiguration
   paketiert diesen Pfad als externe App-Resource.
+- [x] Lokaler Packaged-App-Smoke baut eine unpacked macOS `.app`, prueft den
+  gebuendelten Helper im tatsaechlichen App-Resource-Pfad und fuehrt
+  Installation, Inspect, Attach, Neustart und WebRTC-only Launch aus einem
+  frischen Desktop-Profil ueber genau diesen verpackten Helper aus.
 - [ ] Signierter Release-/Fresh-Machine-Smoke mit echtem, gebuendeltem
   CTOX-Helper und ohne vorhandenes globales CTOX-Binary.
 
@@ -553,6 +568,11 @@ Tests:
 - [x] `npm run release:check`: Prueft, dass die Business-OS-Desktop-
   Release-Matrix den gebuendelten CTOX-Helper baut und dass
   `electron-builder` `resources/ctox` als externe App-Resource aufnehmen kann.
+- [x] `npm run pack:dir:bundled-runtime-smoke`: Baut lokal eine unpacked macOS
+  `.app` mit temporaerem gebuendeltem CTOX-Helper, validiert
+  `Contents/Resources/ctox/ctox` als ausfuehrbare Datei und nutzt den
+  verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect,
+  Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak.
 
 ## Welle 4: Pairing Invite Source
 
@@ -886,6 +906,10 @@ Release Gates:
 - [x] `npm run smoke:keychain-runtime`
 - [x] `npm run pack:dir:smoke` baut lokal eine macOS `.app` und validiert
   Bundle-Metadaten, App-Icon plus `app.asar` Inhalt.
+- [x] `npm run pack:dir:bundled-runtime-smoke` baut lokal eine macOS `.app` mit
+  App-Resource-Helper und beweist, dass ein frisches Desktop-Profil ohne
+  globales CTOX-Binary ueber den verpackten Helper lokal installieren,
+  attachen, neu starten und WebRTC-only launchen kann.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -968,6 +992,8 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Welle 3 Packaged-App-Helper-Nachweis ergaenzt: `npm run pack:dir:bundled-runtime-smoke` baut lokal eine unpacked macOS `.app` mit temporaerem gebuendeltem CTOX-Helper, validiert `Contents/Resources/ctox/ctox` als ausfuehrbar und nutzt den verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect, Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak. Welle 3 steigt auf 96%; production-ready bleibt durch echten signierten/notarisierten Tag-Run und echte ctox.dev Membership-Revocation blockiert. |
+| 2026-06-15 | ctox.dev Live-Revocation eingeordnet: Der aktuelle Live-Account ist per read-only Membership-Check auf allen sechs sichtbaren Tenants `owner`. Ein sicherer, reversibler Entzug der eigenen Mitgliedschaft ist mit diesem Account kein valider Test; fuer den Produktionsnachweis braucht es einen separaten Nicht-Owner-Testmember oder eine dedizierte Testinstanz mit administrativ kontrollierbarem Mitglied. |
 | 2026-06-13 | Plan im aktuellen Worktree neu angelegt und an den sichtbaren Stand angepasst. Electron-Scaffold wieder aufgebaut: Instanzmodell, Registry, ctox.dev Source-Adapter, Pairing-Source, Launch-Config, BrowserView-Host, Renderer-Shell und Electron Session-Isolation-Smoke. |
 | 2026-06-13 | Wiederaufgetauchte stärkere Contract-Tests integriert und Implementierung nachgezogen: Local-Daemon CLI-Vertrag, SSH Host-Key/Preflight/Attach/Existing-Upgrade und OS-Keychain-Adapter-Contracts sind wieder grün. `npm test` läuft mit 50/50 Tests grün. |
 | 2026-06-13 | Verifiziert: `npm run check` grün und `npm run test:electron-smoke` grün. Der Electron-Smoke nutzt einen frischen `userData`-Pfad und weist getrennte persistente Session-Partitionen für Cookies, LocalStorage und IndexedDB nach. |

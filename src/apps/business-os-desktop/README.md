@@ -25,6 +25,7 @@ npm run smoke:ssh-password-live -- --host <host> --user <user> --password-stdin 
 npm run release:check
 npm run release:secrets:check
 npm run pack:dir:smoke
+npm run pack:dir:bundled-runtime-smoke
 ```
 
 Release-related checks:
@@ -51,6 +52,11 @@ Release-related checks:
   repository as a CTOX runtime root, attaches via `peer ensure` in a fresh
   desktop profile and verifies a WebRTC-only launch without leaking peer
   secrets into the registry.
+- `npm run pack:dir:bundled-runtime-smoke` builds an unpacked macOS app with a
+  temporary bundled CTOX helper, verifies the helper is present and executable
+  in `Contents/Resources/ctox/ctox`, then uses that packaged helper from a
+  fresh desktop profile for install, inspect, attach, restart and WebRTC-only
+  launch.
 - `npm run smoke:ctox-dev-live -- --email <email> --password-stdin` is an
   opt-in production/staging smoke for the managed ctox.dev account path. It
   reads the password from stdin, signs in through ctox.dev's password endpoint
