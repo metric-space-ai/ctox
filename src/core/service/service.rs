@@ -3577,31 +3577,33 @@ fn start_prompt_worker(
                             let threshold = mission_agent_failure_threshold(&root);
                             if record.agent_failure_count >= threshold {
                                 agent_failure_threshold_hit = true;
-                                let _ = engine.defer_mission_for_reason(
+                                // x2-2: the defer is the loop-stopping safety action
+                                // and persist_mission_state is fallible — tie the
+                                // governance audit to the real outcome and surface a
+                                // failed defer, instead of unconditionally recording
+                                // "stopped automatic retry loop" while is_open stayed
+                                // true (the loop was NOT stopped).
+                                let defer_result = engine.defer_mission_for_reason(
                                     conversation_id,
                                     "agent_failure_threshold",
                                 );
-                                let _ = governance::record_event(
+                                if let Err(err) = &defer_result {
+                                    push_event(
+                                        &state,
+                                        format!(
+                                            "agent_failure_threshold reached but defer FAILED for conversation {conversation_id}: {err}"
+                                        ),
+                                    );
+                                }
+                                record_agent_failure_threshold_outcome(
                                     &root,
-                                    governance::GovernanceEventRequest {
-                                        mechanism_id: "agent_failure_threshold",
-                                        conversation_id: Some(conversation_id),
-                                        severity: "error",
-                                        reason: "agent turns repeatedly failed or timed out",
-                                        action_taken:
-                                            "deferred mission and stopped automatic retry loop",
-                                        details: serde_json::json!({
-                                            "agent_outcome": agent_outcome.as_str(),
-                                            "agent_failure_count": record.agent_failure_count,
-                                            "threshold": threshold,
-                                            "thread_key": job.thread_key.clone(),
-                                            "source_label": job.source_label.clone(),
-                                        }),
-                                        idempotence_key: Some(&format!(
-                                            "agent-failure-threshold:{}:{}",
-                                            conversation_id, record.agent_failure_count
-                                        )),
-                                    },
+                                    &defer_result,
+                                    conversation_id,
+                                    agent_outcome,
+                                    record.agent_failure_count,
+                                    threshold,
+                                    job.thread_key.as_deref(),
+                                    &job.source_label,
                                 );
                             }
                         }
@@ -15434,6 +15436,57 @@ pub(crate) fn classify_agent_failure(error_text: &str) -> lcm::AgentOutcome {
     lcm::AgentOutcome::ExecutionError
 }
 
+/// x2-2: record the governance audit for an agent-failure-threshold defer, tying
+/// `action_taken` to the REAL defer outcome. The defer is the actual loop-stopping
+/// safety action (persist_mission_state, fallible); a swallowed failure leaves
+/// `is_open=true` while a success row would falsely claim the retry loop was
+/// stopped. On `Err`, record an error event that says the loop was NOT stopped
+/// (distinct idempotence key) and carry the defer error, so the audit matches
+/// reality.
+fn record_agent_failure_threshold_outcome(
+    root: &Path,
+    defer_result: &anyhow::Result<lcm::MissionStateRecord>,
+    conversation_id: i64,
+    agent_outcome: lcm::AgentOutcome,
+    failure_count: i64,
+    threshold: i64,
+    thread_key: Option<&str>,
+    source_label: &str,
+) {
+    let mut details = serde_json::json!({
+        "agent_outcome": agent_outcome.as_str(),
+        "agent_failure_count": failure_count,
+        "threshold": threshold,
+        "thread_key": thread_key,
+        "source_label": source_label,
+    });
+    let (action_taken, key_prefix) = match defer_result {
+        Ok(_) => (
+            "deferred mission and stopped automatic retry loop",
+            "agent-failure-threshold",
+        ),
+        Err(err) => {
+            details["defer_error"] = serde_json::json!(err.to_string());
+            (
+                "defer_mission FAILED — automatic retry loop NOT stopped",
+                "agent-failure-threshold-defer-failed",
+            )
+        }
+    };
+    let _ = governance::record_event(
+        root,
+        governance::GovernanceEventRequest {
+            mechanism_id: "agent_failure_threshold",
+            conversation_id: Some(conversation_id),
+            severity: "error",
+            reason: "agent turns repeatedly failed or timed out",
+            action_taken,
+            details,
+            idempotence_key: Some(&format!("{key_prefix}:{conversation_id}:{failure_count}")),
+        },
+    );
+}
+
 /// govrec-5: emit the recovery half of the defer/recover governance pair when a
 /// mission that was deferred for repeated agent failures clears that deferral on
 /// a successful turn. No-op unless a deferral was actually cleared (so it never
@@ -26725,6 +26778,127 @@ Those are not durable artifact requirements."
         // long healthy run never re-emits a recovery event.
         let no_recovery = engine.reset_mission_agent_failure_count(101).unwrap();
         assert!(no_recovery.previous_deferred_reason.is_none());
+    }
+
+    #[test]
+    fn agent_failure_threshold_audit_matches_defer_outcome() {
+        // x2-2: the governance audit must reflect the REAL defer outcome — a
+        // failed defer (the retry loop was NOT stopped) must record an error
+        // event, not a success row that lies the loop was stopped.
+        let root = temp_root("agent-failure-threshold");
+        let engine =
+            lcm::LcmEngine::open(&root.join("ctox.sqlite3"), lcm::LcmConfig::default()).unwrap();
+        let _ = engine.continuity_init_documents(303).unwrap();
+        let record = engine.mission_state(303).unwrap();
+
+        // Success: the defer succeeded -> the audit records the loop-stopped action
+        // and the full context details.
+        let ok_result: anyhow::Result<lcm::MissionStateRecord> = Ok(record.clone());
+        record_agent_failure_threshold_outcome(
+            &root,
+            &ok_result,
+            303,
+            lcm::AgentOutcome::ExecutionError,
+            3,
+            5,
+            Some("t-303"),
+            "queue",
+        );
+        let success = governance::list_recent_events(&root, 303, 50)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.mechanism_id == "agent_failure_threshold")
+            .expect("a threshold event for the successful defer");
+        assert_eq!(success.mechanism_id, "agent_failure_threshold");
+        assert_eq!(success.severity, "error");
+        assert_eq!(
+            success.action_taken,
+            "deferred mission and stopped automatic retry loop"
+        );
+        assert_eq!(
+            success.details.get("agent_outcome").and_then(|v| v.as_str()),
+            Some("ExecutionError")
+        );
+        assert_eq!(
+            success.details.get("agent_failure_count").and_then(|v| v.as_i64()),
+            Some(3)
+        );
+        assert_eq!(
+            success.details.get("threshold").and_then(|v| v.as_i64()),
+            Some(5)
+        );
+        assert_eq!(
+            success.details.get("source_label").and_then(|v| v.as_str()),
+            Some("queue")
+        );
+        assert!(
+            success.details.get("defer_error").is_none(),
+            "a successful defer carries no defer_error"
+        );
+
+        // Failure: the defer failed -> the audit must record FAILURE, not success.
+        let err_result: anyhow::Result<lcm::MissionStateRecord> = Err(anyhow::anyhow!("disk full"));
+        record_agent_failure_threshold_outcome(
+            &root,
+            &err_result,
+            304,
+            lcm::AgentOutcome::ExecutionError,
+            3,
+            5,
+            Some("t-304"),
+            "queue",
+        );
+        let failure = governance::list_recent_events(&root, 304, 50)
+            .unwrap()
+            .into_iter()
+            .find(|event| event.mechanism_id == "agent_failure_threshold")
+            .expect("a threshold event for the failed defer");
+        assert_eq!(failure.mechanism_id, "agent_failure_threshold");
+        assert_eq!(
+            failure.action_taken,
+            "defer_mission FAILED — automatic retry loop NOT stopped"
+        );
+        assert_eq!(
+            failure.details.get("defer_error").and_then(|v| v.as_str()),
+            Some("disk full"),
+            "the failed-defer audit must carry the defer error"
+        );
+
+        // Idempotence-key distinction: the SAME {conversation, failure_count} with
+        // different outcomes must produce TWO rows (the key prefixes differ), so a
+        // recorded failure is never deduped against a later success or vice-versa.
+        // Without distinct prefixes this collapses to one row.
+        let ok_same: anyhow::Result<lcm::MissionStateRecord> = Ok(record);
+        let err_same: anyhow::Result<lcm::MissionStateRecord> = Err(anyhow::anyhow!("locked"));
+        record_agent_failure_threshold_outcome(
+            &root,
+            &ok_same,
+            305,
+            lcm::AgentOutcome::ExecutionError,
+            3,
+            5,
+            Some("t-305"),
+            "queue",
+        );
+        record_agent_failure_threshold_outcome(
+            &root,
+            &err_same,
+            305,
+            lcm::AgentOutcome::ExecutionError,
+            3,
+            5,
+            Some("t-305"),
+            "queue",
+        );
+        let rows_305 = governance::list_recent_events(&root, 305, 50)
+            .unwrap()
+            .into_iter()
+            .filter(|event| event.mechanism_id == "agent_failure_threshold")
+            .count();
+        assert_eq!(
+            rows_305, 2,
+            "same conversation + count, Ok vs Err -> two distinct rows (key prefixes differ)"
+        );
     }
 
     #[test]
