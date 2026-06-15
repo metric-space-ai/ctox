@@ -12107,6 +12107,13 @@ fn runtime_error_is_transient_api_failure(error: &str) -> bool {
         || normalized.contains("database is busy")
         || normalized.contains("sqlite_busy")
         || normalized.contains("sqlite locked")
+        // gateway-1: managed-local-backend readiness failures (wrapped with the
+        // "failed to ensure local chat backend before direct session" context)
+        // are transient host-infra blockers. The cooldown gate above already
+        // recognizes them via summarize_known_infra_error; this second gate must
+        // match the same prefix or the worker burns the item instead of holding
+        // it for retry.
+        || normalized.contains("failed to ensure local chat backend")
 }
 
 fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -22045,6 +22052,27 @@ Use shell tools to create or update these files."
         assert!(runtime_error_is_transient_api_failure(error));
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
         assert!(turn_loop::summarize_runtime_error(error).contains("re-authentication"));
+    }
+
+    #[test]
+    fn local_chat_backend_readiness_failure_keeps_work_retryable() {
+        // gateway-1: a crashed/OOM managed local backend surfaces a supervisor
+        // readiness failure wrapped with the
+        // .context("failed to ensure local chat backend before direct session")
+        // prefix. Both retry gates must classify it as transient host-infra so
+        // the work item holds for cooldown instead of burning. Before the fix
+        // the cooldown was None and the worker routed the slice to "failed".
+        let error = "failed to ensure local chat backend before direct session: chat backend for Qwen3.5-27B did not become ready within 180s";
+        assert_eq!(
+            turn_loop::hard_runtime_blocker_retry_cooldown_secs(error),
+            Some(900)
+        );
+        assert!(runtime_error_is_transient_api_failure(error));
+        assert_eq!(failed_worker_route_status(false, false, true), "pending");
+        assert!(
+            turn_loop::summarize_runtime_error(error)
+                .contains("managed local backend did not become ready")
+        );
     }
 
     #[test]

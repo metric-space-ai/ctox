@@ -1441,6 +1441,17 @@ fn summarize_known_infra_error(content: &str) -> Option<String> {
             "CTOX chat backend could not start on this host because the integrated agent-runtime workspace manifest is not buildable in its current remote environment.".to_string(),
         );
     }
+    // gateway-1: every supervisor readiness failure on the local path (did not
+    // become ready within Ns / exited before becoming ready / did not become
+    // healthy while waiting) is wrapped with this .context prefix before it
+    // reaches the worker. Matching the prefix (not the three variant fragments)
+    // classifies a crashed or OOM managed local backend as a transient
+    // host-infra blocker so the task holds for cooldown instead of burning.
+    if lower.contains("failed to ensure local chat backend") {
+        return Some(
+            "CTOX chat backend could not start on this host because the managed local backend did not become ready. The task must stay open and retry after cooldown.".to_string(),
+        );
+    }
     None
 }
 
