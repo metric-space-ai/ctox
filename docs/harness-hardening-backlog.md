@@ -1331,7 +1331,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — `job.suggested_skill` is validated against the catalog once at the prompt-worker boundary (new pub `skill_store::skill_bundle_exists` over `ctox_skill_bundles`); on absence `record_skill_bound_missing_flow_event` emits exactly one `skill.bound_missing` harness-flow event chained on the leased message key + work item (same chaining as skills-5), with `{skill, source_label}` metadata. The dispatch hint still renders — a missing skill degrades, not aborts — and a catalog-lookup error surfaces a feed event instead of a false `bound_missing`. Test pins `skill_bundle_exists` false for a ghost skill and exactly one chained event.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/skill_store.rs::load_skill_bundle_by_name`, `src/core/skill_store.rs::resolve_materialized_skill_dir`, `src/core/context/live_context.rs::render_skill_dispatch_block`
