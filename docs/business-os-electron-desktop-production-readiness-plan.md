@@ -81,8 +81,11 @@ wieder testbar:
   Helper aus einem frischen Desktop-Profil fuer Installation, Inspect, Attach,
   simulierten App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak.
   Der `main`-/PR-CI-Desktop-E2E-Job fuehrt diesen Smoke auf macOS ebenfalls
-  aus, damit der Nachweis nicht nur lokal existiert. Noch offen ist der echte
-  Tag-/Signed-Run auf sauberer Maschine.
+  aus, damit der Nachweis nicht nur lokal existiert. GitHub-Actions-Run
+  `27517440788` fuer Commit `a182ea06` hat den Step
+  `Packaged bundled helper smoke` im Job `Business OS Desktop E2E (mac)`
+  erfolgreich abgeschlossen. Noch offen ist der echte Tag-/Signed-Run auf
+  sauberer Maschine.
 - Pairing-Invite und manuelles Signaling-Pairing speichern Secret-Material im
   SecretStore statt in der Registry.
 - `ctox business-os desktop invite` erzeugt ein Electron-kompatibles Pairing
@@ -368,12 +371,12 @@ Nicht umgesetzt oder noch nicht bewiesen:
 | 0. Baseline & Architekturentscheidung | 8% | Abgeschlossen | 100% |
 | 1. Electron Shell & Session Isolation | 12% | Abgeschlossen | 100% |
 | 2. ctox.dev Managed Source | 14% | In Umsetzung | 99% |
-| 3. Local Daemon Source | 12% | In Umsetzung | 96% |
+| 3. Local Daemon Source | 12% | In Umsetzung | 97% |
 | 4. Pairing Invite Source | 12% | Abgeschlossen | 100% |
 | 5. SSH/Sudo Remote Install Source | 14% | Abgeschlossen | 100% |
 | 6. Unified Switcher UX | 10% | Abgeschlossen | 100% |
 | 7. Secret Storage & Hardening | 10% | Abgeschlossen | 100% |
-| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 88% |
+| 8. Production E2E, Packaging & Release | 8% | In Umsetzung | 89% |
 | **Gesamt** | **100%** | **In Umsetzung** | **98%** |
 
 ## Welle 0: Baseline & Architekturentscheidung
@@ -516,7 +519,7 @@ Tests:
 
 ## Welle 3: Local Daemon Source
 
-Status: In Umsetzung, 96%.
+Status: In Umsetzung, 97%.
 
 Aufgaben:
 
@@ -578,6 +581,9 @@ Tests:
 - [x] `main`-/PR-CI fuehrt `npm run pack:dir:bundled-runtime-smoke` im
   macOS-Desktop-E2E-Job aus; `npm run release:check` erzwingt diesen
   Workflow-Vertrag.
+- [x] Live-CI-Nachweis fuer diesen Gate: GitHub-Actions-Run `27517440788`
+  fuer Commit `a182ea06`, Job `Business OS Desktop E2E (mac)`, Step
+  `Packaged bundled helper smoke`, ist gruen.
 
 ## Welle 4: Pairing Invite Source
 
@@ -901,7 +907,7 @@ Tests:
 
 ## Welle 8: Production E2E, Packaging & Release
 
-Status: In Umsetzung, 88%.
+Status: In Umsetzung, 89%.
 
 Release Gates:
 
@@ -918,6 +924,9 @@ Release Gates:
 - [x] macOS `main`-/PR-CI fuehrt denselben Packaged-Helper-Smoke auf einem
   sauberen GitHub-Runner aus; `release:check` prueft, dass der CI-Gate nicht
   versehentlich entfernt wird.
+- [x] Live-CI-Nachweis fuer den macOS Packaged-Helper-Smoke: Run
+  `27517440788`, Commit `a182ea06`, Job `Business OS Desktop E2E (mac)`,
+  Step `Packaged bundled helper smoke`, erfolgreich.
 - [x] `npm run test:electron-smoke` inklusive Session-Isolation,
   Protocol-Lifecycle, Renderer-Badges, ctox.dev Login-Cookie-Jar und
   ctox.dev Logout-Cookie-Clear, Access-Revocation/Launch-Rotation gegen
@@ -1000,6 +1009,7 @@ Release Gates:
 
 | Datum | Änderung |
 | --- | --- |
+| 2026-06-15 | Welle 3/8 macOS-CI-Evidenz fuer Packaged-App-Helper nachgetragen: GitHub-Actions-Run `27517440788` fuer Commit `a182ea06` hat im Job `Business OS Desktop E2E (mac)` den Step `Packaged bundled helper smoke` erfolgreich abgeschlossen. Welle 3 steigt auf 97%, Welle 8 auf 89%; Gesamt bleibt konservativ bei 98%, weil echter signierter/notarisierter Tag-Run und echte ctox.dev Membership-Revocation weiter fehlen. |
 | 2026-06-15 | Welle 3/8 CI-Gate fuer Packaged-App-Helper ergaenzt: Der `Business OS Desktop E2E (mac)` Job in `.github/workflows/ci.yml` fuehrt jetzt `npm run pack:dir:bundled-runtime-smoke` aus. `npm run release:check` erzwingt den Workflow-Befehl, damit der unpacked-`.app`-Helper-Nachweis auf einem sauberen macOS-Runner nicht wieder verloren geht. Offen bleibt weiter der signierte/notarisierte Tag-Run mit echten Installer-Artefakten. |
 | 2026-06-15 | Welle 3 Packaged-App-Helper-Nachweis ergaenzt: `npm run pack:dir:bundled-runtime-smoke` baut lokal eine unpacked macOS `.app` mit temporaerem gebuendeltem CTOX-Helper, validiert `Contents/Resources/ctox/ctox` als ausfuehrbar und nutzt den verpackten Helper aus einem frischen Desktop-Profil fuer Install, Inspect, Attach, App-Neustart und WebRTC-only Launch ohne Registry-Secret-Leak. Welle 3 steigt auf 96%; production-ready bleibt durch echten signierten/notarisierten Tag-Run und echte ctox.dev Membership-Revocation blockiert. |
 | 2026-06-15 | ctox.dev Live-Revocation eingeordnet: Der aktuelle Live-Account ist per read-only Membership-Check auf allen sechs sichtbaren Tenants `owner`. Ein sicherer, reversibler Entzug der eigenen Mitgliedschaft ist mit diesem Account kein valider Test; fuer den Produktionsnachweis braucht es einen separaten Nicht-Owner-Testmember oder eine dedizierte Testinstanz mit administrativ kontrollierbarem Mitglied. |
