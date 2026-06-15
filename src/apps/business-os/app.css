@@ -4851,7 +4851,9 @@ body[data-auth-state="locked"] .topbar {
   align-items: center;
   justify-content: center;
   min-height: 100%;
+  max-height: 100%;
   padding: 40px 24px;
+  overflow: auto;
   background:
     radial-gradient(
       circle at 50% 42%,
@@ -4867,6 +4869,12 @@ body[data-auth-state="locked"] .topbar {
   box-sizing: border-box;
 }
 
+.workspace-startup-loader:has(.startup-error-card:not([hidden])) {
+  justify-content: flex-start;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
 .startup-logo-container {
   position: relative;
   width: 140px;
@@ -4875,6 +4883,17 @@ body[data-auth-state="locked"] .topbar {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.workspace-startup-loader:has(.startup-error-card:not([hidden])) .startup-logo-container {
+  width: 72px;
+  height: 72px;
+  margin-bottom: 8px;
+}
+
+.workspace-startup-loader:has(.startup-error-card:not([hidden])) .startup-logo-svg {
+  width: 56px;
+  height: 56px;
 }
 
 .startup-logo-glow {
@@ -4909,6 +4928,11 @@ body[data-auth-state="locked"] .topbar {
   letter-spacing: 0;
   margin: 0 0 28px 0;
   color: var(--text-strong);
+}
+
+.workspace-startup-loader:has(.startup-error-card:not([hidden])) .startup-title {
+  font-size: 20px;
+  margin-bottom: 12px;
 }
 
 .startup-progress-container {
@@ -4956,9 +4980,12 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .startup-error-card {
-  margin-top: 32px;
+  display: flex;
+  flex-direction: column;
+  margin-top: 14px;
   width: 100%;
-  max-width: 480px;
+  max-width: min(560px, calc(100vw - 48px));
+  max-height: min(620px, calc(100vh - 170px));
   background: color-mix(in srgb, var(--surface) 92%, transparent);
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
@@ -4969,6 +4996,7 @@ body[data-auth-state="locked"] .topbar {
   text-align: left;
   box-sizing: border-box;
   animation: startup-shake 0.5s cubic-bezier(.36,.07,.19,.97) both;
+  overflow: hidden;
 }
 
 .startup-error-card[hidden] {
@@ -4999,7 +5027,10 @@ body[data-auth-state="locked"] .topbar {
 }
 
 .error-body {
-  margin-bottom: 24px;
+  min-height: 0;
+  margin-bottom: 0;
+  overflow: auto;
+  padding-right: 4px;
 }
 
 .error-body p {
@@ -5018,16 +5049,22 @@ body[data-auth-state="locked"] .topbar {
   border-radius: 8px;
   padding: 12px 16px;
   color: var(--text-strong);
-  overflow-x: auto;
+  overflow: auto;
   white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 150px;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  max-height: min(220px, 28vh);
   box-shadow: inset 0 2px 8px color-mix(in srgb, var(--text-strong) 10%, transparent);
 }
 
 .error-footer {
   display: flex;
   justify-content: flex-end;
+  flex-shrink: 0;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid color-mix(in srgb, var(--danger) 18%, transparent);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
 }
 
 .error-retry-btn {
@@ -5121,7 +5158,7 @@ body[data-auth-state="locked"] .topbar {
   font-size: 13.5px;
   line-height: 1.55;
   background: rgba(239, 68, 68, 0.08);
-  border-left: 3px solid #f87171;
+  border: 1px solid color-mix(in srgb, var(--danger) 34%, transparent);
   border-radius: 6px;
   padding: 12px 16px;
   color: #fecaca;

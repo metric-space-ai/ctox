@@ -11,7 +11,7 @@ const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260615-desktop-url-pairing1';
+const APP_BUILD = '20260615-desktop-error-surface2';
 // Monotonic token so a slow loading-shadow fetch from a previous module open
 // cannot paint over a newer one (rapid module switching).
 let activeLoadToken = 0;
@@ -6792,10 +6792,14 @@ function getFriendlyErrorMessage(error) {
     title = 'Fehler in Skript-Reihenfolge';
     description = 'Eine Systemvariable wurde vor ihrer Initialisierung aufgerufen (Temporal Dead Zone).';
     advice = 'Dieses Ladeproblem wurde behoben. Bitte leeren Sie den Browser-Cache und klicken Sie auf "Erneut versuchen".';
+  } else if (msg.includes('Failed to fetch dynamically imported module') || msg.includes('ctox-rxdb-js.mjs') || msg.includes('RxDB bundle import')) {
+    title = 'Business-OS-Dateien konnten nicht geladen werden';
+    description = 'Ein benötigtes CTOX-DB-Bundle fehlt, ist veraltet oder wurde vom Cache mit einer alten Version geladen.';
+    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, muss die Instanz mit den aktuellen Business-OS-Assets synchronisiert werden.';
   } else if (msg.includes('NetworkError') || msg.includes('Failed to fetch') || msg.includes('signaling')) {
     title = 'Netzwerkverbindung fehlgeschlagen';
-    description = 'Der Signalisierungs-Server für die Echtzeit-Synchronisation konnte nicht erreicht werden.';
-    advice = 'Bitte überprüfen Sie Ihre Netzwerkverbindung und stellen Sie sicher, dass die CTOX-Hintergrunddienste aktiv sind.';
+    description = 'Eine Netzwerk- oder WebRTC-Verbindung konnte nicht aufgebaut werden.';
+    advice = 'Bitte versuchen Sie es erneut. Wenn die Meldung bleibt, prüfen Sie die Instanzdienste und die Erreichbarkeit des Signaling-Servers.';
   }
 
   return { title, description, advice };
