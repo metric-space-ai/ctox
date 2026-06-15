@@ -5652,7 +5652,7 @@ fn run_completion_review(
         deterministic_evidence,
     };
     let mut outcome = review::review_completion_if_needed(root, &review_request, reply_text);
-    if let Some(guard_outcome) = spreadsheet_attachment_guard_outcome(job, &review_request) {
+    if let Some(guard_outcome) = spreadsheet_attachment_guard_outcome(root, job, &review_request) {
         push_event(
             state,
             format!(
@@ -7273,33 +7273,100 @@ fn review_context_keywords(job: &QueuedPrompt) -> Vec<String> {
     keywords
 }
 
+/// X2-01: the skill whose DECLARED contract the gate falls back to when the
+/// artifact context clearly requests the complete exhibitor/company-list
+/// deliverable but inbound routing did not bind a contract-declaring skill.
+/// Transitional — see `spreadsheet_attachment_guard_outcome`.
+const COMPLETE_LIST_FALLBACK_SKILL: &str = "intersolar-company-list";
+
+/// X2-01 transitional resolver: does the ARTIFACT context (job text + produced
+/// artifact text) request the COMPLETE exhibitor/company-list deliverable? Mirrors
+/// the legacy review-time trigger EXACTLY so the de-hardcoding does not under-gate
+/// a request whose inbound never surfaced the routing keywords (the routing layer
+/// only sees the inbound). Resolves WHICH deliverable applies; the pass/fail check
+/// stays a skill-declared hard-key contract. Remove once inbound routing reliably
+/// carries the contract-declaring skill.
+fn artifact_requests_complete_exhibitor_list(
+    job: &QueuedPrompt,
+    request: &review::CompletionReviewRequest,
+) -> bool {
+    let haystack = format!(
+        "{}\n{}\n{}\n{}",
+        job.prompt, job.goal, job.preview, request.artifact_text
+    )
+    .to_ascii_lowercase();
+    haystack.contains("intersolar")
+        && (haystack.contains("alle unternehmen")
+            || haystack.contains("alle aussteller")
+            || haystack.contains("aller unternehmen")
+            || haystack.contains("vollstaendig")
+            || haystack.contains("vollständig"))
+}
+
 fn spreadsheet_attachment_guard_outcome(
+    root: &Path,
     job: &QueuedPrompt,
     request: &review::CompletionReviewRequest,
 ) -> Option<review::ReviewOutcome> {
     if request.artifact_attachments.is_empty() {
         return None;
     }
-    let haystack = format!(
-        "{}\n{}\n{}\n{}",
-        job.prompt, job.goal, job.preview, request.artifact_text
-    )
-    .to_ascii_lowercase();
-    let requires_full_intersolar_company_list = haystack.contains("intersolar")
-        && (haystack.contains("alle unternehmen")
-            || haystack.contains("alle aussteller")
-            || haystack.contains("aller unternehmen")
-            || haystack.contains("vollstaendig")
-            || haystack.contains("vollständig"));
-    if !requires_full_intersolar_company_list {
+    // X2-01: enforce a deliverable contract resolved below, then check the workbook
+    // against its skill-DECLARED hard keys (row count + required columns) — never a
+    // magic literal in the gate. PRIMARY resolution: the bound skill's declared
+    // contract (the principled, fully de-hardcoded path).
+    let bound = request
+        .bound_skill
+        .as_deref()
+        .or(job.suggested_skill.as_deref());
+    let mut resolved = bound.and_then(|name| {
+        crate::skill_store::load_skill_deliverable_contract(root, name)
+            .ok()
+            .flatten()
+            .filter(|contract| contract.declares_spreadsheet_deliverable)
+            .map(|contract| (name.to_string(), contract))
+    });
+    // X2-01 TRANSITIONAL FALLBACK: until inbound routing is proven to reliably bind
+    // the contract-declaring skill, also resolve the complete-exhibitor-list
+    // deliverable from the ARTIFACT context, so the protective gate is not silently
+    // weakened for a request whose inbound did not surface the routing keywords.
+    if resolved.is_none() && artifact_requests_complete_exhibitor_list(job, request) {
+        if let Some(contract) =
+            crate::skill_store::load_skill_deliverable_contract(root, COMPLETE_LIST_FALLBACK_SKILL)
+                .ok()
+                .flatten()
+                .filter(|contract| contract.declares_spreadsheet_deliverable)
+        {
+            resolved = Some((COMPLETE_LIST_FALLBACK_SKILL.to_string(), contract));
+        }
+    }
+    let (skill_name, contract) = resolved?;
+    let skill_name = skill_name.as_str();
+
+    // Act only on the .xlsx attachments actually present (preserves the prior
+    // behaviour of gating present spreadsheets, not demanding one exists).
+    let xlsx_paths: Vec<&String> = request
+        .artifact_attachments
+        .iter()
+        .filter(|path| path.to_ascii_lowercase().ends_with(".xlsx"))
+        .collect();
+    if xlsx_paths.is_empty() {
         return None;
+    }
+    // Fail closed: a skill that declares a spreadsheet deliverable but omits its
+    // thresholds cannot validate the workbook, so it must NOT pass.
+    if contract.min_data_rows == 0 && contract.required_columns.is_empty() {
+        return Some(spreadsheet_guard_failure_outcome(
+            skill_name,
+            Vec::new(),
+            format!(
+                "Skill `{skill_name}` declares a spreadsheet deliverable but omits its required contract (min_data_rows / required_columns)."
+            ),
+        ));
     }
 
     let mut checked = Vec::new();
-    for path in &request.artifact_attachments {
-        if !path.to_ascii_lowercase().ends_with(".xlsx") {
-            continue;
-        }
+    for path in xlsx_paths {
         match inspect_xlsx_attachment(path) {
             Ok(evidence) => {
                 checked.push(format!(
@@ -7309,26 +7376,20 @@ fn spreadsheet_attachment_guard_outcome(
                     evidence.row_count.saturating_sub(1),
                     evidence.headers.join(", ")
                 ));
-                let has_plz = evidence
-                    .headers
-                    .iter()
-                    .any(|header| header.trim().eq_ignore_ascii_case("plz"));
-                if evidence.row_count.saturating_sub(1) < 200 || !has_plz {
+                if let Some(reason) = spreadsheet_contract_violation(&contract, &evidence) {
                     return Some(spreadsheet_guard_failure_outcome(
-                        checked,
-                        format!(
-                            "The attached Intersolar spreadsheet is not a complete PLZ deliverable: data_rows={} and PLZ column present={}.",
-                            evidence.row_count.saturating_sub(1),
-                            has_plz
-                        ),
+                        skill_name, checked, reason,
                     ));
                 }
             }
             Err(err) => {
                 checked.push(format!("`{path}` inspection failed: {err}"));
                 return Some(spreadsheet_guard_failure_outcome(
+                    skill_name,
                     checked,
-                    "The attached Intersolar spreadsheet could not be inspected.".to_string(),
+                    format!(
+                        "The attached spreadsheet for skill `{skill_name}` could not be inspected."
+                    ),
                 ));
             }
         }
@@ -7336,7 +7397,44 @@ fn spreadsheet_attachment_guard_outcome(
     None
 }
 
+/// X2-01: the pure deterministic contract check — returns a human-readable
+/// violation reason, or None when the workbook satisfies the skill-declared
+/// contract (minimum data-row count + required column headers, case-insensitive).
+/// Extracted so the hard-key rule is unit-testable without a skill DB.
+fn spreadsheet_contract_violation(
+    contract: &crate::skill_store::SkillDeliverableContract,
+    evidence: &SpreadsheetAttachmentEvidence,
+) -> Option<String> {
+    let data_rows = evidence.row_count.saturating_sub(1);
+    if contract.min_data_rows > 0 && data_rows < contract.min_data_rows {
+        return Some(format!(
+            "Workbook has {} data row(s); the deliverable contract requires at least {}.",
+            data_rows, contract.min_data_rows
+        ));
+    }
+    let missing: Vec<String> = contract
+        .required_columns
+        .iter()
+        .filter(|required| {
+            !evidence
+                .headers
+                .iter()
+                .any(|header| header.trim().eq_ignore_ascii_case(required.trim()))
+        })
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return Some(format!(
+            "Workbook is missing required column(s): [{}]. Present headers: [{}].",
+            missing.join(", "),
+            evidence.headers.join(", ")
+        ));
+    }
+    None
+}
+
 fn spreadsheet_guard_failure_outcome(
+    skill_name: &str,
     evidence: Vec<String>,
     summary: String,
 ) -> review::ReviewOutcome {
@@ -7348,25 +7446,24 @@ fn spreadsheet_guard_failure_outcome(
         report: "Deterministic spreadsheet attachment guard failed before completion.".to_string(),
         score: 5,
         reasons: vec!["spreadsheet_attachment_contract".to_string()],
-        failed_gates: vec![
-            "Attached spreadsheet does not satisfy the requested full Intersolar PLZ deliverable."
-                .to_string(),
-        ],
-        semantic_findings: vec![
-            "The task asked for all Intersolar companies, but the attached workbook is incomplete or lacks the required PLZ column."
-                .to_string(),
-        ],
+        failed_gates: vec![format!(
+            "Attached spreadsheet does not satisfy the deliverable contract declared by skill `{skill_name}`."
+        )],
+        semantic_findings: vec![format!(
+            "Skill `{skill_name}` declares a spreadsheet deliverable contract, but the attached workbook is incomplete or is missing a required column."
+        )],
         categorized_findings: vec![review::CategorizedFinding {
             id: "spreadsheet_attachment_contract".to_string(),
             category: review::FindingCategory::Rework,
             evidence: evidence.join(" | "),
             corrective_action:
-                "Build the complete workbook from the full source set, verify row count and PLZ column, then rerun the reviewed send."
+                "Rebuild the workbook from the full source set, verify the row count and required columns, then rerun the reviewed send."
                     .to_string(),
         }],
         open_items: vec![
-            "Create a complete Intersolar workbook with the full source row count and PLZ column."
-                .to_string(),
+            format!(
+                "Rebuild the workbook to satisfy skill `{skill_name}`'s declared row count and required columns."
+            ),
             "Attach only the verified complete workbook to the outbound mail.".to_string(),
         ],
         evidence,
@@ -11048,6 +11145,21 @@ fn inferred_skill_from_message_content(message: &channels::RoutedInboundMessage)
         message.subject, message.preview, message.body_text
     )
     .to_ascii_lowercase();
+    // X2-01: route the COMPLETE Intersolar exhibitor-list deliverable to the skill
+    // that declares its spreadsheet contract (min rows + PLZ column), so the review
+    // gate enforces a skill-declared HARD-KEY contract instead of a hardcoded
+    // company literal in the deterministic kernel gate. The customer-specific
+    // heuristic belongs here in the routing/suggestion layer (where heuristics are
+    // appropriate), not in the gate — this is the determinism-split fix.
+    if text.contains("intersolar")
+        && (text.contains("alle unternehmen")
+            || text.contains("alle aussteller")
+            || text.contains("aller unternehmen")
+            || text.contains("vollstaendig")
+            || text.contains("vollständig"))
+    {
+        return Some("intersolar-company-list".to_string());
+    }
     if !looks_like_web_extraction_task(&text) {
         return None;
     }
@@ -25464,18 +25576,106 @@ Was jetzt zu tun ist:\n\
     }
 
     #[test]
-    fn spreadsheet_guard_blocks_tiny_intersolar_all_companies_attachment() {
+    fn spreadsheet_guard_enforces_skill_declared_contract() {
+        // X2-01: the gate now enforces the BOUND SKILL's declared contract (resolved
+        // from the durable skill store), not a hardcoded company literal.
         let root = temp_root("xlsx-guard");
-        let path = root.join("tiny.xlsx");
-        write_minimal_xlsx(&path, &["company", "PLZ"], 19);
-        let job = QueuedPrompt {
-            prompt:
-                "Bitte recherchiere die Postleitzahl aller Unternehmen aus der Intersolar und sende die Excel."
-                    .to_string(),
-            goal: "Intersolar alle Unternehmen PLZ".to_string(),
-            preview: "Intersolar PLZ".to_string(),
+        crate::skill_store::bootstrap_embedded_system_skills(&root)
+            .expect("bootstrap embedded system skills");
+        let make_job = |skill: &str| QueuedPrompt {
+            prompt: "Build the complete exhibitor-list workbook.".to_string(),
+            goal: "complete list".to_string(),
+            preview: "list".to_string(),
             source_label: "tui".to_string(),
-            suggested_skill: None,
+            suggested_skill: Some(skill.to_string()),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("jill".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let make_request = |skill: &str, path: &Path| review::CompletionReviewRequest {
+            artifact_text: "Die Excel ist fertig.".to_string(),
+            artifact_attachments: vec![path.to_string_lossy().into_owned()],
+            bound_skill: Some(skill.to_string()),
+            ..review::CompletionReviewRequest::default()
+        };
+
+        // A 19-row workbook fails intersolar-company-list's >=200 contract.
+        let tiny = root.join("tiny.xlsx");
+        write_minimal_xlsx(&tiny, &["company", "PLZ"], 19);
+        let outcome = spreadsheet_attachment_guard_outcome(
+            &root,
+            &make_job("intersolar-company-list"),
+            &make_request("intersolar-company-list", &tiny),
+        )
+        .expect("a 19-row workbook must fail the >=200 contract");
+        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
+        assert!(outcome.summary.contains("19") && outcome.summary.contains("200"));
+        // The deterministic gate carries no hardcoded company literal anymore.
+        assert!(!outcome.summary.to_ascii_lowercase().contains("intersolar"));
+
+        // A workbook missing the required PLZ column also fails.
+        let no_plz = root.join("no_plz.xlsx");
+        write_minimal_xlsx(&no_plz, &["company", "city"], 250);
+        assert_eq!(
+            spreadsheet_attachment_guard_outcome(
+                &root,
+                &make_job("intersolar-company-list"),
+                &make_request("intersolar-company-list", &no_plz),
+            )
+            .expect("a workbook missing PLZ must fail")
+            .verdict,
+            review::ReviewVerdict::Fail
+        );
+
+        // A complete workbook (>=200 rows + PLZ) satisfies the same contract.
+        let full = root.join("full.xlsx");
+        write_minimal_xlsx(&full, &["company", "PLZ"], 200);
+        assert!(
+            spreadsheet_attachment_guard_outcome(
+                &root,
+                &make_job("intersolar-company-list"),
+                &make_request("intersolar-company-list", &full),
+            )
+            .is_none(),
+            "a complete workbook satisfying the contract must pass"
+        );
+
+        // A bound skill that declares NO spreadsheet contract is never gated.
+        assert!(
+            spreadsheet_attachment_guard_outcome(
+                &root,
+                &make_job("universal-scraping"),
+                &make_request("universal-scraping", &tiny),
+            )
+            .is_none(),
+            "a skill without a spreadsheet contract must not be gated"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spreadsheet_guard_fallback_preserves_legacy_artifact_coverage() {
+        // X2-01 behavior-preservation: a request whose INBOUND bound only a
+        // no-contract skill, but whose ARTIFACT context requests the complete
+        // exhibitor list, must STILL be gated via the transitional artifact fallback
+        // — no protective-gate regression vs the legacy artifact-text trigger.
+        let root = temp_root("xlsx-guard-fallback");
+        // No bootstrap on purpose: the embedded-skill fallback in
+        // load_skill_deliverable_contract must resolve the contract so the gate fires
+        // even on a non-bootstrapped instance (the production default).
+        let tiny = root.join("tiny.xlsx");
+        write_minimal_xlsx(&tiny, &["company", "PLZ"], 19);
+        let job = QueuedPrompt {
+            prompt: "Bitte alle Aussteller der Intersolar mit PLZ als komplette Excel.".to_string(),
+            goal: "Intersolar alle Aussteller".to_string(),
+            preview: "list".to_string(),
+            source_label: "tui".to_string(),
+            suggested_skill: Some("universal-scraping".to_string()),
             leased_message_keys: Vec::new(),
             leased_ticket_event_keys: Vec::new(),
             thread_key: Some("jill".to_string()),
@@ -25485,16 +25685,103 @@ Was jetzt zu tun ist:\n\
             outbound_anchor: None,
         };
         let request = review::CompletionReviewRequest {
-            artifact_text: "Die Excel ist fertig.".to_string(),
-            artifact_attachments: vec![path.to_string_lossy().into_owned()],
+            artifact_text: "Die Excel mit allen Ausstellern der Intersolar ist fertig.".to_string(),
+            artifact_attachments: vec![tiny.to_string_lossy().into_owned()],
+            bound_skill: Some("universal-scraping".to_string()),
             ..review::CompletionReviewRequest::default()
         };
+        assert_eq!(
+            spreadsheet_attachment_guard_outcome(&root, &job, &request)
+                .expect("artifact fallback must still gate the complete-list deliverable")
+                .verdict,
+            review::ReviewVerdict::Fail
+        );
 
-        let outcome = spreadsheet_attachment_guard_outcome(&job, &request)
-            .expect("tiny all-companies workbook must be blocked");
+        // A generic scraping artifact (no complete-list signal) bound to the same
+        // no-contract skill is NOT gated -> the fallback does not over-gate.
+        let job_generic = QueuedPrompt {
+            prompt: "Bitte die Tabelle von example.com auslesen.".to_string(),
+            goal: "scrape".to_string(),
+            ..job.clone()
+        };
+        let generic = review::CompletionReviewRequest {
+            artifact_text: "Die Tabelle ist fertig.".to_string(),
+            artifact_attachments: vec![tiny.to_string_lossy().into_owned()],
+            bound_skill: Some("universal-scraping".to_string()),
+            ..review::CompletionReviewRequest::default()
+        };
+        assert!(
+            spreadsheet_attachment_guard_outcome(&root, &job_generic, &generic).is_none(),
+            "a generic artifact without the complete-list signal must not be gated"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
-        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
-        assert!(outcome.summary.contains("data_rows=19"));
+    #[test]
+    fn spreadsheet_contract_violation_checks_rows_then_columns() {
+        let contract = crate::skill_store::SkillDeliverableContract {
+            required_columns: vec!["PLZ".to_string()],
+            min_data_rows: 200,
+            declares_spreadsheet_deliverable: true,
+        };
+        let evidence = |rows: usize, headers: &[&str]| SpreadsheetAttachmentEvidence {
+            path: "x.xlsx".to_string(),
+            sheet_name: "s".to_string(),
+            row_count: rows,
+            headers: headers.iter().map(|h| h.to_string()).collect(),
+        };
+        // 19 data rows (< 200) -> row violation naming the threshold.
+        assert!(
+            spreadsheet_contract_violation(&contract, &evidence(20, &["company", "PLZ"]))
+                .expect("short workbook violates")
+                .contains("200")
+        );
+        // Enough rows but missing PLZ -> column violation.
+        assert!(
+            spreadsheet_contract_violation(&contract, &evidence(250, &["company"]))
+                .expect("missing column violates")
+                .to_ascii_uppercase()
+                .contains("PLZ")
+        );
+        // Enough rows + PLZ present (case-insensitive) -> satisfied.
+        assert!(
+            spreadsheet_contract_violation(&contract, &evidence(250, &["Company", "plz"]))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn intersolar_complete_list_inbound_routes_to_contract_skill() {
+        let inbound = |body: &str| channels::RoutedInboundMessage {
+            message_key: "k".to_string(),
+            channel: "email".to_string(),
+            account_key: "a".to_string(),
+            thread_key: "t".to_string(),
+            sender_display: String::new(),
+            sender_address: String::new(),
+            subject: "Datenanfrage".to_string(),
+            preview: String::new(),
+            body_text: body.to_string(),
+            external_created_at: String::new(),
+            workspace_root: None,
+            metadata: serde_json::Value::Null,
+            preferred_reply_modality: None,
+        };
+        // A complete-exhibitor-list request routes to the contract-declaring skill,
+        // so the gate has a contract to enforce — the determinism-split fix.
+        assert_eq!(
+            inferred_skill_from_message_content(&inbound(
+                "Bitte alle Aussteller der Intersolar mit PLZ als Excel."
+            )),
+            Some("intersolar-company-list".to_string())
+        );
+        // A generic web-extraction request still routes to the general skill.
+        assert_eq!(
+            inferred_skill_from_message_content(&inbound(
+                "Bitte die Ausstellerliste von https://example.com als Excel auslesen."
+            )),
+            Some("universal-scraping".to_string())
+        );
     }
 
     #[test]
