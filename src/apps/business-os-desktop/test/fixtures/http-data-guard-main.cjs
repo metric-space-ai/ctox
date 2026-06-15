@@ -68,8 +68,10 @@ app.whenReady().then(async () => {
     const blockedPaths = ["/api/business-os/records", "/rxdb/pull", "/commands"];
     const resultOk = result.status.ok
       && result.status.status === 200
+      && result["/rxdb/dist/ctox-rxdb-js.mjs"].ok === true
       && blockedPaths.every((entry) => result[entry].ok === false)
       && serverState.requests.includes("/api/business-os/status")
+      && serverState.requests.includes("/rxdb/dist/ctox-rxdb-js.mjs")
       && blockedPaths.every((entry) => !serverState.requests.includes(entry))
       && !view.webContents.getURL().includes("ctox_config=");
     writeResult({
@@ -113,6 +115,7 @@ async function attempt(path, options) {
 (async () => {
   window.__ctoxHttpDataGuardResult = {
     status: await attempt("/api/business-os/status"),
+    "/rxdb/dist/ctox-rxdb-js.mjs": await attempt("/rxdb/dist/ctox-rxdb-js.mjs"),
     "/api/business-os/records": await attempt("/api/business-os/records"),
     "/rxdb/pull": await attempt("/rxdb/pull"),
     "/commands": await attempt("/commands", { method: "POST", body: "{}" }),

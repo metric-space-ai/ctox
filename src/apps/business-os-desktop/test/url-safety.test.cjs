@@ -29,6 +29,10 @@ test("classifies Business OS HTTP data requests separately from control plane", 
   );
   assert.equal(isForbiddenBusinessOsHttpDataRequest("https://tenant.example.com/api/business-os/records"), true);
   assert.equal(isForbiddenBusinessOsHttpDataRequest("https://tenant.example.com/api/business-os/commands"), true);
+  assert.equal(
+    isForbiddenBusinessOsHttpDataRequest("https://tenant.example.com/rxdb/dist/ctox-rxdb-js.mjs?v=20260614"),
+    false,
+  );
   assert.equal(isForbiddenBusinessOsHttpDataRequest("https://tenant.example.com/rxdb/pull"), true);
   assert.equal(isForbiddenBusinessOsHttpDataRequest("https://tenant.example.com/commands"), true);
   assert.equal(isForbiddenBusinessOsHttpDataRequest("wss://signaling.ctox.dev/room"), false);

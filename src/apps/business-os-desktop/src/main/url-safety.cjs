@@ -58,6 +58,7 @@ function isForbiddenBusinessOsHttpDataRequest(rawUrl) {
   if (path.startsWith("/api/business-os/") || path === "/api/business-os") {
     return !ALLOWED_BUSINESS_OS_CONTROL_PATHS.has(path);
   }
+  if (path.startsWith("/rxdb/dist/")) return false;
   if (path.startsWith("/rxdb/")) return true;
   if (path === "/commands" || path.startsWith("/commands/")) return true;
   return false;
