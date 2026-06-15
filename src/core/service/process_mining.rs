@@ -1108,7 +1108,7 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
                        child_entity_type, child_entity_id, spawn_kind,
                        spawn_reason, actor, checkpoint_key, budget_key,
                        max_attempts, accepted, violation_codes_json,
-                       request_json, created_at, updated_at, terminal_reaped_at
+                       request_json, created_at, updated_at
                 FROM ctox_core_spawn_edges
                 ORDER BY updated_at DESC
                 LIMIT ?1
@@ -1134,7 +1134,6 @@ pub fn handle_process_mining_command(root: &Path, args: &[String]) -> Result<()>
                         "request_summary": spawn_request_summary(&request_json),
                         "created_at": row.get::<_, String>(14)?,
                         "updated_at": row.get::<_, String>(15)?,
-                        "terminal_reaped_at": row.get::<_, Option<String>>(16)?,
                     }))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
