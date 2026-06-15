@@ -4319,7 +4319,7 @@ fn start_prompt_worker(
                                     && should_queue_artifact_outcome_recovery(&job)
                                     && outcome_witness_rejection_count(&root, &job)
                                         .map(|count| {
-                                            count < review_checkpoint_requeue_block_threshold()
+                                            count < review_checkpoint_requeue_block_threshold(&root)
                                         })
                                         .unwrap_or(true)
                                 {
@@ -8646,7 +8646,7 @@ fn job_outcome_entity_id(job: &QueuedPrompt) -> String {
 
 fn outcome_witness_retry_route_status(root: &Path, job: &QueuedPrompt) -> &'static str {
     match outcome_witness_rejection_count(root, job) {
-        Ok(count) if count >= review_checkpoint_requeue_block_threshold() => "failed",
+        Ok(count) if count >= review_checkpoint_requeue_block_threshold(root) => "failed",
         Ok(_) | Err(_) => "pending",
     }
 }
@@ -8679,7 +8679,7 @@ fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPr
         return false;
     }
     outcome_witness_rejection_count(root, job)
-        .map(|count| count < review_checkpoint_requeue_block_threshold())
+        .map(|count| count < review_checkpoint_requeue_block_threshold(root))
         .unwrap_or(true)
 }
 
@@ -8930,7 +8930,7 @@ fn terminalize_exhausted_queue_review_budget_before_run(
     {
         return Ok(None);
     }
-    let threshold = review_checkpoint_requeue_block_threshold();
+    let threshold = review_checkpoint_requeue_block_threshold(root);
     let mut exhausted = Vec::new();
     for message_key in &job.leased_message_keys {
         let attempts = queue_review_budget_attempt_count(root, job, message_key)?;
@@ -9166,7 +9166,7 @@ fn queue_review_unavailable_retry_disposition(
     job: &QueuedPrompt,
     summary: &str,
 ) -> Result<CompletionReviewDisposition> {
-    let threshold = review_checkpoint_requeue_block_threshold();
+    let threshold = review_checkpoint_requeue_block_threshold(root);
     let mut exhausted = Vec::new();
     let mut proof_ids = Vec::new();
     for message_key in &job.leased_message_keys {
@@ -9430,7 +9430,7 @@ fn queue_review_rejection_feedback_disposition(
     outcome: &review::ReviewOutcome,
     prior_reply: &str,
 ) -> Result<CompletionReviewDisposition> {
-    let threshold = review_checkpoint_requeue_block_threshold();
+    let threshold = review_checkpoint_requeue_block_threshold(root);
     let mut exhausted = Vec::new();
     let mut proof_ids = Vec::new();
     for message_key in &job.leased_message_keys {
@@ -14185,33 +14185,46 @@ fn runtime_api_retry_review_rejection_block_note(
     )))
 }
 
-fn review_checkpoint_requeue_block_threshold() -> usize {
-    match std::env::var("CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD") {
-        Ok(value) => match value.trim().parse::<usize>() {
+// review-2: the finite review/rework requeue budget is the ranking function the
+// core state-machine termination proof relies on (core_state_machine.rs: the
+// "review_rounds_left + reviewer_unavailable_retries_left + validator_rework_left
+// strictly decreases" invariant). Its override therefore must come from durable,
+// auditable runtime config — NOT ambient process environment, per the CLAUDE.md
+// hard rule "No global env-var controls for runtime state." Read it through
+// runtime_env::env_or_config (typed AppConfig / SQLite runtime store). The const
+// default (5) and the MAX_* clamp (also 5, so an override can only LOWER the
+// budget toward 1, never raise it) are preserved so the finite-budget invariant
+// behind the termination proof is unchanged.
+fn review_checkpoint_requeue_block_threshold(root: &Path) -> usize {
+    match runtime_env::env_or_config(root, "CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD") {
+        Some(value) => match value.trim().parse::<usize>() {
             Ok(parsed) if parsed > 0 => parsed.min(MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD),
             _ => REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
         },
-        Err(_) => REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+        None => REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
     }
 }
 
-fn review_rework_checkpoint_requeue_block_threshold() -> usize {
-    match std::env::var("CTOX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD") {
-        Ok(value) => match value.trim().parse::<usize>() {
+fn review_rework_checkpoint_requeue_block_threshold(root: &Path) -> usize {
+    match runtime_env::env_or_config(
+        root,
+        "CTOX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD",
+    ) {
+        Some(value) => match value.trim().parse::<usize>() {
             Ok(parsed) if parsed > 0 => {
                 parsed.min(MAX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD)
             }
             _ => REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
         },
-        Err(_) => REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
+        None => REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD,
     }
 }
 
-fn review_checkpoint_requeue_block_threshold_for_kind(kind: &str) -> usize {
+fn review_checkpoint_requeue_block_threshold_for_kind(root: &Path, kind: &str) -> usize {
     if kind == "review-rework" {
-        review_rework_checkpoint_requeue_block_threshold()
+        review_rework_checkpoint_requeue_block_threshold(root)
     } else {
-        review_checkpoint_requeue_block_threshold()
+        review_checkpoint_requeue_block_threshold(root)
     }
 }
 
@@ -14224,7 +14237,7 @@ fn review_checkpoint_loop_disposition(
         return Ok(None);
     };
     let attempts = review_checkpoint_requeue_attempt_count(root, work_id)?;
-    let threshold = review_checkpoint_requeue_block_threshold_for_kind(&item.kind);
+    let threshold = review_checkpoint_requeue_block_threshold_for_kind(root, &item.kind);
     if attempts < threshold {
         return Ok(None);
     }
@@ -16204,6 +16217,79 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    /// review-2: the review/rework requeue budget — the ranking function the core
+    /// state-machine termination proof relies on (review_rounds_left + ... strictly
+    /// decreases) — must be overridable only from durable, auditable runtime config,
+    /// NOT ambient process environment (CLAUDE.md "No global env-var controls for
+    /// runtime state"). This pins that the helpers read the SQLite runtime store via
+    /// runtime_env::env_or_config, honor an override, and preserve the const default,
+    /// the MAX_* clamp, and the >0 invariant the termination proof depends on.
+    #[test]
+    fn review_requeue_budget_threshold_reads_runtime_config_not_env() {
+        let root = temp_root("review-2-threshold-config");
+
+        // No override -> the const defaults.
+        assert_eq!(
+            review_checkpoint_requeue_block_threshold(&root),
+            REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD
+        );
+        assert_eq!(
+            review_rework_checkpoint_requeue_block_threshold(&root),
+            REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD
+        );
+
+        // A durable override (written to the SQLite runtime store, NOT std::env)
+        // lowers the budget; for_kind dispatches review vs rework correctly.
+        let mut settings = runtime_env::load_runtime_env_map(&root).unwrap_or_default();
+        settings.insert(
+            "CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD".to_string(),
+            "2".to_string(),
+        );
+        settings.insert(
+            "CTOX_REVIEW_REWORK_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD".to_string(),
+            "1".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings).expect("persist runtime config");
+        assert_eq!(review_checkpoint_requeue_block_threshold(&root), 2);
+        assert_eq!(review_rework_checkpoint_requeue_block_threshold(&root), 1);
+        assert_eq!(
+            review_checkpoint_requeue_block_threshold_for_kind(&root, "review-rework"),
+            1
+        );
+        assert_eq!(
+            review_checkpoint_requeue_block_threshold_for_kind(&root, "review"),
+            2
+        );
+
+        // The MAX_* clamp holds: an override above the clamp cannot RAISE the
+        // budget, so the finite-variant bound behind the termination proof is safe.
+        let mut clamp = runtime_env::load_runtime_env_map(&root).unwrap_or_default();
+        clamp.insert(
+            "CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD".to_string(),
+            "999".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &clamp).expect("persist clamp override");
+        assert_eq!(
+            review_checkpoint_requeue_block_threshold(&root),
+            MAX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD
+        );
+
+        // A zero / invalid override falls back to the const default — never 0,
+        // which would break the strictly-decreasing budget.
+        let mut zero = runtime_env::load_runtime_env_map(&root).unwrap_or_default();
+        zero.insert(
+            "CTOX_REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD".to_string(),
+            "0".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &zero).expect("persist zero override");
+        assert_eq!(
+            review_checkpoint_requeue_block_threshold(&root),
+            REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -20480,7 +20566,7 @@ Business OS command:
         outcome.verdict = review::ReviewVerdict::Fail;
         outcome.failed_gates = vec!["Missing required output.".to_string()];
 
-        for attempt in 1..review_checkpoint_requeue_block_threshold() {
+        for attempt in 1..review_checkpoint_requeue_block_threshold(&root) {
             channels::lease_queue_task(&root, &task.message_key, "ctox-service-test")
                 .expect("failed to lease queue task");
             let disposition = handle_actionable_completion_review_rejection(
@@ -20555,7 +20641,7 @@ Business OS command:
             .expect("failed to count queue review checkpoint proofs");
         assert_eq!(
             proof_count as usize,
-            review_checkpoint_requeue_block_threshold()
+            review_checkpoint_requeue_block_threshold(&root)
         );
         let requeue_count: i64 = conn
             .query_row(
@@ -20575,7 +20661,7 @@ Business OS command:
             .expect("failed to count queue review requeue proofs");
         assert_eq!(
             requeue_count as usize,
-            review_checkpoint_requeue_block_threshold() - 1
+            review_checkpoint_requeue_block_threshold(&root) - 1
         );
     }
 
@@ -20619,7 +20705,7 @@ Business OS command:
             .workspace_root
             .as_deref()
             .expect("test queue task should be workspace-backed");
-        for attempt in 1..review_checkpoint_requeue_block_threshold() {
+        for attempt in 1..review_checkpoint_requeue_block_threshold(&root) {
             let verification_request = verification::SliceVerificationRequest {
                 conversation_id: turn_loop::CHAT_CONVERSATION_ID,
                 goal: format!("Review rework attempt {attempt} changed the worker prompt"),
@@ -20675,7 +20761,7 @@ Business OS command:
             .expect("failed to load queue review checkpoint proof");
         assert!(checkpoint_attempt.contains(&format!(
             "\"review_checkpoint_attempt\":\"{}\"",
-            review_checkpoint_requeue_block_threshold()
+            review_checkpoint_requeue_block_threshold(&root)
         )));
     }
 
@@ -20718,7 +20804,7 @@ Business OS command:
             .workspace_root
             .as_deref()
             .expect("test queue task should be workspace-backed");
-        for attempt in 0..review_checkpoint_requeue_block_threshold() {
+        for attempt in 0..review_checkpoint_requeue_block_threshold(&root) {
             let verification_request = verification::SliceVerificationRequest {
                 conversation_id: turn_loop::CHAT_CONVERSATION_ID,
                 goal: format!("Changed review feedback prompt {attempt}"),
@@ -21027,7 +21113,7 @@ Business OS command:
     #[test]
     fn review_spawn_budget_fails_unbounded_self_work_cascade() {
         let root = temp_root("ctox-review-spawn-budget");
-        for attempt in 0..review_checkpoint_requeue_block_threshold() {
+        for attempt in 0..review_checkpoint_requeue_block_threshold(&root) {
             create_self_work_backed_queue_task(
                 &root,
                 DurableSelfWorkQueueRequest {
@@ -21421,7 +21507,7 @@ Business OS command:
         )
         .expect("failed to create self-work");
 
-        let threshold = review_checkpoint_requeue_block_threshold();
+        let threshold = review_checkpoint_requeue_block_threshold(&root);
         for attempt in 0..threshold {
             let task = requeue_review_rejected_self_work(
                 &root,
@@ -21487,7 +21573,7 @@ Business OS command:
         )
         .expect("failed to create review-rework self-work");
 
-        let rework_threshold = review_rework_checkpoint_requeue_block_threshold();
+        let rework_threshold = review_rework_checkpoint_requeue_block_threshold(&root);
         assert_eq!(rework_threshold, 5);
 
         for attempt in 0..rework_threshold {
@@ -21623,7 +21709,9 @@ Business OS command:
             AbstractRoute::Terminal,
         ] {
             let mut route = start;
-            let mut requeue_budget = review_checkpoint_requeue_block_threshold();
+            // review-2: this abstract worst-case termination model has no runtime
+            // root; the const IS the default the helper returns with no override.
+            let mut requeue_budget = REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD;
             let mut variant = requeue_budget + route_weight(route);
 
             for _ in 0..16 {
@@ -25773,7 +25861,7 @@ The controller must update stale files itself."
             outbound_anchor: None,
         };
 
-        for _ in 0..=review_checkpoint_requeue_block_threshold() {
+        for _ in 0..=review_checkpoint_requeue_block_threshold(&root) {
             let _ = enforce_job_outcome_witness(
                 &root,
                 &job,
@@ -25820,7 +25908,7 @@ The controller must update stale files itself."
             outbound_anchor: None,
         };
 
-        for _ in 0..=review_checkpoint_requeue_block_threshold() {
+        for _ in 0..=review_checkpoint_requeue_block_threshold(&root) {
             let _ = enforce_job_outcome_witness(
                 &root,
                 &job,
