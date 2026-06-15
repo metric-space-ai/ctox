@@ -22069,10 +22069,8 @@ Use shell tools to create or update these files."
         );
         assert!(runtime_error_is_transient_api_failure(error));
         assert_eq!(failed_worker_route_status(false, false, true), "pending");
-        assert!(
-            turn_loop::summarize_runtime_error(error)
-                .contains("managed local backend did not become ready")
-        );
+        assert!(turn_loop::summarize_runtime_error(error)
+            .contains("managed local backend did not become ready"));
     }
 
     #[test]
