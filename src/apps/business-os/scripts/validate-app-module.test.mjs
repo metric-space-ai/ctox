@@ -31,6 +31,7 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   const dir = join(root, 'runtime/business-os/installed-modules', moduleId);
   mkdirSync(join(dir, 'locales'), { recursive: true });
   mkdirSync(join(dir, 'tests'), { recursive: true });
+  mkdirSync(join(dir, 'core'), { recursive: true });
   writeJson(join(dir, 'module.json'), {
     id: moduleId,
     title: moduleId,
@@ -70,11 +71,37 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
     '};',
     '',
   ].join('\n'));
+  writeFileSync(join(dir, 'core/automation.mjs'), overrides.automationJs || [
+    'export function buildFollowUpCommand(record = {}) {',
+    '  return {',
+    "    id: `cmd_${record.id || 'demo'}`,",
+    "    module: 'good-module',",
+    "    type: 'business_os.chat.task',",
+    "    command_type: 'business_os.chat.task',",
+    "    record_id: record.id || 'demo',",
+    '    payload: {',
+    "      title: `Review ${record.title || 'record'}`,",
+    "      instruction: `Review ${record.title || 'record'} and create the next CTOX follow-up.`,",
+    "      prompt: `Review ${record.title || 'record'} and create the next CTOX follow-up.`,",
+    '      record_snapshot: record,',
+    "      outbound_channel: 'business_os_chat',",
+    "      response_channel: 'business_os_chat',",
+    '    },',
+    "    client_context: { source: 'validator-fixture', surface: 'validator-fixture.follow-up' },",
+    '  };',
+    '}',
+    '',
+  ].join('\n'));
   writeFileSync(join(dir, 'index.html'), overrides.indexHtml || '<main class="good-module"><section>Ready</section></main>\n');
   writeFileSync(join(dir, 'index.css'), overrides.indexCss || '.good-module { --good-accent: #2563eb; color: inherit; }\n');
   writeFileSync(join(dir, 'index.js'), overrides.indexJs || [
+    "import { buildFollowUpCommand } from './core/automation.mjs';",
+    '',
     'export async function mount(ctx) {',
-    "  ctx.host.textContent = 'Ready';",
+    "  ctx.host.innerHTML = '<button type=\"button\" data-action=\"follow-up\">Review</button>';",
+    "  ctx.host.querySelector('[data-action=\"follow-up\"]')?.addEventListener('click', () => {",
+    "    ctx.commandBus.dispatch(buildFollowUpCommand({ id: 'demo', title: 'Demo' }));",
+    '  });',
     '  return () => { ctx.host.textContent = ""; };',
     '}',
     '',
@@ -84,7 +111,10 @@ function writeInstalledModule(root, moduleId, overrides = {}) {
   writeJson(join(dir, 'locales/en.json'), { title: moduleId });
   writeFileSync(join(dir, 'tests/basic.test.mjs'), overrides.testJs || [
     "import assert from 'node:assert/strict';",
-    'assert.equal(1 + 1, 2);',
+    "import { buildFollowUpCommand } from '../core/automation.mjs';",
+    "const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });",
+    "assert.equal(command.type, 'business_os.chat.task');",
+    "assert.equal(command.command_type, 'business_os.chat.task');",
     '',
   ].join('\n'));
   return dir;
@@ -289,6 +319,23 @@ function writeSourceModule(root, moduleId, overrides = {}) {
 
 {
   const root = makeWorkspace();
+  writeInstalledModule(root, 'embeddedicon', {
+    manifest: {
+      layout: {
+        shell: 'full-workspace',
+        left: 'List',
+        center: 'Details',
+        icon_svg: '<svg></svg>',
+      },
+    },
+  });
+  const run = runValidator(root, 'embeddedicon', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /module\.json layout\.icon_svg is forbidden/);
+}
+
+{
+  const root = makeWorkspace();
   writeInstalledModule(root, 'missingversion', {
     manifest: { version: undefined },
   });
@@ -332,6 +379,92 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, 'webstorage', '--installed');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /localStorage\/sessionStorage persistence/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'noautomation', {
+    automationJs: [
+      'export function buildFollowUpCommand(record = {}) {',
+      "  return { type: 'noop', record_id: record.id || '' };",
+      '}',
+      '',
+    ].join('\n'),
+    indexJs: [
+      'export async function mount(ctx) {',
+      "  ctx.host.textContent = 'Ready';",
+      '  return () => { ctx.host.textContent = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      'assert.equal(1 + 1, 2);',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'noautomation', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must dispatch at least one real automation through ctx\.commandBus\.dispatch/);
+  assert.match(run.stderr, /must include a business_os\.chat\.task automation command/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingcommandtype', {
+    automationJs: [
+      'export function buildFollowUpCommand(record = {}) {',
+      '  return {',
+      "    module: 'missingcommandtype',",
+      "    type: 'business_os.chat.task',",
+      "    record_id: record.id || 'demo',",
+      "    payload: { record_snapshot: record },",
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'missingcommandtype', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /must preserve command_type: business_os\.chat\.task/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'missingsnapshot', {
+    automationJs: [
+      'export function buildFollowUpCommand(record = {}) {',
+      '  return {',
+      "    module: 'missingsnapshot',",
+      "    type: 'business_os.chat.task',",
+      "    command_type: 'business_os.chat.task',",
+      "    record_id: record.id || 'demo',",
+      "    payload: { title: record.title || 'Demo' },",
+      '  };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'missingsnapshot', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /automation must include a source record_snapshot/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'frameworkruntime', {
+    indexJs: [
+      'export async function mount(ctx) {',
+      "  const view = React.createElement('div', null, 'Nope');",
+      '  ctx.host.textContent = String(view);',
+      '  return () => { ctx.host.textContent = ""; };',
+      '}',
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'frameworkruntime', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /vanilla HTML\/CSS\/browser ESM; found React framework runtime/);
 }
 
 {

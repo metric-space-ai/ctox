@@ -27,25 +27,37 @@ or `validate-app-module.mjs` is red.
 
 ## Static Checks
 
-Run the narrow checks that match the touched files:
+Run the narrow checks that match the touched files. Always set `MODULE_DIR`
+first; source modules and runtime-installed modules live in different roots:
 
 ```sh
+MODULE=<module>
+
+# Source module target:
+MODULE_DIR="src/apps/business-os/modules/$MODULE"
 ctox business-os app validate <module> --source
-ctox business-os app validate <module> --installed
-node -e "const fs=require('fs'); for (const f of ['src/apps/business-os/modules/<module>/module.json','src/apps/business-os/modules/<module>/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')"
-node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('runtime/business-os/installed-modules/<module>/module.json','utf8')); if (!/^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/.test(m.version || '')) throw new Error('module.json version must be SemVer x.y.z'); if (m.version === '0.0.0') throw new Error('0.0.0 is not a valid app work version'); console.log('module SemVer OK')"
+node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs "$MODULE"
+node -e "const fs=require('fs'); for (const f of ['$MODULE_DIR/module.json','$MODULE_DIR/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')"
 node -e "const fs=require('fs'); const f='src/apps/business-os/modules/registry.json'; if (fs.existsSync(f)) JSON.parse(fs.readFileSync(f,'utf8')); console.log('registry JSON OK')"
-node --check src/apps/business-os/modules/<module>/index.js
-node --test src/apps/business-os/modules/<module>/tests/*.test.mjs
-node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module>
-node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs <module> --installed  # for App Creator/runtime installed-modules targets
 node src/apps/business-os/scripts/assert-module-conformance.mjs
-! rg -n "ctx\\??\\.db\\??\\.raw|\\bdb\\??\\.raw\\b|ctx\\.collections|ctox\\.db|fetch\\('/api/business-os|from ['\\\"]rxdb|from ['\\\"]node:|from ['\\\"][^./]|require\\(|https?://|cdn\\." src/apps/business-os/modules/<module> --glob '*.js' --glob '*.mjs' --glob '*.html' --glob '!tests/**' --glob '!*.test.mjs'
-! rg -n "import .*\\.json" src/apps/business-os/modules/<module> --glob '*.js' --glob '*.mjs' --glob '!tests/**' --glob '!*.test.mjs'
-! find src/apps/business-os/modules/<module> -maxdepth 4 \( -name node_modules -o -name package.json -o -name package-lock.json -o -name yarn.lock -o -name pnpm-lock.yaml -o -name bun.lockb \) -print
-! rg -n "esbuild|webpack|rollup|vite|importmap|import map|npm run build|npm install|npx " src/apps/business-os/modules/<module>/README.md docs/business-os-<module>-implementation-plan.md
-! find src/apps/business-os/modules/<module> -maxdepth 4 \( -name .DS_Store -o -name Thumbs.db -o -name '_probe_*' -o -name '*.bundle.js' -o -name '*.tmp' \) -print
-! rg -n "pending_sync|business_commands.*upsert|business_commands.*insert|collection\\(['\\\"]business_commands|commandBus unavailable" src/apps/business-os/modules/<module> docs/business-os-<module>-implementation-plan.md
+
+# Runtime-installed App Creator target:
+MODULE_DIR="runtime/business-os/installed-modules/$MODULE"
+ctox business-os app validate <module> --installed
+node src/skills/system/product_engineering/business-os-app-module-development/scripts/module_static_check.mjs "$MODULE" --installed
+node -e "const fs=require('fs'); for (const f of ['$MODULE_DIR/module.json','$MODULE_DIR/collections.schema.json']) JSON.parse(fs.readFileSync(f,'utf8')); console.log('module JSON OK')"
+node -e "const fs=require('fs'); const m=JSON.parse(fs.readFileSync('$MODULE_DIR/module.json','utf8')); if (!/^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/.test(m.version || '')) throw new Error('module.json version must be SemVer x.y.z'); if (m.version === '0.0.0') throw new Error('0.0.0 is not a valid app work version'); console.log('module SemVer OK')"
+
+# Shared per-module file checks after choosing the correct MODULE_DIR:
+node --check "$MODULE_DIR/index.js"
+node --test "$MODULE_DIR"/tests/*.test.mjs
+! rg -n "ctx\\??\\.db\\??\\.raw|\\bdb\\??\\.raw\\b|ctx\\.collections|ctox\\.db|fetch\\('/api/business-os|from ['\\\"]rxdb|from ['\\\"]node:|from ['\\\"][^./]|require\\(|https?://|cdn\\." "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '*.html' --glob '!tests/**' --glob '!*.test.mjs'
+! rg -n "import .*\\.json" "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '!tests/**' --glob '!*.test.mjs'
+! rg -n "React\\.|ReactDOM|createRoot\\(|from ['\\\"][^'\\\"]*react|Vue\\.|createApp\\(|from ['\\\"][^'\\\"]*vue|from ['\\\"][^'\\\"]*svelte|from ['\\\"][^'\\\"]*@angular|from ['\\\"][^'\\\"]*solid-js|from ['\\\"][^'\\\"]*preact|from ['\\\"][^'\\\"]*lit|jsx-runtime|@jsx" "$MODULE_DIR" --glob '*.js' --glob '*.mjs' --glob '*.html' --glob '!tests/**' --glob '!*.test.mjs'
+! find "$MODULE_DIR" -maxdepth 4 \( -name node_modules -o -name package.json -o -name package-lock.json -o -name yarn.lock -o -name pnpm-lock.yaml -o -name bun.lockb -o -name vite.config.js -o -name webpack.config.js -o -name rollup.config.js -o -name '*.jsx' -o -name '*.tsx' \) -print
+! rg -n "esbuild|webpack|rollup|vite|importmap|import map|npm run build|npm install|npx " "$MODULE_DIR" docs/business-os-<module>-implementation-plan.md
+! find "$MODULE_DIR" -maxdepth 4 \( -name .DS_Store -o -name Thumbs.db -o -name '_probe_*' -o -name '*.bundle.js' -o -name '*.bundle.mjs' -o -name '*.tmp' \) -print
+! rg -n "pending_sync|business_commands.*upsert|business_commands.*insert|collection\\(['\\\"]business_commands|commandBus unavailable" "$MODULE_DIR" docs/business-os-<module>-implementation-plan.md
 ```
 
 The forbidden `node:` import scan is for browser runtime files only. It must
@@ -353,6 +365,8 @@ For automation actions, additionally verify:
 
 ```text
 the UI dispatches an existing CTOX command type such as business_os.chat.task, or the change includes a native handler
+business_os.chat.task commands preserve both type and command_type
+the automation payload includes record_snapshot with the source record
 the automation does not write directly to ctox_ticket_* projection collections
 the automation result shown in the UI is based on command dispatch/status, not only a local audit row
 module copy does not claim "ticket created" unless the command/projection path is proven
@@ -442,6 +456,7 @@ index.html or index.css contains right-pane/right-column/right-resizer/data-*-ri
 index.css defines `:root` custom properties or redefines shell/base design tokens instead of scoping module-local variables under the module root
 unknown <module>.* command falls through to generic queue behavior
 module invents a module-local automation command without native handler and still claims normal CTOX work/ticket flow
+module automation sets `type` but omits `command_type`, or omits `record_snapshot`
 stub command returns ok/completed
 tests assert wrong field names or wrong unit scale
 test setup created package.json, package-lock.json, node_modules, or .opencode/node_modules artifacts

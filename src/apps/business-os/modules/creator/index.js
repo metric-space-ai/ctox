@@ -923,6 +923,7 @@ function generateAllFiles() {
     : '0.1.0';
   const appCollectionVersion = `v${appVersion.replace(/\./g, '_')}`;
   const versionedCollections = collections.map(coll => `${coll}_${appCollectionVersion}`);
+  const moduleCollections = Array.from(new Set(['business_commands', ...versionedCollections]));
 
   const iconSvg = generateSvgLogo(appId, appCategory);
   state.generatedFiles['icon.svg'] = iconSvg;
@@ -933,13 +934,12 @@ function generateAllFiles() {
     title: appTitle,
     description: appDesc,
     entry: `installed-modules/${appId}/index.html`,
-    collections: versionedCollections,
+    install_scope: 'installed',
+    collections: moduleCollections,
     layout: {
       shell: appLayout,
       left: `${appTitle} Navigation`,
-      center: `${appTitle} Workbench`,
-      right: 'AI Operator Queue',
-      icon_svg: iconSvg
+      center: `${appTitle} Workbench`
     },
     category: appCategory,
     version: appVersion,
@@ -948,14 +948,34 @@ function generateAllFiles() {
     tags: [appId, 'installed-module', appCategory.toLowerCase()]
   }, null, 2);
 
-  // 2. schema.js
-  let colSchemaProps = '';
-  collections.forEach(coll => {
-    const versionedColl = `${coll}_${appVersion}`;
-    colSchemaProps += `  ${versionedColl}: {\n    schema: {\n      title: '${versionedColl} schema',\n      version: 0,\n      primaryKey: 'id',\n      type: 'object',\n      properties: {\n        id: { type: 'string', maxLength: 100 },\n        title: { type: 'string' },\n        status: { type: 'string' },\n        updated_at_ms: { type: 'number' },\n        data: { type: 'object', additionalProperties: true }\n      },\n      required: ['id', 'title', 'status', 'updated_at_ms']\n    }\n  },\n`;
-  });
+  // 2. schemas. Installed modules persist via shell-provided CTOX DB collections.
+  const collectionSchemas = Object.fromEntries(versionedCollections.map((collectionName) => [collectionName, {
+    title: `${collectionName} schema`,
+    version: 0,
+    primaryKey: 'id',
+    type: 'object',
+    properties: {
+      id: { type: 'string', maxLength: 120 },
+      title: { type: 'string' },
+      status: { type: 'string' },
+      updated_at_ms: { type: 'number' },
+      data: { type: 'object', additionalProperties: true },
+    },
+    required: ['id', 'title', 'status', 'updated_at_ms'],
+  }]));
+  state.generatedFiles['collections.schema.json'] = JSON.stringify({
+    schema_format: 'ctox-business-os-module-collections-v1',
+    collections: collectionSchemas,
+  }, null, 2);
+  state.generatedFiles['core/schemas.mjs'] = `export const primaryCollection = '${primaryColl}_${appCollectionVersion}';
+export const collectionSchemas = ${JSON.stringify(collectionSchemas, null, 2)};
+`;
+  state.generatedFiles['schema.js'] = `import { collectionSchemas } from './core/schemas.mjs';
 
-  state.generatedFiles['schema.js'] = `export const collections = {\n${colSchemaProps.trim().substring(0, colSchemaProps.trim().length - 1)}\n};\n`;
+export const collections = Object.fromEntries(
+  Object.entries(collectionSchemas).map(([name, schema]) => [name, { schema }])
+);
+`;
 
   // 3. index.html — built on the shared design system (shared/base.css).
   // The shell loads base.css once; generated apps use its classes directly and
@@ -975,8 +995,9 @@ function generateAllFiles() {
               <option value="Archiviert">Archiviert</option>
             </select>
           </div>
-          <div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
             <button type="button" class="ctox-button is-primary" id="btn-save-record" data-t="saveRecord">Speichern</button>
+            <button type="button" class="ctox-button" id="btn-request-review" data-t="requestReview">Review anfordern</button>
           </div>
         </div>
       </div>`;
@@ -1077,6 +1098,7 @@ ${detailCardHtml}
     noSelection: 'Kein Eintrag gewählt',
     createRecord: 'Eintrag erstellen',
     saveRecord: 'Speichern',
+    requestReview: 'Review anfordern',
     fieldTitle: 'Titel des Eintrags',
     fieldStatus: 'Status',
     selectPrompt: 'Wähle einen Datensatz links aus oder erstelle einen neuen.',
@@ -1090,6 +1112,7 @@ ${detailCardHtml}
     noSelection: 'No record selected',
     createRecord: 'Create record',
     saveRecord: 'Save',
+    requestReview: 'Request review',
     fieldTitle: 'Record title',
     fieldStatus: 'Status',
     selectPrompt: 'Select a record on the left or create a new one.',
@@ -1099,8 +1122,49 @@ ${detailCardHtml}
   state.generatedFiles['locales/de.json'] = JSON.stringify(localeDe, null, 2);
   state.generatedFiles['locales/en.json'] = JSON.stringify(localeEn, null, 2);
 
-  // 6. index.js
+  // 6. automation helper and self-checks for installed modules.
+  state.generatedFiles['core/automation.mjs'] = `export function buildFollowUpCommand(record = {}) {
+  const title = record.title || 'Unbenannter Datensatz';
+  return {
+    id: \`cmd_\${record.id || Date.now()}\`,
+    module: '${appId}',
+    type: 'business_os.chat.task',
+    command_type: 'business_os.chat.task',
+    record_id: record.id || null,
+    payload: {
+      title: \`Review: \${title}\`,
+      instruction: \`Review "\${title}" in ${appTitle} and create the next CTOX follow-up if action is required.\`,
+      prompt: \`Review "\${title}" in ${appTitle} and create the next CTOX follow-up if action is required.\`,
+      source_module: '${appId}',
+      source_collection: '${primaryColl}_${appCollectionVersion}',
+      record_snapshot: record,
+      outbound_channel: 'business_os_chat',
+      response_channel: 'business_os_chat',
+    },
+    client_context: {
+      source: '${appId}',
+      surface: '${appId}.record-review',
+    },
+  };
+}
+`;
+  state.generatedFiles[`tests/${appId}.test.mjs`] = `import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { buildFollowUpCommand } from '../core/automation.mjs';
+
+const schemaDoc = JSON.parse(readFileSync(new URL('../collections.schema.json', import.meta.url), 'utf8'));
+assert.equal(schemaDoc.schema_format, 'ctox-business-os-module-collections-v1');
+assert.ok(schemaDoc.collections['${primaryColl}_${appCollectionVersion}']);
+
+const command = buildFollowUpCommand({ id: 'demo', title: 'Demo' });
+assert.equal(command.type, 'business_os.chat.task');
+assert.equal(command.command_type, 'business_os.chat.task');
+assert.deepEqual(command.payload.record_snapshot, { id: 'demo', title: 'Demo' });
+`;
+
+  // 7. index.js
   state.generatedFiles['index.js'] = `import { loadModuleMessages } from '../../shared/i18n.js';
+import { buildFollowUpCommand } from './core/automation.mjs';
 
 const labels = {
   de: ${JSON.stringify(localeDe, null, 2).replace(/\n/g, '\n  ')},
@@ -1110,10 +1174,11 @@ const labels = {
 const APP_METADATA = {
   version: '${appVersion}',
   collectionVersion: '${appCollectionVersion}',
+  primaryCollection: '${primaryColl}_${appCollectionVersion}',
   collections: ${JSON.stringify(collections)}
 };
 
-const PRIMARY_COLL = \`${primaryColl}_\${APP_METADATA.collectionVersion}\`;
+const PRIMARY_COLL = APP_METADATA.primaryCollection;
 
 const state = {
   ctx: null,
@@ -1125,37 +1190,22 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
-
-  // 1. Inject stylesheet dynamically
   await ensureStyles();
 
-  // 2. Fetch and render localization messages
   const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
 
-  // 3. Mount HTML template structure
   const html = await fetch(new URL('./index.html', import.meta.url)).then(res => res.text());
   ctx.host.innerHTML = html;
-
-  // 4. Translate static tags
   applyTranslations(ctx.host, state.t);
 
-  // 5. Column resizing is shell-owned: the declarative
-  //    .ctox-column-resizer[data-resizer-var] handle in index.html is wired
-  //    (incl. width persistence) by the shell after mount — no module code.
+  await Promise.allSettled([
+    state.ctx.sync?.startCollection?.(PRIMARY_COLL),
+    state.ctx.sync?.startCollection?.('business_commands')
+  ]);
 
-  // 6. Run client-side auto-migration
-  try {
-    await autoMigrate(ctx);
-  } catch (err) {
-    console.error('[Migration] Auto-migration failed:', err);
-  }
-
-  // 7. Setup dynamic db observation and sync
   await loadInitialData();
   state.dbSubscription = wireReactiveSync();
-
-  // 8. Bind interactive clicks
   wireUi(ctx.host);
 
   return () => {
@@ -1164,63 +1214,7 @@ export async function mount(ctx) {
     } else if (state.dbSubscription && typeof state.dbSubscription.unsubscribe === 'function') {
       state.dbSubscription.unsubscribe();
     }
-    console.log('[${appId}] Unmounted successfully.');
   };
-}
-
-async function autoMigrate(ctx) {
-  const version = APP_METADATA.version;
-  const versionNum = parseInt(version.replace('v', ''), 10) || 1;
-  if (versionNum <= 1) return;
-
-  console.log(\`[Migration] [\${APP_METADATA.version}] Auto-Migration wird initialisiert...\\n\`);
-  for (const baseColl of APP_METADATA.collections) {
-    const currentColl = \`\${baseColl}_\${version}\\n\`.trim();
-    if (!ctx.db || !ctx.db[currentColl]) continue;
-
-    const currentCount = await ctx.db[currentColl].find().exec().then(docs => docs.length).catch(() => 0);
-    if (currentCount > 0) {
-      console.log(\`[Migration] [\${currentColl}] Hat bereits Daten, keine Migration erforderlich.\\n\`);
-      continue;
-    }
-
-    for (let i = versionNum - 1; i >= 1; i--) {
-      const prevColl = \`\${baseColl}_v\${i}\\n\`.trim();
-      console.log(\`[Migration] Überprüfe historische Tabelle \${prevColl}...\\n\`);
-
-      if (!ctx.db[prevColl]) {
-        try {
-          const currentSchema = ctx.db[currentColl].schema.jsonSchema;
-          const prevSchema = {
-            ...currentSchema,
-            title: \`\${prevColl} schema\`
-          };
-          await ctx.db.addCollections({
-            [prevColl]: { schema: prevSchema }
-          });
-        } catch (e) {
-          console.error(\`[Migration] Fehler bei Registrierung von \${prevColl}:\\n\`, e);
-          continue;
-        }
-      }
-
-      const prevCount = await ctx.db[prevColl].find().exec().then(docs => docs.length).catch(() => 0);
-      if (prevCount > 0) {
-        console.log(\`[Migration] Daten in \${prevColl} gefunden (\${prevCount} Einträge). Starte Migration...\\n\`);
-        const oldItems = await ctx.db[prevColl].find().exec();
-        const docs = oldItems.map(item => {
-          const json = item.toJSON();
-          delete json._meta;
-          delete json._deleted;
-          return json;
-        });
-
-        await ctx.db[currentColl].bulkInsert(docs);
-        console.log(\`[Migration] Migration von \${prevColl} nach \${currentColl} erfolgreich beendet!\\n\`);
-        break;
-      }
-    }
-  }
 }
 
 async function ensureStyles() {
@@ -1233,23 +1227,40 @@ async function ensureStyles() {
 }
 
 function applyTranslations(root, t) {
-  root.querySelectorAll('[data-t]').forEach(el => el.textContent = t(el.dataset.t));
+  root.querySelectorAll('[data-t]').forEach((el) => {
+    el.textContent = t(el.dataset.t, el.textContent);
+  });
+}
+
+function getCollection(name) {
+  return state.ctx?.db?.collection?.(name)
+    || state.ctx?.db?.collections?.[name]
+    || null;
 }
 
 async function loadInitialData() {
-  if (!state.ctx.db?.[PRIMARY_COLL]) return;
-  const items = await state.ctx.db[PRIMARY_COLL].find().exec();
-  state.records = items.map(item => item.toJSON());
+  const collection = getCollection(PRIMARY_COLL);
+  if (!collection) {
+    state.records = [];
+    renderList();
+    return;
+  }
+  const items = await collection.find().exec();
+  state.records = items.map(item => item.toJSON ? item.toJSON() : item);
   renderList();
 }
 
 function wireReactiveSync() {
-  if (!state.ctx.db?.[PRIMARY_COLL]) return () => {};
-  const sub = state.ctx.db[PRIMARY_COLL].find().$.subscribe(items => {
-    state.records = items.map(item => item.toJSON());
+  const collection = getCollection(PRIMARY_COLL);
+  if (!collection?.find) return () => {};
+  const query = collection.find();
+  if (!query?.$?.subscribe) return () => {};
+
+  const sub = query.$.subscribe((items) => {
+    state.records = items.map(item => item.toJSON ? item.toJSON() : item);
     renderList();
     if (state.selectedId) {
-      const activeItem = state.records.find(r => r.id === state.selectedId);
+      const activeItem = state.records.find(record => record.id === state.selectedId);
       if (activeItem) showDetail(activeItem);
     }
   });
@@ -1269,25 +1280,31 @@ function renderList() {
     return;
   }
 
-  state.records.forEach(record => {
+  state.records.forEach((record) => {
     const card = document.createElement('button');
     card.type = 'button';
     card.className = 'ctox-list-item';
     card.setAttribute('aria-selected', state.selectedId === record.id ? 'true' : 'false');
     card.dataset.id = record.id;
-
     card.setAttribute('data-context-module', '${appId}');
     card.setAttribute('data-context-record-type', PRIMARY_COLL);
     card.setAttribute('data-context-record-id', record.id);
-    card.setAttribute('data-context-label', record.title);
+    card.setAttribute('data-context-label', record.title || record.id);
 
-    card.innerHTML = \`
-      <div style="font-weight: 600; font-size: 13px;">\${record.title}</div>
-      <div class="${appId}-record-meta">
-        <span>Status: \${record.status}</span>
-        <span>\${new Date(record.updated_at_ms).toLocaleTimeString()}</span>
-      </div>
-    \`;
+    const title = document.createElement('div');
+    title.style.fontWeight = '600';
+    title.style.fontSize = '13px';
+    title.textContent = record.title || 'Unbenannt';
+
+    const meta = document.createElement('div');
+    meta.className = '${appId}-record-meta';
+    const status = document.createElement('span');
+    status.textContent = 'Status: ' + (record.status || 'Entwurf');
+    const updated = document.createElement('span');
+    updated.textContent = new Date(record.updated_at_ms || Date.now()).toLocaleTimeString();
+    meta.append(status, updated);
+
+    card.append(title, meta);
     card.addEventListener('click', () => selectRecord(record.id));
     container.appendChild(card);
   });
@@ -1295,7 +1312,7 @@ function renderList() {
 
 function selectRecord(id) {
   state.selectedId = id;
-  const record = state.records.find(r => r.id === id);
+  const record = state.records.find(item => item.id === id);
   if (record) {
     showDetail(record);
     renderList();
@@ -1306,61 +1323,81 @@ function showDetail(record) {
   const emptyState = state.ctx.host.querySelector('#empty-state');
   const detailCard = state.ctx.host.querySelector('#detail-card');
   const titleHeader = state.ctx.host.querySelector('#selected-item-title');
-
-  if (emptyState) emptyState.hidden = true;
-  if (detailCard) detailCard.hidden = false;
-  if (titleHeader) titleHeader.textContent = record.title;
-
   const inputTitle = state.ctx.host.querySelector('#record-detail-title');
   const selectStatus = state.ctx.host.querySelector('#record-detail-status');
 
-  if (inputTitle) inputTitle.value = record.title;
-  if (selectStatus) selectStatus.value = record.status;
+  if (emptyState) emptyState.hidden = true;
+  if (detailCard) detailCard.hidden = false;
+  if (titleHeader) titleHeader.textContent = record.title || 'Unbenannt';
+  if (inputTitle) inputTitle.value = record.title || '';
+  if (selectStatus) selectStatus.value = record.status || 'Entwurf';
+}
+
+function notify(title, message, type = 'success') {
+  state.ctx.notifications?.show?.({ title, message, type });
 }
 
 function wireUi(host) {
   const btnCreate = host.querySelector('#btn-create-record') || state.ctx.left?.querySelector('#btn-create-record');
   const btnSave = host.querySelector('#btn-save-record');
+  const btnReview = host.querySelector('#btn-request-review');
 
   if (btnCreate) {
     btnCreate.addEventListener('click', async () => {
-      if (!state.ctx.db?.[PRIMARY_COLL]) return;
-      const newId = \`rec-\${Date.now()}\`;
-      await state.ctx.db[PRIMARY_COLL].insert({
+      const collection = getCollection(PRIMARY_COLL);
+      if (!collection) return;
+      const newId = 'rec-' + Date.now();
+      const record = {
         id: newId,
         title: 'Neuer Eintrag',
         status: 'Entwurf',
         updated_at_ms: Date.now(),
         data: {}
+      };
+      await collection.insert({
+        ...record
       });
+      state.records = [record, ...state.records.filter(item => item.id !== newId)];
       selectRecord(newId);
-      state.ctx.notifications.show({
-        title: 'Eintrag erstellt',
-        message: 'Ein neuer Datensatz wurde erfolgreich angelegt.',
-        type: 'success'
-      });
+      notify('Eintrag erstellt', 'Ein neuer Datensatz wurde erfolgreich angelegt.');
     });
   }
 
   if (btnSave) {
     btnSave.addEventListener('click', async () => {
-      if (!state.selectedId || !state.ctx.db?.[PRIMARY_COLL]) return;
+      const collection = getCollection(PRIMARY_COLL);
+      if (!state.selectedId || !collection) return;
       const inputTitle = host.querySelector('#record-detail-title');
       const selectStatus = host.querySelector('#record-detail-status');
+      const doc = await collection.findOne(state.selectedId).exec();
+      if (!doc) return;
+      await doc.patch({
+        title: inputTitle?.value || 'Unbenannt',
+        status: selectStatus?.value || 'Entwurf',
+        updated_at_ms: Date.now()
+      });
+      await loadInitialData();
+      const updatedRecord = state.records.find(item => item.id === state.selectedId);
+      if (updatedRecord) showDetail(updatedRecord);
+      notify('Gespeichert', 'Die Änderungen wurden erfolgreich synchronisiert.');
+    });
+  }
 
-      const doc = await state.ctx.db[PRIMARY_COLL].findOne(state.selectedId).exec();
-      if (doc) {
-        await doc.patch({
-          title: inputTitle.value || 'Unbenannt',
-          status: selectStatus.value,
-          updated_at_ms: Date.now()
-        });
-        state.ctx.notifications.show({
-          title: 'Gespeichert',
-          message: 'Die Änderungen wurden erfolgreich synchronisiert.',
-          type: 'success'
-        });
-      }
+  if (btnReview) {
+    btnReview.addEventListener('click', async () => {
+      const record = state.records.find(item => item.id === state.selectedId);
+      if (!record || !state.ctx.commandBus?.dispatch) return;
+      const command = buildFollowUpCommand(record);
+      await state.ctx.commandBus.dispatch({
+        ...command,
+        type: 'business_os.chat.task',
+        command_type: 'business_os.chat.task',
+        payload: {
+          ...command.payload,
+          record_snapshot: record
+        }
+      });
+      notify('Review angefordert', 'Der CTOX Chat hat eine Follow-up Aufgabe erhalten.');
     });
   }
 }
@@ -1377,8 +1414,12 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   const appDesc = state.appDesc;
   const collections = state.appCollections;
   const appLayout = state.appLayout;
-  const appVersion = state.appVersion || 'v1';
-  const versionedCollections = collections.map(coll => `${coll}_${appVersion}`);
+  const appVersion = /^\d+\.\d+\.\d+$/.test(String(state.appVersion || '').trim())
+    ? String(state.appVersion).trim()
+    : '0.1.0';
+  const appCollectionVersion = `v${appVersion.replace(/\./g, '_')}`;
+  const versionedCollections = collections.map(coll => `${coll}_${appCollectionVersion}`);
+  const moduleCollections = Array.from(new Set(['business_commands', ...versionedCollections]));
 
   if (!appId || !appTitle || !appDesc) {
     state.ctx.notifications.show({
@@ -1397,9 +1438,9 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   syncText.textContent = state.t('deploySaving', 'Speichere Modul...');
   updateCreatorActionState();
 
-  // Visual delay logs to mimic compiler
+  // Visual delay logs for the static module generator.
   addConsoleLog('==================================================', 'info');
-  addConsoleLog(`[START] Kompiliere Modul-Spezifikation für '${appTitle}' (${appId})...`, 'info');
+  addConsoleLog(`[START] Erzeuge statische Business OS Moduldateien für '${appTitle}' (${appId})...`, 'info');
 
   await new Promise(r => setTimeout(r, 400));
   addConsoleLog(`[1/3] Generiere module.json manifest für layout.shell: '${appLayout}'...`, 'info');
@@ -1408,7 +1449,7 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
   addConsoleLog(`[2/3] Bereite RxDB Schema Definition für [${versionedCollections.join(', ')}] vor...`, 'info');
 
   await new Promise(r => setTimeout(r, 300));
-  addConsoleLog(`[3/3] Kompiliere native ESM Modul-Controller index.js und index.css...`, 'info');
+  addConsoleLog('[3/3] Schreibe Vanilla HTML/CSS/browser-ESM Dateien ohne Build-Schritt...', 'info');
 
   try {
     const actorContext = (session) => {
@@ -1439,13 +1480,12 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
         description: appDesc,
         version: appVersion,
         entry: `installed-modules/${appId}/index.html`,
-        collections: versionedCollections,
+        install_scope: 'installed',
+        collections: moduleCollections,
         layout: {
           shell: appLayout,
           left: `${appTitle} Navigation`,
-          center: `${appTitle} Workbench`,
-          right: 'AI Operator Queue',
-          icon_svg: state.generatedFiles['icon.svg']
+          center: `${appTitle} Workbench`
         }
       },
       client_context: clientContext
@@ -1454,7 +1494,20 @@ async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
     await new Promise(r => setTimeout(r, 600));
 
     // 2. Loop through generated templates and dispatch ctox.source.save
-    const filesToSave = ['module.json', 'schema.js', 'index.html', 'index.css', 'index.js', 'icon.svg', 'locales/de.json', 'locales/en.json'];
+    const filesToSave = [
+      'module.json',
+      'collections.schema.json',
+      'schema.js',
+      'core/schemas.mjs',
+      'core/automation.mjs',
+      'index.html',
+      'index.css',
+      'index.js',
+      'icon.svg',
+      'locales/de.json',
+      'locales/en.json',
+      `tests/${appId}.test.mjs`
+    ];
     for (const file of filesToSave) {
       addConsoleLog(`[WRITE] Schreibe Datei: installed-modules/${appId}/${file}...`, 'info');
       await state.ctx.commandBus.dispatch({

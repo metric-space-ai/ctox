@@ -971,3 +971,44 @@ Treat layout.right / third panes as a hard failure unless third_pane_justificati
 Promote the shell-owned collection rule into validator feedback with examples: business_commands may be listed in module.json.collections but must not be exported from schema.js or collections.schema.json.
 Discourage large JS generation through nested shell/Node string builders; agents should write normal module files directly under MODULE_DIR and run node --check on generated ESM.
 ```
+
+## Claude Code CLI Runtime-Installed R1 Findings
+
+Recorded: 2026-06-16 CEST
+
+Workspace: `/tmp/ctox-bos-claude-bench-20260616-135858`
+
+Runtime:
+
+```text
+agent runner: Claude Code CLI 2.1.163
+model alias: sonnet
+execution path: isolated /tmp release-like workspace with runtime/business-os/installed-modules/<id>
+prompts: five intentionally small app requests; each prompt required reading CLAUDE.md and the local business-os-app-module-development skill
+apps: bench_subscriptions, bench_inventory, bench_projects, bench_contracts, bench_quality
+```
+
+Current-validator result before extra hardening:
+
+```text
+5/5 apps eventually passed node src/apps/business-os/scripts/validate-app-module.mjs <id> --installed.
+The agents self-repaired early negative-proof string failures in tests for subscriptions/inventory/projects.
+All agents wrote only under runtime/business-os/installed-modules/<id>; diff against the base copy showed no app artifacts outside runtime.
+```
+
+Forensic false-greens found after independent review:
+
+```text
+inventory, projects, and contracts built business_os.chat.task commands with type but without command_type.
+contracts embedded the SVG icon into module.json layout.icon_svg even though icon.svg existed.
+These were validator gaps, not acceptable app behavior: command envelopes must preserve command_type and manifests must keep icons as icon.svg.
+```
+
+Hardening taken from this round:
+
+```text
+module_static_check.mjs now rejects module.json layout.icon_svg.
+module_static_check.mjs now requires installed App Creator/runtime modules to include command_type: business_os.chat.task and record_snapshot in the automation command.
+validate-app-module.test.mjs now has regression fixtures for embedded icon_svg, missing command_type, and missing record_snapshot.
+SKILL.md and references/verification.md now state the same requirements explicitly.
+```

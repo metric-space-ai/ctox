@@ -20,6 +20,7 @@ Stop and report the blocker instead of coding when any hard stop is active:
 you have not inspected at least 3 existing Business OS modules for concrete patterns
 you are about to create a skill file, skill trace, harness trace, README-only deliverable, or plan-only deliverable
 you are about to build a generic Next.js/React/Vanilla app outside the Business OS module contract
+you are about to use React, Vue, Svelte, Angular, Solid, Preact, Lit, JSX/TSX, a component framework, a framework runtime, or a compile/transpile step for a generated App Creator app
 you are about to add package.json for any reason, npm/pnpm/yarn, node_modules, lockfiles, a bundler, CommonJS require, or CDN dependency management
 you are about to use esbuild, Vite, Rollup, Webpack, node:vm, or new Function as a syntax-check, import, schema-transform, or test workaround
 you are about to mention forbidden package-manager, bundler, or dependency names inside generated app files, tests, comments, or user-visible copy; keep those names only in validation/skill context
@@ -37,6 +38,7 @@ the module has a visible button/action with no real handler, persistence change,
 the module declares collections in module.json but not in schema.js and collections.schema.json
 the module-owned data model is unclear: central object, collection names, states, commands, and automation payload are not named
 the app has a decorative third pane, layout.right by default, right-column resizers by default, decorative controls, fake AI buttons, fake status-only actions, or UI that is not needed for the workflow
+module.json embeds `layout.icon_svg` instead of using the required separate `icon.svg`
 module.json or collections.schema.json would be exposed in an invalid or incomplete state after any edit
 any required module file is still missing: module.json, collections.schema.json, schema.js, index.html, index.css, index.js, icon.svg, locales/de.json, locales/en.json, or tests/*.test.mjs
 the validator reports missing files, right/third-pane layout, schema, manifest, dependency, syntax, or test failures and you are about to finish instead of repairing the exact bullets
@@ -110,6 +112,20 @@ ticket/chat automation -> business_commands with outbound_channel/response_chann
 ```
 
 CTOX DB is CTOX-owned and RxDB-derived. It is not npm `rxdb`, not `ctox.db`, and not a generic IndexedDB wrapper. Business data persists through the Business OS shell context and replicates WebRTC-only to the CTOX native peer. Do not add HTTP fallbacks.
+
+Generated App Creator apps must be vanilla static Business OS modules:
+
+```text
+index.html -> static fragment loaded by the shell
+index.css -> scoped module CSS
+index.js -> browser ESM exporting mount(ctx)
+local .mjs helpers -> optional pure logic, schemas, reducers, and command builders
+```
+
+Do not use a UI framework, JSX/TSX, compile step, transpiler, generated bundle,
+or dependency-managed runtime. CTOX DB/ctox-rxdb is already provided by the
+Business OS shell as a local ESM runtime; app modules consume only the `ctx`
+facade and must not import or bundle the data runtime themselves.
 
 For more details, read the relevant bundled reference before coding:
 
@@ -220,6 +236,8 @@ This is also a negative example: do not add `"right": "Details"`,
 `"right": "Inspector"`, or any `layout.right` unless the user explicitly asked
 for a persistent third pane and you also add `layout.third_pane_justification`.
 The default Business OS app surface is one or two panes plus a modal/drawer.
+Do not embed SVG in `module.json.layout.icon_svg`; keep the icon in the
+required separate `icon.svg` file.
 
 ## App Versioning Contract
 
@@ -371,6 +389,7 @@ export function mount(ctx) {
 
 - Keep the first version intentionally small: one primary list/workbench, one detail/edit flow, the required automation action, and focused tests.
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
+- For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
 - Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.
@@ -398,7 +417,7 @@ phase 7 automation: at least one visible action dispatches a real business_comma
 phase 8 UI layout: default is one/two panes plus modal or drawer; no layout.right, right rail, right-column CSS, right resizer, or three-column grid unless explicitly justified by workflow
 phase 9 UI controls: every visible button, filter, tab, menu, and form action has a real handler and state/persistence/dispatch effect
 phase 10 CSS: module CSS is scoped under the module root; no :root token definitions, shell token redefinitions, decorative resize handles, or layout affordances copied from unrelated modules
-phase 11 dependencies: browser runtime uses only local relative ESM imports; no package manager, bare package import, remote import, CommonJS, bundler, or generated bundle
+phase 11 dependencies: browser runtime uses only vanilla HTML/CSS/browser ESM and local relative ESM imports; no UI framework, JSX/TSX, package manager, bare package import, remote import, CommonJS, bundler, transpiler, or generated bundle
 phase 12 tests: tests import only local `.mjs` helpers and JSON/text files; they do not import `index.js`/`schema.js` directly, do not use data: URLs, and cover schema parity, core command builders, and at least one CRUD/automation path
 phase 13 validation: node --check, `ctox business-os app validate <id> --installed|--source`, forbidden-pattern scan, and any available shell/browser smoke proof are green
 phase 14 cleanup: no root-level artifacts, source-installed app artifacts, probe files, blocker notes, generated bundles, package files, or stale phase rows remain
@@ -408,11 +427,14 @@ Treat these common findings as automatic rework, not acceptable tradeoffs:
 
 ```text
 module.json has layout.right without layout.third_pane_justification
+module.json embeds layout.icon_svg instead of using icon.svg
 index.html/index.css contains data-*-right, right-pane, right-column, right-resizer, or a three-column grid copied from another app without a real workflow need
 collections.schema.json starts directly with collections and omits schema_format
 module.json for a new/runtime-installed app has no SemVer version, uses legacy v1, uses 0.0.0, or claims public release below 1.0.0
 version 2.0.0 or later is used without a new module id/icon for a parallel major app line
+runtime-installed App Creator app uses React/Vue/Svelte/Angular/Solid/Preact/Lit, JSX/TSX, framework config, or any compile/transpile artifact
 schema.js or collections.schema.json redeclares business_commands
+automation helper sets only type and omits command_type, or omits record_snapshot
 tests import index.js/schema.js directly, or load them through data:text/javascript/base64, instead of testing shared `.mjs` helpers plus JSON/text parity
 the phase tracker says done while validator or browser proof is red
 ```
@@ -456,6 +478,7 @@ await ctx.commandBus.dispatch({
   id: `cmd_${crypto.randomUUID()}`,
   module: '<id>',
   type: 'business_os.chat.task',
+  command_type: 'business_os.chat.task',
   record_id: record.id,
   inbound_channel: '<id>',
   payload: {
@@ -479,6 +502,10 @@ await ctx.commandBus.dispatch({
 ```
 
 The command must be connected to a real UI action and tested at least as a pure builder function when browser automation is not available.
+For App Creator/runtime-installed modules, the automation must preserve both
+`type: 'business_os.chat.task'` and
+`command_type: 'business_os.chat.task'`, include a `record_snapshot`, and be
+dispatched by runtime UI through `ctx.commandBus.dispatch`.
 
 ## Validation
 

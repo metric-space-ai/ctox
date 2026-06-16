@@ -231,6 +231,9 @@ if (manifest) {
   if (manifest.layout?.right && !manifest.layout?.third_pane_justification) {
     fail('module.json layout.right requires layout.third_pane_justification; use two panes plus modals/drawers by default');
   }
+  if (manifest.layout?.icon_svg) {
+    fail('module.json layout.icon_svg is forbidden; keep icons in icon.svg instead of embedding SVG in the manifest');
+  }
 }
 
 if (schemaDoc) {
@@ -304,8 +307,14 @@ for (const path of files) {
     name === 'yarn.lock' ||
     name === 'pnpm-lock.yaml' ||
     name === 'bun.lockb' ||
+    name === 'vite.config.js' ||
+    name === 'vite.config.mjs' ||
+    name === 'webpack.config.js' ||
+    name === 'rollup.config.js' ||
     forbiddenModuleArtifactName(name) ||
     name?.startsWith('_probe_') ||
+    name?.endsWith('.jsx') ||
+    name?.endsWith('.tsx') ||
     name?.endsWith('.bundle.js') ||
     name?.endsWith('.bundle.mjs') ||
     name?.endsWith('.bundle.css') ||
@@ -423,6 +432,46 @@ for (const path of broadScanFiles) {
     if (regex.test(text)) {
       fail(`${rel(path)} contains ${label}`);
     }
+  }
+}
+
+if (installedMode) {
+  const runtimeTextFiles = files.filter((path) =>
+    /\.(js|mjs|html|css)$/.test(path) && !hasPathSegment(path, 'tests')
+  );
+  const runtimeText = runtimeTextFiles
+    .map((path) => readFileSync(path, 'utf8'))
+    .join('\n');
+  const allModuleText = files
+    .filter((path) => /\.(js|mjs|html|css|json)$/.test(path))
+    .map((path) => readFileSync(path, 'utf8'))
+    .join('\n');
+  const frameworkRules = [
+    ['React framework runtime', /\bReact(?:DOM)?\.|\bcreateRoot\s*\(|from\s+['"][^'"]*react(?:\/|['"])/i],
+    ['Vue framework runtime', /\bVue\.|\bcreateApp\s*\(|from\s+['"][^'"]*vue(?:\/|['"])/i],
+    ['Svelte framework runtime', /from\s+['"][^'"]*svelte(?:\/|['"])/i],
+    ['Angular framework runtime', /from\s+['"][^'"]*@angular(?:\/|['"])/i],
+    ['Solid framework runtime', /from\s+['"][^'"]*solid-js(?:\/|['"])/i],
+    ['Preact framework runtime', /from\s+['"][^'"]*preact(?:\/|['"])/i],
+    ['Lit framework runtime', /from\s+['"][^'"]*lit(?:\/|['"])/i],
+    ['JSX runtime marker', /jsx-runtime|\/\*\s*@jsx/i],
+  ];
+  for (const [label, regex] of frameworkRules) {
+    if (regex.test(runtimeText)) {
+      fail(`installed App Creator module must be vanilla HTML/CSS/browser ESM; found ${label}`);
+    }
+  }
+  if (!/\b(?:ctx|state\.ctx)\.commandBus\.dispatch\s*\(/.test(runtimeText)) {
+    fail('installed App Creator module must dispatch at least one real automation through ctx.commandBus.dispatch');
+  }
+  if (!/\bbusiness_os\.chat\.task\b/.test(allModuleText)) {
+    fail('installed App Creator module must include a business_os.chat.task automation command');
+  }
+  if (!/(?:command_type\s*:\s*['"]business_os\.chat\.task['"]|["']command_type["']\s*:\s*["']business_os\.chat\.task["'])/.test(allModuleText)) {
+    fail('installed App Creator module must preserve command_type: business_os.chat.task in its automation command');
+  }
+  if (!/\brecord_snapshot\b/.test(allModuleText)) {
+    fail('installed App Creator module automation must include a source record_snapshot');
   }
 }
 
