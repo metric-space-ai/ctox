@@ -46,7 +46,7 @@ you are about to write a very large app file as one huge tool-call argument or h
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
-you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; use validators as black-box gates until they report a concrete failure
+you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 tests and Business OS guards were not run after the last code change
 ```
@@ -97,8 +97,9 @@ Creator/CTOX service will complete queue and command state after the app
 validator is green.
 
 After the required reading and tiny analogue map, write the first runnable
-slice immediately. Do not keep inspecting validator source, static-checker
-source, shell wrappers, or guard internals while `module.json`,
+slice immediately. Do not open or inspect `validate-app-module.mjs`,
+`module_static_check.mjs`, `assert-module-conformance.mjs`,
+`assert-rxdb-only.mjs`, shell wrappers, or guard internals while `module.json`,
 `collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`,
 `icon.svg`, locales, and at least one test are still missing. The correct loop
 is:

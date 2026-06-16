@@ -127,6 +127,9 @@ reconstructing regexes, or writing negative-proof assertions before the required
 module files exist. Write the minimal module, run the validator, then repair
 the concrete bullets it reports. Inspect checker internals only when the checker
 crashes or a failure cannot be traced to a module file.
+In particular, do not open `validate-app-module.mjs`, `module_static_check.mjs`,
+`assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required
+module files exist and a validation command has reported a concrete failure.
 
 For CTOX-native release/App Creator work, distinguish command-path proof from
 source-checkout proof. A runtime-installed module must show evidence that the

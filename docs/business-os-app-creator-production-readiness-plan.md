@@ -1606,3 +1606,37 @@ next action:
 - run native R14 from a fresh isolated root and require 5/5 app-validator green
   before moving from Phase 6 to Phase 8
 ```
+
+### Claude Runtime-Installed R2 2026-06-16
+
+```text
+status: partially green; four completed apps green, inventory blocked by runner/analysis loop
+
+evidence:
+- bench_subscriptions, bench_projects, bench_contracts, and bench_quality passed
+  tests, module_static_check, and validate-app-module in installed mode
+- completed apps wrote only under runtime/business-os/installed-modules/<id>
+- bench_inventory hit one API socket close after partial scaffolding
+- later inventory retries spent more than five minutes reading validator/checker
+  internals and planning around scanner rules, while writing zero module files
+
+changes made from evidence:
+- skill now treats validators/static checkers as black-box gates until the
+  required module files exist and validation reports a concrete failure
+- Business OS app-target prompt now carries the same sequencing rule directly:
+  after skill/few-shot reads, write MODULE_DIR files first; do not open
+  validate-app-module.mjs, module_static_check.mjs,
+  assert-module-conformance.mjs, or assert-rxdb-only.mjs before the first file
+  pass
+
+verification after hardening:
+- node src/apps/business-os/scripts/validate-app-module.test.mjs
+- cargo test --bin ctox app_modify_queue_prompt_targets_app_module_not_skill_files
+- cargo test --bin ctox app_create_queue_prompt_targets_app_module_skill
+
+next action:
+- rebuild/deploy through the normal ctox upgrade --dev path before judging
+  CTOX-native App Creator behavior
+- rerun the five-app CTOX-native bench and require 5/5 installed-module
+  validator green plus live shell proof before declaring production-ready
+```

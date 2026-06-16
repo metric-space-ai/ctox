@@ -1051,6 +1051,7 @@ bench_inventory did not produce a completed R2 app outcome.
 The first inventory run hit a Claude Code API socket close after writing only partial module scaffolding.
 Two fresh inventory retries hung for several minutes without writing any module files and were manually terminated.
 An additional stream-json/verbose retry confirmed a distinct analysis-loop failure: the agent read existing modules and validator/checker implementation details, repeatedly planned around scanner terms, but after 5 minutes had still written zero module files under runtime/business-os/installed-modules/bench_inventory. The process was terminated and no app result was counted.
+After the skill was updated with a black-box validator rule, a fresh inventory retry still violated the intended sequence: it read `validate-app-module.mjs` and `module_static_check.mjs`, planned around checker internals, and had written zero module files after 5:21. The process was terminated and no app result was counted.
 This is recorded as runner/infrastructure failure, not a green or red app result.
 ```
 
@@ -1061,4 +1062,5 @@ The R1 hardening worked for the completed apps: command_type and record_snapshot
 The negative-proof string scanner still matters: projects briefly had layout/right wording in tests, then self-corrected after validation.
 The remaining bench blocker is Claude Code CLI reliability on one prompt/run plus one observed process failure mode: an agent can overread checker internals and delay the first runnable slice indefinitely.
 The skill now treats validators/static checkers as black-box gates before the required module file set exists. Agents must inspect contracts and three modules, write the minimal app files, run validation, and repair concrete validator bullets instead of reconstructing scanner rules up front.
+Because the skill-only version did not prevent the Claude Code analysis loop, the Business OS app-target prompt now also carries a sequencing rule: do not open validator/checker implementation files before the required module files exist and a validation command has produced a concrete failure.
 ```
