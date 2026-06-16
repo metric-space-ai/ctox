@@ -64,6 +64,7 @@ you are about to import browser entry files such as `index.js` or `schema.js` di
 you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; do not open `validate-app-module.mjs`, `module_static_check.mjs`, `assert-module-conformance.mjs`, or `assert-rxdb-only.mjs` before the required files exist and a validation command reports a concrete failure
 you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 you are about to write tests that contain forbidden legacy strings as negative-proof literals; generated tests must avoid the forbidden literals entirely and assert positive current-contract behavior instead
+you are about to write generated tests that scan source files for forbidden anti-pattern absence, build forbidden tokens from fragments, use String.fromCharCode or regex assembly to bypass validators, or describe validator/checker workarounds; delete that test and write positive contract tests instead
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -401,12 +402,16 @@ and import it as a `data:text/javascript;base64,...` URL. That breaks relative
 imports and is not how the Business OS shell loads apps.
 
 Tests must prove the positive current contract, not prove absence of legacy
-contracts by embedding forbidden strings. Do not put strings such as
-`ctx.db.raw`, `db.raw`, `window.dispatchEvent`,
-`ctox-business-os-chat-submit`, `pending_sync`, `layout.right`,
-`right-resizer`, or `business_commands fallback` in generated tests, comments,
-or helper names. If you need a negative assertion, assemble the searched token
-from harmless fragments or prefer a positive assertion for the allowed API.
+contracts by embedding, naming, scanning for, or constructing forbidden
+strings. Do not put strings such as `ctx.db.raw`, `db.raw`,
+`window.dispatchEvent`, `ctox-business-os-chat-submit`, `pending_sync`,
+`layout.right`, `right-resizer`, or `business_commands fallback` in generated
+tests, comments, or helper names. Do not build those strings from fragments,
+character codes, regex text, arrays, or helper constants to bypass validators.
+Do not write tests named "does not use forbidden ...", "anti-patterns", or
+similar. Validators own negative anti-pattern checks. Generated module tests
+must assert positive behavior only: schema parity, reducers/calculations,
+valid command payload shape, and `ctx.commandBus.dispatch` integration hooks.
 
 `module.json` must list every collection the module reads/writes. Shell collections such as `business_commands`, `ctox_queue_tasks`, `business_module_catalog`, and `ctox_runtime_settings` may be listed when used, but module-owned collections must be declared in both `schema.js` and `collections.schema.json`.
 
@@ -455,6 +460,7 @@ export function mount(ctx) {
 - Do not read or paraphrase validator/static-checker source to plan around broad scanner terms before writing files. This causes analysis loops and often leaks forbidden strings into generated tests or comments.
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
 - For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
+- Do not write negative source-scanner tests for forbidden legacy patterns. The validator already performs that role. If validation reports forbidden terms in a test file, remove the negative scanner test instead of splitting or reconstructing the terms.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.
 - Do not inspect shell aliases or write temporary probe files to test the harness. Trust the target block and validator.
 - Do not copy the skill's forbidden tool/dependency names into app comments or test comments. The static checker treats generated-file literals as violations.

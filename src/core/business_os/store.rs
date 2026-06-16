@@ -16343,7 +16343,7 @@ Business OS app build target:
 - repair order: fix target path, complete required file inventory, valid JSON, manifest mode/version, schema ownership, UI layout, dependency/data-plane patterns, ESM syntax, tests, then shell smoke; do not patch tests to hide earlier failures.
 - persistence: use the Business OS RxDB/WebRTC data plane exposed by the shell context; do not create IndexedDB/Postgres/SQLite/HTTP fallbacks or dependency-managed builds.
 - dependencies: browser-safe ESM only; no package manager, no bundled node_modules, no CommonJS require, no npx, no esbuild/Vite/Rollup/Webpack proof, and no bundler imports in tests; these forbidden names may appear in this prompt but must not appear in generated app files, comments, or tests.
-- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. Tests must prove allowed behavior and must not contain forbidden legacy literals such as ctx.db.raw, db.raw, window.dispatchEvent, ctox-business-os-chat-submit, pending_sync, layout.right, right-resizer, or business_commands fallback.
+- tests: put reusable schemas, command builders, reducers, and calculations in local .mjs helpers imported by index.js/schema.js and by tests; Node tests must not import ../index.js or ../schema.js directly and must not data-url/base64 transform browser entry files. Tests must prove positive current-contract behavior only: schema parity, reducers/calculations, command payload shape, and commandBus dispatch hooks. Do not write tests that scan source for absence of anti-patterns, construct forbidden terms from fragments/character codes/regexes, or copy forbidden examples from this prompt. If validation flags a test for forbidden terms, delete the negative scanner test instead of evading the checker.
 - UI: default to one/two panes plus modals/drawers; do not create layout.right, right-column resizers, or three-column grids unless the user explicitly requested a persistent third pane and you can justify it in a code comment.
 - finalization checklist: mark target, few-shots, scope, manifest, versioning, schema, persistence, automation, UI layout, controls, CSS, dependencies, tests, validation, and cleanup as done/rework/blocked before claiming success; repair every rework item first.
 - scope: build the smallest useful one-pass app; avoid broad decorative status/filter/export/settings surfaces unless all handlers and tests are implemented.
@@ -17343,11 +17343,11 @@ mod tests {
         assert!(prompt.contains("finalization checklist: mark target, few-shots, scope"));
         assert!(prompt.contains("include at least one real automation through ctx.commandBus.dispatch"));
         assert!(prompt.contains("Do not call ctx.db.collection('business_commands')"));
-        assert!(prompt.contains("must not contain forbidden legacy literals"));
+        assert!(prompt.contains("Tests must prove positive current-contract behavior only"));
+        assert!(prompt.contains("Do not write tests that scan source for absence"));
+        assert!(prompt.contains("delete the negative scanner test instead of evading the checker"));
         assert!(prompt.contains("never use layout.icon_svg"));
-        assert!(prompt.contains(
-            "do not implement a business_commands fallback"
-        ));
+        assert!(prompt.contains("do not implement a business_commands fallback"));
         assert!(
             prompt.contains("not documentation, plans, trace files, blocker notes, or skill files")
         );
@@ -17385,7 +17385,7 @@ mod tests {
         assert!(prompt.contains("Do not call ctox queue ack/complete/release/fail/block"));
         assert!(prompt.contains("Do not request complete file dumps"));
         assert!(prompt.contains("do not search for validator filenames"));
-        assert!(prompt.contains("business_commands fallback"));
+        assert!(prompt.contains("delete the negative scanner test instead of evading the checker"));
         assert!(prompt.contains("Do not reconstruct scanner regexes"));
         assert!(prompt.contains("window.dispatchEvent"));
         assert!(prompt.contains("Node tests must not import ../index.js or ../schema.js directly"));

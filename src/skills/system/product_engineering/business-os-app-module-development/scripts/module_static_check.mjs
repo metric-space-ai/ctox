@@ -347,12 +347,24 @@ for (const path of files) {
 
 for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
   const text = readFileSync(path, 'utf8');
-  if (hasPathSegment(path, 'tests')) {
+  const isTestFile = hasPathSegment(path, 'tests') || path.endsWith('.test.mjs');
+  if (isTestFile) {
     if (/data:text\/javascript/i.test(text)) {
       fail(`${rel(path)} imports local app source through a data: URL; test shared .mjs helpers and JSON/text parity instead`);
     }
     if (/(?:from\s+['"]\.\.\/(?:index|schema)\.js['"]|import\s*\(\s*(?:new\s+URL\s*\(\s*)?['"]\.\.\/(?:index|schema)\.js['"])/.test(text)) {
       fail(`${rel(path)} imports browser .js entrypoints directly; put testable logic/schemas in local .mjs helpers and import those helpers from tests`);
+    }
+    const testEvasionRules = [
+      ['validator scanner-evasion String.fromCharCode', /\bString\.fromCharCode\s*\(/],
+      ['validator scanner-evasion forbidden token list', /\b(?:bundlerTokens|thirdPaneTokens|forbiddenTokens?|legacyTokens?)\b/],
+      ['validator scanner-evasion anti-pattern source scan', /\bdoes\s+not\s+use\s+forbidden\b|\b(?:forbidden|legacy|anti[-_\s]?pattern)[\s\S]{0,160}\b(?:tokens?|literals?|patterns?|source|scan)\b/i],
+      ['validator scanner-evasion workaround language', /\b(?:validator|checker|static checker)[\s\S]{0,160}\b(?:does not flag|bypass|workaround|evad|scan)\b/i],
+    ];
+    for (const [label, regex] of testEvasionRules) {
+      if (regex.test(text)) {
+        fail(`${rel(path)} contains forbidden ${label}; generated tests must assert positive Business OS behavior instead of scanning for anti-pattern absence`);
+      }
     }
   }
   const thirdPanePatterns = [
@@ -365,6 +377,7 @@ for (const path of files.filter((file) => /\.(html|css|js|mjs)$/.test(file))) {
     /grid-template-columns\s*:[^;]*(?:\b1fr\b[^;]*){1}[^;]*(?:\bvar\([^)]*right|right-width|minmax\([^)]*right)/i,
   ];
   if (
+    !isTestFile &&
     thirdPanePatterns.some((regex) => regex.test(text)) &&
     !/third[-_\s]?pane[-_\s]?justification|persistent third pane/i.test(text)
   ) {
@@ -453,6 +466,10 @@ const broadRules = [
   ['forbidden legacy shell chat event literal', /ctox-business-os-chat-submit|window\.dispatchEvent\s*\(/],
   ['forbidden command state literal pending_sync', /\bpending_sync\b/],
   ['forbidden direct command fallback literal', /business_commands\s+fallback|fallback\s+to\s+business_commands|falls?\s+back\s+to\s+business_commands|with\s+business_commands\s+fallback/i],
+  ['forbidden third-pane literal layout.right', /\blayout\.right\b/],
+  ['forbidden third-pane literal right-resizer', /\bright[-_]?resizer\b/i],
+  ['forbidden third-pane literal right-column', /\bright-column\b/i],
+  ['forbidden third-pane literal data-*-right', /\bdata-[\w-]*right\b/i],
 ];
 
 for (const path of broadScanFiles) {

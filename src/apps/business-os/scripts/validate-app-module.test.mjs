@@ -602,4 +602,49 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   assert.match(run.stderr, /imports browser \.js entrypoints directly/);
 }
 
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'rightreasontest', {
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "import { buildFollowUpCommand } from '../core/automation.mjs';",
+      "assert.equal('right reason', 'right reason');",
+      "assert.equal('right selectors', 'right selectors');",
+      "assert.equal(buildFollowUpCommand({ id: 'demo' }).command_type, 'business_os.chat.task');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'rightreasontest', '--installed');
+  assert.equal(run.status, 0, `${run.stderr}\n${run.stdout}`);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'rightresizertestliteral', {
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      "assert.equal('right-resizer', 'right-resizer');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'rightresizertestliteral', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /forbidden third-pane literal right-resizer/);
+}
+
+{
+  const root = makeWorkspace();
+  writeInstalledModule(root, 'scannerevasiontest', {
+    testJs: [
+      "import assert from 'node:assert/strict';",
+      'const legacyTokens = [String.fromCharCode(120)];',
+      "assert.equal(legacyTokens[0], 'x');",
+      '',
+    ].join('\n'),
+  });
+  const run = runValidator(root, 'scannerevasiontest', '--installed');
+  assert.notEqual(run.status, 0);
+  assert.match(run.stderr, /validator scanner-evasion/);
+}
+
 console.log('[validate-app-module.test] OK');
