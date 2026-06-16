@@ -398,6 +398,42 @@ WHERE job_id = ? AND item_id = ? AND status = ?
         Ok(result.rows_affected() > 0)
     }
 
+    /// liveness-6: requeue a still-Pending item after a TRANSIENT spawn failure,
+    /// incrementing `attempt_count` so the retry is bounded. Unlike
+    /// `mark_agent_job_item_pending` (which transitions Running->Pending and does
+    /// not count an attempt), this matches the Pending spawn-error state and bumps
+    /// the counter, so the job's finite drain recovers from a momentary
+    /// thread-manager hiccup yet still terminates after a fixed number of attempts.
+    pub async fn mark_agent_job_item_spawn_retry(
+        &self,
+        job_id: &str,
+        item_id: &str,
+        error_message: &str,
+    ) -> anyhow::Result<bool> {
+        let now = Utc::now().timestamp();
+        let result = sqlx::query(
+            r#"
+UPDATE agent_job_items
+SET
+    status = ?,
+    assigned_thread_id = NULL,
+    attempt_count = attempt_count + 1,
+    updated_at = ?,
+    last_error = ?
+WHERE job_id = ? AND item_id = ? AND status = ?
+            "#,
+        )
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .bind(now)
+        .bind(error_message)
+        .bind(job_id)
+        .bind(item_id)
+        .bind(AgentJobItemStatus::Pending.as_str())
+        .execute(self.pool.as_ref())
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn set_agent_job_item_thread(
         &self,
         job_id: &str,
@@ -649,6 +685,68 @@ mod tests {
                 failed_items: 0,
             }
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn spawn_retry_requeues_pending_and_bumps_attempt_count() -> anyhow::Result<()> {
+        // liveness-6: a transient spawn failure requeues the still-Pending item and
+        // increments attempt_count, so the handler's bounded MAX_AGENT_JOB_SPAWN_ATTEMPTS
+        // gate terminates the retry instead of looping forever (mark_pending does NOT
+        // bump the counter and only matches Running items).
+        let codex_home = unique_temp_dir();
+        let runtime = StateRuntime::init(codex_home, "test-provider".to_string()).await?;
+        let job_id = "job-retry".to_string();
+        let item_id = "item-retry".to_string();
+        runtime
+            .create_agent_job(
+                &AgentJobCreateParams {
+                    id: job_id.clone(),
+                    name: "retry-job".to_string(),
+                    instruction: "Return a result".to_string(),
+                    auto_export: true,
+                    max_runtime_seconds: None,
+                    output_schema_json: None,
+                    input_headers: vec!["path".to_string()],
+                    input_csv_path: "/tmp/in.csv".to_string(),
+                    output_csv_path: "/tmp/out.csv".to_string(),
+                },
+                &[AgentJobItemCreateParams {
+                    item_id: item_id.clone(),
+                    row_index: 0,
+                    source_id: None,
+                    row_json: json!({"path":"file-1"}),
+                }],
+            )
+            .await?;
+
+        let item = runtime
+            .get_agent_job_item(job_id.as_str(), item_id.as_str())
+            .await?
+            .expect("item should exist");
+        assert_eq!(item.status, AgentJobItemStatus::Pending);
+        assert_eq!(item.attempt_count, 0);
+
+        for expected in 1..=2 {
+            let retried = runtime
+                .mark_agent_job_item_spawn_retry(
+                    job_id.as_str(),
+                    item_id.as_str(),
+                    "failed to spawn worker: hiccup",
+                )
+                .await?;
+            assert!(retried, "spawn retry must match the pending item");
+            let item = runtime
+                .get_agent_job_item(job_id.as_str(), item_id.as_str())
+                .await?
+                .expect("item should exist");
+            assert_eq!(item.status, AgentJobItemStatus::Pending);
+            assert_eq!(item.attempt_count, expected);
+            assert_eq!(
+                item.last_error.as_deref(),
+                Some("failed to spawn worker: hiccup")
+            );
+        }
         Ok(())
     }
 

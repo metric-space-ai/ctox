@@ -44,6 +44,10 @@ const MAX_AGENT_JOB_CONCURRENCY: usize = 64;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_AGENT_JOB_ITEM_TIMEOUT: Duration = Duration::from_secs(60 * 30);
+// liveness-6: a transient worker-spawn error (e.g. a momentary thread-manager
+// hiccup) is retried up to this many times before the item is terminally failed,
+// so a single blip no longer loses a row the job's finite drain could recover.
+const MAX_AGENT_JOB_SPAWN_ATTEMPTS: i64 = 3;
 
 #[derive(Debug, Deserialize)]
 struct SpawnAgentsOnCsvArgs {
@@ -657,6 +661,26 @@ async fn run_agent_job_loop(
                     }
                     Err(err) => {
                         let error_message = format!("failed to spawn worker: {err}");
+                        if item.attempt_count < MAX_AGENT_JOB_SPAWN_ATTEMPTS {
+                            // liveness-6: a transient spawn error must not terminally
+                            // fail the item. Requeue it Pending with a bumped
+                            // attempt_count so the finite drain recovers; do NOT set
+                            // `progressed`, and break so the loop yields to
+                            // wait_for_status_change (backoff) before retrying. A
+                            // `false` return means the item already raced out of
+                            // Pending (e.g. a concurrent cancel/complete) — it is then
+                            // simply not re-fetched as Pending next tick, so there is
+                            // nothing to retry and no loop; intentionally not an error
+                            // (a real DB error still propagates via `?`).
+                            let _requeued = db
+                                .mark_agent_job_item_spawn_retry(
+                                    job_id.as_str(),
+                                    item.item_id.as_str(),
+                                    error_message.as_str(),
+                                )
+                                .await?;
+                            break;
+                        }
                         db.mark_agent_job_item_failed(
                             job_id.as_str(),
                             item.item_id.as_str(),
