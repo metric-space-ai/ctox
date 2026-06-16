@@ -207,7 +207,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — workflow predecessor-satisfaction hardening in `tickets.rs` — the parallel agent (Codex) is actively implementing the workflow cluster (the `WORKFLOW_MAX_STEPS_PER_WORKFLOW` const for workflow-6 is present in its uncommitted `tickets.rs` diff). Resolves on Codex’s commit; editing `tickets.rs` now would collide (shared-checkout hazard).
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/tickets.rs::workflow_step_satisfied`, `src/core/mission/tickets.rs::apply_ticket_workflow_delta`, `src/core/mission/tickets.rs::merge_ticket_self_work_metadata`, `src/core/mission/tickets.rs::enforce_ticket_self_work_state_transition`, `src/core/mission/tickets.rs:3555`
@@ -222,7 +222,7 @@ Independent per-ticket re-verification against the **live code** (anchors re-gre
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every load-bearing claim is verified in live code. The satisfying-flip set in workflow_step_satisfied (4024-4025) consults no evidence; evidence storage is optional (3557); the successor gate (workflow_step_ready_for_queue, 3937-3957) de...
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — satisfying-status-evidence hardening in `tickets.rs` — Codex’s active workflow-cluster lane. Resolves on Codex’s commit; collision-blocked for a parallel agent.
 - **Anchors:** `src/core/mission/tickets.rs::apply_ticket_workflow_delta`, `src/core/mission/tickets.rs:3557`, `src/core/mission/tickets.rs::WorkflowDeltaUpdateStep`, `src/core/mission/tickets.rs:3486`
 - **Problem:** The constraints doc names this exact target: 'Workflow-Delta-Erzeugung an Phase Evidence binden' (harness-hardening-constraints.md:210). `WorkflowDeltaUpdateStep.evidence` is `#[serde(default)] Value` (tickets.rs:638) and is stored only `if !update.evidence.is_null()` (3557) — it is OPTIONAL. A delta can set `workflow_step_status:"verified"` with `evidence: null` and the step satisfies predecessors. The step's `workflow_exit_gate` (written at 3486, rendered into the prompt at service.rs:12549) is never compared to anything at flip time. Determinism-split fit: requiring that evidence be PRESENT for a satisfying flip is a hard harness fact; judging whether the evidence is good stays model/review work.
 - **Fix:** Make the deterministic apply-path refuse a satisfying status flip that carries no `workflow_step_evidence`, tightening the existing delta validator rather than adding a new mechanism. This rides the same per-update loop that already rejects empty create prompts (3586).
@@ -444,7 +444,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 🏷 Pass 1 · impact **high** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — This is an accurately-researched, grounded ticket (unusually so for this backlog — the grounding caveat and verifier guidance match the live code line-for-line). The negative predecessor-gate test genuinely does not exist, and the gate i...
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — negative workflow-predecessor gate test — must live in `tickets.rs`’s `#[cfg(test)]` module (Codex’s active lane). Land once Codex commits the workflow cluster.
 - **Anchors:** `src/core/mission/tickets.rs::workflow_step_ready_internal`, `src/core/mission/tickets.rs::materialize_ready_workflow_steps_for_workflow`, `src/core/mission/tickets.rs::ticket_workflow_delta_materializes_successor_after_verified_predecessor`
 - **Problem:** workflow_step_ready_internal (tickets.rs:3936) is the deterministic predecessor-satisfaction gate the constraints doc names explicitly (Workflow-Predecessor-Erfuellung must be deterministic). It returns false unless every workflow_predecessor_work_id and workflow_predecessor_step_id is workflow_step_satisfied. The only test, ticket_workflow_delta_materializes_successor_after_verified_predecessor (tickets.rs:12418), exercises ONLY the positive path: it marks phase-0-reducer 'verified' FIRST, then asserts the successor becomes ready and materializes. There is no test that, with the predecessor still unverified, the successor is NOT in ready_steps and materialize_ready_workflow_steps_for_workflow materializes 0 steps. A regression that inverted or short-circuited the predecessor loop (e.g. returned Ok(true) early) would let a leaf step queue before its phase gate passed — the exact phase-model violation the doc warns against — and pass the existing test.
 - **Fix:** Extend the existing workflow test (or add a sibling) to assert the gate's closed state: after start_ticket_workflow + apply_ticket_workflow_delta that CREATES the successor with predecessor_steps but does NOT verify the predecessor, assert load_ticket_workflow.ready_steps does not contain the successor and materialize_ready_workflow_steps_for_workflow returns materialized_count==0. This pins the deterministic side of an already-existing gate.
@@ -525,7 +525,7 @@ With those three adjustments the finding is a clean keep-quality hardening.
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — negative predecessor-gate test (`workflow_step_ready_internal`) in `tickets.rs` (Codex’s active lane). Land once Codex commits the workflow cluster.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/execution/models/runtime_env.rs::write_runtime_env_map (lines 202-214, DELETE FROM runtime_env_kv then reinsert full in-memory map inside one txn)`, `src/core/execution/models/runtime_env.rs::save_runtime_env_map (line 53, entry point)`, `src/core/main.rs::persist_runtime_turn_timeout (lines 1964-1979, load->insert one key->save)`, `src/core/ui/tui/mod.rs::persist_setup_wizard_state (lines 1912-1914, load->insert one key->save from TUI thread)`
@@ -614,7 +614,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor, line number, symbol, struct field, and the full control-flow chain match the live code verbatim — exceptionally well-researched ticket, not a hallucination. The vulnerability is real: a model/reducer-authored workflow delta...
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — workflow-delta predecessor/workflow_id immutability in `tickets.rs` — Codex’s active workflow-cluster lane. Resolves on Codex’s commit.
 - **Anchors:** `src/core/mission/tickets.rs:3560`, `src/core/mission/tickets.rs::apply_ticket_workflow_delta`, `src/core/mission/tickets.rs::workflow_step_ready_internal`
 - **Problem:** In the update loop, `update.metadata` is copied verbatim into the row: `for (key,value) in extra { object.insert(key.clone(), value.clone()); }` (tickets.rs:3560-3563), then merged by `merge_ticket_self_work_metadata`. There is no allowlist, so a delta update can overwrite `workflow_predecessor_step_ids`/`workflow_predecessor_work_ids` (clearing a step's predecessors) or even `workflow_id` and `workflow_step_id` — the very keys `workflow_step_ready_internal` (3936) reads to gate materialization. A reducer can thus silently delete the gating edges of a waiting step and make it ready, with no spawn-guard or state-machine involvement.
 - **Fix:** Constrain the free-form `update.metadata` passthrough so structural gating keys cannot be mutated through the delta update channel; structural changes must go through `put_ticket_workflow_step` (which sets predecessors deliberately and re-runs the spawn guard).
@@ -630,7 +630,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** ✅ **DO — real stability win** · grounded **confirmed** · stability **clear** — Every anchor is accurate (line numbers exact except service.rs drifted 9046->9134, within tolerance). The defect is real and demonstrable: put_ticket_workflow_step (3408) loads the case but never inspects case.state/workflow_status; appl...
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — closed/cancelled-workflow step-creation guard in `tickets.rs` — Codex’s active workflow-cluster lane. Resolves on Codex’s commit.
 - **Anchors:** `src/core/mission/tickets.rs::put_ticket_workflow_step`, `src/core/mission/tickets.rs::load_ticket_workflow_case_internal`, `src/core/mission/tickets.rs::apply_ticket_workflow_delta`
 - **Problem:** `put_ticket_workflow_step` (3403) loads the case via `load_ticket_workflow_case_internal` (3849) only to read `source_system`/`thread_key`/`priority` — it never checks the case `state` or `workflow_status`. `apply_ticket_workflow_delta` (3523) likewise never re-validates the case is active. So after a workflow case is closed/cancelled/superseded, a stray delta or `workflow-step-put` (CLI 1142) can still spawn new `workflow-step` items and `materialize_ready_workflow_steps` (service.rs:9046) will route them into the worker — work continues on a terminated case. `workflow_prompt_block` already excludes terminal cases (tickets.rs:3711), so this is an inconsistency the create path doesn't honor.
 - **Fix:** Gate new step creation and delta application on the case being non-terminal, reusing the same terminal-state set already used in `workflow_prompt_block`'s SQL filter — a guard riding the existing case lookup, not a new lifecycle.
@@ -648,7 +648,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — dangling-predecessor stall detection in `tickets.rs` — Codex’s active workflow-cluster lane. Resolves on Codex’s commit.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/tickets.rs::workflow_step_ready_internal`, `src/core/mission/tickets.rs::apply_ticket_workflow_delta`, `src/core/mission/tickets.rs::locate_workflow_step_in_conn`
@@ -665,7 +665,7 @@ Net: the genuinely dead, genuinely unduplicated gap is the main-loop repeated-bl
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — workflow-wide step budget in `tickets.rs` — Codex is implementing exactly this NOW (`WORKFLOW_MAX_STEPS_PER_WORKFLOW = 256` is in its uncommitted diff). Resolves on Codex’s commit.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/tickets.rs:3531`, `src/core/mission/tickets.rs::ticket_self_work_spawn_budget`, `src/core/mission/tickets.rs::enforce_ticket_self_work_spawn`
@@ -773,7 +773,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **partial — log+count shipped, txn half Codex-blocked** — the LOG+COUNT half shipped (`6dc29f57`, harness_flow.rs: `record_harness_flow_event_lossy` now logs + counts via an AtomicU64). The remaining transactional/idempotent half (reuse the caller `conn` in `put_ticket_self_work_item`) is in `tickets.rs` (Codex’s active lane). Land once `tickets.rs` frees.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/harness_flow.rs::record_harness_flow_event_lossy`, `src/core/service/harness_flow.rs::record_harness_flow_event`, `src/core/service/harness_flow.rs::open_event_connection`, `src/core/service/harness_flow.rs::event_id`, `src/core/mission/tickets.rs::put_ticket_self_work_item`
@@ -807,7 +807,7 @@ Tighter corrected version: introduce is_subagent_terminal(status) = is_final(sta
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (dedicated effort)** — real correctness gap (deterministic skill-BODY injection, not just the name) but the fix is a substantial cross-layer refactor — `live_context` name→path resolution + the `turn_loop` skill passage + the harness injection layer; re-audit downgraded impact to low (prompt-coherence, no behavioural loss since the skill is still dispatched). Better as a focused effort than a tail add.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/context/live_context.rs::render_skill_dispatch_block`, `src/core/harness/core/src/skills/injection.rs::collect_explicit_skill_mentions`, `src/core/harness/core/src/skills/injection.rs::build_skill_injections`, `src/core/mission/channels.rs::create_queue_task_with_metadata`
@@ -1031,7 +1031,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **partial — (b) + (c) shipped; (a) blocked on the parallel agent's `tickets.rs`** — (c) `state_write_guard` multi-line-protected-write fixture shipped earlier (tests-5c). (b) the planner firewall: `production_runtime_plan_avoids_model_conditioned_planner_heuristics` now uses a GENERIC structural scanner (`model_conditioned_planner_violations`) — flags `harness.model` adjacent to a comparison operator and `matches!`/`match harness.model` against quoted vendor-id literals, allowing bare value-uses; the two legit gemma hardware-quirk pins are whitelisted via comment markers (comment-required, comment-stripped scan, so a planted string-literal marker or a commented counter-example can't subvert it). (a) widening the terminology-firewall scan-all in `tickets.rs` stays OPEN — that file is in the parallel agent's active lane; land it (with the curated identifier allowlist, non-strict scan-all only) once `tickets.rs` is free.
+- [ ] **partial — (b)+(c) shipped, (a) Codex-blocked** — (b) generic planner model-firewall (`tests-5b`) and (c) the multi-line protected-write fixture (`tests-5c`) shipped. The remaining (a) terminology-firewall scan-all touches `tickets.rs` (Codex’s active lane) and needs a curated legacy-identifier allowlist landed atomically. Land once `tickets.rs` frees.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/mission/tickets.rs::internal_work_terminology_firewall_keeps_self_work_legacy_only`, `src/core/execution/models/runtime_plan_boundary_tests.rs::production_runtime_plan_avoids_model_conditioned_planner_heuristics`, `src/core/service/state_write_guard.rs::protected_state_writes_are_core_guarded_or_explicit_test_fixtures`
@@ -1101,7 +1101,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (new subsystem)** — a NEW structured skill-execution contract (`input_ref`/`expected_output`/`required_evidence`), not a hardening fix. Doable in `skill_store.rs`/`system.rs`/`live_context.rs` without `tickets.rs`, but warrants a dedicated skills-infrastructure feature rather than a tail add.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/skill_store.rs::parse_skill_catalog_metadata`, `src/core/mission/tickets.rs::put_ticket_workflow_step`, `src/core/mission/tickets.rs::required_evidence_for_bundle`
@@ -1118,7 +1118,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — `c520c843`. New `channels::list_stale_queue_task_leases` (read-only; leased+unacked past the shared `STALE_QUEUE_LEASE_AGE_MINUTES`=15) + `reconcile_ticket_runtime_state` now emits one idempotent `stuck_lease_escalation` governance event per stuck lease whose key IS in `active_keys` (a worker wedged mid-slice) — escalate-as-evidence, NOT auto-released. Mechanism registered; the 15-min window const is shared with process_mining so the advisory finding and the durable event never drift. Test: a 16-min protected lease yields exactly one escalation event and stays leased. Whole-crate build + test green.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/process_mining.rs::diagnose_queue`, `src/core/service/service.rs::reconcile_ticket_runtime_state`, `src/core/mission/channels.rs::release_stale_queue_task_leases`
@@ -1150,7 +1150,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 2 · impact **medium** · effort **S** · kind **design-pattern** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Grounded and accurate: the byte-identical triplication of a 6-line trimmed-non-empty string extractor across service/channels/tickets is real, no divergent overload exists, and the three copies do parse the same durable metadata keys (ti...
 
-- [ ] **open**
+- [ ] **deferred (re-audit: speculative)** — behavior-preserving dedup of the byte-identical `metadata_string`/`metadata_string_value` across service/channels/tickets (verified NO current divergence). Re-pointing all three spans `tickets.rs` (Codex’s lane); re-audit rates it speculative/cosmetic. Post-hardening refactor.
 - **Anchors:** `src/core/service/service.rs::metadata_string (10248) + metadata_string_list (10257)`, `src/core/mission/channels.rs::metadata_string_value (2418)`, `src/core/mission/tickets.rs::metadata_string_value (2951)`, `src/core/mission/mod.rs (1-18, module home)`
 - **Problem:** The same trimmed-non-empty JSON-string extractor exists as three byte-identical private copies — metadata_string (service.rs) and metadata_string_value (channels.rs, tickets.rs) — feeding ~65 call sites (25 in service.rs, 7 in channels.rs, 33 in tickets.rs). These three files all parse the SAME durable metadata_json blobs (workflow_*, dedupe_key, thread_key, inbound_message_key) that cross the channel/ticket/service boundary, so a future tweak to trimming/empty-handling in one copy silently diverges the others — the exact stringly-typed cross-file drift the metadata keys already risk. This is a pure behavior-preserving dedup target.
 - **Fix:** Hoist one canonical pub(crate) metadata_string(+_list) into a small mission util module and re-point all three modules at it, so metadata parsing semantics are single-sourced across the boundary.
@@ -1217,7 +1217,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (focused rxdb effort)** — worthwhile guard-test pinning the 12-mapper SQL→replicated projection’s id/updated_at sources against silent copy-paste swaps. But it lives in the guard-protected ctox-rxdb data plane and a CORRECT pin must seed all ~12 projected collections and model each id-source (per docs/ctox-rxdb.md). Warrants a focused, properly-seeded rxdb-hardening effort, not a tail add.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `tickets.rs::list_ticket_event_routing_for_business_os`, `tickets.rs::business_os_ticket_projection_documents`, `business_os_schema_contract.json:2311`
@@ -1314,7 +1314,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **deferred (re-audit: no-op now)** — with `CHANNEL_ROUTER_SERIAL_LEASE_LIMIT=1` the source-rank sort is a verified NO-OP, and router-4 (`66853d45`) already added founder-inbound priority at the durable-vs-inbound boundary. The residual idle-first-selection-by-recency gap would need a `take_messages` `ORDER BY`/migration change for marginal value.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::route_external_messages`, `src/core/service/service.rs::source_label_dispatch_rank`, `src/core/mission/channels.rs::lease_pending_inbound_messages`
@@ -1380,7 +1380,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 1 · impact **medium** · effort **S** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Grounded and well-researched: anchors, literals, budget values, key construction, the no-test claim, the feasibility of accumulation, and the bail string all match live code. The proposed fix is a pure test-only addition that pins existi...
 
-- [ ] **open**
+- [ ] **deferred (Codex lane)** — ticket-self-work spawn-budget value-pinning test must edit `tickets.rs`’s `#[cfg(test)]` module (Codex’s active lane). Rescope after Codex commits the workflow cluster.
 - **Anchors:** `src/core/mission/tickets.rs::ticket_self_work_spawn_budget`, `src/core/mission/tickets.rs::enforce_ticket_self_work_spawn`, `src/core/service/core_transition_guard.rs::core_spawn_allows_only_finite_budgeted_cycles`
 - **Problem:** ticket_self_work_spawn_budget (tickets.rs:2926) hard-codes the spawn budgets that bound internal-work liveness: review kinds = 5 (review-spawn:{kind}:{thread_key}), founder-communication-rework = 2 (founder-rework-spawn:{key}), everything else = 64 (service-self-work-spawn:{kind}:{key}). enforce_ticket_self_work_spawn (tickets.rs:2860) feeds these into enforce_core_spawn as budget_key+max_attempts. The generic exhaustion mechanism is tested in core_transition_guard.rs::core_spawn_allows_only_finite_budgeted_cycles (proves spawn_budget_exhausted fires), but NO test pins the values or the budget_key construction for the ticket path. self_work_items_allow_multiple_entries_for_same_kind_when_not_deduped only spawns 2 of a 64-budget kind. A regression that bumped founder-rework from 2 to 200, or changed the founder budget_key so two distinct inbound_message_keys collide into one bucket (throttling legitimate distinct rework), passes every current test. These budgets are the liveness ceiling against runaway self-spawn.
 - **Fix:** Add a unit test on the existing function asserting the (budget_key, max_attempts) tuple for the three classes, plus one integration assertion via enforce_ticket_self_work_spawn that the (N+1)th founder-rework spawn for the SAME inbound_message_key is rejected with spawn_budget_exhausted while a distinct inbound_message_key is still accepted (proving the key isolates correctly).
@@ -1446,7 +1446,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 🏷 Pass 2 · impact **low** · effort **M** · kind **architecture** · verifier **keep**/high-conf
 🔎 **Live re-audit (3rd pass):** 🔵 **DEFER — audit/cosmetic, not hardening** · grounded **confirmed** · stability **marginal** — Every factual claim is verified in live code: the god-file (25578 lines), the pure self-contained xlsx cluster of 8 symbols, its module-private visibility, zero SharedState/db/push_event/spawn dependencies, no external callers, and the d...
 
-- [ ] **open**
+- [ ] **deferred (re-audit: low-urgency hygiene)** — pure, correctly-scoped xlsx-parser extraction from the 25k-line `service.rs` god-module to `src/tools/spreadsheet/` (behavior-preserving layering per architecture.md:167). Re-audit rates impact low — the parser works correctly in place; do it when architectural cleanliness becomes blocking, not as a hardening fix.
 - **Anchors:** `src/core/service/service.rs (25374 lines, ~398 top-level fns, single flat module)`, `src/core/service/service.rs::inspect_xlsx_attachment (6763) + read_zip_text (6790) + read_xlsx_shared_strings (6804) + parse_xlsx_rows (6861) + SpreadsheetAttachmentEvidence (6006)`, `docs/architecture.md Feature Placement Rule (source-package support belongs under src/tools/)`
 - **Problem:** service.rs concentrates unrelated responsibilities in one flat module: the serial dispatch hot path, the bounded worker lifecycle, ~10 prompt renderers, 4 deterministic post-review guards, AND a self-contained .xlsx/zip parser. The xlsx cluster (inspect_xlsx_attachment + read_zip_text + read_xlsx_shared_strings + parse_xlsx_rows + SpreadsheetAttachmentEvidence) is pure (no SharedState/db/push_event) and is spreadsheet tooling, which per the architecture's feature-placement rule belongs under src/tools/, not in the orchestration service module. A full split of service.rs is blocked by the constraints (a behavior-/persistence-preserving extraction is fine, but a broad restructure risks the dispatch invariants and is not sanctioned), so the actionable, safe move is just the isolated pure cluster. Reporting the rest as a constrained smell.
 - **Fix:** Extract only the verified-pure xlsx cluster into src/tools/ (or a service submodule) as a behavior-preserving move, shrinking the god-file at a true layer boundary and making the parser independently testable. Leave the dispatch/worker/prompt/guard code in place — those are constrained against restructure.
@@ -1464,7 +1464,7 @@ Net: medium-impact, S effort, low real-world risk if SendFailed accepts provider
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [x] **shipped** — `e21596aa`. Bounded per-item retry on transient agent-job spawn errors: on a non-AgentLimitReached spawn `Err`, if `attempt_count < MAX_AGENT_JOB_SPAWN_ATTEMPTS`(3) requeue the still-Pending item via the new `ctox_state::mark_agent_job_item_spawn_retry` (WHERE status=pending, attempt_count+1) and break without setting `progressed` (backoff via wait_for_status_change); else mark Failed as before. The increment guarantees strict termination (mark_pending neither counts an attempt nor matches Pending). State test proves attempt_count 0→2 stays Pending; adversarial review SHIP (bounded termination + backoff + no regression). Harness state crate test + main-crate compile green.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/harness/core/src/tools/handlers/agent_jobs.rs:658 (Err(err) => mark_agent_job_item_failed)`, `src/core/harness/core/src/tools/handlers/agent_jobs.rs:649 (AgentLimitReached => mark pending, requeue)`, `src/core/harness/state/src/runtime/agent_jobs.rs (attempt_count column)`
@@ -1490,7 +1490,7 @@ Corrected, tighter version: (a) Add a state-layer mutation that operates on the 
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **won’t do (DROP)** — re-audit: writing `ctox_core_spawn_edges` from `ctox-core` would VIOLATE the crate boundary (the spawn-edge ledger belongs to the orchestration plane, not the harness fork). The smell is constrained and a trace already exists via harness `send_event` + the threads forensics (x-subagent-liveness, shipped). Not worth the boundary violation.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/harness/core/src/tools/handlers/multi_agents/spawn.rs:45`, `src/core/service/core_transition_guard.rs::enforce_core_spawn`, `src/core/service/process_mining.rs`, `src/core/harness/FORK.md`
@@ -1507,7 +1507,7 @@ Corrected, tighter version: (a) Add a state-layer mutation that operates on the 
 
 > ⚠️ **Canonical issue:** implement the **Canonical scope** + **Verifier guidance** below. (The stale original Fix/Change-sketch fields were removed in the live re-audit cleanup.)
 
-- [ ] **open**
+- [ ] **won’t do (DROP)** — re-audit: `render_ticket_self_work_prompt` omitting the bound skill from the WORKFLOW PHASE CONTEXT is cosmetic prompt-coherence (the skill is still bound + dispatched), and the file is `tickets.rs` (Codex’s lane). Dropped.
 - **Canonical scope:** Implement the corrected scope in **Verifier guidance**. Treat the superseded original fix/sketch/test mapping as historical context, not instructions.
 - **Canonical verification:** Use the Q10/test instructions in **Verifier guidance**; if they conflict with any superseded original field, Verifier guidance wins.
 - **Anchors:** `src/core/service/service.rs::render_ticket_self_work_prompt`, `src/core/mission/tickets.rs::map_ticket_self_work_row`, `src/core/mission/tickets.rs::put_ticket_workflow_step`
