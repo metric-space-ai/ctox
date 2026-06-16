@@ -1050,6 +1050,7 @@ Inventory outcome:
 bench_inventory did not produce a completed R2 app outcome.
 The first inventory run hit a Claude Code API socket close after writing only partial module scaffolding.
 Two fresh inventory retries hung for several minutes without writing any module files and were manually terminated.
+An additional stream-json/verbose retry confirmed a distinct analysis-loop failure: the agent read existing modules and validator/checker implementation details, repeatedly planned around scanner terms, but after 5 minutes had still written zero module files under runtime/business-os/installed-modules/bench_inventory. The process was terminated and no app result was counted.
 This is recorded as runner/infrastructure failure, not a green or red app result.
 ```
 
@@ -1058,5 +1059,6 @@ R2 takeaways:
 ```text
 The R1 hardening worked for the completed apps: command_type and record_snapshot were present, layout.icon_svg did not recur, and all four completed modules stayed in the runtime-installed target.
 The negative-proof string scanner still matters: projects briefly had layout/right wording in tests, then self-corrected after validation.
-The remaining bench blocker is Claude Code CLI reliability on one prompt/run, not an observed Business OS architecture failure in completed modules.
+The remaining bench blocker is Claude Code CLI reliability on one prompt/run plus one observed process failure mode: an agent can overread checker internals and delay the first runnable slice indefinitely.
+The skill now treats validators/static checkers as black-box gates before the required module file set exists. Agents must inspect contracts and three modules, write the minimal app files, run validation, and repair concrete validator bullets instead of reconstructing scanner rules up front.
 ```

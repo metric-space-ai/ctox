@@ -46,6 +46,8 @@ you are about to write a very large app file as one huge tool-call argument or h
 you are about to patch a large generated JavaScript file with fragile line-number sed edits instead of rewriting the relevant bounded helper/file
 you are about to make a failing test match broken behavior instead of fixing the app contract violation it exposed
 you are about to import browser entry files such as `index.js` or `schema.js` directly from Node tests, or through `data:text/javascript`, base64, `Buffer.from(source)`, or any generated data URL, instead of testing local `.mjs` helpers and JSON/text parity
+you are spending extra turns reading validator/static-checker implementation internals before the required module file set exists; use validators as black-box gates until they report a concrete failure
+you are trying to satisfy or avoid scanner keywords by mentally reconstructing the checker instead of writing the smallest valid Business OS module and then repairing actual validator bullets
 tests and Business OS guards were not run after the last code change
 ```
 
@@ -93,6 +95,26 @@ unjustified right/third pane, then rerun validation
 Do not use queue IDs or open-work context as a target selector. The App
 Creator/CTOX service will complete queue and command state after the app
 validator is green.
+
+After the required reading and tiny analogue map, write the first runnable
+slice immediately. Do not keep inspecting validator source, static-checker
+source, shell wrappers, or guard internals while `module.json`,
+`collections.schema.json`, `schema.js`, `index.html`, `index.css`, `index.js`,
+`icon.svg`, locales, and at least one test are still missing. The correct loop
+is:
+
+```text
+1. inspect contracts and 3 modules
+2. choose MODULE_DIR and app scope
+3. write the required files with a small two-pane/modal app
+4. parse JSON and run syntax/test/validator gates
+5. copy exact validator failure bullets into the repair checklist
+6. repair the module files and rerun the same gates
+```
+
+Validators and static checkers are gates, not few-shot source material. Read
+their user-facing failure output, not their implementation, unless the checker
+itself crashes or the failure cannot be mapped to a module file.
 
 ## Architecture Translation Layer
 
@@ -388,6 +410,8 @@ export function mount(ctx) {
 ## Generation Discipline
 
 - Keep the first version intentionally small: one primary list/workbench, one detail/edit flow, the required automation action, and focused tests.
+- Prefer shipping a minimal valid slice over pre-solving every possible guard rule. Once the required files exist, let the validator tell you the next concrete repair.
+- Do not read or paraphrase validator/static-checker source to plan around broad scanner terms before writing files. This causes analysis loops and often leaks forbidden strings into generated tests or comments.
 - Do not create broad status/filter/export/settings surfaces unless the prompt asked for them and the handlers are implemented.
 - For App Creator/runtime-installed apps, use vanilla DOM and browser APIs only. A local `.mjs` helper is fine; a framework runtime or generated bundle is not.
 - Avoid huge single tool calls. If a file grows large enough to risk malformed tool-call JSON, reduce scope first; otherwise write it in bounded chunks and immediately run syntax checks.

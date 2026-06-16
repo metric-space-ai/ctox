@@ -121,6 +121,13 @@ module tests, README, phase-plan, and source edits. If any file under
 `docs/business-os-<module>-implementation-plan.md` changes after a green run,
 the green evidence is stale and the checker must be rerun.
 
+Treat validators and static checkers as black-box gates while building the
+first runnable slice. Do not spend turns reading checker implementation source,
+reconstructing regexes, or writing negative-proof assertions before the required
+module files exist. Write the minimal module, run the validator, then repair
+the concrete bullets it reports. Inspect checker internals only when the checker
+crashes or a failure cannot be traced to a module file.
+
 For CTOX-native release/App Creator work, distinguish command-path proof from
 source-checkout proof. A runtime-installed module must show evidence that the
 Business OS command or App Creator action completed, wrote the expected
