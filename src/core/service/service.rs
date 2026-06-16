@@ -10641,6 +10641,55 @@ fn reconcile_ticket_runtime_state(root: &Path, state: &Arc<Mutex<SharedState>>) 
             format!("Released {released_count} stale queue task lease(s)"),
         );
     }
+    // router-3: a stuck queue-task lease whose key is STILL in active_keys (a
+    // worker wedged mid-slice, or a key held in pending_prompts) is intentionally
+    // protected from auto-release above — but process-mining flags it CRITICAL
+    // after the stale-lease window with no durable governance evidence. Escalate-
+    // as-evidence: emit one idempotent governance event per stuck protected key so
+    // the deadlock-recovery audit trail exists. We do NOT release it (its worker
+    // may be genuinely mid-slice).
+    match channels::list_stale_queue_task_leases(root, CHANNEL_ROUTER_LEASE_OWNER) {
+        Ok(stale_leases) => {
+            let mut stuck_protected: Vec<String> = stale_leases
+                .into_iter()
+                .filter(|key| active_keys.contains(key))
+                .collect();
+            stuck_protected.sort();
+            if !stuck_protected.is_empty() {
+                let stuck_count = stuck_protected.len();
+                let idempotence_key = format!(
+                    "stuck-lease-escalation:{}",
+                    normalize_token(&stuck_protected.join(","))
+                );
+                governance::record_event_or_count(
+                    root,
+                    governance::GovernanceEventRequest {
+                        mechanism_id: "stuck_lease_escalation",
+                        conversation_id: None,
+                        severity: "warning",
+                        reason: "a queue-task lease has been held by an in-process worker past the stuck-lease window and is protected from auto-release",
+                        action_taken: "escalated the stuck protected lease as durable evidence without releasing it (the worker may be mid-slice)",
+                        details: serde_json::json!({
+                            "stuck_message_keys": stuck_protected.clone(),
+                            "stale_lease_age_minutes": channels::STALE_QUEUE_LEASE_AGE_MINUTES,
+                        }),
+                        idempotence_key: Some(&idempotence_key),
+                    },
+                );
+                push_event(
+                    state,
+                    format!("Escalated {stuck_count} stuck protected queue lease(s) as evidence"),
+                );
+            }
+        }
+        Err(err) => push_event(
+            state,
+            format!(
+                "Stuck-lease escalation check skipped: {}",
+                clip_text(&err.to_string(), 180)
+            ),
+        ),
+    }
     let runnable_queue_tasks =
         channels::list_queue_tasks(root, &["pending".to_string(), "leased".to_string()], 1)?;
     if !runnable_queue_tasks.is_empty() {
@@ -23644,6 +23693,88 @@ Use shell tools to create or update these files."
                 .iter()
                 .any(|task| task.message_key == queue_task.message_key),
             "durable queue task must be leased when no higher-ranked inbound is pending"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// router-3: a queue-task lease held past the stuck window by an in-process
+    /// worker (its key is in active_keys) is intentionally NOT auto-released, but it
+    /// must leave a durable governance escalation as deadlock-recovery evidence
+    /// (today it is only an advisory process-mining finding).
+    #[test]
+    fn stuck_protected_queue_lease_is_escalated_not_released() {
+        let root = temp_root("router3-stuck-lease");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Wedged worker task".to_string(),
+                prompt: "A task whose worker is wedged mid-slice.".to_string(),
+                thread_key: "wedged".to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("seed queue task");
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
+            .expect("lease the queue task");
+        // Backdate the lease clearly past the 15-min stuck window.
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open channel db");
+        conn.execute(
+            "UPDATE communication_routing_state SET leased_at='2020-01-01T00:00:00.000Z' \
+             WHERE message_key = ?1",
+            rusqlite::params![task.message_key],
+        )
+        .expect("backdate the lease");
+
+        // The lease key is in active_keys (a worker wedged mid-slice) -> protected.
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        {
+            let mut shared = lock_shared_state(&state);
+            shared.pending_prompts.push_back(QueuedPrompt {
+                prompt: "wedged".to_string(),
+                goal: "wedged".to_string(),
+                preview: "wedged".to_string(),
+                source_label: "queue".to_string(),
+                suggested_skill: None,
+                leased_message_keys: vec![task.message_key.clone()],
+                leased_ticket_event_keys: Vec::new(),
+                thread_key: Some("wedged".to_string()),
+                workspace_root: None,
+                ticket_self_work_id: None,
+                outbound_email: None,
+                outbound_anchor: None,
+            });
+        }
+
+        reconcile_ticket_runtime_state(&root, &state).expect("reconcile should succeed");
+
+        // The protected lease must NOT be auto-released.
+        let status: String = conn
+            .query_row(
+                "SELECT route_status FROM communication_routing_state WHERE message_key = ?1",
+                rusqlite::params![task.message_key],
+                |row| row.get(0),
+            )
+            .expect("read routing status");
+        assert_eq!(
+            status, "leased",
+            "a protected stuck lease must not be auto-released"
+        );
+
+        // ...and exactly one durable stuck_lease_escalation event was recorded.
+        let events = governance::list_recent_events(&root, 1, 100).expect("list events");
+        let escalations = events
+            .iter()
+            .filter(|event| event.mechanism_id == "stuck_lease_escalation")
+            .count();
+        assert_eq!(
+            escalations, 1,
+            "exactly one stuck-lease escalation event must be recorded"
         );
 
         let _ = std::fs::remove_dir_all(&root);

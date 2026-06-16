@@ -258,6 +258,14 @@ const DEFAULT_MECHANISMS: &[DefaultMechanism] = &[
         description: "Reconciles stale ticket leases and previously blocked ticket events before new external routing.",
     },
     DefaultMechanism {
+        mechanism_id: "stuck_lease_escalation",
+        mechanism_class: "recovery",
+        autonomy: "autonomous_ticket_reconciliation",
+        prompt_visibility: "inventory_only",
+        module_hint: "src/service.rs",
+        description: "Escalates a queue-task lease held past the stuck-lease window by an in-process worker (protected from auto-release) as durable evidence, so the deadlock-recovery audit trail exists instead of only an advisory process-mining finding.",
+    },
+    DefaultMechanism {
         mechanism_id: "plan_goal_superseded_for_duplicate_slice",
         mechanism_class: "safety",
         autonomy: "autonomous_plan_goal_supersede",

@@ -2795,6 +2795,46 @@ pub fn lease_queue_task(
     load_queue_task_from_conn(&conn, message_key)?.context("failed to load leased queue task")
 }
 
+/// router-3: the age past which a still-leased, unacked queue task is "stuck".
+/// Kept in lockstep with the process-mining `stuck_queue_items` diagnostic
+/// (process_mining.rs) so the durable escalation and the advisory finding never
+/// drift apart.
+pub const STALE_QUEUE_LEASE_AGE_MINUTES: i64 = 15;
+
+/// router-3: read-only — `message_key`s of queue-task leases held by `lease_owner`
+/// that are older than [`STALE_QUEUE_LEASE_AGE_MINUTES`] and still unacked (the
+/// exact condition process-mining flags as `stuck_queue_items`). This does NOT
+/// release anything; it lets the reconciler escalate-as-evidence the in-active-key
+/// case (a worker wedged mid-slice) that `release_stale_queue_task_leases`
+/// intentionally protects from auto-release. The `leased_at < cutoff` comparison
+/// mirrors the process-mining query (RFC3339-millis cutoff) so the two surfaces
+/// agree on which leases are stuck.
+pub fn list_stale_queue_task_leases(root: &Path, lease_owner: &str) -> Result<Vec<String>> {
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let cutoff = (Utc::now() - Duration::minutes(STALE_QUEUE_LEASE_AGE_MINUTES))
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let mut statement = conn.prepare(
+        r#"
+        SELECT m.message_key
+        FROM communication_messages m
+        JOIN communication_routing_state r ON r.message_key = m.message_key
+        WHERE m.channel = 'queue'
+          AND m.direction = 'inbound'
+          AND r.route_status IN ('leased', 'running')
+          AND r.lease_owner = ?1
+          AND r.leased_at IS NOT NULL
+          AND r.leased_at < ?2
+          AND (r.acked_at IS NULL OR r.acked_at = '')
+        ORDER BY r.leased_at ASC
+        LIMIT 128
+        "#,
+    )?;
+    let rows = statement.query_map(params![lease_owner, cutoff], |row| row.get::<_, String>(0))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(anyhow::Error::from)
+}
+
 pub fn release_stale_queue_task_leases(
     root: &Path,
     lease_owner: &str,

@@ -3091,8 +3091,12 @@ fn diagnose_queue(conn: &Connection) -> Result<Value> {
         routing_duration_stats(conn, "communication_routing_state", "message_key")?;
     let negative_duration_count =
         negative_routing_duration_count(conn, "communication_routing_state")?;
-    let stale_lease_cutoff = (chrono::Utc::now() - chrono::Duration::minutes(15))
-        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    // router-3: share the stuck-lease window with the durable escalation in
+    // reconcile_ticket_runtime_state so the advisory finding and the governance
+    // event never drift apart.
+    let stale_lease_cutoff = (chrono::Utc::now()
+        - chrono::Duration::minutes(crate::mission::channels::STALE_QUEUE_LEASE_AGE_MINUTES))
+    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let active_leased = if table_exists(conn, "communication_routing_state")? {
         conn.query_row(
             r#"
