@@ -126,6 +126,13 @@ const SERVICE_SHUTDOWN_TIMEOUT_SECS: u64 = 15;
 const SERVICE_SHUTDOWN_POLL_MILLIS: u64 = 150;
 const SYSTEMCTL_USER_TIMEOUT_SECS: u64 = 5;
 const CTO_DRIFT_KIND: &str = "cto-drift-correction";
+const BUSINESS_OS_WEB_AUTOSTART_KEY: &str = "CTOX_BUSINESS_OS_WEB_AUTOSTART";
+const BUSINESS_OS_WEB_ADDR_KEY: &str = "CTOX_BUSINESS_OS_WEB_ADDR";
+const BUSINESS_OS_WEB_DEFAULT_ADDR: &str = "127.0.0.1:8765";
+const BUSINESS_OS_MCP_AUTOSTART_KEY: &str = "CTOX_BUSINESS_OS_MCP_AUTOSTART";
+const BUSINESS_OS_MCP_ADDR_KEY: &str = "CTOX_BUSINESS_OS_MCP_ADDR";
+const BUSINESS_OS_MCP_DEFAULT_ADDR: &str = "127.0.0.1:8788";
+const BUSINESS_OS_AUTOSTART_RETRY_SECS: u64 = 30;
 
 static SERVICE_PANIC_HOOK: Once = Once::new();
 
@@ -639,6 +646,27 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
+fn runtime_config_bool(root: &Path, key: &str, default: bool) -> bool {
+    runtime_env::env_or_config(root, key)
+        .as_deref()
+        .and_then(parse_boolish)
+        .unwrap_or(default)
+}
+
+fn runtime_config_string(root: &Path, key: &str, default: &str) -> String {
+    runtime_env::env_or_config(root, key)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| default.to_string())
+}
+
+fn parse_boolish(value: &str) -> Option<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Some(true),
+        "0" | "false" | "no" | "off" => Some(false),
+        _ => None,
+    }
+}
+
 const DEFAULT_AGENT_FAILURE_THRESHOLD: i64 = 2;
 const MAX_AGENT_FAILURE_THRESHOLD: i64 = 6;
 const REVIEW_FEEDBACK_SOURCE_LABEL: &str = "review-feedback";
@@ -680,6 +708,72 @@ struct ServiceExitGuard {
 impl Drop for ServiceExitGuard {
     fn drop(&mut self) {
         eprintln!("ctox service exiting pid={}", self.pid);
+    }
+}
+
+fn start_business_os_surfaces(root: &Path, state: Arc<Mutex<SharedState>>) {
+    if runtime_config_bool(root, BUSINESS_OS_WEB_AUTOSTART_KEY, true) {
+        let addr =
+            runtime_config_string(root, BUSINESS_OS_WEB_ADDR_KEY, BUSINESS_OS_WEB_DEFAULT_ADDR);
+        start_business_os_web_surface(root.to_path_buf(), addr, state.clone());
+    } else {
+        push_event(&state, "Business OS web autostart disabled".to_string());
+        eprintln!("ctox service: Business OS web autostart disabled");
+    }
+
+    if runtime_config_bool(root, BUSINESS_OS_MCP_AUTOSTART_KEY, true) {
+        let addr =
+            runtime_config_string(root, BUSINESS_OS_MCP_ADDR_KEY, BUSINESS_OS_MCP_DEFAULT_ADDR);
+        start_business_os_mcp_surface(root.to_path_buf(), addr, state);
+    } else {
+        push_event(&state, "Business OS MCP autostart disabled".to_string());
+        eprintln!("ctox service: Business OS MCP autostart disabled");
+    }
+}
+
+fn start_business_os_web_surface(root: PathBuf, addr: String, state: Arc<Mutex<SharedState>>) {
+    push_event(
+        &state,
+        format!("Business OS web autostart on http://{addr}"),
+    );
+    eprintln!("ctox service: starting Business OS web on http://{addr}");
+    spawn_business_os_surface_thread("ctox-business-os-web", move || {
+        crate::business_os::serve_business_os(
+            &root,
+            crate::business_os::BusinessOsServeOptions { addr: addr.clone() },
+        )
+    });
+}
+
+fn start_business_os_mcp_surface(root: PathBuf, addr: String, state: Arc<Mutex<SharedState>>) {
+    push_event(
+        &state,
+        format!("Business OS MCP autostart on http://{addr}/mcp"),
+    );
+    eprintln!("ctox service: starting Business OS MCP on http://{addr}/mcp");
+    spawn_business_os_surface_thread("ctox-business-os-mcp", move || {
+        crate::business_os::mcp_channel::serve_mcp_channel(
+            &root,
+            crate::business_os::mcp_channel::BusinessOsMcpServeOptions { addr: addr.clone() },
+        )
+    });
+}
+
+fn spawn_business_os_surface_thread<F>(name: &'static str, mut serve: F)
+where
+    F: FnMut() -> anyhow::Result<()> + Send + 'static,
+{
+    if let Err(err) = thread::Builder::new().name(name.to_string()).spawn(move || loop {
+        if let Err(err) = serve() {
+            eprintln!(
+                "ctox service: {name} exited: {err:#}; retrying in {BUSINESS_OS_AUTOSTART_RETRY_SECS}s"
+            );
+        } else {
+            eprintln!("ctox service: {name} exited; restarting in {BUSINESS_OS_AUTOSTART_RETRY_SECS}s");
+        }
+        thread::sleep(Duration::from_secs(BUSINESS_OS_AUTOSTART_RETRY_SECS));
+    }) {
+        eprintln!("ctox service: failed to spawn {name}: {err}");
     }
 }
 
@@ -739,6 +833,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     if let Err(err) = crate::business_os::ensure_native_peer(root) {
         eprintln!("ctox service: Business OS native RxDB peer failed to start: {err:#}");
     }
+    start_business_os_surfaces(root, state.clone());
     #[cfg(unix)]
     let socket_path = service_socket_path(root);
     let mut announced_ready = false;
@@ -16439,6 +16534,83 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         root
+    }
+
+    #[test]
+    fn business_os_surfaces_autostart_by_default_and_honor_runtime_config() {
+        let root = temp_root("business-os-autostart-config");
+
+        assert!(runtime_config_bool(
+            &root,
+            BUSINESS_OS_WEB_AUTOSTART_KEY,
+            true
+        ));
+        assert!(runtime_config_bool(
+            &root,
+            BUSINESS_OS_MCP_AUTOSTART_KEY,
+            true
+        ));
+        assert_eq!(
+            runtime_config_string(
+                &root,
+                BUSINESS_OS_WEB_ADDR_KEY,
+                BUSINESS_OS_WEB_DEFAULT_ADDR
+            ),
+            BUSINESS_OS_WEB_DEFAULT_ADDR
+        );
+        assert_eq!(
+            runtime_config_string(
+                &root,
+                BUSINESS_OS_MCP_ADDR_KEY,
+                BUSINESS_OS_MCP_DEFAULT_ADDR
+            ),
+            BUSINESS_OS_MCP_DEFAULT_ADDR
+        );
+
+        let mut settings = runtime_env::load_runtime_env_map(&root).unwrap_or_default();
+        settings.insert(
+            BUSINESS_OS_WEB_AUTOSTART_KEY.to_string(),
+            "false".to_string(),
+        );
+        settings.insert(BUSINESS_OS_MCP_AUTOSTART_KEY.to_string(), "off".to_string());
+        settings.insert(
+            BUSINESS_OS_WEB_ADDR_KEY.to_string(),
+            "127.0.0.1:9876".to_string(),
+        );
+        settings.insert(
+            BUSINESS_OS_MCP_ADDR_KEY.to_string(),
+            "127.0.0.1:9877".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings).expect("persist runtime config");
+
+        assert!(!runtime_config_bool(
+            &root,
+            BUSINESS_OS_WEB_AUTOSTART_KEY,
+            true
+        ));
+        assert!(!runtime_config_bool(
+            &root,
+            BUSINESS_OS_MCP_AUTOSTART_KEY,
+            true
+        ));
+        assert_eq!(
+            runtime_config_string(
+                &root,
+                BUSINESS_OS_WEB_ADDR_KEY,
+                BUSINESS_OS_WEB_DEFAULT_ADDR
+            ),
+            "127.0.0.1:9876"
+        );
+        assert_eq!(
+            runtime_config_string(
+                &root,
+                BUSINESS_OS_MCP_ADDR_KEY,
+                BUSINESS_OS_MCP_DEFAULT_ADDR
+            ),
+            "127.0.0.1:9877"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// review-2: the review/rework requeue budget — the ranking function the core

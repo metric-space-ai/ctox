@@ -27,6 +27,8 @@ MODEL_FLAG="${CTOX_MODEL:-}"
 API_PROVIDER_FLAG="${CTOX_API_PROVIDER:-}"
 AZURE_FOUNDRY_ENDPOINT_FLAG="${CTOX_AZURE_FOUNDRY_ENDPOINT:-}"
 AZURE_FOUNDRY_DEPLOYMENT_ID_FLAG="${CTOX_AZURE_FOUNDRY_DEPLOYMENT_ID:-}"
+BUSINESS_OS_AUTOSTART=1
+BUSINESS_OS_AUTOSTART_EXPLICIT=0
 
 # Default local model
 DEFAULT_MODEL="Qwen/Qwen3.6-27B"
@@ -1926,6 +1928,13 @@ write_runtime_sqlite_config() {
   kv_override CTOX_ENGINE_BINARY "${CTOX_ENGINE_BINARY:-$engine_binary}"
   kv_override CTOX_ENGINE_LOG "${CTOX_ENGINE_LOG:-$engine_log}"
 
+  local business_os_autostart_value="true"
+  [[ "$BUSINESS_OS_AUTOSTART" -eq 0 ]] && business_os_autostart_value="false"
+  kv_seed CTOX_BUSINESS_OS_WEB_AUTOSTART "$business_os_autostart_value" "" "$BUSINESS_OS_AUTOSTART_EXPLICIT"
+  kv_seed CTOX_BUSINESS_OS_MCP_AUTOSTART "$business_os_autostart_value" "" "$BUSINESS_OS_AUTOSTART_EXPLICIT"
+  kv_seed CTOX_BUSINESS_OS_WEB_ADDR "127.0.0.1:8765"
+  kv_seed CTOX_BUSINESS_OS_MCP_ADDR "127.0.0.1:8788"
+
   kv_seed CTOX_EMBEDDING_MODEL "${CTOX_EMBEDDING_MODEL:-$emb_model}" CTOX_EMBEDDING_MODEL
   kv_seed CTOX_EMBEDDING_PORT "${CTOX_EMBEDDING_PORT:-$emb_port}" CTOX_EMBEDDING_PORT
   kv_seed CTOX_EMBEDDING_ISQ "${CTOX_EMBEDDING_ISQ:-$emb_isq}" CTOX_EMBEDDING_ISQ
@@ -2137,6 +2146,10 @@ parse_args() {
         shift
         AZURE_FOUNDRY_DEPLOYMENT_ID_FLAG="${1:-}"
         ;;
+      --no-business-os-autostart)
+        BUSINESS_OS_AUTOSTART=0
+        BUSINESS_OS_AUTOSTART_EXPLICIT=1
+        ;;
       --help|-h)
         printf 'Usage: install.sh [OPTIONS]\n\n'
         printf 'Options:\n'
@@ -2154,6 +2167,7 @@ parse_args() {
         printf '  --bin-dir=<path>            Binary symlink directory (default: ~/.local/bin)\n'
         printf '  --tools-root=<path>         Canonical install root for helper tools (default: <state>/tools)\n'
         printf '  --dependencies-root=<path>  Canonical install root for dependencies (default: <state>/dependencies)\n'
+        printf '  --no-business-os-autostart  Do not autostart Business OS web or local MCP with ctox start\n'
         printf '  --rebuild                   Rebuild in-place (used by ctox update)\n'
         printf '  --help                      Show this help\n\n'
         printf 'Environment:\n'

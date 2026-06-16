@@ -90,6 +90,18 @@ serve the same Business OS shell, but browser business data still goes through
 the RxDB/WebRTC contract. There is no HTTP bridge for Business OS collections,
 commands, module manifests, files, or runtime state.
 
+`ctox start` starts the native Business OS peer plus the local Business OS web
+surface and local MCP endpoint by default:
+
+```text
+Business OS web: http://127.0.0.1:8765
+Business OS MCP: http://127.0.0.1:8788/mcp
+```
+
+The installer can opt out with `--no-business-os-autostart`. That flag disables
+both local surfaces for daemon startup; operators can still run them explicitly
+with `ctox business-os serve` and `ctox business-os mcp serve`.
+
 ### Business OS MCP Channel
 
 External agents use a separate typed communication channel: Business OS MCP.
@@ -125,6 +137,10 @@ export CTOX_BUSINESS_OS_MCP_CONNECT_TOKEN=<instance-connect-token>
 ctox business-os mcp connect \
   --url wss://mcp.ctox.dev/connect/cto1.kunstmen.com
 ```
+
+Local MCP and managed MCP are separate. Local agents on the same host can use
+`http://127.0.0.1:8788/mcp` after `ctox start`. Remote agents should use the
+managed gateway only after the CTOX instance has been explicitly connected.
 
 For private desktop setups, keep the remote-control/TUI room separate from the
 Business OS sync room. The Business OS values come from:
@@ -344,6 +360,7 @@ Advanced installer options:
 | `--bin-dir=<path>` | Where the `ctox` command symlink is placed. Use this if `~/.local/bin` is not on `PATH` or your system uses a different user-local binary directory. |
 | `--tools-root=<path>` | Where CTOX-managed helper tools are installed. Defaults to `<state-root>/tools`. |
 | `--dependencies-root=<path>` | Where downloaded dependencies and assets are installed. Defaults to `<state-root>/dependencies`. |
+| `--no-business-os-autostart` | Do not start the local Business OS web surface or local MCP endpoint automatically with `ctox start`. |
 | `--repo=<url>` | Installs from a fork or custom repository. Normal users should keep the default repository. |
 | `--branch=<branch>` | Installs from a non-default branch. This is mainly for development, testing, or controlled rollout of a fork. |
 
@@ -361,7 +378,8 @@ What these commands do:
 
 - `ctox doctor` checks the installation and runtime environment.
 - `ctox` opens the TUI for configuration and operation.
-- `ctox start` starts the persistent daemon.
+- `ctox start` starts the persistent daemon, including Business OS web and
+  local Business OS MCP by default.
 - `ctox status` shows the current service state.
 - `ctox work-hours set 08:00 18:00` lets the daemon accept and start work only
   inside that local-time window; `ctox work-hours off` disables the guard.

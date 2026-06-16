@@ -148,6 +148,13 @@ skills/ctox-business-os-mcp/
 
 The skill tells Codex or another agent how to use the typed MCP tools safely. It does not grant access by itself; access is granted only by the configured MCP server token and the CTOX Business OS MCP policy.
 
+`ctox start` starts the local Business OS MCP server by default on
+`http://127.0.0.1:8788/mcp`, alongside the local Business OS web surface on
+`http://127.0.0.1:8765`. This is the same-host agent path; keep it bound to
+localhost unless the deployment has a separate network/auth plan. Install with
+`--no-business-os-autostart` to keep both local surfaces disabled by default and
+start them explicitly with the commands below.
+
 The managed gateway requires the CTOX daemon to hold an outbound WebSocket:
 
 ```sh
@@ -262,6 +269,10 @@ When a rollback is triggered, the native daemon performs the following sequence 
 Manage the Business OS instance directly from the CLI:
 
 ```sh
+# Start the CTOX daemon; by default this also serves local Business OS web
+# and local Business OS MCP.
+ctox start
+
 # Inspect the native and bundled Business OS assets
 ctox business-os status
 
@@ -274,7 +285,7 @@ ctox business-os peer rotate
 # Serve the Business OS app locally
 ctox business-os serve [--addr 127.0.0.1:8765]
 
-# Serve local Business OS MCP for development
+# Serve local Business OS MCP explicitly
 ctox business-os mcp serve [--addr 127.0.0.1:8788]
 
 # Connect this CTOX instance to the managed MCP gateway
